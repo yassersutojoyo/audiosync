@@ -151,11 +151,15 @@ pub const AIRPLAY_REASON_AIRPLAY2_ONLY: i32 = 6;
 /// It refused NTP timing, and PTP timing can't take its place (P157,
 /// P158).
 pub const AIRPLAY_REASON_TIMING: i32 = 7;
-/// Another AirPlay 2 speaker plays, and only one can at a time (P169).
-pub const AIRPLAY_REASON_ONE_AIRPLAY2: i32 = 8;
+/// Sixteen AirPlay 2 sessions run; it waits for a place and starts when
+/// one ends for good (P204).
+pub const AIRPLAY_REASON_TOO_MANY_AIRPLAY2: i32 = 8;
 /// The Apple TV of a home theater group that plays, or the group of an
 /// Apple TV that plays by itself (P177).
 pub const AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS: i32 = 9;
+/// It takes only PTP, and the PTP service runs for receivers on another
+/// network; it waits and starts once the service is free (P205).
+pub const AIRPLAY_REASON_PTP_OTHER_NETWORK: i32 = 10;
 
 /// What discovery saw ([`AscAirPlayReceiver::flags`]), bit by bit: it
 /// announces `_raop._tcp` (AirPlay 1 audio).
@@ -320,6 +324,12 @@ pub const AIRPLAY_WARNING_LATENCY_SHORTFALL: i32 = 11;
 /// A session bound the PTP ports after [`AIRPLAY_WARNING_PTP_PORTS_TAKEN`]:
 /// they are free again, and a later clash is reported anew (P158).
 pub const AIRPLAY_WARNING_PTP_FREE: i32 = 12;
+/// A SETPEERS update was refused or unanswered; the speaker plays on with
+/// the list it had, and the detail names the status (P210).
+pub const AIRPLAY_WARNING_PEERS_UPDATE_REFUSED: i32 = 13;
+/// The receiver announced a clock that ranks ahead of AudioSync's, so it
+/// may not follow AudioSync's timing (P206).
+pub const AIRPLAY_WARNING_GRANDMASTER_OUTRANKED: i32 = 14;
 
 /// A speaker's state ([`AscAirPlayEvent::state`]): a session is starting.
 pub const AIRPLAY_STATE_CONNECTING: i32 = 1;
@@ -801,8 +811,9 @@ fn reason_code(reason: UnsupportedReason) -> i32 {
         UnsupportedReason::Format => AIRPLAY_REASON_FORMAT,
         UnsupportedReason::AirPlay2Only => AIRPLAY_REASON_AIRPLAY2_ONLY,
         UnsupportedReason::Timing => AIRPLAY_REASON_TIMING,
-        UnsupportedReason::OneAirPlay2Session => AIRPLAY_REASON_ONE_AIRPLAY2,
+        UnsupportedReason::TooManyAirPlay2Sessions => AIRPLAY_REASON_TOO_MANY_AIRPLAY2,
         UnsupportedReason::PlaysThroughSpeakers => AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS,
+        UnsupportedReason::PtpOtherNetwork => AIRPLAY_REASON_PTP_OTHER_NETWORK,
     }
 }
 
@@ -943,6 +954,8 @@ fn warning_code(warning: &Warning) -> i32 {
         Warning::RemoteControlUnavailable => AIRPLAY_WARNING_REMOTE_CONTROL_UNAVAILABLE,
         Warning::RemoteControlNotAdvertised => AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED,
         Warning::LatencyShortfall { .. } => AIRPLAY_WARNING_LATENCY_SHORTFALL,
+        Warning::PeersUpdateRefused { .. } => AIRPLAY_WARNING_PEERS_UPDATE_REFUSED,
+        Warning::GrandmasterOutranked => AIRPLAY_WARNING_GRANDMASTER_OUTRANKED,
     }
 }
 
@@ -958,6 +971,14 @@ fn warning_detail(warning: &Warning) -> String {
             latency_frames,
             u64::from(*latency_frames) * 1000 / 44_100
         ),
+        Warning::PeersUpdateRefused {
+            status: Some(status),
+        } => {
+            format!("a SETPEERS update was refused with status {status}; it plays on")
+        }
+        Warning::PeersUpdateRefused { status: None } => {
+            "a SETPEERS update went unanswered for 10 s; it plays on".to_owned()
+        }
         other => format!("{other:?}"),
     }
 }
@@ -6294,9 +6315,13 @@ mod tests {
         );
         assert_eq!(
             error_code(UserReason::Unsupported(
-                UnsupportedReason::OneAirPlay2Session
+                UnsupportedReason::TooManyAirPlay2Sessions
             )),
-            (AIRPLAY_ERROR_UNSUPPORTED, AIRPLAY_REASON_ONE_AIRPLAY2)
+            (AIRPLAY_ERROR_UNSUPPORTED, AIRPLAY_REASON_TOO_MANY_AIRPLAY2)
+        );
+        assert_eq!(
+            error_code(UserReason::Unsupported(UnsupportedReason::PtpOtherNetwork)),
+            (AIRPLAY_ERROR_UNSUPPORTED, AIRPLAY_REASON_PTP_OTHER_NETWORK)
         );
     }
 

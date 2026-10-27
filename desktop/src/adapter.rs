@@ -548,8 +548,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// rather than show them playing.
     busy: BTreeSet<String>,
     /// The AirPlay speakers AudioSync keeps trying to reach, that wait for
-    /// the one AirPlay 2 slot ([`BackendEvent::AirPlayTrouble`]) or for their
-    /// announcement ([`BackendEvent::AirPlayUnannounced`]), by ID:
+    /// an AirPlay 2 place or for PTP ([`BackendEvent::AirPlayTrouble`]) or
+    /// for their announcement ([`BackendEvent::AirPlayUnannounced`]), by ID:
     /// their rows say so rather than show them playing.
     reconnecting: BTreeMap<String, Waiting>,
     /// While PTP port 319 or 320 is taken (from
@@ -3516,10 +3516,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 }
             }
             BackendEvent::AirPlayTrouble { id, problem } => {
-                let waiting = if problem == AirPlayProblem::OneAirPlay2Speaker {
-                    Waiting::ForAirPlay2Slot
-                } else {
-                    Waiting::Reconnecting
+                let waiting = match problem {
+                    AirPlayProblem::TooManyAirPlay2Speakers => Waiting::ForAirPlay2Slot,
+                    AirPlayProblem::PtpOtherNetwork => Waiting::ForPtp,
+                    _ => Waiting::Reconnecting,
                 };
                 self.reconnecting.insert(id.clone(), waiting);
                 let speaker = self.airplay_name(&id);
@@ -5063,7 +5063,8 @@ fn ui_problem(problem: AirPlayProblem) -> ui_model::AirPlayProblem {
         AirPlayProblem::PairingNotYet => P::PairingNotYet,
         AirPlayProblem::AirPlay2NotYet => P::AirPlay2NotYet,
         AirPlayProblem::TimingUnavailable => P::TimingUnavailable,
-        AirPlayProblem::OneAirPlay2Speaker => P::OneAirPlay2Speaker,
+        AirPlayProblem::TooManyAirPlay2Speakers => P::TooManyAirPlay2Speakers,
+        AirPlayProblem::PtpOtherNetwork => P::PtpOtherNetwork,
         AirPlayProblem::PlaysThroughSpeakers => P::PlaysThroughSpeakers,
         AirPlayProblem::ReceiverUnverified => P::ReceiverUnverified,
         AirPlayProblem::AppleTvPlays => P::AppleTvPlays,
@@ -8565,7 +8566,7 @@ mod tests {
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         fake.fail(
             &kitchen,
-            ErrorKind::Unsupported(UnsupportedReason::OneAirPlay2Session),
+            ErrorKind::Unsupported(UnsupportedReason::TooManyAirPlay2Sessions),
         );
         adapter.poll();
         assert_eq!(
@@ -8574,6 +8575,68 @@ mod tests {
         );
         fake.state(&kitchen, AirPlayState::Playing);
         adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+    }
+
+    /// [`airplay_adapter`] with Kitchen and a second open speaker, Den, on
+    /// and playing.
+    fn two_playing() -> (AudioAdapter<MockBackend>, FakeAirPlay, Device, Device) {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let den = device(3, "Den", OPEN_TXT);
+        fake.appear(&den);
+        adapter.poll();
+        for speaker in [&kitchen, &den] {
+            adapter.set_speaker_enabled(&ap(speaker), true);
+            fake.state(speaker, AirPlayState::Playing);
+        }
+        adapter.poll();
+        (adapter, fake, kitchen, den)
+    }
+
+    // covers: S285
+    #[test]
+    fn every_airplay_2_speaker_switched_on_plays_and_only_a_17th_or_one_needing_ptp_on_another_network_waits()
+     {
+        use audiosync_airplay::error::UnsupportedReason;
+
+        let (mut adapter, fake, kitchen, den) = two_playing();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        assert_eq!(state_of(&adapter, &ap(&den)), SpeakerState::Playing);
+        fake.fail(
+            &den,
+            ErrorKind::Unsupported(UnsupportedReason::PtpOtherNetwork),
+        );
+        adapter.poll();
+        assert_eq!(
+            state_of(&adapter, &ap(&den)),
+            SpeakerState::Waiting(ui_model::Waiting::ForPtp)
+        );
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        fake.fail(
+            &kitchen,
+            ErrorKind::Unsupported(UnsupportedReason::TooManyAirPlay2Sessions),
+        );
+        adapter.poll();
+        assert_eq!(
+            state_of(&adapter, &ap(&kitchen)),
+            SpeakerState::Waiting(ui_model::Waiting::ForAirPlay2Slot)
+        );
+        for speaker in [&kitchen, &den] {
+            fake.state(speaker, AirPlayState::Connecting);
+            fake.state(speaker, AirPlayState::Playing);
+        }
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        assert_eq!(state_of(&adapter, &ap(&den)), SpeakerState::Playing);
+    }
+
+    // covers: S285
+    #[test]
+    fn one_airplay_2_speaker_failing_leaves_the_others_playing() {
+        let (mut adapter, fake, kitchen, den) = two_playing();
+        fake.fail(&den, ErrorKind::Unreachable);
+        adapter.poll();
+        assert_ne!(state_of(&adapter, &ap(&den)), SpeakerState::Playing);
         assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
     }
 

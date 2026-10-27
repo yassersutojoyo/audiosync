@@ -123,7 +123,14 @@ pub struct SenderConfig {
     /// How long the connection of a PIN pairing that paired waits for the
     /// host to start its speaker, 30 s (P153); a test picks a shorter one.
     pub pairing_hold: Duration,
+    /// AirPlay 2 sessions at once, [`AIRPLAY2_SESSIONS`] (P204); a test
+    /// picks fewer so it needs fewer receivers.
+    pub airplay2_sessions: usize,
 }
+
+/// The most AirPlay 2 sessions a sender runs at once, each member of a
+/// target counting as one (P204).
+pub const AIRPLAY2_SESSIONS: usize = 16;
 
 /// [`SenderConfig::pairing_hold`]'s default (P153).
 const PAIRING_HOLD: Duration = Duration::from_secs(30);
@@ -235,6 +242,7 @@ impl Default for SenderConfig {
             ptp_ports: PtpPorts::default(),
             ptp_receiver_ports: PtpPorts::default(),
             pairing_hold: PAIRING_HOLD,
+            airplay2_sessions: AIRPLAY2_SESSIONS,
         }
     }
 }
@@ -666,6 +674,7 @@ impl Sender {
         )
         .with_ptp_ports(config.ptp_ports, config.ptp_receiver_ports)
         .with_pairing_hold(config.pairing_hold)
+        .with_airplay2_sessions(config.airplay2_sessions)
         .with_sounding(sounding.clone());
         let dacp_counters = driver.dacp_counters();
         let handle = thread::Builder::new()

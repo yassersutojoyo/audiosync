@@ -922,6 +922,10 @@ impl App {
             now_playing: RefCell::default(),
             now_playing_source: RefCell::default(),
         });
+        let sessions = i32::try_from(audiosync_airplay::sender::AIRPLAY2_SESSIONS);
+        app.main
+            .global::<Strings>()
+            .set_airplay2_sessions(sessions.unwrap_or(i32::MAX));
         app.attach_models();
         app.connect_main();
         app.connect_flyout();
@@ -1652,6 +1656,7 @@ impl App {
             .airplay_delay_draft
             .text(state.airplay_delay_ms)
             .map(str::to_owned);
+        let check_updates_automatically = ui.check_updates_automatically;
         // No window call while `ui` is borrowed: showing a dialog runs Slint's
         // pending change handlers, and the focus ones borrow `ui` mutably (UI
         // Automation focuses and toggles in one turn).
@@ -4073,6 +4078,7 @@ pub fn row_state(state: SpeakerState) -> RowState {
         SpeakerState::Waiting(ui_model::Waiting::ForDevice) => RowState::WaitingForDevice,
         SpeakerState::Waiting(ui_model::Waiting::Reconnecting) => RowState::Reconnecting,
         SpeakerState::Waiting(ui_model::Waiting::ForAirPlay2Slot) => RowState::WaitingForAirplay2,
+        SpeakerState::Waiting(ui_model::Waiting::ForPtp) => RowState::WaitingForPtp,
         SpeakerState::Waiting(ui_model::Waiting::NotOnNetwork) => RowState::NotOnNetwork,
     }
 }
@@ -4132,7 +4138,8 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::PairingNotYet => AirPlayProblem::PairingNotYet,
         P::AirPlay2NotYet => AirPlayProblem::Airplay2NotYet,
         P::TimingUnavailable => AirPlayProblem::TimingUnavailable,
-        P::OneAirPlay2Speaker => AirPlayProblem::OneAirplay2Speaker,
+        P::TooManyAirPlay2Speakers => AirPlayProblem::TooManyAirplay2Speakers,
+        P::PtpOtherNetwork => AirPlayProblem::PtpOtherNetwork,
         P::PlaysThroughSpeakers => AirPlayProblem::PlaysThroughSpeakers,
         P::ReceiverUnverified => AirPlayProblem::ReceiverUnverified,
         P::AppleTvPlays => AirPlayProblem::AppleTvPlays,
@@ -5089,7 +5096,9 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::PairFirst { speaker } => (NoticeKind::PairFirst, speaker.as_str()),
         NoticeMessage::AirPlayRetrying {
             speaker,
-            problem: ui_model::AirPlayProblem::OneAirPlay2Speaker,
+            problem:
+                ui_model::AirPlayProblem::TooManyAirPlay2Speakers
+                | ui_model::AirPlayProblem::PtpOtherNetwork,
         } => (NoticeKind::AirplayWaiting, speaker.as_str()),
         NoticeMessage::AirPlayRetrying { speaker, .. } => {
             (NoticeKind::AirplayRetrying, speaker.as_str())
@@ -5667,10 +5676,15 @@ mod tests {
             read(RowState::Reconnecting),
             (reconnecting.clone(), turn_off.clone(), reconnecting)
         );
-        let slot = "Waiting for the other AirPlay 2 speaker".to_owned();
+        let slot = "Waiting: too many AirPlay 2 speakers".to_owned();
         assert_eq!(
             read(RowState::WaitingForAirplay2),
             (slot.clone(), turn_off.clone(), slot)
+        );
+        let ptp = "Waiting: AirPlay 2 speakers on another network".to_owned();
+        assert_eq!(
+            read(RowState::WaitingForPtp),
+            (ptp.clone(), turn_off.clone(), ptp)
         );
         // The Mac row's words (P215).
         let away = "Not on the network right now, plays once it's back".to_owned();
@@ -6679,6 +6693,32 @@ mod tests {
 
     fn name_of(app: &App, id: &str) -> String {
         app.snapshot().speaker(id).unwrap().name.clone()
+    }
+
+    #[test]
+    fn the_waiting_notices_name_the_sender_limit_and_what_to_do() {
+        let app = app_over(MockBackend::new());
+        let strings = app.main.global::<Strings>();
+        assert_eq!(
+            strings.invoke_notice_airplay(AirPlayProblem::TooManyAirplay2Speakers, "Loft".into()),
+            format!(
+                "AudioSync plays up to {} AirPlay 2 speakers at once, so Loft waits. \
+                 It starts once one of them stops.",
+                audiosync_airplay::sender::AIRPLAY2_SESSIONS
+            )
+        );
+        // The number comes from the sender, not from the strings file.
+        strings.set_airplay2_sessions(2);
+        assert_eq!(
+            strings.invoke_notice_airplay(AirPlayProblem::TooManyAirplay2Speakers, "Loft".into()),
+            "AudioSync plays up to 2 AirPlay 2 speakers at once, so Loft waits. \
+             It starts once one of them stops."
+        );
+        assert_eq!(
+            strings.invoke_notice_airplay(AirPlayProblem::PtpOtherNetwork, "Loft".into()),
+            "Loft waits while AudioSync plays to AirPlay 2 speakers on another network. \
+             Turn those speakers off and Loft starts."
+        );
     }
 
     #[test]
@@ -8967,7 +9007,15 @@ mod tests {
         assert_eq!(
             dismiss_label(NoticeMessage::AirPlayRetrying {
                 speaker: "Kitchen".into(),
-                problem: ui_model::AirPlayProblem::OneAirPlay2Speaker,
+                problem: ui_model::AirPlayProblem::TooManyAirPlay2Speakers,
+            }),
+            "Dismiss: Kitchen waiting"
+        );
+        // Its notice is titled waiting too, as on the Mac.
+        assert_eq!(
+            dismiss_label(NoticeMessage::AirPlayRetrying {
+                speaker: "Kitchen".into(),
+                problem: ui_model::AirPlayProblem::PtpOtherNetwork,
             }),
             "Dismiss: Kitchen waiting"
         );

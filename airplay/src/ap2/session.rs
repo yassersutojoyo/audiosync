@@ -54,6 +54,8 @@ pub const EVENTS_RETRIES: u32 = 5;
 pub const EVENTS_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// Features bit 41: the receiver supports PTP timing (P16, P157).
 pub const FEATURE_PTP: u32 = 41;
+/// Changes to the SETPEERS list within this time make one update (P209).
+pub const PEERS_MERGE: Duration = Duration::from_secs(1);
 const STATUS_CONFLICT: u16 = 409;
 const STATUS_BANDWIDTH: u16 = 453;
 
@@ -85,9 +87,9 @@ pub struct Ap2Config {
     /// The PTP service's clock, when it runs (P158). Without it a session
     /// never asks for PTP.
     pub ptp: Option<PtpPeer>,
-    /// The other members of the receiver's target, named in SETPEERS after
-    /// the receiver (P179).
-    pub members: Vec<IpAddr>,
+    /// The other receivers on the sender's PTP timeline, named in SETPEERS
+    /// after the receiver (P207); [`Ap2Session::set_peers`] changes them.
+    pub peers: Vec<IpAddr>,
     /// The host asked for a PIN pairing (P61): the connection runs
     /// `/pair-pin-start`, waits for [`Ap2Session::submit_pin`], then pair-setup
     /// M1 to M6 and a pair-verify (P153), and waits in [`Ap2State::Paired`]
@@ -118,7 +120,7 @@ impl Ap2Config {
             device_id: [0; 6],
             timing: Timing::Ntp,
             ptp: None,
-            members: Vec::new(),
+            peers: Vec::new(),
             pin_pairing: false,
             trace: false,
             read_volume: false,
@@ -199,6 +201,18 @@ pub enum Ap2Event {
     /// A session SETUP with this timing was answered 200; the host
     /// remembers it for the device (P157, P217).
     TimingChosen(Timing),
+    /// RECORD was answered 200: under PTP the receiver now belongs on the
+    /// other sessions' SETPEERS lists (P207, P208).
+    Recorded,
+    /// A SETPEERS update was refused with `status`, or left unanswered for
+    /// 10 s (`status` none); the session plays on with the list it had
+    /// (P210). `added` when the refused list named a receiver the old one
+    /// lacked, `first_accepted` when the first SETPEERS was answered 2xx.
+    PeersRefused {
+        status: Option<u16>,
+        added: bool,
+        first_accepted: bool,
+    },
     /// The session SETUP with the remembered PTP got an answer other than
     /// 200: the entry is dropped and a new connection asks for NTP first
     /// (P217).
@@ -243,7 +257,11 @@ enum Kind {
     PairVerify,
     SessionSetup,
     Record,
-    SetPeers,
+    /// The list it named; `update` for one of P209's (P207, P209).
+    SetPeers {
+        list: Vec<IpAddr>,
+        update: bool,
+    },
     Volume(Volume),
     /// Carries the volume generation it was sent in, so an answer older
     /// than the latest host value is dropped (P184).
@@ -263,7 +281,7 @@ impl Kind {
             Kind::PairSetup | Kind::PairVerify | Kind::Feedback => Method::Post,
             Kind::SessionSetup | Kind::StreamSetup => Method::Setup,
             Kind::Record => Method::Record,
-            Kind::SetPeers => Method::SetPeers,
+            Kind::SetPeers { .. } => Method::SetPeers,
             Kind::Volume(_) | Kind::Metadata(_) => Method::SetParameter,
             Kind::VolumeRead(_) => Method::GetParameter,
             Kind::Flush => Method::Flush,
@@ -424,6 +442,14 @@ pub struct Ap2Session {
     /// What the receiver reported of its latency in this session (P196
     /// to P198).
     reported_latency: ReportedLatency,
+    /// The first SETPEERS was answered, 2xx when true (P209, P210).
+    peers_answered: Option<bool>,
+    /// The list of the last SETPEERS answered 2xx: what the receiver has.
+    peers_accepted: Vec<IpAddr>,
+    /// When the pending update of P209 goes out.
+    peers_update_at: Option<Instant>,
+    /// One warning per session for refused updates (P210).
+    peers_warned: bool,
     /// The last volume trace line, so a steady level logs once.
     last_volume_trace: Option<String>,
 }
@@ -528,6 +554,10 @@ impl Ap2Session {
             volume_reads_stopped_warned: false,
             reported_latency: ReportedLatency::default(),
             last_volume_trace: None,
+            peers_answered: None,
+            peers_accepted: Vec::new(),
+            peers_update_at: None,
+            peers_warned: false,
         };
         session.flush_point = (session.ids.first_seq, session.ids.first_rtptime);
         if drawn.is_err() {
@@ -691,11 +721,58 @@ impl Ap2Session {
         }
         if self.state != Ap2State::TearingDown {
             times.extend(self.feedback_due);
+            times.extend(self.peers_update_at);
         }
         if self.state == Ap2State::Ready {
             times.extend(self.read_due);
         }
         times.into_iter().min()
+    }
+
+    /// RECORD was answered 200 (P207).
+    pub fn recorded(&self) -> bool {
+        self.recorded
+    }
+
+    /// The other receivers on the timeline changed (P207). Before the first
+    /// SETPEERS is answered the new list only waits for it; after, an
+    /// update goes out within 1 s, so changes within 1 s of each other make
+    /// one request (P209).
+    pub fn set_peers(&mut self, peers: Vec<IpAddr>, now: Instant) {
+        if peers == self.config.peers {
+            return;
+        }
+        self.config.peers = peers;
+        if self.timing == Timing::Ptp
+            && self.peers_answered.is_some()
+            && matches!(self.state, Ap2State::Starting | Ap2State::Ready)
+            && self.peers_update_at.is_none()
+        {
+            self.peers_update_at = Some(now + PEERS_MERGE);
+        }
+    }
+
+    /// An update was refused or went unanswered (P210).
+    fn peers_refused(&mut self, list: &[IpAddr], status: Option<u16>) {
+        if !self.peers_warned {
+            self.peers_warned = true;
+            self.event(Ap2Event::Warning(Warning::PeersUpdateRefused { status }));
+        }
+        let mut had = self.peers_accepted.clone();
+        let added = list
+            .iter()
+            .any(|ip| match had.iter().position(|old| old == ip) {
+                Some(at) => {
+                    had.swap_remove(at);
+                    false
+                }
+                None => true,
+            });
+        self.event(Ap2Event::PeersRefused {
+            status,
+            added,
+            first_accepted: self.peers_answered == Some(true),
+        });
     }
 
     /// The PIN the user read off the receiver, while a PIN pairing waits for
@@ -981,6 +1058,13 @@ impl Ap2Session {
                 self.in_flight = None;
                 self.late_answers.push(cseq);
                 self.artwork_answered(false, None);
+            } else if let Kind::SetPeers { list, update: true } = &in_flight.kind {
+                // P210: an unanswered update never ends the session.
+                let list = list.clone();
+                let cseq = in_flight.cseq;
+                self.in_flight = None;
+                self.late_answers.push(cseq);
+                self.peers_refused(&list, None);
             } else {
                 let method = in_flight.kind.method();
                 return self.fail(ErrorKind::Timeout, Some(method), None, None);
@@ -1347,6 +1431,11 @@ impl Ap2Session {
                     self.flush_pending = false;
                     return self.send(Kind::Flush, now, false);
                 }
+                if self.peers_update_at.is_some_and(|at| at <= now) {
+                    self.peers_update_at = None;
+                    let list = self.config.peers.clone();
+                    return self.send(Kind::SetPeers { list, update: true }, now, false);
+                }
                 if self.state != Ap2State::Ready {
                     return;
                 }
@@ -1427,11 +1516,11 @@ impl Ap2Session {
                 };
                 request.body = bodies::session_setup(&body);
             }
-            Kind::SetPeers => {
+            Kind::SetPeers { list, .. } => {
                 request.headers.push("Content-Type", PEERS_CONTENT_TYPE);
                 let receiver = self.remote.map_or(IpAddr::from([0, 0, 0, 0]), |r| r.ip());
                 let local: Vec<IpAddr> = self.connection.iter().map(|c| c.local).collect();
-                request.body = bodies::peers_with_members(receiver, &self.config.members, &local);
+                request.body = bodies::peers_with_members(receiver, list, &local);
             }
             Kind::Volume(volume) => {
                 request.headers.push("Content-Type", "text/parameters");
@@ -1642,18 +1731,44 @@ impl Ap2Session {
                     .headers
                     .get("Audio-Latency")
                     .and_then(crate::rtsp::audio_latency);
-                // SETPEERS only under PTP (P165).
+                self.event(Ap2Event::Recorded);
+                // SETPEERS only under PTP (P165, P207).
                 if self.timing == Timing::Ptp {
-                    self.send(Kind::SetPeers, now, false);
+                    let list = self.config.peers.clone();
+                    self.send(
+                        Kind::SetPeers {
+                            list,
+                            update: false,
+                        },
+                        now,
+                        false,
+                    );
                 } else {
                     self.stream_setup_waiting = true;
                 }
             }
-            Kind::SetPeers => {
-                if !success {
+            Kind::SetPeers {
+                list,
+                update: false,
+            } => {
+                if success {
+                    self.peers_accepted = list.clone();
+                } else {
                     self.warn(method, code);
                 }
+                self.peers_answered = Some(success);
+                // The list changed while the first one was on its way.
+                if list != self.config.peers && self.peers_update_at.is_none() {
+                    self.peers_update_at = Some(now);
+                }
                 self.stream_setup_waiting = true;
+            }
+            Kind::SetPeers { list, update: true } => {
+                if success {
+                    self.peers_accepted = list;
+                } else {
+                    self.peers_refused(&list, Some(code));
+                }
             }
             Kind::Volume(volume) => {
                 if success {

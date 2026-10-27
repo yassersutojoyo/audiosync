@@ -60,6 +60,9 @@ extern "C" {
 /* Number of equalizer presets. */
 #define ASC_EQ_PRESETS 12
 
+/* Most AirPlay 2 speakers that play at once. */
+#define ASC_AIRPLAY2_SESSIONS 16
+
 /* The ring's safety margin M in frames: no ring holds fewer than twice this. */
 #define ASC_RING_MARGIN_FRAMES 8192
 
@@ -99,8 +102,9 @@ extern "C" {
 #define ASC_AIRPLAY_REASON_FORMAT 5        /* not 44 100 Hz, 16-bit stereo */
 #define ASC_AIRPLAY_REASON_AIRPLAY2_ONLY 6 /* only AirPlay 2 could serve it */
 #define ASC_AIRPLAY_REASON_TIMING 7        /* it refused NTP timing, and PTP can't take its place */
-#define ASC_AIRPLAY_REASON_ONE_AIRPLAY2 8  /* another AirPlay 2 speaker plays; one at a time */
+#define ASC_AIRPLAY_REASON_TOO_MANY_AIRPLAY2 8  /* ASC_AIRPLAY2_SESSIONS AirPlay 2 sessions run; it waits and starts when one ends for good */
 #define ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS 9 /* an Apple TV whose home theater group plays, or the group of one that plays alone */
+#define ASC_AIRPLAY_REASON_PTP_OTHER_NETWORK 10 /* it takes only PTP, which runs for another network; it waits until PTP is free */
 
 /* What discovery saw (AscAirPlayReceiver.flags), bit by bit. */
 #define ASC_AIRPLAY_FLAG_RAOP 1            /* announces _raop._tcp (AirPlay 1 audio) */
@@ -162,6 +166,8 @@ extern "C" {
 #define ASC_AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED 10 /* the remote control's _dacp._tcp record couldn't be registered */
 #define ASC_AIRPLAY_WARNING_LATENCY_SHORTFALL 11         /* its reported latency needs more than the sounding stream's Lf; it plays at that Lf; .detail names both */
 #define ASC_AIRPLAY_WARNING_PTP_FREE 12                  /* a session bound the PTP ports after PTP_PORTS_TAKEN: they are free again, and a later clash is reported anew */
+#define ASC_AIRPLAY_WARNING_PEERS_UPDATE_REFUSED 13      /* a SETPEERS update was refused or unanswered; it plays on; once per session */
+#define ASC_AIRPLAY_WARNING_GRANDMASTER_OUTRANKED 14     /* it announced a clock ranked ahead of AudioSync's and may not follow it; once per session */
 
 /* A speaker's state (AscAirPlayEvent.state). */
 #define ASC_AIRPLAY_STATE_CONNECTING 1 /* a session is starting */
@@ -342,7 +348,7 @@ extern "C" {
 #define ASC_ZONE_STEP_NEEDS_AIRPLAY2 1     /* a pair or theater target while AirPlay 2 is off: left alone */
 #define ASC_ZONE_STEP_IN_TARGET 2          /* plays as part of a target: left alone */
 #define ASC_ZONE_STEP_ON 3                 /* switched on, or stays on */
-#define ASC_ZONE_STEP_WAITING 4            /* switched on, waiting for the other AirPlay 2 speaker */
+#define ASC_ZONE_STEP_WAITING 4            /* switched on, waiting for the sender (S285) */
 #define ASC_ZONE_STEP_OFF 5                /* switched off, or stays off */
 #define ASC_ZONE_STEP_CAST_ANOTHER_PLAYS 6 /* a Cast member left off: a Cast speaker outside the zone is on */
 #define ASC_ZONE_STEP_CAST_ONE_AT_A_TIME 7 /* a Cast member left off: another Cast member plays */
@@ -355,7 +361,7 @@ extern "C" {
 
 /* What asc_preset_recall_plan writes for each stored member. */
 #define ASC_PRESET_STEP_ON 0             /* switched on, or stays on */
-#define ASC_PRESET_STEP_WAITING 1        /* switched on, waiting for the other AirPlay 2 speaker */
+#define ASC_PRESET_STEP_WAITING 1        /* switched on, waiting for the sender (S285) */
 #define ASC_PRESET_STEP_NOT_FOUND 2      /* left off: no speaker with its key is listed */
 #define ASC_PRESET_STEP_HIDDEN 3         /* left off: hidden */
 #define ASC_PRESET_STEP_NEEDS_AIRPLAY2 4 /* left off: a pair or theater target while AirPlay 2 is off */

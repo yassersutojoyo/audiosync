@@ -183,8 +183,11 @@ pub enum AirPlayProblem {
     AirPlay2NotYet,
     /// It turned NTP timing down, and PTP timing isn't available.
     TimingUnavailable,
-    /// Another AirPlay 2 speaker plays; it starts once that one stops.
-    OneAirPlay2Speaker,
+    /// Sixteen AirPlay 2 speakers play; it starts once one of them stops.
+    TooManyAirPlay2Speakers,
+    /// It takes only PTP, which runs for speakers on another network; it
+    /// starts once those stop.
+    PtpOtherNetwork,
     /// An Apple TV whose home theater group plays, so it is off.
     PlaysThroughSpeakers,
     /// It didn't prove it is the speaker that was paired, so it is off.
@@ -390,9 +393,12 @@ pub enum Waiting {
     /// An AirPlay speaker that stopped playing, which AudioSync keeps trying
     /// to reach.
     Reconnecting,
-    /// An AirPlay speaker that waits for the one AirPlay 2 slot; it starts
-    /// once the other AirPlay 2 speaker stops.
+    /// An AirPlay speaker that waits for an AirPlay 2 place, 16 being in
+    /// use; it starts once one of them stops.
     ForAirPlay2Slot,
+    /// An AirPlay 2 speaker that takes only PTP while PTP runs for speakers
+    /// on another network; it starts once those stop.
+    ForPtp,
     /// An AirPlay speaker that stopped announcing itself on the network; it
     /// plays once it is announced again (P215).
     NotOnNetwork,

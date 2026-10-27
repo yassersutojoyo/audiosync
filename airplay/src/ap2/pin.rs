@@ -243,6 +243,8 @@ impl PinPairing {
             }
             Ap2Event::Server(_)
             | Ap2Event::TimingChosen(_)
+            | Ap2Event::Recorded
+            | Ap2Event::PeersRefused { .. }
             | Ap2Event::TimingRefused
             | Ap2Event::Ready(_)
             | Ap2Event::Flushed

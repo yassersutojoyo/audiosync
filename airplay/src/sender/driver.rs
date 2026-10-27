@@ -274,14 +274,17 @@ struct Speaker {
     /// target member reads only this one (P177); the device's outcome lives
     /// in `Driver::airplay1_outcomes` (P218).
     airplay1_outcome: Option<ErrorKind>,
-    /// Refused only because another AirPlay 2 session ran (P169): it starts
-    /// once that session ends for good.
+    /// Refused only because 16 AirPlay 2 sessions ran (P204): it starts
+    /// once one of them ends for good (P169).
     ap2_waiting: bool,
-    /// When it was refused for that, as a count of such refusals: the
+    /// Refused because it takes only PTP and the service runs in another
+    /// address family: it starts once no session holds the service (P205).
+    ptp_waiting: bool,
+    /// When it was refused for either, as a count of such refusals: the
     /// lowest waiting one is the first refused (P169).
     ap2_refusal: u64,
     /// Its AirPlay 2 session failed and waits for its own retry, so it
-    /// keeps the one AirPlay 2 place (P169).
+    /// keeps its AirPlay 2 place (P169, P204).
     ap2_retry: bool,
     /// The target the host added it with (P177).
     target: Option<TargetId>,
@@ -310,6 +313,7 @@ impl Speaker {
             removing: false,
             airplay1_outcome: None,
             ap2_waiting: false,
+            ptp_waiting: false,
             ap2_refusal: 0,
             ap2_retry: false,
             reads_volume: false,
@@ -319,8 +323,8 @@ impl Speaker {
         }
     }
 
-    /// Runs the AirPlay 2 session, waits to retry it, or waits for the
-    /// turn of a session that will (P169, P222).
+    /// Runs an AirPlay 2 session, waits to retry it, or waits for the turn
+    /// of a session that will (P169, P204, P222).
     fn holds_ap2(&self) -> bool {
         match self.phase {
             Phase::Ap2(_) => true,
@@ -354,9 +358,12 @@ pub(crate) struct Driver {
     held: BTreeMap<DeviceKey, ap2::Held>,
     /// How long a held pairing connection waits to be claimed (P153).
     held_for: Duration,
+    /// AirPlay 2 sessions at once (P204).
+    ap2_sessions: usize,
     stream_ids: HashMap<stream::SpeakerId, DeviceKey>,
     next_session: u64,
-    /// Refusals for the one AirPlay 2 place so far (P169).
+    /// Refusals for an AirPlay 2 place or the PTP service so far (P169,
+    /// P204, P205).
     ap2_refusals: u64,
     directory: Directory,
     browser: Option<Box<dyn Browser + Send>>,
@@ -409,6 +416,16 @@ pub(crate) struct Driver {
     /// Speakers whose current session is the restart after a move, so a
     /// fallback in it goes to NTP instead of moving the service back.
     ptp_retrying: BTreeSet<DeviceKey>,
+    /// Speakers whose current session goes without PTP because the service
+    /// runs in another family: a timing refusal from it is a wait (P205).
+    ptp_excluded: BTreeSet<DeviceKey>,
+    /// The PTP service closed: receivers waiting for it start (P205).
+    ptp_freed: bool,
+    /// A receiver entered or left the SETPEERS list (P207, P209).
+    peers_dirty: bool,
+    /// Speakers set up again after a refused SETPEERS update, once per run
+    /// (P210).
+    peers_set_up_again: BTreeSet<DeviceKey>,
     /// The remote-control command server (P186 to P195).
     dacp: super::remote::Server,
     /// The AirPlay 1 outcome that moved each device to the AirPlay 2 path,
@@ -445,6 +462,7 @@ impl Driver {
             pairing_sessions: HashMap::new(),
             held: BTreeMap::new(),
             held_for: super::PAIRING_HOLD,
+            ap2_sessions: super::AIRPLAY2_SESSIONS,
             stream_ids: HashMap::new(),
             next_session: 0,
             ap2_refusals: 0,
@@ -472,6 +490,10 @@ impl Driver {
             ptp_restart: BTreeMap::new(),
             ptp_moved: BTreeMap::new(),
             ptp_retrying: BTreeSet::new(),
+            ptp_excluded: BTreeSet::new(),
+            ptp_freed: false,
+            peers_dirty: false,
+            peers_set_up_again: BTreeSet::new(),
             dacp,
             airplay1_outcomes: BTreeMap::new(),
             connects: ConnectQueue::new(),
@@ -486,6 +508,11 @@ impl Driver {
     ) -> Driver {
         self.ptp_ports = local;
         self.ptp_receiver_ports = receiver;
+        self
+    }
+
+    pub(crate) fn with_airplay2_sessions(mut self, sessions: usize) -> Driver {
+        self.ap2_sessions = sessions;
         self
     }
 
@@ -765,6 +792,15 @@ impl Driver {
     fn flush(&mut self, now: Instant) {
         loop {
             let mut progressed = false;
+            if std::mem::take(&mut self.peers_dirty) {
+                progressed = true;
+                self.refresh_peers(now);
+            }
+            if std::mem::take(&mut self.ptp_freed) {
+                progressed = true;
+                self.wake_ptp_waiters(now);
+            }
+            self.warn_outranked();
             let keys: Vec<DeviceKey> = self
                 .speakers
                 .iter()
@@ -1157,14 +1193,8 @@ impl Driver {
             Phase::Ap2(active) => {
                 self.sessions.remove(&active.key);
                 self.sessions.remove(&active.events_key);
-                // The members of a target share the service (P179).
-                let shared = self
-                    .speakers
-                    .values()
-                    .any(|speaker| matches!(speaker.phase, Phase::Ap2(_)));
-                if !shared {
-                    self.close_ptp();
-                }
+                self.peers_dirty = true;
+                self.close_unused_ptp();
             }
             Phase::Queued { .. } => {
                 self.connects.remove(&Turn::Session(key.clone()));
@@ -1360,32 +1390,41 @@ impl Driver {
         }
     }
 
-    /// The AirPlay 2 session ended for good: the first speaker refused only
-    /// because it ran starts now (P169), through the usual restart.
+    /// An AirPlay 2 session ended for good: the first speakers refused only
+    /// for the limit start now, one per free place (P169, P204), through
+    /// the usual restart, and so do those waiting for PTP once no service
+    /// runs (P205). A woken speaker holds its place until it starts.
     fn wake_ap2_waiter(&mut self, now: Instant) {
-        if self.stopping.is_some() || self.speakers.values().any(Speaker::holds_ap2) {
+        if self.stopping.is_some() {
             return;
         }
-        let Some((key, speaker)) = self
-            .speakers
-            .iter_mut()
-            .filter(|(_, speaker)| {
-                speaker.ap2_waiting && !speaker.removing && matches!(speaker.phase, Phase::Failed)
-            })
-            .min_by_key(|(_, speaker)| speaker.ap2_refusal)
-        else {
-            return;
-        };
-        speaker.ap2_waiting = false;
-        speaker.wait_until(now, StartKind::Host);
-        let key = key.clone();
-        let target = speaker.target.clone();
-        self.emit_speaker(
-            &key,
-            SpeakerEvent::State(SpeakerState::Retrying { at: now }),
-        );
-        if let Some(target) = target {
-            self.wake_target_waiters(&target, now);
+        let ptp_free = self.ptp.is_none();
+        loop {
+            let holding = self.speakers.values().filter(|s| s.holds_ap2()).count();
+            if holding >= self.ap2_sessions {
+                return;
+            }
+            let Some((key, speaker)) = self
+                .speakers
+                .iter_mut()
+                .filter(|(_, speaker)| {
+                    (speaker.ap2_waiting || (speaker.ptp_waiting && ptp_free))
+                        && !speaker.removing
+                        && matches!(speaker.phase, Phase::Failed)
+                })
+                .min_by_key(|(_, speaker)| speaker.ap2_refusal)
+            else {
+                return;
+            };
+            speaker.ap2_waiting = false;
+            speaker.ptp_waiting = false;
+            speaker.ap2_retry = true;
+            speaker.wait_until(now, StartKind::Host);
+            let key = key.clone();
+            self.emit_speaker(
+                &key,
+                SpeakerEvent::State(SpeakerState::Retrying { at: now }),
+            );
         }
     }
 
@@ -1734,6 +1773,7 @@ impl Driver {
         self.ptp_restart.remove(key);
         self.ptp_moved.remove(key);
         self.ptp_retrying.remove(key);
+        self.ptp_excluded.remove(key);
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
@@ -1896,13 +1936,14 @@ impl Driver {
     fn begin_session(&mut self, key: &DeviceKey, now: Instant) -> bool {
         let held = self.speakers.get_mut(key).is_some_and(|speaker| {
             speaker.ap2_waiting = false;
+            speaker.ptp_waiting = false;
             std::mem::take(&mut speaker.ap2_retry)
         });
         self.open_session(key, now);
         if let Some(speaker) = self.speakers.get_mut(key) {
             speaker.told_connecting = false;
         }
-        // A retry that ends anywhere but a running AirPlay 2 session hands the place on (P169).
+        // A retry that ends anywhere but a running AirPlay 2 session hands its place on (P169).
         if held {
             self.wake_ap2_waiter(now);
         }
@@ -1995,6 +2036,10 @@ impl Driver {
         if self.plans_ap2(key) {
             return self.start_ap2(key, now);
         }
+        self.open_airplay1(key, now);
+    }
+
+    fn open_airplay1(&mut self, key: &DeviceKey, now: Instant) {
         let planned = {
             let Some(speaker) = self.speakers.get_mut(key) else {
                 return;
@@ -2602,7 +2647,8 @@ mod tests {
         let (local, remote) = (free(), free());
         let mut driver = Driver::new(stream, receiver, inputs, events, latency)
             .with_airplay2(true, false, Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]))
-            .with_ptp_ports(local, remote);
+            .with_ptp_ports(local, remote)
+            .with_airplay2_sessions(1);
 
         // Receivers that take the connection and never answer.
         let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
@@ -2666,6 +2712,216 @@ mod tests {
         assert!(driver.ptp.is_some(), "the service is bound");
         assert!(driver.speakers[&second_key].ap2_waiting);
         drop(listener);
+        true
+    }
+
+    // A on PTP, B waiting for PTP on another network, C on NTP: once A
+    // ends, the service closes and B starts; C never holds it open (P205).
+    #[test]
+    fn a_ptp_waiter_starts_once_the_last_ptp_session_ends_whatever_ntp_sessions_run() {
+        for _ in 0..5 {
+            if ptp_waiter_after_the_last_ptp_session() {
+                return;
+            }
+        }
+        panic!("another socket took a picked PTP port on every pick");
+    }
+
+    fn ptp_waiter_after_the_last_ptp_session() -> bool {
+        use crate::discovery::{DeviceId, ScopedAddr, ServiceKind, ServiceRecord};
+        use std::net::{IpAddr, Ipv4Addr, TcpListener, UdpSocket};
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let free = || {
+            let [event, general] = [(); 2].map(|()| {
+                UdpSocket::bind("0.0.0.0:0")
+                    .and_then(|socket| Ok((socket.local_addr()?.port(), socket)))
+                    .expect("a free port")
+            });
+            crate::ptp::PtpPorts {
+                event: event.0,
+                general: general.0,
+            }
+        };
+        let (local, remote) = (free(), free());
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency)
+            .with_airplay2(true, false, Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]))
+            .with_ptp_ports(local, remote);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let port = listener.local_addr().expect("an address").port();
+        let device = |n: u8| {
+            let id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, n]);
+            let record = ServiceRecord {
+                kind: ServiceKind::AirPlay,
+                instance: format!("Speaker {n}"),
+                host: format!("speaker-{n}.local"),
+                port,
+                txt: [
+                    "features=0x0,0x10240".to_owned(),
+                    "flags=0x4".to_owned(),
+                    "model=Speaker1,1".to_owned(),
+                    format!("deviceid={id}"),
+                ]
+                .into_iter()
+                .map(String::into_bytes)
+                .collect(),
+                addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
+            };
+            Device::from_records(DeviceKey::Id(id), None, Some(&record)).expect("a device")
+        };
+        let options = || SpeakerOptions::new(Volume::Db(-20.0));
+        let counters = || Arc::new(SpeakerCounters::default());
+        let (a, b, c) = (device(1), device(2), device(3));
+        let (a_key, b_key, c_key) = (a.key.clone(), b.key.clone(), c.key.clone());
+        driver.add_speaker(a, options(), counters(), now);
+        if driver.ptp_unavailable_told {
+            return false;
+        }
+        assert!(driver.ptp.is_some(), "the service is bound");
+        driver.add_speaker(b, options(), counters(), now);
+        driver.add_speaker(c, options(), counters(), now);
+        // A is served; C, set up with the PtpPeer, had its SETUP answered
+        // with NTP but not yet its RECORD; B was refused with "PTP in use on
+        // another network".
+        if let Phase::Ap2(active) = &mut driver.speakers.get_mut(&a_key).expect("A").phase {
+            active.ptp_served = true;
+        }
+        assert!(
+            matches!(&driver.speakers[&c_key].phase, Phase::Ap2(active) if active.ptp_configured),
+            "C was offered the PtpPeer"
+        );
+        driver.ap2_event(
+            &c_key,
+            crate::ap2::Ap2Event::TimingChosen(crate::ap2::Timing::Ntp),
+            now,
+        );
+        assert!(driver.ptp.is_some(), "A still uses the service");
+        driver.end_session(&b_key, Phase::Failed);
+        driver.ap2_refusals += 1;
+        let refusal = driver.ap2_refusals;
+        let waiter = driver.speakers.get_mut(&b_key).expect("B");
+        waiter.ptp_waiting = true;
+        waiter.ap2_refusal = refusal;
+
+        driver.end_session(&a_key, Phase::Failed);
+        driver.flush(now);
+        assert!(driver.ptp.is_none(), "C on NTP holds no service");
+        assert!(
+            !driver.speakers[&b_key].ptp_waiting
+                && matches!(driver.speakers[&b_key].phase, Phase::Waiting(_)),
+            "B starts"
+        );
+        assert!(matches!(driver.speakers[&c_key].phase, Phase::Ap2(_)));
+        drop(listener);
+        true
+    }
+
+    // A plays on a PTP service bound over IPv6. B speaks both, has no IPv6
+    // address and remembers PTP, and only the preference sends it to
+    // AirPlay 2: AirPlay 1 plays it instead of a wait for PTP (P214).
+    #[test]
+    fn a_dual_speaker_only_the_preference_sends_to_airplay2_plays_airplay1_rather_than_wait_for_ptp()
+     {
+        for _ in 0..5 {
+            if dual_speaker_beside_a_ptp_service_elsewhere() {
+                return;
+            }
+        }
+        panic!("another socket took a picked PTP port on every pick");
+    }
+
+    fn dual_speaker_beside_a_ptp_service_elsewhere() -> bool {
+        use crate::discovery::{DeviceId, ScopedAddr, ServiceKind, ServiceRecord};
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, UdpSocket};
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let v6 = IpAddr::V6(Ipv6Addr::LOCALHOST);
+        let bind_ip = crate::ptp::service_bind_ip(v6);
+        let free = || {
+            let [event, general] = [(); 2].map(|()| {
+                UdpSocket::bind((bind_ip, 0))
+                    .and_then(|socket| Ok((socket.local_addr()?.port(), socket)))
+                    .expect("a free port")
+            });
+            crate::ptp::PtpPorts {
+                event: event.0,
+                general: general.0,
+            }
+        };
+        let (local, remote) = (free(), free());
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency)
+            .with_airplay2(true, true, Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]))
+            .with_ptp_ports(local, remote);
+        let listener_v6 = TcpListener::bind((v6, 0)).expect("a listener");
+        let listener_v4 = TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let record = |kind: ServiceKind, n: u8, address: IpAddr, port: u16, txt: Vec<String>| {
+            ServiceRecord {
+                kind,
+                instance: format!("Speaker {n}"),
+                host: format!("speaker-{n}.local"),
+                port,
+                txt: txt.into_iter().map(String::into_bytes).collect(),
+                addresses: vec![ScopedAddr::new(address)],
+            }
+        };
+        // Features bits 38, 41 (PTP) and 48 (P16, P157).
+        let airplay_txt = |id: DeviceId| {
+            vec![
+                "features=0x0,0x10240".to_owned(),
+                "flags=0x4".to_owned(),
+                "model=Speaker1,1".to_owned(),
+                format!("deviceid={id}"),
+            ]
+        };
+        let a_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 1]);
+        let a_port = listener_v6.local_addr().expect("an address").port();
+        let a_record = record(ServiceKind::AirPlay, 1, v6, a_port, airplay_txt(a_id));
+        let a = Device::from_records(DeviceKey::Id(a_id), None, Some(&a_record)).expect("A");
+        let b_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 2]);
+        let v4 = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let b_port = listener_v4.local_addr().expect("an address").port();
+        let raop_txt = [
+            "txtvers=1",
+            "ch=2",
+            "cn=0",
+            "et=0",
+            "sr=44100",
+            "ss=16",
+            "tp=UDP",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let b_raop = record(ServiceKind::Raop, 2, v4, b_port, raop_txt);
+        let b_airplay = record(ServiceKind::AirPlay, 2, v4, b_port, airplay_txt(b_id));
+        let b =
+            Device::from_records(DeviceKey::Id(b_id), Some(&b_raop), Some(&b_airplay)).expect("B");
+        assert_eq!(b.choose_path(true, None), Ok(ProtocolPath::AirPlay1));
+        let (a_key, b_key) = (a.key.clone(), b.key.clone());
+        let counters = || Arc::new(SpeakerCounters::default());
+        driver.add_speaker(a, SpeakerOptions::new(Volume::Db(-20.0)), counters(), now);
+        if driver.ptp_unavailable_told {
+            return false;
+        }
+        assert!(driver.ptp.is_some(), "the service is bound over IPv6");
+        assert!(
+            matches!(&driver.speakers[&a_key].phase, Phase::Ap2(active) if active.may_take_ptp())
+        );
+        let mut options = SpeakerOptions::new(Volume::Db(-20.0));
+        options.timing = Some(super::super::TimingMemory::of(&b, crate::ap2::Timing::Ptp));
+        driver.add_speaker(b, options, counters(), now);
+        let b = &driver.speakers[&b_key];
+        assert!(!b.ptp_waiting, "B waits for PTP");
+        assert!(matches!(b.phase, Phase::Active(_)), "B is not on AirPlay 1");
+        drop((listener_v6, listener_v4));
         true
     }
 
@@ -2761,6 +3017,7 @@ mod tests {
                 removing: false,
                 airplay1_outcome: None,
                 ap2_waiting: false,
+                ptp_waiting: false,
                 ap2_refusal: 0,
                 ap2_retry: false,
                 reads_volume: false,
