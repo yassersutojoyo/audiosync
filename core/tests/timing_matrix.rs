@@ -17,10 +17,10 @@
 //! Invariants, from 2 s on unless said otherwise:
 //! - I1: no read runs dry.
 //! - I2: no drift skip or silence at any time, the start included.
-//! - I3: S206's slow-down makes up no shortage, unless the output's wander
-//!   brings its callbacks earlier faster than S207's trim can carry it later
-//!   (S209), which runs its lead's slack down. A late-first output's I1 and
-//!   I3 count from 1 s after its callbacks came on time.
+//! - I3: S206's slow-down makes up no shortage. A late-first output's I1
+//!   and I3 count from 1 s after its callbacks came on time. Neither counts
+//!   for an output whose wander brings its callbacks earlier faster than
+//!   S207's trim can carry it later (S209), which runs its lead's slack down.
 //! - I4: over the last quarter, any two outputs' mean delays, less their
 //!   latencies and hold-backs, lie within a capture block plus 2 ms.
 //! - I5: over the last quarter, each output's delay stays within 2 ms.
@@ -1030,9 +1030,10 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         let mut own = [false; 8];
         let mut trim = String::new();
         if !case.is_stall() {
-            own[0] = dry > 0;
+            let outruns = wander_outruns_trim(d);
+            own[0] = dry > 0 && !outruns;
             own[1] = corrections > 0;
-            own[2] = shortage > 0 && !wander_outruns_trim(d);
+            own[2] = shortage > 0 && !outruns;
             own[4] = o.tail.count == 0 || spread > STEADY_MS;
             if d.wander_ms == 0.0 && d.ppm.abs() >= TRIM_JUDGED_PPM {
                 let judged_s = case.seconds - o.trim_judged_from;
