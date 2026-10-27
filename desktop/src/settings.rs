@@ -56,7 +56,7 @@ use serde::{Deserialize, Serialize};
 use crate::audio::cast_address;
 use crate::data_folder;
 use crate::remote::RemoteSettings;
-use crate::ui_model::WindowFrame;
+use crate::ui_model::{UpdateRecord, WindowFrame};
 
 /// The file's name in the app's data folder.
 #[cfg(any(os_backend, test))]
@@ -705,6 +705,25 @@ pub struct Settings {
     pub cast_addresses: Vec<String>,
     /// File > AirPlay 2 (Experimental); read at launch only (spec P170).
     pub airplay2_experimental: bool,
+    /// File > Check for Updates Automatically (spec S305), on by default.
+    pub check_updates_automatically: bool,
+    /// The last update check that read the appcast, in seconds since the
+    /// Unix epoch (spec S305).
+    pub last_update_check: Option<u64>,
+    /// The version that failed its first start or was blocked (spec S316);
+    /// one that doesn't read is no record.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "record_that_reads"
+    )]
+    pub update_record: Option<UpdateRecord>,
+}
+
+fn record_that_reads<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<UpdateRecord>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
 }
 
 impl Default for Settings {
@@ -736,6 +755,9 @@ impl Default for Settings {
             remote: RemoteSettings::default(),
             cast_addresses: Vec::new(),
             airplay2_experimental: false,
+            check_updates_automatically: true,
+            last_update_check: None,
+            update_record: None,
         }
     }
 }
@@ -999,6 +1021,9 @@ impl Settings {
             remote: self.remote.clamped(),
             cast_addresses: cast_address::clamped(self.cast_addresses),
             airplay2_experimental: self.airplay2_experimental,
+            check_updates_automatically: self.check_updates_automatically,
+            last_update_check: self.last_update_check,
+            update_record: self.update_record,
         }
     }
 
@@ -1857,6 +1882,36 @@ mod tests {
         let on = read(r#"{"version": 2, "airplay2_experimental": true}"#);
         assert!(on.airplay2_experimental);
         assert!(read(&on.to_json()).airplay2_experimental);
+    }
+
+    #[test]
+    fn update_checks_are_on_by_default_and_keep_their_time() {
+        let read = |json: &str| Settings::from_json(json).expect("read").0;
+        assert!(Settings::default().check_updates_automatically);
+        assert!(read(r#"{"version": 2}"#).check_updates_automatically);
+        let off = read(
+            r#"{"version": 2, "check_updates_automatically": false, "last_update_check": 1800000000}"#,
+        );
+        assert!(!off.check_updates_automatically);
+        let again = read(&off.to_json());
+        assert_eq!(again.last_update_check, Some(1_800_000_000));
+        assert!(!again.check_updates_automatically);
+        assert_eq!(again.update_record, None);
+
+        // covers: S316
+        let blocked =
+            read(r#"{"version": 2, "update_record": {"version": "0.9.0", "reason": "blocked"}}"#);
+        let record = Some(crate::ui_model::UpdateRecord {
+            version: "0.9.0".to_owned(),
+            reason: crate::ui_model::UpdateRecordReason::Blocked,
+        });
+        assert_eq!(blocked.update_record, record);
+        assert_eq!(read(&blocked.to_json()).update_record, record);
+        let odd = read(r#"{"version": 2, "update_record": {"version": 9}}"#);
+        assert_eq!(
+            odd.update_record, None,
+            "a record that doesn't read is none"
+        );
     }
 
     #[test]

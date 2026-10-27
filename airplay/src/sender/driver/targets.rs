@@ -78,8 +78,12 @@ impl Driver {
         };
         let airplay2 = self.airplay2
             && in_view.iter().any(|device| {
-                device.choose_path_paired(true, None, paired(&device.key))
-                    == Ok(ProtocolPath::AirPlay2)
+                device.choose_path_preferring(
+                    true,
+                    self.airplay2_preferred,
+                    None,
+                    paired(&device.key),
+                ) == Ok(ProtocolPath::AirPlay2)
             });
         self.driven.insert(
             id.clone(),
@@ -440,9 +444,12 @@ impl Driver {
             return;
         }
         let missing = |speakers: &BTreeMap<DeviceKey, Speaker>, key: &DeviceKey| {
-            speakers
-                .get(key)
-                .is_none_or(|speaker| matches!(speaker.phase, Phase::Waiting(_) | Phase::Failed))
+            speakers.get(key).is_none_or(|speaker| {
+                matches!(
+                    speaker.phase,
+                    Phase::Waiting(_) | Phase::Unannounced | Phase::Failed
+                )
+            })
         };
         let mut changed = Vec::new();
         for (id, run) in &self.driven {

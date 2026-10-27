@@ -4,8 +4,9 @@
 #   --hardware  also runs the engine test, which opens real output devices at
 #               zero volume (silent) to check render flow and delay end to end.
 # Also runs shellcheck on the scripts in scripts/shellcheck-files.txt (it fails
-# if shellcheck isn't installed: brew install shellcheck) and the private-reference
-# check, scripts/privacy_check.py. The logic and core suites, the soak harness
+# if shellcheck isn't installed: brew install shellcheck), the private-reference
+# check, scripts/privacy_check.py, and the host spec-marker check,
+# scripts/spec_markers.py. The logic and core suites, the soak harness
 # and the engine test link the Rust core, so this builds it first with
 # scripts/build_core.sh (which needs a Rust toolchain).
 # Off macOS (the Windows PC's Git Bash) the Swift suites can't build, so it runs
@@ -89,6 +90,14 @@ if [ -z "$python" ]; then
   status=1
 else
   { "$python" -I scripts/text_check.py --self-test && "$python" -I scripts/text_check.py; } || status=1
+fi
+
+echo "▶ host spec markers name real clauses (scripts/spec_markers.py)"
+if [ -z "$python" ]; then
+  echo "$no_python"
+  status=1
+else
+  { "$python" -I scripts/spec_markers.py --self-test && "$python" -I scripts/spec_markers.py; } || status=1
 fi
 
 if [ "$only" = python ]; then
@@ -177,6 +186,25 @@ elif grep -nE 'DebugTrace|print\(|NSLog|os_log|Logger|DispatchQueue|Lock|Mutex|p
   status=1
 elif grep -nE 'Array\(|\.allocate\(|\[Float\]\(|\.append\(' <<< "$io_only"; then
   echo "FAIL: an IOProc allocates"
+  status=1
+else
+  echo "PASSED"
+fi
+
+echo "▶ zone header clicks go through its routing table"
+# The logic suite proves ZoneHeaderHit; this proves the view reaches it from
+# each area, with the box's tap last so the slider and the menu keep theirs.
+zone_card=$(awk '/^private struct ZoneCard/ { f = 1 } f { print } f && /^}$/ { exit }' "$SRC/MainWindow.swift")
+if [ "$(grep -c 'hit(\.' <<< "$zone_card")" -ne 5 ] \
+    || ! grep -q 'Button { hit(\.chevron) }' <<< "$zone_card" \
+    || ! grep -q 'Button { hit(\.zoneIcon) }' <<< "$zone_card" \
+    || ! grep -q '\.onTapGesture { hit(\.name) }' <<< "$zone_card" \
+    || ! grep -q '\.onTapGesture { hit(\.count) }' <<< "$zone_card" \
+    || ! grep -A1 -E '^        \.contentShape\(Rectangle\(\)\)$' <<< "$zone_card" \
+         | grep -qE '^        \.onTapGesture \{ hit\(\.blank\) \}$' \
+    || [ "$(grep -c 'toggleZone(' <<< "$zone_card")" -ne 1 ] \
+    || ! grep -q 'case \.toggleZone: model\.actions\.toggleZone(zone\.id)' <<< "$zone_card"; then
+  echo "FAIL: a zone header area no longer goes through ZoneHeaderHit, or something else switches the zone"
   status=1
 else
   echo "PASSED"

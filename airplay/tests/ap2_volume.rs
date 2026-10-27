@@ -655,7 +655,7 @@ fn sets_framed(rig: &Ap2Rig) -> bool {
 
 // covers: P183, P184
 #[test]
-fn k1_row_20_reaches_the_samsung_as_minus_24_db_after_the_flush_answer() {
+fn row_20_reaches_the_samsung_as_minus_24_db_after_the_flush_answer_without_master_volume() {
     let mut fake = FakeAp2::samsung();
     fake.hold = Some("FLUSH".to_owned());
     let mut config = reading_config();
@@ -680,14 +680,14 @@ fn k1_row_20_reaches_the_samsung_as_minus_24_db_after_the_flush_answer() {
     assert!(warnings(&rig).is_empty(), "{:?}", rig.events);
     assert!(rig.failure().is_none());
     cell(
-        "AP2.K1",
+        "AP2.row20",
         "row 20 sent once as -24.000000 dB, encrypted, right after the FLUSH answer; read back -24 dB",
     );
 }
 
 // covers: P183, P184
 #[test]
-fn k1_keep_a_new_session_starts_the_samsung_at_the_level_it_holds() {
+fn a_new_session_starts_the_samsung_at_the_level_it_holds_without_master_volume() {
     let mut rig = Ap2Rig::new(reading_config(), FakeAp2::samsung());
     assert!(rig.ready(), "{:?} {:?}", rig.keys(), rig.events);
     let now = rig.now;
@@ -714,7 +714,7 @@ fn k1_keep_a_new_session_starts_the_samsung_at_the_level_it_holds() {
     assert!(warnings(&again).is_empty(), "{:?}", again.events);
     assert!(again.failure().is_none());
     cell(
-        "AP2.K1.keep",
+        "AP2.row20.keep",
         &format!("TV holding {held} dB, new session sent -24.000000 once, read back -24 dB"),
     );
 }

@@ -91,14 +91,19 @@ impl Driver {
         }
     }
 
+    /// Whether another speaker, outside `key`'s target, runs an AirPlay 2
+    /// session or waits to retry its own (P169).
+    pub(super) fn ap2_place_taken(&self, key: &DeviceKey) -> bool {
+        self.speakers.iter().any(|(other, speaker)| {
+            other != key && speaker.holds_ap2() && !self.same_target(key, other)
+        })
+    }
+
     /// Starts an AirPlay 2 session, unless another speaker runs one or waits
     /// to retry its own (P169): that one, and every AirPlay 1 session, go on
     /// untouched.
     pub(super) fn start_ap2(&mut self, key: &DeviceKey, now: Instant) {
-        let running = self.speakers.iter().any(|(other, speaker)| {
-            other != key && speaker.holds_ap2() && !self.same_target(key, other)
-        });
-        if running {
+        if self.ap2_place_taken(key) {
             let error = SessionError::new(ErrorKind::Unsupported(
                 UnsupportedReason::OneAirPlay2Session,
             ));
@@ -117,11 +122,13 @@ impl Driver {
         };
         // The PTP ports are bound only for a receiver that may take PTP:
         // one that took it before or sets features bit 41 (P157, P158).
+        let remembered = self.remembered_ptp(key);
         let restart = self.ptp_restart.remove(key);
         let wants = restart != Some(None)
-            && self.speakers.get(key).is_some_and(|speaker| {
-                self.ptp_timing.contains(key) || speaker.device.features().has(FEATURE_PTP)
-            });
+            && self
+                .speakers
+                .get(key)
+                .is_some_and(|speaker| remembered || speaker.device.features().has(FEATURE_PTP));
         let mut addresses = self
             .speakers
             .get(key)
@@ -196,11 +203,7 @@ impl Driver {
         config.device_id = self.device_id;
         config.ptp = ptp;
         config.members = members;
-        config.timing = if self.ptp_timing.contains(key) {
-            Timing::Ptp
-        } else {
-            Timing::Ntp
-        };
+        config.timing = if remembered { Timing::Ptp } else { Timing::Ntp };
         let events_key = SessionKey(self.next_session);
         self.next_session += 1;
         let mut pairing_connection = None;
@@ -243,6 +246,7 @@ impl Driver {
         if let (Some(Connection { local, .. }), Some(peer)) = (pairing_connection, held_remote) {
             self.remote_attach(key, remote, SocketAddr::new(local, 0), peer.ip());
         }
+        self.emit_speaker(key, SpeakerEvent::Path(ProtocolPath::AirPlay2));
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Connecting));
     }
 
@@ -361,13 +365,60 @@ impl Driver {
     }
 
     /// Drops the HomeKit credentials kept for a device, so its next session
-    /// pairs again.
+    /// pairs again, and its timing entry with them (P217).
     pub(super) fn forget_homekit(&mut self, key: &DeviceKey) {
         if let Some(speaker) = self.speakers.get_mut(key) {
             speaker.options.homekit_credentials = None;
+            speaker.options.timing = None;
         }
         self.homekit.remove(key);
         self.homekit_turned_down.remove(key);
+        self.timing_memory.remove(key);
+    }
+
+    /// Whether the device's timing entry says PTP and still holds, so the
+    /// first session SETUP asks for PTP; an entry its TXT record no longer
+    /// matches is forgotten (P217).
+    fn remembered_ptp(&mut self, key: &DeviceKey) -> bool {
+        let Some(speaker) = self.speakers.get_mut(key) else {
+            return false;
+        };
+        if let Some(stored) = speaker.options.timing.take() {
+            self.timing_memory.insert(key.clone(), stored);
+        }
+        let device = &speaker.device;
+        let Some(memory) = self.timing_memory.get(key) else {
+            return false;
+        };
+        if memory.matches(device) {
+            return memory.timing == Timing::Ptp && device.features().has(FEATURE_PTP);
+        }
+        self.timing_memory.remove(key);
+        self.emit_speaker(key, SpeakerEvent::TimingForgotten);
+        false
+    }
+
+    /// Keeps the timing a session SETUP took and hands a new entry to the
+    /// host (P217). An NTP session that had no PTP service leaves a PTP
+    /// entry as it is.
+    fn remember_timing(&mut self, key: &DeviceKey, timing: Timing) {
+        let without_ptp = self
+            .ap2_active(key)
+            .is_some_and(|active| !active.session.has_ptp());
+        let Some(speaker) = self.speakers.get(key) else {
+            return;
+        };
+        let memory = TimingMemory::of(&speaker.device, timing);
+        let held = self.timing_memory.get(key);
+        let kept_ptp = without_ptp && held.is_some_and(|held| held.timing == Timing::Ptp);
+        if held == Some(&memory) || kept_ptp {
+            return;
+        }
+        self.timing_memory.insert(key.clone(), memory.clone());
+        // The host keeps it by deviceid, never by a name (P217).
+        if matches!(key, DeviceKey::Id(_)) {
+            self.emit_speaker(key, SpeakerEvent::TimingRemembered(memory));
+        }
     }
 
     pub(super) fn next_ap2_output(&mut self, key: &DeviceKey) -> Option<Ap2Output> {
@@ -693,9 +744,14 @@ impl Driver {
                 self.homekit_turned_down.remove(key);
                 self.emit_speaker(key, SpeakerEvent::HomeKitPaired(credentials));
             }
+            Ap2Event::TimingRefused => {
+                if self.timing_memory.remove(key).is_some() {
+                    self.emit_speaker(key, SpeakerEvent::TimingForgotten);
+                }
+            }
             Ap2Event::TimingChosen(timing) => {
+                self.remember_timing(key, timing);
                 if timing == Timing::Ptp {
-                    self.ptp_timing.insert(key.clone());
                     let remote = self
                         .ap2_active(key)
                         .and_then(|active| active.session.remote());

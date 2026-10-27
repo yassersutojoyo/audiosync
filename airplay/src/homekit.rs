@@ -99,12 +99,15 @@ pub enum Stored {
     TurnedDown,
 }
 
-/// P61's order: flags bit 3 (a PIN every time, stored credentials or not),
-/// then a password pairing in place of turned-down credentials, then stored
+/// P61's order: stored credentials not turned down verify first, even under
+/// bit 3, which anyone can send in plain text; then bit 3 (PIN), then a
+/// password pairing in place of turned-down credentials, then turned-down
 /// credentials, then bit 9 (PIN), then bit 7 (password), otherwise
 /// transient.
 pub fn choose_mode(flags: u64, stored: Stored) -> Mode {
-    if asks_code_every_time(flags) {
+    if stored == Stored::Kept {
+        Mode::Verify
+    } else if asks_code_every_time(flags) {
         Mode::Pin
     } else if stored == Stored::TurnedDown && flags & FLAG_PASSWORD != 0 {
         Mode::Password

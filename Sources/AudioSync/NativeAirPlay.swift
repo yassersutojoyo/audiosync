@@ -743,16 +743,7 @@ final class NativeAirPlay {
         }
     }
 
-    static func state(_ code: Int32) -> NativeSpeakerEvent.State? {
-        switch code {
-        case ASC_AIRPLAY_STATE_CONNECTING: return .connecting
-        case ASC_AIRPLAY_STATE_PLAYING: return .playing
-        case ASC_AIRPLAY_STATE_RETRYING: return .retrying
-        case ASC_AIRPLAY_STATE_FAILED: return .failed
-        case ASC_AIRPLAY_STATE_STOPPED: return .stopped
-        default: return nil
-        }
-    }
+    static func state(_ code: Int32) -> NativeSpeakerEvent.State? { NativeSpeakerEvent.State(code: code) }
 
     /// An unsupported session's reason, where the app words it apart.
     static func problem(_ code: Int32, reason: Int32) -> NativeSpeakerEvent.Problem {

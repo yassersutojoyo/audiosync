@@ -30,7 +30,7 @@ S97 Retired with the bundled engine; host-side by design: the password and the c
 S98 Retired with the bundled engine: its process lifecycle; the core's policy::engine went too.
 S99 Retired with the bundled engine: its pipe playback; the core's policy::engine went too.
 S100 Retired with the bundled engine: its output list; the core's policy::reconcile went too.
-S101 The host's 3 s poll; the rest, the bundled engine's HTTP client transport (timeouts, serial write queue, path encoding), is retired.
+S101 The host's reconciles, driven by Core Audio's device-list notice, the sender's events and a 30 s safety net (the Mac logic suite's "reconcile: …" tests); the rest, the bundled engine's HTTP client transport (timeouts, serial write queue, path encoding), is retired.
 S102 Retired with the bundled engine: its reachability and restarts; the core's policy::reconcile went too.
 S103 Retired with the bundled engine: its switch-on tracking; the core's policy::reconcile went too.
 S104 Retired with the bundled engine: its reconcile of each reported speaker; the core's policy::reconcile went too.
@@ -43,8 +43,8 @@ S110 Retired with the bundled engine: its quit sequence, the API write drain and
 S111 The app's SIGTERM and SIGINT handlers: process signals and the exit path.
 S112 Engine control interface of the host's engine wrapper (Core Audio device IDs, callbacks).
 S113 Main-thread dispatch of the host's control calls and callbacks.
-S114 Session start orchestration, which starts Core Audio capture after the core's ring and equalizer.
-S115 Session stop orchestration, which stops Core Audio capture and renderers.
+S114 Session start orchestration, which starts the host's capture after the core's ring and equalizer; the Windows controller's a_failed_start_leaves_nothing_running_and_every_feed_free tests its failure path.
+S115 Session stop orchestration, which stops the host's capture and renderers; the Windows controller's a_second_stop_is_safe_and_no_capture_runs_once_a_stop_finished tests it.
 S129 Retired with the FIFO feed: its writer thread.
 S143 Retired with the bundled engine and the FIFO feed: the engine's restart and the pipe's reopen.
 S148 Retired with the bundled engine and the FIFO feed: a network loss as the engine's reconcile saw it.
@@ -85,7 +85,6 @@ S219 Mac host only: what the app hands its own AirPlay sender as track info; its
 S220 Mac host only: the delay field's typed text and when it applies; its logic suite checks it.
 S221 Mac host only: the delay panels of the speaker rows; its logic suite checks it.
 S222 Mac host only: the window's model of the native AirPlay sender's receivers, speakers and failures; its logic suite checks it.
-S223 Mac host only: pairing and password prompts for the native AirPlay sender; its logic suite checks it.
 S225 Test harness only: the soak run's memory rule; the soak rules suite checks it.
 S228 Mac host only: the names the user gives speakers and the inline rename; its logic suite checks it.
 S256 Web remote and hosts only: the snapshot's zones, presets and calibrating flag; the remote crate's, the Windows host's and the Mac logic suites check it.
@@ -112,3 +111,25 @@ S284 Hosts only: Lf, E and each row's delay with several AirPlay 2 receivers, a 
 S285 Hosts only: every AirPlay 2 speaker playing, the two wait reasons and one speaker's failure on its own row; the Windows tests and the Mac logic suite check all but the two reasons, which the sender doesn't report yet.
 S288 Hosts only: the web remote's debug switch at launch; the Windows host's tests and the Mac logic suite check it.
 S292 Hosts only: an explicit pause from a play-pause or the player's own pause seen in the host's now-playing readings, resumed by the mirror or by sound the host counts in its own capture; the Windows tests and the Mac logic suite check it.
+S293 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S294 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S295 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S296 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S297 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S298 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S299 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S300 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S301 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S302 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S303 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S304 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S305 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S306 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S307 Hosts only: the Windows updater of section 19; whether SmartScreen prompts after a swap is checked by hand at the first PC sitting with a real update.
+S308 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S309 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S310 Hosts only: the Mac's Sparkle reading the shared appcast with Windows items; a Mac check on the first such release appcast will check it.
+S311 Hosts only: the release appcast's Windows items; a check in the release script will check it.
+S314 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S315 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S316 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.

@@ -1091,6 +1091,10 @@ mod tests {
                 AIRPLAY_STATE_STOPPED.to_string(),
             ),
             (
+                "ASC_AIRPLAY_STATE_UNANNOUNCED",
+                AIRPLAY_STATE_UNANNOUNCED.to_string(),
+            ),
+            (
                 "ASC_AIRPLAY_ERROR_NOT_RESPONDING",
                 AIRPLAY_ERROR_NOT_RESPONDING.to_string(),
             ),
