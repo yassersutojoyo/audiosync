@@ -1093,6 +1093,10 @@ impl Renderer {
         let shift = i128::from(shift_ns) * i128::from(self.capture_rate) / 1_000_000_000;
         self.reader
             .set_floor_shift_frames(shift.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64);
+        // At the time the callback really reads at: Jr already counts its
+        // lateness, so the capture written meanwhile belongs in the anchor.
+        let capture = now.and_then(|now| self.capture_estimate(now));
+        self.reader.set_capture_frames(capture);
         // The capture's clock is judged at the time the callback would have
         // read at had it come as early as the earliest ones did when the
         // reader anchored.
@@ -1276,6 +1280,30 @@ impl Renderer {
         }
     }
 
+    /// How old a stamp may be, in ns, before it is stale (S207).
+    fn stale_stamp_ns(&self) -> u64 {
+        let rate = u64::from(self.capture_rate.max(1));
+        let blocks_ns = STALE_STAMP_BLOCKS
+            .saturating_mul(self.reader.ring().block_frames() as u64)
+            .saturating_mul(1_000_000_000)
+            / rate;
+        (STALE_STAMP_MS * 1_000_000).max(blocks_ns)
+    }
+
+    /// `Ws + S` for a callback that reads at `now` (S322): the newest
+    /// stamp's W plus the capture frames of the time since it, at most the
+    /// lead's block. `None` without a stamp or with a stale one.
+    fn capture_estimate(&self, now: u64) -> Option<i64> {
+        let stamp = self.reader.ring().stamp()?;
+        let age_ns = now.saturating_sub(stamp.time_ns);
+        if age_ns > self.stale_stamp_ns() {
+            return None;
+        }
+        let block = self.reader.ring().block_frames().min(self.block_cap) as u128;
+        let since = (u128::from(age_ns) * u128::from(self.capture_rate) / 1_000_000_000).min(block);
+        i64::try_from(u128::from(stamp.written) + since).ok()
+    }
+
     /// Follows the capture's clock at the start of a callback of `frames`
     /// device frames that reads at `now`, needs `need` capture frames and
     /// goes on as `next` says (S207). Returns the trim it asks for, in
@@ -1288,12 +1316,7 @@ impl Renderer {
             return 0;
         };
         let rate = u64::from(self.capture_rate.max(1));
-        let blocks_ns = STALE_STAMP_BLOCKS
-            .saturating_mul(ring.block_frames() as u64)
-            .saturating_mul(1_000_000_000)
-            / rate;
-        let stale_ns = (STALE_STAMP_MS * 1_000_000).max(blocks_ns);
-        if now.saturating_sub(stamp.time_ns) > stale_ns {
+        if now.saturating_sub(stamp.time_ns) > self.stale_stamp_ns() {
             self.tracking = RESTART;
             return 0;
         }
@@ -1701,7 +1724,9 @@ impl Renderer {
             // What this callback's Jt counted from, so Jf is 0 from here; a
             // start step already set it (S318).
             if std::mem::take(&mut self.step_floor_set) {
-                let moved = u64::try_from(report.error.saturating_neg()).unwrap_or(0);
+                let ahead = self.reader.anchor_ahead_frames();
+                let moved = report.error.saturating_neg().saturating_sub(ahead);
+                let moved = u64::try_from(moved).unwrap_or(0);
                 self.shared
                     .start_step_frames
                     .fetch_add(moved, Ordering::Relaxed);
@@ -2057,7 +2082,7 @@ mod tests {
         let Tracking::Following { reference, .. } = s.renderer.tracking else {
             panic!("not following: {:?}", s.renderer.tracking);
         };
-        assert!(reference > 4800.0, "{reference}");
+        assert!((reference - 4800.0).abs() < 96.0, "{reference}");
         assert_eq!(
             (s.renderer.slowed_frames(), s.renderer.sped_frames()),
             (0, 0)
@@ -2225,19 +2250,32 @@ mod tests {
         );
     }
 
-    /// [`timed_step`] with a ramp for the block, each frame's value its
-    /// index in the capture: returns how many capture frames behind the
-    /// newest written one the callback's first frame is.
+    /// [`timed_step`] with a ramp for the blocks, each frame's value its
+    /// index in the capture, and the capture writing on its own clock: a
+    /// late callback finds the blocks written by the time it reads at (S322
+    /// anchors on them). Returns how many capture frames behind the newest
+    /// written one the callback's first frame is.
     fn ramp_step(s: &mut Stepped, written: &mut u64, late_ns: u64) -> f64 {
+        stray_step(s, written, late_ns, 0)
+    }
+
+    /// [`ramp_step`] whose output time is a stray, `early_ns` too late, so
+    /// `now - output time` reads that much early while the callback reads
+    /// at its real time.
+    fn stray_step(s: &mut Stepped, written: &mut u64, late_ns: u64, early_ns: u64) -> f64 {
         s.now += 10_000_000;
-        let block: Vec<f32> = (*written..*written + 480)
-            .flat_map(|i| [i as f32 / 4_000_000.0; 2])
-            .collect();
-        *written += 480;
-        s.writer.write_at(&block, 480, s.now);
         let due = s.now + 1_000_000;
+        let reads_at = due + late_ns;
+        while (*written / 480 + 1) * 10_000_000 <= reads_at {
+            let block: Vec<f32> = (*written..*written + 480)
+                .flat_map(|i| [i as f32 / 4_000_000.0; 2])
+                .collect();
+            s.writer
+                .write_at(&block, 480, (*written / 480 + 1) * 10_000_000);
+            *written += 480;
+        }
         s.renderer
-            .render_timed_at(&mut s.out, due + 20_000_000, due + late_ns);
+            .render_timed_at(&mut s.out, due + 20_000_000 + early_ns, reads_at);
         *written as f64 - f64::from(s.out[0]) * 4_000_000.0
     }
 
@@ -2253,7 +2291,7 @@ mod tests {
             ramp_step(&mut s, &mut written, late);
         }
         for _ in 0..strays {
-            ramp_step(&mut s, &mut written, late - early_ns);
+            stray_step(&mut s, &mut written, late, early_ns);
         }
         for _ in 0..5 {
             ramp_step(&mut s, &mut written, late);
@@ -2264,7 +2302,7 @@ mod tests {
             ramp_step(&mut s, &mut written, late);
             ramp_step(&mut s, &mut written, late);
             assert_eq!(s.control.counters().resyncs, 0);
-            ramp_step(&mut s, &mut written, late - early_ns);
+            stray_step(&mut s, &mut written, late, early_ns);
             assert_eq!(s.control.counters().resyncs, 1);
         }
         let mut behind = 0.0;
@@ -2327,7 +2365,7 @@ mod tests {
             ramp_step(&mut s, &mut written, late);
         }
         for _ in 0..2 {
-            ramp_step(&mut s, &mut written, late - early_ns);
+            stray_step(&mut s, &mut written, late, early_ns);
         }
         let mut behind = 0.0;
         for _ in 0..2000 {
@@ -2355,10 +2393,12 @@ mod tests {
 
     /// What [`late_start`] saw: the output's delay 3.2 s in and at the end,
     /// in ms, its start steps, the frames they moved it, the silent device
-    /// frames after its callbacks came on time, and its counters.
+    /// frames after its callbacks came on time, its counters, and the first
+    /// callback after which a start step waited for its fade-out.
     struct LateStart {
         delay_ms: [f64; 2],
         steps: u64,
+        waited_at: Option<usize>,
         step_frames: u64,
         silent: usize,
         counters: ReaderCounters,
@@ -2375,6 +2415,7 @@ mod tests {
         let (mut written, mut block_ns) = (0u64, 10_000_000u64);
         let mut silent = 0;
         let mut delay_ms = [f64::NAN; 2];
+        let mut waited_at = None;
         for call in 0..2000u64 {
             let due = 11_000_000 + call * 10_000_000;
             let now = due + if call < late_calls as u64 { late_ns } else { 0 };
@@ -2394,6 +2435,9 @@ mod tests {
             if call >= late_calls as u64 {
                 silent += s.out.chunks_exact(2).filter(|f| f[0] == 0.0).count();
             }
+            if s.renderer.step_due.is_some() {
+                waited_at.get_or_insert(call as usize);
+            }
             if s.renderer.fade_state() == FadeState::Open {
                 let captured_ms = f64::from(s.out[0]) * 4_000_000.0 / 48.0;
                 let delay = (due + 20_000_000) as f64 / 1e6 - captured_ms;
@@ -2407,6 +2451,7 @@ mod tests {
         LateStart {
             delay_ms,
             steps: s.control.start_steps(),
+            waited_at,
             step_frames: s.control.start_step_frames(),
             silent,
             counters: s.control.counters(),
@@ -2426,9 +2471,9 @@ mod tests {
                 assert!(off.abs() < 2.0, "{late_ns} ns, point {at}: {off:.2} ms");
             }
             assert_eq!(seen.steps, 1, "{late_ns} ns");
-            // The late callbacks read the blocks written by then, so the
-            // output played early by those blocks.
-            let ahead_ms = ((1_000_000 + late_ns) / 10_000_000 * 10) as f64;
+            // The late callbacks anchored on the capture as it stood when they
+            // read, so the output played early by their lateness.
+            let ahead_ms = late_ns as f64 / 1e6;
             let step_ms = seen.step_frames as f64 / 48.0;
             assert!(
                 (step_ms - ahead_ms).abs() < 2.0,
@@ -2458,6 +2503,16 @@ mod tests {
         assert_eq!(late_start(45_000_000, 100, Some(110)).steps, 0);
     }
 
+    // covers: S318
+    #[test]
+    fn a_stop_while_the_start_step_waits_for_its_fade_makes_no_step() {
+        let waited_at = late_start(45_000_000, 100, None).waited_at.unwrap();
+        // Asked for on the next callback, before the step's fade-out ended.
+        let seen = late_start(45_000_000, 100, Some(waited_at + 1));
+        assert_eq!(seen.waited_at, Some(waited_at));
+        assert_eq!((seen.steps, seen.counters.resyncs), (0, 0));
+    }
+
     /// The delay, in ms, of an output held back 100 ms whose callbacks come
     /// `phase_ns` after each 480-frame block, measured 2 s in.
     fn delay_at_phase(phase_ns: u64) -> f64 {
@@ -2473,7 +2528,8 @@ mod tests {
             s.writer.write_at(&block, 480, block_ns);
             written += 480;
             let now = block_ns + phase_ns;
-            s.renderer.render_timed_at(&mut s.out, now + 20_000_000, now);
+            s.renderer
+                .render_timed_at(&mut s.out, now + 20_000_000, now);
             if s.renderer.fade_state() == FadeState::Open {
                 let captured_ms = f64::from(s.out[0]) * 4_000_000.0 / 48.0;
                 delay_ms = (now + 20_000_000) as f64 / 1e6 - captured_ms;
