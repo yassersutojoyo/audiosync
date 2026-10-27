@@ -74,6 +74,8 @@ detach() {
 # the layout and check mounts, and the work folder with the staging folder and
 # the read-write image.
 cleanup() {
+  # A second signal during the detach retries would end this trap halfway.
+  trap '' INT TERM HUP
   if [ -n "$LAYOUT_MOUNT" ]; then
     detach "$LAYOUT_MOUNT" || true
   fi
