@@ -35,7 +35,7 @@ AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay s
 
 ## New in 0.7
 
-The Windows parts are in the preview build, which isn't out yet.
+The Windows parts are in the Windows preview, out since 0.7.1.
 
 - Web Remote: turn it on and a phone on your home network can switch speakers on and off and set volumes and delays. It's plain HTTP, so keep it at home.
 - Calibrate All Speakers measures the speakers that are on, one after the other, and lets you apply or undo the new delays in one go. It leaves out headphones and virtual outputs, since the microphone can't hear them.
