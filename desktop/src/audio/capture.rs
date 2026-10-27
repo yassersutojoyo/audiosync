@@ -1022,6 +1022,54 @@ pub struct CaptureGlitches {
     pub gap_fill_frames: u64,
 }
 
+/// The holes of exact digital silence a capture's stereo frames had inside
+/// sound: runs of frames whose samples are all 0 that follow sound, end in
+/// sound and last [`ZeroRuns::MIN_MS`] to [`ZeroRuns::MAX_MS`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ZeroHoles {
+    pub holes: u64,
+    pub frames: u64,
+    /// The holes that had frames of flagged or filled silence in them.
+    pub flagged: u64,
+}
+
+/// Finds [`ZeroHoles`] in a capture's stereo frames as they pass. Plain
+/// integers: never allocates, locks or blocks.
+#[derive(Debug)]
+pub struct ZeroRuns {
+    holes: ZeroHoles,
+}
+
+impl ZeroRuns {
+    /// The shortest hole counted: shorter zero runs are zero crossings.
+    pub const MIN_MS: u32 = 5;
+    /// The longest: anything longer is a pause, not a hole.
+    pub const MAX_MS: u32 = 500;
+
+    /// A finder for frames at `rate`.
+    pub fn new(rate: u32) -> ZeroRuns {
+        let _ = rate;
+        ZeroRuns {
+            holes: ZeroHoles::default(),
+        }
+    }
+
+    /// Looks at interleaved stereo frames that came as data.
+    pub fn observe(&mut self, stereo: &[f32]) {
+        let _ = stereo;
+    }
+
+    /// Looks at `frames` frames of flagged or filled silence.
+    pub fn observe_silence(&mut self, frames: usize) {
+        let _ = frames;
+    }
+
+    /// The holes found so far.
+    pub fn holes(&self) -> ZeroHoles {
+        self.holes
+    }
+}
+
 /// Decodes little-endian samples into floats in -1.0..=1.0.
 pub(crate) fn decode(sample: SampleType, bytes: &[u8], out: &mut [f32]) {
     match sample {
@@ -2159,6 +2207,77 @@ mod tests {
         let (fill, _, jumped) = gaps.packet(80 * HNS_PER_MS, 480, false);
         counters.count_packet(480, false, fill, jumped);
         assert_eq!(counters.glitches().gap_fill_frames, 480);
+    }
+
+    /// `frames` stereo frames of a 1 kHz tone at 48 kHz, which never holds
+    /// two zero frames in a row.
+    fn tone(frames: usize) -> Vec<f32> {
+        (0..frames)
+            .flat_map(|i| {
+                let v = (i as f32 * 2.0 * std::f32::consts::PI / 48.0 + 0.1).sin() * 0.5;
+                [v, v]
+            })
+            .collect()
+    }
+
+    // covers: S229 (zero holes)
+    #[test]
+    fn a_10_ms_zero_hole_inside_a_tone_is_one_hole() {
+        let mut runs = ZeroRuns::new(48_000);
+        runs.observe(&tone(4_800));
+        runs.observe(&[0.0; 480 * 2]);
+        runs.observe(&tone(4_800));
+        assert_eq!(
+            runs.holes(),
+            ZeroHoles {
+                holes: 1,
+                frames: 480,
+                flagged: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn long_silence_short_gaps_and_leading_silence_are_no_holes() {
+        let mut runs = ZeroRuns::new(48_000);
+        // Silence before any sound, then a long pause between two tones.
+        runs.observe(&[0.0; 4_800 * 2]);
+        runs.observe(&tone(4_800));
+        runs.observe_silence(48_000);
+        runs.observe(&tone(4_800));
+        // 4 ms of zeros is under the 5 ms floor.
+        runs.observe(&[0.0; 192 * 2]);
+        runs.observe(&tone(480));
+        // Trailing silence that never ends in sound.
+        runs.observe(&[0.0; 960 * 2]);
+        assert_eq!(runs.holes(), ZeroHoles::default());
+        let mut silence = ZeroRuns::new(48_000);
+        silence.observe(&[0.0; 48_000 * 2]);
+        assert_eq!(silence.holes(), ZeroHoles::default());
+    }
+
+    #[test]
+    fn a_hole_split_across_packets_and_partly_flagged_counts_once_as_flagged() {
+        let mut runs = ZeroRuns::new(48_000);
+        runs.observe(&tone(480));
+        runs.observe(&[0.0; 240 * 2]);
+        runs.observe_silence(480);
+        runs.observe(&[0.0; 240 * 2]);
+        runs.observe(&tone(480));
+        // One channel silent while the other plays is sound.
+        let mut one_side = tone(480);
+        for frame in one_side.chunks_mut(2) {
+            frame[0] = 0.0;
+        }
+        runs.observe(&one_side);
+        assert_eq!(
+            runs.holes(),
+            ZeroHoles {
+                holes: 1,
+                frames: 960,
+                flagged: 1,
+            }
+        );
     }
 
     #[test]
