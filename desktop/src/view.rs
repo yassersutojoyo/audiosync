@@ -5496,7 +5496,7 @@ mod tests {
 
         // Unreadable text reverts to the saved value.
         app.main
-            .invoke_delay_edited("local:desk".into(), "abc".into());
+            .invoke_delay_edited("local:desk".into(), "+".into());
         app.main.invoke_delay_committed("local:desk".into());
         assert_eq!(applied(), Some(220.0));
         assert_eq!(desk_delay_text(&app), "+220", "unreadable text reverts");
@@ -6192,10 +6192,13 @@ mod tests {
     fn a_delay_field_takes_only_digits_and_marks_a_number_out_of_range() {
         let app = app_over(MockBackend::new());
         app.main.invoke_sync_toggled("local:desk".into());
-        for typed in ["1", "1a", "12"] {
-            app.main
-                .invoke_delay_edited("local:desk".into(), typed.into());
-        }
+        app.main
+            .invoke_delay_edited("local:desk".into(), "1".into());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "1a".into());
+        assert_eq!(desk_delay_text(&app), "1", "the letter is refused");
+        app.main
+            .invoke_delay_edited("local:desk".into(), "12".into());
         assert_eq!(desk_delay_text(&app), "12", "the letter was dropped");
         assert_eq!(desk_row(&app).delay_range_hint, "");
 

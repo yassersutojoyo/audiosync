@@ -1178,7 +1178,7 @@ export component SyncControls inherits VerticalLayout {
                     edited(text) => {
                         root.edited(text);
                         // A character the field can't take: the app kept the
-                        // text without it, which the field shows again.
+                        // text from before the edit, which the field shows again.
                         if field.text != root.delay-text {
                             field.text = root.delay-text;
                         }
@@ -1359,7 +1359,7 @@ export component AirPlayDelayControls inherits VerticalLayout {
                             edited(text) => {
                                 root.edited(text);
                                 // A character the field can't take: the app
-                                // kept the text without it.
+                                // kept the text from before the edit.
                                 if field.text != root.delay-text {
                                     field.text = root.delay-text;
                                 }
