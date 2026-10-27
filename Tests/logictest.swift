@@ -4832,6 +4832,14 @@ do {
     check(barSource.contains("grow(own.panel, about: tip)") && barSource.contains("shrink(own.panel, about: tip)")
             && barSource.contains("window.addChildWindow(shadow, ordered: .below)"),
           "menu bar panel source: the own shadow scales with the panel, in a window under it")
+    let resizeBody = barSource.components(separatedBy: "private func animateResize(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(resizeBody.contains("dropOwnShadow()") && resizeBody.contains("setShadow(window, true)"),
+          "menu bar panel source: a resize hands the shadow back to the system, so the own one never keeps an old size")
+    let ownBody = barSource.components(separatedBy: "private func ownShadow(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(ownBody.contains("window.effectiveAppearance.bestMatch") && !ownBody.contains("NSApp.effectiveAppearance"),
+          "menu bar panel source: the own shadow takes the panel window's theme")
     let bar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
     let foldBody = bar.components(separatedBy: "private func fold(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
@@ -8251,6 +8259,10 @@ do {
 do {
     let t = UIStrings()
     let pieces = GuideLayout.pieces(of: t.helpText, anchor: t.guideArtAnchor)
+    let guideWords = t.helpText.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    check(guideWords.contains("the button with its zone's name goes to the zone")
+            && !guideWords.contains("after its own goes to the zone"),
+          "guide, zones: a zoned speaker's short row names the button that goes to its zone")
     check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
             && pieces.map(\.text).joined() == t.helpText,
           "guide: every illustration has its anchor line, in order, and the text is kept whole",
