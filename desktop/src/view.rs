@@ -3921,6 +3921,33 @@ impl App {
     pub fn hide_flyout(&self) {
         let _ = self.flyout.hide();
     }
+
+    /// Sizes the flyout to show every part down to its buttons, at most
+    /// `room` logical pixels high, and returns that height. Windows makes it
+    /// at Slint's preferred height, which counts a wrapped notice as one line
+    /// and cut the buttons off. On a screen too short for it all, the zones
+    /// and speakers list gets less room and scrolls.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn fit_flyout(&self, room: f32) -> f32 {
+        let flyout = &self.flyout;
+        let set_cut = |cut: f32| {
+            if flyout.get_list_cut() != cut {
+                flyout.set_list_cut(cut);
+            }
+        };
+        set_cut(0.0);
+        let mut height = flyout.get_fit_height();
+        if height > room {
+            set_cut(height - room);
+            height = flyout.get_fit_height().min(room);
+        }
+        let window = flyout.window();
+        let size = window.size().to_logical(window.scale_factor());
+        if (size.height - height).abs() >= 0.5 {
+            window.set_size(slint::LogicalSize::new(size.width, height));
+        }
+        height
+    }
 }
 
 /// The properties the main window and the flyout share.
@@ -8085,13 +8112,34 @@ mod tests {
         let window = flyout.window();
         let preferred = flyout.get_made_height();
         window.set_size(slint::LogicalSize::new(340.0, preferred));
-        let height = window.size().to_logical(window.scale_factor()).height;
+        let height = app.fit_flyout(1000.0);
+        let size = window.size().to_logical(window.scale_factor());
+        assert_eq!(size.height, height);
         let bottom = flyout.get_footer_bottom();
         assert!(
             bottom + 16.0 <= height,
             "buttons end at {bottom}, window {height} high (Slint asked for {preferred})"
         );
         assert!(height <= bottom + 16.5, "no room left under the buttons");
+    }
+
+    /// On a screen too short for the whole flyout, the list scrolls and the
+    /// buttons still show.
+    #[test]
+    fn a_short_screen_shortens_the_flyout_list_not_the_buttons() {
+        let app = app_over(MockBackend::zones_preview());
+        app.refresh();
+        draw_frames();
+        let flyout = &app.flyout;
+        let window = flyout.window();
+        window.set_size(slint::LogicalSize::new(340.0, 400.0));
+        let full = app.fit_flyout(1000.0);
+        let room = full - 40.0;
+        let height = app.fit_flyout(room);
+        assert_eq!(height, room);
+        let bottom = flyout.get_footer_bottom();
+        assert!(bottom + 16.0 <= room, "buttons end at {bottom} in {room}");
+        assert_eq!(app.fit_flyout(1000.0), full, "the list gets its room back");
     }
 
     #[test]

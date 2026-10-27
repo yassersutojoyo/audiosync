@@ -68,6 +68,9 @@ thread_local! {
 #[cfg(windows)]
 thread_local! {
     static FLYOUT_CLOSED_AT: Cell<Option<Instant>> = const { Cell::new(None) };
+    /// The icon the flyout last opened next to: a refresh while it is open
+    /// can change its height, and it is placed again.
+    static FLYOUT_ICON: Cell<Option<Bounds>> = const { Cell::new(None) };
 }
 
 pub struct Tray {
@@ -208,6 +211,13 @@ impl Tray {
         app.set_on_refresh(move |state| {
             if let Some(tray) = weak.upgrade() {
                 tray.show_state(state);
+            }
+            #[cfg(windows)]
+            if let Some(app) = APP.with(|cell| cell.borrow().upgrade())
+                && app.flyout.window().is_visible()
+                && let Some(icon) = FLYOUT_ICON.with(Cell::get)
+            {
+                place_flyout(&app, icon);
             }
         });
         // The taskbar's theme can change while nothing else does.
@@ -385,25 +395,31 @@ fn show_flyout(app: &App, icon: Bounds) {
     // With the system's rounded frame, the flyout leaves out its own edge.
     let rounded = app.apply_frame(flyout, "tray flyout", crate::backdrop::Frame::Flyout);
     app.flyout.set_rounded(rounded);
+    FLYOUT_ICON.with(|cell| cell.set(Some(icon)));
+    place_flyout(app, icon);
+    platform::bring_to_front(flyout);
+    app.flyout.invoke_take_focus();
+}
+
+/// Sizes the flyout to its parts, as much as the work area of the icon's
+/// monitor holds, and places it next to the icon.
+#[cfg(windows)]
+fn place_flyout(app: &App, icon: Bounds) {
+    let flyout = app.flyout.window();
     let scale = f64::from(flyout.scale_factor());
-    let size = flyout.size();
     let work_area = platform::work_area_at(icon.x, icon.y).unwrap_or(Bounds {
         x: 0.0,
         y: 0.0,
         width: icon.x + icon.width,
         height: icon.y,
     });
-    let (x, y) = placement::flyout_origin(
-        icon,
-        f64::from(size.width),
-        f64::from(size.height),
-        work_area,
-        FLYOUT_GAP * scale,
-    );
+    let gap = FLYOUT_GAP * scale;
+    let room = (work_area.height - 2.0 * gap) / scale;
+    let height = f64::from(app.fit_flyout(room as f32)) * scale;
+    let (x, y) =
+        placement::flyout_origin(icon, f64::from(flyout.size().width), height, work_area, gap);
     flyout.set_position(slint::PhysicalPosition::new(
         x.round() as i32,
         y.round() as i32,
     ));
-    platform::bring_to_front(flyout);
-    app.flyout.invoke_take_focus();
 }
