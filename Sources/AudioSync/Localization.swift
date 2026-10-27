@@ -188,9 +188,25 @@ struct UIStrings {
 
     /// The calibrate button's tooltip and VoiceOver hint while it is off.
     func calibrationUnavailable(_ reason: CalibrationFailure) -> String {
-        reason == .noReference
-            ? "Calibration measures against the Mac's built-in speakers, and they aren't listed."
-            : "Turn on streaming and this speaker to calibrate it."
+        calibrationFailure(reason)
+    }
+
+    /// What a calibration needs that is off, in the order streaming, the
+    /// speaker (`speaker`), the built-in speakers; all three when none is given.
+    func calibrationNeeds(_ missing: CalibrationMissing, speaker: String = "this speaker") -> String {
+        let missing = missing.isEmpty ? CalibrationMissing.all : missing
+        var names: [String] = []
+        if missing.contains(.streaming) { names.append("streaming") }
+        if missing.contains(.speaker) { names.append(speaker) }
+        if missing.contains(.reference) { names.append("the built-in speakers") }
+        guard let last = names.popLast() else { return "" }
+        return names.isEmpty ? last : names.joined(separator: ", ") + " and " + last
+    }
+
+    /// Why a calibration of one speaker, or of all of them, can't start.
+    func calibrationTurnOn(_ missing: CalibrationMissing) -> String {
+        let it = missing.isEmpty || missing.contains(.speaker) ? " it" : ""
+        return "Turn on \(calibrationNeeds(missing)) to calibrate\(it)."
     }
 
     /// What a running calibration is doing.
@@ -225,8 +241,8 @@ struct UIStrings {
         switch failure {
         case .noReference:
             return "Calibration measures against the Mac's built-in speakers, and they aren't listed."
-        case .notPlaying:
-            return "Turn on streaming, this speaker and the built-in speakers first."
+        case .notPlaying(let missing):
+            return calibrationTurnOn(missing)
         case .referenceHeadphones:
             return calibrateAllUnavailable(.referenceHeadphones)
         case .microphoneDenied:
@@ -315,7 +331,7 @@ struct UIStrings {
     func calibrateAllUnavailable(_ blocker: CalibrateAllBlocker) -> String {
         switch blocker {
         case .noReference: "Calibration measures against the Mac's built-in speakers, and they aren't listed."
-        case .notPlaying: "Turn on streaming and the built-in speakers first."
+        case .notPlaying(let missing): calibrationTurnOn(missing)
         case .noOtherSpeaker: "Only the built-in speakers are on. Turn on another speaker to calibrate it."
         case .onlyLeftOut: "The other speakers that are on are headphones or virtual outputs, which the "
             + "microphone can't hear. Turn on another speaker, or choose Include Anyway for one in \(calibrateAll)."
@@ -471,8 +487,8 @@ struct UIStrings {
             return calibrateAllEndReason(end) + " The row for \(name) wasn't changed."
         case .changedSinceMeasured:
             return "A delay changed after the measurement, so nothing was applied. Calibrate again."
-        case .cannotMeasureAgain(let name):
-            return "Turn on streaming, the built-in speakers and \(name) to measure it again."
+        case .cannotMeasureAgain(let name, let missing):
+            return "Turn on \(calibrationNeeds(missing, speaker: name)) to measure it again."
         case .applied:
             return "New delays applied."
         case .undone:

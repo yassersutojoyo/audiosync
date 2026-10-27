@@ -32,7 +32,7 @@ mod cast_address;
 mod password;
 
 use crate::audio::backend::AirPlayGroupKind;
-use crate::audio::calibration::{self, Failure, Phase, Step, Which};
+use crate::audio::calibration::{self, Failure, Missing, Phase, Step, Which};
 use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
@@ -4271,6 +4271,7 @@ pub fn speaker_item(
                 state.running,
                 state.reference_name.is_some(),
                 speaker.enabled,
+                reference_on(state),
             )
             .is_none(),
         // Needs the strings: set by the caller (`App::refresh`).
@@ -4428,6 +4429,63 @@ fn is_calibratable(speaker: &ui_model::Speaker) -> bool {
         )
 }
 
+/// The reference's switch is on, or no reference is listed.
+fn reference_on(state: &AppState) -> bool {
+    !state
+        .speakers
+        .iter()
+        .any(|speaker| speaker.is_reference() && !speaker.enabled)
+}
+
+/// What a calibration needs that is off, in the order streaming, `speaker`,
+/// the reference; all three when `missing` names none.
+fn calibration_needs(
+    strings: &Strings<'_>,
+    reference: &str,
+    missing: Missing,
+    speaker: SharedString,
+) -> SharedString {
+    let missing = if missing.is_empty() {
+        Missing::ALL
+    } else {
+        missing
+    };
+    let reference = if reference.is_empty() {
+        strings.get_calibration_own_speakers()
+    } else {
+        reference.into()
+    };
+    strings.invoke_calibration_needs(
+        missing.streaming,
+        if missing.speaker {
+            speaker
+        } else {
+            SharedString::default()
+        },
+        if missing.reference {
+            reference
+        } else {
+            SharedString::default()
+        },
+    )
+}
+
+/// Why a calibration of one speaker, or of all of them, can't start.
+fn calibration_turn_on(strings: &Strings<'_>, reference: &str, missing: Missing) -> SharedString {
+    let missing = if missing.is_empty() {
+        Missing::ALL
+    } else {
+        missing
+    };
+    let needs = calibration_needs(
+        strings,
+        reference,
+        missing,
+        strings.get_calibration_this_speaker(),
+    );
+    strings.invoke_calibration_turn_on(needs, missing.speaker)
+}
+
 /// The line under a speaker's Calibrate button: what its calibration does,
 /// how it ended, or why one can't start; empty when there is nothing to say.
 fn calibration_status(
@@ -4445,15 +4503,15 @@ fn calibration_status(
         Phase::Idle
     };
     match shown {
-        Phase::Idle => match calibration::unavailable(
+        Phase::Idle => calibration::unavailable(
             state.running,
             state.reference_name.is_some(),
             speaker.enabled,
-        ) {
-            Some(Failure::NoReference) => strings.get_calibration_no_reference(),
-            Some(_) => strings.get_calibration_turn_on(),
-            None => SharedString::default(),
-        },
+            reference_on(state),
+        )
+        .map_or_else(SharedString::default, |failure| {
+            calibration_failure(strings, reference, failure)
+        }),
         Phase::Running(Step::Preparing) => strings.get_calibration_preparing(),
         Phase::Running(Step::Measuring(Which::Reference)) => {
             strings.invoke_calibration_listening(reference.into())
@@ -4555,9 +4613,9 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             strings.invoke_calibrate_all_stopped(calibration_failure(strings, reference, *failure))
         }
         AllPhase::Stale => strings.get_calibrate_all_stale(),
-        AllPhase::CannotMeasureAgain(name) => {
-            strings.invoke_calibrate_all_cannot_again(reference.into(), name.as_str().into())
-        }
+        AllPhase::CannotMeasureAgain(name, missing) => strings.invoke_calibrate_all_cannot_again(
+            calibration_needs(strings, reference, *missing, name.as_str().into()),
+        ),
         AllPhase::Idle if all.other_running => strings.get_calibrate_all_busy(),
         AllPhase::Idle => match all.blocked {
             Some(Failure::NoReference) => strings.get_calibration_no_reference(),
@@ -4565,13 +4623,13 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
                 strings.invoke_calibrate_all_nothing(reference.into())
             }
             Some(Failure::OnlyLeftOut) => strings.get_calibrate_all_only_left_out(),
-            Some(_) => strings.invoke_calibrate_all_turn_on(reference.into()),
+            Some(failure) => calibration_failure(strings, reference, failure),
             None => strings.invoke_calibrate_all_hint(reference.into()),
         },
     };
     let failed = matches!(
         all.phase,
-        AllPhase::Failed(_) | AllPhase::Stale | AllPhase::CannotMeasureAgain(_)
+        AllPhase::Failed(_) | AllPhase::Stale | AllPhase::CannotMeasureAgain(..)
     );
     let sheet = all.sheet.as_ref();
     let outcome = sheet.map_or_else(SharedString::default, |sheet| {
@@ -4805,7 +4863,7 @@ fn calibration_failure(strings: &Strings<'_>, reference: &str, failure: Failure)
     };
     match failure {
         Failure::NoReference => strings.get_calibration_no_reference(),
-        Failure::NotPlaying => strings.invoke_calibration_not_playing(reference.into()),
+        Failure::NotPlaying(missing) => calibration_turn_on(strings, reference, missing),
         Failure::MicrophoneDenied => strings.get_calibration_microphone_denied(),
         Failure::NoMicrophone => strings.get_calibration_no_microphone(),
         Failure::UnsupportedRate => strings.get_calibration_unsupported_rate(),
@@ -5872,9 +5930,10 @@ mod tests {
         );
         let desk = row_of(&app, "local:desk");
         assert!(!desk.calibration_enabled, "streaming is off");
-        assert_eq!(
-            desk.calibration_status,
-            app.strings().get_calibration_turn_on()
+        assert!(
+            desk.calibration_status.starts_with("Turn on streaming"),
+            "{}",
+            desk.calibration_status
         );
 
         let mut backend = MockBackend::new();
@@ -6013,6 +6072,46 @@ mod tests {
                 "Turn on Speakers to calibrate."
             ],
             "Calibrate All"
+        );
+
+        let mut both = lineup(None, &[]);
+        both.reference_off = true;
+        assert_eq!(
+            crate::audio::calibrate_all::blocked(&both, &none)
+                .map(|failure| { calibration_failure(&strings, "", failure).to_string() }),
+            Some("Turn on streaming and the PC's own speakers to calibrate.".to_owned()),
+            "Calibrate All, without a reference name"
+        );
+
+        let again: Vec<String> = [
+            Missing::STREAMING,
+            Missing::SPEAKER,
+            Missing::REFERENCE,
+            Missing {
+                reference: true,
+                ..Missing::STREAMING
+            },
+            Missing::ALL,
+        ]
+        .into_iter()
+        .map(|missing| {
+            let mut state = app.snapshot();
+            state.reference_name = Some("Speakers".into());
+            state.calibrate_all.other_running = false;
+            state.calibrate_all.phase = AllPhase::CannotMeasureAgain("Den".into(), missing);
+            calibrate_all_card(&strings, &state).status.to_string()
+        })
+        .collect();
+        assert_eq!(
+            again,
+            [
+                "Turn on streaming to measure it again.",
+                "Turn on Den to measure it again.",
+                "Turn on Speakers to measure it again.",
+                "Turn on streaming and Speakers to measure it again.",
+                "Turn on streaming, Den and Speakers to measure it again.",
+            ],
+            "Measure Again"
         );
     }
 
@@ -6193,7 +6292,7 @@ mod tests {
         assert_eq!(card.status, strings.get_calibrate_all_busy());
 
         state.calibrate_all.other_running = false;
-        state.calibrate_all.phase = AllPhase::CannotMeasureAgain("Den".into());
+        state.calibrate_all.phase = AllPhase::CannotMeasureAgain("Den".into(), Missing::SPEAKER);
         let card = calibrate_all_card(&strings, &state);
         assert!(card.status.contains("Den"), "{}", card.status);
         assert!(

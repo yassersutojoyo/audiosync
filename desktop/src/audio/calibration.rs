@@ -266,6 +266,42 @@ pub enum Which {
     Chosen,
 }
 
+/// What a calibration needs that is off, named in this order in its text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Missing {
+    pub streaming: bool,
+    /// The output being calibrated, or the row Measure Again measures.
+    pub speaker: bool,
+    pub reference: bool,
+}
+
+impl Missing {
+    pub const STREAMING: Missing = Missing {
+        streaming: true,
+        speaker: false,
+        reference: false,
+    };
+    pub const SPEAKER: Missing = Missing {
+        streaming: false,
+        speaker: true,
+        reference: false,
+    };
+    pub const REFERENCE: Missing = Missing {
+        streaming: false,
+        speaker: false,
+        reference: true,
+    };
+    pub const ALL: Missing = Missing {
+        streaming: true,
+        speaker: true,
+        reference: true,
+    };
+
+    pub fn is_empty(self) -> bool {
+        !(self.streaming || self.speaker || self.reference)
+    }
+}
+
 /// Why a calibration changed nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Failure {
@@ -273,7 +309,7 @@ pub enum Failure {
     /// output is the reference.
     NoReference,
     /// Streaming is off, or the chosen output or the reference isn't playing.
-    NotPlaying,
+    NotPlaying(Missing),
     /// Windows' privacy settings block microphone access for desktop apps.
     MicrophoneDenied,
     /// No default input device, or one that delivered nothing.
@@ -562,23 +598,36 @@ pub fn blocker(engine: &Engine, chosen: &str) -> Option<Failure> {
     if reference == chosen {
         return Some(Failure::NoReference);
     }
-    let plays = |id: &str| engine.playing.iter().any(|p| p == id);
-    if engine.session.is_none() || !plays(chosen) || !plays(reference) {
-        return Some(Failure::NotPlaying);
+    // Nothing plays while streaming is off, so only streaming is named then.
+    if engine.session.is_none() {
+        return Some(Failure::NotPlaying(Missing::STREAMING));
     }
-    None
+    let plays = |id: &str| engine.playing.iter().any(|p| p == id);
+    let missing = Missing {
+        streaming: false,
+        speaker: !plays(chosen),
+        reference: !plays(reference),
+    };
+    (!missing.is_empty()).then_some(Failure::NotPlaying(missing))
 }
 
-/// Why the button can't start a calibration, from what the row knows;
-/// `None` when it may try ([`blocker`] checks the rest on the press).
-pub fn unavailable(streaming: bool, has_reference: bool, speaker_on: bool) -> Option<Failure> {
+/// Why the button can't start a calibration, from the switches the row
+/// knows; `None` when it may try ([`blocker`] checks the rest on the press).
+pub fn unavailable(
+    streaming: bool,
+    has_reference: bool,
+    speaker_on: bool,
+    reference_on: bool,
+) -> Option<Failure> {
     if !has_reference {
-        Some(Failure::NoReference)
-    } else if streaming && speaker_on {
-        None
-    } else {
-        Some(Failure::NotPlaying)
+        return Some(Failure::NoReference);
     }
+    let missing = Missing {
+        streaming: !streaming,
+        speaker: !speaker_on,
+        reference: !reference_on,
+    };
+    (!missing.is_empty()).then_some(Failure::NotPlaying(missing))
 }
 
 /// Frames each run keeps from the moment the signal enters the outputs'
@@ -769,7 +818,7 @@ impl CalibrationRun {
             return refuse(failure);
         }
         let (Some(session), Some(tap)) = (engine.session, rig.tap()) else {
-            return refuse(Failure::NotPlaying);
+            return refuse(Failure::NotPlaying(Missing::STREAMING));
         };
         // Windows' privacy settings show only when a stream opens: asking
         // before the music fades keeps a denial from pausing it.
@@ -1703,15 +1752,43 @@ mod tests {
         assert_eq!(blocker(&engine, "usb"), None);
         assert_eq!(blocker(&engine, "builtin"), Some(Failure::NoReference));
         engine.playing.retain(|id| id != "builtin");
-        assert_eq!(blocker(&engine, "usb"), Some(Failure::NotPlaying));
+        assert_eq!(
+            blocker(&engine, "usb"),
+            Some(Failure::NotPlaying(Missing::REFERENCE))
+        );
+        engine.playing.clear();
+        assert_eq!(
+            blocker(&engine, "usb"),
+            Some(Failure::NotPlaying(Missing {
+                streaming: false,
+                speaker: true,
+                reference: true,
+            }))
+        );
         engine.session = None;
-        assert_eq!(blocker(&engine, "usb"), Some(Failure::NotPlaying));
+        assert_eq!(
+            blocker(&engine, "usb"),
+            Some(Failure::NotPlaying(Missing::STREAMING))
+        );
         engine.reference = None;
         assert_eq!(blocker(&engine, "usb"), Some(Failure::NoReference));
-        assert_eq!(unavailable(true, false, true), Some(Failure::NoReference));
-        assert_eq!(unavailable(false, true, true), Some(Failure::NotPlaying));
-        assert_eq!(unavailable(true, true, false), Some(Failure::NotPlaying));
-        assert_eq!(unavailable(true, true, true), None);
+        assert_eq!(
+            unavailable(true, false, true, true),
+            Some(Failure::NoReference)
+        );
+        assert_eq!(
+            unavailable(false, true, true, true),
+            Some(Failure::NotPlaying(Missing::STREAMING))
+        );
+        assert_eq!(
+            unavailable(true, true, false, true),
+            Some(Failure::NotPlaying(Missing::SPEAKER))
+        );
+        assert_eq!(
+            unavailable(true, true, true, false),
+            Some(Failure::NotPlaying(Missing::REFERENCE))
+        );
+        assert_eq!(unavailable(true, true, true, true), None);
     }
 
     #[test]

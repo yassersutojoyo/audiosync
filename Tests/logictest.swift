@@ -7069,7 +7069,7 @@ do {
 
     // Refusals the host makes before the estimate say why and that nothing changed.
     let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .handsFreeMicrophone, .sourceSilent,
-                                              .interrupted, .notPlaying, .noReference, .unsupportedRate]
+                                              .interrupted, .notPlaying(.streaming), .noReference, .unsupportedRate]
     for failure in hostRefusals {
         let message = t.calibrationMessage(.failed(failure)) ?? ""
         check(message.hasSuffix(" The delay wasn't changed.") && message.count > " The delay wasn't changed.".count + 10,
@@ -7130,9 +7130,9 @@ do {
 
     // When one may start: both the speaker and the reference play (S232).
     check(CalibrationFlow.blocker(streaming: true, reference: nil, chosen: "usb", playing: ["usb"]) == .noReference
-            && CalibrationFlow.blocker(streaming: false, reference: "mac", chosen: "usb", playing: []) == .notPlaying
-            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["usb"]) == .notPlaying
-            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "mac", playing: ["mac"]) == .notPlaying
+            && CalibrationFlow.blocker(streaming: false, reference: "mac", chosen: "usb", playing: []) == .notPlaying(.streaming)
+            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["usb"]) == .notPlaying(.reference)
+            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "mac", playing: ["mac"]) == .notPlaying(.all)
             && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["mac", "usb"]) == nil,
           "calibration: starts only while streaming with the chosen speaker and the reference playing")
     check(CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["mac", "usb"],
@@ -7227,8 +7227,8 @@ do {
             && CalibrationStatus.offsetDiffers(stored: 19_990, clamped: stepped(20_000)),
           "calibration: a delay step at the maximum leaves the offset, and its line, as they were")
 
-    check(CalibrationFlow.unavailable(streaming: false, hasReference: true, speakerOn: true) == .notPlaying
-            && CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: false) == .notPlaying
+    check(CalibrationFlow.unavailable(streaming: false, hasReference: true, speakerOn: true) == .notPlaying(.streaming)
+            && CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: false) == .notPlaying(.speaker)
             && CalibrationFlow.unavailable(streaming: true, hasReference: false, speakerOn: true) == .noReference
             && CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: true) == nil,
           "calibration: the button is off while streaming or the speaker is off, or without a reference")
@@ -7310,9 +7310,9 @@ do {
     var referenceOff = inputs
     referenceOff.localOutputs = [(id: "usb", name: "Desk")]
     check(CalibrateAllFlow.plan(alone) == .failure(.noOtherSpeaker)
-            && CalibrateAllFlow.plan(stopped) == .failure(.notPlaying)
+            && CalibrateAllFlow.plan(stopped) == .failure(.notPlaying(.streaming))
             && CalibrateAllFlow.plan(noReference) == .failure(.noReference)
-            && CalibrateAllFlow.plan(referenceOff) == .failure(.notPlaying),
+            && CalibrateAllFlow.plan(referenceOff) == .failure(.notPlaying(.reference)),
           "calibrate all: starts only while streaming with the built-in speakers and another speaker playing")
 
     // Mic calibration is for external speakers only (decision 2026-10-23): headphones and virtual outputs sit out.
@@ -7442,8 +7442,8 @@ do {
           "calibrate all: a speaker still connecting at the start that begins playing stops the run, unmuted (S240)")
     check(t.calibrateAllLine(.ended(.rateChanged))
                 == "The audio's sample rate changed during the measurement. No delay was changed."
-            && t.calibrateAllLine(.cannotMeasureAgain(name: "Desk"))
-                == "Turn on streaming, the built-in speakers and Desk to measure it again.",
+            && t.calibrateAllLine(.cannotMeasureAgain(name: "Desk", missing: .all))
+                == "Turn on streaming, Desk and the built-in speakers to measure it again.",
           "calibrate all: a changed sample rate and a Measure Again that can't start say so in their own words")
     check(CalibrateAllEnd.delaysChanged.core == UInt32(ASC_CALIBRATION_END_CANCELLED)
             && CalibrateAllEnd.speakerOff.core == UInt32(ASC_CALIBRATION_END_SPEAKER_OFF)
@@ -7731,6 +7731,36 @@ do {
     let allTexts = [all(stopped), all(referenceSilent)]
     check(allTexts == ["Turn on streaming to calibrate.", "Turn on the built-in speakers to calibrate."],
           "calibrate all refusal: names only streaming or the built-in speakers, whichever is off", "\(allTexts)")
+
+    let referenceTips = [
+        CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: true, referenceOn: false),
+        CalibrationFlow.unavailable(streaming: false, hasReference: true, speakerOn: true, referenceOn: false),
+        CalibrationFlow.unavailable(streaming: false, hasReference: true, speakerOn: false, referenceOn: false),
+    ].map { $0.map(t.calibrationUnavailable) ?? "" }
+    check(referenceTips == ["Turn on the built-in speakers to calibrate.",
+                            "Turn on streaming and the built-in speakers to calibrate.",
+                            "Turn on streaming, this speaker and the built-in speakers to calibrate it."],
+          "calibration refusal: the tooltip names the built-in speakers when their switch is off", "\(referenceTips)")
+    var stoppedSilent = stopped
+    stoppedSilent.referenceOn = false
+    check(all(stoppedSilent) == "Turn on streaming and the built-in speakers to calibrate.",
+          "calibrate all refusal: with streaming off, names the built-in speakers too when their switch is off",
+          all(stoppedSilent))
+
+    let again: [CalibrationMissing] = [.streaming, .speaker, .reference, [.streaming, .reference], [.speaker, .reference]]
+    let againTexts = again.map { t.calibrateAllLine(.cannotMeasureAgain(name: "Desk", missing: $0)) }
+    check(againTexts == ["Turn on streaming to measure it again.", "Turn on Desk to measure it again.",
+                         "Turn on the built-in speakers to measure it again.",
+                         "Turn on streaming and the built-in speakers to measure it again.",
+                         "Turn on Desk and the built-in speakers to measure it again."],
+          "measure again refusal: names only what is off, the row's speaker by its name", "\(againTexts)")
+    let missingNow = [
+        CalibrationMissing.of(streaming: true, speaker: "usb", reference: "mac", playing: ["mac"], switchedOn: []),
+        CalibrationMissing.of(streaming: false, speaker: "usb", reference: "mac", playing: [], switchedOn: ["usb"]),
+        CalibrationMissing.of(streaming: false, speaker: "usb", reference: "mac", playing: [], switchedOn: ["mac", "usb"]),
+    ]
+    check(missingNow == [.speaker, [.streaming, .reference], .streaming],
+          "measure again refusal: while streaming is off, the switches say which speaker is off", "\(missingNow)")
 }
 
 // MARK: Calibrate Zone: the zone's plan, the speakers silenced outside it and the AirPlay line (S255)
@@ -7852,8 +7882,8 @@ do {
     let nothing = CalibrateAllFlow.startFailure(.noOtherSpeaker, zone: "Upstairs")
     // covers: S255
     check(nothing == .nothingToMeasure(zone: "Upstairs")
-            && CalibrateAllFlow.startFailure(.noOtherSpeaker, zone: nil) == .notPlaying
-            && CalibrateAllFlow.startFailure(.notPlaying, zone: "Upstairs") == .notPlaying
+            && CalibrateAllFlow.startFailure(.noOtherSpeaker, zone: nil) == nil
+            && CalibrateAllFlow.startFailure(.notPlaying(.streaming), zone: "Upstairs") == .notPlaying(.streaming)
             && CalibrateAllFlow.startFailure(.onlyLeftOut, zone: "Upstairs") == nil
             && nothing.map(zoneText.calibrationFailure)
                 == "Nothing to measure in “Upstairs”. Turn on a speaker in this zone first.",

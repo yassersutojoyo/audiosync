@@ -28,8 +28,9 @@ struct CalibrationControl: View {
         let t = model.text
         let phase = model.calibration.phase(of: id)
         let running = phase.isRunning
+        let referenceOn = model.local.first(where: \.isReference)?.enabled ?? true
         let unavailable = CalibrationFlow.unavailable(streaming: model.running, hasReference: model.hasLocalReference,
-                                                      speakerOn: speakerOn)
+                                                      speakerOn: speakerOn, referenceOn: referenceOn)
         // Another speaker's run, or a cut-off sweep still playing out, holds the outputs.
         let held = (model.calibration.holdsOutputs || model.calibrateAll.holdsOutputs) && !running
         VStack(alignment: .leading, spacing: 4) {
