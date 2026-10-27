@@ -38,7 +38,9 @@ The app updates itself with Sparkle from `releases/latest/download/appcast.xml`,
 
 Run `Tests/soak.sh` for the full 60 minutes before every release and only go on when it ends with `VERDICT: PASS`. It's silent and unattended, and judges against `Tests/baseline/rust.json` ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)). If that baseline is missing, the soak says `NO BASELINE` and exits 3: run `Tests/bench.sh` first (an hour), commit the baseline and the updated `docs/BENCHMARKS.md`, then run the soak.
 
-Write your release notes file before tagging. Start from the CHANGELOG entry, keep them short and user-facing, and include the install notes (macOS 15 or later, Open Anyway). Leave the title out of the file, since `--title` sets it.
+Write your release notes file before tagging. Start from the CHANGELOG entry, keep them short and user-facing, and include the install notes: macOS 15 or later, Open Anyway for the DMG, and the Terminal install (`curl -fsSL https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.sh | bash`), which downloads the release zip, checks it against `SHA256SUMS.txt`, puts AudioSync in Applications and opens it, with no Open Anyway step. Leave the title out of the file, since `--title` sets it.
+
+0.6.0 and older have no updater, so the first release that ships one (0.7.0) can't reach them by itself. Its notes should say that people on those versions update by hand once, from the DMG or the Terminal install, and that later releases come through Check for Updates….
 
 Publish it as a normal release, not a pre-release. The README and the site link to `/releases/latest`, which skips pre-releases, so the download link would keep pointing at the old version.
 
