@@ -792,6 +792,11 @@ const VOLUME_TOLERANCE_DB: f64 = 0.5;
 /// and a remote press later can land that close too (S271).
 const VOLUME_SETTLE: Duration = Duration::from_secs(3);
 
+/// How long a slider that started editing holds its row with no move: a
+/// screen reader's set never sends the release (S271). It mirrors
+/// [`VOLUME_SETTLE`], a design value, not a measurement.
+const DRAG_IDLE: Duration = Duration::from_secs(3);
+
 /// The address a receiver announces first, AirPlay service before RAOP.
 fn first_address(device: &Device) -> Option<IpAddr> {
     device
@@ -813,9 +818,11 @@ const MAX_LISTED_PER_ADDRESS: usize = 64;
 struct VolumeRead {
     /// A read was asked since the volume was last set.
     reading: bool,
-    /// The row's slider is held, so a reading must not move it (S271).
+    /// The row's slider started editing and wasn't released; it holds the
+    /// row only while [`VolumeRead::held`] (S271).
     dragging: bool,
-    /// When the volume was last set: its own, the master or a calibration.
+    /// When the volume was last set (its own, the master or a calibration)
+    /// or the held slider last moved.
     set_at: Instant,
     /// It turned a read down, or its AirPlay 2 reads stopped (P184): it
     /// isn't asked again.
@@ -838,6 +845,19 @@ impl VolumeRead {
     /// The last set is recent enough for a reading near it to be its echo.
     fn recent(&self, now: Instant) -> bool {
         now.saturating_duration_since(self.set_at) < VOLUME_SETTLE
+    }
+
+    /// The slider is held, so a reading must not move the row: it started
+    /// editing and moved within [`DRAG_IDLE`] (S271).
+    fn held(&self, now: Instant) -> bool {
+        self.dragging && now.saturating_duration_since(self.set_at) < DRAG_IDLE
+    }
+
+    /// The held slider moved without a set, so its hold restarts.
+    fn moved(&mut self, now: Instant) {
+        if self.dragging {
+            self.set_at = now;
+        }
     }
 
     /// The volume was set: an answer to a read asked before is old.
@@ -2560,6 +2580,10 @@ impl AirPlaySpeakers {
     pub fn move_row(&mut self, id: &str, row: f64) {
         let (zone, master) = (self.zone(id), self.master);
         let Some(moved) = row_move(row, zone, master) else {
+            // Nothing is sent, but the move still keeps the slider's hold.
+            if let Some(added) = self.added.get_mut(id) {
+                added.read.moved(Instant::now());
+            }
             return;
         };
         let entry = self.entry(id);
@@ -2599,6 +2623,9 @@ impl AirPlaySpeakers {
         if let Some(added) = self.added.get_mut(id) {
             added.read.dragging = dragging;
             added.read.reading = false;
+            if dragging {
+                added.read.set_at = Instant::now();
+            }
         }
     }
 
@@ -2870,7 +2897,7 @@ impl AirPlaySpeakers {
             return own;
         };
         own.level = self.device_level_of(row);
-        own.dragging = added.read.dragging;
+        own.dragging = added.read.held(now);
         if let Command::DeviceVolume(db) = command {
             // The level the speaker has, the held one with k at 0 (S290).
             let has = match self.calibration_solo.as_deref() {
@@ -2945,7 +2972,7 @@ impl AirPlaySpeakers {
         let Some(added) = self.added.get_mut(&row) else {
             return false;
         };
-        if !added.read.answered() || added.read.dragging || solo {
+        if !added.read.answered() || added.read.held(Instant::now()) || solo {
             return false;
         }
         if !added.read.echo.set_on_speaker(db) {
@@ -8133,6 +8160,58 @@ pub mod tests {
         report_volume(&fake, &kitchen, -9.0);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
         assert_eq!(airplay.speakers()[0].volume, 70.0);
+    }
+
+    // covers: S271, S291
+    #[test]
+    fn a_slider_set_with_no_release_stops_holding_the_row_once_idle() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        // A screen reader sets the value: the slider starts editing but
+        // never sees a release.
+        airplay.set_volume_dragging(&id, true);
+        airplay.move_row(&id, 30.0);
+        fake.take_calls();
+        settle(&mut airplay, &id);
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -21.0);
+        assert!(airplay.poll().is_empty(), "the echo of the level sent");
+        // The television's remote then moves it to −24 dB: level 20.
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -24.0);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(airplay.speakers()[0].volume, 20.0);
+    }
+
+    // covers: S271
+    #[test]
+    fn a_slider_that_keeps_moving_past_the_idle_time_keeps_holding_the_row() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_volume_dragging(&id, true);
+        settle(&mut airplay, &id);
+        airplay.move_row(&id, 30.0);
+        fake.take_calls();
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -9.0);
+        assert!(airplay.poll().is_empty());
+        assert_eq!(airplay.speakers()[0].volume, 30.0);
+    }
+
+    // covers: S271, S290
+    #[test]
+    fn a_slider_moved_at_master_0_keeps_holding_the_row() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_master(0.0);
+        airplay.set_volume_dragging(&id, true);
+        settle(&mut airplay, &id);
+        // With k at 0 the move sends nothing, but the slider still moved.
+        airplay.move_row(&id, 40.0);
+        fake.take_calls();
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -9.0);
+        assert!(airplay.poll().is_empty());
     }
 
     // covers: S250, S290, S291
