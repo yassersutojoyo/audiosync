@@ -1294,6 +1294,77 @@ fn selected_text_in_a_text_box_reaches_4_5_to_1() {
     assert!(CONTRAST_PAIRS.contains(&("surface", "tealText")));
 }
 
+// covers: S308
+/// The updater's notice and menu items: words from strings.slint, token
+/// colors only, text at 4.5:1 on the notice in light and dark, and Narrator
+/// hears the notice's text and each button's name.
+#[test]
+fn the_updater_notice_uses_strings_and_tokens() {
+    let stack = component_body(include_str!("../ui/widgets.slint"), "NoticeStack");
+    for line in stack.lines().map(str::trim) {
+        if ["color:", "background:", "border-color:"]
+            .iter()
+            .any(|key| line.starts_with(key))
+        {
+            assert!(
+                !line.contains('#') && !line.contains("rgb"),
+                "a token, not a literal: {line}"
+            );
+        }
+        if ["text:", "accessible-label:", "label:"]
+            .iter()
+            .any(|key| line.starts_with(key))
+        {
+            assert!(!line.contains('"'), "words from strings.slint: {line}");
+        }
+    }
+    for needle in [
+        "background: Tokens.notice;",
+        "accessible-label: notice.message;",
+        "text: Strings.update-button(button);",
+        "accessible-label: Strings.update-button(button);",
+        "label: Strings.dismiss-notice(notice.title);",
+    ] {
+        assert!(stack.contains(needle), "NoticeStack has {needle}");
+    }
+    // The buttons' own fill and label use Slint's Fluent palette, which no token reaches.
+    for pair in [
+        ("text", "notice"),
+        ("text@secondaryText", "notice"),
+        ("muted", "notice"),
+    ] {
+        assert!(CONTRAST_PAIRS.contains(&pair), "{pair:?} is checked");
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let value = ratio(pair.0, pair.1, appearance);
+            assert!(
+                value >= MIN_TEXT_CONTRAST,
+                "{pair:?} ({appearance:?}): {value:.2}:1"
+            );
+        }
+    }
+    let main = include_str!("../ui/main.slint");
+    for title in [
+        "title: Strings.check-updates-automatically;",
+        "title: Strings.menu-check-for-updates;",
+    ] {
+        assert!(main.contains(title), "main.slint has {title}");
+    }
+    let strings = include_str!("../ui/strings.slint");
+    for label in [
+        "Download and Install",
+        "Not Now",
+        "Cancel",
+        "Try Again",
+        "Open Release Page",
+        "Restart Now",
+    ] {
+        assert!(
+            strings.contains(&format!("@tr(\"{label}\")")),
+            "strings.slint words {label}"
+        );
+    }
+}
+
 // covers: S268 (the Windows host)
 /// The preset controls (spec S267, S268): token colors only, a focus ring,
 /// Narrator's label, value and hint on each row, F2 for Rename, and the
