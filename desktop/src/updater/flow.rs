@@ -42,6 +42,8 @@ pub struct Env {
     pub launch: Arc<dyn Launch>,
     /// How long Restart Now waits for the new version's start signal.
     pub start_wait: Duration,
+    /// The wait before a lock retry (spec S315); tests count it instead.
+    pub sleep: Arc<dyn Fn(Duration) + Send + Sync>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -197,6 +199,7 @@ fn install_in(
     let files = Retrying {
         inner: env.files.as_ref(),
         log: &env.log,
+        sleep: env.sleep.as_ref(),
     };
     let enclosure = &update.enclosure;
     let zip = dir.join("update.zip");
@@ -493,6 +496,7 @@ pub mod tests {
                 log,
                 launch: Arc::new(NoLaunch),
                 start_wait: Duration::from_millis(300),
+                sleep: Arc::new(std::thread::sleep),
             },
             fetch,
         }

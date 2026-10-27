@@ -117,6 +117,7 @@ pub const LOCK_RETRIES: [Duration; 5] = [
 pub struct Retrying<'a> {
     pub inner: &'a dyn Files,
     pub log: &'a DebugLog,
+    pub sleep: &'a (dyn Fn(Duration) + Send + Sync),
 }
 
 impl Retrying<'_> {
@@ -143,7 +144,7 @@ impl Retrying<'_> {
                             wait.as_millis()
                         )
                     });
-                    std::thread::sleep(*wait);
+                    (self.sleep)(*wait);
                 }
                 other => return other,
             }

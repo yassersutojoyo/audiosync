@@ -578,6 +578,7 @@ pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
         log,
         launch: Arc::new(relaunch::ProcessLaunch),
         start_wait: relaunch::START_WAIT,
+        sleep: Arc::new(std::thread::sleep),
     }))
 }
 
@@ -1220,5 +1221,104 @@ pub mod tests {
         );
         assert_eq!(folder(&updater), old_folder());
         assert_eq!(std::fs::read_dir(temp_root).unwrap().count(), 0);
+    }
+
+    /// Real files, except that deleting `audiosync.exe` meets a sharing
+    /// violation `locked` times, as while Defender still scans the new exe,
+    /// and each try records the thread it ran on.
+    struct Scanned {
+        locked: Mutex<u32>,
+        threads: Mutex<Vec<Option<String>>>,
+    }
+
+    impl crate::updater::files::Files for Scanned {
+        fn create(
+            &self,
+            path: &Path,
+            exclusive: bool,
+        ) -> std::io::Result<Box<dyn crate::updater::files::Sink>> {
+            RealFiles.create(path, exclusive)
+        }
+        fn remove(&self, path: &Path) -> std::io::Result<()> {
+            if path
+                .file_name()
+                .is_some_and(|name| name == archive::EXE_NAME)
+            {
+                self.threads
+                    .lock()
+                    .unwrap()
+                    .push(std::thread::current().name().map(str::to_owned));
+                let mut locked = self.locked.lock().unwrap();
+                if *locked > 0 {
+                    *locked -= 1;
+                    return Err(std::io::Error::from_raw_os_error(32));
+                }
+            }
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            RealFiles.rename(from, to)
+        }
+    }
+
+    /// A new version that ends before its start signal.
+    struct Exits;
+
+    impl relaunch::Launch for Exits {
+        fn start(&self, _: &Path, _: std::time::Duration) -> Start {
+            Start::Exited {
+                pid: 1,
+                code: Some(1),
+            }
+        }
+    }
+
+    // covers: S303, S315
+    #[test]
+    fn a_new_exe_still_scanned_after_a_failed_restart_is_deleted_on_a_retry() {
+        let files = Arc::new(Scanned {
+            locked: Mutex::new(2),
+            threads: Mutex::new(Vec::new()),
+        });
+        let waits = Arc::new(Mutex::new(Vec::new()));
+        let mut f = fixture(
+            "scanned-after-restart",
+            false,
+            files.clone(),
+            DebugLog::default(),
+        );
+        let counted = waits.clone();
+        f.env.sleep = Arc::new(move |wait| counted.lock().unwrap().push(wait));
+        f.env.launch = Arc::new(Exits);
+        let mut updater = Updater::new(f.env);
+        updater.check(Trigger::Manual);
+        updater.wait();
+        updater.press(UpdaterButton::Download);
+        updater.wait();
+        assert!(matches!(
+            updater.notice(),
+            Some(UpdaterNotice::Installed { .. })
+        ));
+
+        assert_eq!(updater.press(UpdaterButton::RestartNow), Action::Nothing);
+        let polled = updater.wait();
+        assert!(!polled.quit);
+        assert_eq!(updater.notice(), Some(&UpdaterNotice::RelaunchFailed));
+        assert_eq!(folder(&updater), old_folder());
+        assert_eq!(
+            *waits.lock().unwrap(),
+            [
+                std::time::Duration::from_millis(250),
+                std::time::Duration::from_millis(500)
+            ]
+        );
+        let threads = files.threads.lock().unwrap();
+        assert_eq!(threads.len(), 3, "two locked tries, then the delete");
+        assert!(
+            threads
+                .iter()
+                .all(|name| name.as_deref() == Some("audiosync-updater")),
+            "the undo runs on the worker, never on the UI thread: {threads:?}"
+        );
     }
 }
