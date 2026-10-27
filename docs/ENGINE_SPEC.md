@@ -2059,6 +2059,8 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 | the_launch_check_runs_once_a_day_and_a_failed_check_stores_no_time (23 h no, 24 h yes, a clock moved back yes) | S305 |
 | turning_the_switch_off_stops_the_launch_check_not_the_manual_one | S305 |
 | the_updater_texts (every text of S308 comes from strings.slint; the blocked and failed-start notices offer Open Release Page) | S308, S314, S315, S316 |
+| the_updater_notice_buttons_take_tab_then_space_or_enter (Tab reaches Download then Not Now; Space and Enter press them) | S308 |
+| the_updater_notice_uses_strings_and_tokens (notice words and button names from strings.slint, token colors, text 4.5:1 on the notice in light and dark) | S308 |
 | the_updater_writes_its_debug_log_lines | S309 |
 | the_fake_appcast_end_to_end_through_a_memory_fetch | S296, S298, S299, S300, S301 |
 | a_bad_signature_deletes_the_download_and_changes_nothing | S299 |
