@@ -29,11 +29,11 @@ cp scripts/install.sh install.sh
 ASSETS=(AudioSync.dmg "AudioSync-$VERSION.zip" appcast.xml install.sh THIRD_PARTY_NOTICES.md)
 shasum -a 256 "${ASSETS[@]}" > SHA256SUMS.txt
 # every zip that goes on the release needs its appcast item, under the right sparkle:os
-python3 -I scripts/check_appcast.py --assets appcast.xml "$VERSION" "${ASSETS[@]}" SHA256SUMS.txt
-
-git tag -a "v$VERSION" -m "AudioSync $VERSION" && git push origin "v$VERSION"
-gh release create "v$VERSION" --title "AudioSync $VERSION" --notes-file "$NOTES" \
-  "${ASSETS[@]}" SHA256SUMS.txt
+# (joined with &&, so a failed check stops before the tag)
+python3 -I scripts/check_appcast.py --assets appcast.xml "$VERSION" "${ASSETS[@]}" SHA256SUMS.txt \
+  && git tag -a "v$VERSION" -m "AudioSync $VERSION" && git push origin "v$VERSION" \
+  && gh release create "v$VERSION" --title "AudioSync $VERSION" --notes-file "$NOTES" \
+     "${ASSETS[@]}" SHA256SUMS.txt
 
 # confirmation: the same check on the release as GitHub serves it
 mkdir -p .build/release-check
