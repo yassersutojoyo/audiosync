@@ -120,6 +120,15 @@ impl Driver {
         running >= self.ap2_sessions
     }
 
+    /// AirPlay 1 can play the speaker, and only the AirPlay 2 preference
+    /// sends it to AirPlay 2: no target of it plays there (P214).
+    fn airplay1_serves(&self, key: &DeviceKey) -> bool {
+        self.speakers.get(key).is_some_and(|speaker| {
+            speaker.device.choose_path(true, speaker.airplay1_outcome) == Ok(ProtocolPath::AirPlay1)
+                && !self.target_on_airplay2(speaker)
+        })
+    }
+
     /// Starts an AirPlay 2 session, unless 16 others run or wait to retry
     /// their own (P204): those, and every AirPlay 1 session, go on
     /// untouched.
@@ -196,6 +205,11 @@ impl Driver {
                     // P205: a receiver that takes only PTP waits for the
                     // service; any other plays on NTP.
                     if remembered {
+                        // Only the preference sent it here (P214).
+                        if self.airplay1_serves(key) {
+                            self.ptp_retrying.remove(key);
+                            return self.open_airplay1(key, now);
+                        }
                         return self.wait_for_ptp(key, now);
                     }
                     excluded = true;

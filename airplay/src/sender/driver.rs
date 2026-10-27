@@ -1717,6 +1717,10 @@ impl Driver {
                 return self.start_ap2(key, now);
             }
         }
+        self.open_airplay1(key, now);
+    }
+
+    fn open_airplay1(&mut self, key: &DeviceKey, now: Instant) {
         let planned = {
             let Some(speaker) = self.speakers.get_mut(key) else {
                 return;
