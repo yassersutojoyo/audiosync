@@ -7,7 +7,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Changed
 
 - In the Mac's menu bar panel and the Windows tray flyout, a zone works like its header in the main window: the round icon switches the zone on or off, and the arrow, the name or the space around them shows or hides the zone's speakers. Before, a click on the name switched the whole zone in the panel and anywhere on the row did in the flyout, and the speakers were always listed. On Windows the main window and the flyout show or hide a zone's speakers together.
-- A speaker in a zone keeps a short row in its own section, This Mac (This PC on Windows) or Connected Speakers, under "In zones": its switch, its name and a link to its zone. Turn it on there to play it by itself; Go to Zone and Remove from Zone are in its menu. On the Mac and on Windows.
+- A speaker in a zone keeps a short row in its own section, This Mac (This PC on Windows) or Connected Speakers, under "In zones": its switch, its name and a link to its zone. Its switch there turns only that speaker on or off, and the zone's other speakers stay as they are; Go to Zone and Remove from Zone are in its menu. On the Mac and on Windows.
 - Only This Speaker, in a speaker's menu under its zone, turns the zone's other speakers off and plays this one. Nobody leaves the zone.
 
 ## [0.7.0] - 2026-10-27

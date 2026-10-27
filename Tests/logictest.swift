@@ -4784,13 +4784,13 @@ do {
           "menu bar icon: a press is ignored only while the panel shrinks away; right after, it opens it")
 
     let window = CGRect(x: 1000, y: 543, width: 306, height: 386)
-let grown = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 280, height: 428))
-check(grown == CGRect(x: 1000, y: 474, width: 306, height: 455),
-      "menu bar panel: a taller panel grows its window downward, its top edge under the icon where it was")
-let wider = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 300, height: 300))
-check(wider.maxY == window.maxY && wider.midX == window.midX && wider.size == CGSize(width: 326, height: 327),
-      "menu bar panel: a resize keeps the window's top edge and middle, so the arrow stays on the icon")
-let closeAsked = PopoverCloseRequest.answer
+    let grown = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 280, height: 428))
+    check(grown == CGRect(x: 1000, y: 474, width: 306, height: 455),
+          "menu bar panel: a taller panel grows its window downward, its top edge under the icon where it was")
+    let wider = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 300, height: 300))
+    check(wider.maxY == window.maxY && wider.midX == window.midX && wider.size == CGSize(width: 326, height: 327),
+          "menu bar panel: a resize keeps the window's top edge and middle, so the arrow stays on the icon")
+    let closeAsked = PopoverCloseRequest.answer
     check(closeAsked(false, true, 30, nil) == .closeOurWay && closeAsked(true, true, 30, nil) == .allow,
           "menu bar panel: an open panel the popover wants closed shrinks away its own way")
     // A press on the icon mid-grow starts the close, and the popover asks
