@@ -654,11 +654,21 @@ private struct PresetsCard: View {
 /// SwiftUI's macro plugins.
 final class ZoneDisclosure: ObservableObject {
     @Published private(set) var collapsed: Set<String> = []
+    /// True from a fold until its motion is over (`PanelFold`).
+    @Published private(set) var moving = false
+    private var folds = 0
 
     func isExpanded(_ id: String) -> Bool { !collapsed.contains(id) }
 
     func toggle(_ id: String) {
         if collapsed.remove(id) == nil { collapsed.insert(id) }
+        folds += 1
+        let fold = folds
+        moving = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + PanelFold.duration + 0.05) { [weak self] in
+            guard let self, self.folds == fold else { return }
+            self.moving = false
+        }
     }
 }
 

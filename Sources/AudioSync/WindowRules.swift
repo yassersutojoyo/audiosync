@@ -316,6 +316,13 @@ struct PanelFold: Equatable {
     init(reduceMotion: Bool) { duration = reduceMotion ? 0 : Self.duration }
 
     var moves: Bool { duration > 0 }
+
+    /// What a zone shows of itself: while a fold moves, only its own moving
+    /// area, so the rows below never slide over its fading rows; at rest
+    /// room to spare, so focus rings aren't cut.
+    static func clip(_ rect: CGRect, moving: Bool) -> CGRect {
+        moving ? rect : rect.insetBy(dx: -40, dy: -40)
+    }
 }
 
 /// When work that follows a menu bar panel open or close may run: once its

@@ -592,6 +592,12 @@ enum PanelSwitches {
     /// of the system's, to compare the two at rest (until the panel resizes).
     static let holdOwnShadow = DebugTrace.enabled && UserDefaults.standard.bool(forKey: "PanelShadowHold")
 
+    /// `PanelStandInBehindWindow` blurs what is behind the window in the
+    /// background that scales during the open and close, as the system's does,
+    /// in place of a blend within the panel, to see whether the blur follows the scale.
+    static let standInBehindWindow = DebugTrace.enabled
+        && UserDefaults.standard.bool(forKey: "PanelStandInBehindWindow")
+
     /// The own shadow's values, or with the debug log on, those set with
     /// `defaults write <bundle ID> PanelShadowRadius|PanelShadowOpacity|PanelShadowOffsetY -float <n>`.
     static func shadow(dark: Bool) -> PanelShadow {
@@ -641,6 +647,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var rest: PanelRest?
     private var moveWatch: NSObjectProtocol?
     private var shadowWindow: PanelShadowWindow?
+    /// The background that scales with the panel while it grows in or
+    /// shrinks away, and the system's own, hidden meanwhile: it keeps the
+    /// window's full size whatever the panel's layer does.
+    private var standIn: NSVisualEffectView?
+    private var systemBackground: [NSView] = []
     private var noticeWatch: AnyCancellable?
     let model: AppModel
 
@@ -919,7 +930,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + motion.settles) { [weak self, weak window] in
                     guard let self, let window, self.closing == ticket, !PanelSwitches.holdOwnShadow else { return }
                     self.setShadow(window, true)
-                    self.dropOwnShadow()
+                    self.dropOwnShadow(fade: Self.handBackFade)
                 }
             } else {
                 setShadow(window, true)
@@ -965,11 +976,69 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                                   + "body %.0fx%.0f, arrow %.1f pt", style.radius, style.opacity, style.offsetY,
                                   body.width, body.height, edge.maxY - body.maxY))
         }
+        standInBackground(window, in: frame, outline: PanelShadow.outline(body: body, tip: tip), edge: edge)
         setShadow(window, false)
         return (shadow, tip)
     }
 
-    private func dropOwnShadow() {
+    /// How long the stand-in background takes to fade into the system's at rest.
+    private static let handBackFade: TimeInterval = 0.12
+
+    /// Hides the system's background and puts one under the panel's content
+    /// that scales with it; `outline` and `edge` are in the window's coordinates.
+    private func standInBackground(_ window: NSWindow, in frame: NSView, outline: CGPath, edge: CGRect) {
+        guard standIn == nil else { return }
+        var root: NSView = frame
+        while let up = root.superview { root = up }
+        let found = Self.backgrounds(in: root, skipping: host.view)
+        let model = found.first
+        let view = NSVisualEffectView(frame: frame.bounds)
+        view.material = model?.material ?? .popover
+        view.blendingMode = PanelSwitches.standInBehindWindow ? .behindWindow : .withinWindow
+        view.state = .active
+        view.isEmphasized = model?.isEmphasized ?? false
+        view.autoresizingMask = [.width, .height]
+        var shift = CGAffineTransform(translationX: -edge.minX, y: -edge.minY)
+        let shape = outline.copy(using: &shift) ?? outline
+        view.maskImage = NSImage(size: edge.size, flipped: false) { _ in
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
+            context.addPath(shape)
+            context.setFillColor(NSColor.black.cgColor)
+            context.fillPath()
+            return true
+        }
+        frame.addSubview(view, positioned: .below, relativeTo: nil)
+        found.forEach { $0.alphaValue = 0 }
+        systemBackground = found
+        standIn = view
+        DebugTrace.log("[AudioSync] panel background: stand-in \(view.blendingMode == .behindWindow ? "behind" : "within") "
+                       + "window, hid \(found.count) system view(s) \(found.map { String(describing: type(of: $0)) })")
+    }
+
+    /// The system's background views in the popover window, outside the panel's own content.
+    private static func backgrounds(in view: NSView, skipping content: NSView) -> [NSVisualEffectView] {
+        guard view !== content else { return [] }
+        let own = (view as? NSVisualEffectView).map { [$0] } ?? []
+        return own + view.subviews.flatMap { backgrounds(in: $0, skipping: content) }
+    }
+
+    /// Gives the background back to the system, at once or fading the stand-in out over it.
+    private func restoreBackground(fade: TimeInterval) {
+        systemBackground.forEach { $0.alphaValue = 1 }
+        systemBackground = []
+        guard let view = standIn else { return }
+        standIn = nil
+        guard fade > 0 else { return view.removeFromSuperview() }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = fade
+            view.animator().alphaValue = 0
+        }, completionHandler: {
+            MainActor.assumeIsolated { view.removeFromSuperview() }
+        })
+    }
+
+    private func dropOwnShadow(fade: TimeInterval = 0) {
+        restoreBackground(fade: fade)
         guard let shadow = shadowWindow else { return }
         shadow.parent?.removeChildWindow(shadow)
         shadow.orderOut(nil)
@@ -1566,21 +1635,24 @@ struct MenuBarView: View {
             // connected speaker in no zone by name. This Mac sits above the
             // divider, with the volume.
             ForEach(model.zones) { zone in
-                PanelZoneHeader(model: model, disclosure: zoneDisclosure, zone: zone, height: rowHeight)
-                ForEach(ZoneLayout.shownMembers(zone.members, folded: !zoneDisclosure.isExpanded(zone.id))) { member in
-                    Group {
-                        if let speaker = model.speaker(of: member) {
-                            speakerRow(speaker, note: member.note)
-                        } else {
-                            CompactRow(name: member.name, symbol: member.symbol, state: .off, text: t,
-                                       height: rowHeight, hint: member.note) {}
-                                .disabled(true)
+                VStack(spacing: 0) {
+                    PanelZoneHeader(model: model, disclosure: zoneDisclosure, zone: zone, height: rowHeight)
+                    ForEach(ZoneLayout.shownMembers(zone.members, folded: !zoneDisclosure.isExpanded(zone.id))) { member in
+                        Group {
+                            if let speaker = model.speaker(of: member) {
+                                speakerRow(speaker, note: member.note)
+                            } else {
+                                CompactRow(name: member.name, symbol: member.symbol, state: .off, text: t,
+                                           height: rowHeight, hint: member.note) {}
+                                    .disabled(true)
+                            }
                         }
+                        .padding(.leading, 12)
+                        // Fades only in the fold's animation; a speaker joining or leaving a zone shows at once.
+                        .transition(.opacity)
                     }
-                    .padding(.leading, 12)
-                    // Fades only in the fold's animation; a speaker joining or leaving a zone shows at once.
-                    .transition(.opacity)
                 }
+                .clipShape(FoldClip(moving: zoneDisclosure.moving))
             }
             ForEach(layout.connected) { speaker in speakerRow(speaker, note: nil) }
         }
@@ -1604,6 +1676,14 @@ struct MenuBarView: View {
 }
 
 /// One speaker or group in the panel: the whole row switches it on or off.
+/// A zone's clip in the panel (`PanelFold.clip`). It has no animatable data,
+/// so it switches at once while the zone's frame it follows animates.
+private struct FoldClip: Shape {
+    var moving: Bool
+
+    func path(in rect: CGRect) -> Path { Path(PanelFold.clip(rect, moving: moving)) }
+}
+
 private struct CompactRow: View {
     let name, symbol: String
     let state: SpeakerState
