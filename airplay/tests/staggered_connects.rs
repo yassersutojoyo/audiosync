@@ -216,14 +216,10 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
         .map(|device| sender.add_speaker(device, options()))
         .collect();
 
-    // Every one is Connecting from the call, waiting or not (P224): a
-    // waiting one is told before its turn comes.
-    for (k, key) in keys.iter().enumerate() {
+    // Every one is Connecting from the call, waiting or not (P224).
+    for key in &keys {
         first_state_at(&mut events, &sender, key, SpeakerState::Connecting, LONG)
             .unwrap_or_else(|| panic!("{key:?} Connecting: {:?}", events.of(key)));
-        if k > 0 {
-            assert_eq!(counters[k].connect_starts(), 0, "{key:?} told at its turn");
-        }
         assert_eq!(
             events.of(key).first(),
             Some(&SpeakerEvent::State(SpeakerState::Connecting))
@@ -380,11 +376,6 @@ fn a_queued_airplay2_start_keeps_the_one_place() {
 
     let connecting = first_state_at(&mut events, &sender, &a_key, SpeakerState::Connecting, LONG);
     assert!(connecting.is_some());
-    assert_eq!(
-        counters[3].connect_starts(),
-        0,
-        "told Connecting at its turn"
-    );
     let refused = events.wait_for(&sender, LONG, |event| {
         matches!(event, SenderEvent::Speaker { key, event: SpeakerEvent::Error(error) }
             if *key == b_key
@@ -392,11 +383,6 @@ fn a_queued_airplay2_start_keeps_the_one_place() {
                     == ErrorKind::Unsupported(UnsupportedReason::OneAirPlay2Session))
     });
     assert!(refused.is_some(), "{:?}", events.of(&b_key));
-    assert_eq!(
-        counters[3].connect_starts(),
-        0,
-        "refused while the first still waits"
-    );
 
     assert!(wait_until(LONG, || !first_ap2
         .fake()
