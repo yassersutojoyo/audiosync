@@ -1042,6 +1042,62 @@ mod tests {
         assert!(matches!(problem, Some(LoadProblem::NotInFormat)));
     }
 
+    /// What the copies kept aside next to `path` hold.
+    fn copies_kept_aside(path: &Path) -> Vec<Vec<u8>> {
+        let mut copies: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|copy| {
+                copy.file_name().is_some_and(|name| {
+                    name.to_string_lossy().starts_with("remote-devices.ignored")
+                })
+            })
+            .collect();
+        copies.sort();
+        copies.iter().map(|copy| fs::read(copy).unwrap()).collect()
+    }
+
+    #[test]
+    fn an_unreadable_device_costs_only_that_device_and_the_file_is_kept_aside_first() {
+        let path = scratch("auth-one-bad-device");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let now = day_zero();
+        let seen = unix_seconds(now);
+        let first = random_token().unwrap();
+        let second = random_token().unwrap();
+        let third = random_token().unwrap();
+        let text = json!({
+            "version": 1,
+            "devices": [hex(&token_hash(&first)), "zz", 5, hex(&token_hash(&second)), hex(&token_hash(&third))],
+            "seen": [seen, seen, seen, "yesterday", seen]
+        })
+        .to_string();
+        fs::write(&path, &text).unwrap();
+        let (mut store, _) = TokenStore::open_at(Some(path.clone()), now);
+        assert_eq!(store.len(), 3);
+        for token in [&first, &second, &third] {
+            assert!(store.contains(token, now + DAY * 89));
+        }
+        DeviceFile::default()
+            .save(
+                store
+                    .take_rewrite()
+                    .expect("the bad entries are written out"),
+            )
+            .unwrap();
+        assert_eq!(copies_kept_aside(&path), [text.into_bytes()]);
+        let (reopened, problem) = TokenStore::open_at(Some(path.clone()), now);
+        assert!(problem.is_none());
+        assert_eq!(reopened.len(), 3);
+
+        // A last-seen list of another length: every device counts as seen now.
+        let text =
+            json!({ "version": 1, "devices": [hex(&token_hash(&first))], "seen": [] }).to_string();
+        fs::write(&path, text).unwrap();
+        let (store, _) = TokenStore::open_at(Some(path), now);
+        assert!(store.contains(&first, now + DAY * 89));
+    }
+
     #[test]
     fn a_damaged_file_starts_empty() {
         let path = scratch("auth-damaged");
