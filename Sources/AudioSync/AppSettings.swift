@@ -254,10 +254,10 @@ struct AppSettings: Equatable {
         return out
     }
 
-    /// The stored groups; none when the data is missing or can't be read.
+    /// The stored groups without a group that can't be read; none when the
+    /// data is missing or isn't a list.
     static func decodeGroups(_ data: Data?) -> [SpeakerGroup] {
-        guard let data, let list = try? JSONDecoder().decode([SpeakerGroup].self, from: data) else { return [] }
-        return list
+        decodeList(SpeakerGroup.self, data)
     }
 
     /// The stored zones as S245 keeps them, without a zone that can't be
