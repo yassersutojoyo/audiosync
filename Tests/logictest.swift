@@ -5615,6 +5615,14 @@ do {
               && ZoneEdit.renaming("zone-2", to: "Living", in: zonesBefore).map(\.name) == ["Living", "Living"],
           "zone rename: the typed name is trimmed, a blank one keeps the name, and a name another zone uses is allowed",
           "\(renamedZones.map(\.name))")
+    check(ZoneEdit.renaming("zone-1", to: " " + String(repeating: "a", count: 65) + "\n", in: zonesBefore)[0].name
+              == String(repeating: "a", count: SpeakerNames.maxLength)
+              && ZoneEdit.renaming("zone-1", to: "Den\nStudy", in: zonesBefore)[0].name == "Den Study",
+          "zone rename: a long name is cut to 60 characters and line breaks become spaces, as a speaker's",
+          "\(ZoneEdit.renaming("zone-1", to: String(repeating: "a", count: 65), in: zonesBefore)[0].name.count)")
+    check(UIStrings().renameZone == "Rename…" && UIStrings().renameZone == UIStrings().renameSpeaker,
+          "zone rename: the zone menu item reads like the speaker's",
+          UIStrings().renameZone)
 }
 
 // MARK: Delay field — typed text applies on Return or focus loss, once (DelayFieldDraft)
@@ -9794,7 +9802,7 @@ do {
     check(count(card, "InlineNameField(") == 1 && count(card, "Button(t.renameZone) { model.startRename(zone) }") == 1
             && count(card, ".accessibilityAction(named: t.renameZone) { model.startRename(zone) }") == 2
             && !zonesCode.isEmpty && count(zonesCode, "promptRenameZone") == 0 && count(zonesCode, "renameZoneTitle") == 0,
-          "main window zone header: Rename Zone edits the name in place like a speaker's, with no alert, and VoiceOver has the action")
+          "main window zone header: Rename… edits the name in place like a speaker's, with no alert, and VoiceOver has the action")
 
     let compact = window.components(separatedBy: "private struct ZoneMemberCompactRow").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""

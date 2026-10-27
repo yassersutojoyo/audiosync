@@ -1457,6 +1457,72 @@ export component AirPlayDelayControls inherits VerticalLayout {
     }
 }
 
+// A speaker's or a zone's name edited where it shows: Enter applies,
+// Escape (captured before the field sees the key) keeps the old name.
+export component NameEditor inherits FocusScope {
+    in property <string> text;
+    in property <string> placeholder;
+    in property <string> label;
+    in property <string> description;
+    // The row asks for the focus here; focus-taken clears its request.
+    in property <bool> focus-wanted;
+    callback focus-taken();
+    callback focus-changed(bool);
+    callback edited(string);
+    callback accepted();
+    callback cancelled();
+
+    focus-on-click: false;
+    focus-on-tab-navigation: false;
+    capture-key-pressed(event) => {
+        if event.text == Key.Escape {
+            root.cancelled();
+            return accept;
+        }
+        return reject;
+    }
+
+    field := TextField {
+        text: root.text;
+        placeholder-text: root.placeholder;
+        accessible-label: root.label;
+        accessible-description: root.description;
+        // Focused in its own init, before `changed has-focus` watches it:
+        // the row is told here.
+        init => {
+            if root.focus-wanted {
+                root.focus-taken();
+                self.focus();
+                self.select-all();
+                root.focus-changed(true);
+            }
+        }
+        property <bool> focus-asked: root.focus-wanted;
+        // Selected, so typing replaces the name as F2 in File Explorer does.
+        changed focus-asked => {
+            if self.focus-asked {
+                root.focus-taken();
+                self.focus();
+                self.select-all();
+            }
+        }
+        // Cut to the name limit while typed, a speaker's or a zone's.
+        edited(text) => {
+            if NameField.fit(text) != text {
+                self.text = NameField.fit(text);
+                self.set-selection-offsets(self.text.character-count * 4, self.text.character-count * 4);
+            }
+            root.edited(self.text);
+        }
+        accepted => {
+            root.accepted();
+        }
+        changed has-focus => {
+            root.focus-changed(self.has-focus);
+        }
+    }
+}
+
 // One speaker: its toggle, then its name with the kind below it, the sync
 // delay and its options on one line, and its volume under them. The sync
 // controls open underneath.
@@ -1845,56 +1911,27 @@ export component SpeakerRow inherits Rectangle {
                                         }
                                     }
 
-                                    // Escape keeps the old name; captured
-                                    // before the field sees the key.
-                                    if root.item.renaming: FocusScope {
+                                    if root.item.renaming: NameEditor {
                                         horizontal-stretch: 1;
-                                        focus-on-click: false;
-                                        focus-on-tab-navigation: false;
-                                        capture-key-pressed(event) => {
-                                            if event.text == Key.Escape {
-                                                root.rename-cancelled();
-                                                return accept;
-                                            }
-                                            return reject;
+                                        text: root.item.name-text;
+                                        placeholder: root.item.device-name;
+                                        label: Strings.speaker-name-field(root.item.device-name);
+                                        description: Strings.speaker-name-field-hint;
+                                        focus-wanted: root.pending-focus == RowPart.name;
+                                        focus-taken => {
+                                            root.pending-focus = RowPart.none;
                                         }
-
-                                        name-field := TextField {
-                                            text: root.item.name-text;
-                                            placeholder-text: root.item.device-name;
-                                            accessible-label: Strings.speaker-name-field(root.item.device-name);
-                                            accessible-description: Strings.speaker-name-field-hint;
-                                            // Focused in its own init, before
-                                            // `changed has-focus` watches it:
-                                            // the row is told here.
-                                            init => {
-                                                if root.pending-focus == RowPart.name {
-                                                    root.pending-focus = RowPart.none;
-                                                    self.focus();
-                                                    self.select-all();
-                                                    root.name-focused = true;
-                                                }
-                                            }
-                                            property <bool> focus-asked: root.pending-focus == RowPart.name;
-                                            changed focus-asked => {
-                                                if self.focus-asked {
-                                                    root.pending-focus = RowPart.none;
-                                                    self.focus();
-                                                }
-                                            }
-                                            edited(text) => {
-                                                if NameField.fit(text) != text {
-                                                    self.text = NameField.fit(text);
-                                                    self.set-selection-offsets(self.text.character-count * 4, self.text.character-count * 4);
-                                                }
-                                                root.rename-edited(self.text);
-                                            }
-                                            accepted => {
-                                                root.rename-committed();
-                                            }
-                                            changed has-focus => {
-                                                root.name-focused = self.has-focus;
-                                            }
+                                        focus-changed(focused) => {
+                                            root.name-focused = focused;
+                                        }
+                                        edited(text) => {
+                                            root.rename-edited(text);
+                                        }
+                                        accepted => {
+                                            root.rename-committed();
+                                        }
+                                        cancelled => {
+                                            root.rename-cancelled();
                                         }
                                     }
 
@@ -2217,20 +2254,69 @@ export component SpeakerRow inherits Rectangle {
 // A zone member's compact row under its own section: its switch, which runs
 // the same as the one on its row under the zone, its name and a link to the
 // zone. No volume, delay or equalizer; its menu holds Go to Zone and Remove
-// from Zone.
+// from Zone. A double-click on the name, or F2 on the switch, renames the
+// speaker here, as on its full row.
 export component ZoneMemberRow inherits Rectangle {
     in property <SpeakerItem> item;
     callback toggled();
     callback go-to-zone();
     callback remove-from-zone();
+    callback rename-requested();
+    callback rename-edited(string);
+    callback rename-committed();
+    callback rename-cancelled();
+    // A click on the row outside its controls.
+    callback blank-clicked();
+    // The part of the row with the keyboard focus changed (its switch,
+    // name field or options); none: the row lost it.
+    callback focus-changed(RowPart);
+
+    // Gives the row the keyboard focus on `part`: the name field while it
+    // renames, the switch, else the options.
+    public function take-focus(part: RowPart) {
+        if part == RowPart.name && root.item.renaming {
+            root.pending-focus = RowPart.name;
+        } else if part == RowPart.toggle {
+            badge.focus();
+        } else {
+            options.focus();
+        }
+    }
 
     property <string> note: root.item.zone-note != "" ? root.item.zone-note : Strings.row-note(root.item.state);
+    property <RowPart> pending-focus: RowPart.none;
+    property <bool> badge-focused;
+    property <bool> options-focused;
+    property <bool> name-focused;
+    // The name field goes without reporting that it lost the focus.
+    property <bool> renaming: root.item.renaming;
+    changed renaming => {
+        if !self.renaming {
+            root.name-focused = false;
+        }
+    }
+    property <RowPart> focused-part: self.name-focused ? RowPart.name : self.options-focused ? RowPart.options : self.badge-focused ? RowPart.toggle : RowPart.none;
+    changed focused-part => {
+        root.focus-changed(self.focused-part);
+    }
+
+    // Two clicks on the name within the system's double-click time rename.
+    click-wait := Timer {
+        interval: NameField.double-click;
+        running: false;
+        triggered => {
+            self.running = false;
+        }
+    }
 
     border-radius: Fluent.radius-control;
     background: hover.has-hover ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
 
     hover := TouchArea {
+        clicked => {
+            root.blank-clicked();
+        }
         menu := ContextMenuArea {
             Menu {
                 MenuItem {
@@ -2261,7 +2347,7 @@ export component ZoneMemberRow inherits Rectangle {
                     alignment: center;
                     VerticalLayout {
                         alignment: center;
-                        SpeakerBadge {
+                        badge := SpeakerBadge {
                             size: 24px;
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
@@ -2269,6 +2355,12 @@ export component ZoneMemberRow inherits Rectangle {
                             description: root.note != "" ? root.note : Strings.help(root.item.state);
                             toggled => {
                                 root.toggled();
+                            }
+                            focus-changed(focused) => {
+                                root.badge-focused = focused;
+                            }
+                            rename-key => {
+                                root.rename-requested();
                             }
                         }
                     }
@@ -2284,19 +2376,62 @@ export component ZoneMemberRow inherits Rectangle {
                         spacing: 6px;
                         alignment: start;
 
-                        Text {
-                            text: root.item.name;
-                            font-size: Tokens.font-size-body;
-                            font-weight: root.item.state == RowState.playing ? 600 : 400;
-                            color: Tokens.text;
-                            vertical-alignment: center;
-                            overflow: elide;
+                        if !root.item.renaming: Rectangle {
                             horizontal-stretch: 1;
-                            max-width: self.preferred-width;
-                            accessible-role: none;
+                            min-width: 0px;
+                            preferred-width: name-label.preferred-width;
+                            max-width: name-label.preferred-width;
+                            min-height: name-label.preferred-height;
+
+                            name-label := Text {
+                                width: 100%;
+                                height: 100%;
+                                text: root.item.name;
+                                font-size: Tokens.font-size-body;
+                                font-weight: root.item.state == RowState.playing ? 600 : 400;
+                                color: Tokens.text;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                accessible-role: none;
+                            }
+
+                            TouchArea {
+                                clicked => {
+                                    if click-wait.running {
+                                        click-wait.running = false;
+                                        root.rename-requested();
+                                    } else {
+                                        click-wait.running = true;
+                                    }
+                                }
+                            }
                         }
 
-                        LinkButton {
+                        if root.item.renaming: NameEditor {
+                            horizontal-stretch: 1;
+                            text: root.item.name-text;
+                            placeholder: root.item.device-name;
+                            label: Strings.speaker-name-field(root.item.device-name);
+                            description: Strings.speaker-name-field-hint;
+                            focus-wanted: root.pending-focus == RowPart.name;
+                            focus-taken => {
+                                root.pending-focus = RowPart.none;
+                            }
+                            focus-changed(focused) => {
+                                root.name-focused = focused;
+                            }
+                            edited(text) => {
+                                root.rename-edited(text);
+                            }
+                            accepted => {
+                                root.rename-committed();
+                            }
+                            cancelled => {
+                                root.rename-cancelled();
+                            }
+                        }
+
+                        if !root.item.renaming: LinkButton {
                             text: Strings.in-zone(root.item.zone-name);
                             label: Strings.go-to-zone-label(root.item.zone-name);
                             clicked => {
@@ -2323,6 +2458,9 @@ export component ZoneMemberRow inherits Rectangle {
                                 y: self.absolute-position.y - menu.absolute-position.y + self.height,
                             });
                         }
+                        focus-changed(focused) => {
+                            root.options-focused = focused;
+                        }
                     }
                 }
             }
@@ -2341,19 +2479,28 @@ export component ZoneHeader inherits Rectangle {
     callback toggled();
     callback expanded-changed(bool);
     callback volume-changed(float);
+    // Rename… in its menu, F2, or a double-click on its name: edit the
+    // name here, as a speaker's row does.
     callback rename();
+    callback rename-edited(string);
+    // Enter in its name field: apply the name.
+    callback rename-committed();
+    // Escape in its name field: keep the old name.
+    callback rename-cancelled();
     callback delete();
     callback calibrate();
     // Use <target> Instead, by the member's ID.
     callback use-target(string);
     // The part of the header with the keyboard focus changed (its toggle,
-    // volume or options); none: the header lost it.
+    // name field, volume or options); none: the header lost it.
     callback focus-changed(RowPart);
 
     // Gives the header the keyboard focus on `part`. With no member found
     // the arrow takes the toggle's, and the options the volume's.
     public function take-focus(part: RowPart) {
-        if part == RowPart.volume && root.live {
+        if part == RowPart.name && root.item.renaming {
+            root.pending-focus = RowPart.name;
+        } else if part == RowPart.volume && root.live {
             volume-slider.focus-slider();
         } else if part == RowPart.toggle && root.live {
             badge.focus();
@@ -2369,9 +2516,30 @@ export component ZoneHeader inherits Rectangle {
     property <bool> badge-focused;
     property <bool> arrow-focused;
     property <bool> options-focused;
-    property <RowPart> focused-part: self.options-focused ? RowPart.options : volume-slider.slider-focused ? RowPart.volume : self.badge-focused || self.arrow-focused ? RowPart.toggle : RowPart.none;
+    property <bool> name-focused;
+    // The name field takes the focus as it is built.
+    property <RowPart> pending-focus: RowPart.none;
+    // The name field goes without reporting that it lost the focus.
+    property <bool> renaming: root.item.renaming;
+    changed renaming => {
+        if !self.renaming {
+            root.name-focused = false;
+        }
+    }
+    property <RowPart> focused-part: self.name-focused ? RowPart.name : self.options-focused ? RowPart.options : volume-slider.slider-focused ? RowPart.volume : self.badge-focused || self.arrow-focused ? RowPart.toggle : RowPart.none;
     changed focused-part => {
         root.focus-changed(self.focused-part);
+    }
+
+    // A click on the name waits for a second one: two within the system's
+    // double-click time rename, and one alone shows or hides the speakers.
+    click-wait := Timer {
+        interval: NameField.double-click;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.expanded-changed(!root.item.expanded);
+        }
     }
 
     border-radius: Fluent.radius-control;
@@ -2471,15 +2639,67 @@ export component ZoneHeader inherits Rectangle {
                             alignment: center;
                             spacing: 1px;
                             horizontal-stretch: 1;
-                            max-width: max(name-text.preferred-width, count-text.preferred-width);
+                            // The name field takes the width the volume leaves.
+                            max-width: root.item.renaming ? 100000px : max(name-line.preferred-width, count-text.preferred-width);
 
-                            name-text := Text {
-                                text: root.item.name;
-                                font-size: Tokens.font-size-body;
-                                font-weight: root.item.state == RowState.playing ? 600 : 400;
-                                color: Tokens.text;
-                                overflow: elide;
-                                accessible-role: none;
+                            name-line := HorizontalLayout {
+                                // As wide as the name, so the blank space
+                                // after it stays the header's.
+                                if !root.item.renaming: Rectangle {
+                                    horizontal-stretch: 1;
+                                    min-width: 0px;
+                                    preferred-width: name-text.preferred-width;
+                                    max-width: name-text.preferred-width;
+                                    min-height: name-text.preferred-height;
+
+                                    name-text := Text {
+                                        width: 100%;
+                                        height: 100%;
+                                        text: root.item.name;
+                                        font-size: Tokens.font-size-body;
+                                        font-weight: root.item.state == RowState.playing ? 600 : 400;
+                                        color: Tokens.text;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                        accessible-role: none;
+                                    }
+
+                                    TouchArea {
+                                        clicked => {
+                                            if click-wait.running {
+                                                click-wait.running = false;
+                                                root.rename();
+                                            } else {
+                                                click-wait.running = true;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // A zone has no device name to fall back on:
+                                // an empty field keeps the old name.
+                                if root.item.renaming: NameEditor {
+                                    horizontal-stretch: 1;
+                                    text: root.item.name-text;
+                                    label: Strings.new-zone-field-label;
+                                    description: Strings.zone-name-field-hint;
+                                    focus-wanted: root.pending-focus == RowPart.name;
+                                    focus-taken => {
+                                        root.pending-focus = RowPart.none;
+                                    }
+                                    focus-changed(focused) => {
+                                        root.name-focused = focused;
+                                    }
+                                    edited(text) => {
+                                        root.rename-edited(text);
+                                    }
+                                    accepted => {
+                                        root.rename-committed();
+                                    }
+                                    cancelled => {
+                                        root.rename-cancelled();
+                                    }
+                                }
                             }
 
                             // The count, and the note of a zone whose members all

@@ -979,7 +979,7 @@ struct UIStrings {
     let moveToZone = "Move to Zone"
     let newZoneItem = "New Zone…"
     let removeFromZone = "Remove from Zone"
-    let renameZone = "Rename Zone…"
+    let renameZone = "Rename…"
     func renameMessage(_ name: String) -> String { "Enter a new name for “\(name)”." }
     let deleteZone = "Delete Zone"
     /// A zone header's count; `zoneWaiting` follows it when a member waits.
