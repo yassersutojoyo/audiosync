@@ -1,14 +1,19 @@
 //! The parts of the two-speaker sync check that run without receivers: the
 //! `--rx` delay option, the click, the onset detector on made-up PCM and
-//! the verdict. The check itself runs against two receivers through
+//! the verdict; and the timing traces it reads, against a loopback fake
+//! receiver. The check itself runs against two receivers through
 //! `scripts/two_speaker_sync_wsl.sh`.
 
+mod common;
 #[path = "../examples/rx_pair/sync_check.rs"]
 mod sync_check;
 
 use std::time::Duration;
 
 use audiosync_airplay::discovery::ProtocolPath;
+use audiosync_airplay::sender::{Sender, SenderConfig, SpeakerEvent, SpeakerOptions, SpeakerState};
+use audiosync_airplay::volume::Volume;
+use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
 use sync_check::{
     CLICK_FIRST_FRAME, CLICK_FRAMES, CLICK_PERIOD_FRAMES, DEFAULT_THRESHOLD, Detector, Onset, RATE,
     click_sample, fit_timeline, parse_rx_spec, stated_play, verdict,
@@ -412,4 +417,90 @@ fn the_stated_play_time_of_a_frame_follows_the_speakers_own_rtp_numbering() {
         stated_play((0, 1_000), &syncs(1_000, 0.0, 2.0), 1_000),
         None
     );
+}
+
+/// The value of `name=` in a trace line.
+fn trace_field<T: std::str::FromStr>(line: &str, name: &str) -> Option<T> {
+    line.split(' ')
+        .find_map(|part| part.strip_prefix(name)?.strip_prefix('='))?
+        .parse()
+        .ok()
+}
+
+/// A receiver that takes PCM only.
+const PCM_TXT: &[&str] = &[
+    "txtvers=1",
+    "ch=2",
+    "cn=0",
+    "et=0",
+    "sr=44100",
+    "ss=16",
+    "tp=UDP",
+    "md=0,1,2",
+];
+
+// The SENDER check reads these traces, so they must say what went on the
+// wire: each traced audio packet and sync is one the receiver got, with
+// the same RTP numbers, sound offset and stated time.
+#[test]
+fn timing_traces_state_what_the_receiver_got() {
+    let _serial = serial();
+    let receiver = NetReceiver::start(Behavior::default());
+    let (sender, writer) = Sender::start(SenderConfig::default()).expect("the sender starts");
+    let clock = sender.clock();
+    let _host = HostAudio::start(writer);
+    let mut events = Events::default();
+    let device = receiver.device(1, PCM_TXT);
+    let key = device.key.clone();
+    let mut options = SpeakerOptions::new(Volume::Db(-20.0));
+    options.pcm = true;
+    options.trace_timing = true;
+    sender.add_speaker(device, options);
+    let long = Duration::from_secs(15);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, long, |s| *s == SpeakerState::Playing)
+            .is_some()
+    );
+    assert!(wait_until(long, || receiver.log().syncs.len() >= 3));
+    events.drain(&sender);
+    std::thread::sleep(Duration::from_millis(300));
+
+    let lines: Vec<String> = events
+        .of(&key)
+        .into_iter()
+        .filter_map(|event| match event {
+            SpeakerEvent::Trace(line) => Some(line),
+            _ => None,
+        })
+        .collect();
+    let log = receiver.log();
+    let audio: Vec<&String> = lines.iter().filter(|l| l.starts_with("audio ")).collect();
+    assert!(audio.len() >= 100, "{} audio traces", audio.len());
+    for line in audio {
+        let seq: u16 = trace_field(line, "seq").unwrap();
+        let got = log
+            .audio
+            .iter()
+            .find(|packet| packet.header.seq == seq)
+            .unwrap_or_else(|| panic!("traced but not received: {line}"));
+        assert_eq!(trace_field::<u32>(line, "rtp"), Some(got.header.timestamp));
+        let sound_at = got.payload.iter().position(|&byte| byte != 0);
+        assert_eq!(trace_field::<usize>(line, "sound_at"), sound_at, "{line}");
+    }
+    let syncs: Vec<&String> = lines.iter().filter(|l| l.starts_with("sync ")).collect();
+    assert!(syncs.len() >= 3);
+    for line in syncs {
+        let heard: u32 = trace_field(line, "rtp_heard").unwrap();
+        let at: f64 = trace_field(line, "at_s").unwrap();
+        let got = log
+            .syncs
+            .iter()
+            .find(|(_, _, sync)| sync.rtp_heard == heard)
+            .unwrap_or_else(|| panic!("traced but not received: {line}"));
+        assert!((clock.seconds_of(got.2.time) - at).abs() < 1e-8, "{line}");
+        assert_eq!(trace_field::<u32>(line, "next_rtp"), Some(got.2.next_rtp));
+    }
+    drop(log);
+    sender.shutdown();
 }
