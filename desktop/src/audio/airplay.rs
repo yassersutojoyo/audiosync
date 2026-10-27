@@ -4308,21 +4308,28 @@ impl AirPlaySpeakers {
                 if !added.members.is_empty() {
                     text.push_str(&format!("\n    member {}", self.label(member)));
                 }
-                text.push_str(&format!(
-                    "; {} packets sent, {} late, {} resend requests, {} resent, {} not held, \
-                     {} timing replies, {} datagrams from other addresses dropped",
-                    counters.packets_sent(),
-                    counters.late_packets(),
-                    counters.resend_requests(),
-                    counters.packets_resent(),
-                    counters.not_held(),
-                    counters.timing_replies(),
-                    counters.foreign_datagrams(),
-                ));
+                text.push_str(&describe_speaker_counters(counters));
             }
         }
         Some(text)
     }
+}
+
+/// A speaker's part of the AirPlay status lines, as read from the counters
+/// its sender keeps without locks.
+fn describe_speaker_counters(counters: &SpeakerCounters) -> String {
+    format!(
+        "; {} packets sent, {} late, {} resend requests, {} resent, {} not held, \
+         {} timing replies, {} datagrams from other addresses dropped, {} silent frames",
+        counters.packets_sent(),
+        counters.late_packets(),
+        counters.resend_requests(),
+        counters.packets_resent(),
+        counters.not_held(),
+        counters.timing_replies(),
+        counters.foreign_datagrams(),
+        counters.silent_frames(),
+    )
 }
 
 impl Drop for AirPlaySpeakers {
@@ -4356,6 +4363,17 @@ pub mod tests {
     use crate::audio::explicit_pause::STALE_READING;
     use crate::audio::mock::MockBackend;
     use audiosync_core::volume::row_level;
+
+    #[test]
+    fn a_speaker_status_ends_with_the_silent_frames_its_packets_carried() {
+        // The sender counts them (its own tests drive that); the status
+        // appends them after the fields it always had, in their order.
+        assert_eq!(
+            describe_speaker_counters(&SpeakerCounters::default()),
+            "; 0 packets sent, 0 late, 0 resend requests, 0 resent, 0 not held, \
+             0 timing replies, 0 datagrams from other addresses dropped, 0 silent frames"
+        );
+    }
 
     #[test]
     fn pairing_events_are_logged_without_secrets() {

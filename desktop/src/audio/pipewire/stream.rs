@@ -405,7 +405,7 @@ impl Feed {
     /// in [`CAPTURE_FORMAT`], or `None` when it wasn't mapped (then silence).
     fn buffer(&mut self, cycle_hns: u64, bytes: Option<&[u8]>, frames: usize) {
         let start = self.clock.place(cycle_hns, frames);
-        let (fill, skip) = self.gaps.packet(start, frames, false);
+        let (fill, skip, _) = self.gaps.packet(start, frames, false);
         if fill > 0 {
             self.converter.push(&[], fill, true);
         }
