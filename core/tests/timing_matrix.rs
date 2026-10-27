@@ -50,7 +50,7 @@ use std::time::Instant;
 
 use audiosync_core::fade::FadeState;
 use audiosync_core::reader::{Reader, ReaderCounters};
-use audiosync_core::render::{ANCHOR_FALL_MS, Renderer, RendererControl, START_STEP_GAP_NS};
+use audiosync_core::render::{ANCHOR_FALL_MS, Renderer, RendererControl};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 use proptest::prelude::*;
@@ -1256,9 +1256,9 @@ fn the_capture_rate_output_that_sets_the_lead_never_runs_dry_through_its_wander(
     }
 }
 
-// covers: S208, S209
+// covers: S207, S208, S209
 #[test]
-fn a_late_second_callback_neither_corrects_drift_nor_plays_early_in_a_mac_case() {
+fn a_late_second_callback_neither_corrects_drift_nor_moves_the_output_in_a_mac_case() {
     // The start re-anchor used to land on the late second callback before
     // the floor had formed, too close to W by its lateness: past T it was
     // corrected (I2), inside T it played that much early all run (on main
@@ -1279,12 +1279,12 @@ fn a_late_second_callback_neither_corrects_drift_nor_plays_early_in_a_mac_case()
     let mut lines = Vec::new();
     let mut shown = 0;
     for ((case, late), on_time) in late.iter().zip(simulate_all(&on_time)) {
-        let early_ms = on_time.norms[0] - late.norms[0];
+        let late_ms = late.norms[0] - on_time.norms[0];
         let corrected = late.fails[1] && !on_time.fails[1];
-        shown += usize::from(corrected || early_ms > ALIGN_SLACK_MS);
+        shown += usize::from(corrected || late_ms.abs() > ALIGN_SLACK_MS);
         lines.push(format!(
-            "case {}: {:.2} ms early, drift corrected {corrected}",
-            case.k, early_ms
+            "case {}: {:.2} ms later than on time, drift corrected {corrected}",
+            case.k, late_ms
         ));
     }
     println!("{}", lines.join("\n"));
@@ -1382,14 +1382,16 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
                 (seen.end_ms - seen.before_ms - owed) - (on_time.end_ms - on_time.before_ms)
             })
             .collect();
-        let own = moves[0];
-        // A start step lands on the run's highest value, which the restart
-        // rule lets lie up to START_STEP_GAP_NS above where the callbacks
-        // settle (S318); cases f2, f6 and f20 end 2.3 to 3.6 ms short.
-        let own_slack = if seen.start_steps[0] > 0 {
-            ALIGN_SLACK_MS + START_STEP_GAP_NS as f64 / 1e6
+        // A start step makes up the error the late start left, which its
+        // delay while late shows only to about a millisecond, so a stepped
+        // output is judged where it plays from its window's end on against
+        // its twin (S320).
+        let own = if seen.start_steps[0] > 0 {
+            let (low, high) = seen.after_window[0].unwrap();
+            let (twin_low, twin_high) = on_time.after_window[0].unwrap();
+            (high - twin_low).abs().max((twin_high - low).abs())
         } else {
-            ALIGN_SLACK_MS
+            moves[0]
         };
         let others = moves[1..]
             .iter()
@@ -1397,12 +1399,12 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
         // One time constant leaves 1/e of the fall, so 2 s leave 0.4 of it at most.
         let ok = fall.drop_ms >= 0.8 * ms
             && after >= -0.4 * ms
-            && own.abs() <= own_slack
+            && own.abs() <= ALIGN_SLACK_MS
             && others <= ALIGN_SLACK_MS
             && !seen.fails.iter().any(|&f| f);
         failed += usize::from(!ok);
         lines.push(format!(
-            "case f{}: {ms} ms late for {until:.2} s, floor down {:.2} ms, Jf down to {:.2} ms, {after:.2} ms 2 s later; moved {own:+.2} ms past its lateness, others up to {others:.2} ms{}",
+            "case f{}: {ms} ms late for {until:.2} s, floor down {:.2} ms, Jf down to {:.2} ms, {after:.2} ms 2 s later; {own:+.2} ms off (moved past its lateness, or from its window's end against its twin once stepped), others up to {others:.2} ms{}",
             case.k,
             fall.drop_ms,
             fall.least_ms,
@@ -1417,13 +1419,12 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
     assert_eq!(failed, 0, "\n{}", lines.join("\n"));
 }
 
-// covers: S318, S320
+// covers: S318, S320, S321
 #[test]
 fn only_a_late_start_makes_a_start_step() {
-    // Every late-first case's late output makes one, inside its window; no
-    // other output of any case makes one, wander and stalls included. On
-    // the late-first cases' own draws a late output makes at most one: own
-    // draws f18 and f34 make none, their late starts left to S321.
+    // Every late-first case's late output makes one, inside its window, on
+    // the matrix's draws and on their own; no other output of any case
+    // makes one, wander and stalls included.
     let matrix = matrix();
     let own = late_first_cases_on_own_draws();
     let own_outcomes = simulate_all(&own);
@@ -1441,12 +1442,7 @@ fn only_a_late_start_makes_a_start_step() {
                 if late_start { "f" } else { "" },
                 case.k
             );
-            let expected = if draws == "matrix" {
-                steps == u64::from(late_start)
-            } else {
-                steps <= u64::from(late_start)
-            };
-            if !expected {
+            if steps != u64::from(late_start) {
                 lines.push(name.clone());
                 lines.extend(outcome.lines.iter().cloned());
             }
