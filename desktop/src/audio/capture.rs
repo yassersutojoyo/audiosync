@@ -2136,6 +2136,20 @@ mod tests {
     }
 
     #[test]
+    fn the_silence_up_to_a_packet_after_a_pause_is_not_counted() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        let counters = CaptureCounters::default();
+        gaps.packet(0, 480, false);
+        // The app pauses: silence up to 40 ms.
+        assert_eq!(gaps.idle(50 * HNS_PER_MS), 1_440);
+        // It resumes at 60 ms: the 20 ms left get silence, but nothing dropped.
+        let (fill, _) = gaps.packet(60 * HNS_PER_MS, 480, false);
+        assert_eq!(fill, 960);
+        counters.count_packet(480, false, fill);
+        assert_eq!(counters.glitches(), CaptureGlitches::default());
+    }
+
+    #[test]
     fn a_packet_inside_the_silence_written_skips_the_frames_filled() {
         let mut gaps = GapFill::new(SESSION_RATE);
         gaps.packet(0, 480, false);
