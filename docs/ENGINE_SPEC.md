@@ -1239,14 +1239,14 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | settings: the whole system is stored as an empty source (S12) | S12, S212 |
 | settings: a master that isn't a finite number starts at 100 | S212 |
 | settings: volumes are clamped to 0…100, anything else is dropped (S76) | S76, S212 |
-| settings: delays are clamped to 0…20 000 ms, anything else is dropped (S77) | S77, S212 |
+| settings: delays are clamped to 0…20 000 ms, anything else is dropped (S77) | S179, S212 |
 | settings: unreadable groups, IDs or appearance fall back to the defaults | S212 |
 | settings: a master above 100 is clamped | S76, S212 |
 | settings: older linear gains become slider positions (3.49 % → 32.68, 150 % → 100, S75) | S75 |
 | settings: the converted volumes are saved under the current key and the old key is removed | S75 |
 | settings: a second launch reads the converted volumes as they are | S75 |
-| settings: an older single delay is where local speakers start (S77) | S77, S179 |
-| settings: an older single delay is clamped to 20 000 ms | S77, S179 |
+| settings: an older single delay is where local speakers start (S77) | S179 |
+| settings: an older single delay is clamped to 20 000 ms | S179 |
 | settings: stored positions win over older gains, which are removed | S75 |
 | settings: every UserDefaults key keeps the name existing installs use | S212 |
 | speaker names: a speaker shows its system name until renamed | S228 |
@@ -1562,7 +1562,7 @@ The checks for S187's large increases and for S47 and S48 at the largest hold-ba
 
 | Test | Clauses |
 |---|---|
-| an_output_started_at_20_s_sounds_20_s_after_the_capture_and_plays_on | S77, S175 |
+| an_output_started_at_20_s_sounds_20_s_after_the_capture_and_plays_on | S175 |
 | a_change_from_0_to_20_s_sounds_at_once_at_the_new_delay | S187, S159 |
 | a_change_from_2_to_15_or_20_s_sounds_at_once_at_the_new_delay | S187, S159 |
 | an_increase_of_exactly_5_s_inserts_its_silence_and_one_frame_more_restarts | S47, S187, S159 |
