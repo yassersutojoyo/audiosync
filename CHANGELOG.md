@@ -9,37 +9,35 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - With AirPlay 2 on, several AirPlay 2 speakers play at once, up to 16. A speaker past that limit stays on, and its row says "Waiting: too many AirPlay 2 speakers" until another one stops. On the Mac and on Windows.
 - With AirPlay 2 on, a speaker that needs PTP timing while AudioSync plays to AirPlay 2 speakers on another network stays on, its row says "Waiting: AirPlay 2 speakers on another network", and it starts once those speakers are off. On the Mac and on Windows.
 - An AirPlay speaker that's on but has left the network waits for it to come back instead of retrying, and its row says "Not on the network right now, plays once it's back". A stereo pair keeps a member that left and names it as missing. On the Mac and on Windows.
-- On Windows, AudioSync updates itself in release builds. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, checks at launch. Download and Install fetches the update, checks its signature and installs it, and Restart Now opens the new version. If the new version doesn't start within 15 seconds, or Windows security blocks the file, AudioSync puts the old version back and offers the release page, and that version isn't offered again at launch.
+- On Windows, AudioSync updates itself. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, checks at launch. Download and Install fetches the update, checks that it was signed with AudioSync's release key and installs it, and Restart Now opens the new version. If the new version doesn't start within 15 seconds, or Windows security blocks the file, AudioSync puts the old version back and offers the release page, and that version isn't offered again at launch. Builds you make yourself never check.
 - With AirPlay 2 on, AudioSync remembers per speaker whether it plays with PTP or NTP timing, so the next launch starts with the timing that worked. It's forgotten when the speaker's software changes, when the speaker turns that timing down, and with Forget Pairing. On the Mac and on Windows.
-- For testing, `AUDIOSYNC_AIRPLAY2_AUTO=1` plays AirPlay 2 speakers over AirPlay 2 without the switch, which then reads Prefer AirPlay 2 and only decides the path of a speaker that offers both AirPlay 1 and AirPlay 2. While 16 AirPlay 2 speakers already play, or AirPlay 2 waits for PTP on another network, such a speaker plays over AirPlay 1 and its row says AirPlay. On the Mac and on Windows.
 
 ### Changed
 
-- A Google Cast speaker that ends the stream on its own gets it again each time, and only a second end within 10 minutes of the one before ends the session. Before, the second end in a session always ended it.
+- A Google Cast speaker that ends the stream on its own gets it again each time, and only a second end within 10 minutes of the one before ends the session. Before, the second end in a session always ended it. On the Mac and on Windows.
 - When several AirPlay speakers start together, they connect one after another, half a second apart, and a pairing's key exchange no longer holds up the sound of a speaker that's already playing. On the Mac and on Windows.
-- The notice for an AirPlay speaker turned off because it asks for a code now says whether it needs a PIN or a password, on the Mac and on Windows.
-- On Windows, AirPlay audio keeps its timing better while the PC is busy, since AudioSync asks Windows to treat its AirPlay sending as audio work.
-- On the Mac, double-clicking a zone's name in the main window or choosing Rename… from its menu now edits the name in place, like a speaker's, instead of opening the Rename Zone dialog: Return keeps the new name, Escape the old one.
-- On Windows, a zone is renamed in place like a speaker: double-click its name, press F2 or choose Rename…, type, then press Enter. A speaker in its row under In zones renames the same way. No dialog opens.
+- The notice for an AirPlay speaker turned off because it asks for a code now says whether it needs a PIN or a password. On the Mac and on Windows.
+- A zone is renamed in place, like a speaker, instead of in a dialog. On the Mac, double-click its name in the main window or choose Rename… from its menu: Return keeps the new name, Escape the old one. On Windows, double-click its name, press F2 or choose Rename…, type, then press Enter; a speaker in its row under In zones renames the same way.
 - A zone's menu item now says Rename…, as a speaker's does, and a zone name is cut to 60 characters with line breaks turned into spaces, as a speaker name is. On the Mac and on Windows.
+- On Windows, AudioSync registers its AirPlay sending with Windows as audio work (the Pro Audio task), as it already did for its local outputs.
 
 ### Fixed
 
 - A Google Cast speaker added by address that doesn't answer, for example because it's switched off, no longer counts as online, and it plays once it answers again. AudioSync checks it every 15 seconds. On the Mac and on Windows.
-- On Windows, when another program resizes the main window past the screen, it now stops at the largest size Windows gives any window, instead of growing taller than the screen.
 - A local speaker whose sound starts late catches up in one step within its first 3 seconds, instead of playing late or drifting into place. On the Mac and on Windows.
 - Calibration times a speaker by the sound that reaches the microphone first, so a louder reflection off a wall no longer makes it read late, and a knock or hiss just before the test sound isn't taken for it. On the Mac and on Windows.
 - When calibration can't start, its message names only what's off instead of asking for all of it. Calibrate All and Measure Again say it the same way. On the Mac and on Windows.
 - With AirPlay 2 on, a paired speaker that also announces it asks for a PIN plays with its stored pairing. Only a speaker that turns the pairing down asks for the PIN again. On the Mac and on Windows.
 - With AirPlay 2 on, a speaker that offers AirPlay 1 and AirPlay 2 and turns AirPlay 1 down now gets the AirPlay 2 PIN prompt. On the Mac and on Windows.
 - With AirPlay 2 on, a pairing step that never gets an answer no longer leaves the speaker on Connecting. It fails and tries again like any other failed start. On the Mac and on Windows.
-- On Windows, an AirPlay speaker that was on at launch and asks for a PIN or password goes off with a notice, instead of reading On while nothing plays.
 - On the Mac, while macOS asks for microphone access for a new input, picking the source that's already playing cancels the switch.
-- On Windows, pasting something that isn't a whole number, such as "1,5", into a delay box no longer leaves just its digits behind ("15"), which Enter then applied. The paste is ignored and the box keeps what it showed, as on the Mac.
 - On the Mac, the menu bar panel's separator lines and edges stay sharp while it opens. Before, they blurred as the panel grew and snapped sharp at the end. It now unfolds from its arrow at its own size instead of scaling up.
 - On the Mac, the menu bar panel's first open after launch grows in from the menu bar like every open after it. Before, that first one just faded in at full size.
 - On the Mac, while none of a zone's speakers is found, Tab in the main window skips the zone's greyed round icon and stops on its arrow, which shows or hides the zone's speakers, as in the menu bar panel. Before, the focus stopped on the icon, which VoiceOver doesn't read.
 - On the Mac, while an AirPlay problem is showing, the "no speakers found" note asks you to check Local Network access only once macOS has refused it, not while AudioSync merely can't tell yet.
+- On Windows, when another program resizes the main window past the screen, it now stops at the largest size Windows gives any window, instead of growing taller than the screen.
+- On Windows, an AirPlay speaker that was on at launch and asks for a PIN or password goes off with a notice, instead of reading On while nothing plays.
+- On Windows, pasting something that isn't a whole number, such as "1,5", into a delay box no longer leaves just its digits behind ("15"), which Enter then applied. The paste is ignored and the box keeps what it showed, as on the Mac.
 
 ## [0.7.1] - 2026-10-27
 
