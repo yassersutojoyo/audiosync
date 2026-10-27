@@ -944,8 +944,8 @@ fn jittered_wakes(device_rate: u32, seed: u64) -> (u64, ReaderCounters) {
 #[test]
 fn a_windows_endpoint_whose_wakes_jitter_by_up_to_3_ms_makes_no_start_step() {
     // S324's limits: a wake late by less than a period finds as much padding
-    // as an on-time one and shows its lateness in the silence for that wake
-    // only, which the set's median leaves out.
+    // as an on-time one and raises the gap for that wake only, which the
+    // lowest gap of the newest PULL_GAP_WAKES wakes leaves out.
     for device_rate in [48_000, 44_100] {
         for seed in [1, 0x9E37_79B9_7F4A_7C15, 0xDEAD_BEEF, 42, 7_777_777] {
             let (steps, counters) = jittered_wakes(device_rate, seed);
