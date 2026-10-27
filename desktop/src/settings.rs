@@ -2254,11 +2254,13 @@ mod tests {
                     "master_volume": {master},
                     "outputs": {{"desk": {{"enabled": true, "volume": "x", "delay_ms": null}}}},
                     "airplay": {{"far": {{"volume": "loud", "delay_ms": "slow"}}}},
-                    "auto_connect": ["lc:desk"]
+                    "auto_connect": ["lc:desk"],
+                    "airplay_adjustment_ms": {master}
                 }}"#
             );
             let (settings, _) = Settings::from_json(&text).expect("one odd value spoils nothing");
             assert_eq!(settings.master_volume, 100.0, "master {master}");
+            assert_eq!(settings.airplay_adjustment_ms, 0.0, "adjustment {master}");
             assert_eq!(
                 settings.outputs.get("desk"),
                 Some(&SavedSpeaker {
