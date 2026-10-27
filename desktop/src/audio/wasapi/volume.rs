@@ -725,6 +725,7 @@ mod tests {
         let read = Windows(enumerator)
             .read(&default.id)
             .expect("the default output's volume control can be read");
+        println!("{:?}: {read:?}", default.name);
         assert!((0.0..=1.0).contains(&read.level), "{read:?}");
         assert_eq!(Some(read), default.volume);
     }
