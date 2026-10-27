@@ -45,6 +45,7 @@ use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, audio_ring};
 use audiosync_cast::discovery::mdns::MdnsBrowser;
+use audiosync_cast::discovery::reach::Reachability;
 use audiosync_cast::discovery::{BrowseEvent, DeviceId, DeviceKey, DeviceList, Entry, ListEvent};
 use audiosync_cast::group::{GroupMember, GroupRecords};
 use audiosync_cast::host::{
@@ -579,6 +580,9 @@ pub struct CastSpeakers {
     manual: Vec<Manual>,
     lookups: (mpsc::Sender<Lookup>, Receiver<Lookup>),
     resolver: Resolver,
+    /// Whether each speaker added by address answers: it is listed offline
+    /// until a check reaches it.
+    reach: Reachability,
 }
 
 impl CastSpeakers {
@@ -606,12 +610,22 @@ impl CastSpeakers {
             manual: Vec::new(),
             lookups: mpsc::channel(),
             resolver: cast_address::resolve,
+            #[cfg(not(test))]
+            reach: Reachability::default(),
+            // Unit tests never reach the network; one that needs an answer sets a probe.
+            #[cfg(test)]
+            reach: Reachability::new(|_| false),
         }
     }
 
     #[cfg(test)]
     pub fn set_resolver(&mut self, resolver: Resolver) {
         self.resolver = resolver;
+    }
+
+    #[cfg(test)]
+    pub fn set_probe(&mut self, probe: audiosync_cast::discovery::reach::Probe) {
+        self.reach = Reachability::new(probe);
     }
 
     /// Adds a speaker by address (C18); one added before stays as it is.
@@ -633,7 +647,23 @@ impl CastSpeakers {
             self.look_up(self.manual.len() - 1);
         }
         self.keep_manual_listed();
+        self.check_manual();
         self.pending.push(BackendEvent::CastChanged);
+    }
+
+    /// Takes in what the checks of the speakers added by address found,
+    /// and starts the ones due.
+    fn check_manual(&mut self) {
+        for change in self.reach.poll(&mut self.list, Instant::now()) {
+            if let ListEvent::Updated(key @ DeviceKey::Manual(socket)) = change {
+                let online = self.list.get(key).is_some_and(|entry| entry.online);
+                self.log.log(|| {
+                    let state = if online { "answers" } else { "doesn't answer" };
+                    format!("Cast: {socket} {state}")
+                });
+            }
+            self.pending.push(BackendEvent::CastChanged);
+        }
     }
 
     /// Takes back a speaker added by address, off first if it is on. One a
@@ -1433,6 +1463,7 @@ impl CastSpeakers {
         }
         self.poll_lookups();
         self.keep_manual_listed();
+        self.check_manual();
         self.follow_group();
         while let Some(event) = self.link.as_mut().and_then(|link| link.poll_event()) {
             self.handle(event);
@@ -2406,6 +2437,7 @@ pub mod tests {
     #[test]
     fn a_speaker_added_by_address_plays_under_its_address_until_removed() {
         let (fake, mut cast) = listed();
+        cast.set_probe(|_| true);
         cast.add_address(address("192.0.2.20"));
         cast.add_address(address("192.0.2.20:8009"));
         let speakers = cast.speakers();
@@ -2421,6 +2453,7 @@ pub mod tests {
 
         assert_eq!(cast.set_enabled(&row_id, true), Ok(()));
         cast.set_streaming(true);
+        poll_until_started(&fake, &mut cast);
         assert_eq!(fake.state().started, [address("192.0.2.20").device_id()]);
         assert_eq!(
             fake.state().targets,
@@ -2432,6 +2465,34 @@ pub mod tests {
         assert_eq!(fake.state().stops, 1, "switched off first");
         assert_eq!(cast.speakers().len(), 3);
         assert!(!cast.chosen());
+    }
+
+    // covers: C18
+    // No record vouches for a speaker added by address, so it stays
+    // offline, and nothing waits for it, until a check reaches it.
+    #[test]
+    fn a_speaker_added_by_address_that_doesnt_answer_stays_offline_and_off_the_air() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_probe(|_| false);
+        cast.add_address(address("192.0.2.21"));
+        let row_id = address("192.0.2.21").device_id().to_string();
+        assert_eq!(cast.set_enabled(&row_id, true), Ok(()));
+        cast.set_streaming(true);
+        for _ in 0..40 {
+            cast.poll();
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            fake.state().started.is_empty(),
+            "no session to a silent address"
+        );
+        assert!(!cast.chosen(), "local outputs don't wait for it");
+        assert_eq!(cast.speakers().len(), 1, "still listed");
+
+        cast.set_probe(|_| true);
+        poll_until_started(&fake, &mut cast);
+        assert!(cast.chosen());
     }
 
     // covers: C16, C18
@@ -2463,11 +2524,13 @@ pub mod tests {
     fn a_browse_that_finds_a_speaker_added_by_address_keeps_it_on_with_its_offset() {
         let fake = FakeCast::default();
         let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_probe(|_| true);
         cast.add_address(address("192.0.2.30"));
         let manual = address("192.0.2.30").device_id();
         assert!(cast.set_offset(&manual.to_string(), 400.0));
         assert_eq!(cast.set_enabled(&manual.to_string(), true), Ok(()));
         cast.set_streaming(true);
+        poll_until_started(&fake, &mut cast);
 
         fake.announce_at(
             KITCHEN,
@@ -2535,6 +2598,7 @@ pub mod tests {
             assert_eq!(host, "speaker.local");
             Ok(SocketAddr::from(([192, 0, 2, 40], port)))
         });
+        cast.set_probe(|_| true);
         cast.add_address(address("Speaker.local:8010"));
         let speakers = cast.speakers();
         assert_eq!(speakers.len(), 1);

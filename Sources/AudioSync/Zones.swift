@@ -152,11 +152,11 @@ enum ZoneEdit {
         return out
     }
 
-    /// Zone `id` named `typed`, trimmed; a blank name keeps the current one.
+    /// Zone `id` named `typed`, cleaned as a speaker name is; a blank name keeps the current one.
     static func renaming(_ id: String, to typed: String, in zones: [SpeakerZone]) -> [SpeakerZone] {
         guard let index = zones.firstIndex(where: { $0.id == id }) else { return zones }
         var out = zones
-        out[index].name = GroupName.afterRename(typed: typed, current: zones[index].name)
+        out[index].name = GroupName.afterRename(typed: SpeakerNames.clean(typed), current: zones[index].name)
         return out
     }
 

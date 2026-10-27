@@ -3,7 +3,8 @@
 //! `core/src` or `core/tests`, or is listed in `core/tests/spec_exempt.txt` with
 //! a one-line reason because only the host application can implement it, or in
 //! `core/tests/spec_pending.txt` with what is missing because the core is meant
-//! to implement it but doesn't yet.
+//! to implement it but doesn't yet. A clause retired or superseded as a whole
+//! needs none of these, and a `// covers:` line may not name it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -39,6 +40,72 @@ fn clauses(spec: &str) -> Vec<(u32, String)> {
             Some((clause_number(id)?, line.to_owned()))
         })
         .collect()
+}
+
+/// Clauses withdrawn as a whole: the text after the ID opens, possibly after an
+/// italic title such as `*Engine restart.*`, with "withdrawn", "retired" or
+/// "superseded", the last two not followed by " in part". Only the opening
+/// counts, since a live clause may mention retired things later on. Same rule
+/// as `scripts/spec_markers.py`.
+fn withdrawn_numbers(spec: &str) -> BTreeSet<u32> {
+    clauses(spec)
+        .into_iter()
+        .filter(|(_, line)| {
+            let body = line
+                .trim_start()
+                .strip_prefix("- **")
+                .and_then(|rest| rest.split_once("**"))
+                .map_or("", |(_, body)| body)
+                .trim_start();
+            opens_withdrawn(body) || opens_withdrawn(after_title(body))
+        })
+        .map(|(number, _)| number)
+        .collect()
+}
+
+/// The text after a leading italic title that ends with a period, or the whole
+/// text when it has none.
+fn after_title(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix('*') else {
+        return text;
+    };
+    match rest.split_once('*') {
+        Some((title, after)) if title.len() > 1 && title.ends_with('.') => after.trim_start(),
+        _ => text,
+    }
+}
+
+fn opens_withdrawn(text: &str) -> bool {
+    let word = text.trim_start_matches(['*', '(']).to_ascii_lowercase();
+    if word.starts_with("withdrawn") {
+        return true;
+    }
+    ["retired", "superseded"].iter().any(|opening| {
+        word.strip_prefix(*opening)
+            .is_some_and(|after| !after.starts_with(" in part"))
+    })
+}
+
+#[test]
+fn retired_and_superseded_clauses_are_withdrawn_unless_only_in_part() {
+    let spec = "\
+- **S1** *Required.* A live clause that mentions a retired engine later on.
+- **S2** *Retired with the bundled engine; kept as a record.* *Observed*.
+- **S3** *Retired in part with the bundled engine*: the rest holds.
+- **S4** *Engine restart.* *Retired with the bundled engine; kept as a record.*
+- **S5** *Superseded by S1*: groups became zones.
+- **S6** *Network loss, as tested.* *Retired in part*: the hint stands.
+- **S7** *Superseded in part by S1*: the range still holds.
+- **S8** (withdrawn) *Observed*.
+- **S9** *Retired.* *Observed* in an old build.
+- **S10** *superseded by S1.*
+  - **S11** *Retired with the FIFO feed.*
+- **S12** *Observed* (`Retired.swift`). Not withdrawn.
+";
+    assert_eq!(
+        withdrawn_numbers(spec),
+        BTreeSet::from([2, 4, 5, 8, 9, 10, 11])
+    );
 }
 
 fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
@@ -226,6 +293,18 @@ fn covers_lines_are_well_formed_and_name_spec_clauses() {
         "`// covers:` names clauses the spec doesn't have:\n{}",
         unknown.join("\n")
     );
+    let withdrawn = withdrawn_numbers(&spec_text());
+    let retired: Vec<String> = covered
+        .iter()
+        .filter(|(number, _)| withdrawn.contains(number))
+        .map(|(number, places)| format!("S{number} at {}", places.join(", ")))
+        .collect();
+    assert!(
+        retired.is_empty(),
+        "`// covers:` names retired or superseded clauses (drop the marker, or name \
+         the clause that replaced it):\n{}",
+        retired.join("\n")
+    );
 }
 
 #[test]
@@ -284,6 +363,7 @@ fn the_pending_list_is_well_formed_and_names_spec_clauses() {
 #[test]
 fn every_clause_is_covered_exempt_or_pending() {
     let known = spec_numbers();
+    let withdrawn = withdrawn_numbers(&spec_text());
     let (covered, _) = covers();
     let (exempt, _) = exemptions();
     let (pending, _) = pending();
@@ -291,7 +371,8 @@ fn every_clause_is_covered_exempt_or_pending() {
         .iter()
         .copied()
         .filter(|number| {
-            !covered.contains_key(number)
+            !withdrawn.contains(number)
+                && !covered.contains_key(number)
                 && !exempt.contains_key(number)
                 && !pending.contains_key(number)
         })
@@ -307,8 +388,9 @@ fn every_clause_is_covered_exempt_or_pending() {
         .filter(|number| covered.contains_key(number))
         .collect();
     println!(
-        "{} clauses: {} covered, {} exempt, {} pending, {} uncovered",
+        "{} clauses: {} withdrawn, {} covered, {} exempt, {} pending, {} uncovered",
         known.len(),
+        withdrawn.len(),
         known
             .iter()
             .filter(|number| covered.contains_key(number))

@@ -14,12 +14,34 @@ enum CalibrationRecording: Equatable {
     case chosen
 }
 
+/// What a calibration needs that is off, named in this order in its text.
+struct CalibrationMissing: OptionSet, Hashable {
+    let rawValue: Int
+    static let streaming = CalibrationMissing(rawValue: 1)
+    /// The speaker being calibrated.
+    static let speaker = CalibrationMissing(rawValue: 2)
+    /// The Mac's built-in speakers.
+    static let reference = CalibrationMissing(rawValue: 4)
+    static let all: CalibrationMissing = [.streaming, .speaker, .reference]
+
+    /// While streaming runs, whichever of `speaker` and `reference` doesn't
+    /// play; while it is off, whichever is switched off.
+    static func of(streaming: Bool, speaker: String, reference: String, playing: Set<String>,
+                   switchedOn: Set<String>) -> CalibrationMissing {
+        let on = streaming ? playing : switchedOn
+        var missing: CalibrationMissing = streaming ? [] : .streaming
+        if !on.contains(speaker) { missing.insert(.speaker) }
+        if !on.contains(reference) { missing.insert(.reference) }
+        return missing
+    }
+}
+
 /// Why a calibration changed nothing.
 enum CalibrationFailure: Equatable {
     /// No reference (the Mac's built-in speakers) is listed.
     case noReference
     /// Streaming is off, or the chosen speaker or the reference isn't playing.
-    case notPlaying
+    case notPlaying(CalibrationMissing)
     /// The built-in output plays to the headphone jack, so its speakers are silent.
     case referenceHeadphones
     case microphoneDenied
@@ -184,8 +206,13 @@ enum CalibrationFlow {
     static func blocker(streaming: Bool, reference: String?, chosen: String,
                         playing: [String], referenceLeftOut: CalibrationLeftOut? = nil) -> CalibrationFailure? {
         guard let reference else { return .noReference }
-        guard streaming, chosen != reference, playing.contains(chosen), playing.contains(reference)
-        else { return .notPlaying }
+        // Nothing plays while streaming is off, so only streaming is named then.
+        guard streaming else { return .notPlaying(.streaming) }
+        guard chosen != reference else { return .notPlaying(.all) }
+        var missing: CalibrationMissing = []
+        if !playing.contains(chosen) { missing.insert(.speaker) }
+        if !playing.contains(reference) { missing.insert(.reference) }
+        if !missing.isEmpty { return .notPlaying(missing) }
         return referenceLeftOut == .headphones ? .referenceHeadphones : nil
     }
 
@@ -193,7 +220,10 @@ enum CalibrationFlow {
     /// knows; nil when it may try (`blocker` checks the rest on the press).
     static func unavailable(streaming: Bool, hasReference: Bool, speakerOn: Bool) -> CalibrationFailure? {
         if !hasReference { return .noReference }
-        return streaming && speakerOn ? nil : .notPlaying
+        var missing: CalibrationMissing = []
+        if !streaming { missing.insert(.streaming) }
+        if !speakerOn { missing.insert(.speaker) }
+        return missing.isEmpty ? nil : .notPlaying(missing)
     }
 
     /// Allowance for an output's own latency in a recording's length; a

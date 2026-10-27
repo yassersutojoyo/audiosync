@@ -41,14 +41,14 @@ CORE=(-I Sources/CAudioSyncCore -L core/target/universal-apple-darwin/release -l
 ENGINE_PARTS=(EngineParts.swift CoreEngine.swift OutputRenderer.swift OutputFades.swift Equalizer.swift Diagnostics.swift
   NativeAirPlayTap.swift CastTap.swift CalibrationTap.swift)
 
-build() {   # build <name> <test file> <source files…> [-- <more swiftc arguments…>]
-  local name=$1 test=$2; shift 2
+build() {   # [SWIFT_OPT=-Onone] build <name> <test file> <source files…> [-- <more swiftc arguments…>]
+  local name=$1 test=$2 opt=${SWIFT_OPT:--O}; shift 2
   mkdir -p "$OUT/$name"
   cp "$test" "$OUT/$name/main.swift"
   local srcs=() extra=()
   while [ $# -gt 0 ] && [ "$1" != "--" ]; do srcs+=("$SRC/$1"); shift; done
   if [ $# -gt 0 ]; then shift; extra=("$@"); fi
-  swiftc -O -swift-version 5 "$OUT/$name/main.swift" ${srcs[@]+"${srcs[@]}"} ${extra[@]+"${extra[@]}"} \
+  swiftc "$opt" -swift-version 5 "$OUT/$name/main.swift" ${srcs[@]+"${srcs[@]}"} ${extra[@]+"${extra[@]}"} \
     -o "$OUT/$name/run"
 }
 
@@ -199,6 +199,28 @@ else
   echo "PASSED"
 fi
 
+echo "▶ the engine's callbacks start on the main queue"
+# covers: S113 (onInterrupted comes from the capture's listeners and timers, onOutputGone from a renderer's alive listener)
+# No suite can make a device vanish without hardware, so this checks the
+# queues those callbacks start on; the logic suite checks the control calls.
+main_sources=$(grep -hE 'AudioObjectAddPropertyListenerBlock\(|makeTimerSource\(' \
+  "$SRC/ProcessTapCapture.swift" "$SRC/SyncEngine.swift")
+alive_listener=$(awk '/func installDeviceAliveListener/ { f = 1 } f { print } f && /^    }$/ { exit }' \
+  "$SRC/OutputRenderer.swift")
+workspace_hop=$(grep -A1 'NSWorkspace\.shared\.observe' "$SRC/ProcessTapCapture.swift" || true)
+if [ "$(grep -c . <<< "$main_sources")" -lt 3 ] \
+    || grep -vE 'DispatchQueue\.main|queue: \.main' <<< "$main_sources" \
+    || [ "$(grep -c 'onInterrupted?(' "$SRC/ProcessTapCapture.swift")" -ne 1 ] \
+    || [ "$(grep -c 'onOutputGone?(' "$SRC/SyncEngine.swift")" -ne 1 ] \
+    || ! grep -q 'self\.onDeviceGone?()' <<< "$alive_listener" \
+    || ! grep -q 'AudioObjectAddPropertyListenerBlock(device, &address, DispatchQueue\.main, block)' <<< "$alive_listener" \
+    || ! grep -q 'DispatchQueue\.main\.async' <<< "$workspace_hop"; then
+  echo "FAIL: a source of onInterrupted or onOutputGone no longer starts on the main queue"
+  status=1
+else
+  echo "PASSED"
+fi
+
 echo "▶ zone header clicks go through its routing table"
 # The logic suite proves ZoneHeaderHit; this proves the view reaches it from
 # each area, with the box's tap last so the slider and the menu keep theirs.
@@ -206,13 +228,25 @@ zone_card=$(awk '/^private struct ZoneCard/ { f = 1 } f { print } f && /^}$/ { e
 if [ "$(grep -c 'hit(\.' <<< "$zone_card")" -ne 5 ] \
     || ! grep -q 'Button { hit(\.chevron) }' <<< "$zone_card" \
     || ! grep -q 'Button { hit(\.zoneIcon) }' <<< "$zone_card" \
-    || ! grep -q '\.onTapGesture { hit(\.name) }' <<< "$zone_card" \
+    || ! grep -q '\.exclusively(before: TapGesture()\.onEnded { hit(\.name) })' <<< "$zone_card" \
     || ! grep -q '\.onTapGesture { hit(\.count) }' <<< "$zone_card" \
     || ! grep -A1 -E '^        \.contentShape\(Rectangle\(\)\)$' <<< "$zone_card" \
          | grep -qE '^        \.onTapGesture \{ hit\(\.blank\) \}$' \
     || [ "$(grep -c 'toggleZone(' <<< "$zone_card")" -ne 1 ] \
     || ! grep -q 'case \.toggleZone: model\.actions\.toggleZone(zone\.id)' <<< "$zone_card"; then
   echo "FAIL: a zone header area no longer goes through ZoneHeaderHit, or something else switches the zone"
+  status=1
+else
+  echo "PASSED"
+fi
+
+echo "▶ the whole system's switch marks its early stop as a rebuild"
+# covers: S223 (the logic suite proves a stop marked so ends the stream; this proves switchToSystem marks it)
+switch_system=$(awk '/^    private func switchToSystem/ { f = 1 } f { print } f && /^    }$/ { exit }' \
+  "$SRC/AppDelegate+Engine.swift")
+if [ "$(grep -c 'engine\.stop()' <<< "$switch_system")" -ne 1 ] \
+    || ! grep -B1 -E '^ +engine\.stop\(\)$' <<< "$switch_system" | grep -qE '^ +midRebuild = true( |$)'; then
+  echo "FAIL: switchToSystem stops the engine without setting midRebuild = true on the line before"
   status=1
 else
   echo "PASSED"
@@ -232,6 +266,9 @@ Tests/shellchecktest.sh || status=1
 
 echo "▶ disk image detach (Tests/dmgdetachtest.sh)"
 Tests/dmgdetachtest.sh || status=1
+
+echo "▶ updater words (Tests/updatertexttest.sh)"
+Tests/updatertexttest.sh || status=1
 
 if [ "$macos" = 0 ]; then
   # shellcheck source=scripts/cargo_path.sh disable=SC1091
@@ -258,11 +295,14 @@ if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
   # name the capture's and the engine's start errors, which bring the
   # engine's parts along (SyncEngine.swift with StreamEngine's StartError): the
   # logic suite links the core too.
-  build logic Tests/logictest.swift TrackMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
+  # Unoptimized: its -O compile was most of the macOS CI job, and no logic check relies on the optimizer.
+  logic_start=$SECONDS
+  SWIFT_OPT=-Onone build logic Tests/logictest.swift TrackMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
     AirPlayPairing.swift Notices.swift PermissionFlow.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
     AudioDevices.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift PanelColors.swift \
     NativeReceiver.swift NativeAirPlayModel.swift CastModel.swift CastSender.swift WindowRules.swift FieldEditor.swift AppSettings.swift Zones.swift Presets.swift HiddenSpeakers.swift SpeakerNames.swift AppLifecycle.swift UpdateGate.swift MicrophoneRequestGate.swift LocalDelay.swift InputLevel.swift DeviceVolume.swift \
     Localization.swift AboutPanel.swift MenuNote.swift MenuActions.swift BrandTokens.swift WebRemoteModel.swift CalibrationFlow.swift CalibrateAllFlow.swift GuideArtwork.swift GuideLayout.swift ProcessTapCapture.swift SyncEngine.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
+  echo "logic compile: $((SECONDS - logic_start)) s"
   "$OUT/logic/run" || status=1
   echo "▶ core (the app's wrappers of the core)"
   build core Tests/coretest.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"

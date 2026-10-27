@@ -46,6 +46,7 @@ final class CastSender {
     /// The track and cover given last, also for a handle created later.
     private var track: TrackMetadata.Fields?
     private var artwork: Data?
+    private var underruns = CastUnderruns()
 
     init(memoryURL: URL?, onChanges: @escaping ([CastDeviceChange]) -> Void,
          onEvents: @escaping ([CastEvent]) -> Void) {
@@ -394,7 +395,7 @@ final class CastSender {
         var events: [CastEvent] = []
         var rawEvent = AscCastEvent()
         while asc_cast_next_event(handle, &rawEvent) {
-            guard let event = CastEvent(rawEvent, members: { self.members(handle) }) else { continue }
+            guard let event = CastEvent(rawEvent, members: { self.members(handle) }, underruns: &underruns) else { continue }
             if event == .memoryChanged { saveMemory() }
             events.append(event)
         }

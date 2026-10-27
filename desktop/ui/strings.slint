@@ -262,8 +262,7 @@ export global Strings {
     out property <string> move-to-zone: @tr("Move to Zone");
     out property <string> new-zone-item: @tr("New Zone…");
     out property <string> remove-from-zone: @tr("Remove from Zone");
-    out property <string> rename-zone: @tr("Rename Zone…");
-    out property <string> rename-zone-title: @tr("Rename Zone");
+    out property <string> rename-zone: @tr("Rename…");
     out property <string> delete-zone: @tr("Delete Zone");
     // Calibrate Zone (spec S255): in a zone's menu, then what the Calibrate
     // All card says for a zone run.
@@ -1340,6 +1339,7 @@ export global Strings {
 
     // What the name field says about its keys.
     out property <string> speaker-name-field-hint: @tr("Press Enter to apply or Escape to cancel. Leave it empty for the device's own name.");
+    out property <string> zone-name-field-hint: @tr("Press Enter to apply or Escape to cancel.");
 
     // The tooltip on a speaker's name in the tray flyout: the full name,
     // which the row may elide, then the device's own name once renamed.
@@ -1542,7 +1542,7 @@ export global Strings {
     out property <string> calibration-this-speaker: @tr("this speaker");
     out property <string> calibration-a-speaker: @tr("a speaker");
     out property <string> calibration-no-reference: @tr("Calibration measures against the PC's own speakers, and they aren't listed.");
-    out property <string> calibration-turn-on: @tr("Turn on streaming and this speaker to calibrate it.");
+    out property <string> calibration-own-speakers: @tr("the PC's own speakers");
     out property <string> calibration-microphone-denied: Platform.os == OperatingSystemType.linux ? @tr("PipeWire didn't let AudioSync use the microphone. Allow microphone access for AudioSync in your desktop's privacy settings, and try again.") : @tr("Windows is blocking microphone access for desktop apps. Turn on “Let desktop apps access your microphone” in Settings > Privacy & security > Microphone, and try again.");
     out property <string> calibration-no-microphone: Platform.os == OperatingSystemType.linux ? @tr("AudioSync couldn't record from the microphone. Check the input in Sound settings.") : @tr("AudioSync couldn't record from the microphone. Check the input in Settings > System > Sound.");
     out property <string> calibration-unsupported-rate: Platform.os == OperatingSystemType.linux ? @tr("The microphone runs at a sample rate calibration can't use. Choose another input in Sound settings, and try again.") : @tr("The microphone runs at a sample rate calibration can't use. Set its format to 48 kHz in Settings > System > Sound, and try again.");
@@ -1576,8 +1576,35 @@ export global Strings {
         return @tr("Listening to {}…", name);
     }
 
-    public pure function calibration-not-playing(reference: string) -> string {
-        return @tr("Turn on streaming, this speaker and {} first.", reference);
+    // What a calibration needs that is off, in the order streaming, the speaker, the reference; an empty name is left out.
+    public pure function calibration-needs(streaming: bool, speaker: string, reference: string) -> string {
+        if streaming && speaker != "" && reference != "" {
+            return @tr("streaming, {} and {}", speaker, reference);
+        }
+        if streaming && speaker != "" {
+            return @tr("streaming and {}", speaker);
+        }
+        if streaming && reference != "" {
+            return @tr("streaming and {}", reference);
+        }
+        if speaker != "" && reference != "" {
+            return @tr("{} and {}", speaker, reference);
+        }
+        if streaming {
+            return @tr("streaming");
+        }
+        if speaker != "" {
+            return speaker;
+        }
+        return reference;
+    }
+
+    // `needs` from calibration-needs; `speaker` when it names the speaker being calibrated.
+    public pure function calibration-turn-on(needs: string, speaker: bool) -> string {
+        if speaker {
+            return @tr("Turn on {} to calibrate it.", needs);
+        }
+        return @tr("Turn on {} to calibrate.", needs);
     }
 
     public pure function calibration-clipped(subject: string) -> string {
@@ -1641,19 +1668,9 @@ export global Strings {
         return @tr("Put the microphone where you listen. AudioSync fades the music out, plays a short sweep on {} and then on every other speaker that is on, one at a time, twice each, and fades the music back in. Headphones and virtual outputs are left out. Nothing changes until you choose Apply.", reference);
     }
 
-    public pure function calibrate-all-turn-on(reference: string) -> string {
-        if reference == "" {
-            return @tr("Turn on streaming and at least one speaker besides the PC's own speakers first.");
-        }
-        return @tr("Turn on streaming and at least one speaker besides {} first.", reference);
-    }
-
-    // Measure Again was refused: the reference or that row's speaker doesn't play.
-    public pure function calibrate-all-cannot-again(reference: string, name: string) -> string {
-        if reference == "" {
-            return @tr("Turn on streaming, the PC's own speakers and {} to measure it again.", name);
-        }
-        return @tr("Turn on streaming, {} and {} to measure it again.", reference, name);
+    // Measure Again was refused: `needs` from calibration-needs, with the row's speaker by its name.
+    public pure function calibrate-all-cannot-again(needs: string) -> string {
+        return @tr("Turn on {} to measure it again.", needs);
     }
 
     public pure function calibrate-all-nothing(reference: string) -> string {

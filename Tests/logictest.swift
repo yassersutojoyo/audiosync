@@ -3075,6 +3075,89 @@ do {
     check(retried == nil && pin.withdrawPrompt() == nil,
           "every time: a refusal the sender retries while the PIN prompt is open starts no second pairing and keeps the prompt",
           "\(String(describing: retried))")
+
+    // S223: switched on by hand lasts only for the PIN session that click
+    // bought. Once the stream ends the speaker goes off with the needs-a-PIN
+    // notice, the next stream opens no prompt, and the next click pairs again.
+    var session = NativeAirPlayModel()
+    session.apply(.appeared(tv("S1", .needsPin, everyTime: true)))
+    var hand = EveryTimeGuard()
+    hand.turnedOnByHand(["native:S1"])
+    _ = session.turnedOnByUser("S1")
+    session.added("S1")
+    _ = session.apply(.state(id: "S1", .playing, retryMs: nil))
+    for id in session.plan(streaming: false, enabled: ["native:S1"]).remove { session.removed(id) }
+    let ended = hand.streamEnded(.stopped(.powerSwitch), streaming: true,
+                                 asking: session.askingEveryTime(session.rows(enabled: ["native:S1"])),
+                                 enabled: ["native:S1"])
+    for off in ended { _ = session.turnedOff(off.id) }
+    let enabledAfter: Set<String> = ended.isEmpty ? ["native:S1"] : []
+    let restart = session.plan(streaming: true, enabled: enabledAfter)
+    let reopened = session.nextPrompt()
+    let relisted = hand.turnsOff(session.askingEveryTime(session.rows(enabled: enabledAfter)), enabled: enabledAfter)
+    check(ended == [NativeAirPlayPlan.TurnOff(id: "native:S1", reason: .needsCode)]
+            && restart.add.isEmpty && reopened == nil && relisted.isEmpty,
+          "every time: stop then start: row off + notice",
+          "ended \(ended), restart \(restart), prompt \(String(describing: reopened)), relisted \(relisted)")
+    check(session.turnedOnByUser("S1") == .startPairing("S1"),
+          "every time: after the stream ended, the next click on it pairs again")
+
+    // Inside the stream the sender retries a lost connection; the receiver
+    // refuses credentials from the earlier connection, so it needs a new PIN.
+    var again = NativeAirPlayModel()
+    again.apply(.appeared(tv("S2", .needsPin, everyTime: true)))
+    var kept = EveryTimeGuard()
+    kept.turnedOnByHand(["native:S2"])
+    _ = again.turnedOnByUser("S2")
+    again.added("S2")
+    _ = again.apply(.state(id: "S2", .playing, retryMs: nil))
+    let lost = again.apply(.error(id: "S2", .connectionLost, retryMs: 1000, detail: ""))
+    let keptOn = kept.turnsOff(again.askingEveryTime(again.rows(enabled: ["native:S2"])), enabled: ["native:S2"])
+    let refusedAgain = again.apply(.error(id: "S2", .pairingRequired, retryMs: nil, detail: ""))
+    check(lost == nil && keptOn.isEmpty && refusedAgain == .turnOff("native:S2", .needsCode) && again.nextPrompt() == nil,
+          "every time: a reconnect inside the stream that the receiver refuses: row off + notice, no prompt",
+          "lost \(String(describing: lost)), kept \(keptOn), refused \(String(describing: refusedAgain))")
+
+    // The other ways a stream ends drop the mark too; with every speaker off
+    // nothing is left to turn off.
+    let ends: [(StreamEnd, Set<String>, [NativeAirPlayPlan.TurnOff], String)] = [
+        (.stopped(.noSpeakerOn), [], [], "every speaker off"),
+        (.senderFailed, ["native:S1"], [.init(id: "native:S1", reason: .needsCode)], "a sender failure that stops streaming"),
+        (.sleep, ["native:S1"], [.init(id: "native:S1", reason: .needsCode)], "sleep"),
+    ]
+    for (cause, enabled, expected, what) in ends {
+        var marked = EveryTimeGuard()
+        marked.turnedOnByHand(["native:S1"])
+        let off = marked.streamEnded(cause, streaming: true, asking: ["native:S1"], enabled: enabled)
+        check(off == expected && marked.byHand.isEmpty,
+              "every time: \(what) ends the stream: the by-hand mark is gone", "\(off), \(marked.byHand)")
+    }
+    // A rebuild (a source change, say) stops the engine before it starts it
+    // again; when that start fails, streaming has stopped and the mark ends.
+    var rebuilt = EveryTimeGuard()
+    rebuilt.turnedOnByHand(["native:S1"])
+    let failedRebuild = rebuilt.streamEnded(.stopped(.startFailed), streaming: false, midRebuild: true,
+                                            asking: ["native:S1"], enabled: ["native:S1"])
+    check(failedRebuild == [.init(id: "native:S1", reason: .needsCode)] && rebuilt.byHand.isEmpty,
+          "every time: a rebuild after a source change that fails to start ends the stream: the by-hand mark is gone",
+          "\(failedRebuild), \(rebuilt.byHand)")
+    var quitMidRebuild = EveryTimeGuard()
+    quitMidRebuild.turnedOnByHand(["native:S1"])
+    let quitOff = quitMidRebuild.streamEnded(.stopped(.quitting), streaming: false, midRebuild: true,
+                                             asking: ["native:S1"], enabled: ["native:S1"])
+    check(quitOff.isEmpty && quitMidRebuild.byHand == ["native:S1"],
+          "every time: quitting during a rebuild keeps the by-hand mark", "\(quitOff)")
+    // A source change rebuilds inside the stream, and quitting leaves the
+    // switches for the next launch: the mark stays.
+    let keeps: [(StreamEnd, Bool)] = [(.stopped(.sourceChanged), true), (.stopped(.quitting), true),
+                                      (.stopped(.powerSwitch), false)]
+    for (cause, streaming) in keeps {
+        var marked = EveryTimeGuard()
+        marked.turnedOnByHand(["native:S1"])
+        let off = marked.streamEnded(cause, streaming: streaming, asking: ["native:S1"], enabled: ["native:S1"])
+        check(off.isEmpty && marked.byHand == ["native:S1"],
+              "every time: \(cause) with streaming \(streaming) keeps the by-hand mark", "\(off)")
+    }
 }
 
 // MARK: Every time at launch: on from the last run and discovered, it stays off with no pairing for 15 s
@@ -5615,6 +5698,14 @@ do {
               && ZoneEdit.renaming("zone-2", to: "Living", in: zonesBefore).map(\.name) == ["Living", "Living"],
           "zone rename: the typed name is trimmed, a blank one keeps the name, and a name another zone uses is allowed",
           "\(renamedZones.map(\.name))")
+    check(ZoneEdit.renaming("zone-1", to: " " + String(repeating: "a", count: 65) + "\n", in: zonesBefore)[0].name
+              == String(repeating: "a", count: SpeakerNames.maxLength)
+              && ZoneEdit.renaming("zone-1", to: "Den\nStudy", in: zonesBefore)[0].name == "Den Study",
+          "zone rename: a long name is cut to 60 characters and line breaks become spaces, as a speaker's",
+          "\(ZoneEdit.renaming("zone-1", to: String(repeating: "a", count: 65), in: zonesBefore)[0].name.count)")
+    check(UIStrings().renameZone == "Rename…" && UIStrings().renameZone == UIStrings().renameSpeaker,
+          "zone rename: the zone menu item reads like the speaker's",
+          UIStrings().renameZone)
 }
 
 // MARK: Delay field — typed text applies on Return or focus loss, once (DelayFieldDraft)
@@ -6077,6 +6168,59 @@ do {
           "observer: Wi-Fi switched off says so")
 }
 
+// MARK: Status line: what capture and each output counted since the previous 5 s line (SessionTally, S229)
+do {
+    typealias Out = SessionTally.Output
+    var numbers: [String: Int] = [:]
+    SessionTally.number(["Built-in", "BT-AA:BB"], in: &numbers)
+    check(numbers == ["BT-AA:BB": 1, "Built-in": 2], "status line: outputs are numbered in UID order at first", "\(numbers)")
+    SessionTally.number(["Built-in", "USB"], in: &numbers)
+    check(numbers == ["BT-AA:BB": 1, "Built-in": 2, "USB": 3],
+          "status line: an output leaving or joining never renumbers the others", "\(numbers)")
+    var tokens = AttachTokens()
+    tokens.attached("BT-AA:BB")
+    tokens.attached("Built-in")
+    let bt = tokens.byUID["BT-AA:BB"] ?? 0
+    let builtInBefore = tokens.byUID["Built-in"] ?? 0
+    let old = SessionTally(capture: CaptureCounts(callbacks: 1_000, frames: 512_000, silentCallbacks: 4),
+                           outputs: ["BT-AA:BB": Out(number: 1, attach: bt, starvedRenders: 2, starvedFrames: 900, driftSkips: 1,
+                                                     driftSilences: 4, lateCallbacks: 7, overloads: 1),
+                                     "Built-in": Out(number: 2, attach: builtInBefore, starvedRenders: 5, starvedFrames: 2_000,
+                                                     lateCallbacks: 3, overloads: 0)])
+    // Built-in is detached and attached again within one tick (a replug), and its new renderer counts
+    // past the old totals; USB joins.
+    tokens.attached("Built-in")
+    tokens.attached("USB")
+    let builtInAfter = tokens.byUID["Built-in"] ?? 0
+    check(builtInAfter != builtInBefore && tokens.byUID["BT-AA:BB"] == bt,
+          "status line: a re-attach gets a new token, the other outputs keep theirs", "\(tokens.byUID)")
+    let new = SessionTally(capture: CaptureCounts(callbacks: 1_500, frames: 752_000, silentCallbacks: 4),
+                           outputs: ["BT-AA:BB": Out(number: 1, attach: bt, starvedRenders: 3, starvedFrames: 1_412, driftSkips: 3,
+                                                     driftSilences: 4, lateCallbacks: 7, overloads: 2),
+                                     "Built-in": Out(number: 2, attach: builtInAfter, starvedRenders: 7, starvedFrames: 3_360,
+                                                     driftSkips: 1, driftSilences: 2, lateCallbacks: 0, overloads: 0),
+                                     "USB": Out(number: 3, attach: tokens.byUID["USB"] ?? 0, starvedRenders: 0, starvedFrames: 0,
+                                                lateCallbacks: 1, overloads: 0)])
+    let line = SessionTally.statusText(since: old, now: new, seconds: 5.0)
+    check(line == "status over 5.0 s: capture 240000 frames (48000 frames/s), 500 callbacks, 0 without usable channels"
+              + "; output 1: starved 1 (512 frames), drift skips 2, drift silences 0, late callbacks 0, IO overloads 1"
+              + "; output 2: starved 7 (3360 frames), drift skips 1, drift silences 2, late callbacks 0, IO overloads 0"
+              + "; output 3: starved 0 (0 frames), drift skips 0, drift silences 0, late callbacks 1, IO overloads 0",
+          "status line: deltas since the last line; a re-attached output's counts are all new, a new output counts from 0",
+          line)
+    check(!line.contains("BT-AA") && !line.contains("Built-in") && !line.contains("USB"),
+          "status line: outputs are numbered, never named", line)
+    // BT-AA:BB left: the others keep their numbers in the line.
+    let later = SessionTally(capture: new.capture, outputs: ["Built-in": new.outputs["Built-in"]!, "USB": new.outputs["USB"]!])
+    let next = SessionTally.statusText(since: new, now: later, seconds: 5.0)
+    check(next.contains("; output 2: starved 0") && next.contains("; output 3: starved 0") && !next.contains("output 1"),
+          "status line: an output leaving keeps the others' numbers", next)
+    let idle = SessionTally.statusText(since: new, now: SessionTally(capture: new.capture), seconds: 0)
+    check(idle == "status over 0.0 s: capture 0 frames (0 frames/s), 0 callbacks, 0 without usable channels"
+              + "; no local outputs",
+          "status line: no time passed gives a rate of 0, and no outputs say so", idle)
+}
+
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
 // covers: S186 (the Mac's stop order)
 
@@ -6537,6 +6681,80 @@ do {
           "removed \(refused.removed), applied \(failedRestart), report \(String(describing: afterRestart))")
 }
 
+// MARK: The engine's control interface (S112) and the thread it is used on (S113)
+// covers: S112
+do {
+    // Pinned by type, so a renamed or reshaped call stops this suite from building.
+    let start: (StreamEngine) -> (AudioSource, Int, Bool) throws -> Void = StreamEngine.start(source:inputPair:rebuild:)
+    let stop: (StreamEngine) -> ((() -> Void)?) -> Void = StreamEngine.stop(then:)
+    let running: KeyPath<StreamEngine, Bool> = \.isRunning
+    let attach: (StreamEngine) -> (String, AudioObjectID, Double, Double) throws -> Void =
+        StreamEngine.attachOutput(uid:device:delayMs:gain:)
+    let detach: (StreamEngine) -> (String) -> Void = StreamEngine.detachOutput(uid:)
+    let detachTogether: (StreamEngine) -> ([String]) -> Void = StreamEngine.detachOutputs(uids:)
+    let active: KeyPath<StreamEngine, [String]> = \.activeOutputUIDs
+    let setGain: (StreamEngine) -> (String, Double) -> Void = StreamEngine.setGain(uid:g:)
+    let setDelay: (StreamEngine) -> (String, Double) -> Void = StreamEngine.setDelay(uid:ms:)
+    let equalizer: (StreamEngine) -> (Equalizer.Settings) -> Void = StreamEngine.updateEqualizer(_:)
+    let gone: ReferenceWritableKeyPath<StreamEngine, ((String) -> Void)?> = \.onOutputGone
+    let interrupted: ReferenceWritableKeyPath<StreamEngine, ((SourceCapture.Interruption) -> Void)?> = \.onInterrupted
+    _ = (start, stop, running, attach, detach, detachTogether, active, setGain, setDelay, equalizer, gone, interrupted)
+
+    // No default case: a third interruption kind stops this suite from building.
+    func kind(_ reason: SourceCapture.Interruption) -> String {
+        switch reason {
+        case .formatChanged: return "formatChanged"
+        case .sourceLost: return "sourceLost"
+        }
+    }
+    check(kind(.formatChanged) == "formatChanged" && kind(.sourceLost(.appNotRunning("Music"))) == "sourceLost",
+          "S112 interface: an interruption is a format change or a lost source with its error")
+
+    let idle = StreamEngine()
+    var threw = false
+    do { try idle.attachOutput(uid: "usb", device: 52, delayMs: 40, gain: 0.5) } catch { threw = true }
+    idle.setGain(uid: "usb", g: 0.25)
+    idle.setDelay(uid: "usb", ms: 10)
+    idle.detachOutput(uid: "usb")
+    idle.detachOutputs(uids: ["usb", "bt"])
+    check(!idle.isRunning && !threw && idle.activeOutputUIDs.isEmpty,
+          "S112 interface: with no session an attach adds nothing; gain, delay and detach of unknown outputs do nothing",
+          "running \(idle.isRunning), threw \(threw), active \(idle.activeOutputUIDs)")
+
+    /// Records each call with whether it came on the main thread.
+    final class ThreadNotingEngine: LocalOutputEngine {
+        var activeOutputUIDs: [String] = ["old"]
+        var calls: [String] = []
+        var offMain: [String] = []
+        private func note(_ call: String) {
+            calls.append(call)
+            if !Thread.isMainThread { offMain.append(call) }
+        }
+        func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {
+            note("attach \(uid) on \(device) at \(delayMs) ms, gain \(gain)")
+            activeOutputUIDs.append(uid)
+        }
+        func detachOutput(uid: String) { detachOutputs(uids: [uid]) }
+        func detachOutputs(uids: [String]) {
+            note("detach \(uids)")
+            activeOutputUIDs.removeAll { uids.contains($0) }
+        }
+        func setGain(uid: String, g: Double) { note("gain \(uid) \(g)") }
+    }
+    let usb = AudioDevices.Device(id: 52, name: "USB DAC", uid: "usb", transport: kAudioDeviceTransportTypeUSB)
+    let noting = ThreadNotingEngine()
+    _ = LocalOutputSync.apply(enabled: ["usb"], listing: [usb], to: noting, holdBacks: ["usb": 40], gain: { _ in 0.5 })
+    LocalOutputSync.reapplyGains(on: noting, gain: { _ in 0.25 })
+    check(noting.calls == ["attach usb on 52 at 40.0 ms, gain 0.5", "detach [\"old\"]", "gain usb 0.25"],
+          "S112 interface: the host's attach, detach and gain reach the engine with the device, hold-back and gain",
+          "\(noting.calls)")
+
+    // covers: S113 (the host's control calls; the callbacks' main queue is checked in Tests/run-tests.sh)
+    check(Thread.isMainThread && noting.offMain.isEmpty && noting.calls.count == 3,
+          "S113 main thread: the host's sync makes every engine call on the main thread, before it returns",
+          "off the main thread: \(noting.offMain)")
+}
+
 // MARK: Launch, second launch and session events (AppLifecycle.swift)
 // covers: S215
 do {
@@ -6686,6 +6904,15 @@ do {
     let actedFirst = systemSwitch([.started], userActsAfter: 0, firstWait: settleWait)
     check(actedFirst.streaming == nil && actedFirst.lasts.isEmpty,
           "source quit: a stop or source change before the first attempt makes none (S227 g)", "\(actedFirst)")
+    // S223: the stop before a waiting first attempt marks a rebuild, so the
+    // final startFailed stop, with nothing streaming, still ends the stream.
+    var switchedOn = EveryTimeGuard()
+    switchedOn.turnedOnByHand(["native:S1"])
+    let allFailed = switchedOn.streamEnded(.stopped(.startFailed), streaming: false, midRebuild: true,
+                                           asking: ["native:S1"], enabled: ["native:S1"])
+    check(allFailed == [.init(id: "native:S1", reason: .needsCode)] && switchedOn.byHand.isEmpty,
+          "source quit: a switch to the whole system whose every attempt fails ends the stream: the by-hand mark is gone (S223)",
+          "\(allFailed), \(switchedOn.byHand)")
     func afterWait(system: Bool = true, stopped: Bool = false, running: Bool = false, userStarted: Bool = false)
         -> QuitSwitch.AfterWait {
         QuitSwitch.afterWait(sourceIsSystem: system, userStopped: stopped, running: running, userStarted: userStarted)
@@ -7069,7 +7296,7 @@ do {
 
     // Refusals the host makes before the estimate say why and that nothing changed.
     let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .handsFreeMicrophone, .sourceSilent,
-                                              .interrupted, .notPlaying, .noReference, .unsupportedRate]
+                                              .interrupted, .notPlaying(.streaming), .noReference, .unsupportedRate]
     for failure in hostRefusals {
         let message = t.calibrationMessage(.failed(failure)) ?? ""
         check(message.hasSuffix(" The delay wasn't changed.") && message.count > " The delay wasn't changed.".count + 10,
@@ -7130,9 +7357,9 @@ do {
 
     // When one may start: both the speaker and the reference play (S232).
     check(CalibrationFlow.blocker(streaming: true, reference: nil, chosen: "usb", playing: ["usb"]) == .noReference
-            && CalibrationFlow.blocker(streaming: false, reference: "mac", chosen: "usb", playing: []) == .notPlaying
-            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["usb"]) == .notPlaying
-            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "mac", playing: ["mac"]) == .notPlaying
+            && CalibrationFlow.blocker(streaming: false, reference: "mac", chosen: "usb", playing: []) == .notPlaying(.streaming)
+            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["usb"]) == .notPlaying(.reference)
+            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "mac", playing: ["mac"]) == .notPlaying(.all)
             && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["mac", "usb"]) == nil,
           "calibration: starts only while streaming with the chosen speaker and the reference playing")
     check(CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["mac", "usb"],
@@ -7227,8 +7454,8 @@ do {
             && CalibrationStatus.offsetDiffers(stored: 19_990, clamped: stepped(20_000)),
           "calibration: a delay step at the maximum leaves the offset, and its line, as they were")
 
-    check(CalibrationFlow.unavailable(streaming: false, hasReference: true, speakerOn: true) == .notPlaying
-            && CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: false) == .notPlaying
+    check(CalibrationFlow.unavailable(streaming: false, hasReference: true, speakerOn: true) == .notPlaying(.streaming)
+            && CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: false) == .notPlaying(.speaker)
             && CalibrationFlow.unavailable(streaming: true, hasReference: false, speakerOn: true) == .noReference
             && CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: true) == nil,
           "calibration: the button is off while streaming or the speaker is off, or without a reference")
@@ -7310,9 +7537,9 @@ do {
     var referenceOff = inputs
     referenceOff.localOutputs = [(id: "usb", name: "Desk")]
     check(CalibrateAllFlow.plan(alone) == .failure(.noOtherSpeaker)
-            && CalibrateAllFlow.plan(stopped) == .failure(.notPlaying)
+            && CalibrateAllFlow.plan(stopped) == .failure(.notPlaying(.streaming))
             && CalibrateAllFlow.plan(noReference) == .failure(.noReference)
-            && CalibrateAllFlow.plan(referenceOff) == .failure(.notPlaying),
+            && CalibrateAllFlow.plan(referenceOff) == .failure(.notPlaying(.reference)),
           "calibrate all: starts only while streaming with the built-in speakers and another speaker playing")
 
     // Mic calibration is for external speakers only (decision 2026-10-23): headphones and virtual outputs sit out.
@@ -7442,8 +7669,8 @@ do {
           "calibrate all: a speaker still connecting at the start that begins playing stops the run, unmuted (S240)")
     check(t.calibrateAllLine(.ended(.rateChanged))
                 == "The audio's sample rate changed during the measurement. No delay was changed."
-            && t.calibrateAllLine(.cannotMeasureAgain(name: "Desk"))
-                == "Turn on streaming, the built-in speakers and Desk to measure it again.",
+            && t.calibrateAllLine(.cannotMeasureAgain(name: "Desk", missing: .all))
+                == "Turn on streaming, Desk and the built-in speakers to measure it again.",
           "calibrate all: a changed sample rate and a Measure Again that can't start say so in their own words")
     check(CalibrateAllEnd.delaysChanged.core == UInt32(ASC_CALIBRATION_END_CANCELLED)
             && CalibrateAllEnd.speakerOff.core == UInt32(ASC_CALIBRATION_END_SPEAKER_OFF)
@@ -7691,6 +7918,69 @@ do {
           "calibrate all: the progress line names the speaker and the sweep, and says when a Cast speaker is searched")
 }
 
+// MARK: A calibration that can't start names only what is off, in the order streaming, the speaker, the reference
+do {
+    let t = UIStrings()
+    func press(streaming: Bool, playing: [String]) -> String {
+        CalibrationFlow.blocker(streaming: streaming, reference: "mac", chosen: "usb", playing: playing)
+            .map(t.calibrationFailure) ?? ""
+    }
+    func tip(streaming: Bool, speakerOn: Bool) -> String {
+        CalibrationFlow.unavailable(streaming: streaming, hasReference: true, speakerOn: speakerOn)
+            .map(t.calibrationUnavailable) ?? ""
+    }
+    let pressed = [press(streaming: false, playing: ["mac", "usb"]), press(streaming: true, playing: ["mac"]),
+                   press(streaming: true, playing: ["usb"]), press(streaming: true, playing: [])]
+    check(pressed == ["Turn on streaming to calibrate.", "Turn on this speaker to calibrate it.",
+                      "Turn on the built-in speakers to calibrate.",
+                      "Turn on this speaker and the built-in speakers to calibrate it."],
+          "calibration refusal: the press names only streaming, the speaker or the built-in speakers that are off",
+          "\(pressed)")
+    let tips = [tip(streaming: false, speakerOn: true), tip(streaming: true, speakerOn: false),
+                tip(streaming: false, speakerOn: false)]
+    check(tips == ["Turn on streaming to calibrate.", "Turn on this speaker to calibrate it.",
+                   "Turn on streaming and this speaker to calibrate it."],
+          "calibration refusal: the tooltip names only streaming or the speaker that is off", "\(tips)")
+
+    let everyone = CalibrateAllFlow.Inputs(
+        streaming: true, reference: "mac",
+        localOutputs: [(id: "mac", name: "MacBook Speakers"), (id: "usb", name: "Desk")],
+        localOffsets: ["usb": 150], holdBacks: [:], cast: nil, airPlay: [],
+        airPlayDelayMs: 1750, airPlayHoldBackMs: 0, airPlaySenderMs: nil)
+    func all(_ inputs: CalibrateAllFlow.Inputs) -> String {
+        if case .failure(let blocker) = CalibrateAllFlow.plan(inputs) { return t.calibrateAllUnavailable(blocker) }
+        return ""
+    }
+    var stopped = everyone
+    stopped.streaming = false
+    var referenceSilent = everyone
+    referenceSilent.localOutputs = [(id: "usb", name: "Desk")]
+    let allTexts = [all(stopped), all(referenceSilent)]
+    check(allTexts == ["Turn on streaming to calibrate.", "Turn on the built-in speakers to calibrate."],
+          "calibrate all refusal: names only streaming or the built-in speakers, whichever is off", "\(allTexts)")
+
+    var stoppedSilent = stopped
+    stoppedSilent.referenceOn = false
+    check(all(stoppedSilent) == "Turn on streaming and the built-in speakers to calibrate.",
+          "calibrate all refusal: with streaming off, names the built-in speakers too when their switch is off",
+          all(stoppedSilent))
+
+    let again: [CalibrationMissing] = [.streaming, .speaker, .reference, [.streaming, .reference], [.speaker, .reference]]
+    let againTexts = again.map { t.calibrateAllLine(.cannotMeasureAgain(name: "Desk", missing: $0)) }
+    check(againTexts == ["Turn on streaming to measure it again.", "Turn on Desk to measure it again.",
+                         "Turn on the built-in speakers to measure it again.",
+                         "Turn on streaming and the built-in speakers to measure it again.",
+                         "Turn on Desk and the built-in speakers to measure it again."],
+          "measure again refusal: names only what is off, the row's speaker by its name", "\(againTexts)")
+    let missingNow = [
+        CalibrationMissing.of(streaming: true, speaker: "usb", reference: "mac", playing: ["mac"], switchedOn: []),
+        CalibrationMissing.of(streaming: false, speaker: "usb", reference: "mac", playing: [], switchedOn: ["usb"]),
+        CalibrationMissing.of(streaming: false, speaker: "usb", reference: "mac", playing: [], switchedOn: ["mac", "usb"]),
+    ]
+    check(missingNow == [.speaker, [.streaming, .reference], .streaming],
+          "measure again refusal: while streaming is off, the switches say which speaker is off", "\(missingNow)")
+}
+
 // MARK: Calibrate Zone: the zone's plan, the speakers silenced outside it and the AirPlay line (S255)
 do {
     let inputs = CalibrateAllFlow.Inputs(
@@ -7810,8 +8100,10 @@ do {
     let nothing = CalibrateAllFlow.startFailure(.noOtherSpeaker, zone: "Upstairs")
     // covers: S255
     check(nothing == .nothingToMeasure(zone: "Upstairs")
-            && CalibrateAllFlow.startFailure(.noOtherSpeaker, zone: nil) == .notPlaying
-            && CalibrateAllFlow.startFailure(.notPlaying, zone: "Upstairs") == .notPlaying
+            && CalibrateAllFlow.startFailure(.noOtherSpeaker, zone: nil) == .notPlaying(.speaker)
+            && zoneText.calibrateAllLine(.ended(.failed(.notPlaying(.speaker))))
+                == "Turn on another speaker to calibrate. No delay was changed."
+            && CalibrateAllFlow.startFailure(.notPlaying(.streaming), zone: "Upstairs") == .notPlaying(.streaming)
             && CalibrateAllFlow.startFailure(.onlyLeftOut, zone: "Upstairs") == nil
             && nothing.map(zoneText.calibrationFailure)
                 == "Nothing to measure in “Upstairs”. Turn on a speaker in this zone first.",
@@ -7970,6 +8262,47 @@ do {
           "cast: a format fallback event copies the format")
     raw.kind = 999
     check(CastEvent(raw) == nil, "cast: an unknown event kind is skipped")
+    do {
+        // The core's underrun count runs from the stream's LOAD; the line shows what changed since the last one.
+        var underruns = CastUnderruns()
+        func diagnostics(_ attempt: UInt64, _ total: UInt64) -> String {
+            var event = AscCastEvent()
+            event.kind = ASC_CAST_EVENT_DIAGNOSTICS
+            event.attempt = attempt
+            event.drift_ms = 40
+            event.queued_ms = 250
+            event.underrun_frames = total
+            guard case .note(_, let line)? = CastEvent(event, members: { [] }, underruns: &underruns) else { return "" }
+            return line
+        }
+        func lifecycle(_ kind: Int32, _ attempt: UInt64) {
+            var event = AscCastEvent()
+            event.kind = kind
+            event.attempt = attempt
+            _ = CastEvent(event, members: { [] }, underruns: &underruns)
+        }
+        let first = diagnostics(7, 960)
+        check(first == "drift 40 ms, queued 250 ms, underrun silence 960 frames since the previous line",
+              "cast diagnostics: the first line shows the underrun silence counted so far", first)
+        let quiet = diagnostics(7, 960)
+        let more = diagnostics(7, 2_880)
+        check(quiet.hasSuffix("silence 0 frames since the previous line")
+                && more.hasSuffix("silence 1920 frames since the previous line"),
+              "cast diagnostics: later lines show only the new underrun silence", quiet + " | " + more)
+        check(diagnostics(8, 480).hasSuffix("silence 480 frames since the previous line"),
+              "cast diagnostics: each attempt keeps its own count")
+        lifecycle(ASC_CAST_EVENT_PLAYING, 7)
+        let reloaded = diagnostics(7, 3_000)
+        check(reloaded.hasSuffix("silence 3000 frames since the previous line"),
+              "cast diagnostics: a new LOAD (playing again) counts from 0", reloaded)
+        let restarted = diagnostics(7, 100)
+        check(restarted.hasSuffix("silence 100 frames since the previous line"),
+              "cast diagnostics: a count that went down was restarted, so all of it is new", restarted)
+        lifecycle(ASC_CAST_EVENT_ENDED, 8)
+        let after = diagnostics(8, 480)
+        check(after.hasSuffix("silence 480 frames since the previous line"),
+              "cast diagnostics: an ended attempt's count is dropped", after)
+    }
     let change: CastDeviceChange? = kitchen.withCString { id in
         "Kitchen".withCString { name in
             "Nest Audio".withCString { model in
@@ -9557,6 +9890,16 @@ do {
     check(t.airPlayNoneFound(localNetworkRefused: true).contains("Local Network")
             && t.airPlayNoneFound(hint: .denied, localNetworkRefused: true) == "No AirPlay speakers found yet.",
           "local network: once refused, the advice names it, unless the hint on screen already does")
+    // The soft hint comes from an empty list alone, before macOS has asked for Local Network.
+    let hidden = LocalNetworkHint.possible.shown(airPlayProblem: true)
+    check(t.networkSpeakersNote(airPlayNone: true, cast: .noneFound, hint: hidden,
+                                localNetworkRefused: LocalNetworkHint.possible.accessRefused)?
+            .contains("Local Network") == false
+            && !t.airPlayNoneFound(hint: hidden, localNetworkRefused: LocalNetworkHint.possible.accessRefused)
+            .contains("Local Network"),
+          "local network: a maybe-denied hint never puts Local Network in the advice")
+    check(LocalNetworkHint.denied.accessRefused && !LocalNetworkHint.none.accessRefused,
+          "local network: only denied access counts as refused")
 }
 
 // MARK: Permission setup window (PermissionFlow.swift, PermissionSetup)
@@ -9669,6 +10012,8 @@ do {
     check(inCard(".accessibilityHidden(nonePresent)") == 1
           && inCard(".accessibilityValue(nonePresent ? model.countText(of: zone) : \"\")") == 1,
           "main window zone header: VoiceOver skips the greyed icon and the fold button carries the count")
+    check(inCard(".focusable(!nonePresent)") == 1 && occurrences(".focusable(!nonePresent)") == 1,
+          "zone header: the keyboard skips the greyed icon VoiceOver skips, in the main window as in the panel")
     // Go to Zone lands on a part VoiceOver can reach: the greyed icon is hidden from it.
     check(ZoneHeaderHit.goToZoneFocus(nonePresent: false) == .zoneIcon,
           "Go to Zone: with a speaker of the zone present, the focus lands on the zone's round icon")
@@ -9720,7 +10065,7 @@ do {
     check(count(card, "InlineNameField(") == 1 && count(card, "Button(t.renameZone) { model.startRename(zone) }") == 1
             && count(card, ".accessibilityAction(named: t.renameZone) { model.startRename(zone) }") == 2
             && !zonesCode.isEmpty && count(zonesCode, "promptRenameZone") == 0 && count(zonesCode, "renameZoneTitle") == 0,
-          "main window zone header: Rename Zone edits the name in place like a speaker's, with no alert, and VoiceOver has the action")
+          "main window zone header: Rename… edits the name in place like a speaker's, with no alert, and VoiceOver has the action")
 
     let compact = window.components(separatedBy: "private struct ZoneMemberCompactRow").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""

@@ -23,7 +23,7 @@ use crate::speaker_names;
 use audiosync_core::calibrate_all::{AirPlayMoves, AirPlayShared, Class, EndReason, RowState};
 
 pub use crate::audio::backend::{CastMembers, InTarget};
-use crate::audio::calibration::{Failure, Phase};
+use crate::audio::calibration::{Failure, Missing, Phase};
 pub use crate::audio::outputs::MicKind;
 
 pub use crate::settings::Appearance;
@@ -1014,9 +1014,9 @@ pub enum AllPhase {
     Running(AllProgress),
     /// It couldn't start, or the microphone or the capture stopped it.
     Failed(Failure),
-    /// Measure Again couldn't start: the reference or the named row's
-    /// speaker isn't playing.
-    CannotMeasureAgain(String),
+    /// Measure Again couldn't start: streaming, the reference or the named
+    /// row's speaker is off.
+    CannotMeasureAgain(String, Missing),
     /// A delay changed after the run, so its results went.
     Stale,
 }
@@ -2473,7 +2473,8 @@ impl Backend for MockBackend {
     }
 
     fn rename_zone(&mut self, id: &str, name: &str) {
-        self.zones_mut(|zones| zones.rename(id, name));
+        let name = speaker_names::normalized(name);
+        self.zones_mut(|zones| zones.rename(id, &name));
     }
 
     fn delete_zone(&mut self, id: &str) {
