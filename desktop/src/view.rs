@@ -1647,6 +1647,7 @@ impl App {
             .collect();
         let show_virtual = ui.show_virtual;
         let airplay2_experimental = ui.airplay2_experimental;
+        let check_updates_automatically = ui.check_updates_automatically;
         let airplay_typed = ui
             .airplay_delay_draft
             .text(state.airplay_delay_ms)
@@ -1862,7 +1863,7 @@ impl App {
         self.main.set_launch_at_login(self.login.borrow().is_on());
         self.main.set_updater_available(self.has_updater());
         self.main
-            .set_check_updates_automatically(ui.check_updates_automatically);
+            .set_check_updates_automatically(check_updates_automatically);
         self.main
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
         let airplay_delay = format_ms(state.airplay_delay_ms.unwrap_or(0.0));
