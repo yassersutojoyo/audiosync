@@ -4582,6 +4582,43 @@ do {
           "track info wiring: a sender start before Now Playing's first reading schedules one look, sends nothing")
 }
 
+// MARK: Track info call sites: AppDelegate hands a Now Playing change and a sender start to TrackInfoHost
+do {
+    // AppDelegate needs AppKit's whole app to build, so the suite reads its source for the two calls the
+    // checks above drive through the recorder.
+    // A commented-out call must not count as the call.
+    func read(_ path: String) -> String {
+        let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        return text.components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+    }
+    func count(_ text: String, _ needle: String) -> Int { text.components(separatedBy: needle).count - 1 }
+    func body(_ text: String, after marker: String, until end: String = "\n    }\n") -> String {
+        text.components(separatedBy: marker).dropFirst().first?.components(separatedBy: end).first ?? ""
+    }
+    let names = ((try? FileManager.default.contentsOfDirectory(atPath: "Sources/AudioSync")) ?? [])
+        .filter { $0.hasPrefix("AppDelegate") && $0.hasSuffix(".swift") }
+    let app = names.sorted().map { read("Sources/AudioSync/" + $0) }.joined(separator: "\n")
+    let windows = read("Sources/AudioSync/AppDelegate+Windows.swift")
+    let native = read("Sources/AudioSync/AppDelegate+NativeAirPlay.swift")
+
+    let setUp = body(windows, after: "func setUpMenuBar() {")
+    check(count(setUp, "nowPlaying.onChange = { [weak self] track in self?.nowPlayingChanged(track) }") == 1
+            && count(app, "nowPlaying.onChange =") == 1,
+          "track info call site: Now Playing's change callback runs nowPlayingChanged, set once at setup",
+          "setUpMenuBar \(setUp.isEmpty ? "not found" : "found"), \(count(app, "nowPlaying.onChange =")) assignments")
+    let started = body(body(native, after: "func nativeStartFinished("), after: "if started {",
+                       until: "\n        } else")
+    check(count(started, "resendTrackInfo()") == 1,
+          "track info call site: a native sender that started gets the track info again through resendTrackInfo",
+          started.isEmpty ? "the started branch of nativeStartFinished not found" : "no resendTrackInfo() in it")
+    check(!app.isEmpty && count(app, "extension AppDelegate: TrackInfoHost") == 1
+            && count(app, "func nowPlayingChanged(") == 0 && count(app, "func resendTrackInfo(") == 0
+            && count(app, "func sendTrackInfo(") == 0,
+          "track info call site: AppDelegate takes the tested TrackInfoHost wiring and shadows none of it")
+}
+
 // MARK: Track info — Spotify paused, read as empty every 2 s for 11 minutes, never sends the fallback
 do {
     let spotify = NowPlayingMonitor.spotify
