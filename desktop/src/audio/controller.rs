@@ -3659,6 +3659,47 @@ mod tests {
         assert_eq!(backend.driver().renderers_started(), [HEADPHONES, SPEAKERS]);
     }
 
+    // covers: S6 (the Windows host; the capture feeds AudioSync's own AirPlay sender, not a FIFO)
+    #[test]
+    fn one_capture_writes_one_equalized_ring_that_each_output_on_reads() {
+        let mut backend = backend();
+        backend.connect_output("tv", "TV");
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        backend.set_airplay(fake.link(), Some(FeedSlot::new(input)));
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        backend.poll();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: 6.0,
+            ..EqSettings::default()
+        });
+
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(backend.driver().captures_started().len(), 1);
+        assert!(backend.driver().capture_feeds_airplay());
+        let ring = backend.driver().capture_ring().expect("the capture runs");
+        let rings = backend.driver().renderer_rings();
+        let ids: Vec<&str> = rings.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, [HEADPHONES, SPEAKERS], "the TV is off");
+        assert!(
+            rings.iter().all(|(_, read)| Arc::ptr_eq(read, &ring)),
+            "every output reads the capture's ring"
+        );
+
+        let before = ring.frames_written();
+        let raised = 0.25 * 10f32.powf(6.0 / 20.0);
+        let written = backend.feed_capture_level(4, 0.25);
+        assert!(
+            written.iter().all(|s| (s - raised).abs() < 1e-4),
+            "equalized on the way into the ring: {written:?}"
+        );
+        assert_eq!(ring.frames_written(), before + 4);
+    }
+
     #[test]
     fn a_capture_that_cant_start_starts_nothing() {
         let mut backend = backend();
