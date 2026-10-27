@@ -7715,6 +7715,57 @@ mod tests {
         assert!(state.running, "the session the user started goes on");
     }
 
+    // covers: S223, P182
+    #[test]
+    fn an_every_time_speaker_turned_on_by_hand_goes_off_with_a_notice_when_streaming_stops() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&den, PairingEvent::PairedForSession);
+        adapter.poll();
+        fake.state(&den, AirPlayState::Playing);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&id).unwrap().enabled);
+
+        adapter.set_running(false);
+        adapter.poll();
+        adapter.set_running(true);
+        adapter.poll();
+        fake.take_calls();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(state.running, "Speakers still play");
+        let row = state.speaker(&id).unwrap();
+        assert!(
+            !row.enabled,
+            "the PIN session ended with the stream: on, it would stay silent"
+        );
+        assert_eq!(state.pin_prompt, None, "no prompt opens by itself");
+        assert!(
+            !starts_a_pairing(&fake.take_calls()),
+            "never paired by itself"
+        );
+        assert!(
+            messages(&adapter).contains(&NoticeMessage::AirPlayCantPlay {
+                speaker: "Den".to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPin,
+            }),
+            "{:?}",
+            messages(&adapter)
+        );
+
+        adapter.set_speaker_enabled(&id, true);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::StartPairing(id_of(&den))],
+            "the next click asks for a new code"
+        );
+    }
+
     #[test]
     fn an_every_time_speaker_whose_pin_prompt_is_open_keeps_it_when_it_appears_again() {
         let (mut adapter, fake, den) = every_time_adapter();
