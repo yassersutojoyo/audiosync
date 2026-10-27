@@ -3910,6 +3910,7 @@ mod tests {
         );
     }
 
+    // covers: S186
     #[test]
     fn a_stop_waits_for_every_output_to_fade_and_never_more_than_500_ms() {
         let mut backend = backend();
@@ -6209,7 +6210,7 @@ mod tests {
     // covers: S244
     #[test]
     fn live_input_waits_for_an_airplay_speaker_like_any_source() {
-        let (mut backend, _fake, kitchen) = local_delay_with_airplay();
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
         backend.connect_input("mic", "Microphone", "USB");
         let mic = SourceId::Input {
             endpoint_id: "mic".to_owned(),
@@ -6218,10 +6219,55 @@ mod tests {
         assert_eq!(held(&backend), [Some(250), Some(400), Some(0)], "no wait");
         backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
         assert_eq!(held(&backend), [Some(1750), Some(1900), Some(1500)]);
+        fake.take_calls();
         backend.start(&SourceId::WholeSystem).unwrap();
         assert_eq!(held(&backend), [Some(1750), Some(1900), Some(1500)]);
+        assert_eq!(delay_calls(&fake), [], "to the system mix");
         backend.start(&mic).unwrap();
         assert_eq!(held(&backend), [Some(1750), Some(1900), Some(1500)]);
+        assert_eq!(delay_calls(&fake), [], "back to live input");
+    }
+
+    fn delay_calls(fake: &FakeAirPlay) -> Vec<Call> {
+        fake.take_calls()
+            .into_iter()
+            .filter(|call| matches!(call, Call::Delay(..)))
+            .collect()
+    }
+
+    // covers: S244
+    #[test]
+    fn live_input_waits_for_a_cast_speaker_and_a_source_switch_re_times_nothing() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        let id = id_of(&kitchen);
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.connect_input("mic", "Microphone", "USB");
+        let mic = SourceId::Input {
+            endpoint_id: "mic".to_owned(),
+        };
+        backend.set_airplay_enabled(&id, true).unwrap();
+        backend.start(&mic).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        fake.take_calls();
+        backend.set_cast_offset(KITCHEN, 3000.0);
+        assert_eq!(held(&backend), [Some(3000), Some(3150), Some(2750)]);
+        assert_eq!(
+            delay_calls(&fake),
+            [Call::Delay(id, Duration::from_millis(1250))]
+        );
+        for (source, name) in [(SourceId::WholeSystem, "system mix"), (mic, "live input")] {
+            backend.start(&source).unwrap();
+            assert_eq!(
+                held(&backend),
+                [Some(3000), Some(3150), Some(2750)],
+                "{name}"
+            );
+            assert_eq!(delay_calls(&fake), [], "{name}");
+        }
     }
 
     #[test]
