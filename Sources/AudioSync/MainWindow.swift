@@ -709,6 +709,7 @@ private struct ZoneCard: View {
             .opacity(nonePresent ? 0.45 : 1)
             // With nothing to switch, the chevron speaks for the header.
             .accessibilityHidden(nonePresent)
+            .focusable(!nonePresent)
             .accessibilityLabel(t.zoneLabel(zone.name))
             .accessibilityValue(nonePresent ? model.countText(of: zone)
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
