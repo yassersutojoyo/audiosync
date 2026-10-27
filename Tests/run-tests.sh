@@ -206,7 +206,7 @@ zone_card=$(awk '/^private struct ZoneCard/ { f = 1 } f { print } f && /^}$/ { e
 if [ "$(grep -c 'hit(\.' <<< "$zone_card")" -ne 5 ] \
     || ! grep -q 'Button { hit(\.chevron) }' <<< "$zone_card" \
     || ! grep -q 'Button { hit(\.zoneIcon) }' <<< "$zone_card" \
-    || ! grep -q '\.onTapGesture { hit(\.name) }' <<< "$zone_card" \
+    || ! grep -q '\.exclusively(before: TapGesture()\.onEnded { hit(\.name) })' <<< "$zone_card" \
     || ! grep -q '\.onTapGesture { hit(\.count) }' <<< "$zone_card" \
     || ! grep -A1 -E '^        \.contentShape\(Rectangle\(\)\)$' <<< "$zone_card" \
          | grep -qE '^        \.onTapGesture \{ hit\(\.blank\) \}$' \
