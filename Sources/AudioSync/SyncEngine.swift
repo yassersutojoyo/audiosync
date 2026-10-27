@@ -344,6 +344,20 @@ final class StreamEngine {
         DebugTrace.log("[AudioSync] output \(uid): delay \(ms) ms")
     }
 
+    /// For the debug log: how far output `uid`'s reader trails the newest
+    /// frame against its delay, which drift may move inside the 50 ms dead
+    /// band (S50, S56), and the corrections it counted (S158).
+    func driftNote(uid: String) -> String {
+        guard let renderer = renderers[uid] else { return "\(uid): no renderer" }
+        let lag = renderer.lagFrames
+        let delay = renderer.delayFrames
+        let counted = renderer.counters
+        let ms = captureRate > 0 ? Double(lag - delay) * 1000 / captureRate : 0
+        return "\(uid): lag \(lag) delay \(delay) frames, lag-delay \(ms) ms, drift skips \(counted.driftSkips) "
+            + "(\(counted.driftSkipFrames) frames), drift silences \(counted.driftSilences) "
+            + "(\(counted.driftSilenceFrames) frames)"
+    }
+
     /// A new linear gain for output `uid`, applied from its next callback (S64).
     func setGain(uid: String, g: Double) {
         renderers[uid]?.setGain(linear: g)

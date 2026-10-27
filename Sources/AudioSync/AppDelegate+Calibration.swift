@@ -205,7 +205,8 @@ final class CalibrationRun {
                     + "\(CalibrationTap.playedOnFill ? "silence fill" : "tap block") at ticks \(ticks), "
                     + "lagFrames \(start), mic firstFrameTicks \(first) timestamp valid \(mic.firstFrameStamped), "
                     + "hold-backs now: reference \(String(describing: app.localHoldBacks[reference])) ms, "
-                    + "chosen \(String(describing: app.localHoldBacks[chosen])) ms")
+                    + "chosen \(String(describing: app.localHoldBacks[chosen])) ms; "
+                    + "\(app.engine.driftNote(uid: reference)); \(app.engine.driftNote(uid: chosen))")
                 stage = .recording(which, mic, start: start, frames: frames,
                                    deadlineNs: now + seconds(Double(frames) / Double(mic.rate) + 2))
             } else if now >= asked + seconds(1.5) {

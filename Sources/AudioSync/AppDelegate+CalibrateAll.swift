@@ -624,7 +624,8 @@ final class CalibrateAllRun {
                 DebugTrace.log("[AudioSync] calibrate all: row \(step.row) sweep \(step.sweep) in on the "
                     + "\(CalibrationTap.playedOnFill ? "silence fill" : "tap block") at ticks \(ticks), "
                     + "lagFrames \(start), mic firstFrameTicks \(first) timestamp valid \(mic.firstFrameStamped), "
-                    + "delays now: \(app.calibrateAllContext(taking: [speakers[0].id, speakers[step.row].id], zone: zone).delays)")
+                    + "delays now: \(app.calibrateAllContext(taking: [speakers[0].id, speakers[step.row].id], zone: zone).delays); "
+                    + "\(app.engine.driftNote(uid: speakers[0].id)); \(app.engine.driftNote(uid: speakers[step.row].id))")
                 stage = .recording(step, mic, start: start, frames: frames,
                                    deadlineNs: now + seconds(Double(frames) / Double(mic.rate) + 2))
             } else if now >= asked + seconds(1.5) {
