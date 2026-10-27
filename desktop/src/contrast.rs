@@ -628,7 +628,7 @@ fn keyboard_shortcuts_are_declared() {
 /// for the one AirPlay 2 slot show only behind the AirPlay 2 switch, whose
 /// File menu item says it is experimental, as do the notice that turning
 /// the item on or off applies at the next launch and its short name.
-/// Under the AirPlay 2 flag, off by default, the item reads Prefer AirPlay 2
+/// Under the AirPlay 2 flag, on by default, the item reads Prefer AirPlay 2
 /// (spec S313).
 /// The row note and notice for a speaker that plays only AirPlay 2 name
 /// that item, and show only for a receiver the sender found; so does the
