@@ -773,6 +773,7 @@ pub mod tests {
 
     const WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 
+    // covers: S298 (Cancel and closing the notice)
     #[test]
     fn cancel_during_the_download_answers_at_once_and_changes_nothing() {
         let Gated {
@@ -822,6 +823,7 @@ pub mod tests {
         untouched(&updater);
     }
 
+    // covers: S298
     #[test]
     fn a_manual_check_right_after_cancel_is_answered_once_the_download_stops() {
         let Gated {
@@ -868,6 +870,7 @@ pub mod tests {
         assert_ne!(updater.notice_time(), "earlier");
     }
 
+    // covers: S305
     #[test]
     fn a_manual_check_during_the_launch_check_gets_its_answer() {
         let Gated {
@@ -912,6 +915,7 @@ pub mod tests {
         assert!(plist.contains(&format!("<string>{FEED_URL}</string>")));
     }
 
+    // covers: S305
     #[test]
     fn offline_at_launch_is_quiet_and_a_manual_check_says_so() {
         let (mut updater, _) = updater("offline-quiet");
@@ -940,6 +944,7 @@ pub mod tests {
         assert_eq!(updater.notice(), Some(&UpdaterNotice::Unreachable));
     }
 
+    // covers: S305
     #[test]
     fn a_manual_check_says_it_is_checking_until_the_answer_replaces_it() {
         let (mut updater, _) = updater("checking");
@@ -965,6 +970,7 @@ pub mod tests {
         assert_eq!(updater.notice(), latest.as_ref());
     }
 
+    // covers: S305
     #[test]
     fn a_manual_check_with_nothing_newer_says_the_running_version_is_the_latest() {
         let (mut updater, _) = updater("up-to-date");
@@ -989,6 +995,7 @@ pub mod tests {
         );
     }
 
+    // covers: S297, S303, S306
     #[test]
     fn a_check_after_a_swap_without_a_restart_shows_restart_now_and_touches_no_file() {
         let (mut updater, fetch) = updater("swapped");
