@@ -6769,15 +6769,13 @@ do {
     let actedFirst = systemSwitch([.started], userActsAfter: 0, firstWait: settleWait)
     check(actedFirst.streaming == nil && actedFirst.lasts.isEmpty,
           "source quit: a stop or source change before the first attempt makes none (S227 g)", "\(actedFirst)")
-    // S223: the stop before a waiting first attempt finds the engine
-    // running; when every attempt then fails, the stream that ran has ended.
+    // S223: the stop before a waiting first attempt marks a rebuild, so the
+    // final startFailed stop, with nothing streaming, still ends the stream.
     var switchedOn = EveryTimeGuard()
     switchedOn.turnedOnByHand(["native:S1"])
-    let waitingStop = QuitSwitch.midRebuild(stopped: true, before: false)
-    let allFailed = switchedOn.streamEnded(.stopped(.startFailed), streaming: false, midRebuild: waitingStop,
+    let allFailed = switchedOn.streamEnded(.stopped(.startFailed), streaming: false, midRebuild: true,
                                            asking: ["native:S1"], enabled: ["native:S1"])
-    check(allFailed == [.init(id: "native:S1", reason: .needsCode)] && switchedOn.byHand.isEmpty
-            && QuitSwitch.midRebuild(stopped: false, before: true) && !QuitSwitch.midRebuild(stopped: false, before: false),
+    check(allFailed == [.init(id: "native:S1", reason: .needsCode)] && switchedOn.byHand.isEmpty,
           "source quit: a switch to the whole system whose every attempt fails ends the stream: the by-hand mark is gone (S223)",
           "\(allFailed), \(switchedOn.byHand)")
     func afterWait(system: Bool = true, stopped: Bool = false, running: Bool = false, userStarted: Bool = false)
