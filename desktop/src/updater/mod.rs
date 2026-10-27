@@ -496,12 +496,14 @@ impl Updater {
                 return;
             }
             let undone = undo(&env, &swapped);
+            // Sent before the guard goes, so a quit that takes the guard
+            // finds the result.
+            let _ = sender.send(Event::Started(start, Some(undone)));
             drop(closed);
             #[cfg(test)]
             if let Some(after_undo) = after_undo {
                 after_undo();
             }
-            let _ = sender.send(Event::Started(start, Some(undone)));
         });
     }
 
