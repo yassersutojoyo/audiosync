@@ -3,9 +3,6 @@
 # tests/spec_coverage.rs fails if a clause listed here gains a `// covers:`
 # test, so this list only shrinks. "Partly done" names what already exists.
 
-# Connection.
-C20 AES-CBC-SHA suites for older devices: the fake device's TLS server is rustls, which has no CBC suites, so only the platform TLS stacks' offer stands for them; G4 records what devices accept (partly done: TLS 1.2 minimum, a TLS 1.2-only server connects, an RSA-keyed server pinned to each ECDHE-RSA AES-GCM suite connects on it, handshake errors carry the TLS stack's reason).
-
 # Timing: hardware.
 C74 Latency of seconds: hardware, G7.
 C75 Growing latency: hardware, G7 (partly done: drops and rebuffers are counted, C79).
