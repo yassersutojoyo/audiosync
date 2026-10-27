@@ -6903,6 +6903,46 @@ mod tests {
         assert_eq!(held(&backend), [Some(2470), Some(2620), Some(2220)]);
     }
 
+    // covers: S281
+    #[test]
+    fn a_new_airplay_latency_beside_a_cast_speaker_waits_for_the_longer_of_the_two() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        let id = id_of(&kitchen);
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_airplay_enabled(&id, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.set_cast_offset(KITCHEN, 3000.0);
+        assert_eq!(held(&backend), [Some(3000), Some(3150), Some(2750)]);
+        fake.take_calls();
+
+        fake.set_latency(Duration::from_secs(2));
+        backend.poll();
+        assert_eq!(backend.airplay_sender_latency_ms(), Some(2000.0));
+        assert_eq!(
+            held(&backend),
+            [Some(3000), Some(3150), Some(2750)],
+            "the Cast wait stays the longer"
+        );
+        assert_eq!(
+            delay_calls(&fake),
+            [Call::Delay(id.clone(), Duration::from_millis(1000))]
+        );
+
+        fake.set_latency(Duration::from_millis(3500));
+        backend.poll();
+        assert_eq!(
+            held(&backend),
+            [Some(3500), Some(3650), Some(3250)],
+            "L is now the longer"
+        );
+        assert_eq!(delay_calls(&fake), [Call::Delay(id, Duration::ZERO)]);
+    }
+
     // covers: S283, S237
     #[test]
     fn calibrate_all_measures_relative_to_the_reported_latency() {

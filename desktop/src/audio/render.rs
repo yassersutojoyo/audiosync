@@ -339,6 +339,80 @@ mod tests {
         );
     }
 
+    /// The runs of silence in `played`, as (first frame, frames).
+    fn silences(played: &[f32]) -> Vec<(usize, usize)> {
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for (i, &sample) in played.iter().enumerate() {
+            if sample != 0.0 {
+                continue;
+            }
+            match runs.last_mut() {
+                Some((first, frames)) if *first + *frames == i => *frames += 1,
+                _ => runs.push((i, 1)),
+            }
+        }
+        runs
+    }
+
+    /// A live output at 50 ms raised by 100 ms, as an AirPlay switch-on
+    /// raises it by L, then by `raise` frames `after` callbacks later; what
+    /// it played from the first raise on.
+    fn raised_twice(after: usize, raise: i64) -> Vec<f32> {
+        let mut s = setup(SESSION_RATE, 2, 2_400, 1.0);
+        let block = vec![0.5f32; 480 * 2];
+        let tick = |s: &mut Setup| {
+            s.writer.write(&block, 480);
+            play(s, 480, 480)
+        };
+        for _ in 0..20 {
+            tick(&mut s);
+        }
+        s.control.set_delay_frames(2_400 + 4_800);
+        let mut played = Vec::new();
+        for _ in 0..after {
+            played.extend(tick(&mut s));
+        }
+        s.control.set_delay_frames(2_400 + 4_800 + raise);
+        for _ in 0..40 {
+            played.extend(tick(&mut s));
+        }
+        played
+    }
+
+    // covers: S281
+    #[test]
+    fn a_raise_during_the_inserted_silence_lengthens_it_and_a_later_one_inserts_more() {
+        let len = fade_len(SESSION_RATE);
+        // The fade-out's last frame is silent, then the converter's latency.
+        let gap = |raise: usize| raise + LATENCY + 1;
+        assert_eq!(silences(&raised_twice(0, 0)), [(len - 1, gap(4_800))]);
+        assert_eq!(
+            silences(&raised_twice(3, 960)),
+            [(len - 1, gap(4_800 + 960))],
+            "one silence, longer by the raise"
+        );
+
+        let played = raised_twice(20, 960);
+        let later = 20 * 480;
+        assert_eq!(
+            silences(&played),
+            [(len - 1, gap(4_800)), (later + len - 1, gap(960))]
+        );
+        let back = later + len - 1 + gap(960);
+        for i in 0..len {
+            let out = 0.5 * fade_out(i, len);
+            assert!(
+                (f64::from(played[later + i]) - out).abs() <= 1e-6,
+                "out {i}"
+            );
+            let fade_in = 0.5 * fade_in(i, len);
+            assert!(
+                (f64::from(played[back + i]) - fade_in).abs() <= 1e-6,
+                "in {i}"
+            );
+        }
+    }
+
     /// What the endpoint holds, as the render loop reads it at 48 kHz.
     fn queue(padding: u32, clock_queued: Option<u64>, latency_frames: u32) -> EndpointQueue {
         EndpointQueue {
