@@ -28,8 +28,20 @@ pub const MIN_PORT: u16 = 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RemoteSettings {
+    #[serde(deserialize_with = "crate::settings::bool_or_false")]
     pub on: bool,
+    #[serde(deserialize_with = "port_or_default")]
     pub port: u16,
+}
+
+/// A stored port that isn't a whole number from 0 to 65535 is the default,
+/// so it costs only itself (S212).
+fn port_or_default<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u16, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value
+        .as_u64()
+        .and_then(|port| u16::try_from(port).ok())
+        .unwrap_or(DEFAULT_PORT))
 }
 
 impl Default for RemoteSettings {

@@ -195,6 +195,7 @@ pub struct SavedMixApp {
 #[serde(default)]
 pub struct SavedMix {
     pub mode: MixMode,
+    #[serde(deserialize_with = "entries_that_read")]
     pub apps: Vec<SavedMixApp>,
 }
 
@@ -203,6 +204,7 @@ pub struct SavedMix {
 #[serde(default)]
 pub struct SavedSpeaker {
     /// Whether the user switched it on.
+    #[serde(deserialize_with = "bool_or_false")]
     pub enabled: bool,
     /// The volume slider position, 0 to 100.
     #[serde(deserialize_with = "number_or_nan")]
@@ -627,9 +629,13 @@ pub struct Settings {
     pub version: u32,
     /// The source; the whole system while [`Settings::input_device`] names
     /// the source, so an older build falls back to it.
+    #[serde(deserialize_with = "or_default")]
     pub source: SavedSource,
     /// The input device chosen as the source, if one is.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "or_default"
+    )]
     pub input_device: Option<SavedInput>,
     /// The channel pair each input device plays, by endpoint ID, as an
     /// index (1 for channels 3-4); a device without an entry plays 1-2.
@@ -640,16 +646,22 @@ pub struct Settings {
     pub input_pairs: BTreeMap<String, u16>,
     /// Several apps chosen as the source, if they are; the source above is
     /// the whole system meanwhile.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "or_default"
+    )]
     pub source_mix: Option<SavedMix>,
     /// The master volume slider position, 0 to 100.
     #[serde(deserialize_with = "number_or_nan")]
     pub master_volume: f64,
     /// The local outputs, by endpoint ID.
+    #[serde(deserialize_with = "speakers_that_read")]
     pub outputs: BTreeMap<String, SavedSpeaker>,
     /// The AirPlay speakers, by the ID they announce.
+    #[serde(deserialize_with = "speakers_that_read")]
     pub airplay: BTreeMap<String, SavedSpeaker>,
     /// The speakers marked auto-connect, by speaker key.
+    #[serde(deserialize_with = "strings_that_read")]
     pub auto_connect: BTreeSet<String>,
     /// The names the user gave speakers, by speaker key (spec S228).
     #[serde(
@@ -664,22 +676,27 @@ pub struct Settings {
         deserialize_with = "hidden_that_read"
     )]
     pub hidden_speakers: Vec<SavedHidden>,
+    /// Unreadable groups are none (S212).
+    #[serde(deserialize_with = "or_default")]
     pub groups: Vec<SavedGroup>,
     /// The zones, in order, each speaker in at most one (spec S245).
     #[serde(deserialize_with = "entries_that_read")]
     pub speaker_zones: Vec<SavedZone>,
     /// The groups were moved to zones (spec S248). A file without it, as
     /// every version 2 file, has not been migrated; the defaults have, since
-    /// there are no groups to move.
-    #[serde(default)]
+    /// there are no groups to move. A mark that isn't a bool was written by
+    /// a build that had migrated, so it reads as set.
+    #[serde(default, deserialize_with = "bool_or_true")]
     pub speaker_zones_migrated: bool,
     /// The speaker presets, in order (spec S251).
     #[serde(deserialize_with = "entries_that_read")]
     pub speaker_presets: Vec<SavedPreset>,
     /// The groups that lost a member to the zones became presets (spec
     /// S254). A file without it has not been migrated; the defaults have.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "bool_or_true")]
     pub speaker_presets_migrated: bool,
+    /// Unreadable settings give the defaults (S212).
+    #[serde(deserialize_with = "or_default")]
     pub equalizer: SavedEqualizer,
     /// The equalizer curves the user saved, in the picker's order (spec
     /// S270); left out of the file while there are none.
@@ -689,10 +706,13 @@ pub struct Settings {
     )]
     pub equalizer_curves: Vec<SavedCurve>,
     /// View > Show Virtual Devices.
+    #[serde(deserialize_with = "bool_or_false")]
     pub show_virtual_devices: bool,
     /// View > Appearance.
     pub appearance: Appearance,
-    /// The main window's place and size, once it has been shown.
+    /// The main window's place and size, once it has been shown; an
+    /// unreadable one gives the default place and size.
+    #[serde(deserialize_with = "or_default")]
     pub window: Option<WindowFrame>,
     /// The AirPlay delay adjustment A in milliseconds, −2000 to +20 000: the
     /// AirPlay speakers are taken to sound L = L_s + A after a frame reaches
@@ -701,18 +721,24 @@ pub struct Settings {
     pub airplay_adjustment_ms: f64,
     /// What a session does when the app it captures quits, as the core
     /// stores it: `stop` or `system` (spec S227).
+    #[serde(deserialize_with = "or_default")]
     pub when_source_quits: String,
     /// File > Web Remote: whether it is on, and its port.
+    #[serde(deserialize_with = "or_default")]
     pub remote: RemoteSettings,
     /// The Google Cast speakers added by address (spec C18), as
     /// `host` or `host:port`.
+    #[serde(deserialize_with = "strings_that_read")]
     pub cast_addresses: Vec<String>,
     /// File > AirPlay 2 (Experimental); read at launch only (spec P170).
+    #[serde(deserialize_with = "bool_or_false")]
     pub airplay2_experimental: bool,
     /// File > Check for Updates Automatically (spec S305), on by default.
+    #[serde(deserialize_with = "bool_or_true")]
     pub check_updates_automatically: bool,
     /// The last update check that read the appcast, in seconds since the
     /// Unix epoch (spec S305).
+    #[serde(deserialize_with = "or_default")]
     pub last_update_check: Option<u64>,
     /// The version that failed its first start or was blocked (spec S316);
     /// one that doesn't read is no record.
@@ -735,6 +761,64 @@ fn record_that_reads<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Option<UpdateRecord>, D::Error> {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(serde_json::from_value(value).ok())
+}
+
+/// A stored value, or its type's default when it doesn't read (S212).
+fn or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+pub(crate) fn bool_or_false<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<bool, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_bool().unwrap_or(false))
+}
+
+fn bool_or_true<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_bool().unwrap_or(true))
+}
+
+/// The text entries of a stored list; anything that isn't a list is none.
+fn strings_that_read<'de, D, C>(deserializer: D) -> Result<C, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    C: FromIterator<String>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let entries = match value {
+        serde_json::Value::Array(entries) => entries,
+        _ => Vec::new(),
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            serde_json::Value::String(text) => Some(text),
+            _ => None,
+        })
+        .collect())
+}
+
+/// The stored speakers: one that isn't a speaker is dropped, and anything
+/// that isn't a map is none.
+fn speakers_that_read<'de, D>(deserializer: D) -> Result<BTreeMap<String, SavedSpeaker>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Object(entries) = value else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|(id, speaker)| Some((id, serde_json::from_value(speaker).ok()?)))
+        .collect())
 }
 
 impl Default for Settings {
