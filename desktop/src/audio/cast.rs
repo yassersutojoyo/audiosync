@@ -2971,4 +2971,38 @@ pub mod tests {
             "a fixed volume sends nothing (C68)"
         );
     }
+
+    fn volume_fixed(cast: &CastSpeakers, id: &str) -> bool {
+        cast.speakers()
+            .into_iter()
+            .find(|speaker| speaker.id == id)
+            .expect("listed")
+            .volume_fixed
+    }
+
+    // covers: C68
+    #[test]
+    fn a_fixed_volume_report_marks_only_that_speaker_fixed() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        assert!(!volume_fixed(&cast, KITCHEN), "unknown until reported");
+        let report = |control_type| HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.6,
+                control_type,
+                ..DeviceVolume::default()
+            }),
+        };
+        fake.report(report(ControlType::Fixed));
+        cast.poll();
+        assert!(volume_fixed(&cast, KITCHEN));
+        assert!(!volume_fixed(&cast, ATTIC));
+
+        fake.report(report(ControlType::Attenuation));
+        cast.poll();
+        assert!(!volume_fixed(&cast, KITCHEN));
+    }
 }
