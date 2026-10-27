@@ -39,7 +39,7 @@ pub fn backend<D: Driver + 'static>(
         settings_file,
         debug_log::env_skips_auto_connect(),
     );
-    adapter.set_cast_file(cast_file);
+    adapter.set_cast_file(cast_file, false);
     Box::new(adapter)
 }
 

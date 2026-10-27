@@ -1812,11 +1812,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Keeps the Cast speakers' offsets and formats in `path` from now on.
+    /// `unread_at_launch` says the file was there but couldn't be read into
+    /// the Cast memory at launch.
     #[cfg_attr(
         all(not(os_backend), not(test)),
         expect(dead_code, reason = "only the Windows app keeps a file")
     )]
-    pub fn set_cast_file(&mut self, path: Option<PathBuf>) {
+    pub fn set_cast_file(&mut self, path: Option<PathBuf>, _unread_at_launch: bool) {
         self.cast_file = path;
         self.cast_saved = self.audio.cast_memory_json();
         self.cast_file_checked = false;
@@ -12695,7 +12697,7 @@ mod tests {
     fn quitting_keeps_a_cast_offset_set_since_the_last_poll() {
         let (mut adapter, fake) = cast_adapter();
         let file = test_dir("cast-memory-quit").join("cast-speakers.json");
-        adapter.set_cast_file(Some(file.clone()));
+        adapter.set_cast_file(Some(file.clone()), false);
         adapter.save_settings();
         assert!(!file.exists(), "nothing changed, nothing is written");
 
@@ -12715,7 +12717,7 @@ mod tests {
         let folder = test_dir("cast-memory-ignored");
         let file = folder.join("cast-speakers.json");
         std::fs::write(&file, b"{ not json").expect("written");
-        adapter.set_cast_file(Some(file.clone()));
+        adapter.set_cast_file(Some(file.clone()), false);
         adapter.poll();
         adapter.save_settings();
         let kept = || crate::data_folder::copies_kept_aside(&folder, "cast-speakers.ignored");
@@ -12735,6 +12737,49 @@ mod tests {
         adapter.set_speaker_delay(&cc(CAST_KITCHEN), 300.0);
         adapter.save_settings();
         assert_eq!(kept().len(), 1, "one copy a run");
+    }
+
+    #[test]
+    fn a_cast_speakers_file_unread_at_launch_is_kept_aside_before_it_is_saved_over() {
+        let (mut adapter, _fake) = cast_adapter();
+        let folder = test_dir("cast-memory-unread-at-launch");
+        let file = folder.join("cast-speakers.json");
+        let earlier = format!(r#"{{"{}":{{"offsetMs":120}}}}"#, cast_device(CAST_LIVING));
+        std::fs::write(&file, &earlier).expect("written");
+        // Locked at launch, it reads again by the first save.
+        adapter.set_cast_file(Some(file.clone()), true);
+        adapter.poll();
+        adapter.save_settings();
+        let kept = || crate::data_folder::copies_kept_aside(&folder, "cast-speakers.ignored");
+        assert!(kept().is_empty(), "opening it keeps nothing aside");
+        assert_eq!(std::fs::read_to_string(&file).expect("the file"), earlier);
+
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.save_settings();
+        assert_eq!(kept(), [earlier.into_bytes()]);
+        let saved = std::fs::read_to_string(&file).expect("the file is written");
+        assert_eq!(
+            DeviceMemory::from_json(&saved).offset(&cast_device(CAST_KITCHEN)),
+            Some(std::time::Duration::from_millis(250))
+        );
+    }
+
+    #[test]
+    fn a_cast_speakers_file_with_a_stray_byte_the_launch_reads_isnt_kept_aside() {
+        let (mut adapter, _fake) = cast_adapter();
+        let folder = test_dir("cast-memory-stray-byte");
+        let file = folder.join("cast-speakers.json");
+        let mut bytes =
+            format!(r#"{{"{}":{{"offsetMs":120,"x":""#, cast_device(CAST_LIVING)).into_bytes();
+        bytes.extend_from_slice(&[0xff, b'"', b'}', b'}']);
+        assert!(DeviceMemory::read_json(&String::from_utf8_lossy(&bytes)).is_some());
+        std::fs::write(&file, &bytes).expect("written");
+        adapter.set_cast_file(Some(file.clone()), false);
+
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.save_settings();
+        let kept = crate::data_folder::copies_kept_aside(&folder, "cast-speakers.ignored");
+        assert!(kept.is_empty(), "{} copies kept", kept.len());
     }
 
     #[test]
@@ -12810,7 +12855,7 @@ mod tests {
     fn a_cast_delay_is_its_offset_that_local_outputs_wait_for_and_is_saved() {
         let (mut adapter, fake) = cast_adapter();
         let file = test_dir("cast-memory").join("cast-speakers.json");
-        adapter.set_cast_file(Some(file.clone()));
+        adapter.set_cast_file(Some(file.clone()), false);
         turn_on(&mut adapter, SPEAKERS);
         adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
         adapter.set_speaker_delay(&cc(CAST_KITCHEN), 400.0);
