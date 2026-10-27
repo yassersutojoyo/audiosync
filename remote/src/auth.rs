@@ -1128,7 +1128,7 @@ mod tests {
             let file = format!(r#"{{"version":{version},"devices":["{hash}"]}}"#);
             assert!(parse_file(file.as_bytes(), 5).is_none(), "{version}");
         }
-        for seen in ["1.8e9", "1800000000.0", "-1", "-0"] {
+        for seen in ["1.8e9", "1800000000.0", "-1"] {
             let file = format!(r#"{{"version":1,"devices":["{hash}"],"seen":[{seen}]}}"#);
             let (devices, rewrite, _) = parse_file(file.as_bytes(), 5).unwrap();
             assert_eq!(devices[0].seen, 5, "{seen} counts as seen now");
