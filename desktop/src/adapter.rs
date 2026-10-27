@@ -7874,6 +7874,63 @@ mod tests {
 
     // covers: S223
     #[test]
+    fn an_every_time_pairing_that_fails_after_the_stream_ended_says_it_needs_a_pin() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.set_running(false);
+        adapter.poll();
+
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(
+            &den,
+            PairingEvent::Failed {
+                error: SessionError::new(ErrorKind::PairingFailed),
+                wrong_pin: false,
+            },
+        );
+        adapter.poll();
+        assert!(!adapter.snapshot().speaker(&id).unwrap().enabled);
+        assert!(
+            messages(&adapter).contains(&NoticeMessage::AirPlayCantPlay {
+                speaker: "Den".to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPin,
+            }),
+            "{:?}",
+            messages(&adapter)
+        );
+        assert!(
+            !adapter.airplay_on_by_hand.contains(&id_of(&den)),
+            "the click's mark ends with its pairing"
+        );
+    }
+
+    // covers: S223
+    #[test]
+    fn closing_the_pin_prompt_after_the_stream_ended_drops_the_by_hand_mark() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.set_running(false);
+        adapter.poll();
+
+        adapter.cancel_pairing(&id);
+        adapter.poll();
+        assert!(!adapter.snapshot().speaker(&id).unwrap().enabled);
+        assert!(
+            !adapter.airplay_on_by_hand.contains(&id_of(&den)),
+            "closing the prompt cancels the click"
+        );
+    }
+
+    // covers: S223
+    #[test]
     fn an_every_time_speaker_whose_password_prompt_waits_in_line_turns_on_once_paired() {
         let (mut adapter, fake, den) = every_time_adapter();
         let study = airplay2_every_time_tv(11, "Study");
