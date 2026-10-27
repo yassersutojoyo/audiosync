@@ -167,9 +167,10 @@ enum AppLifecycle {
         }
 
         /// `midRebuild` once the switch stopped (`stopped`) the capture that
-        /// still waited for the app, before its first attempt.
+        /// still waited for the app, before its first attempt. That stop is
+        /// a rebuild's: when every attempt fails, the stream that ran ends (S223).
         static func midRebuild(stopped: Bool, before: Bool) -> Bool {
-            before
+            stopped || before
         }
 
         /// What a wait between attempts ends in.
