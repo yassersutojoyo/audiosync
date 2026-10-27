@@ -27,8 +27,6 @@ use common::net::{
 
 const LONG: Duration = Duration::from_secs(15);
 const SPACING: Duration = Duration::from_millis(500);
-/// The sender and the test read the time at different moments (P225).
-const UNDER: Duration = Duration::from_millis(50);
 /// Half a turn, so a connect can't pass for the next one (P225).
 const OVER: Duration = Duration::from_millis(250);
 /// The largest gap between two audio packets of a playing receiver: the cap
@@ -131,19 +129,18 @@ fn connect_starts(counters: &[&SpeakerCounters], n: u64) -> Vec<Instant> {
         .collect()
 }
 
-/// Each connect start at least 450 ms after the one before it, and the k-th
-/// within 0.5 s × k + 250 ms of the first (P225).
+/// Each connect start 0.5 s to 0.75 s after the one before it (P225).
 fn assert_in_turn(starts: &[Instant]) {
     let first = starts[0];
     let offsets: Vec<i128> = starts.iter().map(|at| ms(first, *at)).collect();
     for k in 1..starts.len() {
         assert!(
-            starts[k] >= starts[k - 1] + SPACING - UNDER,
+            starts[k] >= starts[k - 1] + SPACING,
             "connect {k} too soon after the one before: {offsets:?} ms"
         );
         assert!(
-            starts[k] <= first + SPACING * k as u32 + OVER,
-            "connect {k} late: {offsets:?} ms"
+            starts[k] <= starts[k - 1] + SPACING + OVER,
+            "connect {k} late after the one before: {offsets:?} ms"
         );
     }
 }
@@ -355,8 +352,6 @@ fn a_silent_receiver_holds_no_one_and_a_removed_start_opens_no_connection() {
     assert_eq!(counters[3].connect_starts(), 0);
     assert!(receivers[3].log().connections.is_empty());
     assert_in_turn(&[first(0), first(1), first(2), first(4)]);
-    assert!(first(4) >= first(2) + SPACING - UNDER);
-    assert!(first(4) <= first(0) + SPACING * 3 + OVER);
 }
 
 // covers: P169, P222, P224, P225
@@ -407,17 +402,11 @@ fn a_queued_airplay2_start_keeps_the_one_place() {
         .fake()
         .connected_at
         .is_empty()));
-    let starts = connect_starts(&[&counters[0], &counters[3]], 1);
-    assert_accepted(
-        &starts,
-        &[
-            airplay1[0].log().connections[0],
-            first_ap2.fake().connected_at[0],
-        ],
-    );
-    let (first, a_connect) = (starts[0], starts[1]);
-    assert!(a_connect >= first + SPACING * 3 - UNDER);
-    assert!(a_connect <= first + SPACING * 3 + OVER);
+    let starts = connect_starts(&[&counters[0], &counters[1], &counters[2], &counters[3]], 1);
+    let mut accepts: Vec<Instant> = airplay1.iter().map(|r| r.log().connections[0]).collect();
+    accepts.push(first_ap2.fake().connected_at[0]);
+    assert_accepted(&starts, &accepts);
+    assert_in_turn(&starts);
     assert!(
         first_state_at(&mut events, &sender, &a_key, SpeakerState::Playing, LONG).is_some(),
         "{:?}",
@@ -480,7 +469,7 @@ fn a_click_while_retries_wait_connects_first() {
     let click_at = connect_starts(&[&click_counters], 1)[0];
     assert_accepted(&[click_at], &[clicked.log().connections[0]]);
     assert!(
-        click_at >= r0 + SPACING - UNDER && click_at <= r0 + SPACING + OVER,
+        click_at >= r0 + SPACING && click_at <= r0 + SPACING + OVER,
         "the click connected {} ms after the first retry",
         ms(r0, click_at)
     );
@@ -513,10 +502,7 @@ fn a_click_while_retries_wait_connects_first() {
     retries.sort_by_key(|(due, _)| *due);
     let connects: Vec<Instant> = retries.iter().map(|(_, at)| *at).collect();
     assert_eq!(connects[0], r0, "the first due connects first");
-    assert!(connects[1] >= click_at + SPACING - UNDER);
-    assert!(connects[1] <= click_at + SPACING + OVER);
-    assert!(connects[2] >= connects[1] + SPACING - UNDER);
-    assert!(connects[2] <= connects[1] + SPACING + OVER);
+    assert_in_turn(&[click_at, connects[1], connects[2]]);
     assert!(
         first_state_at(
             &mut events,
