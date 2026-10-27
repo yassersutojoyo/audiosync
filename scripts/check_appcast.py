@@ -19,8 +19,8 @@ Exit status 0 means the appcast passes; 1 prints one line per problem.
 
 scripts/sign_appcast.sh also uses it to write the Windows items: --add takes
 a Windows zip and the signature Sparkle's sign_update made over it, adds its
-item next to the Mac item in APPCAST, then checks the result. --strays warns
-about Windows-looking zips in a folder that aren't named as the script expects.
+item next to the Mac item in APPCAST, then checks the result. --strays fails
+on Windows-looking zips in a folder that aren't named as the script expects.
 
 Usage:
     scripts/check_appcast.py APPCAST VERSION [ZIP...]
@@ -31,6 +31,8 @@ Usage:
 
 import argparse
 import base64
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -189,6 +191,8 @@ def add_windows(text, version, signed):
     Each item takes the Mac item's versions and publication date, and its URL
     sits in the Mac item's download folder.
     """
+    # Edits the feed after generate_appcast: fine only while SURequireSignedFeed is
+    # off, since turning it on would make these edits break the feed's signature.
     version = version[1:] if version.startswith("v") else version
     root = ET.fromstring(text)
     macs = [item for item in root.iter("item")
@@ -394,6 +398,13 @@ def self_test():
         if stray_zips(folder, "0.8.0") != [os.path.basename(extra)]:
             failures.append(f"stray Windows zips: expected only {os.path.basename(extra)}, "
                             f"got {stray_zips(folder, '0.8.0')}")
+        for name, where, want in (("a folder with a stray", folder, 1),
+                                  ("a folder without one", os.path.dirname(nested), 0)):
+            cases += 1
+            with contextlib.redirect_stderr(io.StringIO()):
+                got = main(["--strays", where, "0.8.0"])
+            if got != want:
+                failures.append(f"--strays on {name}: exit {got}, expected {want}")
     for failure in failures:
         print(f"self-test: {failure}", file=sys.stderr)
     print(f"self-test: {cases} cases, {len(failures)} failure(s)")
@@ -412,7 +423,7 @@ def main(argv):
     parser.add_argument("--add", nargs=2, action="append", default=[], metavar=("ZIP", "SIGNATURE"),
                         help="add a Windows zip's item, signed by sign_update, before the check")
     parser.add_argument("--strays", nargs=2, metavar=("FOLDER", "VERSION"),
-                        help="warn about Windows-looking zips in FOLDER that aren't named for VERSION")
+                        help="fail on Windows-looking zips in FOLDER that aren't named for VERSION")
     parser.add_argument("appcast", nargs="?", help="the release's appcast.xml")
     parser.add_argument("version", nargs="?", help="the release version, such as 0.8.0 or v0.8.0")
     parser.add_argument("zips", nargs="*", help="the release's zips (Mac and Windows)")
@@ -422,10 +433,11 @@ def main(argv):
     if args.strays:
         folder, version = args.strays
         version = version[1:] if version.startswith("v") else version
-        for name in stray_zips(folder, version):
-            print(f"warning: {name} is not named AudioSync-{version}-windows-x64.zip or "
-                  f"-arm64.zip, so it gets no appcast item", file=sys.stderr)
-        return 0
+        strays = stray_zips(folder, version)
+        for name in strays:
+            print(f"{name} is not named AudioSync-{version}-windows-x64.zip or -arm64.zip, so it "
+                  f"would get no appcast item: rename it or move it away", file=sys.stderr)
+        return 1 if strays else 0
     if not args.appcast or not args.version:
         parser.error("APPCAST and VERSION are required")
     if args.add:

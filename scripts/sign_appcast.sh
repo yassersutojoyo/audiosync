@@ -60,7 +60,8 @@ python3 -I -c 'pass' 2>/dev/null || die "python3 not found: install the Command 
 zip_dir=$(dirname -- "$zip")
 x64_zip="$zip_dir/AudioSync-$version-windows-x64.zip"
 arm64_zip="$zip_dir/AudioSync-$version-windows-arm64.zip"
-python3 -I scripts/check_appcast.py --strays "$zip_dir" "$version"
+python3 -I scripts/check_appcast.py --strays "$zip_dir" "$version" \
+  || die "a Windows zip next to $zip has another name (RELEASE.md names them)"
 windows=no
 if [ -f "$x64_zip" ] && [ -f "$arm64_zip" ]; then
   windows=yes
