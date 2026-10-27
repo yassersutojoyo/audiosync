@@ -1721,7 +1721,7 @@ fn every_output_of_every_mix_holds_every_invariant() {
 
 /// Draws of the random run that failed, as `(seed, index)` for
 /// [`random_case`].
-const RANDOM_REGRESSIONS: [(u64, usize); 42] = [
+const RANDOM_REGRESSIONS: [(u64, usize); 43] = [
     (0x5EED, 2),
     (0x5EED, 24),
     (0x5EED, 56),
@@ -1764,6 +1764,7 @@ const RANDOM_REGRESSIONS: [(u64, usize); 42] = [
     (2, 340),
     (2, 388),
     (2, 432),
+    (3, 88),
 ];
 
 // covers: S206, S207, S209
