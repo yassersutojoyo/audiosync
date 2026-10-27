@@ -45,9 +45,9 @@
 //! With an AirPlay sender ([`Controller::set_airplay`]), the capture also
 //! feeds the sender and AirPlay speakers that are on join the stream while a
 //! session runs ([`airplay`](super::airplay)). L is the sender's base
-//! latency L_s plus the user's adjustment (S178). A new capture restarts the
-//! sender's timeline (P143); a new L_s from the sender re-times every
-//! playing output.
+//! latency L_s plus the user's adjustment (S178). A new capture carries on
+//! the sender's timeline after a silent gap (P143); a new L_s from the
+//! sender re-times every playing output.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -81,6 +81,7 @@ use super::capture::{
 };
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
+use super::clock_probe::{ClockQueue, describe_clock_queue};
 use super::now_playing::{Follow, SharedLabels, TrackInfo, TrackReader, TrackSource};
 #[cfg(test)]
 use super::outputs::OutputParams;
@@ -197,6 +198,12 @@ pub trait RendererHandle {
 
     /// How its stream is set up, for the debug log, when known.
     fn setup(&self) -> Option<StreamSetup>;
+
+    /// How much its stream held that the device hadn't played at each
+    /// probe time, for the debug log: once, when every sample is in.
+    fn clock_queue(&self) -> Option<ClockQueue> {
+        None
+    }
 }
 
 /// The platform calls the backend makes.
@@ -1408,6 +1415,23 @@ impl<D: Driver> Controller<D> {
         }
     }
 
+    /// Logs each playing output's clock queue once its probe has every
+    /// sample.
+    fn log_clock_queues(&mut self) {
+        if !self.log.enabled() {
+            return;
+        }
+        let Some(session) = &self.session else {
+            return;
+        };
+        for (id, playing) in &session.outputs {
+            if let Some(queue) = playing.handle.clock_queue() {
+                let name = self.names.get(id).map_or(id.as_str(), String::as_str);
+                self.log.log(|| describe_clock_queue(name, &queue));
+            }
+        }
+    }
+
     /// Logs how the session is doing, at most every [`STATUS_INTERVAL`]:
     /// the frames captured, and each playing output's delay, volume and
     /// reader counters, all read from the atomics the audio threads keep.
@@ -1875,7 +1899,7 @@ impl<D: Driver> Controller<D> {
             }
         }
         if let Some(airplay) = self.airplay.as_mut() {
-            airplay.restart_timeline();
+            airplay.capture_started();
         }
         self.sessions_started += 1;
         self.log.log(|| self.policy.describe_lead());
@@ -2190,6 +2214,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 {
                     Ok(())
                 } else {
+                    // A failed switch leaves no session: the network
+                    // speakers leave the stream as at a stop (S114).
+                    self.airplay_streaming(false);
+                    self.release_busy();
                     Err(error)
                 }
             }
@@ -2569,6 +2597,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .map_or(CastDiscovery::Off, CastSpeakers::discovery)
     }
 
+    fn cast_on(&self) -> bool {
+        self.cast.as_ref().is_some_and(CastSpeakers::is_on)
+    }
+
     fn set_cast_enabled(&mut self, id: &str, enabled: bool) -> Result<(), CastProblem> {
         let Some(cast) = self.cast.as_mut() else {
             return if enabled {
@@ -2738,6 +2770,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
         self.device_volumes.tick();
         self.log_session_lead();
+        self.log_clock_queues();
         // Outputs that faded out stop, and then an ended session's capture;
         // a start that waited for them goes ahead.
         self.reap(false);
@@ -3378,6 +3411,14 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::AirPlayTrouble { id, problem } => {
             format!("AirPlay speaker ({id}) stopped ({problem:?}); the sender keeps trying")
         }
+        BackendEvent::AirPlayUnannounced { id, unannounced } => format!(
+            "AirPlay speaker ({id}) {}",
+            if *unannounced {
+                "is not on the network; it plays once it is announced"
+            } else {
+                "is announced again"
+            }
+        ),
         BackendEvent::AirPlayFailed { id, problem } => {
             format!("AirPlay speaker ({id}) can't play ({problem:?}); it is turned off")
         }
@@ -3654,6 +3695,194 @@ mod tests {
         assert!(playing(&backend).is_empty());
         assert_eq!(backend.running_source(), None);
         assert_eq!(backend.driver().renderers_faded(), 2);
+    }
+
+    // covers: S114
+    #[test]
+    fn a_failed_start_leaves_nothing_running_and_every_feed_free() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        let feed = FeedSlot::new(input);
+        backend.set_airplay(fake.link(), Some(feed.clone()));
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        backend.poll();
+        backend.set_airplay_enabled(&id, true).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        let cast_free =
+            |backend: &MockBackend| backend.cast.as_ref().is_some_and(CastSpeakers::is_free);
+
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        assert_eq!(
+            backend.start(&SourceId::WholeSystem),
+            Err(BackendError::DeviceGone)
+        );
+        assert_eq!(backend.running_source(), None);
+        assert!(!backend.driver().capture_running());
+        assert!(backend.driver().renderers_started().is_empty());
+        assert!(feed.is_free(), "the AirPlay feed is back in its slot");
+        assert!(cast_free(&backend), "the Cast tap is back in its slot");
+        assert!(fake.take_calls().is_empty(), "no AirPlay speaker joined");
+        assert!(cast.state().started.is_empty(), "no Cast session started");
+
+        // A source change where neither the new source nor the old one can
+        // start leaves the same state behind, network speakers included.
+        backend.refuse_captures(None);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(backend.driver().capture_feeds_airplay());
+        assert_eq!(cast.state().started.len(), 1, "the Cast speaker joined");
+        assert_eq!(cast.state().stops, 0);
+        fake.take_calls();
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        assert!(
+            backend
+                .start(&SourceId::App {
+                    root_pid: PLAYER_PID,
+                })
+                .is_err()
+        );
+        assert_eq!(backend.running_source(), None);
+        assert!(!backend.driver().capture_running());
+        assert_eq!(backend.driver().renderers_running(), 0);
+        assert!(feed.is_free(), "the AirPlay feed is back in its slot");
+        assert!(cast_free(&backend), "the Cast tap is back in its slot");
+        assert_eq!(
+            fake.take_calls(),
+            [Call::Remove(id.clone())],
+            "the AirPlay speaker left the stream"
+        );
+        assert_eq!(cast.state().stops, 1, "the Cast speaker left the stream");
+        assert!(
+            backend.feed_capture_level(4, 0.25).is_empty(),
+            "the old capture's ring writer was let go"
+        );
+
+        backend.refuse_captures(None);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(backend.driver().capture_feeds_airplay());
+        assert!(backend.driver().capture_feeds_cast());
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S115
+    #[test]
+    fn a_second_stop_is_safe_and_no_capture_runs_once_a_stop_finished() {
+        let mut backend = backend();
+        backend.stop();
+        assert_eq!(backend.driver().capture_attempts(), 0);
+        assert_eq!(backend.driver().renderers_faded(), 0);
+
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.driver().hold_fades(true);
+        backend.stop();
+        backend.stop();
+        assert_eq!(
+            backend.driver().renderers_faded(),
+            2,
+            "each output is asked to fade once"
+        );
+        assert!(
+            backend.driver().capture_running(),
+            "a second stop doesn't cut the fades short"
+        );
+        assert_eq!(
+            backend.feed_capture_level(4, 0.25).len(),
+            8,
+            "the fades play on frames still being captured"
+        );
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert!(!backend.driver().capture_running());
+        assert!(
+            backend.feed_capture_level(4, 0.25).is_empty(),
+            "no capture callback writes once the stop finished"
+        );
+        assert_eq!(backend.driver().renderers_running(), 0);
+        assert!(playing(&backend).is_empty());
+        assert_eq!(backend.running_source(), None);
+
+        backend.stop();
+        assert!(backend.feed_capture_level(4, 0.25).is_empty());
+        let events = backend.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::Stopped { .. })),
+            "{events:?}"
+        );
+        assert!(!backend.driver().capture_running());
+        assert_eq!(backend.driver().renderers_faded(), 2);
+        assert_eq!(backend.driver().captures_started().len(), 1);
+
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert!(backend.driver().capture_running());
+    }
+
+    // covers: S114
+    #[test]
+    fn a_start_that_fails_before_its_capture_never_tries_one_and_holds_no_feed() {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        let feed = FeedSlot::new(input);
+        backend.set_airplay(fake.link(), Some(feed.clone()));
+
+        assert_eq!(
+            backend.start(&SourceId::App { root_pid: 9999 }),
+            Err(BackendError::SourceGone)
+        );
+        assert_eq!(backend.driver().capture_attempts(), 0);
+        assert_eq!(backend.running_source(), None);
+        assert!(!backend.driver().capture_running());
+        assert!(backend.driver().renderers_started().is_empty());
+        assert!(feed.is_free(), "the AirPlay feed was never leased");
+        assert!(backend.feed_capture_level(4, 0.25).is_empty());
+
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(backend.driver().capture_feeds_airplay());
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S114
+    #[test]
+    fn each_start_captures_into_a_fresh_ring_through_an_equalizer_already_set() {
+        let mut backend = backend();
+        backend.connect_input("mic", "Microphone", "USB");
+        let source = SourceId::Input {
+            endpoint_id: "mic".to_owned(),
+        };
+        backend.start(&source).unwrap();
+        backend.feed_capture_level(4, 0.5);
+        backend.stop();
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: 6.0,
+            ..EqSettings::default()
+        });
+
+        backend.start(&source).unwrap();
+        assert_eq!(
+            backend.input_peak(),
+            Some(0.0),
+            "nothing of the last session is left in the ring"
+        );
+        let raised = 0.25 * 10f32.powf(6.0 / 20.0);
+        let first = backend.feed_capture_level(4, 0.25);
+        assert!(
+            first.iter().all(|s| (s - raised).abs() < 1e-4),
+            "the first captured block is equalized: {first:?}"
+        );
+        let peak = backend.input_peak().unwrap();
+        assert!((peak - raised).abs() < 1e-4, "{peak}");
     }
 
     /// How long a call on the UI thread may take without counting as a wait.
@@ -4991,6 +5220,42 @@ mod tests {
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
     }
 
+    // covers: P143, S141
+    #[test]
+    fn a_source_switch_under_a_sounding_airplay_speaker_sends_the_sender_nothing() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fake.set_sounding(true);
+        fake.report_latency(
+            &kitchen,
+            300_000,
+            audiosync_airplay::latency::LatencySources::AUDIO_LATENCY,
+        );
+        poll_quietly(&mut backend, 2);
+        fake.take_calls();
+
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        poll_quietly(&mut backend, 2);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        let calls = fake.take_calls();
+        assert!(
+            !calls.iter().any(|call| matches!(
+                call,
+                Call::Pause
+                    | Call::Latency(_)
+                    | Call::Delay(..)
+                    | Call::Remove(_)
+                    | Call::Add { .. }
+            )),
+            "no restart, flush, re-timing or rejoin at a switch: {calls:?}"
+        );
+    }
+
     #[test]
     fn an_app_that_quit_while_its_capture_waits_to_start_again_gives_way_when_set() {
         let mut backend = backend();
@@ -6170,14 +6435,11 @@ mod tests {
         assert!(!feed.is_free(), "the capture holds the feed");
         assert_eq!(
             fake.take_calls(),
-            [
-                Call::RestartTimeline,
-                Call::Add {
-                    id: id.clone(),
-                    volume: Volume::Db(-12.0),
-                    delay: Duration::ZERO,
-                }
-            ]
+            [Call::Add {
+                id: id.clone(),
+                volume: Volume::Db(-12.0),
+                delay: Duration::ZERO,
+            }]
         );
         assert_eq!(delay_frames(&backend, SPEAKERS), 84_000);
 

@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use audiosync_airplay::ap2::StreamKey;
+use audiosync_airplay::ap2::{StreamKey, Timing};
 use audiosync_airplay::clock::{NTP_ORIGIN_SECONDS, SenderClock};
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
@@ -23,11 +23,15 @@ use audiosync_airplay::error::{ErrorKind, UnsupportedReason, Warning};
 use audiosync_airplay::ptp::{PtpPorts, PtpService, PtpTransmit, clock_identity};
 use audiosync_airplay::rtp::{RESEND_PREFIX_BYTES, ResendRequest};
 use audiosync_airplay::sdp::Codec;
-use audiosync_airplay::sender::{Sender, SenderConfig, SpeakerEvent, SpeakerOptions, SpeakerState};
+use audiosync_airplay::sender::{
+    Sender, SenderConfig, SpeakerEvent, SpeakerOptions, SpeakerState, TimingMemory,
+};
 use audiosync_airplay::stream::{Ap2Audio, PacketKind, SpeakerConfig, StreamEvent};
 use audiosync_airplay::volume::Volume;
 
-use common::ap2::{Ap2Server, FakeAp2, dict, int, open_packet, plist, read_dict, stream_key};
+use common::ap2::{
+    Ap2Server, FakeAp2, dict, int, open_packet, plist, read_dict, request_key, stream_key,
+};
 use common::net::{
     Events, HostAudio, free_ptp_ports, host_frame_of, ptp_bind_v4, serial, wait_until,
 };
@@ -47,6 +51,36 @@ fn ap2_speaker(k: u8, key: [u8; 32], clock_identity: Option<[u8; 8]>) -> Speaker
 
 fn seq_of(bytes: &[u8]) -> u16 {
     u16::from_be_bytes([bytes[2], bytes[3]])
+}
+
+/// Whether RTP `seq` comes before `next` in sequence order.
+fn before(seq: u16, next: u16) -> bool {
+    (next.wrapping_sub(seq) as i16) > 0
+}
+
+/// The most packets a pause may let out after the call: 100 ms of 352-frame
+/// packets, a count so a late arrival stamp can't inflate it (P213).
+const LATE_PACKETS: usize = 13;
+
+/// The seqs of the datagrams that arrived after `at` and come before `held`,
+/// asserted to be the run that ends right before it, each packet once.
+fn tail_before(datagrams: &[Datagram], at: Instant, held: u16) -> Vec<u16> {
+    let tail: Vec<u16> = datagrams
+        .iter()
+        .filter(|(arrived, _, bytes)| *arrived > at && before(seq_of(bytes), held))
+        .map(|(_, _, bytes)| seq_of(bytes))
+        .collect();
+    assert!(
+        tail.windows(2)
+            .all(|pair| pair[1] == pair[0].wrapping_add(1)),
+        "{tail:?}"
+    );
+    assert!(
+        tail.last().is_none_or(|last| last.wrapping_add(1) == held),
+        "{tail:?} before {held}"
+    );
+    assert!(tail.len() <= LATE_PACKETS, "{tail:?}");
+    tail
 }
 
 fn u32_at(bytes: &[u8], at: usize) -> u32 {
@@ -849,12 +883,19 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     sender.pause();
     let paused = Instant::now();
     assert!(wait_until(LONG, || count(&server, "FLUSH") == 2));
-    let quiet = paused + Duration::from_millis(50);
     std::thread::sleep(Duration::from_millis(4_500));
     assert!(count(&server, "POST /feedback") >= feedback + 2);
-    assert!(udp.data.take().iter().all(|(at, _, _)| *at <= quiet));
-    assert_eq!(count(&server, "FLUSHBUFFERED"), 0);
     let (seq, rtptime) = rtp_info(&server);
+    // The FLUSH names the first packet held back. Packets before it left
+    // before the sender took the pause, however late a busy runner stamps
+    // them; nothing else arrives.
+    let datagrams = udp.data.take();
+    let late = tail_before(&datagrams, paused, seq).len();
+    assert_eq!(
+        datagrams.iter().filter(|(at, _, _)| *at > paused).count(),
+        late
+    );
+    assert_eq!(count(&server, "FLUSHBUFFERED"), 0);
     sender.resume();
     let (_, _, bytes) = udp.data.wait_for(|_| true).expect("audio after the resume");
     assert_eq!(seq_of(&bytes), seq);
@@ -870,10 +911,11 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     sender.pause();
     let paused = Instant::now();
     sender.resume();
-    let quiet = paused + Duration::from_millis(50);
+    assert!(wait_until(LONG, || count(&server, "FLUSH") == 4));
+    let held = rtp_info(&server).0;
     let (at, _, bytes) = udp
         .data
-        .wait_for(|(at, _, _)| *at > quiet)
+        .wait_for(|(_, _, bytes)| !before(seq_of(bytes), held))
         .expect("audio after the resume");
     assert!(
         at >= paused + ANSWER + ANSWER / 2,
@@ -881,8 +923,9 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
         at - paused
     );
     assert_eq!(count(&server, "FLUSH"), 4);
-    assert_eq!(seq_of(&bytes), rtp_info(&server).0);
+    assert_eq!(seq_of(&bytes), held);
     assert_eq!(bytes[1], 0xE0);
+    tail_before(&udp.data.take(), paused, held);
     sender.shutdown();
 }
 
@@ -1157,4 +1200,187 @@ fn ap2_ptp_clash_is_told_again_after_ptp_bound() {
     attempt(&mut events, 3);
     assert_eq!((told(&events), opened(&events)), (2, 1));
     sender.shutdown();
+}
+
+/// A speaker whose TXT record also carries `srcvers`.
+fn versioned(server: &Ap2Server, id: u8, features: &str, srcvers: &str) -> Device {
+    let mut speaker = device(server, id, features);
+    if let Some(txt) = speaker.airplay_txt.as_mut() {
+        txt.source_version = Some(srcvers.to_owned());
+    }
+    speaker
+}
+
+/// One launch of a fresh sender, as after a relaunch: the host hands the
+/// speaker `stored` from its store and the launch ends once the speaker is
+/// `until`. The timing each session SETUP asked for, and the speaker's
+/// events.
+fn launch(
+    server: &Ap2Server,
+    udp: &Udp,
+    speaker: &Device,
+    stored: Option<TimingMemory>,
+    until: SpeakerState,
+) -> (Vec<String>, Vec<SpeakerEvent>) {
+    server.fake().requests.clear();
+    let (sender, _host) = start(
+        SenderClock::new(Instant::now()),
+        free_ptp_ports(),
+        udp.ptp_ports(),
+    );
+    let mut events = Events::default();
+    let key = speaker.key.clone();
+    let mut with_store = options();
+    with_store.timing = stored;
+    sender.add_speaker(speaker.clone(), with_store);
+    assert!(
+        events
+            .wait_state(&sender, &key, 1, LONG, |s| *s == until)
+            .is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    sender.shutdown();
+    let timings = server
+        .fake()
+        .requests
+        .iter()
+        .filter(|(request, _)| request_key(request) == "SETUP session")
+        .filter_map(|(request, _)| {
+            read_dict(&request.body)?
+                .get("timingProtocol")?
+                .as_string()
+                .map(str::to_owned)
+        })
+        .collect();
+    (timings, events.of(&key))
+}
+
+/// The last entry the sender handed the host to keep.
+fn remembered(events: &[SpeakerEvent]) -> Option<TimingMemory> {
+    events.iter().rev().find_map(|event| match event {
+        SpeakerEvent::TimingRemembered(memory) => Some(memory.clone()),
+        _ => None,
+    })
+}
+
+// covers: P217
+#[test]
+fn ap2_timing_choice_outlives_the_launch() {
+    let _serial = serial();
+    let udp = Udp::bind();
+    let mut fake = ptp_fake();
+    fake.status_once.clear();
+    fake.refuse_timing.push("NTP".to_owned());
+    let server = Ap2Server::start(udp.fake(fake));
+    let speaker = versioned(&server, 65, PTP_FEATURES, "366.0");
+
+    // Nothing stored: NTP is refused, PTP takes it, and the host gets the
+    // choice with the TXT values of that SETUP.
+    let (timings, events) = launch(&server, &udp, &speaker, None, SpeakerState::Playing);
+    assert_eq!(timings, ["NTP", "PTP"]);
+    let stored = remembered(&events).expect("the choice reaches the host");
+    assert_eq!(
+        stored,
+        TimingMemory {
+            timing: Timing::Ptp,
+            features: speaker.features().0,
+            srcvers: Some("366.0".to_owned()),
+        }
+    );
+
+    // The next launch with the stored entry asks for PTP at once: one NTP
+    // probe across both launches.
+    let (timings, events) = launch(
+        &server,
+        &udp,
+        &speaker,
+        Some(stored.clone()),
+        SpeakerState::Playing,
+    );
+    assert_eq!(timings, ["PTP"]);
+    assert!(!events.contains(&SpeakerEvent::TimingForgotten));
+
+    // A new srcvers forgets the entry, so the NTP attempt comes back once.
+    let updated = versioned(&server, 65, PTP_FEATURES, "377.1");
+    let (timings, events) = launch(
+        &server,
+        &udp,
+        &updated,
+        Some(stored.clone()),
+        SpeakerState::Playing,
+    );
+    assert_eq!(timings, ["NTP", "PTP"]);
+    assert!(events.contains(&SpeakerEvent::TimingForgotten));
+    let renewed = remembered(&events).expect("the new entry");
+    assert_eq!(renewed.timing, Timing::Ptp);
+    assert_eq!(renewed.srcvers.as_deref(), Some("377.1"));
+    let (timings, _) = launch(
+        &server,
+        &udp,
+        &updated,
+        Some(renewed),
+        SpeakerState::Playing,
+    );
+    assert_eq!(timings, ["PTP"]);
+
+    // So do new features.
+    let changed = versioned(&server, 65, "0x0,0x10241", "366.0");
+    let (timings, events) = launch(&server, &udp, &changed, Some(stored), SpeakerState::Playing);
+    assert_eq!(timings, ["NTP", "PTP"]);
+    assert!(events.contains(&SpeakerEvent::TimingForgotten));
+    assert_eq!(
+        remembered(&events).map(|memory| memory.features),
+        Some(changed.features().0)
+    );
+}
+
+// covers: P217
+#[test]
+fn ap2_remembered_ptp_refused_is_forgotten() {
+    let _serial = serial();
+    let udp = Udp::bind();
+    // The receiver now takes NTP and refuses PTP.
+    let mut fake = ptp_fake();
+    fake.status_once.clear();
+    fake.refuse_timing.push("PTP".to_owned());
+    let server = Ap2Server::start(udp.fake(fake));
+    let speaker = versioned(&server, 66, PTP_FEATURES, "366.0");
+    let stored = TimingMemory {
+        timing: Timing::Ptp,
+        features: speaker.features().0,
+        srcvers: Some("366.0".to_owned()),
+    };
+    let (timings, events) = launch(
+        &server,
+        &udp,
+        &speaker,
+        Some(stored.clone()),
+        SpeakerState::Playing,
+    );
+    assert_eq!(timings, ["PTP", "NTP"]);
+    let forgotten = events
+        .iter()
+        .position(|event| *event == SpeakerEvent::TimingForgotten)
+        .expect("the entry is dropped");
+    let renewed = events
+        .iter()
+        .position(|event| {
+            matches!(event, SpeakerEvent::TimingRemembered(memory) if memory.timing == Timing::Ntp)
+        })
+        .expect("NTP becomes the entry");
+    assert!(forgotten < renewed, "{events:?}");
+
+    // Refused under both: Unsupported (timing), and no entry is kept.
+    server.fake().refuse_timing.push("NTP".to_owned());
+    let (timings, events) = launch(&server, &udp, &speaker, Some(stored), SpeakerState::Failed);
+    assert_eq!(timings, ["PTP", "NTP", "PTP"]);
+    assert!(events.contains(&SpeakerEvent::TimingForgotten));
+    assert_eq!(remembered(&events), None);
+    assert!(events.iter().any(|event| matches!(
+        event,
+        SpeakerEvent::Error(error)
+            if error.error.kind == ErrorKind::Unsupported(UnsupportedReason::Timing)
+    )));
 }

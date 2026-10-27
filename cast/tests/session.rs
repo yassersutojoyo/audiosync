@@ -21,7 +21,7 @@ use audiosync_cast::message::{
     DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_DEVICE_AUTH, NS_HEARTBEAT, NS_RECEIVER, PLATFORM,
     SENDER,
 };
-use common::{Behavior, Command, FakeDevice, OnLaunch, app, json_message};
+use common::{Behavior, Command, FakeDevice, OnLaunch, ServerKey, app, json_message};
 use serde_json::json;
 
 fn connect(device: &FakeDevice) -> CastClient {
@@ -72,6 +72,35 @@ fn a_tls_1_2_only_device_connects() {
     device.join();
 }
 
+// C20's ECDHE-RSA AES-GCM half; its CBC half stays pending (rustls has no CBC
+// suites to serve).
+#[test]
+fn a_tls_1_2_device_with_an_rsa_key_connects_on_each_ecdhe_rsa_aes_gcm_suite() {
+    use rustls::crypto::ring::cipher_suite::{
+        TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+    };
+    for suite in [
+        TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+        TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+    ] {
+        let device = FakeDevice::start(Behavior {
+            tls12_only: true,
+            key: ServerKey::Rsa,
+            suite: Some(suite),
+            ..Behavior::default()
+        });
+        let client = connect(&device);
+        assert!(client.status().is_some(), "{:?}", suite.suite());
+        assert_eq!(
+            client.fingerprint(),
+            Some(Fingerprint::of(&device.certificate_der))
+        );
+        assert_eq!(device.negotiated_suites(), vec![suite.suite()]);
+        let _ = client.stop(Duration::from_secs(1));
+        device.join();
+    }
+}
+
 #[test]
 fn every_message_on_the_wire_is_one_length_prefixed_cast_message() {
     let device = FakeDevice::start(Behavior::default());
@@ -111,10 +140,7 @@ fn a_device_that_never_reports_its_status_is_a_connect_failure() {
 
 #[test]
 fn connect_failures_say_their_cause_and_retries_back_off() {
-    // A port nobody listens on.
-    let closed = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let address = closed.local_addr().expect("address");
-    drop(closed);
+    let address = common::refused_address();
     let error = CastClient::connect(&[address], RequestIds::starting_at(1)).expect_err("refused");
     assert!(matches!(error, ConnectError::Tcp { .. }), "{error}");
     assert!(error.to_string().contains(&address.to_string()));
@@ -213,11 +239,8 @@ fn a_deselect_ends_a_connect_while_it_waits() {
 
 #[test]
 fn ipv4_is_tried_before_ipv6() {
-    let closed = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let port = closed.local_addr().expect("address").port();
-    drop(closed);
-    let v4 = SocketAddr::new(IpAddr::from([127, 0, 0, 1]), port);
-    let v6 = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), port);
+    let v4 = common::refused_address();
+    let v6 = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), v4.port());
     let error = CastClient::connect(&[v6, v4], RequestIds::starting_at(1)).expect_err("closed");
     let ConnectError::Tcp { address, .. } = error else {
         panic!("{error}");

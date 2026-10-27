@@ -19,7 +19,7 @@ use audiosync_cast::host::{
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::{NS_CONNECTION, NS_MEDIA, NS_RECEIVER, PLATFORM};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
-use common::{Behavior, Command, FakeDevice, OnLaunch, OnLoad};
+use common::{Behavior, Command, FakeDevice, OnLaunch, OnLoad, json_message};
 use serde_json::{Value, json};
 
 const A: DeviceId = DeviceId([0xA1; 16]);
@@ -285,6 +285,84 @@ fn a_whole_session_sends_no_clock_and_nothing_for_group_delay() {
     }
     for (_, namespace, payload) in device.received() {
         assert!(!has_time_key(&payload), "{namespace}: {payload}");
+    }
+    assert!(host.shutdown());
+    device.join();
+}
+
+// covers: C77
+#[test]
+fn queue_state_and_current_time_never_change_the_offset_or_reload() {
+    let mut memory = DeviceMemory::default();
+    memory.set_offset(A, Duration::from_millis(1_850));
+    let device = FakeDevice::start(Behavior::default());
+    let mut host = CastHost::new(memory).expect("worker");
+    let (_feed, reader) = ring();
+    host.start(target(A, &device), 48_000, Metadata::default(), reader)
+        .expect("starts");
+    wait_for(&host, Duration::from_secs(10), started(A));
+    let before = host.memory();
+    assert_eq!(before.offset(&A), Some(Duration::from_millis(1_850)));
+
+    let queue = json!({
+        "items": [
+            {"itemId": 1, "media": {"contentId": "elsewhere-1"}},
+            {"itemId": 2, "media": {"contentId": "elsewhere-2"}},
+        ],
+        "loadingItemId": 2,
+        "preloadedItemId": 2,
+        "repeatMode": "REPEAT_ALL",
+        "queueData": {"startIndex": 1, "shuffle": true},
+    });
+    for (state, current_time) in [
+        ("BUFFERING", 0.0),
+        ("PLAYING", 400.0),
+        ("BUFFERING", 401.0),
+        ("PLAYING", 0.2),
+    ] {
+        let mut entry = queue.clone();
+        entry["mediaSessionId"] = json!(1);
+        entry["playerState"] = json!(state);
+        entry["currentTime"] = json!(current_time);
+        device.send(Command::Send(json_message(
+            "transport-1",
+            "*",
+            NS_MEDIA,
+            json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [entry]}),
+        )));
+        thread::sleep(Duration::from_millis(200));
+    }
+    let mut seen = wait_for(&host, Duration::from_secs(5), |event| {
+        matches!(
+            event,
+            HostEvent::Session {
+                event: SessionEvent::Rebuffering,
+                ..
+            }
+        )
+    });
+    let until = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < until {
+        seen.extend(std::iter::from_fn(|| host.poll_event()));
+        thread::sleep(Duration::from_millis(20));
+    }
+
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, HostEvent::MemoryChanged | HostEvent::Ended { .. })),
+        "{seen:?}"
+    );
+    assert_eq!(host.memory(), before, "the offset is the user's alone");
+    assert_eq!(device.payloads(NS_MEDIA, "LOAD").len(), 1, "no reload");
+    let answered: BTreeSet<&str> = ["CONNECT", "PING", "PONG", "GET_STATUS", "LAUNCH", "LOAD"]
+        .into_iter()
+        .collect();
+    for kind in device.types() {
+        assert!(
+            answered.contains(kind.as_str()),
+            "unexpected message {kind}"
+        );
     }
     assert!(host.shutdown());
     device.join();
@@ -678,10 +756,7 @@ fn connect_retries_follow_events_held_when_the_start_began() {
     // The outbox is full, so this session's end is held.
     host.stop();
     thread::sleep(Duration::from_millis(500));
-    let closed = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        listener.local_addr().expect("address")
-    };
+    let closed = common::refused_address();
     let (_feed, reader) = ring();
     let unreachable = CastTarget {
         id: B,

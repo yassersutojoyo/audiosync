@@ -17,7 +17,7 @@ enum Brand {
     /// #1C9F91 itself is only 3.27:1 on white and 3.92:1 on the dark window
     /// background (#323232), so each appearance gets its own shade:
     /// - light: #147167, 5.85:1 on white, 4.95:1 on the light window background (#ECECEC)
-    /// - dark: #20B6A6, 5.07:1 on #323232, 6.59:1 on #1E1E1E
+    /// - dark: #3CCBB9, 6.37:1 on #323232, 8.28:1 on #1E1E1E
     static let tealText = dynamic("AudioSyncTealText",
                                   light: BrandTokens.Light.tealText, dark: BrandTokens.Dark.tealText)
 
@@ -27,7 +27,7 @@ enum Brand {
                                    light: BrandTokens.Light.errorText, dark: BrandTokens.Dark.errorText)
 
     /// The input level meter's track; its `tealText` fill measures 4.31:1 on
-    /// it in light appearance and 4.29:1 in dark (3:1 is the graphics bar).
+    /// it in light appearance and 5.40:1 in dark (3:1 is the graphics bar).
     static let meterTrack = dynamic("AudioSyncMeterTrack",
                                     light: BrandTokens.Light.separator, dark: BrandTokens.Dark.separator)
 

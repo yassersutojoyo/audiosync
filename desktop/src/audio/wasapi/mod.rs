@@ -22,6 +22,8 @@ mod routing;
 mod volume;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::reader::Reader;
@@ -36,6 +38,7 @@ use super::controller::{Controller, Driver};
 use super::outputs::{Endpoint, EndpointReading, Listing};
 use super::process::ProcessTable;
 use super::routing::{EndpointAudio, EndpointVolume};
+use crate::debug_log::DebugLog;
 
 pub use media_sessions::read_media_sessions;
 
@@ -151,4 +154,43 @@ pub type WasapiBackend = Controller<WasapiDriver>;
 /// Opens the Windows audio backend, stopped.
 pub fn open() -> Result<WasapiBackend, BackendError> {
     Ok(Controller::with_driver(WasapiDriver::new()?))
+}
+
+/// Registers the calling thread as a Pro Audio task for as long as the
+/// returned value lives (engine spec S323): the AirPlay sender's driver
+/// thread, which at normal priority woke more than 5 ms late on about 0.1% of
+/// packets on a busy PC. A refusal is logged once per run.
+pub fn pro_audio_thread() -> Box<dyn std::any::Any> {
+    static NOTED: AtomicBool = AtomicBool::new(false);
+    let task = com::ProAudioTask::join();
+    if let Some(line) = refusal_note(task.is_some(), &NOTED) {
+        // The setup runs on the driver thread, which has no handle on the
+        // app's log, so it appends through one of its own.
+        let log = DebugLog::appending_from_env();
+        log.log(|| line.to_owned());
+        log.flush(Duration::from_secs(1));
+    }
+    Box::new(task)
+}
+
+/// The debug line for a refused Pro Audio registration, the first time only.
+fn refusal_note(joined: bool, noted: &AtomicBool) -> Option<&'static str> {
+    if joined || noted.swap(true, Ordering::Relaxed) {
+        return None;
+    }
+    Some("AirPlay driver thread: MMCSS refused the Pro Audio task; it runs at normal priority")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // covers: S323
+    #[test]
+    fn a_refused_pro_audio_registration_is_noted_once() {
+        let noted = AtomicBool::new(false);
+        assert_eq!(refusal_note(true, &noted), None);
+        assert!(refusal_note(false, &noted).is_some());
+        assert_eq!(refusal_note(false, &noted), None);
+    }
 }

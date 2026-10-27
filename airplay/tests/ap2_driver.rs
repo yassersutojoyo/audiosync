@@ -1,6 +1,8 @@
 //! The AirPlay 2 path through the sender's driver over loopback sockets,
-//! with the switch on: one AirPlay 2 session at a time (P169), the path
-//! switch after an AirPlay 1 refusal (P2), and TEARDOWN at shutdown.
+//! with the switch on and the AirPlay 2 limit lowered to one session, so a
+//! second speaker shows how a refused one waits for a place (P169, P204);
+//! the path switch after an AirPlay 1 refusal (P2), and TEARDOWN at
+//! shutdown.
 
 mod common;
 
@@ -64,7 +66,10 @@ fn airplay2_only(server: &Ap2Server, id: u8) -> Device {
 }
 
 fn start() -> (Sender, HostAudio) {
-    start_with(SenderConfig::default())
+    start_with(SenderConfig {
+        airplay2_sessions: 1,
+        ..SenderConfig::default()
+    })
 }
 
 fn start_with(config: SenderConfig) -> (Sender, HostAudio) {
@@ -144,12 +149,12 @@ fn one_airplay2_session_at_a_time() {
     assert_eq!(
         errors(&events, &b_key),
         vec![ErrorKind::Unsupported(
-            UnsupportedReason::OneAirPlay2Session
+            UnsupportedReason::TooManyAirPlay2Sessions
         )]
     );
     assert_eq!(
-        UnsupportedReason::OneAirPlay2Session.to_string(),
-        "one AirPlay 2 speaker at a time"
+        UnsupportedReason::TooManyAirPlay2Sessions.to_string(),
+        "too many AirPlay 2 speakers"
     );
     assert_eq!(second.fake().connections, 0);
 
@@ -268,6 +273,64 @@ fn airplay1_refusal_moves_to_airplay2() {
     sender.shutdown();
 }
 
+// covers: P2, P61
+#[test]
+fn an_airplay1_refusal_moves_an_every_time_receiver_to_airplay2_without_pairing() {
+    let _serial = serial();
+    let mut behavior = Behavior::default();
+    behavior.status.insert("ANNOUNCE".to_owned(), 403);
+    let airplay1 = NetReceiver::start(behavior);
+    let mut fake = FakeAp2::new();
+    fake.hap.code = "4821".to_owned();
+    fake.info_body = common::ap2::plist(common::ap2::dict(&[(
+        "statusFlags",
+        common::ap2::int(0x4c),
+    )]));
+    let server = Ap2Server::start(fake);
+    let (sender, _host) = start();
+    let mut events = Events::default();
+
+    // A television set to ask for a code every time, listed on both paths.
+    let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 55]);
+    let raop = airplay1.record(55, PCM_TXT);
+    let mut airplay = airplay_record(server.address.port(), 55);
+    for entry in &mut airplay.txt {
+        if entry.starts_with(b"flags=") {
+            *entry = b"flags=0x4c".to_vec();
+        }
+    }
+    let device = Device::from_records(DeviceKey::Id(device_id), Some(&raop), Some(&airplay))
+        .expect("device");
+    let key = device.key.clone();
+    sender.add_speaker(device, options());
+    let asked = events.wait_for(&sender, LONG, |event| {
+        matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(e) }
+            if *k == key && e.error.kind == ErrorKind::PairingRequired)
+    });
+    assert!(
+        asked.is_some(),
+        "{:?} {:?}",
+        events.of(&key),
+        server.fake().keys()
+    );
+    std::thread::sleep(Duration::from_secs(3));
+    events.drain(&sender);
+    // AirPlay 1 refuses, the AirPlay 2 attempt asks for pairing once, and
+    // nothing starts a PIN pairing or a retry by itself.
+    assert_eq!(
+        errors(&events, &key),
+        [ErrorKind::Refused, ErrorKind::PairingRequired]
+    );
+    assert!(retrying(&events, &key).is_empty(), "{:?}", events.of(&key));
+    let keys = server.fake().keys();
+    assert!(
+        !keys.contains(&"POST /pair-pin-start".to_owned()),
+        "{keys:?}"
+    );
+    assert!(!keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    sender.shutdown();
+}
+
 // covers: P169
 #[test]
 fn a_refused_airplay2_speaker_starts_once_the_session_ends() {
@@ -324,7 +387,7 @@ fn a_refused_airplay2_speaker_starts_once_the_session_ends() {
     assert_eq!(
         errors(&events, &b_key),
         vec![ErrorKind::Unsupported(
-            UnsupportedReason::OneAirPlay2Session
+            UnsupportedReason::TooManyAirPlay2Sessions
         )]
     );
     assert_eq!(second.fake().connections, 1);
@@ -371,7 +434,7 @@ fn an_airplay2_session_waiting_for_its_retry_keeps_its_place_until_removed() {
     assert_eq!(
         errors(&events, &b_key),
         vec![ErrorKind::Unsupported(
-            UnsupportedReason::OneAirPlay2Session
+            UnsupportedReason::TooManyAirPlay2Sessions
         )]
     );
 
@@ -1219,12 +1282,28 @@ fn stored_credentials_stay_and_verify_once_after_a_receiver_asks_every_time() {
         matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(_) } if *k == key)
     });
     assert!(refused.is_some(), "{:?}", events.of(&key));
+    std::thread::sleep(Duration::from_secs(2));
+    events.drain(&sender);
     assert_eq!(errors(&events, &key), [ErrorKind::PairingRequired]);
     assert!(credential_events(&events, &key).is_empty());
+    assert!(retrying(&events, &key).is_empty(), "{:?}", events.of(&key));
     let keys = server.fake().keys();
     assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
     assert!(!keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
+    assert!(
+        !keys.contains(&"POST /pair-pin-start".to_owned()),
+        "{keys:?}"
+    );
     sender.shutdown();
+}
+
+/// The Retrying states the speaker reported.
+fn retrying(events: &Events, key: &DeviceKey) -> Vec<SpeakerEvent> {
+    events
+        .of(key)
+        .into_iter()
+        .filter(|event| matches!(event, SpeakerEvent::State(SpeakerState::Retrying { .. })))
+        .collect()
 }
 
 /// Whether a speaker event reports on the session, not on its credentials.
@@ -1232,6 +1311,7 @@ fn session_status(event: &SpeakerEvent) -> bool {
     matches!(
         event,
         SpeakerEvent::State(_)
+            | SpeakerEvent::Path(_)
             | SpeakerEvent::Error(_)
             | SpeakerEvent::Warning(_)
             | SpeakerEvent::Latency(_)
@@ -1240,6 +1320,8 @@ fn session_status(event: &SpeakerEvent) -> bool {
             | SpeakerEvent::AudioJack(_)
             | SpeakerEvent::VolumeReported(_)
             | SpeakerEvent::PtpOpened
+            | SpeakerEvent::TimingRemembered(_)
+            | SpeakerEvent::TimingForgotten
             | SpeakerEvent::Trace(_)
     )
 }
@@ -1711,7 +1793,8 @@ fn a_target_with_a_paired_member_plays_over_airplay2_from_its_first_start() {
         partner_unreachable: false,
     };
 
-    let (sender, _host) = start();
+    // Each member takes an AirPlay 2 place (P169), so the default limit.
+    let (sender, _host) = start_with(SenderConfig::default());
     let mut events = Events::default();
     let paired_key = paired.key.clone();
     sender.add_target(target, options(), |key, own| {
@@ -2032,4 +2115,355 @@ fn a_pin_flag_and_a_failed_verify_turn_the_credentials_down_and_offer_the_pin() 
         sender.cancel_pairing(&key);
         sender.shutdown();
     }
+}
+
+/// A speaker paired with a PIN whose `/info` now sets bit 3, with nothing
+/// turned down yet. The fake keeps the pairing, so a verify answered as
+/// usual plays.
+struct PinFlagged {
+    server: Ap2Server,
+    sender: Sender,
+    _host: HostAudio,
+    events: Events,
+    device: Device,
+    key: DeviceKey,
+    options: SpeakerOptions,
+}
+
+fn paired_then_pin_flagged(id: u8) -> PinFlagged {
+    let mut fake = FakeAp2::new();
+    fake.hap.code = "4821".to_owned();
+    fake.info_body = status_flags_body(0x244);
+    let server = Ap2Server::start(fake);
+    let (sender, host) = start();
+    let mut events = Events::default();
+    let device = airplay2_only(&server, id);
+    let key = device.key.clone();
+    let credentials = pair_first_time(&server, &sender, &mut events, &device);
+    let mut options = options();
+    options.homekit_credentials = Some(credentials);
+    {
+        let mut fake = server.fake();
+        fake.info_body = status_flags_body(0x4c);
+        fake.requests.clear();
+    }
+    PinFlagged {
+        server,
+        sender,
+        _host: host,
+        events,
+        device,
+        key,
+        options,
+    }
+}
+
+fn count_states(events: &Events, key: &DeviceKey, state: &SpeakerState) -> usize {
+    events
+        .of(key)
+        .iter()
+        .filter(|event| matches!(event, SpeakerEvent::State(s) if s == state))
+        .count()
+}
+
+impl PinFlagged {
+    /// Starts `device` and returns how many errors the speaker had before.
+    fn start(&mut self, device: Device) -> usize {
+        self.events.drain(&self.sender);
+        let before = errors(&self.events, &self.key).len();
+        self.server.fake().requests.clear();
+        self.sender.add_speaker(device, self.options.clone());
+        before
+    }
+
+    /// Stops the speaker at its first error after `before`, returning the
+    /// new error kinds and the requests the fake read.
+    fn stop_at_error(&mut self, before: usize, case: &str) -> (Vec<ErrorKind>, Vec<String>) {
+        let stopped = count_states(&self.events, &self.key, &SpeakerState::Stopped);
+        let (events, sender, key) = (&mut self.events, &self.sender, &self.key);
+        let failed = wait_until(LONG, || {
+            events.drain(sender);
+            errors(events, key).len() > before
+        });
+        assert!(failed, "{case}: {:?}", self.events.of(&self.key));
+        let seen = errors(&self.events, &self.key)[before..].to_vec();
+        let keys = self.server.fake().keys();
+        self.sender.remove_speaker(&self.key);
+        assert!(
+            self.events
+                .wait_state(&self.sender, &self.key, stopped + 1, LONG, |s| *s
+                    == SpeakerState::Stopped)
+                .is_some(),
+            "{case}"
+        );
+        (seen, keys)
+    }
+
+    fn first_error(&mut self, device: Device, case: &str) -> (Vec<ErrorKind>, Vec<String>) {
+        let before = self.start(device);
+        self.stop_at_error(before, case)
+    }
+
+    /// The next start, with the receiver answering as usual, verifies with
+    /// the stored credentials and plays: nothing marked them turned down.
+    fn verifies_and_plays(&mut self, case: &str) {
+        {
+            let mut fake = self.server.fake();
+            fake.hap.answers.clear();
+            fake.hap.back_off = None;
+            fake.silent.clear();
+        }
+        let playing = count_states(&self.events, &self.key, &SpeakerState::Playing);
+        self.start(self.device.clone());
+        assert!(
+            self.events
+                .wait_state(&self.sender, &self.key, playing + 1, LONG, |s| *s
+                    == SpeakerState::Playing)
+                .is_some(),
+            "{case}: {:?} {:?}",
+            self.events.of(&self.key),
+            self.server.fake().keys()
+        );
+        let keys = self.server.fake().keys();
+        assert!(
+            keys.contains(&"POST /pair-verify".to_owned()),
+            "{case}: {keys:?}"
+        );
+        assert_no_pin(&keys, case);
+        assert!(
+            credential_events(&self.events, &self.key).is_empty(),
+            "{case}"
+        );
+    }
+}
+
+fn assert_no_pin(keys: &[String], case: &str) {
+    assert!(
+        !keys.contains(&"POST /pair-pin-start".to_owned()),
+        "{case}: {keys:?}"
+    );
+    assert!(
+        !keys.contains(&"POST /pair-setup".to_owned()),
+        "{case}: {keys:?}"
+    );
+}
+
+fn with_txt_flags(device: &Device, server: &Ap2Server, id: u8, flags: &str) -> Device {
+    let mut record = airplay_record(server.address.port(), id);
+    for entry in &mut record.txt {
+        if entry.starts_with(b"flags=") {
+            *entry = format!("flags={flags}").into_bytes();
+        }
+    }
+    Device::from_records(device.key.clone(), None, Some(&record)).expect("device")
+}
+
+// Bit 3 in the TXT `flags`, with no `statusFlags` in `/info`, is the same
+// unauthenticated hint: one verify first, and a PIN only after it fails.
+// covers: P61, P153, P154
+#[test]
+fn a_pin_flag_from_txt_alone_verifies_first_and_only_a_failed_verify_offers_the_pin() {
+    let _serial = serial();
+    for (id, holds_pairing) in [(78u8, true), (79, false)] {
+        let case = format!("holds pairing {holds_pairing}");
+        let mut speaker = paired_then_pin_flagged(id);
+        {
+            let mut fake = speaker.server.fake();
+            fake.info_body = common::ap2::plist(common::ap2::dict(&[]));
+            fake.hap.pairing_per_connection = !holds_pairing;
+        }
+        let flagged = with_txt_flags(&speaker.device, &speaker.server, id, "0x4c");
+        speaker.device = flagged.clone();
+        if holds_pairing {
+            for _ in 1..=2 {
+                speaker.verifies_and_plays(&case);
+                speaker.sender.remove_speaker(&speaker.key);
+                let stopped = count_states(&speaker.events, &speaker.key, &SpeakerState::Stopped);
+                assert!(
+                    speaker
+                        .events
+                        .wait_state(&speaker.sender, &speaker.key, stopped + 1, LONG, |s| *s
+                            == SpeakerState::Stopped)
+                        .is_some()
+                );
+            }
+            assert_eq!(errors(&speaker.events, &speaker.key), [], "{case}");
+        } else {
+            let (seen, keys) = speaker.first_error(flagged.clone(), &case);
+            assert_eq!(seen, [ErrorKind::PairingRequired], "{case}");
+            assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+            assert_no_pin(&keys, &case);
+            let (seen, keys) = speaker.first_error(flagged, &case);
+            assert_eq!(seen, [ErrorKind::PairingRequired], "{case}");
+            assert!(
+                !keys.contains(&"POST /pair-verify".to_owned()),
+                "{case}: turned down, straight to the PIN: {keys:?}"
+            );
+            assert!(
+                credential_events(&speaker.events, &speaker.key).is_empty(),
+                "{case}"
+            );
+            speaker.sender.start_pairing(speaker.device.clone());
+            let pin_requested = |event: &PairingEvent| *event == PairingEvent::PinRequested;
+            assert!(
+                wait_pairing(
+                    &mut speaker.events,
+                    &speaker.sender,
+                    &speaker.key,
+                    2,
+                    pin_requested
+                )
+                .is_some(),
+                "{case}: {:?}",
+                pairing_events(&speaker.events, &speaker.key)
+            );
+            speaker.sender.cancel_pairing(&speaker.key);
+        }
+        speaker.sender.shutdown();
+    }
+}
+
+// A 5xx to the verify under bit 3 is a passing fault on the receiver's side:
+// Refused, the credentials stay unmarked, and no PIN is asked for.
+// covers: P58, P154
+#[test]
+fn a_pin_flag_and_a_verify_answered_5xx_is_refused_and_keeps_the_credentials() {
+    let _serial = serial();
+    for (id, status) in [(80u8, 500u16), (81, 503)] {
+        let case = format!("status {status}");
+        let mut speaker = paired_then_pin_flagged(id);
+        speaker
+            .server
+            .fake()
+            .hap
+            .answers
+            .push((("/pair-verify", 1), Answer::Status(status)));
+        let (seen, keys) = speaker.first_error(speaker.device.clone(), &case);
+        assert_eq!(seen.first(), Some(&ErrorKind::Refused), "{case}: {seen:?}");
+        assert!(
+            !seen.contains(&ErrorKind::PairingRequired),
+            "{case}: {seen:?}"
+        );
+        assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+        assert_no_pin(&keys, &case);
+        speaker.verifies_and_plays(&case);
+        speaker.sender.shutdown();
+    }
+}
+
+// Errors 1 and 3 to 7 describe the receiver's state, not the credentials.
+// covers: P150, P154
+#[test]
+fn a_pin_flag_and_a_verify_error_other_than_2_fails_and_keeps_the_credentials() {
+    let _serial = serial();
+    for (id, code, kind) in [
+        (82u8, 3u8, ErrorKind::PairingFailed),
+        (83, 4, ErrorKind::PairingFailed),
+        (84, 5, ErrorKind::PairingFailed),
+        (85, 6, ErrorKind::PairingFailed),
+        (88, 1, ErrorKind::PairingFailed),
+        (89, 7, ErrorKind::Busy),
+    ] {
+        let case = format!("error {code}");
+        let mut speaker = paired_then_pin_flagged(id);
+        speaker
+            .server
+            .fake()
+            .hap
+            .answers
+            .push((("/pair-verify", 1), Answer::Error(code)));
+        let (seen, keys) = speaker.first_error(speaker.device.clone(), &case);
+        assert_eq!(seen.first(), Some(&kind), "{case}: {seen:?}");
+        assert!(
+            !seen.contains(&ErrorKind::PairingRequired),
+            "{case}: {seen:?}"
+        );
+        assert_no_pin(&keys, &case);
+        speaker.verifies_and_plays(&case);
+        speaker.sender.shutdown();
+    }
+}
+
+// A connection lost during the verify says nothing about the credentials.
+// covers: P141, P154
+#[test]
+fn a_pin_flag_and_a_connection_lost_during_the_verify_asks_for_no_pin() {
+    let _serial = serial();
+    let case = "lost";
+    let mut speaker = paired_then_pin_flagged(86);
+    speaker
+        .server
+        .fake()
+        .silent
+        .push("POST /pair-verify".to_owned());
+    let before = speaker.start(speaker.device.clone());
+    let asked = wait_until(LONG, || {
+        speaker
+            .server
+            .fake()
+            .keys()
+            .contains(&"POST /pair-verify".to_owned())
+    });
+    assert!(asked, "{:?}", speaker.server.fake().keys());
+    speaker.server.cut();
+    let (seen, keys) = speaker.stop_at_error(before, case);
+    assert!(
+        matches!(seen.first(), Some(ErrorKind::Lost | ErrorKind::Unreachable)),
+        "{seen:?}"
+    );
+    assert!(!seen.contains(&ErrorKind::PairingRequired), "{seen:?}");
+    assert_no_pin(&keys, case);
+    speaker.verifies_and_plays(case);
+    speaker.sender.shutdown();
+}
+
+// Credentials a verify already turned down without bit 3: bit 3 then leads
+// straight to the PIN, with no verify first.
+// covers: P61, P154
+#[test]
+fn a_pin_flag_after_a_turn_down_goes_straight_to_the_pin() {
+    let _serial = serial();
+    let case = "turned down";
+    let mut speaker = paired_then_pin_flagged(87);
+    {
+        let mut fake = speaker.server.fake();
+        fake.info_body = status_flags_body(0x244);
+        fake.hap
+            .answers
+            .push((("/pair-verify", 1), Answer::Error(2)));
+    }
+    let (seen, keys) = speaker.first_error(speaker.device.clone(), case);
+    assert_eq!(seen, [ErrorKind::PairingRequired]);
+    assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+
+    {
+        let mut fake = speaker.server.fake();
+        fake.info_body = status_flags_body(0x4c);
+        fake.hap.answers.clear();
+    }
+    let (seen, keys) = speaker.first_error(speaker.device.clone(), case);
+    assert_eq!(seen, [ErrorKind::PairingRequired]);
+    assert!(
+        !keys.contains(&"POST /pair-verify".to_owned()),
+        "no verify: {keys:?}"
+    );
+    assert_no_pin(&keys, case);
+    assert!(credential_events(&speaker.events, &speaker.key).is_empty());
+
+    speaker.sender.start_pairing(speaker.device.clone());
+    let pin_requested = |event: &PairingEvent| *event == PairingEvent::PinRequested;
+    assert!(
+        wait_pairing(
+            &mut speaker.events,
+            &speaker.sender,
+            &speaker.key,
+            2,
+            pin_requested
+        )
+        .is_some(),
+        "{:?}",
+        pairing_events(&speaker.events, &speaker.key)
+    );
+    speaker.sender.cancel_pairing(&speaker.key);
+    speaker.sender.shutdown();
 }

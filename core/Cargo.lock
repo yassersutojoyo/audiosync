@@ -111,6 +111,7 @@ dependencies = [
  "criterion",
  "libc",
  "proptest",
+ "serde_json",
  "zeroize",
 ]
 

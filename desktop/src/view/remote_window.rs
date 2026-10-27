@@ -874,6 +874,7 @@ mod tests {
             .expect("a code in force")
     }
 
+    // covers: S288
     #[test]
     fn the_debug_switch_starts_the_remote_for_this_run_and_saves_nothing() {
         use crate::debug_log::{self, DebugLog};

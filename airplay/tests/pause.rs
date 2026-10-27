@@ -17,7 +17,7 @@ use audiosync_airplay::sender::{
 };
 use audiosync_airplay::stream::{PacketKind, SpeakerCounters, SpeakerId, StreamEvent};
 use audiosync_airplay::volume::Volume;
-use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
+use common::net::{AudioPacket, Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
 use common::rig::{Rig, decode, host_frame, speaker};
 
 const PACKET: u64 = FRAMES_PER_PACKET as u64;
@@ -296,15 +296,24 @@ fn play(receiver: &NetReceiver, id: u8) -> (Sender, HostAudio, Events, DeviceKey
 
 /// The `seq` the `nth` (from 0) FLUSH request names.
 fn flush_seq(receiver: &NetReceiver, nth: usize) -> u16 {
+    rtp_info_seq(receiver, Method::Flush, nth)
+}
+
+/// The `seq` in the RTP-Info of the `nth` (from 0) `method` request.
+fn rtp_info_seq(receiver: &NetReceiver, method: Method, nth: usize) -> u16 {
     let log = receiver.log();
-    let flush = log
+    let request = log
         .requests
         .iter()
-        .filter(|(_, request)| request.method == Method::Flush)
+        .filter(|(_, request)| request.method == method)
         .nth(nth)
         .map(|(_, request)| request.clone())
-        .expect("FLUSH");
-    let info = flush.headers.get("RTP-Info").expect("RTP-Info").to_owned();
+        .expect("request");
+    let info = request
+        .headers
+        .get("RTP-Info")
+        .expect("RTP-Info")
+        .to_owned();
     info.split(';')
         .find_map(|part| part.strip_prefix("seq="))
         .and_then(|value| value.parse().ok())
@@ -339,9 +348,35 @@ fn a_resume_waits_for_the_pause_flush_behind_a_delay_flush() {
     let paused = Instant::now();
     sender.resume();
     assert!(wait_until(LONG, || receiver.log().count("FLUSH") == 2));
-    let quiet = paused + Duration::from_millis(50);
-    assert!(wait_until(LONG, || first_audio_after(&receiver, quiet).is_some()));
-    let (at, seq, marker) = first_audio_after(&receiver, quiet).expect("audio");
+    // The pause FLUSH names the first packet held back. Packets before it
+    // left before the sender took the pause, however late a busy runner
+    // stamps them, so they must beat that FLUSH to the receiver.
+    let held = flush_seq(&receiver, 1);
+    let first_held = || {
+        receiver
+            .log()
+            .audio
+            .iter()
+            .find(|packet| !before(packet.header.seq, held))
+            .map(|packet| (packet.at, packet.header.seq, packet.header.marker))
+    };
+    assert!(wait_until(LONG, || first_held().is_some()));
+    let (at, seq, marker) = first_held().expect("audio");
+    let log = receiver.log();
+    let flushed = log
+        .requests
+        .iter()
+        .filter(|(_, request)| request.method == Method::Flush)
+        .nth(1)
+        .map(|(at, _)| *at)
+        .expect("FLUSH");
+    assert!(
+        log.audio
+            .iter()
+            .filter(|packet| before(packet.header.seq, held))
+            .all(|packet| packet.at < flushed)
+    );
+    assert!(late_before(&log.audio, paused, held) <= LATE_PACKETS);
     // The delay FLUSH is answered about ANSWER after the pause, the pause
     // FLUSH about ANSWER after that.
     assert!(
@@ -349,9 +384,26 @@ fn a_resume_waits_for_the_pause_flush_behind_a_delay_flush() {
         "audio {:?} after the pause",
         at - paused
     );
-    assert_eq!(seq, flush_seq(&receiver, 1));
+    assert_eq!(seq, held);
     assert!(marker);
     sender.shutdown();
+}
+
+/// Whether RTP `seq` comes before `next` in sequence order.
+fn before(seq: u16, next: u16) -> bool {
+    (next.wrapping_sub(seq) as i16) > 0
+}
+
+/// The most packets a pause may let out after the call: 100 ms of 352-frame
+/// packets, a count so a late arrival stamp can't inflate it (P213).
+const LATE_PACKETS: usize = 13;
+
+/// How many packets before `held` arrived after `at`.
+fn late_before(audio: &[AudioPacket], at: Instant, held: u16) -> usize {
+    audio
+        .iter()
+        .filter(|packet| packet.at > at && before(packet.header.seq, held))
+        .count()
 }
 
 // Part of P213: a refused pause FLUSH still ends the wait, with a warning.
@@ -412,8 +464,29 @@ fn a_speaker_added_or_reconnected_while_paused_waits_for_the_resume() {
         );
     }
     std::thread::sleep(Duration::from_millis(500));
-    let quiet = paused + Duration::from_millis(50);
-    assert!(first_audio_after(&first, quiet).is_none());
+    let held = flush_seq(&first, 0);
+    let reconnected = rtp_info_seq(&first, Method::Record, 1);
+    {
+        let log = first.log();
+        let source = log.audio.first().expect("audio").from;
+        // The pause FLUSH names the first packet held back, so the first
+        // session sent only the run before it, however late a busy runner
+        // stamps it; the reconnected one sent nothing.
+        let sent: Vec<u16> = log
+            .audio
+            .iter()
+            .filter(|packet| packet.from == source)
+            .map(|packet| packet.header.seq)
+            .collect();
+        assert!(
+            sent.windows(2)
+                .all(|pair| pair[1] == pair[0].wrapping_add(1)),
+            "{sent:?}"
+        );
+        assert_eq!(sent.last().map(|seq| seq.wrapping_add(1)), Some(held));
+        assert_eq!(sent.len(), log.audio.len());
+        assert!(late_before(&log.audio, paused, held) <= LATE_PACKETS);
+    }
     assert!(second.log().audio.is_empty());
 
     let resumed = Instant::now();
@@ -423,6 +496,8 @@ fn a_speaker_added_or_reconnected_while_paused_waits_for_the_resume() {
         let (_, _, marker) = first_audio_after(receiver, resumed).expect("audio");
         assert!(marker, "the first packet of a session");
     }
+    let (_, seq, _) = first_audio_after(&first, resumed).expect("audio");
+    assert_eq!(seq, reconnected, "the reconnected session's first packet");
     sender.shutdown();
 }
 

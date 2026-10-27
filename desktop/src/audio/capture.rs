@@ -1170,6 +1170,7 @@ mod tests {
         assert_eq!(newest(&ring, 2), [0.3, 0.4, 0.7, 0.8]);
     }
 
+    // covers: S10
     #[test]
     fn the_whole_system_excludes_audiosyncs_own_tree() {
         let activation = decide_activation(&SourceId::WholeSystem, OWN_PID, &desktop());

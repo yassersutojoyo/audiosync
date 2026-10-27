@@ -13,7 +13,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::time::Instant;
 
 use crate::error::{ErrorKind, SessionError};
-use crate::homekit::{self, HomeKitCredentials};
+use crate::homekit::{self, HomeKitCredentials, SrpDone, SrpWork};
 use crate::ids::{Entropy, SessionIds};
 use crate::pairing::{self, Output, PairingEvent, PairingState, PinError};
 use crate::session::Connection;
@@ -109,6 +109,15 @@ impl PinPairing {
 
     pub fn handle_connect_failed(&mut self, now: Instant) {
         self.session.handle_connect_failed(now);
+        self.pump();
+    }
+
+    pub fn take_work(&mut self) -> Option<SrpWork> {
+        self.session.take_work()
+    }
+
+    pub fn handle_computed(&mut self, done: SrpDone, now: Instant) {
+        self.session.handle_computed(done, now);
         self.pump();
     }
 
@@ -234,6 +243,9 @@ impl PinPairing {
             }
             Ap2Event::Server(_)
             | Ap2Event::TimingChosen(_)
+            | Ap2Event::Recorded
+            | Ap2Event::PeersRefused { .. }
+            | Ap2Event::TimingRefused
             | Ap2Event::Ready(_)
             | Ap2Event::Flushed
             | Ap2Event::Warning(_)

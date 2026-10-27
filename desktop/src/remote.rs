@@ -287,7 +287,11 @@ fn zones(state: &AppState, listed_now: &[&Speaker]) -> Vec<RemoteZone> {
                     on: count(&|speaker| speaker.enabled),
                     total: count(&|_| true),
                     waiting: count(&|speaker| {
-                        speaker.enabled && speaker.waiting == Some(Waiting::ForAirPlay2Slot)
+                        speaker.enabled
+                            && matches!(
+                                speaker.waiting,
+                                Some(Waiting::ForAirPlay2Slot | Waiting::ForPtp)
+                            )
                     }),
                 },
             }
@@ -579,6 +583,7 @@ mod tests {
     use audiosync_core::policy::zones::Zone;
     use audiosync_remote::{SpeakerChange, ZoneChange};
 
+    // covers: S288
     #[test]
     fn the_debug_switch_starts_the_remote_only_with_the_debug_log() {
         use std::ffi::OsStr;
@@ -766,6 +771,7 @@ mod tests {
         desk.enabled = true;
         AppState {
             running: true,
+            no_speaker_on: false,
             sources: Vec::new(),
             source_id: String::new(),
             input_pair: 0,
@@ -796,6 +802,7 @@ mod tests {
             when_source_quits: Default::default(),
             cast_list: crate::ui_model::CastList::Quiet,
             cast_by_address: false,
+            cast_on: false,
             calibration: Default::default(),
             calibrate_all: Default::default(),
         }

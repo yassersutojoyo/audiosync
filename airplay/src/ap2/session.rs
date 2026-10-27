@@ -16,7 +16,7 @@ use crate::discovery::Features;
 use crate::error::{ErrorKind, SessionError, UnsupportedReason, Warning};
 use crate::homekit::{
     self, HomeKitCredentials, Identity, Mode, PairSetup, PairVerify, SetupStep, SharedSecret,
-    Stored, VerifyStep,
+    SrpDone, SrpWork, Stored, VerifyStep,
 };
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
 use crate::latency::ReportedLatency;
@@ -54,6 +54,8 @@ pub const EVENTS_RETRIES: u32 = 5;
 pub const EVENTS_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 /// Features bit 41: the receiver supports PTP timing (P16, P157).
 pub const FEATURE_PTP: u32 = 41;
+/// Changes to the SETPEERS list within this time make one update (P209).
+pub const PEERS_MERGE: Duration = Duration::from_secs(1);
 const STATUS_CONFLICT: u16 = 409;
 const STATUS_BANDWIDTH: u16 = 453;
 
@@ -80,14 +82,14 @@ pub struct Ap2Config {
     /// The random device ID of `deviceID` and `macAddress` (P5, P43).
     pub device_id: [u8; 6],
     /// The timing the first session SETUP asks for: NTP, or PTP when it was
-    /// remembered for the device (P157).
+    /// remembered for the device (P157, P217).
     pub timing: Timing,
     /// The PTP service's clock, when it runs (P158). Without it a session
     /// never asks for PTP.
     pub ptp: Option<PtpPeer>,
-    /// The other members of the receiver's target, named in SETPEERS after
-    /// the receiver (P179).
-    pub members: Vec<IpAddr>,
+    /// The other receivers on the sender's PTP timeline, named in SETPEERS
+    /// after the receiver (P207); [`Ap2Session::set_peers`] changes them.
+    pub peers: Vec<IpAddr>,
     /// The host asked for a PIN pairing (P61): the connection runs
     /// `/pair-pin-start`, waits for [`Ap2Session::submit_pin`], then pair-setup
     /// M1 to M6 and a pair-verify (P153), and waits in [`Ap2State::Paired`]
@@ -100,6 +102,9 @@ pub struct Ap2Config {
     /// after the initial volume is answered (P184); later reads wait for
     /// [`Ap2Session::read_volume`].
     pub read_volume: bool,
+    /// The SRP step of a pair-setup is handed out through
+    /// [`Ap2Session::take_work`] instead of run in place (P223).
+    pub offload_srp: bool,
 }
 
 impl Ap2Config {
@@ -115,10 +120,11 @@ impl Ap2Config {
             device_id: [0; 6],
             timing: Timing::Ntp,
             ptp: None,
-            members: Vec::new(),
+            peers: Vec::new(),
             pin_pairing: false,
             trace: false,
             read_volume: false,
+            offload_srp: false,
         }
     }
 }
@@ -193,8 +199,24 @@ pub enum Ap2Event {
     /// connection (P153), which waits for [`Ap2Session::proceed`].
     Verified,
     /// A session SETUP with this timing was answered 200; the host
-    /// remembers PTP for the device (P157).
+    /// remembers it for the device (P157, P217).
     TimingChosen(Timing),
+    /// RECORD was answered 200: under PTP the receiver now belongs on the
+    /// other sessions' SETPEERS lists (P207, P208).
+    Recorded,
+    /// A SETPEERS update was refused with `status`, or left unanswered for
+    /// 10 s (`status` none); the session plays on with the list it had
+    /// (P210). `added` when the refused list named a receiver the old one
+    /// lacked, `first_accepted` when the first SETPEERS was answered 2xx.
+    PeersRefused {
+        status: Option<u16>,
+        added: bool,
+        first_accepted: bool,
+    },
+    /// The session SETUP with the remembered PTP got an answer other than
+    /// 200: the entry is dropped and a new connection asks for NTP first
+    /// (P217).
+    TimingRefused,
     /// The stream is set up and flushed (P42).
     Ready(StreamPorts),
     /// A FLUSH after the stream was ready got its answer, success or not
@@ -235,7 +257,11 @@ enum Kind {
     PairVerify,
     SessionSetup,
     Record,
-    SetPeers,
+    /// The list it named; `update` for one of P209's (P207, P209).
+    SetPeers {
+        list: Vec<IpAddr>,
+        update: bool,
+    },
     Volume(Volume),
     /// Carries the volume generation it was sent in, so an answer older
     /// than the latest host value is dropped (P184).
@@ -255,7 +281,7 @@ impl Kind {
             Kind::PairSetup | Kind::PairVerify | Kind::Feedback => Method::Post,
             Kind::SessionSetup | Kind::StreamSetup => Method::Setup,
             Kind::Record => Method::Record,
-            Kind::SetPeers => Method::SetPeers,
+            Kind::SetPeers { .. } => Method::SetPeers,
             Kind::Volume(_) | Kind::Metadata(_) => Method::SetParameter,
             Kind::VolumeRead(_) => Method::GetParameter,
             Kind::Flush => Method::Flush,
@@ -331,6 +357,8 @@ pub struct Ap2Session {
     state: Ap2State,
     timing: Timing,
     ptp_retried: bool,
+    /// The SETUP asks for PTP because it was remembered (P217).
+    remembered: bool,
     /// A pair-verify on this session succeeded (P66).
     pair_verified: bool,
     attempt: usize,
@@ -349,6 +377,10 @@ pub struct Ap2Session {
     group_uuid: String,
     stream_key: zeroize::Zeroizing<[u8; STREAM_KEY_BYTES]>,
     outputs: VecDeque<Output>,
+    work: Option<SrpWork>,
+    /// When the SRP step handed out counts as lost, as an unanswered
+    /// request would.
+    work_due: Option<Instant>,
     /// The session SETUP was answered 200.
     set_up: bool,
     /// The session SETUP answer's `Session` ID, without its timeout (P25).
@@ -410,6 +442,14 @@ pub struct Ap2Session {
     /// What the receiver reported of its latency in this session (P196
     /// to P198).
     reported_latency: ReportedLatency,
+    /// The first SETPEERS was answered, 2xx when true (P209, P210).
+    peers_answered: Option<bool>,
+    /// The list of the last SETPEERS answered 2xx: what the receiver has.
+    peers_accepted: Vec<IpAddr>,
+    /// When the pending update of P209 goes out.
+    peers_update_at: Option<Instant>,
+    /// One warning per session for refused updates (P210).
+    peers_warned: bool,
     /// The last volume trace line, so a steady level logs once.
     last_volume_trace: Option<String>,
 }
@@ -455,6 +495,7 @@ impl Ap2Session {
             state: Ap2State::Connecting,
             timing,
             ptp_retried: timing == Timing::Ptp,
+            remembered: timing == Timing::Ptp,
             pair_verified: false,
             attempt: 0,
             attempt_started: now,
@@ -472,6 +513,8 @@ impl Ap2Session {
             group_uuid,
             stream_key,
             outputs: VecDeque::new(),
+            work: None,
+            work_due: None,
             set_up: false,
             session_header: None,
             recorded: false,
@@ -511,6 +554,10 @@ impl Ap2Session {
             volume_reads_stopped_warned: false,
             reported_latency: ReportedLatency::default(),
             last_volume_trace: None,
+            peers_answered: None,
+            peers_accepted: Vec::new(),
+            peers_update_at: None,
+            peers_warned: false,
         };
         session.flush_point = (session.ids.first_seq, session.ids.first_rtptime);
         if drawn.is_err() {
@@ -552,6 +599,12 @@ impl Ap2Session {
     /// The timing of the current or last session SETUP.
     pub fn timing(&self) -> Timing {
         self.timing
+    }
+
+    /// The session has the PTP service's clock, so it may ask for PTP
+    /// (P158).
+    pub fn has_ptp(&self) -> bool {
+        self.config.ptp.is_some()
     }
 
     /// The receiver's `timingPeerInfo` from a PTP session SETUP (P164).
@@ -659,6 +712,7 @@ impl Ap2Session {
         if let Some(in_flight) = &self.in_flight {
             times.push(in_flight.sent_at + RESPONSE_TIMEOUT);
         }
+        times.extend(self.srp_due());
         times.extend(self.teardown_deadline);
         times.extend(self.last_timing_request.map(|at| at + TIMING_SILENCE));
         times.extend(self.events_retry_at);
@@ -667,11 +721,58 @@ impl Ap2Session {
         }
         if self.state != Ap2State::TearingDown {
             times.extend(self.feedback_due);
+            times.extend(self.peers_update_at);
         }
         if self.state == Ap2State::Ready {
             times.extend(self.read_due);
         }
         times.into_iter().min()
+    }
+
+    /// RECORD was answered 200 (P207).
+    pub fn recorded(&self) -> bool {
+        self.recorded
+    }
+
+    /// The other receivers on the timeline changed (P207). Before the first
+    /// SETPEERS is answered the new list only waits for it; after, an
+    /// update goes out within 1 s, so changes within 1 s of each other make
+    /// one request (P209).
+    pub fn set_peers(&mut self, peers: Vec<IpAddr>, now: Instant) {
+        if peers == self.config.peers {
+            return;
+        }
+        self.config.peers = peers;
+        if self.timing == Timing::Ptp
+            && self.peers_answered.is_some()
+            && matches!(self.state, Ap2State::Starting | Ap2State::Ready)
+            && self.peers_update_at.is_none()
+        {
+            self.peers_update_at = Some(now + PEERS_MERGE);
+        }
+    }
+
+    /// An update was refused or went unanswered (P210).
+    fn peers_refused(&mut self, list: &[IpAddr], status: Option<u16>) {
+        if !self.peers_warned {
+            self.peers_warned = true;
+            self.event(Ap2Event::Warning(Warning::PeersUpdateRefused { status }));
+        }
+        let mut had = self.peers_accepted.clone();
+        let added = list
+            .iter()
+            .any(|ip| match had.iter().position(|old| old == ip) {
+                Some(at) => {
+                    had.swap_remove(at);
+                    false
+                }
+                None => true,
+            });
+        self.event(Ap2Event::PeersRefused {
+            status,
+            added,
+            first_accepted: self.peers_answered == Some(true),
+        });
     }
 
     /// The PIN the user read off the receiver, while a PIN pairing waits for
@@ -887,6 +988,10 @@ impl Ap2Session {
         if self.teardown_deadline.is_some_and(|at| now >= at) {
             return self.finish();
         }
+        if self.srp_due().is_some_and(|at| now >= at) {
+            self.work_due = None;
+            return self.fail(ErrorKind::Timeout, Some(Method::Post), None, None);
+        }
         if self.pin_held && self.pin_not_before.is_none_or(|at| now >= at) {
             self.pin_held = false;
             self.pin_not_before = None;
@@ -953,6 +1058,13 @@ impl Ap2Session {
                 self.in_flight = None;
                 self.late_answers.push(cseq);
                 self.artwork_answered(false, None);
+            } else if let Kind::SetPeers { list, update: true } = &in_flight.kind {
+                // P210: an unanswered update never ends the session.
+                let list = list.clone();
+                let cseq = in_flight.cseq;
+                self.in_flight = None;
+                self.late_answers.push(cseq);
+                self.peers_refused(&list, None);
             } else {
                 let method = in_flight.kind.method();
                 return self.fail(ErrorKind::Timeout, Some(method), None, None);
@@ -1319,6 +1431,11 @@ impl Ap2Session {
                     self.flush_pending = false;
                     return self.send(Kind::Flush, now, false);
                 }
+                if self.peers_update_at.is_some_and(|at| at <= now) {
+                    self.peers_update_at = None;
+                    let list = self.config.peers.clone();
+                    return self.send(Kind::SetPeers { list, update: true }, now, false);
+                }
                 if self.state != Ap2State::Ready {
                     return;
                 }
@@ -1399,11 +1516,11 @@ impl Ap2Session {
                 };
                 request.body = bodies::session_setup(&body);
             }
-            Kind::SetPeers => {
+            Kind::SetPeers { list, .. } => {
                 request.headers.push("Content-Type", PEERS_CONTENT_TYPE);
                 let receiver = self.remote.map_or(IpAddr::from([0, 0, 0, 0]), |r| r.ip());
                 let local: Vec<IpAddr> = self.connection.iter().map(|c| c.local).collect();
-                request.body = bodies::peers_with_members(receiver, &self.config.members, &local);
+                request.body = bodies::peers_with_members(receiver, list, &local);
             }
             Kind::Volume(volume) => {
                 request.headers.push("Content-Type", "text/parameters");
@@ -1614,18 +1731,44 @@ impl Ap2Session {
                     .headers
                     .get("Audio-Latency")
                     .and_then(crate::rtsp::audio_latency);
-                // SETPEERS only under PTP (P165).
+                self.event(Ap2Event::Recorded);
+                // SETPEERS only under PTP (P165, P207).
                 if self.timing == Timing::Ptp {
-                    self.send(Kind::SetPeers, now, false);
+                    let list = self.config.peers.clone();
+                    self.send(
+                        Kind::SetPeers {
+                            list,
+                            update: false,
+                        },
+                        now,
+                        false,
+                    );
                 } else {
                     self.stream_setup_waiting = true;
                 }
             }
-            Kind::SetPeers => {
-                if !success {
+            Kind::SetPeers {
+                list,
+                update: false,
+            } => {
+                if success {
+                    self.peers_accepted = list.clone();
+                } else {
                     self.warn(method, code);
                 }
+                self.peers_answered = Some(success);
+                // The list changed while the first one was on its way.
+                if list != self.config.peers && self.peers_update_at.is_none() {
+                    self.peers_update_at = Some(now);
+                }
                 self.stream_setup_waiting = true;
+            }
+            Kind::SetPeers { list, update: true } => {
+                if success {
+                    self.peers_accepted = list;
+                } else {
+                    self.peers_refused(&list, Some(code));
+                }
             }
             Kind::Volume(volume) => {
                 if success {
@@ -1871,11 +2014,9 @@ impl Ap2Session {
             (Some(_), false) => Stored::Kept,
             (Some(_), true) => Stored::TurnedDown,
         };
-        // A PIN pairing runs only when the host asks for one, and then
-        // whatever the flags say: a receiver that turned a transient pairing
-        // down with 470 sets no PIN flag (P61).
+        // A PIN pairing runs only when the host asks for one.
         let mode = if self.config.pin_pairing {
-            Mode::Pin
+            homekit::requested_mode(flags)
         } else {
             homekit::choose_mode(flags, stored)
         };
@@ -1912,6 +2053,7 @@ impl Ap2Session {
         };
         let kind = match &mut pairing {
             Pairing::Setup(setup) => {
+                setup.set_offload(self.config.offload_srp);
                 setup.start();
                 Kind::PairSetup
             }
@@ -1930,6 +2072,38 @@ impl Ap2Session {
         };
         let mut entropy = Draw(self.entropy.as_mut());
         let step = setup.handle_response(response, &mut entropy);
+        self.on_setup_step(step, response.code, now);
+    }
+
+    /// The pair-setup arithmetic waiting to run, once
+    /// [`Ap2Config::offload_srp`] is set; its result goes to
+    /// [`Ap2Session::handle_computed`].
+    pub fn take_work(&mut self) -> Option<SrpWork> {
+        self.work.take()
+    }
+
+    pub fn handle_computed(&mut self, done: SrpDone, now: Instant) {
+        let Some(Pairing::Setup(setup)) = self.pairing.as_mut() else {
+            return;
+        };
+        if let Some(step) = setup.computed(done) {
+            self.work_due = None;
+            self.on_setup_step(step, 200, now);
+        }
+    }
+
+    /// The deadline of the SRP step handed out, while one is out.
+    fn srp_due(&self) -> Option<Instant> {
+        match &self.pairing {
+            Some(Pairing::Setup(setup)) if setup.computing() => self.work_due,
+            _ => None,
+        }
+    }
+
+    fn on_setup_step(&mut self, step: SetupStep, code: u16, now: Instant) {
+        let Some(Pairing::Setup(setup)) = self.pairing.as_mut() else {
+            return;
+        };
         let refusal = setup.take_refusal();
         match step {
             SetupStep::Send(_) => {
@@ -1974,10 +2148,14 @@ impl Ap2Session {
                     refusal.unwrap_or_default()
                 )));
             }
+            SetupStep::Compute(work) => {
+                self.work = Some(work);
+                self.work_due = Some(now + RESPONSE_TIMEOUT);
+            }
             SetupStep::Challenge => self.fail(
                 ErrorKind::ProtocolError,
                 Some(Method::Post),
-                Some(response.code),
+                Some(code),
                 Some("unexpected pair-setup step"),
             ),
         }
@@ -2048,6 +2226,7 @@ impl Ap2Session {
             _ => Timing::Ntp,
         };
         self.ptp_retried = self.timing == Timing::Ptp;
+        self.remembered = self.ptp_retried;
         self.connection = Some(connection);
         self.send(Kind::SessionSetup, now, false);
     }
@@ -2064,6 +2243,13 @@ impl Ap2Session {
             self.event(Ap2Event::Trace(line));
         }
         if !response.is_success() {
+            if self.remembered {
+                self.remembered = false;
+                self.ptp_retried = false;
+                self.timing = Timing::Ntp;
+                self.event(Ap2Event::TimingRefused);
+                return self.reconnect(Restart::None, now);
+            }
             let ptp_possible = self.timing == Timing::Ntp
                 && !self.ptp_retried
                 && self.config.ptp.is_some()

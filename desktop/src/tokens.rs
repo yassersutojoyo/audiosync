@@ -29,7 +29,7 @@ pub const COLORS: &[ColorToken] = &[
     ColorToken {
         name: "tealText",
         light: [20, 113, 103],
-        dark: [32, 182, 166],
+        dark: [60, 203, 185],
     },
     ColorToken {
         name: "tealDeep",

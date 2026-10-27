@@ -31,10 +31,21 @@ final class AboutPanel: NSObject {
             .foregroundColor: NSColor.secondaryLabelColor,
             .paragraphStyle: paragraph,
         ])
-        NSApp.orderFrontStandardAboutPanel(options: [
-            .credits: credits,
-            NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): text.aboutCopyright,
-        ])
+        let options = Self.options(credits: credits, copyright: text.aboutCopyright,
+                                   info: Bundle.main.infoDictionary ?? [:])
+        NSApp.orderFrontStandardAboutPanel(options: options)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// An empty `.version` drops the build number the panel adds in
+    /// parentheses; CFBundleVersion itself stays, since Sparkle compares it.
+    nonisolated static func options(credits: NSAttributedString, copyright: String,
+                                    info: [String: Any]) -> [NSApplication.AboutPanelOptionKey: Any] {
+        [
+            .applicationVersion: info["CFBundleShortVersionString"] as? String ?? "",
+            .version: "",
+            .credits: credits,
+            NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): copyright,
+        ]
     }
 }

@@ -188,6 +188,26 @@ pub const FLOOR_FORM_CALLBACKS: u32 = 5;
 /// earlier is followed within a few seconds, a stray stamp or two hardly.
 pub const ANCHOR_FALL_MS: u32 = 2000;
 
+/// How long a renderer's start window stays open, in ms of device frames
+/// after its first timed callback (S317): the longest late start the timing
+/// matrix gives, the set that confirms it and the step's fade-out.
+pub const START_WINDOW_MS: u32 = 3000;
+
+/// How far below the anchor floor the start set's level must lie, in ns,
+/// for a start step (S318, S321).
+pub const START_STEP_GAP_NS: i64 = 2_000_000;
+
+/// The start set's jitter allowance A, in ns (S321): how far the medians of
+/// its older and newer halves may lie apart for it to count as settled.
+pub const START_JITTER_NS: i64 = 5_000_000;
+
+/// The newest wakes whose lowest gap a pull endpoint's unheard silence is
+/// measured on (S324).
+pub const PULL_GAP_WAKES: usize = 4;
+
+/// The most timed callbacks the start set holds (S321).
+pub const START_SET_LEN: usize = 256;
+
 /// How fast the earliest lateness a renderer saw rises, in ns per second of
 /// device frames (S209). The floor never lies more than [`LATE_CAP_MS`]
 /// below the current callback, so early callbacks stop counting within 50 s.
@@ -375,6 +395,10 @@ struct Shared {
     floor_drop_ns: AtomicU64,
     /// The observer's steps in the device's output times (S229).
     time_steps: AtomicU64,
+    /// Start steps made, and the capture frames they moved the output
+    /// later by (S318).
+    start_steps: AtomicU64,
+    start_step_frames: AtomicU64,
     /// The host said the device is Bluetooth (S230).
     bluetooth: AtomicBool,
     /// The output latency the device reported and the one the host uses,
@@ -461,6 +485,8 @@ impl RendererControl {
                 least_slack_ns: AtomicI64::new(i64::MAX),
                 floor_drop_ns: AtomicU64::new(0),
                 time_steps: AtomicU64::new(0),
+                start_steps: AtomicU64::new(0),
+                start_step_frames: AtomicU64::new(0),
                 bluetooth: AtomicBool::new(false),
                 reported_latency_ns: AtomicU64::new(0),
                 output_latency_ns: AtomicU64::new(0),
@@ -613,6 +639,17 @@ impl RendererControl {
         self.shared.time_steps.load(Ordering::Relaxed)
     }
 
+    /// The start steps the renderer made inside its start window (S318).
+    pub fn start_steps(&self) -> u64 {
+        self.shared.start_steps.load(Ordering::Relaxed)
+    }
+
+    /// The capture frames its start steps moved the output later by
+    /// (S318), apart from the trim's and the slow-downs'.
+    pub fn start_step_frames(&self) -> u64 {
+        self.shared.start_step_frames.load(Ordering::Relaxed)
+    }
+
     /// Tells the renderer whether its device is Bluetooth, which adds
     /// [`BLUETOOTH_LEAD_FRAMES`] to its start lead (S230). Call it before the
     /// output's first callback and before [`Renderer::set_period_frames`]:
@@ -650,6 +687,81 @@ impl RendererControl {
     pub fn rejected_latency_ns(&self) -> Option<u64> {
         let reported = self.shared.reported_latency_ns.load(Ordering::Relaxed);
         (reported != self.output_latency_ns()).then_some(reported)
+    }
+}
+
+/// A renderer's start window (S317, S324).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartWindow {
+    /// No timed callback, or pull endpoint's wake, yet.
+    Unopened,
+    /// Device frames of those callbacks since it opened.
+    Open {
+        elapsed: u64,
+    },
+    Closed,
+}
+
+/// The values of the newest timed callbacks in a start window, in ns, and
+/// their device frames (S321). Made with the renderer, so judging it on
+/// the audio thread never allocates.
+struct StartSet {
+    values: Box<[i64; START_SET_LEN]>,
+    frames: Box<[u64; START_SET_LEN]>,
+    scratch: Box<[i64; START_SET_LEN]>,
+    /// Where the next value goes.
+    next: usize,
+    len: usize,
+}
+
+impl StartSet {
+    fn new() -> StartSet {
+        StartSet {
+            values: Box::new([0; START_SET_LEN]),
+            frames: Box::new([0; START_SET_LEN]),
+            scratch: Box::new([0; START_SET_LEN]),
+            next: 0,
+            len: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    fn push(&mut self, value: i64, frames: u64) {
+        self.values[self.next] = value;
+        self.frames[self.next] = frames;
+        self.next = (self.next + 1) % START_SET_LEN;
+        self.len = (self.len + 1).min(START_SET_LEN);
+    }
+
+    /// How many of the newest values span `callbacks` callbacks and
+    /// `frames` device frames, the fewest that do; all of them once the set
+    /// is full of callbacks too short to.
+    fn spanning(&self, callbacks: usize, frames: u64) -> Option<usize> {
+        let mut spanned = 0u64;
+        for count in 1..=self.len {
+            spanned = spanned.saturating_add(self.frames[self.index(count, 0)]);
+            if count >= callbacks && spanned >= frames {
+                return Some(count);
+            }
+        }
+        (self.len == START_SET_LEN).then_some(START_SET_LEN)
+    }
+
+    /// The array index of the `at`-th oldest of the newest `count` values.
+    fn index(&self, count: usize, at: usize) -> usize {
+        (self.next + START_SET_LEN - count + at) % START_SET_LEN
+    }
+
+    /// The median of `len` of the newest `count` values from the `from`-th
+    /// oldest on; of an even number, the higher of the middle two.
+    fn median(&mut self, count: usize, from: usize, len: usize) -> i64 {
+        for at in 0..len {
+            self.scratch[at] = self.values[self.index(count, from + at)];
+        }
+        *self.scratch[..len].select_nth_unstable(len / 2).1
     }
 }
 
@@ -768,6 +880,37 @@ pub struct Renderer {
     /// What the observer published last (S229).
     least_slack_ns: i64,
     floor_drop_ns: u64,
+    /// The start window, [`START_WINDOW_MS`] in device frames, and the set
+    /// it judges (S317, S321).
+    start_window: StartWindow,
+    start_window_frames: u64,
+    start_set: StartSet,
+    /// The reader has anchored once; the set fills only after (S321).
+    reader_anchored: bool,
+    /// The lateness floor as it stood when it formed, in ns (S321).
+    start_floor_ns: Option<i64>,
+    /// A confirmed start step's anchor floor, waiting for the fade-out.
+    step_due: Option<i64>,
+    /// The anchor floor a start step set: the next anchor keeps it instead
+    /// of applying S209's rule (S318).
+    step_floor_set: bool,
+    /// A pull endpoint in its start window (S324): its first wake's time,
+    /// the device frames its later wakes asked for, each wake's time since
+    /// the first less those frames over the newest [`PULL_GAP_WAKES`] wakes
+    /// (a ring, the next slot and how many are kept), their lowest at this
+    /// wake, and that lowest's own lowest since the reader's latest anchor,
+    /// with S209's leak, in ns.
+    pull_origin: Option<u64>,
+    pull_asked: u64,
+    pull_gaps: [i64; PULL_GAP_WAKES],
+    pull_gaps_next: usize,
+    pull_gaps_kept: usize,
+    pull_gap_ns: i64,
+    pull_low_ns: i64,
+    /// A confirmed pull start step, waiting for the fade-out and a wake
+    /// that asks for at least its period, or the one after (S324).
+    pull_step_due: bool,
+    pull_step_waited: bool,
 }
 
 impl fmt::Debug for Renderer {
@@ -854,6 +997,22 @@ impl Renderer {
             previous_output: None,
             least_slack_ns: i64::MAX,
             floor_drop_ns: 0,
+            start_window: StartWindow::Unopened,
+            start_window_frames: u64::from(device_rate) * u64::from(START_WINDOW_MS) / 1000,
+            start_set: StartSet::new(),
+            reader_anchored: false,
+            start_floor_ns: None,
+            step_due: None,
+            step_floor_set: false,
+            pull_origin: None,
+            pull_asked: 0,
+            pull_gaps: [0; PULL_GAP_WAKES],
+            pull_gaps_next: 0,
+            pull_gaps_kept: 0,
+            pull_gap_ns: 0,
+            pull_low_ns: 0,
+            pull_step_due: false,
+            pull_step_waited: false,
         })
     }
 
@@ -985,11 +1144,25 @@ impl Renderer {
         let channels = self.channels;
         let frames = out.len() / channels;
         self.update_lead(frames);
+        let mut pull_silence_ns = 0;
+        let mut pull_late = 0;
+        let mut pull_wake_ns = 0;
         let floor_late_ns = match (time, now) {
             (Some(time), Some(now)) => {
                 let late_ns = self.lateness(time, now, frames);
                 self.form_floor(frames);
+                self.judge_start(frames);
                 if self.warming { 0 } else { late_ns }
+            }
+            (None, Some(now)) => {
+                self.warming = false;
+                // Counted as Jf, so neither the drift judgement nor S207's fill
+                // takes the silence in before the step (S324).
+                pull_silence_ns = self.pull_silence(frames, now);
+                self.judge_pull_start(frames, pull_silence_ns);
+                pull_late = self.land_pull_step(frames);
+                pull_wake_ns = self.pull_wake_ns(frames);
+                0
             }
             _ => {
                 self.warming = false;
@@ -997,6 +1170,7 @@ impl Renderer {
             }
         };
         let (floor_shift_ns, drop_ns) = self.floor_shift_ns(frames);
+        let floor_shift_ns = floor_shift_ns.saturating_add(pull_silence_ns);
         // Jt counts from the anchor floor while the floor lies below it, so
         // early stamps the anchor floor didn't follow move no anchor and
         // count no callback as late; the drift is judged as before.
@@ -1011,15 +1185,23 @@ impl Renderer {
             }
         }
         let late = late_ns as u128 * u128::from(self.capture_rate) / 1_000_000_000;
-        self.reader
-            .set_late_frames(i64::try_from(late).unwrap_or(i64::MAX));
+        let late = i64::try_from(late).unwrap_or(i64::MAX);
+        self.reader.set_late_frames(late.saturating_add(pull_late));
         let shift = i128::from(shift_ns) * i128::from(self.capture_rate) / 1_000_000_000;
         self.reader
             .set_floor_shift_frames(shift.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64);
+        // At the time the callback really reads at: Jr already counts its
+        // lateness, so the capture written meanwhile belongs in the anchor.
+        let capture = now.and_then(|now| self.capture_estimate(now));
+        self.reader.set_capture_frames(capture);
         // The capture's clock is judged at the time the callback would have
         // read at had it come as early as the earliest ones did when the
-        // reader anchored.
-        let judged_ns = i128::from(late_ns) + i128::from(shift_ns);
+        // reader anchored, or a pull endpoint's wake had it come on time. A
+        // callback below the anchor floor is that callback's jitter, which
+        // the anchor floor's fall follows; taken in full, one stray stamp
+        // moved the running average past the dead zone (S207).
+        let judged_ns =
+            i128::from(late_ns) + i128::from(shift_ns.max(0)) + i128::from(pull_wake_ns);
         let now =
             now.map(|now| (i128::from(now) - judged_ns).clamp(0, i128::from(u64::MAX)) as u64);
         if !self.start_lead_fixed {
@@ -1133,6 +1315,13 @@ impl Renderer {
             self.timed_frames = self.timed_frames.saturating_add(frames as u64);
             self.floor_formed = self.timed_callbacks >= FLOOR_FORM_CALLBACKS
                 && self.timed_frames >= self.floor_form_frames;
+            if self.floor_formed {
+                self.start_floor_ns = self.late_floor();
+                if let (Some(floor), Some(anchor)) = (self.start_floor_ns, self.anchor_floor) {
+                    self.anchor_floor = Some(anchor.max(floor));
+                    self.anchored_floor = self.anchor_floor;
+                }
+            }
         }
         self.warming = !self.floor_formed;
     }
@@ -1197,6 +1386,30 @@ impl Renderer {
         }
     }
 
+    /// How old a stamp may be, in ns, before it is stale (S207).
+    fn stale_stamp_ns(&self) -> u64 {
+        let rate = u64::from(self.capture_rate.max(1));
+        let blocks_ns = STALE_STAMP_BLOCKS
+            .saturating_mul(self.reader.ring().block_frames() as u64)
+            .saturating_mul(1_000_000_000)
+            / rate;
+        (STALE_STAMP_MS * 1_000_000).max(blocks_ns)
+    }
+
+    /// `Ws + S` for a callback that reads at `now` (S322): the newest
+    /// stamp's W plus the capture frames of the time since it, at most the
+    /// lead's block. `None` without a stamp or with a stale one.
+    fn capture_estimate(&self, now: u64) -> Option<i64> {
+        let stamp = self.reader.ring().stamp()?;
+        let age_ns = now.saturating_sub(stamp.time_ns);
+        if age_ns > self.stale_stamp_ns() {
+            return None;
+        }
+        let block = self.reader.ring().block_frames().min(self.block_cap) as u128;
+        let since = (u128::from(age_ns) * u128::from(self.capture_rate) / 1_000_000_000).min(block);
+        i64::try_from(u128::from(stamp.written) + since).ok()
+    }
+
     /// Follows the capture's clock at the start of a callback of `frames`
     /// device frames that reads at `now`, needs `need` capture frames and
     /// goes on as `next` says (S207). Returns the trim it asks for, in
@@ -1204,17 +1417,18 @@ impl Renderer {
     /// up, 0 for none. Restarts the tracking when the newest stamp is
     /// stale; a callback without a usable stamp changes nothing.
     fn follow(&mut self, now: u64, frames: usize, need: usize, next: &NextRead) -> i64 {
+        // Before the floor forms Jt is 0, so a late callback's fill would
+        // hold its whole lateness and raise the reference (S207, S209).
+        if self.warming {
+            self.tracking = RESTART;
+            return 0;
+        }
         let ring = self.reader.ring();
         let Some(stamp) = ring.stamp() else {
             return 0;
         };
         let rate = u64::from(self.capture_rate.max(1));
-        let blocks_ns = STALE_STAMP_BLOCKS
-            .saturating_mul(ring.block_frames() as u64)
-            .saturating_mul(1_000_000_000)
-            / rate;
-        let stale_ns = (STALE_STAMP_MS * 1_000_000).max(blocks_ns);
-        if now.saturating_sub(stamp.time_ns) > stale_ns {
+        if now.saturating_sub(stamp.time_ns) > self.stale_stamp_ns() {
             self.tracking = RESTART;
             return 0;
         }
@@ -1232,10 +1446,13 @@ impl Renderer {
                 shift,
             } => {
                 // Against the anchor floor as it stood at the first fill, so a
-                // fall during the measuring isn't averaged into the reference.
-                let jf = self.reader.floor_shift_frames() as f64;
-                let shift = if count == 0 { jf } else { shift };
-                let fill = fill + jf - shift;
+                // fall during the measuring isn't averaged into the reference;
+                // Jf would add each callback's jitter below the anchor floor.
+                let minus_anchor = self
+                    .anchor_floor
+                    .map_or(0.0, |anchor| -(anchor as f64) * rate as f64 / 1e9);
+                let shift = if count == 0 { minus_anchor } else { shift };
+                let fill = fill + minus_anchor - shift;
                 let (sum, count, span) = (sum + fill, count + 1, span + frames as u64);
                 self.tracking = if span as f64 >= track {
                     let reference = sum / f64::from(count);
@@ -1328,6 +1545,208 @@ impl Renderer {
         (floor.saturating_sub(anchor), anchored.saturating_sub(floor))
     }
 
+    /// The start window at a timed callback of `frames` device frames (S317,
+    /// S321): opens it at the first, closes it after [`START_WINDOW_MS`],
+    /// once a stop began or once it made its step, and while it is open adds
+    /// the callback's value to the set and makes a start step at the set's
+    /// level once the set confirms it.
+    fn judge_start(&mut self, frames: usize) {
+        let elapsed = match self.start_window {
+            StartWindow::Closed => return,
+            StartWindow::Unopened => 0,
+            StartWindow::Open { elapsed } => elapsed,
+        };
+        if elapsed >= self.start_window_frames || self.stop != Stop::None {
+            self.start_window = StartWindow::Closed;
+            self.start_set.clear();
+            return;
+        }
+        self.start_window = StartWindow::Open {
+            elapsed: elapsed.saturating_add(frames as u64),
+        };
+        let anchor = match self.anchor_floor {
+            Some(anchor) if self.reader_anchored && self.step_due.is_none() => anchor,
+            _ => return,
+        };
+        self.start_set.push(self.anchor_late_ns, frames as u64);
+        let (Some(start_floor), Some(floor)) = (self.start_floor_ns, self.late_floor()) else {
+            return;
+        };
+        let set = &mut self.start_set;
+        let Some(count) = set.spanning(FLOOR_FORM_CALLBACKS as usize, self.floor_form_frames)
+        else {
+            return;
+        };
+        let level = set.median(count, 0, count);
+        // An error to fix, and callbacks that came down from where the
+        // device started, which wander doesn't do within a window.
+        if level >= anchor.saturating_sub(START_STEP_GAP_NS)
+            || level >= start_floor.saturating_sub(START_STEP_GAP_NS + START_JITTER_NS)
+        {
+            return;
+        }
+        let older = count / 2;
+        let settled = set.median(count, 0, older) - set.median(count, older, count - older);
+        if settled.abs() > START_JITTER_NS {
+            return;
+        }
+        set.clear();
+        let step = level.max(floor);
+        if step >= anchor {
+            return;
+        }
+        self.start_window = StartWindow::Closed;
+        if self.fade.is_closed() {
+            self.make_start_step(step);
+        } else {
+            // Made after the fade-out, where any waiting delay or held
+            // correction anchors too, so one fade covers both (S188).
+            self.step_due = Some(step);
+            self.begin_fade_out(None);
+        }
+    }
+
+    /// The silence a pull endpoint (a period and no output times) played
+    /// unheard by the core while its start window is open, in ns, at a wake
+    /// at `now` that asks for `frames` device frames (S324): the lowest,
+    /// over its newest [`PULL_GAP_WAKES`] wakes, of the time since its first
+    /// wake less the frames its later wakes asked for, above that lowest's
+    /// own lowest since the reader's latest anchor. 0 otherwise.
+    fn pull_silence(&mut self, frames: usize, now: u64) -> i64 {
+        if self.period_frames == 0
+            || (self.start_window == StartWindow::Closed && !self.pull_step_due)
+        {
+            return 0;
+        }
+        let rate = u128::from(self.device_rate.max(1));
+        let Some(origin) = self.pull_origin else {
+            self.pull_origin = Some(now);
+            return 0;
+        };
+        self.pull_asked = self.pull_asked.saturating_add(frames as u64);
+        let asked_ns = u128::from(self.pull_asked) * 1_000_000_000 / rate;
+        let gap = i128::from(now.saturating_sub(origin)) - asked_ns as i128;
+        let gap = gap.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+        // A late wake that still found buffer left raises the gap for itself
+        // only, and the next wake on time lowers it again; silence the device
+        // played raises it for good, so only the lowest of the newest wakes
+        // counts.
+        self.pull_gaps[self.pull_gaps_next] = gap;
+        self.pull_gaps_next = (self.pull_gaps_next + 1) % PULL_GAP_WAKES;
+        self.pull_gaps_kept = (self.pull_gaps_kept + 1).min(PULL_GAP_WAKES);
+        let gap = self.pull_gaps[..self.pull_gaps_kept]
+            .iter()
+            .copied()
+            .min()
+            .unwrap_or(gap);
+        // The leak follows a device clock slower than the stamps' clock.
+        let leak = (frames as u128 * u128::from(EARLIEST_LEAK_NS_PER_S) / rate) as i64;
+        self.pull_low_ns = self.pull_low_ns.saturating_add(leak).min(gap);
+        self.pull_gap_ns = gap;
+        gap.saturating_sub(self.pull_low_ns)
+    }
+
+    /// How late a pull endpoint's wake of `frames` device frames came, in ns
+    /// of device time (S207): its frames beyond the period, which its buffer
+    /// drained while it waited; negative for a wake that asks for less, as
+    /// one right after a late wake does. 0 without a period.
+    fn pull_wake_ns(&self, frames: usize) -> i64 {
+        if self.period_frames == 0 {
+            return 0;
+        }
+        let beyond = frames as i64 - self.period_frames as i64;
+        beyond * 1_000_000_000 / i64::from(self.device_rate.max(1))
+    }
+
+    /// The start window at a pull endpoint's wake of `frames` device frames
+    /// that found `silence_ns` of unheard silence (S324): opens it at the
+    /// first wake, closes it as [`Renderer::judge_start`] does, and while
+    /// it is open makes a start step once S321's set of those silences
+    /// confirms one.
+    fn judge_pull_start(&mut self, frames: usize, silence_ns: i64) {
+        if self.period_frames == 0 {
+            return;
+        }
+        let elapsed = match self.start_window {
+            StartWindow::Closed => return,
+            StartWindow::Unopened => 0,
+            StartWindow::Open { elapsed } => elapsed,
+        };
+        if elapsed >= self.start_window_frames || self.stop != Stop::None {
+            self.start_window = StartWindow::Closed;
+            self.start_set.clear();
+            return;
+        }
+        self.start_window = StartWindow::Open {
+            elapsed: elapsed.saturating_add(frames as u64),
+        };
+        if !self.reader_anchored || self.pull_step_due {
+            return;
+        }
+        self.start_set.push(silence_ns, frames as u64);
+        let set = &mut self.start_set;
+        let Some(count) = set.spanning(FLOOR_FORM_CALLBACKS as usize, self.floor_form_frames)
+        else {
+            return;
+        };
+        let level = set.median(count, 0, count);
+        if level <= START_STEP_GAP_NS {
+            return;
+        }
+        let older = count / 2;
+        let settled = set.median(count, 0, older) - set.median(count, older, count - older);
+        if settled.abs() > START_JITTER_NS {
+            return;
+        }
+        set.clear();
+        self.start_window = StartWindow::Closed;
+        let rate = u64::from(self.capture_rate);
+        let moved = u64::try_from(level).unwrap_or(0).saturating_mul(rate) / 1_000_000_000;
+        self.shared
+            .start_step_frames
+            .fetch_add(moved, Ordering::Relaxed);
+        self.pull_step_due = true;
+        if !self.fade.is_closed() {
+            self.begin_fade_out(None);
+        }
+    }
+
+    /// Makes a confirmed pull start step at a wake of `frames` device frames
+    /// once the fade-out is over (S324): the reader anchors anew at this
+    /// callback's first read, which skips the silence the endpoint played.
+    /// Returns the capture frames this wake came late by, its frames beyond
+    /// the period, for Jr; a wake that asks for less follows a late one, so
+    /// the step waits one wake for a better one.
+    fn land_pull_step(&mut self, frames: usize) -> i64 {
+        if !self.pull_step_due || !self.fade.is_closed() {
+            return 0;
+        }
+        if frames < self.period_frames && !self.pull_step_waited {
+            self.pull_step_waited = true;
+            return 0;
+        }
+        self.pull_step_due = false;
+        self.pull_step_waited = false;
+        self.reader_control.request_resync();
+        self.awaiting_resync = true;
+        self.shared.start_steps.fetch_add(1, Ordering::Relaxed);
+        let beyond = frames.saturating_sub(self.period_frames) as u64;
+        let late = beyond * u64::from(self.capture_rate) / u64::from(self.device_rate.max(1));
+        i64::try_from(late).unwrap_or(i64::MAX)
+    }
+
+    /// Sets the anchor floor to `step` and has the reader anchor against it
+    /// at its next read (S318), counting the step.
+    fn make_start_step(&mut self, step: i64) {
+        // The anchor floor never rises before an anchor, the fade-out's
+        // fall included.
+        self.anchor_floor = Some(self.anchor_floor.map_or(step, |anchor| anchor.min(step)));
+        self.step_floor_set = true;
+        self.reader_control.request_resync();
+        self.awaiting_resync = true;
+        self.shared.start_steps.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Lets `frames` capture frames by which the output already plays later,
     /// a dry read's silence or a slow-down kept for a shortage, pay toward
     /// what the anchor floor still has to fall, to the floor or this
@@ -1417,6 +1836,11 @@ impl Renderer {
     fn take_requests(&mut self) {
         if self.stop == Stop::None && self.shared.fade_out.load(Ordering::Acquire) {
             self.stop = Stop::Fading;
+            // No start step once a stop's fade-out was asked for (S317).
+            self.start_window = StartWindow::Closed;
+            self.step_due = None;
+            self.pull_step_due = false;
+            self.pull_step_waited = false;
             self.begin_fade_out(None);
         }
         if take(&self.shared.delay_flag) {
@@ -1528,11 +1952,33 @@ impl Renderer {
             self.tracking = RESTART;
         }
         if report.correction != Correction::None {
-            // What this callback's Jt counted from, so Jf is 0 from here.
-            self.anchor_floor = match (self.late_floor(), self.anchor_floor) {
-                (Some(floor), Some(anchor)) => Some(floor.max(anchor.min(self.anchor_late_ns))),
-                (floor, _) => floor,
-            };
+            self.reader_anchored = true;
+            // A pull endpoint's silence counts from here (S324).
+            self.pull_low_ns = self.pull_gap_ns;
+            // What this callback's Jt counted from, so Jf is 0 from here; a
+            // start step already set it (S318).
+            if std::mem::take(&mut self.step_floor_set) {
+                // A callback below the step's value has a Jt of 0 and lands
+                // at its own value, so the anchor floor goes there (S318).
+                if let (Some(floor), Some(anchor)) = (self.late_floor(), self.anchor_floor) {
+                    self.anchor_floor = Some(floor.max(anchor.min(self.callback_late_ns)));
+                }
+                let ahead = self.reader.anchor_ahead_frames();
+                let moved = report.error.saturating_neg().saturating_sub(ahead);
+                let moved = u64::try_from(moved).unwrap_or(0);
+                self.shared
+                    .start_step_frames
+                    .fetch_add(moved, Ordering::Relaxed);
+            } else {
+                self.start_set.clear();
+                self.anchor_floor = match (self.late_floor(), self.anchor_floor) {
+                    (Some(floor), Some(anchor)) => Some(floor.max(anchor.min(self.anchor_late_ns))),
+                    (Some(floor), None) => Some(floor),
+                    // Its Jt is 0, so it lands as if its own value were on
+                    // time; the floor raises it once formed (S209).
+                    (None, _) => self.earliest.map(|_| self.callback_late_ns),
+                };
+            }
             self.anchored_floor = self.anchor_floor;
         }
         if self.awaiting_resync
@@ -1600,7 +2046,12 @@ impl Renderer {
     /// Whether a stop, a delay change or a held correction keeps the
     /// renderer closed (S184).
     fn waiting(&self) -> bool {
-        self.stop != Stop::None || self.delay_pending || self.awaiting_resync || self.correction_due
+        self.stop != Stop::None
+            || self.delay_pending
+            || self.awaiting_resync
+            || self.correction_due
+            || self.step_due.is_some()
+            || self.pull_step_due
     }
 
     /// Starts a fade-out; one that ends at once (nothing audible) ends after
@@ -1629,6 +2080,9 @@ impl Renderer {
     /// callback): a waiting delay goes to the reader (S187), and a stop's
     /// fade-out is published at the end of the callback (S185).
     fn fade_out_done(&mut self, last: Option<usize>) {
+        if let Some(step) = self.step_due.take() {
+            self.make_start_step(step);
+        }
         if self.delay_pending {
             self.delay_pending = false;
             self.give_reader_delay();
@@ -1872,7 +2326,7 @@ mod tests {
         let Tracking::Following { reference, .. } = s.renderer.tracking else {
             panic!("not following: {:?}", s.renderer.tracking);
         };
-        assert!(reference > 4800.0, "{reference}");
+        assert!((reference - 4800.0).abs() < 96.0, "{reference}");
         assert_eq!(
             (s.renderer.slowed_frames(), s.renderer.sped_frames()),
             (0, 0)
@@ -2040,19 +2494,32 @@ mod tests {
         );
     }
 
-    /// [`timed_step`] with a ramp for the block, each frame's value its
-    /// index in the capture: returns how many capture frames behind the
-    /// newest written one the callback's first frame is.
+    /// [`timed_step`] with a ramp for the blocks, each frame's value its
+    /// index in the capture, and the capture writing on its own clock: a
+    /// late callback finds the blocks written by the time it reads at (S322
+    /// anchors on them). Returns how many capture frames behind the newest
+    /// written one the callback's first frame is.
     fn ramp_step(s: &mut Stepped, written: &mut u64, late_ns: u64) -> f64 {
+        stray_step(s, written, late_ns, 0)
+    }
+
+    /// [`ramp_step`] whose output time is a stray, `early_ns` too late, so
+    /// `now - output time` reads that much early while the callback reads
+    /// at its real time.
+    fn stray_step(s: &mut Stepped, written: &mut u64, late_ns: u64, early_ns: u64) -> f64 {
         s.now += 10_000_000;
-        let block: Vec<f32> = (*written..*written + 480)
-            .flat_map(|i| [i as f32 / 4_000_000.0; 2])
-            .collect();
-        *written += 480;
-        s.writer.write_at(&block, 480, s.now);
         let due = s.now + 1_000_000;
+        let reads_at = due + late_ns;
+        while (*written / 480 + 1) * 10_000_000 <= reads_at {
+            let block: Vec<f32> = (*written..*written + 480)
+                .flat_map(|i| [i as f32 / 4_000_000.0; 2])
+                .collect();
+            s.writer
+                .write_at(&block, 480, (*written / 480 + 1) * 10_000_000);
+            *written += 480;
+        }
         s.renderer
-            .render_timed_at(&mut s.out, due + 20_000_000, due + late_ns);
+            .render_timed_at(&mut s.out, due + 20_000_000 + early_ns, reads_at);
         *written as f64 - f64::from(s.out[0]) * 4_000_000.0
     }
 
@@ -2068,7 +2535,7 @@ mod tests {
             ramp_step(&mut s, &mut written, late);
         }
         for _ in 0..strays {
-            ramp_step(&mut s, &mut written, late - early_ns);
+            stray_step(&mut s, &mut written, late, early_ns);
         }
         for _ in 0..5 {
             ramp_step(&mut s, &mut written, late);
@@ -2079,7 +2546,7 @@ mod tests {
             ramp_step(&mut s, &mut written, late);
             ramp_step(&mut s, &mut written, late);
             assert_eq!(s.control.counters().resyncs, 0);
-            ramp_step(&mut s, &mut written, late - early_ns);
+            stray_step(&mut s, &mut written, late, early_ns);
             assert_eq!(s.control.counters().resyncs, 1);
         }
         let mut behind = 0.0;
@@ -2131,13 +2598,343 @@ mod tests {
         }
     }
 
-    /// An output whose first 100 callbacks come `late_ns` late and the
-    /// rest on time, whose delay is set to 100 ms half a second after they
-    /// came on time: how far behind the capture it plays a minute later.
-    fn resync_after_late_start(late_ns: u64) -> f64 {
+    /// An output on time whose callbacks 100 and 101, about 1 s in, are
+    /// stamped `early_ns` early: how far behind the capture it plays 20 s
+    /// later, and the start steps it made.
+    fn strays_in_window(early_ns: u64) -> (f64, u64) {
+        let late = 20_000_000;
         let mut s = Stepped::new();
         let mut written = 0;
         for _ in 0..100 {
+            ramp_step(&mut s, &mut written, late);
+        }
+        for _ in 0..2 {
+            stray_step(&mut s, &mut written, late, early_ns);
+        }
+        let mut behind = 0.0;
+        for _ in 0..2000 {
+            behind = ramp_step(&mut s, &mut written, late);
+        }
+        (behind, s.control.start_steps())
+    }
+
+    // covers: S209, S318, S320
+    #[test]
+    fn two_stray_early_stamps_inside_the_start_window_make_no_start_step() {
+        // Each callback's value is the higher of its own and the one
+        // before, so two strays sit at the bottom of the set: its median stays.
+        let (calm, _) = strays_in_window(0);
+        for early_ns in [5_000_000, 20_000_000] {
+            let (behind, steps) = strays_in_window(early_ns);
+            let moved_ms = (behind - calm) / 48.0;
+            assert_eq!(steps, 0, "{early_ns} ns strays");
+            assert!(
+                moved_ms.abs() < 2.0,
+                "{early_ns} ns strays: {moved_ms:.2} ms"
+            );
+        }
+    }
+
+    /// What [`late_start`] saw: the output's delay 3.2 s in and at the end,
+    /// in ms, its start steps, the frames they moved it, the silent device
+    /// frames after its callbacks came on time, its counters, and the first
+    /// callback after which a start step waited for its fade-out.
+    struct LateStart {
+        delay_ms: [f64; 2],
+        steps: u64,
+        waited_at: Option<usize>,
+        step_frames: u64,
+        silent: usize,
+        counters: ReaderCounters,
+    }
+
+    /// An output held back 100 ms, so no read runs dry as its callbacks come
+    /// on time, whose first `late_calls` callbacks come `late_ns` late and
+    /// the rest on time, for 20 s, each reading every block written by
+    /// then; with `stop_at`, a stop's fade-out is asked for after that many
+    /// callbacks. A capture block of 480 ramp frames comes every 10 ms.
+    fn late_start(late_ns: u64, late_calls: usize, stop_at: Option<usize>) -> LateStart {
+        let mut s = Stepped::new();
+        s.control.set_delay_frames(4800);
+        let (mut written, mut block_ns) = (0u64, 10_000_000u64);
+        let mut silent = 0;
+        let mut delay_ms = [f64::NAN; 2];
+        let mut waited_at = None;
+        for call in 0..2000u64 {
+            let due = 11_000_000 + call * 10_000_000;
+            let now = due + if call < late_calls as u64 { late_ns } else { 0 };
+            while block_ns <= now {
+                let block: Vec<f32> = (written..written + 480)
+                    .flat_map(|i| [i as f32 / 4_000_000.0; 2])
+                    .collect();
+                s.writer.write_at(&block, 480, block_ns);
+                written += 480;
+                block_ns += 10_000_000;
+            }
+            if Some(call as usize) == stop_at {
+                s.control.request_fade_out();
+            }
+            s.renderer
+                .render_timed_at(&mut s.out, due + 20_000_000, now);
+            if call >= late_calls as u64 {
+                silent += s.out.chunks_exact(2).filter(|f| f[0] == 0.0).count();
+            }
+            if s.renderer.step_due.is_some() {
+                waited_at.get_or_insert(call as usize);
+            }
+            if s.renderer.fade_state() == FadeState::Open {
+                let captured_ms = f64::from(s.out[0]) * 4_000_000.0 / 48.0;
+                let delay = (due + 20_000_000) as f64 / 1e6 - captured_ms;
+                match call {
+                    320 => delay_ms[0] = delay,
+                    1999 => delay_ms[1] = delay,
+                    _ => {}
+                }
+            }
+        }
+        LateStart {
+            delay_ms,
+            steps: s.control.start_steps(),
+            waited_at,
+            step_frames: s.control.start_step_frames(),
+            silent,
+            counters: s.control.counters(),
+        }
+    }
+
+    // covers: S317, S318
+    #[test]
+    fn a_late_start_inside_the_window_is_made_up_in_one_step() {
+        // 45 ms took the trim about 21 s at a frame a 441-frame callback.
+        let calm = late_start(0, 100, None);
+        assert_eq!(calm.steps, 0);
+        for late_ns in [15_400_000u64, 45_000_000] {
+            let seen = late_start(late_ns, 100, None);
+            for (at, (seen, calm)) in seen.delay_ms.iter().zip(calm.delay_ms).enumerate() {
+                let off = seen - calm;
+                assert!(off.abs() < 2.0, "{late_ns} ns, point {at}: {off:.2} ms");
+            }
+            assert_eq!(seen.steps, 1, "{late_ns} ns");
+            // The late callbacks anchored on the capture as it stood when they
+            // read, so the output played early by their lateness.
+            let ahead_ms = late_ns as f64 / 1e6;
+            let step_ms = seen.step_frames as f64 / 48.0;
+            assert!(
+                (step_ms - ahead_ms).abs() < 2.0,
+                "{late_ns} ns: a step of {step_ms:.2} ms"
+            );
+            // A fade-out, the step's silence and a fade-in, once.
+            let silent_ms = seen.silent as f64 / 44.1;
+            assert!(
+                silent_ms <= late_ns as f64 / 1e6 + 2.0,
+                "{late_ns} ns: {silent_ms:.2} ms of silence"
+            );
+            let c = seen.counters;
+            assert_eq!(
+                (c.drift_skips, c.drift_silences, c.starved_renders),
+                (0, 0, 0),
+                "{c:?}"
+            );
+        }
+    }
+
+    // covers: S317, S319
+    #[test]
+    fn no_start_step_after_the_window_or_once_a_stop_began() {
+        // On time only after 3.5 s: the anchor floor's fall follows it.
+        assert_eq!(late_start(45_000_000, 350, None).steps, 0);
+        // The stop is asked for before the set of 300 ms confirms the step.
+        assert_eq!(late_start(45_000_000, 100, Some(110)).steps, 0);
+    }
+
+    // covers: S318
+    #[test]
+    fn a_stop_while_the_start_step_waits_for_its_fade_makes_no_step() {
+        let waited_at = late_start(45_000_000, 100, None).waited_at.unwrap();
+        // Asked for on the next callback, before the step's fade-out ended.
+        let seen = late_start(45_000_000, 100, Some(waited_at + 1));
+        assert_eq!(seen.waited_at, Some(waited_at));
+        assert_eq!((seen.steps, seen.counters.resyncs), (0, 0));
+    }
+
+    /// What [`noisy_start`] saw: its start steps and the latest callback,
+    /// in seconds, that made one; the lowest and highest delay it played
+    /// from `judged_from_s` on, in ms; and its counters.
+    struct NoisyStart {
+        steps: u64,
+        last_step_s: f64,
+        delay_ms: (f64, f64),
+        counters: ReaderCounters,
+    }
+
+    /// 0 to 8 ms for each of 1000 callbacks, from a seeded xorshift.
+    fn jitter_draws() -> Vec<u64> {
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        (0..1000)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x % 8_000_001
+            })
+            .collect()
+    }
+
+    /// A 48 kHz output with 480-frame callbacks, held back 100 ms, for 10
+    /// s: callback `call` comes `late(call)` ns after its on-time point,
+    /// and the capture writes a 480-frame ramp block every 10 ms on its
+    /// own clock (S321 "What the tests show").
+    fn noisy_start(late: impl Fn(usize) -> u64, judged_from_s: f64) -> NoisyStart {
+        let ring = Ring::for_rate(48_000).unwrap();
+        let mut writer = ring.writer().unwrap();
+        let reader = Reader::new(ring, 48_000);
+        let control = RendererControl::new(&reader);
+        let gain = Arc::new(SharedGain::new(1.0));
+        let mut renderer = Renderer::new(reader, &control, gain, 48_000, 48_000, 2).unwrap();
+        control.set_delay_frames(4800);
+        let mut out = vec![0.0f32; 480 * 2];
+        let (mut written, mut block_ns) = (0u64, 10_000_000u64);
+        let mut seen = NoisyStart {
+            steps: 0,
+            last_step_s: f64::NAN,
+            delay_ms: (f64::INFINITY, f64::NEG_INFINITY),
+            counters: ReaderCounters::default(),
+        };
+        for call in 0..1000usize {
+            let due = 11_000_000 + call as u64 * 10_000_000;
+            let now = due + late(call);
+            while block_ns <= now {
+                let block: Vec<f32> = (written..written + 480)
+                    .flat_map(|i| [i as f32 / 4_000_000.0; 2])
+                    .collect();
+                writer.write_at(&block, 480, block_ns);
+                written += 480;
+                block_ns += 10_000_000;
+            }
+            renderer.render_timed_at(&mut out, due + 20_000_000, now);
+            let at_s = call as f64 / 100.0;
+            if control.start_steps() > seen.steps {
+                seen.steps = control.start_steps();
+                seen.last_step_s = at_s;
+            }
+            if at_s >= judged_from_s && renderer.fade_state() == FadeState::Open {
+                let captured_ms = f64::from(out[0]) * 4_000_000.0 / 48.0;
+                let delay = (due + 20_000_000) as f64 / 1e6 - captured_ms;
+                seen.delay_ms.0 = seen.delay_ms.0.min(delay);
+                seen.delay_ms.1 = seen.delay_ms.1.max(delay);
+            }
+        }
+        seen.counters = control.counters();
+        seen
+    }
+
+    /// How far apart two delay ranges lie at most, in ms.
+    fn apart_ms(a: (f64, f64), b: (f64, f64)) -> f64 {
+        (a.1 - b.0).abs().max((b.1 - a.0).abs())
+    }
+
+    fn assert_one_step_on_its_twin(
+        seen: &NoisyStart,
+        twin: &NoisyStart,
+        slack_ms: f64,
+        name: &str,
+    ) {
+        let c = seen.counters;
+        assert_eq!(seen.steps, 1, "{name}: steps");
+        assert!(
+            seen.last_step_s < 3.0,
+            "{name}: a step at {} s",
+            seen.last_step_s
+        );
+        assert_eq!((c.drift_skips, c.drift_silences), (0, 0), "{name}: {c:?}");
+        let apart = apart_ms(seen.delay_ms, twin.delay_ms);
+        assert!(
+            apart <= slack_ms,
+            "{name}: {:.2?} ms against its twin's {:.2?}",
+            seen.delay_ms,
+            twin.delay_ms
+        );
+    }
+
+    // covers: S207, S209, S318, S321, S322
+    #[test]
+    fn a_jittery_late_start_steps_once_and_lands_on_its_twin() {
+        let draws = jitter_draws();
+        let late = |call: usize| if call < 100 { 45_000_000 } else { 0 } + draws[call];
+        let seen = noisy_start(late, 7.0);
+        let twin = noisy_start(|call| draws[call], 7.0);
+        assert_eq!(twin.steps, 0);
+        assert_one_step_on_its_twin(&seen, &twin, 2.0, "jitter");
+    }
+
+    // covers: S321, S322
+    #[test]
+    fn a_gradual_return_to_time_steps_once_and_lands_on_its_twin() {
+        // 45 ms late for 1 s, then 1 ms earlier each callback.
+        let late =
+            |call: usize| 45_000_000u64.saturating_sub(call.saturating_sub(99) as u64 * 1_000_000);
+        let seen = noisy_start(late, 5.0);
+        let twin = noisy_start(|_| 0, 5.0);
+        assert_eq!(twin.steps, 0);
+        assert_one_step_on_its_twin(&seen, &twin, 2.0, "gradual");
+    }
+
+    // covers: S321
+    #[test]
+    fn wander_and_a_late_start_past_the_window_make_no_start_step() {
+        let draws = jitter_draws();
+        // 1 ms a second earlier over the first 3 s.
+        let wander = |call: usize| 3_000_000u64.saturating_sub(call as u64 * 100_000) + draws[call];
+        assert_eq!(noisy_start(wander, 10.0).steps, 0);
+        let too_late = |call: usize| if call < 290 { 45_000_000 } else { 0 } + draws[call];
+        assert_eq!(noisy_start(too_late, 10.0).steps, 0);
+    }
+
+    /// The delay, in ms, of an output held back 100 ms whose callbacks come
+    /// `phase_ns` after each 480-frame block, measured 2 s in.
+    fn delay_at_phase(phase_ns: u64) -> f64 {
+        let mut s = Stepped::new();
+        s.control.set_delay_frames(4800);
+        let mut written = 0u64;
+        let mut delay_ms = f64::NAN;
+        for call in 0..200u64 {
+            let block_ns = 10_000_000 + call * 10_000_000;
+            let block: Vec<f32> = (written..written + 480)
+                .flat_map(|i| [i as f32 / 4_000_000.0; 2])
+                .collect();
+            s.writer.write_at(&block, 480, block_ns);
+            written += 480;
+            let now = block_ns + phase_ns;
+            s.renderer
+                .render_timed_at(&mut s.out, now + 20_000_000, now);
+            if s.renderer.fade_state() == FadeState::Open {
+                let captured_ms = f64::from(s.out[0]) * 4_000_000.0 / 48.0;
+                delay_ms = (now + 20_000_000) as f64 / 1e6 - captured_ms;
+            }
+        }
+        delay_ms
+    }
+
+    // covers: S322
+    #[test]
+    fn an_anchor_between_blocks_lands_where_the_capture_is() {
+        let delays: Vec<f64> = [500_000u64, 3_000_000, 6_000_000, 9_500_000]
+            .into_iter()
+            .map(delay_at_phase)
+            .collect();
+        let low = delays.iter().copied().fold(f64::INFINITY, f64::min);
+        let high = delays.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        assert!(high - low < 2.0, "delays {delays:.2?} ms");
+    }
+
+    /// An output whose first 350 callbacks, past its start window, come
+    /// `late_ns` late and the rest on time, whose delay is set to 100 ms
+    /// half a second after they came on time: how far behind the capture
+    /// it plays a minute later.
+    fn resync_after_late_start(late_ns: u64) -> f64 {
+        let mut s = Stepped::new();
+        let mut written = 0;
+        for _ in 0..350 {
             ramp_step(&mut s, &mut written, late_ns);
         }
         for _ in 0..50 {
@@ -2150,10 +2947,11 @@ mod tests {
         }
         let counters = s.control.counters();
         assert_eq!(counters.resyncs, 1, "{counters:?}");
+        assert_eq!(s.control.start_steps(), 0);
         behind
     }
 
-    // covers: S209
+    // covers: S209, S319
     #[test]
     fn a_resync_while_the_anchor_floor_falls_after_a_late_start_lands_on_its_delay() {
         // The anchor lands on the on-time callback, so the anchor floor

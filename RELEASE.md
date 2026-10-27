@@ -10,33 +10,47 @@ Build every release on the same Mac with the same identity, so updates keep the 
 
 ## Cutting a release
 
-First bump `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist`, set the same version in `desktop/Cargo.toml` and in the `audiosync-desktop` entry of `desktop/Cargo.lock`, move the Unreleased entries in `CHANGELOG.md` under the new version (and update the compare links at the bottom), and commit. Then:
+Each release gets its own branch, cut from `main` as `release/x.y.z`. The version bump, the build, the soak and tests, the tag and any hotfix the release needs all happen on that branch, while `main` keeps taking work for the next version. Once the release is out, merge the release branch back into `main` (version bump, CHANGELOG and every fix included), then open the next version's heading on `main`.
+
+First bump `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist` (`CFBundleVersion` goes up by one on every release, since Sparkle compares that number to decide whether an update is newer), set the same version in `desktop/Cargo.toml` and in the `audiosync-desktop` entry of `desktop/Cargo.lock`, and in `CHANGELOG.md` put the release date on the version's heading (it waits there as `## [x.y.z] - unreleased`; if the entries sit under `## [Unreleased]` instead, move them under a new heading). Point that version's link at the bottom to `releases/tag/vx.y.z`, like the older versions, since the tag exists once you push it below, and commit. Once the release is out, open the next version's heading as `## [x.y.z] - unreleased` with a `compare/vx.y.z...HEAD` link, so later changes have a place to go. Then:
 
 ```bash
-./build.sh
+./build.sh --release                        # the release flag turns the updater on
 Tests/run-tests.sh --hardware
-Tests/soak.sh                               # 60 min, silent; must end with VERDICT: PASS
+Tests/soak.sh                               # 60 min, silent; only when the audio path changed; must end with VERDICT: PASS
 
 VERSION=x.y.z
 NOTES=path/to/release-notes.md          # your local notes file, not committed
 ./make-dmg.sh                               # → AudioSync.dmg
 ditto -c -k --keepParent /Applications/AudioSync.app "AudioSync-$VERSION.zip"
-shasum -a 256 AudioSync.dmg "AudioSync-$VERSION.zip" THIRD_PARTY_NOTICES.md > SHA256SUMS.txt
+scripts/sign_appcast.sh "$VERSION"          # → appcast.xml, for the app's updater
+cp scripts/install.sh install.sh
+shasum -a 256 AudioSync.dmg "AudioSync-$VERSION.zip" appcast.xml install.sh THIRD_PARTY_NOTICES.md > SHA256SUMS.txt
 
 git tag -a "v$VERSION" -m "AudioSync $VERSION" && git push origin "v$VERSION"
 gh release create "v$VERSION" --title "AudioSync $VERSION" --notes-file "$NOTES" \
-  AudioSync.dmg "AudioSync-$VERSION.zip" SHA256SUMS.txt THIRD_PARTY_NOTICES.md
+  AudioSync.dmg "AudioSync-$VERSION.zip" appcast.xml install.sh SHA256SUMS.txt THIRD_PARTY_NOTICES.md
 ```
 
-Run `Tests/soak.sh` for the full 60 minutes before every release and only go on when it ends with `VERDICT: PASS`. It's silent and unattended, and judges against `Tests/baseline/rust.json` ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)). If that baseline is missing, the soak says `NO BASELINE` and exits 3: run `Tests/bench.sh` first (an hour), commit the baseline and the updated `docs/BENCHMARKS.md`, then run the soak.
+`scripts/install.sh` (the Terminal install in the README) depends on two of these: it downloads `AudioSync-$VERSION.zip`, expects `AudioSync.app` at the top of it, and checks it against that file's line in `SHA256SUMS.txt`. Keep both names and the `--keepParent` zip as they are. The copy attached to the release lets someone install that exact version with the script that shipped with it.
 
-Write your release notes file before tagging. Start from the CHANGELOG entry, keep them short and user-facing, and include the install notes (macOS 15 or later, Open Anyway). Leave the title out of the file, since `--title` sets it.
+The app updates itself with Sparkle from `releases/latest/download/appcast.xml`, so every release needs its own `appcast.xml` next to the zip. Sparkle checks each download against the EdDSA public key in `Info.plist` (`SUPublicEDKey`). The key pair comes from Sparkle's `generate_keys` (in `.build/artifacts` after `swift build`, under `Sparkle/bin`), run once on the release Mac: it keeps the private key in the login keychain and prints the public key. Paste that public key into `Info.plist` once and commit it; it isn't a secret. The key alone doesn't turn updates on: only `./build.sh --release` adds `AudioSyncReleaseBuild` to the built app's `Info.plist`, and the app checks for updates only with both, so a plain `./build.sh` and CI builds never check. `--release` stops when the key is missing, and `scripts/sign_appcast.sh` refuses a zip whose app lacks the key or the flag. Back the private key up the same way as the signing keychain (`generate_keys -x` exports it): without it, released builds can't take another update. When `scripts/sign_appcast.sh` reads the key, macOS asks whether the program may use it. The prompt should name "AudioSync Release Signing", which is Sparkle's `generate_appcast` under our name (not yet confirmed on a Mac). Click Allow. Allow grants this one access, so the dialog comes back on every release ([docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#signing) explains why not Always Allow).
+
+Run `Tests/soak.sh` for the full 60 minutes before a release that changes the audio path (capture, the ring, delay, renderers or senders), and only go on when it ends with `VERDICT: PASS`. A release that leaves the audio path alone skips it. It's silent and unattended, and judges against `Tests/baseline/rust.json` ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)). If that baseline is missing, the soak says `NO BASELINE` and exits 3: run `Tests/bench.sh` first (an hour), commit the baseline and the updated `docs/BENCHMARKS.md`, then run the soak.
+
+Write your release notes file before tagging. Start from the CHANGELOG entry, keep them short and user-facing, and include the install notes: macOS 15 or later, Open Anyway for the DMG, and the Terminal install (`curl -fsSL https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.sh | bash`), which downloads the release zip, checks it against `SHA256SUMS.txt`, puts AudioSync in Applications (so it needs an administrator account) and opens it, with no Open Anyway step. Leave the title out of the file, since `--title` sets it.
+
+0.6.0 and older have no updater, so the first release that ships one (0.7.0) can't reach them by itself. Its notes should say that people on those versions update by hand once, from the DMG or the Terminal install, and that later releases come through Check for Updates….
 
 Publish it as a normal release, not a pre-release. The README and the site link to `/releases/latest`, which skips pre-releases, so the download link would keep pointing at the old version.
 
 ## Windows preview (optional)
 
-The Windows build can ride along with a Mac release as an unsigned preview, but only after the maintainer has tried that same commit on a real Windows 11 PC: start it with `AUDIOSYNC_DEBUG=1`, play to a local output and a Bluetooth speaker, listen, and check `%TEMP%\audiosync-debug.log` for errors. Without that try, no Windows files go on the release. Take `audiosync-windows-x64` and `audiosync-windows-arm64` from the Windows CI run of the release commit (CI keeps them for 7 days; re-run the workflow if they're gone), and attach each as a zip of its `audiosync.exe` with the `THIRD-PARTY-NOTICES.txt` from the same artifact, for example `AudioSync-$VERSION-windows-x64.zip`. Add both zips to the `shasum` and `gh release create` commands above, so they're in `SHA256SUMS.txt` and on the release.
+The Windows build can ride along with a Mac release as an unsigned preview, but only after that same commit was tried on a real Windows 11 PC, by the maintainer or by a session running on his PC with his OK: start it with `AUDIOSYNC_DEBUG=1`, play to a local output (and to a paired Bluetooth speaker when one is available), check that the app keeps running and each of those speakers shows as playing, and check `%TEMP%\audiosync-debug.log` for errors and for the stream starting on each of them. Without that try, no Windows files go on the release. Take `audiosync-windows-x64` and `audiosync-windows-arm64` from the Windows CI run of the release commit (CI keeps them for 7 days; re-run the workflow if they're gone), and attach each as a zip of its `audiosync.exe` with the `THIRD-PARTY-NOTICES.txt` from the same artifact, for example `AudioSync-$VERSION-windows-x64.zip`. Add both zips to the `shasum` and `gh release create` commands above, so they're in `SHA256SUMS.txt` and on the release.
+
+The Windows app will update itself from the same `appcast.xml` as the Mac (`docs/ENGINE_SPEC.md` section 19). `scripts/sign_appcast.sh` writes only the Mac item, so once that updater ships, add the Windows items to the appcast by hand, next to the Mac item, until the script does it: one item per zip, each with one enclosure carrying `sparkle:os` (`windows-x64` or `windows-arm64`), the zip's length and a `sparkle:edSignature` made over that zip with the same EdDSA private key that signs the Mac zip, and the release's `sparkle:version` and `sparkle:shortVersionString`. The first time an appcast carries Windows items, point the Mac app at it once and check that it offers the Mac update only (S310). A release without the Windows zips leaves the Windows items out.
+
+Only for a release whose Windows build has the updater: once the Windows items are in, run `python3 scripts/check_appcast.py appcast.xml "$VERSION" "AudioSync-$VERSION.zip" AudioSync-$VERSION-windows-*.zip` and publish only when it prints nothing (S311). It checks the items, versions, URLs, lengths and the Windows zips' contents, not the signatures.
 
 Say plainly in the release notes that it's an unsigned preview (SmartScreen will warn on first launch), Windows 11 only, and what its AirPlay reaches: receivers that take AirPlay 1, with a password prompt for a receiver that has one and a PIN prompt for an Apple TV that asks for a code, while AirPlay 2 stays experimental and off unless File > AirPlay 2 (Experimental) is on (and whether each was tried on a real speaker or Apple TV). The app carries Slint's attribution in its About dialog (see `THIRD_PARTY_NOTICES.md`), so the release notes need no badge.
 
@@ -46,7 +60,7 @@ A release with a Linux build attaches, from the Linux CI run of the release comm
 
 ## Sources and license obligations
 
-The Mac app bundles no third-party GPL or LGPL code: it is AudioSync's own code (GPL-3.0-or-later), the Rust standard library and the crates the audio core compiles in, and the Poppins font, the third-party parts all under permissive licenses. Every release ships `THIRD_PARTY_NOTICES.md` (it's also inside the app, with the license files). A new dependency gets its license checked and its entry in the notices before it ships.
+The Mac app bundles no third-party GPL or LGPL code: it is AudioSync's own code (GPL-3.0-or-later), the Rust standard library and the crates the audio core compiles in, the Poppins font, and Sparkle.framework for updates (MIT, with the licenses of the code it includes, listed in `THIRD_PARTY_NOTICES.md`), the third-party parts all under permissive licenses. Every release ships `THIRD_PARTY_NOTICES.md` (it's also inside the app, with the license files). A new dependency gets its license checked and its entry in the notices before it ships.
 
 The Windows preview is different: it compiles in Slint, used under GPL-3.0-only, so that exe as a whole goes out under GPL-3.0 only. A release that carries the Windows zips also attaches their source: run `cargo vendor` in `desktop/` at the release commit and attach the repository tree at that commit plus the `vendor/` folder as one archive, with the `[source]` snippet that `cargo vendor` prints saved as `desktop/.cargo/config.toml` so the archive builds offline, for example `AudioSync-$VERSION-windows-source.tar.gz`, listed in `SHA256SUMS.txt` like the other files.
 

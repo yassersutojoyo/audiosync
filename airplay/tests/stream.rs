@@ -1148,6 +1148,7 @@ fn restart_timeline() {
     let pending_before = rig.writer.position() as i64;
     rig.stream.restart(rig.now);
     rig.drain();
+    rig.answer_flushes();
     let mut host = Host::new(restart_at);
     host.block = 512;
     rig.host = Some(host);

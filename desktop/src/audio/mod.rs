@@ -50,6 +50,7 @@ pub mod calibration;
 pub mod capture;
 pub mod cast;
 pub mod cast_address;
+pub mod clock_probe;
 pub mod controller;
 pub mod explicit_pause;
 #[cfg(all(test, target_os = "linux"))]

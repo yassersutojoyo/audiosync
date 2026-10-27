@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import ServiceManagement
 
 // The app's windows and the bridge to its views: the menu bar item, the main
@@ -26,6 +27,10 @@ extension AppDelegate {
         nowPlaying.onReading = { [weak self] startedAt in self?.nowPlayingRead(startedAt: startedAt) }
         nowPlaying.onAutomationDenied = { [weak self] bundleID, denied in
             self?.automationChanged(bundleID, denied: denied)
+        }
+        nowPlaying.mayRaisePrompt = permissions.mayRaiseAutomationPrompt
+        nowPlaying.onPromptHeld = { [weak self] in
+            _ = self?.permissionAllows(.automation, state: .notAsked, origin: .automatic)
         }
         // No target set here: setting one makes Now Playing read the players
         // at once. `syncTrackInfo` sets it right before polling starts.
@@ -88,11 +93,6 @@ extension AppDelegate {
         MainActor.assumeIsolated { PresetsMenu.update(rows) }
     }
 
-    private func nowPlayingChanged(_ track: NowPlayingMonitor.Track?) {
-        if appModel.nowPlaying != track { appModel.nowPlaying = track }
-        sendTrackInfo()   // does nothing unless AirPlay receivers show the track
-    }
-
     /// macOS refuses (or allows again) AudioSync's Apple Events to a player:
     /// a notice with a button to the Automation settings, until it is allowed.
     private func automationChanged(_ bundleID: String, denied: Bool) {
@@ -103,6 +103,209 @@ extension AppDelegate {
         }
         postNotice(text.automationDenied(SourceApps.name(for: bundleID)), subject: subject,
                    settings: .automation)
+    }
+
+    // MARK: - Permission explanations
+
+    /// Whether a feature may use `permission` now. True: go on, and macOS
+    /// asks itself if it still has to. False: the feature waits, after Not
+    /// Now on the explanation, or while the window and the panel offer it
+    /// (`PermissionCard`), whose Continue resumes it. Callers handle a
+    /// denied permission themselves, so `state` is `.notAsked` or `.unknown`.
+    func permissionAllows(_ permission: Permission, state: PermissionState, origin: StartOrigin) -> Bool {
+        switch permissions.step(permission, state: state, userAction: origin == .user) {
+        case .go, .denied:
+            return true
+        case .explain:
+            return explainPermission(permission)
+        case .offer:
+            permissions.hold(permission)
+            showPermissionOffer()
+            return false
+        }
+    }
+
+    /// The explanation right after the user's click, before macOS asks: a
+    /// modal alert is fine here, since the user is waiting on this answer.
+    private func explainPermission(_ permission: Permission) -> Bool {
+        menuBar?.close()   // the panel floats above alerts and would cover this one
+        NSApp.activate(ignoringOtherApps: true)
+        let prompt = NSAlert()
+        prompt.messageText = text.permissionTitle(permission)
+        prompt.informativeText = text.permissionReason(permission)
+        prompt.addButton(withTitle: text.permissionContinue)
+        prompt.addButton(withTitle: text.permissionNotNow).keyEquivalent = "\u{1b}"
+        guard prompt.runModal() == .alertFirstButtonReturn else {
+            declinePermission(permission)
+            return false
+        }
+        acceptPermission(permission)
+        return true
+    }
+
+    private func acceptPermission(_ permission: Permission) {
+        permissions.accept(permission)
+        UserDefaults.standard.set(permissions.stored, forKey: PermissionAsks.defaultsKey)
+        showPermissionOffer()
+        if permission == .automation { nowPlaying.mayRaisePrompt = true }
+    }
+
+    /// Continue on the offered explanation: the feature that waited goes on.
+    private func resumeAfterPermission(_ permission: Permission) {
+        acceptPermission(permission)
+        switch permission {
+        case .localNetwork:
+            reconcileAirPlaySpeakers()
+        case .audioCapture, .microphone:
+            if !engine.isRunning { startEngine(origin: .user) }
+        case .automation:
+            nowPlaying.refresh()
+        }
+    }
+
+    private func declinePermission(_ permission: Permission) {
+        permissions.decline(permission)
+        showPermissionOffer()
+    }
+
+    private func showPermissionOffer() {
+        // The setup window asks for these itself while it is open.
+        let offer = setupWindow?.isOpen == true ? nil : permissions.offer
+        guard appModel.permissionOffer != offer else { return }
+        DebugTrace.log("Permission card: \(offer?.rawValue ?? "none")")
+        appModel.permissionOffer = offer
+    }
+
+    // MARK: - Permission setup window
+
+    /// Opens by itself once, on a first install (`PermissionSetup.showsAtLaunch`).
+    func openPermissionSetupIfFirstRun() {
+        let seen = store.read(PermissionSetup.seenKey) as? Bool ?? false
+        guard PermissionSetup.showsAtLaunch(permissions, seen: seen) else { return }
+        store.write(true, PermissionSetup.seenKey)
+        openPermissionSetup()
+    }
+
+    /// The window with every permission and its state; Set Up Permissions… opens it again.
+    func openPermissionSetup() {
+        menuBar?.close()
+        let setup = setupWindow ?? makeSetupWindow()
+        setupWindow = setup
+        refreshSetup()
+        setup.show()
+        showPermissionOffer()
+    }
+
+    private func makeSetupWindow() -> SetupWindowController {
+        let model = PermissionSetupModel(text: text)
+        model.actions.allow = { [weak self] in self?.setupAllow() }
+        model.actions.allowMicrophone = { [weak self] in self?.setupAllowMicrophone() }
+        model.actions.openSettings = { permission in NSWorkspace.shared.open(permission.pane.url) }
+        let setup = SetupWindowController(model: model)
+        model.actions.close = { [weak setup] in setup?.close() }
+        setup.onClose = { [weak self] in
+            self?.setupAsking = false
+            self?.showPermissionOffer()   // a skipped permission's card comes back where a feature waits on it
+        }
+        setup.onBecomeKey = { [weak self] in
+            self?.recheckLocalNetwork()   // back from System Settings
+            self?.refreshSetup()
+        }
+        return setup
+    }
+
+    private func setupRows() -> [Permission: SetupRowState] {
+        let asked = { (permission: Permission) in
+            self.permissions.step(permission, state: .unknown, userAction: false) == .go
+        }
+        return [
+            .localNetwork: PermissionSetup.localNetwork(localNetworkProbe.access, asked: asked(.localNetwork)),
+            .audioCapture: PermissionSetup.audioCapture(heard: SourceCapture.runHeard, asked: asked(.audioCapture)),
+            .microphone: PermissionSetup.microphone(microphonePermission(), asking: setupMicrophoneAsking),
+        ]
+    }
+
+    /// From every model update while the window exists.
+    func refreshSetup() {
+        guard let model = setupWindow?.model else { return }
+        let rows = setupRows()
+        if model.rows != rows { model.rows = rows }
+        if model.asking != setupAsking { model.asking = setupAsking }
+        if setupAsking, localNetworkProbe.access != .unknown { setupAskCapture() }
+    }
+
+    /// Allow: Local Network first, through the sender's discovery as a
+    /// feature would; audio capture once macOS answered that, or after
+    /// `setupStepWait` without an answer.
+    private func setupAllow() {
+        guard let next = PermissionSetup.next(setupRows()) else { return }
+        guard next == .localNetwork else { return setupAskCapture() }
+        DebugTrace.log("[AudioSync] permission setup: asking for Local Network")
+        setupAsking = true
+        acceptPermission(.localNetwork)
+        reconcileAirPlaySpeakers(origin: .user)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.setupStepWait) { [weak self] in
+            guard let self, self.setupAsking else { return }
+            self.setupAskCapture()
+        }
+        refreshSetup()
+    }
+
+    /// How long Allow waits for the Local Network answer before it asks for
+    /// audio capture anyway; macOS queues the second prompt behind the first.
+    static let setupStepWait: TimeInterval = 15
+
+    private func setupAskCapture() {
+        setupAsking = false
+        guard PermissionSetup.next(setupRows()) == .audioCapture else { return refreshSetup() }
+        DebugTrace.log("[AudioSync] permission setup: asking for audio capture")
+        acceptPermission(.audioCapture)
+        probeAudioCapture()
+        refreshSetup()
+    }
+
+    /// A tap's first capture raises macOS's audio capture prompt, so a
+    /// whole-system capture with no speaker runs for `captureProbeLength`.
+    /// Streaming that already captures has raised it.
+    private func probeAudioCapture() {
+        guard !engine.isRunning, setupCaptureProbe == nil, let parts = EngineParts.make() else { return }
+        let probe = SourceCapture()
+        do {
+            try probe.start(source: .system, parts: parts)
+        } catch {
+            DebugTrace.log("[AudioSync] permission setup: capture probe failed: \(error)")
+            return
+        }
+        setupCaptureProbe = probe
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.captureProbeLength) { [weak self] in
+            self?.setupCaptureProbe?.halt()
+            self?.setupCaptureProbe = nil
+            self?.refreshSetup()   // a tap that heard sound proves the permission
+        }
+    }
+
+    /// Long enough to raise the prompt; the tap mutes what it captures meanwhile.
+    static let captureProbeLength: TimeInterval = 1.5
+
+    private func setupAllowMicrophone() {
+        acceptPermission(.microphone)
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined else { return refreshSetup() }
+        setupMicrophoneAsking = true
+        refreshSetup()
+        AVCaptureDevice.requestAccess(for: .audio) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.setupMicrophoneAsking = false
+                self?.refreshSetup()
+            }
+        }
+    }
+
+    private func microphonePermission() -> PermissionState {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return .allowed
+        case .notDetermined: return .notAsked
+        default: return .denied
+        }
     }
 
     /// What the window and the panel can ask for, each mapped to the
@@ -150,25 +353,29 @@ extension AppDelegate {
         a.openWebRemote = { [weak self] in self?.openWebRemoteWindow() }
         a.refreshDevices = { [weak self] in self?.rescanDevices() }
         a.refreshExternalState = { [weak self] in self?.rereadExternalState() }
+        a.refreshModel = { [weak self] in self?.pushModel() }
         a.mainWindowVisible = { [weak self] visible in
             guard let self, visible != self.nowPlayingOnScreen else { return }
             self.nowPlayingOnScreen = visible   // Now Playing polls only while someone sees it
             self.syncTrackInfo()
         }
         a.dismissNotice = { [weak self] subject in self?.clearNotices([subject]) }
+        a.permissionContinue = { [weak self] permission in self?.resumeAfterPermission(permission) }
+        a.permissionNotNow = { [weak self] permission in self?.declinePermission(permission) }
         a.dismissAllNotices = { [weak self] in
             guard let self, !self.appModel.notices.isEmpty else { return }
             self.appModel.notices.clearAll()
         }
         a.toggleZone = { [weak self] id in self?.toggleZone(id) }
         a.deleteZone = { [weak self] id in self?.deleteZone(id) }
-        a.renameZone = { [weak self] id in self?.promptRenameZone(id) }
+        a.renameZone = { [weak self] id, typed in self?.renameZone(id, to: typed) }
         a.calibrateZone = { [weak self] id in self?.calibrateZone(id) }
         a.setZoneVolume = { [weak self] id, position in self?.setZoneVolume(id, position) }
         a.newZone = { [weak self] in self?.promptNewZone() }
         a.newZoneWithSpeaker = { [weak self] key, name in self?.promptNewZone(with: key, name: name) }
         a.moveToZone = { [weak self] key, id in self?.moveToZone(key, id) }
         a.removeFromZone = { [weak self] key in self?.removeFromZone(key) }
+        a.onlyThisSpeaker = { [weak self] key in self?.onlyThisSpeaker(key) }
         a.recallPreset = { [weak self] id in self?.recallPreset(id, from: .app) }
         a.savePreset = { [weak self] in self?.promptSavePreset() }
         a.renamePreset = { [weak self] id in self?.promptRenamePreset(id) }
@@ -230,7 +437,7 @@ extension AppDelegate {
     /// sources. A virtual device already listed stays, even when switched off.
     private func rescanDevices() {
         reconcileLocal(keepListed: true)
-        reconcileAirPlaySpeakers()
+        reconcileAirPlaySpeakers(origin: .user)
         pushSources()
     }
 
@@ -294,6 +501,9 @@ extension AppDelegate {
     /// and when the next reconcile falls due (`scheduleDueReconcile`).
     func pushModel() {
         publish(\.running, engine.isRunning)
+        noteSessionSpeaker()
+        publish(\.noSpeakerOn, StreamingPolicy.showsNoSpeakerOn(
+            streaming: engine.isRunning, enabledAirPlay: playableAirPlay.union(castSwitchedOn), enabledLocal: enabledLocal))
         publish(\.sourceID, audioSource.defaultsValue)
         publish(\.inputPair, currentInputPair)
         publish(\.master, masterVolume)
@@ -325,6 +535,7 @@ extension AppDelegate {
         publishEqualizerCurve()
         rememberZoneNames()
         publish(\.zones, zoneSnapshot())
+        appModel.zonesListed(Set(appModel.zones.map(\.id)))
         publishPresets()
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)
@@ -339,6 +550,7 @@ extension AppDelegate {
         syncStreamingActivity()
         syncTrackInfo()
         scheduleDueReconcile()
+        refreshSetup()
     }
 
     /// Refreshes the source picker: apps come and go, input devices are
@@ -432,7 +644,9 @@ extension AppDelegate {
                                                                       on: enabledAirPlay.contains(id)),
                                     systemName: systemName(airPlay: id),
                                     airPlay2: receiver.map { native?.reachedOverAirPlay2($0) == true } ?? false,
-                                    waitingForAirPlay2: receiver.map { native?.isWaiting($0) == true } ?? false,
+                                    waitingForAirPlay2: receiver.map { native?.waitReason($0) == .tooManyAirPlay2 } ?? false,
+                                    waitingForPtp: receiver.map { native?.waitReason($0) == .ptpOtherNetwork } ?? false,
+                                    unannounced: receiver.map { native?.isUnannounced($0) == true } ?? false,
                                     paired: receiver.map { native?.isPaired($0) == true } ?? false,
                                     holdsCredentials: receiver.map { native?.keepsCredentials($0) == true } ?? false,
                                     holdsPassword: receiver.map { native?.holdsPassword($0) == true } ?? false,
@@ -588,6 +802,8 @@ extension AppDelegate {
     @objc func showGuide(_ sender: Any?) { openGuideWindow() }
 
     @objc func showWebRemote(_ sender: Any?) { openWebRemoteWindow() }
+
+    @objc func showPermissionSetup(_ sender: Any?) { openPermissionSetup() }
 
     @objc func toggleStreaming(_ sender: Any?) { setStreaming(!engine.isRunning, fromMenu: true) }
 

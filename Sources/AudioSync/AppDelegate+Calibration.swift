@@ -26,6 +26,7 @@ extension AppDelegate {
         case .authorized:
             break
         case .notDetermined:
+            guard permissionAllows(.microphone, state: .notAsked, origin: .user) else { return }
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
                 DispatchQueue.main.async {
                     guard let self else { return }
@@ -200,6 +201,12 @@ final class CalibrationRun {
                                                             firstFrameNs: clock.nanoseconds(ticks: first), rate: mic.rate)
                 else { return fail(.noMicrophone) }
                 let frames = CalibrationFlow.recordingFrames(largestHoldBackMs: largestHoldBackMs, rate: mic.rate)
+                DebugTrace.log("[AudioSync] calibration: \(which) sweep in on the "
+                    + "\(CalibrationTap.playedOnFill ? "silence fill" : "tap block") at ticks \(ticks), "
+                    + "lagFrames \(start), mic firstFrameTicks \(first) timestamp valid \(mic.firstFrameStamped), "
+                    + "hold-backs now: reference \(String(describing: app.localHoldBacks[reference])) ms, "
+                    + "chosen \(String(describing: app.localHoldBacks[chosen])) ms; "
+                    + "\(app.engine.driftNote(uid: reference)); \(app.engine.driftNote(uid: chosen))")
                 stage = .recording(which, mic, start: start, frames: frames,
                                    deadlineNs: now + seconds(Double(frames) / Double(mic.rate) + 2))
             } else if now >= asked + seconds(1.5) {
@@ -210,6 +217,9 @@ final class CalibrationRun {
             guard mic.framesRecorded >= start + frames || now >= deadline else { return }
             mic.stop()
             recordings[which] = (mic.recording(from: start, count: frames), mic.rate)
+            if let heard = recordings[which] {
+                CalibrationFlow.logArrival("calibration: \(which)", recording: heard.samples, rate: heard.rate)
+            }
             stage = .between
             DebugTrace.log("[AudioSync] calibration: \(which) recorded, \(recordings[which]?.samples.count ?? 0) "
                 + "frames at \(mic.rate) Hz from frame \(start)")

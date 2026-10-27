@@ -172,6 +172,9 @@ pub enum AirPlayProblem {
     /// An Apple TV that needs pairing with a PIN first; switching it on
     /// pairs it.
     NeedsPin,
+    /// It turned the session down without asking for a PIN or password, so
+    /// it is off; the notice names no code.
+    NotAccepted,
     /// Pairing with an Apple TV failed, so it is off.
     PairingFailed,
     /// It needs pairing, which AudioSync for Windows can't do yet.
@@ -180,8 +183,11 @@ pub enum AirPlayProblem {
     AirPlay2NotYet,
     /// It turned NTP timing down, and PTP timing isn't available.
     TimingUnavailable,
-    /// Another AirPlay 2 speaker plays; it starts once that one stops.
-    OneAirPlay2Speaker,
+    /// Sixteen AirPlay 2 speakers play; it starts once one of them stops.
+    TooManyAirPlay2Speakers,
+    /// It takes only PTP, which runs for speakers on another network; it
+    /// starts once those stop.
+    PtpOtherNetwork,
     /// An Apple TV whose home theater group plays, so it is off.
     PlaysThroughSpeakers,
     /// It didn't prove it is the speaker that was paired, so it is off.
@@ -269,6 +275,9 @@ pub struct AbsentMember {
     /// this run; empty when neither is known.
     pub name: String,
     pub kind: SpeakerKind,
+    /// A stereo pair or home theater this launch can't play, since AirPlay 2
+    /// is off.
+    pub needs_airplay2: bool,
 }
 
 /// A row under a zone's header (spec S245): every member but the hidden ones,
@@ -387,9 +396,15 @@ pub enum Waiting {
     /// An AirPlay speaker that stopped playing, which AudioSync keeps trying
     /// to reach.
     Reconnecting,
-    /// An AirPlay speaker that waits for the one AirPlay 2 slot; it starts
-    /// once the other AirPlay 2 speaker stops.
+    /// An AirPlay speaker that waits for an AirPlay 2 place, 16 being in
+    /// use; it starts once one of them stops.
     ForAirPlay2Slot,
+    /// An AirPlay 2 speaker that takes only PTP while PTP runs for speakers
+    /// on another network; it starts once those stop.
+    ForPtp,
+    /// An AirPlay speaker that stopped announcing itself on the network; it
+    /// plays once it is announced again (P215).
+    NotOnNetwork,
 }
 
 /// Where a pairing's PIN prompt is.
@@ -485,6 +500,96 @@ pub enum SwitchName {
         first: u16,
         last: u16,
     },
+}
+
+/// What the updater's notice says (spec S297 to S305); the UI words it
+/// from `strings.slint`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub enum UpdaterNotice {
+    Available {
+        new: String,
+        running: String,
+        /// Why this version didn't install last time (spec S316).
+        last: Option<UpdateRecordReason>,
+    },
+    /// A manual check waits for the server (spec S305).
+    Checking,
+    Downloading {
+        percent: Option<u8>,
+    },
+    Installed {
+        version: String,
+    },
+    UpToDate {
+        running: String,
+    },
+    Unreachable,
+    DownloadFailed,
+    BadSignature,
+    BrokenDownload,
+    DiskFull,
+    ReadOnly,
+    InUse,
+    Failed,
+    /// Each pair is a `.bak` file and the name it goes back to, the exe
+    /// first.
+    RestoreFailed {
+        renames: Vec<(String, String)>,
+    },
+    RelaunchFailed,
+    /// Windows security removed or blocked an update file (spec S315).
+    Blocked,
+}
+
+/// A version the updater stopped offering at launch (spec S316), saved in
+/// the settings.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UpdateRecord {
+    pub version: String,
+    pub reason: UpdateRecordReason,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateRecordReason {
+    /// The new version gave no start signal (spec S314).
+    FailedStart,
+    /// Windows security blocked an update file (spec S315).
+    Blocked,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub enum UpdaterButton {
+    Download,
+    NotNow,
+    Cancel,
+    TryAgain,
+    OpenReleasePage,
+    RestartNow,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl UpdaterNotice {
+    pub fn buttons(&self) -> &'static [UpdaterButton] {
+        use UpdaterButton::*;
+        match self {
+            UpdaterNotice::Available { .. } => &[Download, NotNow],
+            UpdaterNotice::Downloading { .. } => &[Cancel],
+            UpdaterNotice::Installed { .. } => &[RestartNow],
+            UpdaterNotice::ReadOnly
+            | UpdaterNotice::RelaunchFailed
+            | UpdaterNotice::Blocked
+            | UpdaterNotice::BadSignature
+            | UpdaterNotice::Failed => &[OpenReleasePage],
+            UpdaterNotice::Unreachable
+            | UpdaterNotice::DownloadFailed
+            | UpdaterNotice::DiskFull
+            | UpdaterNotice::InUse => &[TryAgain],
+            _ => &[],
+        }
+    }
 }
 
 /// What a notice says. The UI words it (the notice texts in
@@ -601,8 +706,9 @@ pub enum NoticeMessage {
     /// turned off as a startup app; it is turned on again there.
     LaunchAtLoginOffInSettings,
     /// File > AirPlay 2 (Experimental) was turned on (`on`) or off, which
-    /// applies once AudioSync is quit and opened again.
-    AirPlay2NextLaunch { on: bool },
+    /// applies once AudioSync is quit and opened again; `prefer`: the item
+    /// is Prefer AirPlay 2, under the AirPlay 2 flag (spec S313).
+    AirPlay2NextLaunch { on: bool, prefer: bool },
     /// The web remote listens while a connected network is Public, where
     /// anyone on it can reach the pairing page.
     RemoteOnPublicNetwork,
@@ -617,6 +723,9 @@ pub enum NoticeMessage {
     AirPlayAheadOfCast { speaker: String, tenths: u32 },
     /// The saved groups became zones at this launch (spec S248); posted once.
     GroupsBecameZones,
+    /// The Windows updater's notice.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Update(UpdaterNotice),
     /// A preset recall left stored members off (spec S265), each by its
     /// shown name with why; `nothing_changed`: none could go on, so the
     /// recall changed nothing.
@@ -633,7 +742,16 @@ impl NoticeMessage {
     pub fn reports_a_change(&self) -> bool {
         matches!(
             self,
-            Self::SourceSwitched { .. } | Self::AirPlay2NextLaunch { .. } | Self::GroupsBecameZones
+            Self::SourceSwitched { .. }
+                | Self::AirPlay2NextLaunch { .. }
+                | Self::GroupsBecameZones
+                | Self::Update(
+                    UpdaterNotice::Available { .. }
+                        | UpdaterNotice::Checking
+                        | UpdaterNotice::Downloading { .. }
+                        | UpdaterNotice::Installed { .. }
+                        | UpdaterNotice::UpToDate { .. }
+                )
         )
     }
 }
@@ -775,6 +893,9 @@ impl SpeakerState {
 pub struct AppState {
     /// Streaming is on.
     pub running: bool,
+    /// Streaming is on with every speaker off: the speaker list says the
+    /// first one turned on plays (spec S162).
+    pub no_speaker_on: bool,
     pub sources: Vec<Source>,
     pub source_id: String,
     /// The channel pair saved for the chosen input device, as an index (1
@@ -818,7 +939,7 @@ pub struct AppState {
     /// speaker list says to check the network and Windows Firewall.
     pub airplay_none_found: bool,
     /// AirPlay discovery runs and has listed no speaker yet, short of
-    /// `airplay_none_found`: the flyout says it is looking.
+    /// `airplay_none_found`: the main window and the flyout say they look.
     pub airplay_searching: bool,
     /// What a session does when the app it captures quits (spec S227).
     pub when_source_quits: WhenSourceQuits,
@@ -826,6 +947,8 @@ pub struct AppState {
     pub cast_list: CastList,
     /// A Google Cast sender runs, so Add by Address… can list a speaker.
     pub cast_by_address: bool,
+    /// A Cast speaker is on, listed or not, so another one is refused.
+    pub cast_on: bool,
     /// The microphone calibration a row shows.
     pub calibration: CalibrationState,
     /// Calibrate All Speakers, in its own card.
@@ -1027,10 +1150,22 @@ impl AppState {
     }
 
     /// The note on `row` under `zone`, if it has one. The Cast note needs
-    /// another member on: the click plan switches on one Cast member at most.
+    /// another member on and a Cast speaker on, as on the Mac: the click
+    /// plan switches on one Cast member at most.
     pub fn zone_note<'a>(&self, zone: &Zone, row: ZoneRow<'a>) -> Option<ZoneNote<'a>> {
         let speaker = match row {
-            ZoneRow::NotFound(_) => return Some(ZoneNote::NotFound),
+            ZoneRow::NotFound(id) => {
+                return Some(
+                    if self
+                        .absent_member(id)
+                        .is_some_and(|member| member.needs_airplay2)
+                    {
+                        ZoneNote::NeedsAirPlay2
+                    } else {
+                        ZoneNote::NotFound
+                    },
+                );
+            }
             ZoneRow::Listed(speaker) => speaker,
         };
         if speaker.group.is_some() && speaker.availability == Availability::AirPlay2NotYet {
@@ -1046,6 +1181,7 @@ impl AppState {
         (speaker.kind == SpeakerKind::Cast
             && !speaker.enabled
             && speaker.availability == Availability::Open
+            && self.cast_on
             && other_on())
         .then_some(ZoneNote::CastStayedOff)
     }
@@ -1152,6 +1288,56 @@ impl AppState {
         // A stable sort keeps the order of equal names.
         connected.sort_by_key(|s| s.name.to_lowercase());
         (this_pc, connected)
+    }
+
+    /// A section's speakers split into its full rows and, after them, the
+    /// compact rows of those in a zone, each with its zone; order kept.
+    pub fn split_zoned<'a>(
+        &'a self,
+        section: Vec<&'a Speaker>,
+    ) -> (Vec<&'a Speaker>, Vec<(&'a Speaker, &'a Zone)>) {
+        let mut full = Vec::new();
+        let mut zoned = Vec::new();
+        for speaker in section {
+            match self.zone_of(&speaker.id) {
+                Some(zone) => zoned.push((speaker, zone)),
+                None => full.push(speaker),
+            }
+        }
+        (full, zoned)
+    }
+
+    /// The switches Only This Speaker makes for zone member `id`, in order:
+    /// it comes on unless it is, and every other present member of its zone
+    /// that is on goes off. Another Cast member goes off before it comes on,
+    /// since one Cast speaker plays at a time; the rest after, so streaming
+    /// never stops in between. A hidden member is left alone, and nobody
+    /// leaves the zone.
+    pub fn only_this_steps(&self, id: &str) -> Vec<(String, bool)> {
+        let (Some(zone), Some(this)) = (self.zone_of(id), self.speaker(id)) else {
+            return Vec::new();
+        };
+        let hidden = |key: &str| self.hidden.iter().any(|hidden| hidden.id == key);
+        if hidden(id) {
+            return Vec::new();
+        }
+        let (cast, rest): (Vec<&Speaker>, Vec<&Speaker>) = self
+            .zone_members(zone)
+            .filter(|s| s.id != id && s.enabled && !hidden(&s.id))
+            .partition(|s| s.kind == SpeakerKind::Cast);
+        let off = |s: &&Speaker| (s.id.clone(), false);
+        let mut steps = Vec::new();
+        if !this.enabled {
+            if this.kind == SpeakerKind::Cast {
+                steps.extend(cast.iter().map(off));
+            }
+            steps.push((this.id.clone(), true));
+        }
+        if this.enabled || this.kind != SpeakerKind::Cast {
+            steps.extend(cast.iter().map(off));
+        }
+        steps.extend(rest.iter().map(off));
+        steps
     }
 }
 
@@ -1296,6 +1482,13 @@ pub trait Backend {
     fn move_to_zone(&mut self, speaker_id: &str, zone_id: &str);
     /// Takes speaker `speaker_id` out of its zone.
     fn remove_from_zone(&mut self, speaker_id: &str);
+    /// Only This Speaker in a zone member's menu, through each speaker's
+    /// own switch.
+    fn only_this_speaker(&mut self, speaker_id: &str) {
+        for (id, on) in self.snapshot().only_this_steps(speaker_id) {
+            self.set_speaker_enabled(&id, on);
+        }
+    }
     /// Sets zone `id`'s volume, 0 to 100, which scales each member's own
     /// volume (spec S249).
     fn set_zone_volume(&mut self, id: &str, volume: f64);
@@ -1416,6 +1609,12 @@ pub trait Backend {
         ViewSettings::default()
     }
 
+    /// Whether AirPlay 2 is automatic per receiver for this launch (spec
+    /// S312); the AirPlay 2 item then reads Prefer AirPlay 2 (S313).
+    fn airplay2_auto(&self) -> bool {
+        false
+    }
+
     /// The windows' own settings changed; they are saved with the rest.
     fn set_view_settings(&mut self, _settings: ViewSettings) {}
 
@@ -1468,7 +1667,7 @@ pub fn frame_to_keep(shows: MainWindowShows, saved: Option<WindowFrame>) -> Opti
 }
 
 /// What the windows themselves keep across restarts.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ViewSettings {
     /// View > Show Virtual Devices.
     pub show_virtual_devices: bool,
@@ -1481,6 +1680,11 @@ pub struct ViewSettings {
     /// File > AirPlay 2 (Experimental), as saved; the sender reads it at
     /// launch only.
     pub airplay2_experimental: bool,
+    /// File > Check for Updates Automatically.
+    pub check_updates_automatically: bool,
+    /// The last update check that read the appcast, Unix seconds.
+    pub last_update_check: Option<u64>,
+    pub update_record: Option<UpdateRecord>,
 }
 
 /// Clamps a typed or stepped offset to what the sync controls accept, in
@@ -1512,17 +1716,12 @@ pub fn parse_delay_ms(text: &str) -> Option<f64> {
     parse_ms(text).map(clamp_delay_ms)
 }
 
-/// What a delay field keeps of a keystroke or a paste: digits, after one
-/// leading "+" or "−" (or hyphen-minus); anything else can't be typed.
-pub fn delay_field_text(typed: &str) -> String {
-    typed
-        .chars()
-        .enumerate()
-        .filter(|&(index, c)| {
-            c.is_ascii_digit() || (index == 0 && matches!(c, '+' | '-' | '\u{2212}'))
-        })
-        .map(|(_, c)| c)
-        .collect()
+/// The text a delay field takes from a keystroke or a paste: digits after one
+/// leading "+" or "−" (or hyphen-minus). Anything else is blocked whole, so a
+/// paste of "1,5" can't leave "15" behind.
+pub fn delay_field_text(typed: &str) -> Option<&str> {
+    let digits = typed.strip_prefix(['+', '-', '\u{2212}']).unwrap_or(typed);
+    digits.bytes().all(|b| b.is_ascii_digit()).then_some(typed)
 }
 
 /// While a test holds it, the check of a host under `.held` waits.
@@ -1583,6 +1782,8 @@ pub struct MockBackend {
     /// Each play-pause of the now-playing card: its app and whether it
     /// showed playing.
     pub play_pauses: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
+    /// The speaker that asks for its password once it is turned on.
+    password_on: Option<String>,
 }
 
 #[cfg(any(test, feature = "mock-backend"))]
@@ -1696,6 +1897,7 @@ impl MockBackend {
         speakers[0].device_volume = Some(Hint::Low { percent: 13 });
         let state = AppState {
             running: false,
+            no_speaker_on: false,
             sources: vec![
                 source("system", "All System Audio", SourceKind::System),
                 source("app:player", "Music Player", SourceKind::App),
@@ -1739,6 +1941,7 @@ impl MockBackend {
             when_source_quits: WhenSourceQuits::Stop,
             cast_list: CastList::Quiet,
             cast_by_address: true,
+            cast_on: false,
             calibration: CalibrationState::default(),
             calibrate_all: CalibrateAllState::default(),
         };
@@ -1750,6 +1953,7 @@ impl MockBackend {
             presets: Vec::new(),
             preset_notice: None,
             play_pauses: std::rc::Rc::default(),
+            password_on: None,
         }
     }
 
@@ -1790,11 +1994,30 @@ impl MockBackend {
         });
     }
 
+    /// Has the speaker `id` ask for its password when it is turned on, as a
+    /// speaker with a password does in the adapter.
+    #[cfg(test)]
+    pub fn ask_password_when_on(&mut self, id: &str) {
+        self.password_on = Some(id.into());
+    }
+
     /// AirPlay discovery has found nothing for a while: Connected Speakers
     /// shows its note.
     #[cfg(test)]
     pub fn set_airplay_none_found(&mut self, on: bool) {
         self.state.airplay_none_found = on;
+    }
+
+    /// AirPlay discovery runs and has listed no speaker yet.
+    #[cfg(test)]
+    pub fn set_airplay_searching(&mut self, on: bool) {
+        self.state.airplay_searching = on;
+    }
+
+    /// Streaming is on with every speaker off.
+    #[cfg(test)]
+    pub fn set_no_speaker_on(&mut self, on: bool) {
+        self.state.no_speaker_on = on;
     }
 
     /// Keeps only the example speakers `keep` accepts, and the zones.
@@ -1829,8 +2052,9 @@ impl MockBackend {
     }
 
     /// The example data with zones, for `AUDIOSYNC_PREVIEW_ZONES`: Living
-    /// Room holds a waiting speaker, a stereo pair, a Google Cast speaker,
-    /// a hidden one (not counted) and one not found yet; Upstairs a speaker
+    /// Room holds a waiting speaker, a stereo pair, a Google Cast speaker
+    /// kept off while Porch plays, a hidden one (not counted) and one not
+    /// found yet; Upstairs a speaker
     /// that plays as part of the pair; Office is empty. Streaming is on, and
     /// the notice of groups that became zones shows.
     pub fn zones_preview() -> Self {
@@ -1883,7 +2107,14 @@ impl MockBackend {
             }),
             ..template
         };
-        state.speakers.extend([pair, left, attic]);
+        let porch = Speaker {
+            id: "cc:porch".into(),
+            name: "Porch".into(),
+            system_name: "Porch".into(),
+            enabled: true,
+            ..attic.clone()
+        };
+        state.speakers.extend([pair, left, attic, porch]);
         if let Some(kitchen) = state
             .speakers
             .iter_mut()
@@ -1901,6 +2132,7 @@ impl MockBackend {
             id: "airplay:theater:4C2D".into(),
             name: "Home Theater".into(),
             kind: SpeakerKind::AirPlay2,
+            needs_airplay2: false,
         });
         state.notices.push(Notice {
             id: 1,
@@ -1973,6 +2205,7 @@ impl MockBackend {
                 id: "airplay:patio".into(),
                 name: "Patio".into(),
                 kind: SpeakerKind::AirPlay,
+                needs_airplay2: false,
             });
             mock.zones_mut(|zones| {
                 add_zone(zones, "zone:outdoors", "Outdoors", &["airplay:patio"])
@@ -2020,12 +2253,16 @@ impl Backend for MockBackend {
 
     fn snapshot(&self) -> AppState {
         let mut state = self.state.clone();
+        state.cast_on = state
+            .speakers
+            .iter()
+            .any(|speaker| speaker.kind == SpeakerKind::Cast && speaker.enabled);
         show_presets(&mut state, &self.presets);
         state
     }
 
     fn view_settings(&self) -> ViewSettings {
-        self.view
+        self.view.clone()
     }
 
     fn set_view_settings(&mut self, settings: ViewSettings) {
@@ -2103,6 +2340,17 @@ impl Backend for MockBackend {
                 name: speaker.name.clone(),
                 phase: PinPhase::Ready,
                 wrong_pin: false,
+            });
+        }
+        if let Some(speaker) = self
+            .state
+            .speaker(id)
+            .filter(|_| on && self.password_on.as_deref() == Some(id))
+        {
+            self.state.password_prompt = Some(PasswordPrompt {
+                speaker_id: speaker.id.clone(),
+                name: speaker.name.clone(),
+                wrong: false,
             });
         }
         // Like the Mac: turning a speaker on starts streaming.
@@ -2506,20 +2754,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_delay_field_keeps_digits_and_one_leading_sign() {
-        for (typed, kept) in [
-            ("150", "150"),
-            ("+150", "+150"),
-            ("\u{2212}250", "\u{2212}250"),
-            ("-25", "-25"),
-            ("1a2", "12"),
-            ("15x", "15"),
-            ("1-2", "12"),
-            ("--5", "-5"),
-            ("1.5", "15"),
-            (" 7", "7"),
-        ] {
-            assert_eq!(delay_field_text(typed), kept, "{typed:?}");
+    fn a_delay_field_takes_digits_after_one_leading_sign_and_blocks_the_rest() {
+        for typed in ["", "+", "-", "150", "+150", "\u{2212}250", "-25"] {
+            assert_eq!(delay_field_text(typed), Some(typed), "{typed:?}");
+        }
+        for typed in ["1a2", "15x", "1-2", "--5", "1.5", "1,5", " 7", "\u{2212}2x"] {
+            assert_eq!(delay_field_text(typed), None, "{typed:?}");
         }
     }
 
@@ -2783,7 +3023,13 @@ mod tests {
     #[test]
     fn only_notices_that_report_a_change_show_the_info_glyph() {
         assert!(NoticeMessage::GroupsBecameZones.reports_a_change());
-        assert!(NoticeMessage::AirPlay2NextLaunch { on: true }.reports_a_change());
+        assert!(
+            NoticeMessage::AirPlay2NextLaunch {
+                on: true,
+                prefer: false
+            }
+            .reports_a_change()
+        );
         assert!(
             NoticeMessage::SourceSwitched {
                 source: "Spotify".into()
@@ -2881,6 +3127,110 @@ mod tests {
         assert_eq!(zone.name, "Office");
         assert_eq!(zone.members, ["local:desk"]);
         assert!(state.zones[0].members.is_empty(), "the empty zone stays");
+    }
+
+    #[test]
+    fn a_zone_member_keeps_a_compact_row_after_its_sections_full_rows() {
+        let mut backend = MockBackend::new();
+        backend.add_zone(
+            "zone:a",
+            "Upstairs",
+            &["airplay:bedroom", "local:headphones"],
+        );
+        let state = backend.snapshot();
+        let (this_pc, connected) = state.layout();
+        let ids = |rows: &[&Speaker]| rows.iter().map(|s| s.id.clone()).collect::<Vec<_>>();
+        let (full, zoned) = state.split_zoned(this_pc);
+        assert_eq!(ids(&full), ["local:speakers"]);
+        let zoned: Vec<(&str, &str)> = zoned
+            .iter()
+            .map(|(s, zone)| (s.id.as_str(), zone.name.as_str()))
+            .collect();
+        assert_eq!(zoned, [("local:headphones", "Upstairs")]);
+        let (full, zoned) = state.split_zoned(connected);
+        assert!(!ids(&full).contains(&"airplay:bedroom".to_owned()));
+        assert_eq!(zoned.len(), 1);
+        assert_eq!(zoned[0].0.id, "airplay:bedroom");
+    }
+
+    #[test]
+    fn only_this_speaker_turns_the_zones_others_off_and_keeps_them_in_it() {
+        let mut backend = MockBackend::new();
+        backend.add_zone(
+            "zone:a",
+            "Living",
+            &["airplay:kitchen", "local:speakers", "local:desk", "gone"],
+        );
+        backend.set_speaker_enabled("local:bt", true);
+        backend.only_this_speaker("local:desk");
+        let state = backend.snapshot();
+        let on = |id: &str| state.speaker(id).is_some_and(|s| s.enabled);
+        assert!(on("local:desk"), "it plays");
+        assert!(!on("airplay:kitchen") && !on("local:speakers"));
+        assert!(on("local:bt"), "a speaker in no zone stays on");
+        assert_eq!(
+            state.zones[0].members,
+            ["airplay:kitchen", "local:speakers", "local:desk", "gone"],
+            "nobody leaves the zone"
+        );
+        backend.only_this_speaker("local:bt");
+        assert!(
+            backend.snapshot().speaker("local:bt").unwrap().enabled,
+            "no zone: nothing"
+        );
+    }
+
+    #[test]
+    fn only_this_speaker_leaves_hidden_members_alone() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:a", "Living", &["local:speakers", "local:desk"]);
+        backend.set_speaker_enabled("local:speakers", true);
+        let mut state = backend.snapshot();
+        state.hidden.push(HiddenSpeaker {
+            id: "local:speakers".into(),
+            name: "Speakers".into(),
+            kind_text: String::new(),
+            present: Some(SpeakerKind::BuiltIn),
+        });
+        assert_eq!(
+            state.only_this_steps("local:desk"),
+            [("local:desk".to_owned(), true)]
+        );
+        assert!(state.only_this_steps("local:speakers").is_empty());
+    }
+
+    #[test]
+    fn only_this_speaker_frees_the_cast_place_before_a_cast_member_comes_on() {
+        let mut backend = MockBackend::new();
+        let template = backend.snapshot().speakers[2].clone();
+        for (id, name) in [("cc:attic", "Attic"), ("cc:den", "Den")] {
+            backend.add_speaker(Speaker {
+                id: id.into(),
+                name: name.into(),
+                kind: SpeakerKind::Cast,
+                enabled: id == "cc:attic",
+                ..template.clone()
+            });
+        }
+        backend.add_zone(
+            "zone:a",
+            "Living",
+            &["cc:attic", "local:speakers", "cc:den"],
+        );
+        let state = backend.snapshot();
+        assert_eq!(
+            state.only_this_steps("cc:den"),
+            [
+                ("cc:attic".to_owned(), false),
+                ("cc:den".to_owned(), true),
+                ("local:speakers".to_owned(), false),
+            ]
+        );
+        assert_eq!(
+            state.only_this_steps("local:speakers"),
+            [("cc:attic".to_owned(), false)],
+            "already on: only the others switch"
+        );
     }
 
     #[test]

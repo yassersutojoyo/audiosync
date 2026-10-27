@@ -918,6 +918,12 @@ impl CastSpeakers {
         }
     }
 
+    /// Whether a device is on, listed or not: one that left the network
+    /// still refuses another (spec C2).
+    pub fn is_on(&self) -> bool {
+        self.enabled.is_some()
+    }
+
     /// Whether a device is on and either listed or in a session: then local
     /// outputs wait for it by [`CastSpeakers::anchor`].
     pub fn chosen(&self) -> bool {
@@ -1727,6 +1733,13 @@ pub mod tests {
                     ],
                     addresses: vec![IpAddr::V4(address)],
                 }));
+        }
+
+        /// The goodbye of a speaker announced with [`FakeCast::announce`].
+        pub fn withdraw(&self, id: &str, name: &str) {
+            self.state().browse.push_back(BrowseEvent::Removed {
+                fullname: format!("{name}-{id}._googlecast._tcp.local."),
+            });
         }
 
         pub fn report(&self, event: HostEvent) {

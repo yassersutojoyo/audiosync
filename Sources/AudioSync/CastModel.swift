@@ -398,6 +398,8 @@ struct CastModel {
     /// Devices added by hand that the user removed: a change the sender
     /// queued before it dropped one doesn't bring the row back.
     private(set) var removedManual: Set<String> = []
+    /// Devices another app took over, until the user turns one on again.
+    private(set) var takenOver: Set<String> = []
 
     /// The devices listed, by name.
     var rows: [String] {
@@ -446,12 +448,17 @@ struct CastModel {
 
     func offset(of id: String) -> Double { offsets[id] ?? 0 }
 
+    /// Offline or taken over by another app: a zone click and Only This
+    /// Speaker leave it off (S246).
+    func cantStartNow(_ id: String) -> Bool { devices[id]?.offline == true || takenOver.contains(id) }
+
     /// A browse found the device added by address as `old` under its `id`
     /// (C18), and the sender moved its session there: what the app holds
     /// about it moves too, so it stays on and playing, and Remove still
     /// forgets its address.
     private mutating func identified(_ old: String, as new: String) {
         if let address = manualAddresses.removeValue(forKey: old) { manualAddresses[new] = address }
+        if takenOver.remove(old) != nil { takenOver.insert(new) }
         if enabled == old { enabled = new }
         if starting == old { starting = new }
         if let current = attempt, current.device == old {
@@ -503,6 +510,7 @@ struct CastModel {
     mutating func turnOn(_ id: String) -> CastProblem? {
         if let other = enabled, other != id { return .busy }
         enabled = id
+        takenOver.remove(id)
         return nil
     }
 
@@ -605,6 +613,7 @@ struct CastModel {
             unanswered = []
             members = nil
             if enabled == id { enabled = nil }
+            if end == .takenOver { takenOver.insert(id) }
             return .turnedOff(id, problem: end.problem)
         case .commandFailed, .note, .groupLog, .memoryChanged, .discoveryStopped, .failed:
             return nil

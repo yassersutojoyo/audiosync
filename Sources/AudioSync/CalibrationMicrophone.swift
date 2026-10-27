@@ -93,6 +93,10 @@ final class CalibrationMicrophone {
         return ticks == 0 ? nil : ticks
     }
 
+    /// The first frame's time came from the device's timestamp, not the
+    /// host clock at the callback; read once `firstFrameTicks` is set.
+    var firstFrameStamped: Bool { sink.firstStamped.load(ordering: .acquiring) }
+
     /// Frames recorded so far.
     var framesRecorded: Int { sink.written.load(ordering: .acquiring) }
 
@@ -122,6 +126,7 @@ private final class MicrophoneSink {
     private let stereo: UnsafeMutablePointer<Float>
     let written = Atomic<Int>(0)
     let firstTicks = Atomic<UInt64>(0)
+    let firstStamped = Atomic<Bool>(false)
     private let layout: CaptureChannels.Layout
 
     init(capacity: Int, layout: CaptureChannels.Layout) {
@@ -146,6 +151,7 @@ private final class MicrophoneSink {
         var count = written.load(ordering: .relaxed)
         if count == 0 && firstTicks.load(ordering: .relaxed) == 0 {
             let stamped = time.pointee.mFlags.contains(.hostTimeValid) && time.pointee.mHostTime != 0
+            firstStamped.store(stamped, ordering: .relaxed)
             firstTicks.store(stamped ? time.pointee.mHostTime : mach_absolute_time(), ordering: .releasing)
         }
         let room = capacity

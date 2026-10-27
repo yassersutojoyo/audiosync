@@ -950,13 +950,14 @@ impl Session {
                         return self.send(Kind::Volume(volume), now, false);
                     }
                 }
+                if self.pending_volume.is_some() {
+                    // Reads, metadata and keep-alives wait behind volume
+                    // (P120, P122, P127): a read ahead of it reports the old level.
+                    return;
+                }
                 if self.pending_read_volume {
                     self.pending_read_volume = false;
                     return self.send(Kind::ReadVolume, now, false);
-                }
-                if self.pending_volume.is_some() {
-                    // Metadata and keep-alives wait behind volume (P120, P127).
-                    return;
                 }
                 while let Some(queued) = self.metadata_queue.pop_front() {
                     let metadata = match queued {

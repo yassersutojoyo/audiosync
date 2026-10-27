@@ -1,12 +1,12 @@
 //! Spec coverage: every clause of `docs/AIRPLAY_SPEC.md` (P1 to Pn) is named
-//! by at least one `// covers: P20, P26` line in `airplay/src` or
-//! `airplay/tests`, or is listed in `airplay/tests/spec_pending.txt` with a
-//! one-line reason because a later stage implements it (audio and RTP,
-//! timing, pairing crypto, real transport, AirPlay 2). A clause is covered
-//! only when everything it asks of the sender is implemented and tested; a
-//! test for part of a pending clause says so in a plain comment instead of a
-//! marker. The pending list may only shrink: a clause that gains a marker
-//! must leave it.
+//! by at least one `// covers: P20, P26` line in `airplay/tests` or in the
+//! `#[cfg(test)]` module of a file in `airplay/src`, or is listed in
+//! `airplay/tests/spec_pending.txt` with a one-line reason because a later
+//! stage implements it (audio and RTP, timing, pairing crypto, real
+//! transport, AirPlay 2). A clause is covered only when everything it asks
+//! of the sender is implemented and tested; a test for part of a pending
+//! clause says so in a plain comment instead of a marker. The pending list
+//! may only shrink: a clause that gains a marker must leave it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -89,8 +89,28 @@ fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
+/// The line index where a source file's test code starts: its top-level
+/// `#[cfg(test)]` module, which ends the file by convention. A `// covers:`
+/// line above it would claim coverage for code no test runs. Panics when the
+/// first top-level `#[cfg(test)]` doesn't open a `mod`, since a test helper
+/// there would let the non-test code below it count.
+fn test_code_start(name: &str, text: &str) -> usize {
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(at) = lines.iter().position(|line| *line == "#[cfg(test)]") else {
+        return lines.len();
+    };
+    let next = lines.get(at + 1).copied().unwrap_or_default();
+    assert!(
+        next.starts_with("mod "),
+        "{name}:{}: the top-level #[cfg(test)] must open the test module, \
+         but the next line is `{next}`",
+        at + 1
+    );
+    at
+}
+
 /// Clause numbers named by `// covers:` lines, with where each was named; and
-/// every malformed marker line.
+/// every malformed marker line, a marker outside test code included.
 fn covers() -> (BTreeMap<u32, Vec<String>>, Vec<String>) {
     let mut files = Vec::new();
     rust_files(&crate_dir().join("src"), &mut files);
@@ -104,11 +124,20 @@ fn covers() -> (BTreeMap<u32, Vec<String>>, Vec<String>) {
             .unwrap_or(&file)
             .display()
             .to_string();
+        let tests_from = if file.starts_with(crate_dir().join("src")) {
+            test_code_start(&name, &text)
+        } else {
+            0
+        };
         for (index, line) in text.lines().enumerate() {
             let Some(list) = line.trim_start().strip_prefix(MARKER) else {
                 continue;
             };
             let place = format!("{name}:{}", index + 1);
+            if index < tests_from {
+                malformed.push(format!("{place}: outside test code: {}", line.trim()));
+                continue;
+            }
             let ids: Vec<Option<u32>> = match list.strip_prefix(' ') {
                 Some(list) => list.split(", ").map(clause_number).collect(),
                 None => vec![None],
@@ -228,6 +257,22 @@ fn every_clause_names_a_source_and_the_ids_are_p1_to_pn_once_each() {
         unsourced.is_empty(),
         "clauses without a *Source:* line: {}",
         list(unsourced)
+    );
+}
+
+#[test]
+fn only_markers_in_a_source_files_test_module_count() {
+    let text = "fn sender() {}\n// covers: P1\n#[cfg(test)]\nmod tests {\n    // covers: P2\n}\n";
+    assert_eq!(test_code_start("a.rs", text), 2);
+    assert_eq!(
+        test_code_start("a.rs", "fn a() {\n    #[cfg(test)]\n    b();\n}\n"),
+        4,
+        "an indented cfg(test) is not the test module; with none, nothing counts"
+    );
+    let helper = "#[cfg(test)]\nfn helper() {}\n// covers: P1\nfn sender() {}\n";
+    assert!(
+        std::panic::catch_unwind(|| test_code_start("a.rs", helper)).is_err(),
+        "a top-level cfg(test) that doesn't open a module is not the test module"
     );
 }
 

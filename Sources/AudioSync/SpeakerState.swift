@@ -62,9 +62,38 @@ enum StreamingPolicy {
         !enabledAirPlay.isEmpty || !enabledLocal.isEmpty
     }
 
+    /// A start the user asked for (the power switch, a phone, a preset)
+    /// streams with every speaker off, and the first speaker turned on
+    /// joins. AudioSync on its own still waits for a speaker.
+    static func startsWithoutSpeaker(origin: StartOrigin) -> Bool { origin != .automatic }
+
+    /// Whether a start goes ahead. `continuing`: a rebuild or a source switch
+    /// of the session; `hadSpeaker`: a speaker was on in that session. Only a
+    /// session that began with every speaker off carries on without one: once
+    /// the last speaker went off, an automatic retry would capture, and mute,
+    /// the whole Mac for nobody.
+    static func starts(hasSpeaker: Bool, continuing: Bool, hadSpeaker: Bool, origin: StartOrigin) -> Bool {
+        hasSpeaker || (continuing && !hadSpeaker) || startsWithoutSpeaker(origin: origin)
+    }
+
     /// Streaming with every speaker switched off: nothing to stream to, so it
     /// stops. A speaker that is on but unplugged or out of reach still counts.
-    static func isIdle(streaming: Bool, enabledAirPlay: Set<String>, enabledLocal: Set<String>) -> Bool {
+    /// `hadSpeaker`: a speaker was on at some point in this session; one
+    /// started with every speaker off waits for the first.
+    static func isIdle(streaming: Bool, hadSpeaker: Bool = true,
+                       enabledAirPlay: Set<String>, enabledLocal: Set<String>) -> Bool {
+        streaming && hadSpeaker && !hasSpeaker(enabledAirPlay: enabledAirPlay, enabledLocal: enabledLocal)
+    }
+
+    /// Whether a session started with every speaker off now counts as having
+    /// had one (`isIdle`'s `hadSpeaker`): `switchedOn`, a speaker is on;
+    /// `playing`, one of them plays. One switched on that fails before it
+    /// plays, such as an AirPlay speaker asking for a code every time,
+    /// doesn't count.
+    static func countsForSession(switchedOn: Bool, playing: Bool) -> Bool { switchedOn && playing }
+
+    /// The speaker list's "No speaker is on" line.
+    static func showsNoSpeakerOn(streaming: Bool, enabledAirPlay: Set<String>, enabledLocal: Set<String>) -> Bool {
         streaming && !hasSpeaker(enabledAirPlay: enabledAirPlay, enabledLocal: enabledLocal)
     }
 }
@@ -237,4 +266,78 @@ extension LocalOutputSync {
     static func reapplyGains(on engine: LocalOutputEngine, gain: (String) -> Double) {
         for uid in engine.activeOutputUIDs { engine.setGain(uid: uid, g: gain(uid)) }
     }
+}
+
+/// A Bluetooth speaker's first stream on a link that has just come up can
+/// play later than its reported latency for the whole stream, while the same
+/// output started again a moment later plays in time (S325). This watch tells
+/// which starts are on such a link and restarts each of those once. Main
+/// thread only.
+final class FreshLinkWatch {
+    /// A start this long after its device appeared, or longer, is on a settled link.
+    static let windowS = 3.0
+    /// How long after its fresh-link start an output restarts.
+    static let restartAfterS = 2.0
+    /// The rest between the old output's fade and the new start; the sitting's
+    /// switch-off and on that played in time had 1.4 s between them.
+    static let rejoinPauseS = 1.0
+
+    enum Decision: Equatable {
+        case notBluetooth
+        /// `linkAgeS` is nil when the device was listed at launch or its
+        /// appearance was used up by a restart.
+        case settled(linkAgeS: Double?)
+        case restart(linkAgeS: Double)
+    }
+
+    private var listed: Set<String>?
+    private var appearedAt: [String: Double] = [:]
+    private var pending: [String: (ticket: Int, session: Int)] = [:]
+    private var nextTicket = 0
+    /// Outputs between their restart's fade-out and their new start: the
+    /// sync leaves them off.
+    private(set) var held: Set<String> = []
+
+    /// A device list read at `now` (seconds on a monotonic clock).
+    func noteListing(_ uids: [String], now: Double) {
+        let current = Set(uids)
+        if let before = listed {
+            for uid in current.subtracting(before) { appearedAt[uid] = now }
+        }
+        appearedAt = appearedAt.filter { current.contains($0.key) }
+        listed = current
+    }
+
+    /// What to do with output `uid` that has just started at `now` in
+    /// `session`. A restart uses up the appearance and arms a ticket
+    /// (`pendingTicket`) that only that session can use.
+    func decide(uid: String, bluetooth: Bool, now: Double, session: Int) -> Decision {
+        guard bluetooth else { return .notBluetooth }
+        guard let appeared = appearedAt[uid] else { return .settled(linkAgeS: nil) }
+        let age = now - appeared
+        guard age < Self.windowS else { return .settled(linkAgeS: age) }
+        appearedAt[uid] = nil
+        nextTicket += 1
+        pending[uid] = (nextTicket, session)
+        return .restart(linkAgeS: age)
+    }
+
+    func pendingTicket(uid: String) -> Int? { pending[uid]?.ticket }
+
+    /// The restart's time came in `session`: true when `ticket` is still the
+    /// armed one and its session still runs, and then `uid` is held off the
+    /// sync until `release`. A ticket from an ended session is dropped: the
+    /// new session started the output again already.
+    func begin(uid: String, ticket: Int, session: Int) -> Bool {
+        guard let armed = pending[uid], armed.ticket == ticket else { return false }
+        pending[uid] = nil
+        guard armed.session == session else { return false }
+        held.insert(uid)
+        return true
+    }
+
+    func release(uid: String) { held.remove(uid) }
+
+    /// The output stopped another way (switched off, lost): no restart.
+    func cancel(uid: String) { pending[uid] = nil }
 }

@@ -21,7 +21,8 @@ enum BrandTokens {
         static let mint = BrandRGB(red: 99 / 255, green: 218 / 255, blue: 194 / 255)
         /// The mark and "sync" in the wordmark: teal on light, mint on dark.
         static let logo = BrandRGB(red: 28 / 255, green: 159 / 255, blue: 145 / 255)
-        /// Teal for small text and text-sized glyphs (WCAG AA): 5.85:1 on white, 5.07:1 on #323232.
+        /// Teal for small text and text-sized glyphs (WCAG AA): 5.85:1 on white, 6.37:1 on #323232,
+        /// and 4.94:1 dark under a hovered button in a hovered Windows row.
         static let tealText = BrandRGB(red: 20 / 255, green: 113 / 255, blue: 103 / 255)
         /// Deep teal (website).
         static let tealDeep = BrandRGB(red: 15 / 255, green: 87 / 255, blue: 79 / 255)
@@ -63,8 +64,9 @@ enum BrandTokens {
         static let mint = BrandRGB(red: 99 / 255, green: 218 / 255, blue: 194 / 255)
         /// The mark and "sync" in the wordmark: teal on light, mint on dark.
         static let logo = BrandRGB(red: 99 / 255, green: 218 / 255, blue: 194 / 255)
-        /// Teal for small text and text-sized glyphs (WCAG AA): 5.85:1 on white, 5.07:1 on #323232.
-        static let tealText = BrandRGB(red: 32 / 255, green: 182 / 255, blue: 166 / 255)
+        /// Teal for small text and text-sized glyphs (WCAG AA): 5.85:1 on white, 6.37:1 on #323232,
+        /// and 4.94:1 dark under a hovered button in a hovered Windows row.
+        static let tealText = BrandRGB(red: 60 / 255, green: 203 / 255, blue: 185 / 255)
         /// Deep teal (website).
         static let tealDeep = BrandRGB(red: 15 / 255, green: 87 / 255, blue: 79 / 255)
         /// Pastel accent (website backdrop).

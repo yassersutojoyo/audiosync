@@ -330,7 +330,8 @@ pub enum PairingEvent {
     /// Pairing ended with an error (P58, P136): PairingFailed for a 470 or
     /// another failure status at a pairing step, Busy for a 409 (P137),
     /// Unsupported when the OPTIONS answer shows a receiver that can't take
-    /// AirPlay 1 audio (P27, P46), PasswordRequired for a 401 to OPTIONS
+    /// AirPlay 1 audio (P27, P46), Refused for another 4xx or 5xx to that
+    /// OPTIONS (P138), PasswordRequired for a 401 to OPTIONS
     /// when the pairing has no password and WrongPassword when the receiver
     /// turns the password down (P39, P46, P135), PairingCancelled when the
     /// Apple TV closed the connection while the PIN was awaited, or the
@@ -961,12 +962,23 @@ impl Pairing {
 
     /// The OPTIONS answer (P27, P46): a success whose `Public` lacks
     /// ANNOUNCE, SETUP or RECORD is a receiver that can't take AirPlay 1
-    /// audio, Unsupported before any PIN is asked for. Any other answer
-    /// but a 401, which is a password challenge (`on_unauthorized`),
-    /// goes on to `/pair-pin-start`, whose answer decides (P58): a 403 from
-    /// an Apple TV that wants verification, also to the OPTIONS resent
-    /// after a 401, a 501, or no `Public`.
+    /// audio, Unsupported before any PIN is asked for, and any other 4xx or
+    /// 5xx but a 403 or a 501 is Refused (P138). Any other answer but a
+    /// 401, which is a password challenge (`on_unauthorized`), goes on to
+    /// `/pair-pin-start`, whose answer decides (P58): a 403 from an Apple
+    /// TV that wants verification, also to the OPTIONS resent after a 401,
+    /// a 501, or no `Public`.
     fn on_options(&mut self, response: &Response, now: Instant) {
+        if (400..600).contains(&response.code) && !matches!(response.code, 403 | 501) {
+            self.fail_status(
+                ErrorKind::Refused,
+                Method::Options,
+                response.code,
+                None,
+                false,
+            );
+            return;
+        }
         if response.is_success()
             && let Some(public) = response.headers.get("Public")
         {

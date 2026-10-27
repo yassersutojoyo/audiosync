@@ -60,6 +60,9 @@ extern "C" {
 /* Number of equalizer presets. */
 #define ASC_EQ_PRESETS 12
 
+/* Most AirPlay 2 speakers that play at once. */
+#define ASC_AIRPLAY2_SESSIONS 16
+
 /* The ring's safety margin M in frames: no ring holds fewer than twice this. */
 #define ASC_RING_MARGIN_FRAMES 8192
 
@@ -99,8 +102,9 @@ extern "C" {
 #define ASC_AIRPLAY_REASON_FORMAT 5        /* not 44 100 Hz, 16-bit stereo */
 #define ASC_AIRPLAY_REASON_AIRPLAY2_ONLY 6 /* only AirPlay 2 could serve it */
 #define ASC_AIRPLAY_REASON_TIMING 7        /* it refused NTP timing, and PTP can't take its place */
-#define ASC_AIRPLAY_REASON_ONE_AIRPLAY2 8  /* another AirPlay 2 speaker plays; one at a time */
+#define ASC_AIRPLAY_REASON_TOO_MANY_AIRPLAY2 8  /* ASC_AIRPLAY2_SESSIONS AirPlay 2 sessions run; it waits and starts when one ends for good */
 #define ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS 9 /* an Apple TV whose home theater group plays, or the group of one that plays alone */
+#define ASC_AIRPLAY_REASON_PTP_OTHER_NETWORK 10 /* it takes only PTP, which runs for another network; it waits until PTP is free */
 
 /* What discovery saw (AscAirPlayReceiver.flags), bit by bit. */
 #define ASC_AIRPLAY_FLAG_RAOP 1            /* announces _raop._tcp (AirPlay 1 audio) */
@@ -162,6 +166,8 @@ extern "C" {
 #define ASC_AIRPLAY_WARNING_REMOTE_CONTROL_NOT_ADVERTISED 10 /* the remote control's _dacp._tcp record couldn't be registered */
 #define ASC_AIRPLAY_WARNING_LATENCY_SHORTFALL 11         /* its reported latency needs more than the sounding stream's Lf; it plays at that Lf; .detail names both */
 #define ASC_AIRPLAY_WARNING_PTP_FREE 12                  /* a session bound the PTP ports after PTP_PORTS_TAKEN: they are free again, and a later clash is reported anew */
+#define ASC_AIRPLAY_WARNING_PEERS_UPDATE_REFUSED 13      /* a SETPEERS update was refused or unanswered; it plays on; once per session */
+#define ASC_AIRPLAY_WARNING_GRANDMASTER_OUTRANKED 14     /* it announced a clock ranked ahead of AudioSync's and may not follow it; once per session */
 
 /* A speaker's state (AscAirPlayEvent.state). */
 #define ASC_AIRPLAY_STATE_CONNECTING 1 /* a session is starting */
@@ -169,6 +175,7 @@ extern "C" {
 #define ASC_AIRPLAY_STATE_RETRYING 3   /* its session failed; the next starts in .retry_ms */
 #define ASC_AIRPLAY_STATE_FAILED 4     /* its session failed and needs the user; no retry */
 #define ASC_AIRPLAY_STATE_STOPPED 5    /* removed, or the sender shut down */
+#define ASC_AIRPLAY_STATE_UNANNOUNCED 6 /* it stopped announcing itself; a session starts once it is listed able to play; not a failure */
 
 /* What to tell the user about an error that ended a session (AscAirPlayEvent.error). */
 #define ASC_AIRPLAY_ERROR_NOT_RESPONDING 1    /* the speaker didn't answer */
@@ -341,7 +348,7 @@ extern "C" {
 #define ASC_ZONE_STEP_NEEDS_AIRPLAY2 1     /* a pair or theater target while AirPlay 2 is off: left alone */
 #define ASC_ZONE_STEP_IN_TARGET 2          /* plays as part of a target: left alone */
 #define ASC_ZONE_STEP_ON 3                 /* switched on, or stays on */
-#define ASC_ZONE_STEP_WAITING 4            /* switched on, waiting for the other AirPlay 2 speaker */
+#define ASC_ZONE_STEP_WAITING 4            /* switched on, waiting for the sender (S285) */
 #define ASC_ZONE_STEP_OFF 5                /* switched off, or stays off */
 #define ASC_ZONE_STEP_CAST_ANOTHER_PLAYS 6 /* a Cast member left off: a Cast speaker outside the zone is on */
 #define ASC_ZONE_STEP_CAST_ONE_AT_A_TIME 7 /* a Cast member left off: another Cast member plays */
@@ -354,7 +361,7 @@ extern "C" {
 
 /* What asc_preset_recall_plan writes for each stored member. */
 #define ASC_PRESET_STEP_ON 0             /* switched on, or stays on */
-#define ASC_PRESET_STEP_WAITING 1        /* switched on, waiting for the other AirPlay 2 speaker */
+#define ASC_PRESET_STEP_WAITING 1        /* switched on, waiting for the sender (S285) */
 #define ASC_PRESET_STEP_NOT_FOUND 2      /* left off: no speaker with its key is listed */
 #define ASC_PRESET_STEP_HIDDEN 3         /* left off: hidden */
 #define ASC_PRESET_STEP_NEEDS_AIRPLAY2 4 /* left off: a pair or theater target while AirPlay 2 is off */
@@ -395,15 +402,17 @@ double asc_output_gain(double local_position, double master_position);
  * at zone 100 bit-identical to asc_output_gain. */
 double asc_zone_output_gain(double local_position, double zone_position, double master_position);
 
-/* An AirPlay speaker's device level D, 0 to 100: own x zone x master as
- * fractions, times 100 (zone 100 outside a zone). */
+/* An AirPlay speaker's device level D, 0 to 100: min(100, own x k), with
+ * k = zone x master as fractions (zone 100 outside a zone). The own volume
+ * is stored unrounded and may pass 100 (S290). */
 double asc_airplay_device_level(double own_position, double zone_position, double master_position);
 
 /* The whole number an AirPlay row shows for device level D: D rounded down. */
 double asc_airplay_row_level(double device_level);
 
-/* An AirPlay row moved to `row`: writes the own volume to store and the
- * device level to send. False, writing nothing, when zone x master is 0,
+/* An AirPlay row moved to `row`: writes the own volume to store, row / k
+ * unrounded and possibly above 100, and the device level to send, the row
+ * itself. False, writing nothing, when zone x master is 0,
  * row isn't finite or a pointer is NULL. */
 bool asc_airplay_row_move(double row, double zone_position, double master_position,
                           double *own_position, double *device_level);
@@ -1248,6 +1257,24 @@ typedef struct AscCalibration {
  */
 bool asc_calibration_estimate(const float *signal, size_t signal_frames, const float *reference, size_t reference_frames, const float *chosen, size_t chosen_frames, uint32_t rate, double old_offset_ms, AscCalibration *result);
 
+/* Where the signal arrived in one recording and how the peak stands out,
+ * before the thresholds that would refuse it: for the debug log. */
+typedef struct AscCalibrationArrival {
+    uint32_t status;        /* ASC_CALIBRATION_ACCEPTED when measured, else the refusal */
+    size_t frame;           /* the arrival: the earliest strong lag, else the peak */
+    size_t peak_frame;      /* the strongest lag */
+    size_t echo_frame;      /* the strongest lag more than 3 ms from the peak */
+    double peak_over_floor; /* the peak over the median magnitude */
+    double echo_share;      /* that echo as a share of the peak */
+} AscCalibrationArrival;
+
+/*
+ * Measures one recording as the estimate does, into *result. False, writing
+ * nothing, for a NULL array with a nonzero count or a NULL result. Takes
+ * tens of ms or more: never on an audio thread.
+ */
+bool asc_calibration_measure(const float *signal, size_t signal_frames, const float *recording, size_t recording_frames, uint32_t rate, AscCalibrationArrival *result);
+
 /*
  * Calibrate All Speakers: the reference's sweep, then every other speaker's
  * two, one speaker at a time, each estimated against the reference as
@@ -1551,6 +1578,14 @@ AscAirPlay *asc_airplay_create(void);
 AscAirPlay *asc_airplay_create_with_airplay2(bool airplay2);
 
 /*
+ * Whether AirPlay 2 is automatic per receiver: the build's flag, or
+ * AUDIOSYNC_AIRPLAY2_AUTO=1 (on) or 0 (off) for this launch. While it is on,
+ * AirPlay 2 only receivers play with the setting off, and the setting means
+ * "Prefer AirPlay 2" for receivers that speak both.
+ */
+bool asc_airplay2_auto(void);
+
+/*
  * Stops the sender and frees it: every speaker is torn down and its threads
  * end within about 2 s, which this call waits for, so call it off the main
  * thread. Takes the address of the host's pointer and sets that pointer to
@@ -1613,10 +1648,10 @@ bool asc_airplay_add_speaker(AscAirPlay *airplay, const char *id, double volume)
 bool asc_airplay_remove_speaker(AscAirPlay *airplay, const char *id);
 
 /*
- * Sets the slider position (0 to 100) of the speaker added under `id`; it
- * plays at that position times the master, live. Returns false, changing
- * nothing, when the handle or id is NULL, no speaker was added under id, or
- * volume isn't finite.
+ * Sets the own volume of the speaker added under `id` (0 up, unrounded, and
+ * above 100 when S290 stored it so); it plays at min(100, own x k), live.
+ * Returns false, changing nothing, when the handle or id is NULL, no speaker
+ * was added under id, or volume isn't finite.
  */
 bool asc_airplay_set_volume(AscAirPlay *airplay, const char *id, double volume);
 
@@ -1685,12 +1720,6 @@ double asc_airplay_set_hold_back(AscAirPlay *airplay, double hold_back_ms);
 double asc_airplay_latency_ms(const AscAirPlay *airplay);
 
 /*
- * The host restarted its capture: every speaker is flushed and the timeline
- * starts over; a timeline event follows.
- */
-void asc_airplay_restart_timeline(AscAirPlay *airplay);
-
-/*
  * The user paused playback on purpose (a remote's Pause, a media key or the
  * app's pause button, never silence): every speaker gets a FLUSH so its
  * buffer drops at once, and no audio goes out until asc_airplay_resume. The
@@ -1709,7 +1738,7 @@ void asc_airplay_resume(AscAirPlay *airplay);
  * Sets the stream's base latency Lf in frames, clamped to 11025 to 88200.
  * While no speaker sounds it applies at once and a timeline event reports
  * the new L; later it is held (ASC_AIRPLAY_EVENT_LATENCY_HELD) until the
- * stream has no speaker or the capture restarts. NULL does nothing.
+ * stream has no speaker or the timeline restarts. NULL does nothing.
  */
 void asc_airplay_set_latency(AscAirPlay *airplay, uint32_t frames);
 

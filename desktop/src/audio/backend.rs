@@ -287,6 +287,10 @@ pub enum AirPlayProblem {
     /// An Apple TV that needs pairing with a PIN first (or again, after it
     /// stopped accepting AudioSync's credentials). Switching it on pairs it.
     NeedsPin,
+    /// As `NeedsPin` for a speaker that asked for no PIN or password: it
+    /// turned the session down before any pairing step, so the notice names
+    /// no code. Switching it on pairs it all the same.
+    NotAccepted,
     /// The pairing with an Apple TV failed, so it is off.
     PairingFailed,
     /// It needs another kind of pairing, which AudioSync can't do yet.
@@ -295,9 +299,12 @@ pub enum AirPlayProblem {
     AirPlay2NotYet,
     /// It turned NTP timing down, and PTP timing isn't available.
     TimingUnavailable,
-    /// Another AirPlay 2 speaker plays: it stays on and starts once that
-    /// one stops.
-    OneAirPlay2Speaker,
+    /// Sixteen AirPlay 2 speakers play: it stays on and starts once one of
+    /// them stops.
+    TooManyAirPlay2Speakers,
+    /// It takes only PTP timing, which runs for speakers on another
+    /// network: it stays on and starts once those stop.
+    PtpOtherNetwork,
     /// An Apple TV whose home theater group plays: its sound goes to those
     /// speakers, so it is off.
     PlaysThroughSpeakers,
@@ -315,6 +322,14 @@ pub enum AirPlayProblem {
 }
 
 impl AirPlayProblem {
+    /// The sender keeps it on and starts it once it lets it (S285).
+    pub fn waits(self) -> bool {
+        matches!(
+            self,
+            AirPlayProblem::TooManyAirPlay2Speakers | AirPlayProblem::PtpOtherNetwork
+        )
+    }
+
     /// Whether AudioSync keeps trying by itself; otherwise the speaker is
     /// turned off.
     pub fn retried(self) -> bool {
@@ -521,6 +536,15 @@ pub enum BackendEvent {
         id: String,
         /// What went wrong.
         problem: AirPlayProblem,
+    },
+    /// An AirPlay speaker stopped announcing itself on the network, or was
+    /// announced again (`unannounced` false) without playing yet. It stays
+    /// on, and the sender starts it once it is announced (P215).
+    AirPlayUnannounced {
+        /// The speaker's ID.
+        id: String,
+        /// Whether it is out of view now.
+        unannounced: bool,
     },
     /// An AirPlay speaker can't play from AudioSync, so it was turned off.
     AirPlayFailed {
@@ -935,6 +959,11 @@ pub trait AudioBackend {
 
     fn cast_discovery(&self) -> CastDiscovery {
         CastDiscovery::Off
+    }
+
+    /// A Cast speaker is on, listed or not: turning on another is refused.
+    fn cast_on(&self) -> bool {
+        false
     }
 
     /// Turns a Cast speaker on or off. One plays at a time: turning one on
