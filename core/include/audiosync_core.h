@@ -236,7 +236,7 @@ extern "C" {
 #define ASC_CAST_EVENT_REBUFFERING 8       /* the receiver ran dry */
 #define ASC_CAST_EVENT_FORMAT_FALLBACK 9   /* the device refused WAV; .format is loaded instead */
 #define ASC_CAST_EVENT_VOLUME 10           /* the device's volume: .level, .muted, .volume_fixed, .step */
-#define ASC_CAST_EVENT_DIAGNOSTICS 11      /* once a second while playing: .drift_ms, .queued_ms, .resync_offered */
+#define ASC_CAST_EVENT_DIAGNOSTICS 11      /* once a second while playing: .drift_ms, .queued_ms, .underrun_frames, .resync_offered */
 #define ASC_CAST_EVENT_STREAM 12           /* the stream server's log line in .detail */
 #define ASC_CAST_EVENT_COMMAND_FAILED 13   /* a volume, artwork or Resync request failed: .error */
 #define ASC_CAST_EVENT_MEMORY_CHANGED 14   /* store asc_cast_memory_json */
@@ -2052,6 +2052,7 @@ typedef struct AscCastEvent {
     double step;         /* the device's volume step; 0 when it reports none */
     double drift_ms;     /* dropped audio plus rebuffering since the stream was loaded */
     double queued_ms;    /* audio waiting in the sender's queue */
+    uint64_t underrun_frames; /* silent frames sent since the stream was loaded because the input ran dry */
     bool resync_offered; /* the drift is over 250 ms: the host may offer Resync */
     bool relaunched;     /* the app had to be launched and loaded again */
     const char *detail;  /* an error's text, a log line, a panic location; for a debug log */
