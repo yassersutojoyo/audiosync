@@ -1718,6 +1718,10 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | a_clipped_recording_is_refused | S234 |
 | a_recording_too_short_or_too_long_is_refused | S234 |
 | an_echo_nearly_as_strong_as_the_first_arrival_is_ambiguous | S234 |
+| a_reflection_stronger_than_the_direct_path_still_times_the_direct_path | S234 |
+| loud_noise_before_a_faint_direct_path_is_not_timed | S234 |
+| a_single_clean_arrival_lands_on_its_frame | S234 |
+| an_earlier_path_under_half_the_peak_is_passed_over | S234 |
 | the_thresholds_leave_room_on_both_sides | S233, S234 |
 | the_signal_is_a_quiet_faded_sweep_that_sounds_the_same_at_any_rate | S233 |
 | the_signal_and_the_estimate_cross_the_boundary | S232, S233 |

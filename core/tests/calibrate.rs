@@ -349,6 +349,43 @@ fn loud_noise_before_a_faint_direct_path_is_not_timed() {
     assert_eq!(found.frame, 300 * RATE as usize / 1000, "{found:?}");
 }
 
+// covers: S234
+#[test]
+fn a_single_clean_arrival_lands_on_its_frame() {
+    for at_ms in [25.0, 80.0, 412.0] {
+        let recording = room(RATE, 2.0, &[Path { at_ms, gain: 0.4 }], 1e-4, 9);
+        let found = arrival(&recording, RATE).expect("accepted");
+        let frame = (at_ms * f64::from(RATE) / 1000.0) as usize;
+        assert_eq!((found.frame, found.peak_frame), (frame, frame), "{found:?}");
+    }
+}
+
+// A path under half the peak before it is not strong: the peak is timed.
+// covers: S234
+#[test]
+fn an_earlier_path_under_half_the_peak_is_passed_over() {
+    let recording = room(
+        RATE,
+        2.0,
+        &[
+            Path {
+                at_ms: 80.0,
+                gain: 0.2,
+            },
+            Path {
+                at_ms: 102.0,
+                gain: 0.5,
+            },
+        ],
+        1e-4,
+        5,
+    );
+    let found = arrival(&recording, RATE).expect("accepted");
+    assert_eq!(found.frame, 102 * RATE as usize / 1000, "{found:?}");
+    assert_eq!(found.echo_frame, 80 * RATE as usize / 1000, "{found:?}");
+    assert!(found.echo_share < calibrate::MIN_ARRIVAL_SHARE, "{found:?}");
+}
+
 /// Why the thresholds sit where they do: noise alone stays well under the
 /// floor threshold, a signal 20 dB under the noise stays well above it, and
 /// the signal's own sidelobes outside the guard window stay far under the
