@@ -259,7 +259,9 @@ impl SavedSpeaker {
 #[serde(default)]
 pub struct SavedGroup {
     pub id: String,
+    #[serde(deserialize_with = "or_default")]
     pub name: String,
+    #[serde(deserialize_with = "strings_that_read")]
     pub members: Vec<String>,
 }
 
@@ -707,8 +709,9 @@ pub struct Settings {
         deserialize_with = "hidden_that_read"
     )]
     pub hidden_speakers: Vec<SavedHidden>,
-    /// Unreadable groups are none (S212).
-    #[serde(deserialize_with = "or_default")]
+    /// A group that doesn't read is skipped (S212), so a format 2 file's
+    /// other groups still become zones.
+    #[serde(deserialize_with = "entries_that_read")]
     pub groups: Vec<SavedGroup>,
     /// The zones, in order, each speaker in at most one (spec S245).
     #[serde(deserialize_with = "entries_that_read")]
