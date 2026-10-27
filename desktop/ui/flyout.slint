@@ -437,6 +437,10 @@ export component TrayFlyout inherits Window {
     // How much less room the zones and speakers list gets, set by the app
     // on a screen too short for the whole flyout; the list scrolls.
     in property <length> list-cut;
+    // How much less room everything between the header and the buttons
+    // gets, set by the app when the list is at its floor or absent and the
+    // screen is still too short; that part scrolls.
+    in property <length> body-cut;
     // For the layout tests (src/view.rs): where the buttons end, and the
     // height Windows makes the window at.
     out property <length> footer-bottom: footer.absolute-position.y + footer.height;
@@ -520,211 +524,231 @@ export component TrayFlyout inherits Window {
                 }
             }
 
-            if root.notices.length > 0: NoticeStack {
-                notices: root.notices;
-                dismissed(id) => {
-                    root.notice-dismissed(id);
-                }
-                dismissed-all => {
-                    root.notices-dismissed-all();
-                }
-                guide-requested(id) => {
-                    root.notice-guide-requested(id);
-                }
-                retry-requested(id) => {
-                    root.notice-retry-requested(id);
-                }
-                privacy-requested(id) => {
-                    root.notice-privacy-requested(id);
-                }
-                update-button-pressed(button) => {
-                    root.notice-update-button-pressed(button);
-                }
-                button-focus-changed(focused) => {
-                    root.notice-focused = focused;
-                }
-            }
+            // Between the header and the buttons, all of it scrolls when the
+            // screen is too short even for the list at its three rows. Its
+            // height comes from where the parts end: a layout's preferred
+            // height measures a wrapped notice as one line.
+            body-view := ScrollView {
+                property <length> natural: body-end.y - body.spacing;
+                height: max(48px, self.natural - root.body-cut);
+                content-height: self.natural;
 
-            if root.notice-count > root.notices.length: HorizontalLayout {
-                alignment: start;
-                Button {
-                    text: Strings.more-notices(root.notice-count - root.notices.length);
-                    accessible-label: self.text;
-                    clicked => {
-                        root.open-app();
-                    }
-                    // A standard button reports focus only through has-focus.
-                    changed has-focus => {
-                        root.more-notices-focused = self.has-focus;
-                    }
-                }
-            }
+                body := VerticalLayout {
+                    height: self.preferred-height;
+                    alignment: start;
+                    spacing: 10px;
 
-            Divider { }
-
-            // No visible labels above the source and the volume, as in the
-            // Mac panel; Narrator still hears each control's name.
-            source := ComboBox {
-                model: root.sources;
-                current-index: root.source-index;
-                accessible-label: Strings.source-label;
-                selected => {
-                    root.source-selected(self.current-index);
-                    self.current-index = root.source-index;
-                }
-            }
-
-            if root.live-input-hint != "": SecondaryText {
-                text: root.live-input-hint;
-            }
-
-            if root.input-pairs.length > 0: VerticalLayout {
-                spacing: 4px;
-
-                SecondaryText {
-                    text: Strings.input-channels-label;
-                }
-
-                PairPicker {
-                    model: root.input-pairs;
-                    chosen: root.input-pair-index;
-                    picked(index) => {
-                        root.input-pair-selected(index);
-                    }
-                }
-            }
-
-            // Recall only: the main window saves, renames and deletes.
-            if root.presets.length > 0: PresetPicker {
-                presets: root.presets;
-                current: root.current-preset;
-                recalled(id) => {
-                    root.preset-recall-requested(id);
-                }
-            }
-
-            // This PC's speakers sit with the volume, above the divider, as
-            // in the Mac panel; the zones and connected speakers come after.
-            VerticalLayout {
-                spacing: 2px;
-
-                VolumeSlider {
-                    volume: root.master-volume;
-                    label: Strings.master-volume;
-                    changed(value) => {
-                        root.master-volume-changed(value);
-                    }
-                }
-
-                // Four rows, then it scrolls: with the list below it shares
-                // the 260 px the list had alone, so a PC with many outputs
-                // still fits a small screen.
-                this-pc-view := ScrollView {
-                    height: min(this-pc-list.preferred-height, 144px);
-
-                    this-pc-list := VerticalLayout {
-                        for speaker in root.this-pc: FlyoutRow {
-                            glyph: Glyphs.speaker(speaker.kind);
-                            name: speaker.name;
-                            label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
-                            description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
-                            system-name: speaker.system-name;
-                            state: speaker.state;
-                            device-volume: speaker.device-volume;
-
-                            toggled => {
-                                root.speaker-toggled(speaker.id);
-                            }
-                            focus-changed(focused) => {
-                                root.speaker-focused = focused;
-                            }
+                    if root.notices.length > 0: NoticeStack {
+                        notices: root.notices;
+                        dismissed(id) => {
+                            root.notice-dismissed(id);
+                        }
+                        dismissed-all => {
+                            root.notices-dismissed-all();
+                        }
+                        guide-requested(id) => {
+                            root.notice-guide-requested(id);
+                        }
+                        retry-requested(id) => {
+                            root.notice-retry-requested(id);
+                        }
+                        privacy-requested(id) => {
+                            root.notice-privacy-requested(id);
+                        }
+                        update-button-pressed(button) => {
+                            root.notice-update-button-pressed(button);
+                        }
+                        button-focus-changed(focused) => {
+                            root.notice-focused = focused;
                         }
                     }
-                }
-            }
 
-            Divider { }
-
-            if root.no-speaker-on: SecondaryText {
-                text: Strings.no-speaker-on;
-            }
-
-            // "No speakers found" waits for 20 seconds of AirPlay discovery;
-            // until then it says it looks, as the main window's note does.
-            if root.zones.length == 0 && root.speakers.length == 0 && root.this-pc.length == 0 && (root.all-hidden || root.airplay-none-found || root.airplay-searching): SecondaryText {
-                text: root.all-hidden ? Strings.flyout-all-hidden : root.airplay-none-found ? Strings.no-speakers : Strings.looking-for-speakers;
-            }
-
-            if root.zones.length > 0 || root.speakers.length > 0: ScrollView {
-                // Every row up to five or so, less this PC's rows above, then
-                // it scrolls; three rows at least.
-                height: min(list.preferred-height, max(108px, 260px - root.list-cut - this-pc-view.height));
-
-                list := VerticalLayout {
-                    for zone in root.zones: VerticalLayout {
-                        accessible-role: groupbox;
-                        accessible-label: zone.name;
-
-                        FlyoutZoneHeader {
-                            item: zone;
-                            toggled => {
-                                root.zone-toggled(zone.id);
+                    if root.notice-count > root.notices.length: HorizontalLayout {
+                        alignment: start;
+                        Button {
+                            text: Strings.more-notices(root.notice-count - root.notices.length);
+                            accessible-label: self.text;
+                            clicked => {
+                                root.open-app();
                             }
-                            expanded-changed(open) => {
-                                root.zone-expanded-changed(zone.id, open);
-                            }
-                            focus-changed(focused) => {
-                                root.zone-focused = focused;
-                            }
-                        }
-
-                        // Its speakers while it is unfolded, their toggles
-                        // under the zone's, past the arrow.
-                        for speaker in zone.expanded ? zone.members : []: FlyoutRow {
-                            padding-left: 26px;
-                            glyph: Glyphs.speaker(speaker.kind);
-                            name: speaker.name;
-                            label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
-                            description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
-                            caption: speaker.zone-note;
-                            system-name: speaker.system-name;
-                            kind: speaker.kind;
-                            show-kind: speaker.show-kind && !speaker.cast-group;
-                            state: speaker.state;
-                            enabled: !speaker.missing;
-                            device-volume: speaker.device-volume;
-                            toggled => {
-                                root.speaker-toggled(speaker.id);
-                            }
-                            focus-changed(focused) => {
-                                root.speaker-focused = focused;
+                            // A standard button reports focus only through has-focus.
+                            changed has-focus => {
+                                root.more-notices-focused = self.has-focus;
                             }
                         }
                     }
 
-                    for speaker in root.speakers: FlyoutRow {
-                        glyph: Glyphs.speaker(speaker.kind);
-                        name: speaker.name;
-                        label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
-                        description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
-                        system-name: speaker.system-name;
-                        kind: speaker.kind;
-                        show-kind: speaker.show-kind && !speaker.cast-group;
-                        state: speaker.state;
-                        device-volume: speaker.device-volume;
+                    Divider { }
 
-                        toggled => {
-                            root.speaker-toggled(speaker.id);
-                        }
-                        focus-changed(focused) => {
-                            root.speaker-focused = focused;
+                    // No visible labels above the source and the volume, as in the
+                    // Mac panel; Narrator still hears each control's name.
+                    source := ComboBox {
+                        model: root.sources;
+                        current-index: root.source-index;
+                        accessible-label: Strings.source-label;
+                        selected => {
+                            root.source-selected(self.current-index);
+                            self.current-index = root.source-index;
                         }
                     }
-                }
-            }
 
-            if root.connected-all-hidden: SecondaryText {
-                text: Strings.flyout-connected-hidden;
+                    if root.live-input-hint != "": SecondaryText {
+                        text: root.live-input-hint;
+                    }
+
+                    if root.input-pairs.length > 0: VerticalLayout {
+                        spacing: 4px;
+
+                        SecondaryText {
+                            text: Strings.input-channels-label;
+                        }
+
+                        PairPicker {
+                            model: root.input-pairs;
+                            chosen: root.input-pair-index;
+                            picked(index) => {
+                                root.input-pair-selected(index);
+                            }
+                        }
+                    }
+
+                    // Recall only: the main window saves, renames and deletes.
+                    if root.presets.length > 0: PresetPicker {
+                        presets: root.presets;
+                        current: root.current-preset;
+                        recalled(id) => {
+                            root.preset-recall-requested(id);
+                        }
+                    }
+
+                    // This PC's speakers sit with the volume, above the divider, as
+                    // in the Mac panel; the zones and connected speakers come after.
+                    VerticalLayout {
+                        spacing: 2px;
+
+                        VolumeSlider {
+                            volume: root.master-volume;
+                            label: Strings.master-volume;
+                            changed(value) => {
+                                root.master-volume-changed(value);
+                            }
+                        }
+
+                        // Four rows, then it scrolls: with the list below it shares
+                        // the 260 px the list had alone, so a PC with many outputs
+                        // still fits a small screen.
+                        this-pc-view := ScrollView {
+                            height: min(this-pc-list.preferred-height, 144px);
+
+                            this-pc-list := VerticalLayout {
+                                for speaker in root.this-pc: FlyoutRow {
+                                    glyph: Glyphs.speaker(speaker.kind);
+                                    name: speaker.name;
+                                    label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
+                                    description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
+                                    system-name: speaker.system-name;
+                                    state: speaker.state;
+                                    device-volume: speaker.device-volume;
+
+                                    toggled => {
+                                        root.speaker-toggled(speaker.id);
+                                    }
+                                    focus-changed(focused) => {
+                                        root.speaker-focused = focused;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Divider { }
+
+                    if root.no-speaker-on: SecondaryText {
+                        text: Strings.no-speaker-on;
+                    }
+
+                    // "No speakers found" waits for 20 seconds of AirPlay discovery;
+                    // until then it says it looks, as the main window's note does.
+                    if root.zones.length == 0 && root.speakers.length == 0 && root.this-pc.length == 0 && (root.all-hidden || root.airplay-none-found || root.airplay-searching): SecondaryText {
+                        text: root.all-hidden ? Strings.flyout-all-hidden : root.airplay-none-found ? Strings.no-speakers : Strings.looking-for-speakers;
+                    }
+
+                    if root.zones.length > 0 || root.speakers.length > 0: ScrollView {
+                        // Every row up to five or so, less this PC's rows above, then
+                        // it scrolls; three rows at least.
+                        height: min(list.preferred-height, max(108px, 260px - root.list-cut - this-pc-view.height));
+
+                        list := VerticalLayout {
+                            for zone in root.zones: VerticalLayout {
+                                accessible-role: groupbox;
+                                accessible-label: zone.name;
+
+                                FlyoutZoneHeader {
+                                    item: zone;
+                                    toggled => {
+                                        root.zone-toggled(zone.id);
+                                    }
+                                    expanded-changed(open) => {
+                                        root.zone-expanded-changed(zone.id, open);
+                                    }
+                                    focus-changed(focused) => {
+                                        root.zone-focused = focused;
+                                    }
+                                }
+
+                                // Its speakers while it is unfolded, their toggles
+                                // under the zone's, past the arrow.
+                                for speaker in zone.expanded ? zone.members : []: FlyoutRow {
+                                    padding-left: 26px;
+                                    glyph: Glyphs.speaker(speaker.kind);
+                                    name: speaker.name;
+                                    label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
+                                    description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
+                                    caption: speaker.zone-note;
+                                    system-name: speaker.system-name;
+                                    kind: speaker.kind;
+                                    show-kind: speaker.show-kind && !speaker.cast-group;
+                                    state: speaker.state;
+                                    enabled: !speaker.missing;
+                                    device-volume: speaker.device-volume;
+                                    toggled => {
+                                        root.speaker-toggled(speaker.id);
+                                    }
+                                    focus-changed(focused) => {
+                                        root.speaker-focused = focused;
+                                    }
+                                }
+                            }
+
+                            for speaker in root.speakers: FlyoutRow {
+                                glyph: Glyphs.speaker(speaker.kind);
+                                name: speaker.name;
+                                label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
+                                description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
+                                system-name: speaker.system-name;
+                                kind: speaker.kind;
+                                show-kind: speaker.show-kind && !speaker.cast-group;
+                                state: speaker.state;
+                                device-volume: speaker.device-volume;
+
+                                toggled => {
+                                    root.speaker-toggled(speaker.id);
+                                }
+                                focus-changed(focused) => {
+                                    root.speaker-focused = focused;
+                                }
+                            }
+                        }
+                    }
+
+                    if root.connected-all-hidden: SecondaryText {
+                        text: Strings.flyout-connected-hidden;
+                    }
+
+                    body-end := Rectangle {
+                        height: 0px;
+                    }
+                }
             }
 
             Divider { }
