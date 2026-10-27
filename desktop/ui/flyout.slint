@@ -429,6 +429,14 @@ export component TrayFlyout inherits Window {
     out property <bool> more-notices-focused;
     out property <bool> zone-focused;
     out property <bool> speaker-focused;
+    // The height that shows every part down to the buttons, which the app
+    // sizes the window to: Slint's own preferred height counts a wrapped
+    // notice as one line. The parts sit at the top, so this holds at any
+    // window height.
+    out property <length> fit-height: root.footer-bottom + 16px;
+    // How much less room the zones and speakers list gets, set by the app
+    // on a screen too short for the whole flyout; the list scrolls.
+    in property <length> list-cut;
     // For the layout tests (src/view.rs): where the buttons end, and the
     // height Windows makes the window at.
     out property <length> footer-bottom: footer.absolute-position.y + footer.height;
@@ -472,6 +480,7 @@ export component TrayFlyout inherits Window {
         }
 
         VerticalLayout {
+            alignment: start;
             padding: 16px;
             padding-top: 14px;
             spacing: 10px;
@@ -649,7 +658,7 @@ export component TrayFlyout inherits Window {
             if root.zones.length > 0 || root.speakers.length > 0: ScrollView {
                 // Every row up to five or so, less this PC's rows above, then
                 // it scrolls; three rows at least.
-                height: min(list.preferred-height, max(108px, 260px - this-pc-view.height));
+                height: min(list.preferred-height, max(108px, 260px - root.list-cut - this-pc-view.height));
 
                 list := VerticalLayout {
                     for zone in root.zones: VerticalLayout {
