@@ -880,7 +880,8 @@ private struct ZoneMemberCompactRow: View {
     /// for AirPlay 2, or the zone's note on it.
     private var note: String? {
         model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
-                           target: speaker.airPlayTarget)
+                           waitingForPtp: speaker.waitingForPtp,
+                           unannounced: speaker.unannounced, target: speaker.airPlayTarget)
             ?? zone.members.first { $0.key == speaker.key }?.note
     }
 
