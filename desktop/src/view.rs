@@ -7595,10 +7595,46 @@ mod tests {
             strings.invoke_zone_value(2, 5, 1),
             "2 of 5 speakers on, 1 waiting"
         );
+        assert_eq!(strings.invoke_zone_value(1, 1, 0), "1 of 1 speaker on");
+        assert_eq!(
+            strings.invoke_zone_value(1, 1, 1),
+            "1 of 1 speaker on, 1 waiting"
+        );
         assert_eq!(
             strings.invoke_zone_label("Living Room".into()),
             "Living Room, zone"
         );
+    }
+
+    #[test]
+    fn go_to_zone_with_no_member_found_lands_on_the_arrow_which_folds_it() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:garage", "Garage", &["airplay:not-here"]);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        draw_frames();
+        let expanded = || {
+            app.models
+                .zones
+                .iter()
+                .find(|zone| zone.id == "zone:garage")
+                .expect("the zone is listed")
+                .expanded
+        };
+        assert!(expanded());
+
+        app.main.set_focus_zone_part(RowPart::Toggle);
+        app.main.set_focus_zone_id("zone:garage".into());
+        draw_frames();
+        assert_eq!(
+            app.main_focus.borrow().zone,
+            Some(("zone:garage".into(), RowPart::Toggle)),
+            "the arrow stands in for the toggle, which has nothing to switch"
+        );
+        press(app.main.window(), " ");
+        assert!(!expanded(), "Space folded the zone");
+        press(app.main.window(), Key::Return);
+        assert!(expanded(), "Enter unfolded it");
     }
 
     #[test]
