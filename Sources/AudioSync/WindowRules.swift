@@ -336,7 +336,8 @@ enum PanelBackdrop {
     }
 
     /// The sublayers of a view's layer that no subview owns.
-    static func material<Layer: AnyObject>(in sublayers: [Layer], keeping owned: [Layer]) -> [Layer] {
+    static func material<Layer: AnyObject>(in sublayers: [Layer], keeping owned: [Layer],
+                                           name: (Layer) -> String? = { _ in nil }) -> [Layer] {
         sublayers.filter { layer in !owned.contains { $0 === layer } }
     }
 

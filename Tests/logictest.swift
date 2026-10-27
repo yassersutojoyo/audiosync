@@ -5010,6 +5010,28 @@ do {
           "menu bar panel: a label can wait again once its work ran; one still waiting stays deduplicated")
 }
 
+// MARK: The panel's stand-in on the first open after launch (MenuBar.swift, WindowRules.swift)
+do {
+    final class FrameSublayer {
+        let name: String?
+        init(_ name: String?) { self.name = name }
+    }
+    let frameBackdrop = FrameSublayer("kCUIVariantPopoverMaterial"), frameRing = FrameSublayer("NSAutomaticFocusRing"),
+        frameHosted = FrameSublayer("NSViewBackingLayer")
+    let frameMaterial = PanelBackdrop.material(in: [frameBackdrop, frameHosted, frameRing], keeping: [frameHosted],
+                                               name: { $0.name })
+    check(frameMaterial.count == 1 && frameMaterial.first === frameBackdrop,
+          "menu bar panel: the popover frame's focus ring is no part of its material, so the stand-in never hides it and handing the background back never shows a stale ring",
+          "\(frameMaterial.map { $0.name ?? "nil" })")
+    let panelSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let standInBody = panelSource.components(separatedBy: "private func standInBackground(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    let drawPass = standInBody.range(of: "displayIfNeeded()")?.lowerBound
+    let fadeOnly = standInBody.range(of: "no part of it can be hidden")?.lowerBound
+    check(drawPass != nil && fadeOnly != nil && drawPass! < fadeOnly!,
+          "menu bar panel source: before the panel settles for a fade, the popover draws once, so the first open after launch finds the frame's material too")
+}
+
 // MARK: Settings kept between launches (AppSettings.swift)
 do {
     typealias Keys = AppSettings.Keys
