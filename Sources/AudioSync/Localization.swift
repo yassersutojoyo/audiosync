@@ -1513,8 +1513,8 @@ struct UIStrings {
           alone, choose Only This Speaker from its ⋯ button under the zone;
           the others turn off and stay in the zone. For a mix of speakers you
           turn on again and again, save a preset instead. To move a speaker,
-          choose Move to Zone from its ⋯ button. To rename or delete a zone,
-          right-click it or use its ⋯ button.
+          choose Move to Zone from its ⋯ button. To rename a zone, double-click
+          its name; to rename or delete it, right-click it or use its ⋯ button.
         - Presets: turn on the speakers you want and set their volumes, the
           zone volumes, Master Volume and the equalizer curve, then click
           Save as Preset… in the Presets card. Delays and the preamp aren't
