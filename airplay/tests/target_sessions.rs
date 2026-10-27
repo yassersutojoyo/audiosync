@@ -84,8 +84,14 @@ fn pair(members: Vec<Member>, control: Option<DeviceKey>) -> Target {
 }
 
 fn start(airplay2: bool) -> (Sender, HostAudio) {
+    start_limited(airplay2, SenderConfig::default().airplay2_sessions)
+}
+
+/// A sender that runs at most `sessions` AirPlay 2 sessions (P204).
+fn start_limited(airplay2: bool, sessions: usize) -> (Sender, HostAudio) {
     let config = SenderConfig {
         airplay2,
+        airplay2_sessions: sessions,
         ..SenderConfig::default()
     };
     let (sender, writer) = Sender::start(config).expect("the sender starts");
@@ -408,14 +414,14 @@ fn airplay2_only(server: &Ap2Server, n: u8, features: &str) -> Device {
     Device::from_records(DeviceKey::Id(device_id(n)), None, Some(&record)).expect("device")
 }
 
-// covers: P177
+// covers: P177, P204
 #[test]
-fn a_target_takes_one_airplay2_place_for_all_its_members() {
+fn a_target_takes_one_airplay2_place_per_member() {
     let _serial = serial();
     let first = Ap2Server::start(FakeAp2::new());
     let second = Ap2Server::start(FakeAp2::new());
     let other = Ap2Server::start(FakeAp2::new());
-    let (sender, _host) = start(true);
+    let (sender, _host) = start_limited(true, 2);
     let mut events = Events::default();
     let (da, db) = (
         airplay2_only(&first, 1, "0x0,0x10040"),
@@ -432,7 +438,7 @@ fn a_target_takes_one_airplay2_place_for_all_its_members() {
         );
     }
 
-    // Another AirPlay 2 speaker waits for the target's place.
+    // With both places taken by the members, another speaker waits.
     let dc = airplay2_only(&other, 3, "0x0,0x10040");
     sender.add_speaker(dc.clone(), options());
     assert!(
@@ -443,7 +449,7 @@ fn a_target_takes_one_airplay2_place_for_all_its_members() {
     assert_eq!(
         errors(&events, &dc.key),
         vec![ErrorKind::Unsupported(
-            UnsupportedReason::OneAirPlay2Session
+            UnsupportedReason::TooManyAirPlay2Sessions
         )]
     );
     // The target ending hands the place on.
@@ -577,9 +583,9 @@ fn states_of(events: &Events, key: &DeviceKey) -> Vec<SpeakerState> {
         .collect()
 }
 
-// covers: P169, P177, P181
+// covers: P169, P177, P181, P211
 #[test]
-fn one_member_ending_or_lost_hands_nothing_on_and_the_others_play_on() {
+fn a_member_ending_for_good_hands_its_place_on_and_a_lost_one_keeps_it() {
     let _serial = serial();
     let first = Ap2Server::start(FakeAp2::new());
     let mut ending = FakeAp2::new();
@@ -589,7 +595,8 @@ fn one_member_ending_or_lost_hands_nothing_on_and_the_others_play_on() {
     ending.status.insert("SETUP session".to_owned(), 501);
     let second = Ap2Server::start(ending);
     let other = Ap2Server::start(FakeAp2::new());
-    let (sender, _host) = start(true);
+    let last = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start_limited(true, 2);
     let mut events = Events::default();
     let (da, db) = (
         airplay2_only(&first, 1, "0x0,0x10040"),
@@ -612,9 +619,8 @@ fn one_member_ending_or_lost_hands_nothing_on_and_the_others_play_on() {
             .is_some()
     );
 
-    let refused = states_of(&events, &dc.key).len();
-
-    // The second member ends for good while the first plays.
+    // The second member ends for good while the first plays: its place
+    // goes to the speaker that waited (P211).
     assert!(
         events
             .wait_state(&sender, &db.key, 1, LONG, failed)
@@ -626,11 +632,8 @@ fn one_member_ending_or_lost_hands_nothing_on_and_the_others_play_on() {
         errors(&events, &db.key),
         vec![ErrorKind::Unsupported(UnsupportedReason::Timing)]
     );
-    let quiet = Duration::from_millis(1000);
     assert!(
-        events
-            .wait_state(&sender, &dc.key, refused + 1, quiet, |_| true)
-            .is_none(),
+        playing(&mut events, &sender, &dc.key, 1),
         "{:?}",
         events.of(&dc.key)
     );
@@ -638,6 +641,16 @@ fn one_member_ending_or_lost_hands_nothing_on_and_the_others_play_on() {
         states_of(&events, &da.key),
         [SpeakerState::Connecting, SpeakerState::Playing]
     );
+
+    // Both places are taken again, so a fourth speaker waits.
+    let dd = airplay2_only(&last, 4, "0x0,0x10040");
+    sender.add_speaker(dd.clone(), options());
+    assert!(
+        events
+            .wait_state(&sender, &dd.key, 1, LONG, failed)
+            .is_some()
+    );
+    let refused = states_of(&events, &dd.key).len();
 
     // The first member is lost mid-play: its retry keeps the place.
     drop(first);
@@ -651,19 +664,20 @@ fn one_member_ending_or_lost_hands_nothing_on_and_the_others_play_on() {
         "{:?}",
         events.of(&da.key)
     );
+    let quiet = Duration::from_millis(1000);
     assert!(
         events
-            .wait_state(&sender, &dc.key, refused + 1, quiet, |_| true)
+            .wait_state(&sender, &dd.key, refused + 1, quiet, |_| true)
             .is_none(),
         "{:?}",
-        events.of(&dc.key)
+        events.of(&dd.key)
     );
-    assert!(other.fake().keys().is_empty(), "{:?}", other.fake().keys());
+    assert!(last.fake().keys().is_empty(), "{:?}", last.fake().keys());
     sender.remove_target(&id);
     assert!(
-        playing(&mut events, &sender, &dc.key, 1),
+        playing(&mut events, &sender, &dd.key, 1),
         "{:?}",
-        events.of(&dc.key)
+        events.of(&dd.key)
     );
     sender.shutdown();
 }
@@ -717,7 +731,7 @@ fn ptp_fake() -> FakeAp2 {
     fake
 }
 
-// covers: P179
+// covers: P179, P207
 #[test]
 fn under_ptp_every_member_is_served_and_named_to_the_others_in_setpeers() {
     let _serial = serial();
@@ -745,6 +759,17 @@ fn under_ptp_every_member_is_served_and_named_to_the_others_in_setpeers() {
             events.of(key)
         );
     }
+    // A member whose RECORD was answered first names the other through an
+    // update within 1 s of the other's RECORD answer (P207, P209).
+    let full = |server: &Ap2Server| {
+        server
+            .fake()
+            .last("SETPEERS")
+            .and_then(|peers| read_value(&peers.body))
+            .and_then(|value| value.into_array())
+            .is_some_and(|list| list.len() == 3)
+    };
+    assert!(wait_until(Duration::from_secs(3), || full(&first) && full(&second)));
     let mut groups = Vec::new();
     for server in [&first, &second] {
         let fake = server.fake();
@@ -905,6 +930,157 @@ fn ipv6_loopback() -> Option<IpAddr> {
 /// returned without running because the runner can't host it.
 fn skipped(reason: &str) {
     let _ = writeln!(std::io::stderr(), "SKIPPED ({reason})");
+}
+
+fn peer_warnings(events: &Events, key: &DeviceKey) -> usize {
+    events
+        .of(key)
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                SpeakerEvent::Warning(Warning::PeersUpdateRefused { .. })
+            )
+        })
+        .count()
+}
+
+fn playing_count(events: &Events, key: &DeviceKey) -> usize {
+    states_of(events, key)
+        .iter()
+        .filter(|state| **state == SpeakerState::Playing)
+        .count()
+}
+
+// covers: P208, P210
+#[test]
+fn a_refused_update_that_added_a_receiver_sets_up_only_that_session_again_once() {
+    let _serial = serial();
+    let first = Ap2Server::start(ptp_fake());
+    let second = Ap2Server::start(ptp_fake());
+    let config = SenderConfig {
+        airplay2: true,
+        ptp_ports: free_ptp_ports(),
+        ptp_receiver_ports: free_ptp_ports(),
+        ..SenderConfig::default()
+    };
+    let (sender, writer) = Sender::start(config).expect("the sender starts");
+    let _host = HostAudio::start(writer);
+    let mut events = Events::default();
+    let (da, db) = (
+        airplay2_only(&first, 1, "0x0,0x10240"),
+        airplay2_only(&second, 2, "0x0,0x10240"),
+    );
+    sender.add_speaker(da.clone(), options());
+    assert!(
+        playing(&mut events, &sender, &da.key, 1),
+        "{:?}",
+        events.of(&da.key)
+    );
+    first.fake().status_once.insert("SETPEERS".to_owned(), 501);
+    let connections = first.fake().connections;
+    sender.add_speaker(db.clone(), options());
+    assert!(
+        playing(&mut events, &sender, &db.key, 1),
+        "{:?}",
+        events.of(&db.key)
+    );
+    assert!(
+        playing(&mut events, &sender, &da.key, 2),
+        "set up again: {:?}",
+        events.of(&da.key)
+    );
+    assert!(first.fake().connections > connections);
+    assert_eq!(peer_warnings(&events, &da.key), 1);
+    let rejoined = first.fake().last("SETPEERS").cloned().expect("SETPEERS");
+    let list = read_value(&rejoined.body)
+        .and_then(|value| value.into_array())
+        .expect("an array");
+    assert_eq!(list.len(), 3, "it rejoins with the full list: {list:?}");
+
+    // A refused update that only removed a receiver sets nothing up again.
+    first.fake().status_once.insert("SETPEERS".to_owned(), 501);
+    let connections = first.fake().connections;
+    sender.remove_speaker(&db.key);
+    std::thread::sleep(Duration::from_millis(2500));
+    events.drain(&sender);
+    assert_eq!(first.fake().connections, connections);
+    assert_eq!(
+        playing_count(&events, &da.key),
+        2,
+        "{:?}",
+        events.of(&da.key)
+    );
+    assert_eq!(
+        playing_count(&events, &db.key),
+        1,
+        "the other session was never set up again"
+    );
+    sender.shutdown();
+}
+
+// covers: P204
+#[test]
+fn airplay2_sessions_default_to_16() {
+    assert_eq!(SenderConfig::default().airplay2_sessions, 16);
+}
+
+// covers: P211
+#[test]
+fn a_refused_setup_stays_with_its_own_session() {
+    let _serial = serial();
+    let first = Ap2Server::start(ptp_fake());
+    let mut refusing = ptp_fake();
+    refusing.status.insert("SETUP session".to_owned(), 403);
+    let second = Ap2Server::start(refusing);
+    let config = SenderConfig {
+        airplay2: true,
+        ptp_ports: free_ptp_ports(),
+        ptp_receiver_ports: free_ptp_ports(),
+        ..SenderConfig::default()
+    };
+    let (sender, writer) = Sender::start(config).expect("the sender starts");
+    let _host = HostAudio::start(writer);
+    let mut events = Events::default();
+    let (da, db) = (
+        airplay2_only(&first, 1, "0x0,0x10240"),
+        airplay2_only(&second, 2, "0x0,0x10240"),
+    );
+    sender.add_speaker(da.clone(), options());
+    assert!(
+        playing(&mut events, &sender, &da.key, 1),
+        "{:?}",
+        events.of(&da.key)
+    );
+    let connections = first.fake().connections;
+    sender.add_speaker(db.clone(), options());
+    assert!(
+        wait_until(LONG, || {
+            events.drain(&sender);
+            !errors(&events, &db.key).is_empty()
+        }),
+        "{:?}",
+        events.of(&db.key)
+    );
+    std::thread::sleep(Duration::from_millis(1500));
+    events.drain(&sender);
+    assert!(
+        errors(&events, &da.key).is_empty(),
+        "{:?}",
+        events.of(&da.key)
+    );
+    assert_eq!(
+        playing_count(&events, &da.key),
+        1,
+        "{:?}",
+        events.of(&da.key)
+    );
+    assert_eq!(
+        first.fake().connections,
+        connections,
+        "the other session is left alone"
+    );
+    sender.shutdown();
 }
 
 fn ptp_warnings(events: &Events, key: &DeviceKey) -> usize {

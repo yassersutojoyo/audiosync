@@ -279,7 +279,7 @@ fn stall_ms(ms: u64) -> Option<(u64, u64)> {
     Some((MEASURE_FROM + HOUR / 2, ms * PER_SECOND / 1000))
 }
 
-// covers: S50, S57
+// covers: S50, S57, S322
 #[test]
 fn a_speaker_clock_3_ppm_fast_loses_11_ms_of_lag_in_an_hour_without_a_correction() {
     let hour = run_hour(bench_outputs(Host::Renderer { stamped: false }, None));
@@ -298,15 +298,20 @@ fn a_speaker_clock_3_ppm_fast_loses_11_ms_of_lag_in_an_hour_without_a_correction
 
     // With clock stamps (S207) the speakers' converter, at ratio 1, is
     // trimmed with their clock instead: the lag holds, within the trim's
-    // dead zone, and the virtual output plays as it did.
+    // dead zone, and the virtual output plays as it did, anchored past W
+    // by the capture written since the newest stamp, less than a block
+    // (S322).
     let stamped = run_hour(bench_outputs(Host::Renderer { stamped: true }, None));
     eprintln!("3 ppm, renderer with stamps: {stamped:?}");
     assert_eq!(stamped.corrections, [0, 0], "{stamped:?}");
     assert_eq!(stamped.counters[0], hour.counters[0]);
     assert_eq!(
-        (stamped.first_ms[0], stamped.last_ms[0]),
-        (hour.first_ms[0], hour.last_ms[0])
+        stamped.last_ms[0] - stamped.first_ms[0],
+        hour.last_ms[0] - hour.first_ms[0]
     );
+    let ahead = hour.first_ms[0] - stamped.first_ms[0];
+    let block_ms = BLOCK as f64 * 1000.0 / f64::from(RATE);
+    assert!((0.0..block_ms).contains(&ahead), "{ahead:.2} ms");
     let held = stamped.last_ms[1] - stamped.first_ms[1];
     assert!(held.abs() < ms(16.0), "the speakers hold: {held} ms");
 }

@@ -1,3 +1,4 @@
+import CAudioSyncCore
 import Foundation
 
 // What AudioSync's own AirPlay sender lists and plays, and the decisions the
@@ -112,6 +113,22 @@ struct AirPlayTargetRow: Equatable {
 enum NativeSpeakerEvent: Equatable {
     enum State: String {
         case connecting, playing, retrying, failed, stopped
+        /// Out of view on the network; the sender starts it as soon as it
+        /// is announced again, with no retry schedule meanwhile (P215).
+        case unannounced
+
+        /// An `ASC_AIRPLAY_STATE_*` code; nil for one this side doesn't know.
+        init?(code: Int32) {
+            switch code {
+            case ASC_AIRPLAY_STATE_CONNECTING: self = .connecting
+            case ASC_AIRPLAY_STATE_PLAYING: self = .playing
+            case ASC_AIRPLAY_STATE_RETRYING: self = .retrying
+            case ASC_AIRPLAY_STATE_FAILED: self = .failed
+            case ASC_AIRPLAY_STATE_STOPPED: self = .stopped
+            case ASC_AIRPLAY_STATE_UNANNOUNCED: self = .unannounced
+            default: return nil
+            }
+        }
     }
 
     /// What ended a session (the sender's user reasons).
@@ -126,7 +143,10 @@ enum NativeSpeakerEvent: Equatable {
         case pairingRequired = "pairing required"
         case unsupported
         case timingUnavailable = "timing unavailable"
-        case oneAirPlay2 = "one AirPlay 2 speaker at a time"
+        case tooManyAirPlay2 = "too many AirPlay 2 speakers"
+        /// The receiver takes only PTP, which runs for speakers on another
+        /// network (P205).
+        case ptpOtherNetwork = "PTP in use on another network"
         /// The receiver plays only AirPlay 2, and this launch runs without it.
         case airPlay2Only = "AirPlay 2 only"
         /// An Apple TV whose home theater group plays, or a group whose
@@ -137,8 +157,8 @@ enum NativeSpeakerEvent: Equatable {
         case receiverUnverified = "receiver unverified"
 
         /// The sender tries again by itself, so the speaker stays on; any
-        /// other problem turns it off, except a speaker waiting for the
-        /// AirPlay 2 slot, which stays on (`NativeAirPlayModel.apply`).
+        /// other problem turns it off, except a speaker that waits, which
+        /// stays on (`NativeAirPlayModel.apply`).
         var retried: Bool {
             switch self {
             case .notResponding, .connectionLost, .busy, .refused: return true
@@ -146,15 +166,18 @@ enum NativeSpeakerEvent: Equatable {
             }
         }
 
+        /// The sender keeps the speaker and starts it once it lets it (S285).
+        var waits: Bool { self == .tooManyAirPlay2 || self == .ptpOtherNetwork }
+
         /// Why a speaker it turns off is off.
         var turnOff: NativeTurnOff {
             switch self {
             case .notResponding, .connectionLost, .busy, .refused: return .unreachable
             case .passwordRequired, .wrongPassword: return .needsPassword
             case .pairingRequired: return .needsCode
-            // A speaker waiting for the AirPlay 2 slot never goes off; a
-            // pairing that ends with it can't play, as with `unsupported`.
-            case .incompatible, .unsupported, .oneAirPlay2: return .cantPlay
+            // A waiting speaker never goes off; a pairing that ends with a
+            // wait can't play, as with `unsupported`.
+            case .incompatible, .unsupported, .tooManyAirPlay2, .ptpOtherNetwork: return .cantPlay
             case .airPlay2Only: return .needsAirPlay2
             case .timingUnavailable: return .timingUnavailable
             case .playsThroughSpeakers: return .playsThroughSpeakers
@@ -219,6 +242,7 @@ enum NativeSpeakerEvent: Equatable {
         switch self {
         case .state(let id, let state, let retryMs):
             line = "\(label(id)): \(state.rawValue)" + (state == .retrying ? ", " + retry(retryMs) : "")
+                + (state == .unannounced ? ", waiting until it is announced again" : "")
         case .error(let id, let problem, let retryMs, let detail):
             line = "\(label(id)) error: \(problem.rawValue) (\(detail)); \(retry(retryMs))"
         case .latency(let id, let ms, let frames, let reportedUs, let sources):
@@ -378,11 +402,10 @@ enum NativeAirPlayOutcome: Equatable {
     case prompt
     /// The receiver paired (app ID): it joins with its new credentials.
     case paired(String)
-    /// The speaker (app ID) started waiting for the AirPlay 2 slot, which
-    /// another AirPlay 2 speaker holds, or stopped waiting (`waiting`
-    /// false): it stays on, and the sender starts it once the slot frees
-    /// (P169).
-    case waiting(String, Bool)
+    /// The speaker (app ID) started waiting, for an AirPlay 2 place or for
+    /// PTP, or stopped waiting (nil): it stays on, and the sender starts it
+    /// once it lets it (P169, S285).
+    case waiting(String, NativeSpeakerEvent.Problem?)
     /// Someone changed the speaker's volume on the speaker itself (app ID):
     /// its own volume and device level follow (S290), and nothing goes back
     /// to the sender.
@@ -392,6 +415,9 @@ enum NativeAirPlayOutcome: Equatable {
     case ptpPortsTaken
     /// A session bound the PTP ports: they are free again.
     case ptpPortsFree
+    /// The speaker (app ID) went out of view on the network or came back
+    /// without its playing changing: its row's note follows (P215).
+    case unannouncedChanged(String)
 }
 
 /// The native sender's receivers and speakers as the app sees them (main
@@ -905,14 +931,19 @@ struct NativeAirPlayModel {
     /// passed over.
     mutating func removed(_ id: String) {
         states.removeValue(forKey: id)
-        waiting.remove(id)
+        waiting.removeValue(forKey: id)
         pruneMembers()
     }
 
-    /// The speakers in the sender waiting for the AirPlay 2 slot (P169).
-    private(set) var waiting: Set<String> = []
+    /// The speakers in the sender that wait, and why (P169, S285).
+    private(set) var waiting: [String: NativeSpeakerEvent.Problem] = [:]
 
-    func isWaiting(_ id: String) -> Bool { waiting.contains(id) }
+    func isWaiting(_ id: String) -> Bool { waiting[id] != nil }
+
+    func waitReason(_ id: String) -> NativeSpeakerEvent.Problem? { waiting[id] }
+
+    /// The speaker in the sender is out of view on the network (P215).
+    func isUnannounced(_ id: String) -> Bool { states[id] == .unannounced }
 
     /// Takes a sender event in, and says what the app does about it.
     mutating func apply(_ event: NativeSpeakerEvent) -> NativeAirPlayOutcome? {
@@ -923,20 +954,22 @@ struct NativeAirPlayModel {
             if state == .playing { endAttempt(id) }   // it plays: the user's attempt worked
             // The refusal's failed state keeps it waiting; any other state
             // means the sender started it again.
-            let waited = state != .failed && waiting.remove(id) != nil
+            let waited = state != .failed && waiting.removeValue(forKey: id) != nil
             let (was, now) = (before == .playing, state == .playing)
             if was != now { return .playingChanged(NativeAirPlayID.app(id), playing: now) }
-            return waited ? .waiting(NativeAirPlayID.app(id), false) : nil
+            if waited { return .waiting(NativeAirPlayID.app(id), nil) }
+            return (before == .unannounced) != (state == .unannounced) ? .unannouncedChanged(NativeAirPlayID.app(id)) : nil
         case .error(let id, let problem, let retryMs, _):
             guard states[id] != nil else { return memberError(id, problem) }
             // The member's own error follows and names it (`memberError`).
             if NativeTarget.kind(id) != nil, problem == .passwordRequired || problem == .wrongPassword {
                 return nil
             }
-            if problem == .oneAirPlay2 {
-                return waiting.insert(id).inserted ? .waiting(NativeAirPlayID.app(id), true) : nil
+            if problem.waits {
+                return waiting.updateValue(problem, forKey: id) != problem
+                    ? .waiting(NativeAirPlayID.app(id), problem) : nil
             }
-            waiting.remove(id)
+            waiting.removeValue(forKey: id)
             if retryMs != nil && problem.retried {
                 return nil   // a retrying state event follows
             }
@@ -1349,6 +1382,24 @@ struct NativeReceiverLatency {
     /// A row's offset on top of the hold-back, E - e_s; 0 for one that
     /// reports more than E, which plays late until E may change.
     func offsetMs(of members: [String]) -> Double { max(0, estimateMs - estimateMs(of: members)) }
+
+    /// e_s of each target as its offset uses it, by row ID.
+    private(set) var targetEstimates: [String: Double] = [:]
+
+    /// Takes each target's e_s (its members by row ID) when `canChange`;
+    /// otherwise keeps the one it had, so a member joining or leaving while
+    /// a speaker sounds moves no offset (S284).
+    mutating func holdTargets(_ targets: [String: [String]], canChange: Bool) {
+        targetEstimates = targets.reduce(into: [:]) { held, target in
+            held[target.key] = canChange ? estimateMs(of: target.value)
+                                         : targetEstimates[target.key] ?? estimateMs(of: target.value)
+        }
+    }
+
+    /// `offsetMs(of:)` with a target's e_s as `holdTargets` keeps it.
+    func offsetMs(row: String, of members: [String]) -> Double {
+        max(0, estimateMs - (targetEstimates[row] ?? estimateMs(of: members)))
+    }
 
     /// How much later than E a row plays while E is held, in ms.
     func lateMs(of members: [String]) -> Double { max(0, estimateMs(of: members) - estimateMs) }

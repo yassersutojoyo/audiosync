@@ -63,6 +63,8 @@ mod speaker_names;
 #[rustfmt::skip]
 mod tokens;
 mod ui_model;
+#[cfg(windows)]
+mod updater;
 mod view;
 
 use std::process::ExitCode;
@@ -113,7 +115,19 @@ const PREVIEW_ZONES_VAR: &str = "AUDIOSYNC_PREVIEW_ZONES";
 const PREVIEW_PRESETS_VAR: &str = "AUDIOSYNC_PREVIEW_PRESETS";
 
 fn main() -> ExitCode {
-    let Some(instance) = os::claim_instance() else {
+    // After Restart Now the quitting copy still holds the single instance;
+    // claiming it first would hand this launch over to that copy.
+    #[cfg(windows)]
+    let updater::relaunch::Claimed { instance, note } =
+        updater::relaunch::claim_after(std::env::args_os(), os::claim_instance);
+    #[cfg(not(windows))]
+    let (instance, note) = (os::claim_instance(), None::<String>);
+    let Some(instance) = instance else {
+        if let Some(note) = note {
+            let log = DebugLog::appending_from_env();
+            log.log(|| note);
+            log.flush(LOG_FLUSH_AT_EXIT);
+        }
         return ExitCode::SUCCESS;
     };
     let log = DebugLog::from_env();
@@ -134,6 +148,9 @@ fn main() -> ExitCode {
     }
 
     instance.log_state(&log);
+    if let Some(note) = note {
+        log.log(|| note);
+    }
 
     match run(&log, &instance) {
         Ok(()) => {
@@ -303,6 +320,7 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     }
     slint::run_event_loop_until_quit()?;
     log.log(|| "the event loop ended".to_owned());
+    app.updater_at_exit();
     // Changes since the last poll, and where the main window is.
     app.save_settings();
     app.stop_remote_at_exit();

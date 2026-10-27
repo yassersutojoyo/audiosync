@@ -326,6 +326,6 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
-[0.7.0]: https://github.com/yassersutojoyo/audiosync/compare/v0.6.0...HEAD
+[0.7.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.0
 [0.6.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.6.0
 [0.5.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.5.0

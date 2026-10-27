@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use audiosync_airplay::error::ErrorKind;
 use audiosync_airplay::volume::{MIN_DB, MUTED_DB};
 
 /// A level set on the television shows on the row within this long, with
@@ -195,6 +196,118 @@ pub fn d1(switch_ons: usize, prompts: usize, started: usize, done: usize, playin
         Status::Fail
     };
     Cell::new("D1", status, value)
+}
+
+/// What one add of the password television led to, counted from the add on.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PasswordStep {
+    /// The first error the speaker reported.
+    pub error: Option<ErrorKind>,
+    pub playing: bool,
+    /// The host got HomeKit credentials.
+    pub paired: bool,
+    pub pair_setups: usize,
+    /// Pair-setup M1 without the transient flag, and M5.
+    pub started: usize,
+    pub done: usize,
+    pub pin_starts: usize,
+    pub verifies: usize,
+}
+
+fn password_value(step: PasswordStep) -> String {
+    let outcome = match (step.error, step.playing) {
+        (Some(kind), _) => format!("error {kind:?}"),
+        (None, true) => "playing".to_owned(),
+        (None, false) => "no outcome".to_owned(),
+    };
+    format!(
+        "{outcome}, {} pair-setup ({} M1, {} M5), {} pin-start, {} pair-verify",
+        step.pair_setups, step.started, step.done, step.pin_starts, step.verifies
+    )
+}
+
+/// The password cells, from four adds in order: with no password, a wrong
+/// one, the right one, and again with the credentials the right one gave.
+pub fn pw(
+    none: PasswordStep,
+    wrong: PasswordStep,
+    right: PasswordStep,
+    again: PasswordStep,
+) -> [Cell; 4] {
+    [
+        ("PW.none", none, pw_none(none)),
+        ("PW.wrong", wrong, pw_wrong(wrong)),
+        ("PW.right", right, pw_right(right)),
+        ("PW.again", again, pw_again(again)),
+    ]
+    .map(|(id, step, problems)| Cell::judged(id, &problems, password_value(step)))
+}
+
+fn no_pin_start(step: PasswordStep, problems: &mut Vec<String>) {
+    if step.pin_starts > 0 {
+        problems.push("a PIN pairing was started".to_owned());
+    }
+}
+
+fn pw_none(step: PasswordStep) -> Vec<String> {
+    let mut problems = Vec::new();
+    if step.error != Some(ErrorKind::PasswordRequired) {
+        problems.push("PasswordRequired expected".to_owned());
+    }
+    if step.pair_setups > 0 {
+        problems.push("pair-setup without a password".to_owned());
+    }
+    no_pin_start(step, &mut problems);
+    problems
+}
+
+fn pw_wrong(step: PasswordStep) -> Vec<String> {
+    let mut problems = Vec::new();
+    if step.error != Some(ErrorKind::WrongPassword) {
+        problems.push("WrongPassword expected".to_owned());
+    }
+    // P151 retries M1 once when B leads with a zero byte or S is short.
+    if !(1..=2).contains(&step.started) {
+        problems.push("1 or 2 M1 expected".to_owned());
+    }
+    if step.done > 0 {
+        problems.push("M5 after a wrong password".to_owned());
+    }
+    no_pin_start(step, &mut problems);
+    problems
+}
+
+fn pw_right(step: PasswordStep) -> Vec<String> {
+    let mut problems = Vec::new();
+    if !step.playing || step.error.is_some() {
+        problems.push("never played".to_owned());
+    }
+    if step.started != 1 || step.done != 1 {
+        problems.push("one password pairing expected".to_owned());
+    }
+    if step.verifies == 0 {
+        problems.push("no pair-verify".to_owned());
+    }
+    if !step.paired {
+        problems.push("no credentials reached the host".to_owned());
+    }
+    no_pin_start(step, &mut problems);
+    problems
+}
+
+fn pw_again(step: PasswordStep) -> Vec<String> {
+    let mut problems = Vec::new();
+    if !step.playing || step.error.is_some() {
+        problems.push("never played".to_owned());
+    }
+    if step.pair_setups > 0 {
+        problems.push("paired again".to_owned());
+    }
+    if step.verifies == 0 {
+        problems.push("no pair-verify".to_owned());
+    }
+    no_pin_start(step, &mut problems);
+    problems
 }
 
 fn pause_counts(pause: Pause) -> String {

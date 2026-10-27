@@ -10,7 +10,7 @@ use std::time::Duration;
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::homekit::tlv8::{self, Tlv8, Truncated};
 use audiosync_airplay::homekit::{
-    self, HomeKitCredentials, Identity, Mode, PairSetup, PairVerify, SetupStep, VerifyStep,
+    self, HomeKitCredentials, Identity, Mode, PairSetup, PairVerify, SetupStep, SrpWork, VerifyStep,
 };
 use audiosync_airplay::rtsp::{Method, Request, Response};
 use audiosync_airplay::secret::Secret;
@@ -152,7 +152,7 @@ fn tlv8_encoding() {
     assert_eq!(verify.get(tlv8::ENCRYPTED_DATA).map(<[u8]>::len), Some(120));
 }
 
-// covers: P61, P154
+// covers: P61, P154, P219
 #[test]
 fn the_pairing_is_chosen_from_credentials_then_status_flags() {
     use homekit::{Stored, check_mode, choose_mode, status_flags};
@@ -160,11 +160,11 @@ fn the_pairing_is_chosen_from_credentials_then_status_flags() {
     assert_eq!(status_flags(Some(0x80), Some(0x8)), 0x80);
     assert_eq!(status_flags(None, Some(0x8)), 0x8);
     assert_eq!(status_flags(None, None), 0);
-    // Bit 3 asks for a code every time, stored credentials or not; they
-    // win over every other flag. The two values come from one TV set to
-    // ask every time (0x4c) and only the first time (0x244).
-    assert_eq!(choose_mode(0x8 | 0x80 | 0x200, Stored::Kept), Mode::Pin);
-    assert_eq!(choose_mode(0x4c, Stored::Kept), Mode::Pin);
+    // Bit 3 asks for a code every time, but arrives unproven: stored
+    // credentials not turned down verify first. The two values come from
+    // one TV set to ask every time (0x4c) and only the first time (0x244).
+    assert_eq!(choose_mode(0x8 | 0x80 | 0x200, Stored::Kept), Mode::Verify);
+    assert_eq!(choose_mode(0x4c, Stored::Kept), Mode::Verify);
     assert_eq!(choose_mode(0x80 | 0x200, Stored::Kept), Mode::Verify);
     assert_eq!(choose_mode(0x244, Stored::Kept), Mode::Verify);
     assert!(homekit::asks_code_every_time(0x4c));
@@ -180,6 +180,7 @@ fn the_pairing_is_chosen_from_credentials_then_status_flags() {
     assert_eq!(choose_mode(0x244, Stored::TurnedDown), Mode::Verify);
     assert_eq!(choose_mode(0x4, Stored::TurnedDown), Mode::Verify);
     assert_eq!(choose_mode(0x4c, Stored::TurnedDown), Mode::Pin);
+    assert_eq!(choose_mode(0x8 | 0x80, Stored::TurnedDown), Mode::Pin);
     // A PIN pairing waits for the host; a password pairing for the password.
     assert_eq!(
         check_mode(Mode::Pin, false, true),
@@ -193,6 +194,13 @@ fn the_pairing_is_chosen_from_credentials_then_status_flags() {
     assert_eq!(check_mode(Mode::Password, false, true), Ok(()));
     assert_eq!(check_mode(Mode::Transient, false, false), Ok(()));
     assert_eq!(check_mode(Mode::Verify, false, false), Ok(()));
+    // The pairing the host asks for: a password pairing for bit 7 alone,
+    // a PIN pairing otherwise, also with no PIN flag (P219).
+    assert_eq!(homekit::requested_mode(0x84), Mode::Password);
+    assert_eq!(homekit::requested_mode(0x80 | 0x200), Mode::Pin);
+    assert_eq!(homekit::requested_mode(0x80 | 0x8), Mode::Pin);
+    assert_eq!(homekit::requested_mode(0x244), Mode::Pin);
+    assert_eq!(homekit::requested_mode(0x4), Mode::Pin);
 
     // A 470 to a transient pair-setup means the receiver wants a PIN
     // pairing: PairingRequired.
@@ -969,4 +977,84 @@ fn no_pairing_answer_makes_the_pairing_panic() {
         let _ = Tlv8::decode(&rng.bytes(len));
         let _ = HomeKitCredentials::from_bytes(&rng.bytes(len * 2));
     }
+}
+
+/// Like `run_setup`, with M2's arithmetic handed out and run apart, as the
+/// sender does on another thread; counts the handed-out steps.
+fn run_offloaded(
+    setup: &mut PairSetup,
+    fake: &mut FakeHomeKit,
+    entropy: &mut TestEntropy,
+    pin: Option<&str>,
+) -> (SetupStep, usize) {
+    setup.set_offload(true);
+    let mut request = setup.start();
+    let mut computed = 0;
+    loop {
+        let response = fake.answer(&request);
+        let mut step = setup.handle_response(&response, entropy);
+        if let SetupStep::Compute(work) = step {
+            computed += 1;
+            step = setup.computed(work.clone().run()).expect("M3 or a failure");
+            assert_eq!(setup.computed(work.run()), None);
+        }
+        match step {
+            SetupStep::Send(next) => request = next,
+            SetupStep::PinRequested => {
+                request = setup.submit_pin(pin.expect("a PIN")).expect("M1");
+            }
+            end => return (end, computed),
+        }
+    }
+}
+
+// covers: P223
+#[test]
+fn the_srp_step_can_run_apart_from_the_session() {
+    let mut entropy = TestEntropy::new();
+    let mut fake = FakeHomeKit::new(homekit::TRANSIENT_CODE);
+    let (end, computed) = run_offloaded(&mut PairSetup::transient(), &mut fake, &mut entropy, None);
+    assert!(matches!(end, SetupStep::Transient(_)), "{end:?}");
+    assert_eq!(computed, 1);
+
+    let mut fake = FakeHomeKit::new(PIN);
+    let mut setup = PairSetup::pin(identity(&mut entropy));
+    let (end, computed) = run_offloaded(&mut setup, &mut fake, &mut entropy, Some(PIN));
+    assert!(matches!(end, SetupStep::Paired(_)), "{end:?}");
+    assert_eq!(computed, 1);
+
+    // A wrong PIN is still turned down at M4, after the step ran apart.
+    let mut fake = FakeHomeKit::new(PIN);
+    let mut setup = PairSetup::pin(identity(&mut entropy));
+    let (end, _) = run_offloaded(&mut setup, &mut fake, &mut entropy, Some("1111"));
+    assert!(matches!(end, SetupStep::WrongPin), "{end:?}");
+}
+
+fn compute(step: SetupStep) -> SrpWork {
+    match step {
+        SetupStep::Compute(work) => work,
+        other => panic!("{other:?}"),
+    }
+}
+
+// covers: P223
+#[test]
+fn a_result_computed_before_a_reconnect_is_dropped() {
+    let mut entropy = TestEntropy::new();
+    let mut fake = FakeHomeKit::new(homekit::TRANSIENT_CODE);
+    let mut setup = PairSetup::transient();
+    setup.set_offload(true);
+    let m1 = setup.start();
+    let old = compute(setup.handle_response(&fake.answer(&m1), &mut entropy));
+    // The connection drops while the old step runs; the new M2 comes first.
+    fake.new_connection();
+    let m1 = setup.restart();
+    let new = compute(setup.handle_response(&fake.answer(&m1), &mut entropy));
+    assert_eq!(setup.computed(old.run()), None);
+    let m3 = match setup.computed(new.run()) {
+        Some(SetupStep::Send(m3)) => m3,
+        other => panic!("{other:?}"),
+    };
+    let end = setup.handle_response(&fake.answer(&m3), &mut entropy);
+    assert!(matches!(end, SetupStep::Transient(_)), "{end:?}");
 }

@@ -17,7 +17,8 @@ enum AirPlayPairing {
     /// Why a speaker was switched off, for the message.
     enum Reason: Equatable {
         case unreachable
-        case needsCode          // asked for a code after an automatic turn-on
+        case needsPin           // asked for a PIN after an automatic turn-on
+        case needsPassword      // asked for a password after an automatic turn-on
         case cancelled          // the user cancelled the prompt
         case stillNeedsCode     // paired, but asked for a code again
     }
