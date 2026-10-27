@@ -792,6 +792,10 @@ const VOLUME_TOLERANCE_DB: f64 = 0.5;
 /// and a remote press later can land that close too (S271).
 const VOLUME_SETTLE: Duration = Duration::from_secs(3);
 
+/// How long a slider that started editing holds its row with no move: a
+/// screen reader's set never sends the release (S271).
+const DRAG_IDLE: Duration = Duration::from_secs(3);
+
 /// The address a receiver announces first, AirPlay service before RAOP.
 fn first_address(device: &Device) -> Option<IpAddr> {
     device
@@ -813,9 +817,11 @@ const MAX_LISTED_PER_ADDRESS: usize = 64;
 struct VolumeRead {
     /// A read was asked since the volume was last set.
     reading: bool,
-    /// The row's slider is held, so a reading must not move it (S271).
+    /// The row's slider started editing and wasn't released; it holds the
+    /// row only while [`VolumeRead::held`] (S271).
     dragging: bool,
-    /// When the volume was last set: its own, the master or a calibration.
+    /// When the volume was last set (its own, the master or a calibration)
+    /// or the slider started editing.
     set_at: Instant,
     /// It turned a read down, or its AirPlay 2 reads stopped (P184): it
     /// isn't asked again.
@@ -838,6 +844,12 @@ impl VolumeRead {
     /// The last set is recent enough for a reading near it to be its echo.
     fn recent(&self, now: Instant) -> bool {
         now.saturating_duration_since(self.set_at) < VOLUME_SETTLE
+    }
+
+    /// The slider is held, so a reading must not move the row: it started
+    /// editing and moved within [`DRAG_IDLE`] (S271).
+    fn held(&self, now: Instant) -> bool {
+        self.dragging && now.saturating_duration_since(self.set_at) < DRAG_IDLE
     }
 
     /// The volume was set: an answer to a read asked before is old.
@@ -2599,6 +2611,9 @@ impl AirPlaySpeakers {
         if let Some(added) = self.added.get_mut(id) {
             added.read.dragging = dragging;
             added.read.reading = false;
+            if dragging {
+                added.read.set_at = Instant::now();
+            }
         }
     }
 
@@ -2870,7 +2885,7 @@ impl AirPlaySpeakers {
             return own;
         };
         own.level = self.device_level_of(row);
-        own.dragging = added.read.dragging;
+        own.dragging = added.read.held(now);
         if let Command::DeviceVolume(db) = command {
             // The level the speaker has, the held one with k at 0 (S290).
             let has = match self.calibration_solo.as_deref() {
@@ -2945,7 +2960,7 @@ impl AirPlaySpeakers {
         let Some(added) = self.added.get_mut(&row) else {
             return false;
         };
-        if !added.read.answered() || added.read.dragging || solo {
+        if !added.read.answered() || added.read.held(Instant::now()) || solo {
             return false;
         }
         if !added.read.echo.set_on_speaker(db) {
