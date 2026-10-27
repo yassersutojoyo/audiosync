@@ -7205,9 +7205,11 @@ do {
           "source quit: the same quit reported again (the capture, then macOS) acts once (S227 f)")
     check(WhenSourceQuits(defaultsValue: nil) == .system && WhenSourceQuits(defaultsValue: "system") == .system,
           "source quit: nothing stored reads as system, the Mac's default (S227)")
-    check(WhenSourceQuits(defaultsValue: "stop") == .stop && WhenSourceQuits(defaultsValue: "System") == .stop
-            && WhenSourceQuits(defaultsValue: "switch") == .stop,
-          "source quit: a stored stop, or a value this copy doesn't know, reads as stop (S227)")
+    check(WhenSourceQuits(defaultsValue: "stop") == .stop,
+          "source quit: a stored stop reads as stop (S227)")
+    check(WhenSourceQuits(defaultsValue: "System") == .system && WhenSourceQuits(defaultsValue: "switch") == .system
+            && WhenSourceQuits(defaultsValue: "") == .system,
+          "source quit: a value this copy doesn't know reads as system, the default, like nothing stored (S227)")
     let t = UIStrings()
     let switched = t.sourceSwitchedToSystem(name: "Music", started: true)
     let notStarted = t.sourceSwitchedToSystem(name: "Music", started: false)
