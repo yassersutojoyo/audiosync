@@ -390,11 +390,21 @@ fn one_remote_step_off_the_grid_of_sets_is_reported_as_read() {
     let server = Ap2Server::start(FakeAp2::samsung());
     let mut tv = play(&server);
     tv.run(Duration::from_secs(1), true);
+    let set = Instant::now();
     tv.sender.set_volume(&tv.key, Volume::Db(-26.949231));
-    tv.run(Duration::from_secs(3), true);
-    let echo = tv.reported_after(Instant::now() - Duration::from_secs(1));
-    let echo = echo.last().map(|(_, db)| *db);
-    assert!(echo.is_some_and(|db| (db + 27.0).abs() < 0.001), "{echo:?}");
+    // Polled, not a fixed wait: a loaded CI runner can take seconds to report.
+    let deadline = set + Duration::from_secs(15);
+    let echoed = |tv: &Playing| {
+        tv.reported_after(set)
+            .last()
+            .map(|(_, db)| *db)
+            .filter(|db| (db + 27.0).abs() < 0.001)
+    };
+    while echoed(&tv).is_none() && Instant::now() < deadline {
+        tv.run(Duration::from_millis(100), true);
+    }
+    let echo = echoed(&tv);
+    assert!(echo.is_some(), "{:?}", tv.reported_after(set));
 
     let presses = Instant::now();
     for (pressed_to, read_as) in [(-26.7, -26.700001), (-27.0, -27.0), (-27.3, -27.299999)] {
