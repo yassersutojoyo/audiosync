@@ -1258,7 +1258,7 @@ fn the_capture_rate_output_that_sets_the_lead_never_runs_dry_through_its_wander(
 
 // covers: S208, S209
 #[test]
-fn a_late_second_callback_neither_corrects_drift_nor_plays_early_in_a_mac_case() {
+fn a_late_second_callback_neither_corrects_drift_nor_moves_the_output_in_a_mac_case() {
     // The start re-anchor used to land on the late second callback before
     // the floor had formed, too close to W by its lateness: past T it was
     // corrected (I2), inside T it played that much early all run (on main
@@ -1279,12 +1279,12 @@ fn a_late_second_callback_neither_corrects_drift_nor_plays_early_in_a_mac_case()
     let mut lines = Vec::new();
     let mut shown = 0;
     for ((case, late), on_time) in late.iter().zip(simulate_all(&on_time)) {
-        let early_ms = on_time.norms[0] - late.norms[0];
+        let late_ms = late.norms[0] - on_time.norms[0];
         let corrected = late.fails[1] && !on_time.fails[1];
-        shown += usize::from(corrected || early_ms > ALIGN_SLACK_MS);
+        shown += usize::from(corrected || late_ms.abs() > ALIGN_SLACK_MS);
         lines.push(format!(
-            "case {}: {:.2} ms early, drift corrected {corrected}",
-            case.k, early_ms
+            "case {}: {:.2} ms later than on time, drift corrected {corrected}",
+            case.k, late_ms
         ));
     }
     println!("{}", lines.join("\n"));
