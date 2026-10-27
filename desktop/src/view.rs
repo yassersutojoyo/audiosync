@@ -6082,6 +6082,10 @@ mod tests {
                 reference: true,
                 ..Missing::STREAMING
             },
+            Missing {
+                speaker: true,
+                ..Missing::STREAMING
+            },
             Missing::ALL,
         ]
         .into_iter()
@@ -6100,6 +6104,7 @@ mod tests {
                 "Turn on Den to measure it again.",
                 "Turn on Speakers to measure it again.",
                 "Turn on streaming and Speakers to measure it again.",
+                "Turn on streaming and Den to measure it again.",
                 "Turn on streaming, Den and Speakers to measure it again.",
             ],
             "Measure Again"

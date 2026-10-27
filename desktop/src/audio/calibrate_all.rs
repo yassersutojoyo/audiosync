@@ -102,6 +102,8 @@ pub struct Lineup {
     pub devices: BTreeMap<String, LocalDevice>,
     /// The reference's switch is off: named with streaming while nothing plays.
     pub reference_off: bool,
+    /// Every speaker whose switch is off, by class and ID, for the same text.
+    pub switched_off: Vec<(Class, String)>,
 }
 
 /// A playing local output's device, as the plan reads it.
@@ -342,6 +344,25 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
     let reference_off = outputs
         .iter()
         .any(|output| output.is_reference && !output.enabled);
+    let switched_off = outputs
+        .iter()
+        .filter(|output| !output.enabled)
+        .map(|output| (Class::Local, output.id.clone()))
+        .chain(
+            audio
+                .airplay_speakers()
+                .into_iter()
+                .filter(|speaker| !speaker.enabled)
+                .map(|speaker| (Class::AirPlay, speaker.id)),
+        )
+        .chain(
+            audio
+                .cast_speakers()
+                .into_iter()
+                .filter(|cast| !cast.enabled)
+                .map(|cast| (Class::Cast, cast.id)),
+        )
+        .collect();
     Lineup {
         session: engine.session,
         reference: engine.reference,
@@ -349,6 +370,7 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
         hold_backs_ms: engine.hold_backs_ms,
         devices,
         reference_off,
+        switched_off,
     }
 }
 
@@ -630,7 +652,14 @@ impl AllRun {
             let stopped = lineup.session.is_none() || rig.tap().is_none();
             return refuse(Failure::NotPlaying(Missing {
                 streaming: stopped,
-                speaker: !stopped && now_of(measured).is_none(),
+                speaker: if stopped {
+                    lineup
+                        .switched_off
+                        .iter()
+                        .any(|(class, id)| *class == measured.class && *id == measured.id)
+                } else {
+                    now_of(measured).is_none()
+                },
                 reference: if stopped {
                     lineup.reference_off
                 } else {
@@ -1360,6 +1389,7 @@ pub(crate) mod tests {
                     ]),
                     devices: BTreeMap::new(),
                     reference_off: false,
+                    switched_off: Vec::new(),
                 },
                 tap: Arc::new(CalibrationTap::new()),
                 solo: None,
@@ -2071,6 +2101,37 @@ pub(crate) mod tests {
             DebugLog::default(),
         );
         assert_eq!(again.err(), Some(Failure::NotPlaying(Missing::SPEAKER)));
+        given_back(&rig);
+    }
+
+    #[test]
+    fn measure_again_while_stopped_names_the_speaker_only_when_its_switch_is_off() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let members = run.members().to_vec();
+        let sheet = run_to_end(&mut rig, &mut run, |_, _| {})
+            .sheet
+            .expect("a sheet");
+        rig.lineup.session = None;
+        rig.lineup.members.clear();
+        let refusal = |rig: &mut FakeRig| {
+            let now = rig.now.get();
+            AllRun::again(rig, &sheet, &members, MIC_RATE, 1, now, DebugLog::default()).err()
+        };
+        assert_eq!(
+            refusal(&mut rig),
+            Some(Failure::NotPlaying(Missing::STREAMING))
+        );
+        rig.lineup
+            .switched_off
+            .push((members[1].class, members[1].id.clone()));
+        assert_eq!(
+            refusal(&mut rig),
+            Some(Failure::NotPlaying(Missing {
+                speaker: true,
+                ..Missing::STREAMING
+            }))
+        );
         given_back(&rig);
     }
 
