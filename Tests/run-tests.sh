@@ -191,6 +191,9 @@ Tests/pythonpicktest.sh || status=1
 echo "▶ install script (Tests/installtest.sh)"
 Tests/installtest.sh || status=1
 
+echo "▶ disk image detach (Tests/dmgdetachtest.sh)"
+Tests/dmgdetachtest.sh || status=1
+
 if [ "$macos" = 0 ]; then
   # shellcheck source=scripts/cargo_path.sh disable=SC1091
   source scripts/cargo_path.sh
