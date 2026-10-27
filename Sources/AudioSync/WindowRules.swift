@@ -95,6 +95,21 @@ enum PanelSizing: Equatable {
 
     var followsContent: Bool { self == .shown }
 
+    /// One `show()`; true when the open finishes now. AppKit sends no didShow
+    /// to a popover still on screen, as one reopened while its close fade
+    /// runs, so the show stands in for it.
+    mutating func show(onScreen: Bool) -> Bool {
+        self = after(.show)
+        return onScreen
+    }
+
+    /// Ends the open once; false when it already ended or the panel moved on.
+    mutating func finishOpen() -> Bool {
+        guard self == .opening else { return false }
+        self = after(.didShow)
+        return true
+    }
+
     func after(_ event: Event) -> PanelSizing {
         switch (self, event) {
         case (_, .show): return .opening
