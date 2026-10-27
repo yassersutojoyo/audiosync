@@ -296,3 +296,80 @@ fn the_timeline_follows_a_receiver_that_plays_off_rate() {
         2.0 + 500.0 / RATE
     );
 }
+
+/// Feeds `bytes` in packet reads as a receiver writing to a pipe did in WSL:
+/// its start-up flush lands at once 0.3 s in, ahead of the timeline
+/// `anchor + f / RATE`; after that each read lands `wander(last frame)`
+/// seconds off the timeline, plus a packet late on two reads of three.
+fn feed_pipe(detector: &mut Detector, bytes: &[u8], anchor: f64, wander: impl Fn(u64) -> f64) {
+    let packet_s = PACKET as f64 / RATE;
+    let mut sent = 0usize;
+    for (index, chunk) in bytes.chunks(PACKET * 4).enumerate() {
+        sent += chunk.len();
+        let end = (sent / 4) as u64;
+        let arrival = if end <= 44_100 {
+            anchor + 0.3
+        } else {
+            let slip = if index % 3 == 0 { 0.0 } else { packet_s };
+            anchor + end as f64 / RATE + wander(end) + slip
+        };
+        detector.push(chunk, arrival);
+    }
+    detector.finish();
+}
+
+// covers: P102
+#[test]
+fn onsets_are_timed_from_the_receivers_start_when_its_pipe_writes_wander() {
+    // Measured in the read logs of two AirPlay 1 receivers writing to pipes:
+    // after the start the writes slip by whole packets, catch up a burst at
+    // once, and near the end run up to 60 ms ahead, while the PCM itself
+    // holds every click 176 400 frames apart.
+    let packet_s = PACKET as f64 / RATE;
+    let first = 340_000u64;
+    let at_a: Vec<usize> = (0..6)
+        .map(|k| (first + k * CLICK_PERIOD_FRAMES) as usize)
+        .collect();
+    let shift = 698;
+    let at_b: Vec<usize> = at_a.iter().map(|&f| f - shift).collect();
+    let anchor_a = 1.029;
+    let anchor_b = anchor_a + 0.5 + shift as f64 / RATE;
+    let wander = |late_from: u64, step: u64, catch_up: u64| {
+        move |end: u64| {
+            let seconds = end.saturating_sub(late_from) / step;
+            if end > 1_100_000 {
+                -((end - 1_100_000) as f64 / RATE) * 0.008
+            } else if end > catch_up {
+                0.0
+            } else {
+                seconds.min(8) as f64 * packet_s
+            }
+        }
+    };
+    let mut seed = 9;
+    let a_bytes = pcm(1_300_000, &at_a, &the_click(), &mut seed);
+    let b_bytes = pcm(1_300_000, &at_b, &the_click(), &mut seed);
+    let mut a = Detector::new(DEFAULT_THRESHOLD);
+    feed_pipe(&mut a, &a_bytes, anchor_a, wander(first, 44_100, 840_000));
+    let mut b = Detector::new(DEFAULT_THRESHOLD);
+    feed_pipe(
+        &mut b,
+        &b_bytes,
+        anchor_b,
+        wander(first - 60_000, 30_000, 700_000),
+    );
+
+    for (onset, &at) in b.onsets().iter().zip(&at_b) {
+        let truth = anchor_b + at as f64 / RATE;
+        assert!(
+            (onset.seconds - truth).abs() < 0.000_5,
+            "{onset:?} vs {truth}"
+        );
+    }
+    let judged = verdict(
+        (a.onsets(), Duration::ZERO),
+        (b.onsets(), Duration::from_millis(500)),
+    );
+    assert!(judged.pass, "{judged:?}");
+    assert_eq!(judged.pairs.len(), 6);
+}
