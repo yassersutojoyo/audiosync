@@ -1384,6 +1384,45 @@ do {
               "\(String(describing: host.volumes.hints)), writes: \(host.access.writes.count)")
     }
 
+    // covers: S193
+    do {
+        let access = FakeAccess()
+        // Settable main controls win over the channels, whatever those say.
+        access.set(80, .volume, 0.8)
+        access.set(80, .volume, channel: 1, 0.1)
+        access.set(80, .volume, channel: 2, 0.2)
+        access.set(80, .mute, 0)
+        access.set(80, .mute, channel: 1, 1)
+        access.set(80, .mute, channel: 2, 1)
+        // A main volume that can't be set counts as absent; only channel 1 has
+        // a mute, so its mute alone decides.
+        access.set(81, .volume, 0.8, settable: false)
+        access.set(81, .volume, channel: 1, 0.3)
+        access.set(81, .volume, channel: 2, 0.5)
+        access.set(81, .mute, channel: 1, 1)
+        // A stereo list naming the main element and a channel twice reads each channel once.
+        access.stereo[82] = [main, 2, 2, 5]
+        access.set(82, .volume, channel: 1, 0.9)
+        access.set(82, .volume, channel: 2, 0.2)
+        access.set(82, .volume, channel: 5, 0.6)
+        let mainFirst = DeviceVolumeControls.find(on: 80, access)
+        let fallback = DeviceVolumeControls.find(on: 81, access)
+        let named = DeviceVolumeControls.find(on: 82, access)
+        let mainReading = mainFirst.read(80, access)
+        let fallbackReading = fallback.read(81, access)
+        let namedReading = named.read(82, access)
+        func near(_ value: Double?, _ expected: Double) -> Bool { value.map { abs($0 - expected) < 1e-9 } ?? false }
+        check(mainFirst == DeviceVolumeControls(volume: [main], mute: [main])
+                && near(mainReading.volume, 0.8) && mainReading.muted == false
+                && fallback == DeviceVolumeControls(volume: [1, 2], mute: [1])
+                && near(fallbackReading.volume, 0.4) && fallbackReading.muted == true
+                && named == DeviceVolumeControls(volume: [2, 5], mute: [])
+                && near(namedReading.volume, 0.4) && namedReading.muted == nil,
+              "device volume: the main element's settable control wins, else the mean of the preferred stereo channels",
+              "main \(mainFirst.logText) \(mainReading.logText); fallback \(fallback.logText) \(fallbackReading.logText); "
+                + "named \(named.logText) \(namedReading.logText)")
+    }
+
     do {
         let listed = [AudioDevices.Device(id: builtIn, name: speakers, uid: uid, transport: kAudioDeviceTransportTypeBuiltIn),
                       AudioDevices.Device(id: 52, name: "USB DAC", uid: "usb", transport: kAudioDeviceTransportTypeUSB)]

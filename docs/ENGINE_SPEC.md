@@ -929,6 +929,7 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | device volume: nothing is written at launch, start, stop, switch-on, source change or quit | S192, S197 |
 | device volume: a per-channel device reads the mean of its stereo channels and the fix sets each | S193, S197 |
 | device volume: a device without a settable volume or mute shows nothing | S193, S196 |
+| device volume: the main element's settable control wins, else the mean of the preferred stereo channels | S193 |
 | device volume: AirPlay rows and switched-off rows show nothing and hold no listener | S192, S195, S198 |
 | device volume: a change notification updates the row, and switching off removes the listener | S195, S202 |
 | device volume: the hint and the fix name the output for VoiceOver, the fix's label starting with its visible text | S199, S200 |
