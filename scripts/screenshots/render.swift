@@ -250,7 +250,7 @@ func scrollOverflow(in view: NSView) -> CGFloat {
 /// The main window as MainWindowController sets it up, grown from its usual
 /// size until the mock speakers fit without scrolling.
 func mainWindowShot(_ model: AppModel, look: Look) -> NSBitmapImageRep {
-    let host = NSHostingController(rootView: MainView(model: model))
+    let host = NSHostingController(rootView: MainView(model: model, zoneDisclosure: model.zoneDisclosure))
     host.sizingOptions = [.minSize]
     var shotSize = NSSize(width: 860, height: 610)
     let chrome: NSWindow.StyleMask = [.titled, .resizable, .closable, .miniaturizable]
@@ -287,7 +287,7 @@ func equalizerShot(_ model: EqualizerModel, look: Look) -> NSBitmapImageRep {
 
 /// The menu bar panel's content, on a flat stand-in for its material.
 func panelShot(_ model: AppModel, look: Look) -> NSBitmapImageRep {
-    let host = NSHostingView(rootView: MenuBarView(model: model))
+    let host = NSHostingView(rootView: MenuBarView(model: model, zoneDisclosure: model.zoneDisclosure))
     host.frame = NSRect(origin: .zero, size: host.fittingSize)
     let window = ShotWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
     window.appearance = look.appearance
