@@ -1577,10 +1577,9 @@ impl App {
                         };
                         if let Some(note) = state.zone_note(zone, row) {
                             built.zone_note = zone_note(&strings, note);
-                            built.zone_dimmed = matches!(
-                                note,
-                                ui_model::ZoneNote::InTarget(_) | ui_model::ZoneNote::NotFound
-                            );
+                            // A row not listed is dimmed whatever its note says.
+                            built.zone_dimmed = matches!(row, ui_model::ZoneRow::NotFound(_))
+                                || matches!(note, ui_model::ZoneNote::InTarget(_));
                         }
                         built
                     })
