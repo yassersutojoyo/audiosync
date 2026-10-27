@@ -2487,8 +2487,9 @@ mod tests {
         destroy(handle);
     }
 
-    // Partly C18: no record vouches for a device added by address, so it is
-    // offline until a check reaches it, and again once it stops answering.
+    // No record vouches for a device added by address, so it is offline
+    // until a check reaches it, and again once it stops answering.
+    // CAST_SPEC: C18
     #[test]
     fn a_device_added_by_address_is_online_only_while_it_answers() {
         let handle = create();

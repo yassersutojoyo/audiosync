@@ -24,17 +24,22 @@ pub fn connects(address: SocketAddr) -> bool {
     TcpStream::connect_timeout(&address, CONNECT_TIMEOUT).is_ok()
 }
 
-/// A finished check: the address, and whether it was reached.
-type Found = (SocketAddr, bool);
+/// A finished check: the address, whether it was reached, and the
+/// device's session changes when it started.
+type Found = (SocketAddr, bool, u64);
 
 struct Check {
     address: SocketAddr,
     running: bool,
     due: Instant,
+    /// The device's session changes as this check last saw them.
+    session_changes: u64,
 }
 
 /// Checks every device added by address that no session holds: at once,
-/// then every [`CHECK_INTERVAL`].
+/// then every [`CHECK_INTERVAL`], and at once again after a session on it.
+/// A check that started before the latest session opened or closed is
+/// dropped, since it says nothing about the device now.
 pub struct Reachability {
     probe: Probe,
     checks: Vec<Check>,
@@ -60,12 +65,15 @@ impl Reachability {
     /// changed in `list`.
     pub fn poll(&mut self, list: &mut DeviceList, now: Instant) -> Vec<ListEvent> {
         let mut events = Vec::new();
-        while let Ok((address, reached)) = self.results.1.try_recv() {
+        while let Ok((address, reached, started_under)) = self.results.1.try_recv() {
+            let stale = started_under != list.session_changes(address);
             if let Some(check) = self.checks.iter_mut().find(|c| c.address == address) {
                 check.running = false;
-                check.due = now + CHECK_INTERVAL;
+                check.due = if stale { now } else { now + CHECK_INTERVAL };
             }
-            events.extend(list.set_reachable(address, reached));
+            if !stale {
+                events.extend(list.set_reachable(address, reached));
+            }
         }
         let manual: Vec<SocketAddr> = list
             .entries()
@@ -80,6 +88,7 @@ impl Reachability {
         self.checks
             .retain(|check| check.running || manual.contains(&check.address));
         for address in manual {
+            let session_changes = list.session_changes(address);
             let index = match self.checks.iter().position(|c| c.address == address) {
                 Some(index) => index,
                 None => {
@@ -87,11 +96,16 @@ impl Reachability {
                         address,
                         running: false,
                         due: now,
+                        session_changes,
                     });
                     self.checks.len() - 1
                 }
             };
             let check = &mut self.checks[index];
+            if check.session_changes != session_changes {
+                check.session_changes = session_changes;
+                check.due = now;
+            }
             if check.running || check.due > now {
                 continue;
             }
@@ -100,7 +114,7 @@ impl Reachability {
             let spawned = thread::Builder::new()
                 .name("cast-reach".to_owned())
                 .spawn(move || {
-                    let _ = sender.send((address, probe(address)));
+                    let _ = sender.send((address, probe(address), session_changes));
                 });
             match spawned {
                 Ok(_) => check.running = true,

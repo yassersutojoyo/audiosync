@@ -2461,8 +2461,9 @@ pub mod tests {
         assert!(!cast.chosen());
     }
 
-    // Partly C18: no record vouches for a speaker added by address, so it
-    // stays offline, and nothing waits for it, until a check reaches it.
+    // covers: C18
+    // No record vouches for a speaker added by address, so it stays
+    // offline, and nothing waits for it, until a check reaches it.
     #[test]
     fn a_speaker_added_by_address_that_doesnt_answer_stays_offline_and_off_the_air() {
         let fake = FakeCast::default();

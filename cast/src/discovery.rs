@@ -300,6 +300,9 @@ pub enum ListEvent {
 #[derive(Debug, Default)]
 pub struct DeviceList {
     entries: Vec<Entry>,
+    /// How many times a session opened or closed on each device added by
+    /// address.
+    session_changes: Vec<(SocketAddr, u64)>,
 }
 
 impl DeviceList {
@@ -379,13 +382,34 @@ impl DeviceList {
     /// back.
     pub fn set_in_session(&mut self, key: DeviceKey, open: bool) {
         let mut gone = false;
+        let mut changed = false;
         if let Some(entry) = self.get_mut(key) {
+            changed = entry.in_session != open;
             entry.in_session = open;
             gone = !open && !entry.online && matches!(key, DeviceKey::Id(_));
+        }
+        if changed && let DeviceKey::Manual(address) = key {
+            match self
+                .session_changes
+                .iter_mut()
+                .find(|(known, _)| *known == address)
+            {
+                Some((_, count)) => *count += 1,
+                None => self.session_changes.push((address, 1)),
+            }
         }
         if gone {
             self.entries.retain(|entry| entry.key != key);
         }
+    }
+
+    /// How many times a session opened or closed on the device added by
+    /// `address`: a check that started under another count is stale.
+    pub fn session_changes(&self, address: SocketAddr) -> u64 {
+        self.session_changes
+            .iter()
+            .find(|(known, _)| *known == address)
+            .map_or(0, |&(_, count)| count)
     }
 
     /// Moves the address that worked to the front (C16). A group keeps the

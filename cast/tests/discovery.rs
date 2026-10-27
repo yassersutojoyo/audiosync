@@ -354,8 +354,9 @@ fn a_manual_address_works_without_txt_until_a_browse_finds_its_id() {
     assert_eq!(list.entries().len(), 1);
 }
 
-// Partly C18: no record vouches for a device added by address, so it is
-// listed offline until a check reaches it.
+// covers: C18
+// No record vouches for a device added by address, so it is listed
+// offline until a check reaches it.
 #[test]
 fn a_manual_address_is_listed_offline_until_a_check_reaches_it() {
     let mut list = DeviceList::new();
@@ -380,8 +381,9 @@ fn a_manual_address_is_listed_offline_until_a_check_reaches_it() {
     assert_eq!(list.set_reachable(other, true), None, "not listed");
 }
 
-// Partly C17 and C18: a session's own health decides while it runs, and
-// a device added by address stays listed when its session ends.
+// covers: C17, C18
+// A session's own health decides while it runs, and a device added by
+// address stays listed when its session ends.
 #[test]
 fn a_session_holds_the_reachability_of_a_manual_address() {
     let mut list = DeviceList::new();
@@ -411,9 +413,9 @@ fn poll_until_changed(reach: &mut Reachability, list: &mut DeviceList) -> Vec<Li
 static STALE_PROBES: AtomicUsize = AtomicUsize::new(0);
 static STALE_ANSWER: AtomicBool = AtomicBool::new(true);
 
-// Partly C17 and C18: a check that started before a session opened and
-// ended says nothing about the device now; it is dropped, and a fresh one
-// runs at once.
+// covers: C17, C18
+// A check that started before a session opened and ended says nothing
+// about the device now; it is dropped, and a fresh one runs at once.
 #[test]
 fn a_check_older_than_the_last_session_is_dropped_and_run_again() {
     fn answers(_: SocketAddr) -> bool {
@@ -470,8 +472,9 @@ fn a_check_older_than_the_last_session_is_dropped_and_run_again() {
 
 static PROBES: AtomicUsize = AtomicUsize::new(0);
 
-// Partly C18: a device added by address is checked at once and again on
-// the interval, and goes offline when a check fails.
+// covers: C18
+// A device added by address is checked at once and again on the
+// interval, and goes offline when a check fails.
 #[test]
 fn a_manual_address_is_checked_at_once_and_again_on_the_interval() {
     fn answers(address: SocketAddr) -> bool {
@@ -522,6 +525,7 @@ fn a_manual_address_is_checked_at_once_and_again_on_the_interval() {
     assert!(!list.get(DeviceKey::Manual(on)).expect("listed").online);
 }
 
+// covers: C18
 #[test]
 fn the_live_check_reaches_a_listening_port_only() {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a loopback port");
