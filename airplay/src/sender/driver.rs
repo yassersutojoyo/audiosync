@@ -37,9 +37,12 @@ use crate::latency::ReportedLatency;
 use crate::metadata::Metadata;
 use crate::pairing::{self, LegacyVerifier, Pairing, PairingEvent, PairingState};
 use crate::reconnect::Backoff;
+use crate::rtp::{HEADER_BYTES as RTP_HEADER_BYTES, RtpHeader, SyncPacket};
 use crate::sdp::Codec;
 use crate::secret::Secret;
-use crate::session::{Output, Session, SessionConfig, SessionEvent, State, TEARDOWN_TIMEOUT};
+use crate::session::{
+    Output, Session, SessionConfig, SessionEvent, State, TEARDOWN_TIMEOUT, UdpSendResult,
+};
 use crate::stream::{self, SpeakerConfig, SpeakerCounters, Stream, StreamEvent, Transmit};
 use crate::targets::{Target, TargetId, Targets};
 use crate::transport::{self, IoEvent, RtspIo, SessionIo, SessionKey};
@@ -1440,6 +1443,41 @@ impl Driver {
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Stopped));
     }
 
+    fn traced(&self, key: &DeviceKey) -> bool {
+        self.speakers
+            .get(key)
+            .is_some_and(|speaker| speaker.options.trace_timing)
+    }
+
+    /// What an AirPlay 1 datagram that left for the receiver carries, read
+    /// back from its bytes: a sync's stated time, and an audio packet's RTP
+    /// numbers and the first non-zero payload byte when it has one (silence
+    /// is not traced). The sender's side of P102, which a receiver's output
+    /// can't show.
+    fn trace_sent(&self, key: &DeviceKey, kind: stream::PacketKind, bytes: &[u8]) {
+        let line = match kind {
+            stream::PacketKind::Sync => SyncPacket::parse(bytes).map(|sync| {
+                let at = self.stream.clock().seconds_of(sync.time);
+                format!(
+                    "sync rtp_heard={} at_s={at:.9} next_rtp={}",
+                    sync.rtp_heard, sync.next_rtp
+                )
+            }),
+            stream::PacketKind::Audio => RtpHeader::parse(bytes).and_then(|header| {
+                let payload = &bytes[RTP_HEADER_BYTES..];
+                let sound_at = payload.iter().position(|&byte| byte != 0)?;
+                Some(format!(
+                    "audio seq={} rtp={} sound_at={sound_at}",
+                    header.seq, header.timestamp
+                ))
+            }),
+            _ => None,
+        };
+        if let Some(line) = line {
+            self.emit_speaker(key, SpeakerEvent::Trace(line));
+        }
+    }
+
     fn transmit(&mut self, transmit: Transmit, now: Instant) {
         let Some(key) = self.stream_ids.get(&transmit.speaker).cloned() else {
             return;
@@ -1451,6 +1489,7 @@ impl Driver {
         {
             return self.ap2_transmit(&key, transmit, now);
         }
+        let traced = self.traced(&key);
         let Some(active) = self.active(&key) else {
             return;
         };
@@ -1460,8 +1499,13 @@ impl Driver {
         let Some(io) = &active.io else {
             return;
         };
-        if let Some(result) = io.send(transmit.from, transmit.to, &transmit.bytes) {
-            active.session.handle_udp_send(result, now);
+        let Some(result) = io.send(transmit.from, transmit.to, &transmit.bytes) else {
+            return;
+        };
+        let sent = result == UdpSendResult::Sent;
+        active.session.handle_udp_send(result, now);
+        if traced && sent {
+            self.trace_sent(&key, transmit.kind, &transmit.bytes);
         }
     }
 
@@ -1483,10 +1527,21 @@ impl Driver {
                     self.stream.flush_answered(speaker);
                 }
             }
-            StreamEvent::FirstSound { speaker, .. } => {
+            StreamEvent::FirstSound {
+                speaker,
+                packet,
+                rtptime,
+                at,
+            } => {
                 let Some(key) = self.stream_ids.get(&speaker).cloned() else {
                     return;
                 };
+                if self.traced(&key) {
+                    let at = self.stream.clock().seconds(at);
+                    let line =
+                        format!("first_sound packet={packet} rtptime={rtptime} at_s={at:.6}");
+                    self.emit_speaker(&key, SpeakerEvent::Trace(line));
+                }
                 if let Some(latency) = self.stream.speaker_latency(speaker) {
                     self.emit_speaker(&key, SpeakerEvent::Latency(latency));
                 }

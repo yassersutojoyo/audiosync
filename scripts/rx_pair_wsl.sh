@@ -2,9 +2,10 @@
 # Plays one stream for a while to test receivers that are already running,
 # given as a host:port list, through the airplay example rx_pair, and prints
 # its one summary line per receiver. Starts no receiver itself. A protocol
-# check only: it never tells whether the receivers sound in step.
+# check only: it never tells whether the receivers sound in step; for that,
+# scripts/two_speaker_sync_wsl.sh times a click in each receiver's output.
 #
-#   scripts/rx_pair_wsl.sh [--seconds <n>] [--tone] [--verbose] <host:port>[,ap1|ap2]...
+#   scripts/rx_pair_wsl.sh [--seconds <n>] [--tone|--click] [--verbose] <host:port>[,ap1|ap2][,delay=<ms>]...
 #
 # Meant for Linux (WSL included). An AirPlay 2 receiver needs an IP address
 # of its own, and the sender binds the PTP ports 319 and 320, which takes
@@ -16,7 +17,7 @@ root=$(git rev-parse --show-toplevel)
 cd "$root"
 
 usage() {
-    echo "usage: scripts/rx_pair_wsl.sh [--seconds <n>] [--tone] [--verbose] <host:port>[,ap1|ap2]..." >&2
+    echo "usage: scripts/rx_pair_wsl.sh [--seconds <n>] [--tone|--click] [--verbose] <host:port>[,ap1|ap2][,delay=<ms>]..." >&2
     exit 2
 }
 
@@ -29,7 +30,7 @@ while [ $# -gt 0 ]; do
             args+=(--seconds "$2")
             shift 2
             ;;
-        --tone | --verbose)
+        --tone | --click | --verbose)
             args+=("$1")
             shift
             ;;
