@@ -54,7 +54,7 @@ enum NativeTarget {
 
 /// What a stereo pair or home theater group row says about its members
 /// (P176, P181).
-/// The speakers (app IDs) the user switched on by hand this run, kept
+/// The speakers (app IDs) the user switched on by hand in this stream, kept
 /// apart from the sender's model so they outlive a sender Retry: one that
 /// asks for a code every time stays on when it appears again.
 struct EveryTimeGuard: Equatable {
@@ -70,6 +70,35 @@ struct EveryTimeGuard: Equatable {
     mutating func turnsOff(_ asking: [String], enabled: Set<String>) -> [String] {
         byHand.formIntersection(enabled)
         return asking.filter { enabled.contains($0) && !byHand.contains($0) }
+    }
+
+    /// When `cause` ends a stream that ran, it ends the PIN session each
+    /// click bought, so every mark goes (a retry or a source change inside
+    /// the stream keeps them, S223). Of `asking`, the speakers still on go
+    /// off with the notice that they need a PIN.
+    mutating func streamEnded(_ cause: StreamEnd, streaming: Bool, midRebuild: Bool = false,
+                              asking: [String], enabled: Set<String>) -> [NativeAirPlayPlan.TurnOff] {
+        guard cause.endsStream(streaming: streaming, midRebuild: midRebuild) else { return [] }
+        byHand.removeAll()
+        return turnsOff(asking, enabled: enabled).map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
+    }
+}
+
+/// What may end the stream for `EveryTimeGuard`.
+enum StreamEnd: Equatable {
+    case stopped(SessionStop)
+    /// The sender stopped after an internal error; Retry starts a new stream.
+    case senderFailed
+    /// The Mac goes to sleep, which counts as streaming stopping.
+    case sleep
+
+    /// `midRebuild`: a rebuild stopped the engine and has not started it
+    /// again, so a stop now ends the stream that ran before it.
+    func endsStream(streaming: Bool, midRebuild: Bool) -> Bool {
+        guard streaming || midRebuild else { return false }
+        guard case .stopped(let reason) = self else { return true }
+        // A quit leaves the switches for the next launch, which turns such a speaker off anyway.
+        return !reason.restarts && reason != .quitting
     }
 }
 

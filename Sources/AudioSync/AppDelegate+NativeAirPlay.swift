@@ -210,6 +210,20 @@ extension AppDelegate {
         closeWithdrawnPrompt()
     }
 
+    /// The stream ended (stopped, the sender failed, or the Mac sleeps): a
+    /// speaker that asks for a code every time and was switched on by hand
+    /// goes off with the needs-a-PIN notice, since left on it would play
+    /// nothing in the next stream (S223). `model` is a failed sender's.
+    func endNativePinSessions(_ cause: StreamEnd, streaming: Bool, midRebuild: Bool = false,
+                              model: NativeAirPlayModel? = nil) {
+        guard let model = model ?? nativeAirPlay?.model else { return }
+        let asking = model.askingEveryTime(model.rows(enabled: enabledAirPlay))
+        for off in everyTimeGuard.streamEnded(cause, streaming: streaming, midRebuild: midRebuild,
+                                              asking: asking, enabled: enabledAirPlay) {
+            turnOffNativeSpeaker(off.id, reason: off.reason, origin: .automatic)
+        }
+    }
+
     /// The native speaker `id` (app ID) was switched off: its attempt ends,
     /// its prompt is dropped, and a pairing under way stops, since the
     /// sender would otherwise wait for its PIN forever.
@@ -322,6 +336,7 @@ extension AppDelegate {
         // No notice: Connected Speakers says so in place of the AirPlay speakers, with Retry.
         clearNotices([Notice.airplaySender])
         retimeLocalOutputs()   // no native speaker is chosen any more
+        endNativePinSessions(.senderFailed, streaming: engine.isRunning, model: native.model)
         pushModel()
     }
 
