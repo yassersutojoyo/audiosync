@@ -1518,6 +1518,9 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | offsets_and_the_airplay_adjustment_are_kept_in_their_ranges | S175, S178 |
 | the_reference_row_has_no_delay_and_the_others_show_a_signed_offset | S181 |
 | an_offset_takes_a_leading_plus_or_minus_and_other_text_is_ignored | S175, S181 |
+| the_sync_hint_names_the_reference_and_says_which_way_to_move_a_value (`desktop/src/view.rs`) | S181 |
+| a_delay_that_is_not_a_signed_whole_number_applies_nothing_and_shows_the_stored_value (`desktop/src/view.rs`) | S181 |
+| a_paste_holding_anything_but_a_signed_whole_number_is_blocked_whole (`desktop/src/view.rs`) | S181 |
 
 ### local delay model: Mac
 
@@ -1668,9 +1671,11 @@ The Windows checks for S192 to S202 (`desktop/src/audio/controller/device_volume
 | the_fix_sets_75_percent_and_unmutes_once_each | S197 |
 | nothing_is_written_without_a_click | S192, S197 |
 | an_endpoint_whose_volume_cannot_be_read_shows_nothing | S194, S196 |
+| a_mute_read_beside_a_failed_volume_read_fails_the_whole_read (`desktop/src/audio/wasapi/volume.rs`) | S194 |
 | an_endpoint_volume_notification_updates_the_row | S195, S202 |
 | the_hint_and_the_fix_name_the_output_for_narrator | S199, S200 |
 | the_flyout_row_shows_the_glyph_and_the_hint_in_its_description | S198, S199 |
+| the_device_volume_percent_reads_n_percent_without_a_space_in_every_locale (`desktop/src/view.rs`) | S199 |
 | a_volume_change_logs_only_when_its_decision_changes | S201 |
 
 Outside these suites, `cargo test real_endpoint_volumes -- --ignored --nocapture` in `desktop/` reads the PC's own endpoint volumes and registers and unregisters a listener on each, changing nothing (S194, S195).

@@ -14,12 +14,16 @@ failures=0
 pass() { echo "  PASS  $1"; }
 fail() { echo "  FAIL  $1"; failures=$((failures + 1)); }
 
-# PATH without any directory that holds a shellcheck, so only a stub can answer.
-bare_path=
-IFS=: read -r -a dirs <<< "$PATH"
-for d in "${dirs[@]}"; do
-  if [ -n "$d" ] && { [ -e "$d/shellcheck" ] || [ -e "$d/shellcheck.exe" ]; }; then continue; fi
-  bare_path=${bare_path:+$bare_path:}$d
+# The runs get a PATH of only a tools dir, so no shellcheck can answer but a
+# stub. Dropping whole PATH folders that hold one would also drop /usr/bin on
+# Linux, and with it the dirname and sed that shellcheck.sh needs. Wrappers
+# exec by absolute path, so Windows tools still find their DLLs beside them.
+bare_path=$tmp/tools
+mkdir -p "$bare_path"
+for tool in dirname sed git grep sort tr cat; do
+  if ! real=$(command -v "$tool"); then echo "FAILED: $tool not found on PATH"; exit 1; fi
+  printf '#!/bin/sh\nexec "%s" "$@"\n' "$real" > "$bare_path/$tool"
+  chmod +x "$bare_path/$tool"
 done
 
 # Outside any git repository (GIT_CEILING_DIRECTORIES in run), so the
@@ -74,15 +78,11 @@ else
   fail "another version: rc $rc, output '$out'"
 fi
 
-if PATH=$bare_path command -v shellcheck >/dev/null 2>&1; then
-  echo "  SKIP  no shellcheck (one is still found on PATH with its folders left out)"
+run "$bare_path"
+if [ "$rc" != 0 ] && [[ $out == *"shellcheck is not installed"* ]]; then
+  pass "a missing shellcheck fails the run"
 else
-  run "$bare_path"
-  if [ "$rc" != 0 ] && [[ $out == *"shellcheck is not installed"* ]]; then
-    pass "a missing shellcheck fails the run"
-  else
-    fail "no shellcheck: rc $rc, output '$out'"
-  fi
+  fail "no shellcheck: rc $rc, output '$out'"
 fi
 
 # The real pinned shellcheck on a planted bad script (SC2086, unquoted $1).
