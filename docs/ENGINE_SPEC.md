@@ -2155,6 +2155,7 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 | the_undo_at_quit_spends_at_most_two_seconds_on_lock_retries (every `.bak` rename locked at quit: the counted waits add up to 2 s at most) | S315 |
 | a_quit_right_after_the_undo_still_finds_its_result (a test hook holds the worker right after it releases the undo guard: the quit still applies the undo and stores the record) | S303, S316 |
 | the_updater_writes_no_zone_identifier_stream (a full update from the fake appcast through the memory fetch into a temp install folder on NTFS, then opening `audiosync.exe:Zone.Identifier` there fails with file not found) | S315 |
+| an_old_exe_marked_from_the_web_is_swapped_and_the_new_one_is_unmarked (Windows only: the old `audiosync.exe` and an earlier `.bak` carry a `Zone.Identifier` stream with ZoneId=3, as Explorer leaves after unzipping a browser download; a full update swaps cleanly, the new exe carries no stream, the old exe is the `.bak` and keeps its mark) | S301, S304, S307, S315 |
 | a_failed_or_blocked_version_is_skipped_at_launch_offered_on_a_manual_check_and_cleared_by_a_newer_one (settings that store version N as blocked and a fake appcast offering N: the launch check shows nothing and logs it, a manual check offers N with the blocked line; the appcast then offers a higher version: it is offered and the record is gone) | S316 |
 
 The Mac (pending, [MAC]):

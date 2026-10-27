@@ -1111,4 +1111,39 @@ pub mod tests {
             &f.env.install_dir.join(archive::EXE_NAME)
         ));
     }
+
+    #[cfg(windows)]
+    fn mark_from_the_web(path: &Path) {
+        let mut stream = path.as_os_str().to_owned();
+        stream.push(":Zone.Identifier");
+        fs::write(PathBuf::from(stream), "[ZoneTransfer]\r\nZoneId=3\r\n").unwrap();
+        assert!(marked_from_the_web(path));
+    }
+
+    // A 0.8.x install unzipped by Explorer from a browser download, an
+    // earlier `.bak` included, carries the mark the swap has to rename past.
+    // covers: S301, S304, S307, S315
+    #[cfg(windows)]
+    #[test]
+    fn an_old_exe_marked_from_the_web_is_swapped_and_the_new_one_is_unmarked() {
+        let f = fixture("zone-old", false, Arc::new(RealFiles), DebugLog::default());
+        let install = f.env.install_dir.clone();
+        let old = install.join(archive::EXE_NAME);
+        let earlier = install.join("audiosync.exe.bak");
+        fs::write(&earlier, b"older exe").unwrap();
+        mark_from_the_web(&old);
+        mark_from_the_web(&earlier);
+        let update = update_of(&f.env);
+        let outcome = run(&f.env, &update);
+        assert!(matches!(outcome, Installed::Done(_)), "{outcome:?}");
+        assert!(fs::read(&old).unwrap().ends_with(b"new exe"));
+        assert!(!marked_from_the_web(&old));
+        assert_eq!(fs::read(&earlier).unwrap(), b"old exe");
+        // A rename keeps the streams; the updater leaves the old mark alone.
+        assert!(marked_from_the_web(&earlier));
+        assert!(!install.join("audiosync.exe.new").exists());
+        assert!(temp_folders(&f.env).is_empty());
+        drop(f);
+        let _ = fs::remove_dir_all(install.parent().unwrap());
+    }
 }
