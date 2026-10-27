@@ -474,6 +474,9 @@ struct UIStrings {
         case .sourceChanged: "The source was switched during the measurement."
         case .rateChanged: "The audio's sample rate changed during the measurement."
         case .delaysChanged: "A delay changed during the measurement."
+        // A run over all speakers has no one speaker to call "this speaker".
+        case .failed(.notPlaying(let missing)):
+            "Turn on \(calibrationNeeds(missing, speaker: "another speaker")) to calibrate."
         case .failed(let failure): calibrationFailure(failure)
         }
     }

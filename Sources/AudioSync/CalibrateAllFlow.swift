@@ -401,7 +401,7 @@ enum CalibrateAllFlow {
         switch blocker {
         case .noReference: .noReference
         case .notPlaying(let missing): .notPlaying(missing)
-        case .noOtherSpeaker: zone.map { CalibrationFailure.nothingToMeasure(zone: $0) }
+        case .noOtherSpeaker: zone.map { CalibrationFailure.nothingToMeasure(zone: $0) } ?? .notPlaying(.speaker)
         case .onlyLeftOut, .referenceHeadphones, .busy: nil
         }
     }

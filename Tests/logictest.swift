@@ -7732,15 +7732,6 @@ do {
     check(allTexts == ["Turn on streaming to calibrate.", "Turn on the built-in speakers to calibrate."],
           "calibrate all refusal: names only streaming or the built-in speakers, whichever is off", "\(allTexts)")
 
-    let referenceTips = [
-        CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: true, referenceOn: false),
-        CalibrationFlow.unavailable(streaming: false, hasReference: true, speakerOn: true, referenceOn: false),
-        CalibrationFlow.unavailable(streaming: false, hasReference: true, speakerOn: false, referenceOn: false),
-    ].map { $0.map(t.calibrationUnavailable) ?? "" }
-    check(referenceTips == ["Turn on the built-in speakers to calibrate.",
-                            "Turn on streaming and the built-in speakers to calibrate.",
-                            "Turn on streaming, this speaker and the built-in speakers to calibrate it."],
-          "calibration refusal: the tooltip names the built-in speakers when their switch is off", "\(referenceTips)")
     var stoppedSilent = stopped
     stoppedSilent.referenceOn = false
     check(all(stoppedSilent) == "Turn on streaming and the built-in speakers to calibrate.",
@@ -7882,7 +7873,9 @@ do {
     let nothing = CalibrateAllFlow.startFailure(.noOtherSpeaker, zone: "Upstairs")
     // covers: S255
     check(nothing == .nothingToMeasure(zone: "Upstairs")
-            && CalibrateAllFlow.startFailure(.noOtherSpeaker, zone: nil) == nil
+            && CalibrateAllFlow.startFailure(.noOtherSpeaker, zone: nil) == .notPlaying(.speaker)
+            && zoneText.calibrateAllLine(.ended(.failed(.notPlaying(.speaker))))
+                == "Turn on another speaker to calibrate. No delay was changed."
             && CalibrateAllFlow.startFailure(.notPlaying(.streaming), zone: "Upstairs") == .notPlaying(.streaming)
             && CalibrateAllFlow.startFailure(.onlyLeftOut, zone: "Upstairs") == nil
             && nothing.map(zoneText.calibrationFailure)

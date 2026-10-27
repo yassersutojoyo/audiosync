@@ -4271,7 +4271,6 @@ pub fn speaker_item(
                 state.running,
                 state.reference_name.is_some(),
                 speaker.enabled,
-                reference_on(state),
             )
             .is_none(),
         // Needs the strings: set by the caller (`App::refresh`).
@@ -4429,14 +4428,6 @@ fn is_calibratable(speaker: &ui_model::Speaker) -> bool {
         )
 }
 
-/// The reference's switch is on, or no reference is listed.
-fn reference_on(state: &AppState) -> bool {
-    !state
-        .speakers
-        .iter()
-        .any(|speaker| speaker.is_reference() && !speaker.enabled)
-}
-
 /// What a calibration needs that is off, in the order streaming, `speaker`,
 /// the reference; all three when `missing` names none.
 fn calibration_needs(
@@ -4507,7 +4498,6 @@ fn calibration_status(
             state.running,
             state.reference_name.is_some(),
             speaker.enabled,
-            reference_on(state),
         )
         .map_or_else(SharedString::default, |failure| {
             calibration_failure(strings, reference, failure)
@@ -6022,10 +6012,11 @@ mod tests {
             [
                 "Turn on streaming to calibrate.",
                 "Turn on this speaker to calibrate it.",
-                "Turn on Speakers to calibrate.",
+                // The button stays enabled while the reference is off; the press names it.
+                "",
                 "Turn on streaming and this speaker to calibrate it.",
-                "Turn on streaming and Speakers to calibrate.",
-                "Turn on streaming, this speaker and Speakers to calibrate it.",
+                "Turn on streaming to calibrate.",
+                "Turn on streaming and this speaker to calibrate it.",
             ],
             "the line under the button"
         );

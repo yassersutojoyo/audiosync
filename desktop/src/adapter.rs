@@ -9842,10 +9842,12 @@ mod tests {
             state.calibration.speaker_id.as_deref(),
             Some(earbuds.as_str())
         );
-        assert!(matches!(
+        assert_eq!(
             state.calibration.phase,
-            calibration::Phase::Failed(calibration::Failure::NotPlaying(_))
-        ));
+            calibration::Phase::Failed(calibration::Failure::NotPlaying(
+                calibration::Missing::STREAMING
+            ))
+        );
         assert!(!state.calibration.busy);
         // Streaming, but the mock has no microphone: refused before the
         // music fades, and nothing holds the outputs.
@@ -10175,10 +10177,13 @@ mod tests {
             || "09.41".to_owned(),
             DebugLog::default(),
         );
-        assert!(matches!(
+        assert_eq!(
             adapter.snapshot().calibrate_all.blocked,
-            Some(Failure::NotPlaying(_))
-        ));
+            Some(Failure::NotPlaying(calibration::Missing {
+                reference: !enabled(&adapter, "builtin"),
+                ..calibration::Missing::STREAMING
+            }))
+        );
         turn_on(&mut adapter, "builtin");
         assert_eq!(
             adapter.snapshot().calibrate_all.blocked,

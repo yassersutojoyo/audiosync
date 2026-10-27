@@ -613,19 +613,14 @@ pub fn blocker(engine: &Engine, chosen: &str) -> Option<Failure> {
 
 /// Why the button can't start a calibration, from the switches the row
 /// knows; `None` when it may try ([`blocker`] checks the rest on the press).
-pub fn unavailable(
-    streaming: bool,
-    has_reference: bool,
-    speaker_on: bool,
-    reference_on: bool,
-) -> Option<Failure> {
+pub fn unavailable(streaming: bool, has_reference: bool, speaker_on: bool) -> Option<Failure> {
     if !has_reference {
         return Some(Failure::NoReference);
     }
     let missing = Missing {
         streaming: !streaming,
         speaker: !speaker_on,
-        reference: !reference_on,
+        reference: false,
     };
     (!missing.is_empty()).then_some(Failure::NotPlaying(missing))
 }
@@ -1772,23 +1767,24 @@ mod tests {
         );
         engine.reference = None;
         assert_eq!(blocker(&engine, "usb"), Some(Failure::NoReference));
+        assert_eq!(unavailable(true, false, true), Some(Failure::NoReference));
         assert_eq!(
-            unavailable(true, false, true, true),
-            Some(Failure::NoReference)
-        );
-        assert_eq!(
-            unavailable(false, true, true, true),
+            unavailable(false, true, true),
             Some(Failure::NotPlaying(Missing::STREAMING))
         );
         assert_eq!(
-            unavailable(true, true, false, true),
+            unavailable(true, true, false),
             Some(Failure::NotPlaying(Missing::SPEAKER))
         );
         assert_eq!(
-            unavailable(true, true, true, false),
-            Some(Failure::NotPlaying(Missing::REFERENCE))
+            unavailable(false, true, false),
+            Some(Failure::NotPlaying(Missing {
+                streaming: true,
+                speaker: true,
+                reference: false,
+            }))
         );
-        assert_eq!(unavailable(true, true, true, true), None);
+        assert_eq!(unavailable(true, true, true), None);
     }
 
     #[test]

@@ -216,15 +216,13 @@ enum CalibrationFlow {
         return referenceLeftOut == .headphones ? .referenceHeadphones : nil
     }
 
-    /// Why the button can't start a calibration now, from the switches the
-    /// row knows; nil when it may try (`blocker` checks the rest on the press).
-    static func unavailable(streaming: Bool, hasReference: Bool, speakerOn: Bool,
-                            referenceOn: Bool = true) -> CalibrationFailure? {
+    /// Why the button can't start a calibration now, from what the row
+    /// knows; nil when it may try (`blocker` checks the rest on the press).
+    static func unavailable(streaming: Bool, hasReference: Bool, speakerOn: Bool) -> CalibrationFailure? {
         if !hasReference { return .noReference }
         var missing: CalibrationMissing = []
         if !streaming { missing.insert(.streaming) }
         if !speakerOn { missing.insert(.speaker) }
-        if !referenceOn { missing.insert(.reference) }
         return missing.isEmpty ? nil : .notPlaying(missing)
     }
 
