@@ -77,10 +77,17 @@ struct EveryTimeGuard: Equatable {
     /// the stream keeps them, S223). Of `asking`, the speakers still on go
     /// off with the notice that they need a PIN.
     mutating func streamEnded(_ cause: StreamEnd, streaming: Bool, midRebuild: Bool = false,
-                              asking: [String], enabled: Set<String>) -> [NativeAirPlayPlan.TurnOff] {
+                              asking: [String], enabled: Set<String>,
+                              awaitingUser: Set<String> = []) -> [NativeAirPlayPlan.TurnOff] {
         guard cause.endsStream(streaming: streaming, midRebuild: midRebuild) else { return [] }
         byHand.removeAll()
         return turnsOff(asking, enabled: enabled).map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
+    }
+
+    mutating func paired(_ id: String) {}
+
+    mutating func turnedOff(_ id: String, reason: NativeTurnOff) -> NativeTurnOff {
+        reason
     }
 }
 
@@ -667,6 +674,13 @@ struct NativeAirPlayModel {
     /// The prompt that is open, until it is answered or taken back; the
     /// next waits for it.
     private(set) var openPrompt: NativePrompt?
+
+    /// The targets (app IDs) whose pairing runs or whose PIN or password
+    /// prompt is queued or open: the user's attempt still waits on them.
+    var awaitingUser: Set<String> {
+        Set(stages.keys.filter { promptTargets[$0] == nil }.map(NativeAirPlayID.app))
+            .union(promptTargets.values.map(NativeAirPlayID.app))
+    }
 
     /// A PIN as the sender takes it: ASCII digits, at least one.
     static func isPin(_ code: String) -> Bool {

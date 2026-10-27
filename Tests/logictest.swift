@@ -3230,6 +3230,64 @@ do {
         check(off.isEmpty && marked.byHand == ["native:S1"],
               "every time: \(cause) with streaming \(streaming) keeps the by-hand mark", "\(off)")
     }
+
+    // S223, as on Windows: a stream that ends while the speaker's pairing
+    // runs or its PIN prompt is open keeps the mark, so the pairing still
+    // turns it on; a failure after that turns it off with the needs-a-PIN
+    // notice, and closing the prompt is a cancel.
+    func outlivingStream(promptOpen: Bool) -> (NativeAirPlayModel, EveryTimeGuard, [NativeAirPlayPlan.TurnOff]) {
+        var model = NativeAirPlayModel()
+        model.apply(.appeared(tv("E1", .needsPin, everyTime: true)))
+        var hand = EveryTimeGuard()
+        hand.turnedOnByHand(["native:E1"])
+        _ = model.turnedOnByUser("E1")
+        if promptOpen { _ = model.apply(.pinNeeded(id: "E1")) }
+        let off = hand.streamEnded(.stopped(.powerSwitch), streaming: true,
+                                   asking: model.askingEveryTime(model.rows(enabled: ["native:E1"])),
+                                   enabled: ["native:E1"], awaitingUser: model.awaitingUser)
+        return (model, hand, off)
+    }
+    for promptOpen in [false, true] {
+        let (_, hand, off) = outlivingStream(promptOpen: promptOpen)
+        check(off.isEmpty && hand.byHand == ["native:E1"],
+              "every time: a stream that ends while its \(promptOpen ? "PIN prompt is open" : "pairing runs") keeps the by-hand mark",
+              "\(off), \(hand.byHand)")
+    }
+    var (paired, pairedHand, _) = outlivingStream(promptOpen: true)
+    let pinPrompt = paired.nextPrompt()
+    let submitted = pinPrompt.map { paired.answered($0, code: "4821") }
+    let pairedOutcome = paired.apply(.paired(id: "E1", storeNote: ""))
+    if case .paired(let id)? = pairedOutcome { pairedHand.paired(id) }
+    let afterPairing = pairedHand.turnsOff(paired.askingEveryTime(paired.rows(enabled: ["native:E1"])),
+                                           enabled: ["native:E1"])
+    check(submitted == .submitPin && pairedOutcome == .paired("native:E1") && afterPairing.isEmpty,
+          "every time: a PIN typed after the stream ended pairs it, and it stays on",
+          "\(String(describing: submitted)), \(String(describing: pairedOutcome)), \(afterPairing)")
+    var (failing, failingHand, _) = outlivingStream(promptOpen: false)
+    let failed = failing.apply(.pairingFailed(id: "E1", wrongPin: false, .refused, detail: ""))
+    let failedReason = failed == .turnOff("native:E1", .pairingFailed)
+        ? failingHand.turnedOff("native:E1", reason: .pairingFailed) : nil
+    check(failedReason == .needsCode && failingHand.byHand.isEmpty,
+          "every time: a pairing that fails after the stream ended: mark gone, the needs-a-PIN notice",
+          "\(String(describing: failed)), \(String(describing: failedReason)), \(failingHand.byHand)")
+    var (closing, closingHand, _) = outlivingStream(promptOpen: true)
+    let closedPrompt = closing.nextPrompt()
+    let closed = closedPrompt.map { closing.answered($0, code: nil) }
+    let closedReason = closed == .turnOff(.cancelled) ? closingHand.turnedOff("native:E1", reason: .cancelled) : nil
+    check(closedReason == .cancelled && closingHand.byHand.isEmpty,
+          "every time: closing the PIN prompt after the stream ended cancels: mark gone",
+          "\(String(describing: closed)), \(String(describing: closedReason)), \(closingHand.byHand)")
+    var streamingHand = EveryTimeGuard()
+    streamingHand.turnedOnByHand(["native:E1"])
+    check(streamingHand.turnedOff("native:E1", reason: .pairingFailed) == .pairingFailed && streamingHand.byHand.isEmpty,
+          "every time: a pairing that fails while the stream runs says it failed, as before")
+    // A failed sender takes its pairings and prompts with it: nothing is left to finish.
+    var failedSender = EveryTimeGuard()
+    failedSender.turnedOnByHand(["native:E1"])
+    let senderOff = failedSender.streamEnded(.senderFailed, streaming: true, asking: ["native:E1"],
+                                             enabled: ["native:E1"], awaitingUser: ["native:E1"])
+    check(senderOff == [.init(id: "native:E1", reason: .needsCode)] && failedSender.byHand.isEmpty,
+          "every time: a sender failure during the pairing ends the mark", "\(senderOff)")
 }
 
 // MARK: Every time at launch: on from the last run and discovered, it stays off with no pairing for 15 s
