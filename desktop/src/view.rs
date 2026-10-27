@@ -6702,6 +6702,165 @@ mod tests {
         assert!(app.ui.borrow().sync_open.is_empty());
     }
 
+    /// Double-clicks around the main window's right column, 12 px apart,
+    /// until `found` says the double-click did what the test looks for;
+    /// each try is undone, the zones preview put back.
+    fn double_click_point(app: &App, found: impl Fn(&App) -> bool) -> (f32, f32) {
+        let window = app.main.window();
+        for x in (380..=440).step_by(12) {
+            for y in (200..=716).step_by(12) {
+                let (x, y) = (x as f32, y as f32);
+                click(window, x, y);
+                click(window, x, y);
+                let hit = found(app);
+                let _ = app.zone_dialog.hide();
+                app.blank_click();
+                *app.backend.borrow_mut() = Box::new(MockBackend::zones_preview());
+                {
+                    let mut ui = app.ui.borrow_mut();
+                    ui.sync_open.clear();
+                    ui.collapsed.clear();
+                }
+                app.refresh();
+                draw_frames();
+                if hit {
+                    return (x, y);
+                }
+            }
+        }
+        panic!("no double-click there does it");
+    }
+
+    fn in_zones_row(app: &App, id: &str) -> SpeakerItem {
+        app.models
+            .this_pc_zoned
+            .iter()
+            .chain(app.models.connected_zoned.iter())
+            .find(|s| s.id == id)
+            .expect("the speaker has an In zones row")
+    }
+
+    fn zone_member_row(app: &App, id: &str) -> SpeakerItem {
+        app.models
+            .zones
+            .iter()
+            .flat_map(|zone| zone.members.iter().collect::<Vec<_>>())
+            .find(|s| s.id == id)
+            .expect("the speaker has a row under its zone")
+    }
+
+    fn zone_name(app: &App, id: &str) -> String {
+        let state = app.snapshot();
+        state
+            .zones
+            .iter()
+            .find(|z| z.id == id)
+            .unwrap()
+            .name
+            .clone()
+    }
+
+    #[test]
+    fn a_double_click_on_a_zone_name_renames_it_in_its_header_and_a_single_one_folds_it() {
+        let app = app_over(MockBackend::zones_preview());
+        draw_frames();
+        let window = app.main.window();
+        let (x, y) = double_click_point(&app, |app| {
+            press(app.main.window(), "Q");
+            press(app.main.window(), Key::Return);
+            zone_name(app, "zone:living") == "Q"
+        });
+        click(window, x, y);
+        click(window, x, y);
+        assert!(
+            !app.zone_dialog.window().is_visible(),
+            "the name is edited in the header, not in a dialog"
+        );
+        for key in ["D", "e", "n"] {
+            press(window, key);
+        }
+        press(window, Key::Return);
+        assert_eq!(zone_name(&app, "zone:living"), "Den");
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        draw_frames();
+        assert!(
+            !app.ui.borrow().collapsed.contains("zone:living"),
+            "the double-click doesn't fold the zone"
+        );
+
+        press(window, Key::F2);
+        press(window, "X");
+        press(window, Key::Escape);
+        assert_eq!(
+            zone_name(&app, "zone:living"),
+            "Den",
+            "F2 on the zone's switch renames in place too; Escape keeps the name"
+        );
+        assert!(!app.zone_dialog.window().is_visible());
+
+        click(window, x, y);
+        assert!(
+            !app.ui.borrow().collapsed.contains("zone:living"),
+            "one click waits for a second"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        draw_frames();
+        assert!(
+            app.ui.borrow().collapsed.contains("zone:living"),
+            "then folds the zone"
+        );
+    }
+
+    #[test]
+    fn a_double_click_on_an_in_zones_name_renames_the_speaker_in_that_row() {
+        let app = app_over(MockBackend::zones_preview());
+        draw_frames();
+        let window = app.main.window();
+        scroll(window, 650.0, 400.0, -3000.0);
+        // In its In zones row only: a double-click on its row under Upstairs
+        // renames it there.
+        let renames_bedroom = |app: &App| {
+            in_zones_row(app, "airplay:bedroom").renaming
+                && !zone_member_row(app, "airplay:bedroom").renaming
+        };
+        let (x, y) = double_click_point(&app, renames_bedroom);
+        click(window, x, y);
+        click(window, x, y);
+        let row = in_zones_row(&app, "airplay:bedroom");
+        assert!(
+            row.renaming && row.name_text == "Bedroom",
+            "the double-click renames it in its In zones row"
+        );
+        assert!(
+            !zone_member_row(&app, "airplay:bedroom").renaming,
+            "and not under its zone as well"
+        );
+
+        for key in ["N", "o", "o", "k"] {
+            press(window, key);
+        }
+        press(window, Key::Return);
+        assert_eq!(name_of(&app, "airplay:bedroom"), "Nook");
+        assert!(!in_zones_row(&app, "airplay:bedroom").renaming);
+
+        press(window, Key::F2);
+        assert!(
+            in_zones_row(&app, "airplay:bedroom").renaming,
+            "the focus went back to the row's switch, where F2 renames"
+        );
+        press(window, Key::Escape);
+        assert!(!in_zones_row(&app, "airplay:bedroom").renaming);
+        assert_eq!(name_of(&app, "airplay:bedroom"), "Nook");
+
+        app.main
+            .invoke_speaker_rename_requested("airplay:bedroom".into());
+        assert!(zone_member_row(&app, "airplay:bedroom").renaming);
+        assert!(
+            !in_zones_row(&app, "airplay:bedroom").renaming,
+            "a rename under the zone stays there"
+        );
+    }
+
     #[test]
     fn a_renamed_row_shows_its_device_name_under_the_new_one() {
         let app = app_over(MockBackend::new());
