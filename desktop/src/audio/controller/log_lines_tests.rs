@@ -21,10 +21,13 @@ use super::{
 };
 use crate::audio::SESSION_RATE;
 use crate::audio::backend::SourceId;
-use crate::audio::capture::{CAPTURE_ATTEMPTS, CaptureTarget, decide_capture, pair_attempts};
+use crate::audio::capture::{
+    CAPTURE_ATTEMPTS, CaptureCounters, CaptureGlitches, CaptureTarget, GapFill, decide_capture,
+    pair_attempts,
+};
 use crate::audio::outputs::{HNS_PER_MS, MixFormat, StreamSetup, render_buffer_hns, render_format};
 use crate::audio::process::{ProcessEntry, ProcessTable};
-use crate::audio::render::RenderPipeline;
+use crate::audio::render::{RenderPipeline, WakeCounters};
 
 /// AudioSync's process in these tests.
 const OWN_PID: u32 = 1000;
@@ -316,14 +319,26 @@ fn the_status_clock_gives_a_line_every_five_seconds_at_the_poll_cadence() {
         assert_eq!(span.frames - span.frames_then, 240_000);
     }
     assert_eq!(
-        describe_status(&SourceId::WholeSystem, lines[0].1, &[], None),
+        describe_status(
+            &SourceId::WholeSystem,
+            lines[0].1,
+            CaptureGlitches::default(),
+            &[],
+            None
+        ),
         "status: capturing the whole system; 240000 frames captured, \
-         48000 frames/s over 5.0 s\n  no output plays"
+         48000 frames/s over 5.0 s; discontinuities 0, gap fill 0 frames\n  no output plays"
     );
     assert_eq!(
-        describe_status(&SourceId::WholeSystem, lines[5].1, &[], None),
+        describe_status(
+            &SourceId::WholeSystem,
+            lines[5].1,
+            CaptureGlitches::default(),
+            &[],
+            None
+        ),
         "status: capturing the whole system; 1440000 frames captured, \
-         48000 frames/s over 5.0 s\n  no output plays"
+         48000 frames/s over 5.0 s; discontinuities 0, gap fill 0 frames\n  no output plays"
     );
 }
 
@@ -379,9 +394,15 @@ fn a_poll_gap_gives_one_line_over_the_whole_gap() {
         "the line moved the mark"
     );
     assert_eq!(
-        describe_status(&SourceId::App { root_pid: APP_PID }, span, &[], None),
+        describe_status(
+            &SourceId::App { root_pid: APP_PID },
+            span,
+            CaptureGlitches::default(),
+            &[],
+            None
+        ),
         "status: capturing the app of process 2000; 590400 frames captured, \
-         48000 frames/s over 12.3 s\n  no output plays"
+         48000 frames/s over 12.3 s; discontinuities 0, gap fill 0 frames\n  no output plays"
     );
 }
 
@@ -406,6 +427,9 @@ fn a_status_line_shows_what_a_real_reader_and_render_pipeline_count() {
         channels,
     )
     .expect("a pipeline for the receiver");
+    // What the capture and render threads count beside them.
+    let captured = CaptureCounters::default();
+    let wakes = WakeCounters::default();
 
     let start = Instant::now();
     let mut last = None;
@@ -436,6 +460,7 @@ fn a_status_line_shows_what_a_real_reader_and_render_pipeline_count() {
         shortfall_frames: control.shortfall_frames(),
         shortage_frames: control.shortage_frames(),
         least_slack_ns: control.least_slack_ns(),
+        wakes: wakes.counts(),
     };
     let app = SourceId::App { root_pid: APP_PID };
     // A capture and a render thread in step: anchored once, nothing to
@@ -446,23 +471,38 @@ fn a_status_line_shows_what_a_real_reader_and_render_pipeline_count() {
     // as much as the packet written just before it, so its least slack is
     // that lag too (S229).
     assert_eq!(
-        describe_status(&app, span, &[status()], Some("AirPlay: L = 2000 ms")),
+        describe_status(
+            &app,
+            span,
+            captured.glitches(),
+            &[status()],
+            Some("AirPlay: L = 2000 ms")
+        ),
         format!(
             "status: capturing the app of process 2000; 240000 frames captured, \
-             48000 frames/s over 5.0 s\n  \
+             48000 frames/s over 5.0 s; discontinuities 0, gap fill 0 frames\n  \
              output \"HDMI\" ({HDMI_ID}): delay 10 ms (480 frames), volume 50 (gain 0.250), \
              lag 1205 frames; primes 1, resyncs 0, starved reads 0 (0 frames), \
              drift skips 0 (0 frames), drift silences 0 (0 frames), rejected copies 0, \
              slowed 0 frames, sped 0 frames, shortfall 0 frames, shortage 0 frames, \
-             least slack 25.1 ms\n\
+             least slack 25.1 ms, late wakes 0, empty wakes 0\n\
              AirPlay: L = 2000 ms"
         )
     );
 
-    // Then the capture misses 50 ms while the device keeps asking.
-    for step in 0..500 {
+    // Then the capture misses 50 ms while the device keeps asking. Windows
+    // flags the packet after the gap, and the render thread wakes once a
+    // whole period late, to an empty buffer.
+    let mut gaps = GapFill::new(SESSION_RATE);
+    for step in 0..500_u64 {
         if !(100..105).contains(&step) {
             writer.write(&packet, packet.len() / 2);
+            let at = step * 10 * HNS_PER_MS as u64;
+            let (fill, _) = gaps.packet(at, PACKET_FRAMES as usize, step == 105);
+            captured.count_packet(PACKET_FRAMES as u32, step == 105, fill);
+        }
+        if step == 300 {
+            wakes.count_wake(0, 960, 480);
         }
         pipeline.render(&mut out);
     }
@@ -476,12 +516,19 @@ fn a_status_line_shows_what_a_real_reader_and_render_pipeline_count() {
     let counters = output.counters;
     assert!(counters.starved_renders > 0, "{counters:?}");
     assert_eq!((counters.primes, counters.resyncs), (1, 0), "{counters:?}");
-    let text = describe_status(&app, span, &[output], None);
+    let text = describe_status(&app, span, captured.glitches(), &[output], None);
     assert!(
         text.starts_with(
             "status: capturing the app of process 2000; 477600 frames captured, \
-             47520 frames/s over 5.0 s\n  output \"HDMI\" ("
+             47520 frames/s over 5.0 s; discontinuities 1, gap fill 2400 frames\n  \
+             output \"HDMI\" ("
         ),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .nth(1)
+            .is_some_and(|line| line.ends_with(", late wakes 1, empty wakes 1")),
         "{text}"
     );
     let starved = format!(

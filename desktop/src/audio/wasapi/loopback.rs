@@ -21,7 +21,7 @@ use std::mem::ManuallyDrop;
 use std::ptr;
 use std::slice;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicPtr, Ordering};
 use std::thread;
 
 use audiosync_core::channels::InputPair;
@@ -62,8 +62,9 @@ use super::processes::ProcessWatch;
 use crate::audio::SESSION_RATE;
 use crate::audio::backend::{BackendError, TIMED_OUT};
 use crate::audio::capture::{
-    Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, CaptureTarget, GapFill,
-    LoopbackMode, MAX_MIX_APPS, SampleType, StreamFormat, pair_attempts,
+    Activation, CAPTURE_ATTEMPTS, CaptureAttempt, CaptureConverter, CaptureCounters,
+    CaptureGlitches, CaptureTarget, GapFill, LoopbackMode, MAX_MIX_APPS, SampleType, StreamFormat,
+    pair_attempts,
 };
 use crate::audio::controller::{CaptureHandle, CaptureState};
 use crate::audio::mix::{LaneInput, LaneStream, MixLanes, MixPlan, Opened, as_bytes};
@@ -92,9 +93,8 @@ pub struct LoopbackCapture {
     /// The HRESULT that ended the capture, once `ended` is set.
     failure: Arc<AtomicI32>,
     ended: Arc<AtomicBool>,
-    /// The frames Windows delivered, without the silence filling gaps.
-    #[cfg(test)]
-    captured: Arc<AtomicU64>,
+    /// The frames Windows delivered, the discontinuities and the gap fill.
+    counters: Arc<CaptureCounters>,
     thread: Worker,
     /// The captured apps, to notice when they quit; empty when one can't be
     /// watched or the capture isn't of apps.
@@ -151,12 +151,16 @@ impl CaptureHandle for LoopbackCapture {
             .as_ref()
             .is_none_or(|mix| mix.holds_all(&self.mix_pids))
     }
+
+    fn glitches(&self) -> CaptureGlitches {
+        self.counters.glitches()
+    }
 }
 
 #[cfg(test)]
 impl LoopbackCapture {
     fn frames_captured(&self) -> u64 {
-        self.captured.load(Ordering::Relaxed)
+        self.counters.frames_captured()
     }
 }
 
@@ -205,12 +209,12 @@ pub(super) fn start(
     let stop = Arc::new(Event::manual_reset()?);
     let failure = Arc::new(AtomicI32::new(0));
     let ended = Arc::new(AtomicBool::new(false));
-    let captured = Arc::new(AtomicU64::new(0));
+    let counters = Arc::new(CaptureCounters::default());
     let (thread, setup) = {
         let stop = Arc::clone(&stop);
         let failure = Arc::clone(&failure);
         let ended = Arc::clone(&ended);
-        let captured = Arc::clone(&captured);
+        let counters = Arc::clone(&counters);
         let mix = mix.clone();
         spawn_worker("audiosync-capture", move |ready| {
             run(
@@ -222,7 +226,7 @@ pub(super) fn start(
                 &stop,
                 &failure,
                 &ended,
-                &captured,
+                &counters,
                 ready,
             );
         })?
@@ -231,8 +235,7 @@ pub(super) fn start(
         stop,
         failure,
         ended,
-        #[cfg(test)]
-        captured,
+        counters,
         thread,
         sources,
         mix,
@@ -280,7 +283,7 @@ fn run(
     stop: &Event,
     failure: &AtomicI32,
     ended: &AtomicBool,
-    captured: &Arc<AtomicU64>,
+    counters: &Arc<CaptureCounters>,
     ready: Ready<CaptureAttempt>,
 ) {
     let _apartment = match Apartment::enter() {
@@ -297,7 +300,7 @@ fn run(
             stop,
             failure,
             ended,
-            captured,
+            counters,
             ready,
         );
     }
@@ -326,7 +329,7 @@ fn run(
         let _ = unsafe { stream.client.Stop() };
         return;
     }
-    let result = capture_loop(&stream, &mut converter, stop, captured);
+    let result = capture_loop(&stream, &mut converter, stop, counters);
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
     if let Err(code) = result {
@@ -632,7 +635,7 @@ fn capture_loop(
     stream: &CaptureStream,
     converter: &mut CaptureConverter,
     stop: &Event,
-    captured: &AtomicU64,
+    counters: &CaptureCounters,
 ) -> Result<(), HRESULT> {
     let handles = [stop.raw(), stream.event.raw()];
     let packet_ready = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
@@ -653,7 +656,7 @@ fn capture_loop(
             stream,
             &mut gaps,
             frequency,
-            captured,
+            counters,
             &mut |data, frames, silent| {
                 converter.push(data, frames, silent);
             },
@@ -675,7 +678,7 @@ fn drain(
     stream: &CaptureStream,
     gaps: &mut GapFill,
     frequency: i64,
-    captured: &AtomicU64,
+    counters: &CaptureCounters,
     deliver: &mut dyn FnMut(&[u8], usize, bool),
 ) -> Result<usize, HRESULT> {
     let block = stream.format.block_align();
@@ -705,7 +708,6 @@ fn drain(
             return Ok(packets);
         }
         packets += 1;
-        captured.fetch_add(u64::from(frames), Ordering::Relaxed);
         let count = frames as usize;
         // A packet without a position counts as captured just now.
         let start = if position != 0 {
@@ -716,6 +718,7 @@ fn drain(
         };
         let discontinuity = flags & (AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32) != 0;
         let (fill, skip) = gaps.packet(start, count, discontinuity);
+        counters.count_packet(frames, discontinuity, fill);
         if fill > 0 {
             deliver(&[], fill, true);
         }
@@ -760,7 +763,7 @@ struct LoopbackLane {
     /// when it can't be watched.
     watch: Option<ProcessWatch>,
     frequency: i64,
-    captured: Arc<AtomicU64>,
+    counters: Arc<CaptureCounters>,
 }
 
 impl LoopbackLane {
@@ -768,7 +771,7 @@ impl LoopbackLane {
     fn open(
         pid: u32,
         frequency: i64,
-        captured: &Arc<AtomicU64>,
+        counters: &Arc<CaptureCounters>,
     ) -> Result<Box<Opened<LoopbackLane>>, BackendError> {
         let stream = open_stream(&CaptureTarget::Loopback(Activation {
             mode: LoopbackMode::IncludeTree,
@@ -786,7 +789,7 @@ impl LoopbackLane {
                 stream,
                 watch: ProcessWatch::open(pid).ok().flatten(),
                 frequency,
-                captured: Arc::clone(captured),
+                counters: Arc::clone(counters),
             },
             input,
             rate: format.rate,
@@ -807,7 +810,7 @@ impl LaneStream for LoopbackLane {
         gaps: &mut GapFill,
         deliver: &mut dyn FnMut(&[u8], usize, bool),
     ) -> Result<usize, i32> {
-        drain(&self.stream, gaps, self.frequency, &self.captured, deliver).map_err(|code| code.0)
+        drain(&self.stream, gaps, self.frequency, &self.counters, deliver).map_err(|code| code.0)
     }
 
     fn app_exited(&self) -> bool {
@@ -903,7 +906,7 @@ impl Drop for MixShare {
 /// The opener thread of a mix: opens the loopback of each app the plan
 /// names that the mix doesn't hold yet, once per plan, and stops the ones
 /// the mix let go, until the mix quits.
-fn opener(share: &MixShare, frequency: i64, captured: &Arc<AtomicU64>) {
+fn opener(share: &MixShare, frequency: i64, counters: &Arc<CaptureCounters>) {
     let _apartment = Apartment::enter();
     let (mut seen, mut count) = (0, 0);
     let mut planned = [0_u32; MAX_MIX_APPS];
@@ -932,7 +935,7 @@ fn opener(share: &MixShare, frequency: i64, captured: &Arc<AtomicU64>) {
                     continue;
                 }
                 tried.push(pid);
-                if let Ok(lane) = LoopbackLane::open(pid, frequency, captured)
+                if let Ok(lane) = LoopbackLane::open(pid, frequency, counters)
                     && let Ok(index) = MixShare::post(&share.ready, lane)
                 {
                     posted[index] = pid;
@@ -963,7 +966,7 @@ fn run_mix(
     stop: &Event,
     failure: &AtomicI32,
     ended: &AtomicBool,
-    captured: &Arc<AtomicU64>,
+    counters: &Arc<CaptureCounters>,
     ready: Ready<CaptureAttempt>,
 ) {
     let mut converter = match CaptureConverter::new(MIX_FORMAT, writer, equalizer, feeds) {
@@ -977,7 +980,7 @@ fn run_mix(
     let mut first_error = None;
     let mut opened = Vec::new();
     for activation in activations.iter().take(MAX_MIX_APPS) {
-        match LoopbackLane::open(activation.target_pid, frequency, captured) {
+        match LoopbackLane::open(activation.target_pid, frequency, counters) {
             Ok(lane) => opened.push(lane),
             Err(error) => {
                 first_error.get_or_insert(error);
@@ -1011,10 +1014,10 @@ fn run_mix(
     share.held.set(&held[..count]);
     let opener_thread = {
         let share = Arc::clone(share);
-        let captured = Arc::clone(captured);
+        let counters = Arc::clone(counters);
         thread::Builder::new()
             .name("audiosync-mix-opener".into())
-            .spawn(move || opener(&share, frequency, &captured))
+            .spawn(move || opener(&share, frequency, &counters))
     };
     let opener_thread = match opener_thread {
         Ok(thread) => thread,
@@ -1227,7 +1230,7 @@ mod tests {
             stop,
             failure: Arc::new(AtomicI32::new(0)),
             ended: Arc::new(AtomicBool::new(false)),
-            captured: Arc::new(AtomicU64::new(0)),
+            counters: Arc::new(CaptureCounters::default()),
             thread,
             sources: Vec::new(),
             mix: None,

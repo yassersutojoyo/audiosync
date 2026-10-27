@@ -17,6 +17,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use audiosync_core::channels::{InputPair, pair_to_stereo};
@@ -949,6 +950,68 @@ impl GapFill {
         self.filled = true;
         frames as usize
     }
+}
+
+/// What a loopback capture counts for the debug log's status line: the
+/// frames Windows delivered, the packets it flagged as a discontinuity, and
+/// the silence [`GapFill`] put before a packet whose position jumped. The
+/// silence written while nothing comes is left out: process loopback
+/// delivers nothing whenever its app is quiet. Written by the capture
+/// thread, read by the status timer.
+#[derive(Debug, Default)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    allow(dead_code, reason = "only the WASAPI loopback counts its packets")
+)]
+pub struct CaptureCounters {
+    captured: AtomicU64,
+    discontinuities: AtomicU64,
+    gap_fill_frames: AtomicU64,
+}
+
+#[cfg_attr(
+    all(not(windows), not(test)),
+    allow(dead_code, reason = "only the WASAPI loopback counts its packets")
+)]
+impl CaptureCounters {
+    /// Counts a packet of `frames` frames, flagged as a discontinuity or
+    /// not, that [`GapFill::packet`] put `fill` silent frames before. Never
+    /// allocates, locks or blocks.
+    pub fn count_packet(&self, frames: u32, discontinuity: bool, fill: usize) {
+        self.captured
+            .fetch_add(u64::from(frames), Ordering::Relaxed);
+        if discontinuity {
+            self.discontinuities.fetch_add(1, Ordering::Relaxed);
+        }
+        if fill > 0 {
+            self.gap_fill_frames
+                .fetch_add(fill as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// The frames Windows delivered, without any silence filled.
+    #[cfg(test)]
+    pub fn frames_captured(&self) -> u64 {
+        self.captured.load(Ordering::Relaxed)
+    }
+
+    /// The discontinuities and gap fill counted so far.
+    pub fn glitches(&self) -> CaptureGlitches {
+        CaptureGlitches {
+            discontinuities: self.discontinuities.load(Ordering::Relaxed),
+            gap_fill_frames: self.gap_fill_frames.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// A capture's [`CaptureCounters`] as the status line shows them; zero for
+/// a capture that doesn't count them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaptureGlitches {
+    /// Packets Windows flagged as a discontinuity.
+    pub discontinuities: u64,
+    /// Silent frames put before a packet whose position jumped.
+    pub gap_fill_frames: u64,
 }
 
 /// Decodes little-endian samples into floats in -1.0..=1.0.
@@ -2040,6 +2103,36 @@ mod tests {
             gaps.packet(3_600_000 * HNS_PER_MS, 480, false),
             (21 * 48_000, 0)
         );
+    }
+
+    #[test]
+    fn the_counters_see_each_discontinuity_and_the_silence_a_jump_puts_in() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        let counters = CaptureCounters::default();
+        let mut packet = |start: u64, discontinuity: bool| {
+            let (fill, _) = gaps.packet(start, 480, discontinuity);
+            counters.count_packet(480, discontinuity, fill);
+        };
+        packet(0, false);
+        packet(10 * HNS_PER_MS, false);
+        assert_eq!(counters.glitches(), CaptureGlitches::default());
+        // 10 ms late: 480 frames of silence.
+        packet(30 * HNS_PER_MS, false);
+        // 2 ms late and flagged: 96 more.
+        packet(42 * HNS_PER_MS, true);
+        // Flagged, on time: a discontinuity with nothing to fill.
+        packet(52 * HNS_PER_MS, true);
+        assert_eq!(
+            counters.glitches(),
+            CaptureGlitches {
+                discontinuities: 2,
+                gap_fill_frames: 576,
+            }
+        );
+        assert_eq!(counters.frames_captured(), 5 * 480);
+        // The silence written while nothing comes isn't a glitch.
+        assert!(gaps.idle(500 * HNS_PER_MS) > 0);
+        assert_eq!(counters.glitches().gap_fill_frames, 576);
     }
 
     #[test]

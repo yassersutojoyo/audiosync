@@ -539,7 +539,10 @@ fn a_silent_input_keeps_the_response_open_with_silence() {
             .all(|chunk| chunk.len() == 960 * 4 && chunk.iter().all(|byte| *byte == 0)),
         "silence after the input stopped"
     );
-    assert!(server.stats().streaming);
+    let stats = server.stats();
+    assert!(stats.streaming);
+    // Those five blocks and more were the pump's underrun silence.
+    assert!(stats.underrun_frames >= 5 * 960, "{stats:?}");
     server.stop();
 }
 
