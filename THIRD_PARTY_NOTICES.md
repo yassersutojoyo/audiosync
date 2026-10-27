@@ -51,8 +51,8 @@ TV pairing, RustCrypto's `sha1`, `sha2`, `aes`, `aes-gcm`, `ctr` and
 for HomeKit pairing, RustCrypto's `chacha20poly1305` and `hkdf` with
 `chacha20`, `poly1305` and `hmac`;
 `ed25519-dalek`, `x25519-dalek` and `curve25519-dalek` (BSD-3-Clause) with
-`ed25519`, `signature` and `subtle` (BSD-3-Clause); `zeroize`; and `plist`
-(MIT) for the pairing's property lists, with `quick-xml` (MIT), `time`,
+`ed25519` and `signature` (Apache-2.0 OR MIT) and `subtle` (BSD-3-Clause);
+`zeroize`; and `plist` (MIT) for the pairing's property lists, with `quick-xml` (MIT), `time`,
 `time-core`, `deranged`, `powerfmt`, `num-conv`, `num-traits`, `base64`,
 `indexmap`, `equivalent`, `hashbrown` and `memchr` (Unlicense OR MIT). The
 others are under MIT OR Apache-2.0. CI checks every crate in the core's build
