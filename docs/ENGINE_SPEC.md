@@ -2014,6 +2014,8 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 | a_new_exe_gone_before_the_restart_restores_the_bak (the stand-in new exe is deleted after step 4, then Restart Now) | S303, S315 |
 | a_new_exe_still_scanned_after_a_failed_restart_is_deleted_on_a_retry (the stand-in new exe ends before its signal and deleting it meets error 32 twice: the undo waits 250 ms and 500 ms on a counted clock, restores the old exe without a RestoreFailed notice, and every try runs on the updater's worker thread) | S303, S315 |
 | quitting_after_a_swap_whose_exe_is_gone_renames_the_bak_back (delete the new exe after step 4, then Quit: `audiosync.exe` is the old version again and the version is stored as blocked) | S315 |
+| a_quit_during_the_undo_of_a_failed_restart_waits_for_it_and_keeps_the_record (Quit while the worker waits to retry the locked new exe: the quit waits for the undo, the old exe is back and the version is stored as failed) | S303, S315 |
+| the_undo_at_quit_spends_at_most_two_seconds_on_lock_retries (every `.bak` rename locked at quit: the counted waits add up to 2 s at most) | S315 |
 | the_updater_writes_no_zone_identifier_stream (a full update from the fake appcast through the memory fetch into a temp install folder on NTFS, then opening `audiosync.exe:Zone.Identifier` there fails with file not found) | S315 |
 | a_failed_or_blocked_version_is_skipped_at_launch_offered_on_a_manual_check_and_cleared_by_a_newer_one (settings that store version N as blocked and a fake appcast offering N: the launch check shows nothing and logs it, a manual check offers N with the blocked line; the appcast then offers a higher version: it is offered and the record is gone) | S316 |
 

@@ -1360,4 +1360,98 @@ pub mod tests {
             "the undo runs on the worker, never on the UI thread: {threads:?}"
         );
     }
+
+    /// An updater with `files` and the counting `sleep` that has swapped
+    /// 0.9.0 in and offers Restart Now, which a new version that exits
+    /// before its signal answers.
+    fn swapped_with(
+        name: &str,
+        files: Arc<dyn crate::updater::files::Files>,
+        sleep: impl Fn(std::time::Duration) + Send + Sync + 'static,
+    ) -> Updater {
+        let mut f = fixture(name, false, files, DebugLog::default());
+        f.env.sleep = Arc::new(sleep);
+        f.env.launch = Arc::new(Exits);
+        let mut updater = Updater::new(f.env);
+        updater.check(Trigger::Manual);
+        updater.wait();
+        updater.press(UpdaterButton::Download);
+        updater.wait();
+        assert!(matches!(
+            updater.notice(),
+            Some(UpdaterNotice::Installed { .. })
+        ));
+        updater
+    }
+
+    // covers: S303, S315
+    #[test]
+    fn a_quit_during_the_undo_of_a_failed_restart_waits_for_it_and_keeps_the_record() {
+        let files = Arc::new(Scanned {
+            locked: Mutex::new(3),
+            threads: Mutex::new(Vec::new()),
+        });
+        let (entered_sender, entered) = mpsc::channel();
+        let (release, gate) = mpsc::channel::<()>();
+        let (entered_sender, gate) = (Mutex::new(entered_sender), Mutex::new(gate));
+        let mut updater = swapped_with("quit-during-undo", files, move |_| {
+            let _ = entered_sender.lock().unwrap().send(());
+            let _ = gate.lock().unwrap().recv();
+        });
+        assert_eq!(updater.press(UpdaterButton::RestartNow), Action::Nothing);
+        entered
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("the undo waits to retry the locked exe");
+        drop(release);
+        assert!(updater.at_quit(), "the quit stores the record");
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::FailedStart).as_ref()
+        );
+        assert_eq!(folder(&updater), old_folder());
+    }
+
+    /// Real files, except that renaming a `.bak` back always meets a
+    /// sharing violation.
+    struct LockedBaks;
+
+    impl crate::updater::files::Files for LockedBaks {
+        fn create(
+            &self,
+            path: &Path,
+            exclusive: bool,
+        ) -> std::io::Result<Box<dyn crate::updater::files::Sink>> {
+            RealFiles.create(path, exclusive)
+        }
+        fn remove(&self, path: &Path) -> std::io::Result<()> {
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            if from.extension().is_some_and(|extension| extension == "bak") {
+                return Err(std::io::Error::from_raw_os_error(32));
+            }
+            RealFiles.rename(from, to)
+        }
+    }
+
+    // covers: S315
+    #[test]
+    fn the_undo_at_quit_spends_at_most_two_seconds_on_lock_retries() {
+        let waits = Arc::new(Mutex::new(Vec::new()));
+        let counted = waits.clone();
+        let mut updater = swapped_with("quit-retry-budget", Arc::new(LockedBaks), move |wait| {
+            counted.lock().unwrap().push(wait);
+        });
+        std::fs::remove_file(updater.env.install_dir.join(archive::EXE_NAME)).unwrap();
+        assert!(updater.at_quit());
+        let spent: std::time::Duration = waits.lock().unwrap().iter().sum();
+        assert!(
+            spent <= std::time::Duration::from_secs(2),
+            "one budget for the whole undo at quit, {spent:?}"
+        );
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::Blocked).as_ref()
+        );
+    }
 }
