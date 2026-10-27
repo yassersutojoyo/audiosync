@@ -492,7 +492,13 @@ fn decorative_pieces_are_hidden_from_narrator() {
             );
         }
     }
-    for component in ["Glyph", "SectionTitle", "QuietText", "BrandMark"] {
+    for component in [
+        "Glyph",
+        "SectionTitle",
+        "CardTitle",
+        "QuietText",
+        "BrandMark",
+    ] {
         let body = component_body(widgets, component);
         assert!(
             body.contains("inherits HorizontalLayout") || body.contains("inherits Rectangle"),

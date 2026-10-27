@@ -71,22 +71,18 @@ export global Glyphs {
     out property <string> info: "\u{E946}";
     out property <string> chevron-right: "\u{E76C}";
     out property <string> chevron-down: "\u{E70D}";
-    out property <string> chevron-up: "\u{E70E}";
     out property <string> equalizer: "\u{E9E9}";
     out property <string> timer: "\u{E916}";
     out property <string> auto-connect: "\u{E945}";
     out property <string> volume-low: "\u{E993}";
-    out property <string> volume-high: "\u{E995}";
     // Windows' own Mute glyph, a speaker with a cross (the icon font has
     // no speaker with a slash).
     out property <string> volume-muted: "\u{E74F}";
-    out property <string> source: "\u{E8D6}";
     out property <string> music-note: "\u{EC4F}";
     out property <string> previous: "\u{E892}";
     out property <string> next: "\u{E893}";
     out property <string> play: "\u{E768}";
     out property <string> pause: "\u{E769}";
-    out property <string> microphone: "\u{E720}";
     out property <string> presets: "\u{E728}";
     out property <string> check: "\u{E73E}";
 
@@ -102,9 +98,11 @@ export global Glyphs {
         return "";
     }
 
+    // What the speaker is; how it is reached is the kind's glyph after the
+    // name, so a network speaker's toggle shows a speaker, as on the Mac.
     public pure function speaker(kind: SpeakerKind) -> string {
         if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 || kind == SpeakerKind.cast {
-            return root.network;
+            return root.speakers;
         }
         // The device's form wins over its bus; the kind line still says USB.
         if kind == SpeakerKind.headphones || kind == SpeakerKind.usb-headphones {
@@ -189,9 +187,6 @@ export global Glyphs {
         if glyph == root.chevron-down {
             return "M3 6 L8 11 L13 6";
         }
-        if glyph == root.chevron-up {
-            return "M3 10 L8 5 L13 10";
-        }
         if glyph == root.equalizer {
             return "M4 2 V14 M8 2 V14 M12 2 V14";
         }
@@ -204,14 +199,8 @@ export global Glyphs {
         if glyph == root.volume-low {
             return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6 A2.5 2.5 0 0 1 10.5 10";
         }
-        if glyph == root.volume-high {
-            return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6 A2.5 2.5 0 0 1 10.5 10 M12.5 3.5 A5 5 0 0 1 12.5 12.5";
-        }
         if glyph == root.volume-muted {
             return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6.25 L14 9.75 M14 6.25 L10.5 9.75";
-        }
-        if glyph == root.source {
-            return "M2.5 9.5 V12.5 A1 1 0 0 0 3.5 13.5 H12.5 A1 1 0 0 0 13.5 12.5 V9.5 M8 2 V10 M5 7 L8 10 L11 7";
         }
         if glyph == root.music-note {
             return "M10.5 11.5 V2 Q10.5 4 13.5 5.5";
@@ -221,9 +210,6 @@ export global Glyphs {
         }
         if glyph == root.next {
             return "M12.5 3 V13";
-        }
-        if glyph == root.microphone {
-            return "M6 3.5 A2 2 0 0 1 10 3.5 V8 A2 2 0 0 1 6 8 Z M3.5 7.5 A4.5 4.5 0 0 0 12.5 7.5 M8 12 V14.5 M5.5 14.5 H10.5";
         }
         if glyph == root.presets {
             return "M4 2 H12 V14 L8 10.75 L4 14 Z";
@@ -367,6 +353,23 @@ export component SectionTitle inherits HorizontalLayout {
         font-size: Tokens.font-size-body;
         font-weight: 600;
         color: Tokens.text;
+        accessible-role: none;
+    }
+}
+
+// A main window card's or section's title, as on the Mac: small grey
+// capitals with no icon. Narrator hears it as the label of the section or
+// of the control below it, in its own case, so the text itself is skipped.
+export component CardTitle inherits HorizontalLayout {
+    in property <string> text;
+
+    padding-left: 2px;
+
+    Text {
+        text: root.text.to-uppercase();
+        font-size: Tokens.font-size-caption;
+        font-weight: 600;
+        color: Tokens.secondary-text;
         accessible-role: none;
     }
 }
@@ -1399,7 +1402,8 @@ export component SyncControls inherits VerticalLayout {
 }
 
 // The AirPlay delay: how long the local speakers wait for the AirPlay
-// speakers. Steps and a field, under its own title. Like a speaker's sync
+// speakers. A row in the Connected Speakers card, after the speakers, as on
+// the Mac: its name, then the steps and a field under it. Like a speaker's sync
 // controls, the field applies on Enter, Ctrl+S or a click outside every
 // speaker row: its lower bound follows the sender's latency, so a half-typed
 // number would clamp.
@@ -1417,7 +1421,11 @@ export component AirPlayDelayControls inherits VerticalLayout {
     callback cancelled();
     callback focus-changed(bool);
 
-    spacing: 8px;
+    spacing: 6px;
+    padding-left: 12px;
+    padding-right: 12px;
+    padding-top: 10px;
+    padding-bottom: 12px;
     accessible-role: groupbox;
     accessible-label: Strings.airplay-delay-title;
     // Typing replaces the field's binding; show the applied value after a step.
@@ -1427,11 +1435,28 @@ export component AirPlayDelayControls inherits VerticalLayout {
         }
     }
 
-    SectionTitle {
-        text: Strings.airplay-delay-title;
+    // The glyph in the toggles' column, the name where the rows' names start.
+    HorizontalLayout {
+        spacing: 12px;
+
+        Glyph {
+            width: 32px;
+            glyph: Glyphs.timer;
+            color: Tokens.secondary-text;
+        }
+
+        Text {
+            text: Strings.airplay-delay-title;
+            font-size: Tokens.font-size-body;
+            color: Tokens.text;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
     }
 
-    Card {
+    VerticalLayout {
+        padding-left: Fluent.name-inset - 12px;
+
         VerticalLayout {
             spacing: 6px;
 
@@ -1528,11 +1553,14 @@ export component AirPlayDelayControls inherits VerticalLayout {
     }
 }
 
-// One speaker: its toggle, then its name with the kind below it, the sync
+// One speaker: its toggle, then its name with its kind and note, the sync
 // delay and its options on one line, and its volume under them. The sync
 // controls open underneath.
 export component SpeakerRow inherits Rectangle {
     in property <SpeakerItem> item;
+    // In a zone's tinted box, which already marks it: no fill of its own,
+    // since a hover fill stacked on the box drops colored text below 4.5:1.
+    in property <bool> grouped;
     callback toggled();
     // A click on the blank space of a row without a delay, which this row's
     // TouchArea takes; on a row with one, the click toggles its sync controls.
@@ -1673,7 +1701,7 @@ export component SpeakerRow inherits Rectangle {
     }
 
     border-radius: Fluent.radius-control;
-    background: root.item.state == RowState.playing ? Tokens.playing-row : hover.has-hover ? Fluent.hover : transparent;
+    background: root.grouped ? transparent : root.item.state == RowState.playing ? Tokens.playing-row : hover.has-hover ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
 
     // Around the row's content, so the hover fill stays on over the row's
@@ -1843,9 +1871,11 @@ export component SpeakerRow inherits Rectangle {
                                     alignment: start;
 
                                     // As wide as the name, so the blank space
-                                    // after it stays the row's box.
+                                    // after it stays the row's box. No stretch,
+                                    // so a long note ends in "…" before the
+                                    // name does, as on the Mac.
                                     if !root.item.renaming: Rectangle {
-                                        horizontal-stretch: 1;
+                                        horizontal-stretch: 0;
                                         min-width: 0px;
                                         preferred-width: name-label.preferred-width;
                                         max-width: name-label.preferred-width;
@@ -2510,12 +2540,77 @@ export component ZoneHeader inherits Rectangle {
                 }
 
                 HorizontalLayout {
-                    padding-left: 12px;
+                    padding-left: 4px;
                     padding-right: 4px;
                     padding-top: 8px;
                     padding-bottom: 8px;
                     spacing: 8px;
                     min-height: Fluent.row-height;
+
+                    // The fold arrow at the far left, as on the Mac.
+                    Rectangle {
+                        width: 24px;
+                        height: 32px;
+                        border-radius: Fluent.radius-control;
+                        y: (parent.height - self.height) / 2;
+                        background: arrow.pressed ? Fluent.pressed : arrow.has-hover ? Fluent.hover : transparent;
+                        accessible-role: button;
+                        accessible-label: root.item.expanded ? Strings.hide-zone-speakers(root.item.name) : Strings.show-zone-speakers(root.item.name);
+                        accessible-value: root.live ? "" : count-text.text;
+                        accessible-expandable: true;
+                        accessible-expanded: root.item.expanded;
+                        accessible-action-default => {
+                            root.expanded-changed(!root.item.expanded);
+                        }
+
+                        arrow-focus := ZoneArrowFocus {
+                            enabled: !root.live;
+                            expanded: root.item.expanded;
+                            expanded-changed(open) => {
+                                root.expanded-changed(open);
+                            }
+                            focus-changed(focused) => {
+                                root.arrow-focused = focused;
+                            }
+                        }
+
+                        arrow := TouchArea {
+                            clicked => {
+                                root.expanded-changed(!root.item.expanded);
+                            }
+
+                            // Narrator reads the same words from the arrow's label.
+                            Tooltip {
+                                Rectangle {
+                                    width: arrow-tip.preferred-width + 16px;
+                                    height: arrow-tip.preferred-height + 10px;
+                                    border-radius: Fluent.radius-control;
+                                    border-width: 1px;
+                                    border-color: Fluent.stroke;
+                                    background: Tokens.surface;
+                                    drop-shadow-blur: 8px;
+                                    drop-shadow-offset-y: 2px;
+                                    drop-shadow-color: Tokens.text.with-alpha(0.18);
+                                    accessible-role: none;
+
+                                    arrow-tip := Text {
+                                        x: 8px;
+                                        text: root.item.expanded ? Strings.hide-zone-speakers(root.item.name) : Strings.show-zone-speakers(root.item.name);
+                                        font-size: Tokens.font-size-caption;
+                                        color: Tokens.text;
+                                        vertical-alignment: center;
+                                        accessible-role: none;
+                                    }
+                                }
+                            }
+                        }
+
+                        Glyph {
+                            glyph: root.item.expanded ? Glyphs.chevron-down : Glyphs.chevron-right;
+                            font-size: 12px;
+                            color: Tokens.secondary-text;
+                        }
+                    }
 
                     VerticalLayout {
                         alignment: center;
@@ -2606,70 +2701,6 @@ export component ZoneHeader inherits Rectangle {
                             focus-changed(focused) => {
                                 root.options-focused = focused;
                             }
-                        }
-                    }
-
-                    Rectangle {
-                        width: 32px;
-                        height: 32px;
-                        border-radius: Fluent.radius-control;
-                        y: (parent.height - self.height) / 2;
-                        background: arrow.pressed ? Fluent.pressed : arrow.has-hover ? Fluent.hover : transparent;
-                        accessible-role: button;
-                        accessible-label: root.item.expanded ? Strings.hide-zone-speakers(root.item.name) : Strings.show-zone-speakers(root.item.name);
-                        accessible-value: root.live ? "" : count-text.text;
-                        accessible-expandable: true;
-                        accessible-expanded: root.item.expanded;
-                        accessible-action-default => {
-                            root.expanded-changed(!root.item.expanded);
-                        }
-
-                        arrow-focus := ZoneArrowFocus {
-                            enabled: !root.live;
-                            expanded: root.item.expanded;
-                            expanded-changed(open) => {
-                                root.expanded-changed(open);
-                            }
-                            focus-changed(focused) => {
-                                root.arrow-focused = focused;
-                            }
-                        }
-
-                        arrow := TouchArea {
-                            clicked => {
-                                root.expanded-changed(!root.item.expanded);
-                            }
-
-                            // Narrator reads the same words from the arrow's label.
-                            Tooltip {
-                                Rectangle {
-                                    width: arrow-tip.preferred-width + 16px;
-                                    height: arrow-tip.preferred-height + 10px;
-                                    border-radius: Fluent.radius-control;
-                                    border-width: 1px;
-                                    border-color: Fluent.stroke;
-                                    background: Tokens.surface;
-                                    drop-shadow-blur: 8px;
-                                    drop-shadow-offset-y: 2px;
-                                    drop-shadow-color: Tokens.text.with-alpha(0.18);
-                                    accessible-role: none;
-
-                                    arrow-tip := Text {
-                                        x: 8px;
-                                        text: root.item.expanded ? Strings.hide-zone-speakers(root.item.name) : Strings.show-zone-speakers(root.item.name);
-                                        font-size: Tokens.font-size-caption;
-                                        color: Tokens.text;
-                                        vertical-alignment: center;
-                                        accessible-role: none;
-                                    }
-                                }
-                            }
-                        }
-
-                        Glyph {
-                            glyph: root.item.expanded ? Glyphs.chevron-up : Glyphs.chevron-down;
-                            font-size: 12px;
-                            color: Tokens.secondary-text;
                         }
                     }
                 }

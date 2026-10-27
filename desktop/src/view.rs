@@ -7214,7 +7214,7 @@ mod tests {
         rename("Desk");
         // The master volume's slider, in the left column, below the source
         // card's level meter row.
-        click(window, 150.0, 289.0);
+        click(window, 150.0, 310.0);
         assert_eq!(
             app.main_focus.borrow().control,
             Some(MainControl::MasterVolume)
@@ -7226,9 +7226,10 @@ mod tests {
         assert_eq!(name_of(&app, "local:desk"), "Desk");
 
         rename("Desk left");
-        // The AirPlay delay's field, under the lists scrolled to the end.
+        // The AirPlay delay's field, at the end of the Connected Speakers
+        // card, scrolled to the end.
         scroll(window, 640.0, 600.0, -2000.0);
-        click(window, 470.0, 620.0);
+        click(window, 520.0, 624.0);
         assert_eq!(
             app.main_focus.borrow().control,
             Some(MainControl::AirplayDelay)
@@ -9568,8 +9569,8 @@ mod tests {
         draw_frames();
         let window = app.main.window();
         assert!(!app.main.get_mix_open(), "folded until asked for");
-        // The main switch, then Several apps.
-        tab(window, 2);
+        // The main switch, the source, then Several apps under it.
+        tab(window, 3);
         press(window, " ");
         draw_frames();
         assert!(app.main.get_mix_open());
