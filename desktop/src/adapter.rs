@@ -11713,6 +11713,53 @@ mod tests {
         );
     }
 
+    /// The switch applies at the next launch (as on the Mac), so a stereo
+    /// pair still needs AirPlay 2 after it is saved on.
+    // covers: S265
+    #[test]
+    fn a_stereo_pair_needs_airplay2_until_the_switch_saved_on_is_relaunched() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(false);
+        let (pair, left, right) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        adapter.poll();
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[
+                (key(SPEAKERS), None),
+                ("ap:pair:5f0c".to_owned(), None),
+            ])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        let reasons = |adapter: &AudioAdapter<MockBackend>| -> Vec<PresetLeftOff> {
+            preset_notices(adapter)
+                .into_iter()
+                .flat_map(|notice| match notice {
+                    NoticeMessage::PresetLeftOff { left_off, .. } => {
+                        left_off.into_iter().map(|(_, reason)| reason).collect()
+                    }
+                    _ => Vec::new(),
+                })
+                .collect()
+        };
+
+        adapter.recall_preset("preset:1");
+        assert_eq!(reasons(&adapter), [PresetLeftOff::NeedsAirPlay2]);
+
+        let mut view = adapter.view_settings();
+        view.airplay2_experimental = true;
+        adapter.set_view_settings(view);
+        adapter.recall_preset("preset:1");
+        assert_eq!(
+            reasons(&adapter),
+            [PresetLeftOff::NeedsAirPlay2],
+            "the sender keeps the launch value until the next launch"
+        );
+    }
+
     // covers: S265, S266
     #[test]
     fn a_member_that_fails_to_start_after_a_recall_goes_into_the_preset_notice() {
