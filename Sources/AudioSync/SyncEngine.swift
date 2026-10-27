@@ -77,6 +77,9 @@ final class StreamEngine {
     /// last printed, so each line shows what changed since.
     private var statusTimer: DispatchSourceTimer?
     private var statusLast: (tally: SessionTally, at: TimeInterval)?
+    /// Each output's number in the status line, kept for the whole session so
+    /// an output that joins or leaves never renumbers the others.
+    private var statusNumbers: [String: Int] = [:]
 
     init() {
         capture.onInterrupted = { [weak self] reason in self?.handleInterruption(reason) }
@@ -163,6 +166,7 @@ final class StreamEngine {
     /// counters on the main queue; the IO threads only bump them.
     private func startStatusLine() {
         statusTimer?.cancel()
+        statusNumbers = [:]
         statusLast = (tally(), ProcessInfo.processInfo.systemUptime)
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 5, repeating: 5, leeway: .milliseconds(100))
@@ -182,14 +186,21 @@ final class StreamEngine {
         statusTimer?.cancel()
         statusTimer = nil
         statusLast = nil
+        statusNumbers = [:]
     }
 
     private func tally() -> SessionTally {
-        SessionTally(capture: capture.counts ?? CaptureCounts(), outputs: renderers.mapValues { renderer in
+        SessionTally.number(renderers.keys, in: &statusNumbers)
+        var outputs: [String: SessionTally.Output] = [:]
+        for (uid, renderer) in renderers {
             let counted = renderer.counters
-            return SessionTally.Output(starvedRenders: counted.starvedRenders, starvedFrames: counted.starvedFrames,
-                                       lateCallbacks: renderer.lateCallbacks, overloads: renderer.ioOverloads)
-        })
+            outputs[uid] = SessionTally.Output(
+                number: statusNumbers[uid] ?? 0, start: renderer.starts,
+                starvedRenders: counted.starvedRenders, starvedFrames: counted.starvedFrames,
+                driftSkips: counted.driftSkips, driftSilences: counted.driftSilences,
+                lateCallbacks: renderer.lateCallbacks, overloads: renderer.ioOverloads)
+        }
+        return SessionTally(capture: capture.counts ?? CaptureCounts(), outputs: outputs)
     }
 
     /// The largest sample magnitude captured since the last call (1 is full
@@ -448,8 +459,14 @@ struct CaptureCounts: Equatable {
 /// output's, keyed by device UID only to match outputs between two lines.
 struct SessionTally: Equatable {
     struct Output: Equatable {
+        /// The output's number in the line, kept for the session.
+        var number = 0
+        /// The renderer's start count: a new start's counters begin at 0.
+        var start: UInt64 = 0
         var starvedRenders: Int64 = 0
         var starvedFrames: Int64 = 0
+        var driftSkips: Int64 = 0
+        var driftSilences: Int64 = 0
         var lateCallbacks: Int64 = 0
         var overloads: Int64 = 0
     }
@@ -457,8 +474,18 @@ struct SessionTally: Equatable {
     var capture = CaptureCounts()
     var outputs: [String: Output] = [:]
 
+    /// Gives each UID in `uids` without a number the next free one, in UID
+    /// order, so the numbers of outputs already seen never change.
+    static func number<S: Sequence>(_ uids: S, in numbers: inout [String: Int]) where S.Element == String {
+        var next = (numbers.values.max() ?? 0) + 1
+        for uid in uids.sorted() where numbers[uid] == nil {
+            numbers[uid] = next
+            next += 1
+        }
+    }
+
     /// The status line for `seconds` from `old` to `new`, in counts only:
-    /// outputs are numbered in UID order, so no device name reaches the log.
+    /// outputs show by their session number, so no device name reaches the log.
     static func statusText(since old: SessionTally, now new: SessionTally, seconds: Double) -> String {
         let frames = change(new.capture.frames, since: old.capture.frames)
         let rate = seconds > 0 ? Double(frames) / seconds : 0
@@ -466,23 +493,26 @@ struct SessionTally: Equatable {
         let silent = change(new.capture.silentCallbacks, since: old.capture.silentCallbacks)
         var text = "status over " + String(format: "%.1f", seconds) + " s: capture \(frames) frames ("
         text += String(format: "%.0f", rate) + " frames/s), \(callbacks) callbacks, \(silent) without usable channels"
-        let uids = new.outputs.keys.sorted()
-        if uids.isEmpty { return text + "; no local outputs" }
-        for (index, uid) in uids.enumerated() {
-            let now = new.outputs[uid] ?? Output()
-            let before = old.outputs[uid] ?? Output()
+        let outputs = new.outputs.sorted { ($0.value.number, $0.key) < ($1.value.number, $1.key) }
+        if outputs.isEmpty { return text + "; no local outputs" }
+        for (uid, now) in outputs {
+            // A restarted renderer counts from 0 again, so its old totals are no baseline.
+            let before = old.outputs[uid].flatMap { $0.start == now.start ? $0 : nil } ?? Output()
             let starved = change(now.starvedRenders, since: before.starvedRenders)
             let starvedFrames = change(now.starvedFrames, since: before.starvedFrames)
+            let skips = change(now.driftSkips, since: before.driftSkips)
+            let silences = change(now.driftSilences, since: before.driftSilences)
             let late = change(now.lateCallbacks, since: before.lateCallbacks)
             let overloads = change(now.overloads, since: before.overloads)
-            text += "; output \(index + 1): starved \(starved) (\(starvedFrames) frames), "
+            text += "; output \(now.number): starved \(starved) (\(starvedFrames) frames), "
+            text += "drift skips \(skips), drift silences \(silences), "
             text += "late callbacks \(late), IO overloads \(overloads)"
         }
         return text
     }
 
-    /// A count that went down was restarted (a renderer's new start), so
-    /// all of it is new.
+    /// A count that went down was restarted (a new capture), so all of it is
+    /// new.
     static func change<T: BinaryInteger>(_ new: T, since old: T) -> T {
         new >= old ? new - old : new
     }
