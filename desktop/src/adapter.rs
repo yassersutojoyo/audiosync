@@ -8214,6 +8214,19 @@ mod tests {
                 "{kind:?}: {:?}",
                 messages(&adapter)
             );
+            if kind == ErrorKind::PairingFailed {
+                assert!(
+                    messages(&adapter).iter().any(|message| matches!(
+                        message,
+                        NoticeMessage::AirPlayCantPlay {
+                            problem: ui_model::AirPlayProblem::Refused,
+                            ..
+                        }
+                    )),
+                    "{:?}",
+                    messages(&adapter)
+                );
+            }
         }
     }
 
