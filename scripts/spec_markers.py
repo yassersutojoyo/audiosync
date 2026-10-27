@@ -6,9 +6,9 @@ spec_coverage tests. This covers the rest: tracked Rust and Swift files
 outside those crates (desktop/, remote/, Tests/, Sources/), and shell scripts,
 whose marker is `# covers:`. The letter picks
 the spec: S is docs/ENGINE_SPEC.md, P is docs/AIRPLAY_SPEC.md, C is
-docs/CAST_SPEC.md. A withdrawn or retired clause counts as missing (one
-retired in part does not). Each ID may carry a note in parentheses, and a
-note may run on to the next lines:
+docs/CAST_SPEC.md. A withdrawn, retired or superseded clause counts as missing
+(one retired or superseded in part does not). Each ID may carry a note in
+parentheses, and a note may run on to the next lines:
 
     // covers: S290, S291 (a level set on the speaker is kept)
 
@@ -29,8 +29,11 @@ SPECS = {"S": "ENGINE_SPEC.md", "P": "AIRPLAY_SPEC.md", "C": "CAST_SPEC.md"}
 CRATES_WITH_OWN_CHECK = ("core/", "cast/", "airplay/")
 _ID = re.compile(r"[SPC][1-9][0-9]*[a-z]?")
 _CLAUSE = re.compile(r"\s*- \*\*([SPC][1-9][0-9]*[a-z]?)\*\*(.*)")
-# Only the opening words: a live clause may mention withdrawn things later on.
-_WITHDRAWN = re.compile(r"\s*[*(]*(withdrawn|retired(?! in part))", re.IGNORECASE)
+# Only the opening words, after an italic title such as `*Engine restart.*`:
+# a live clause may mention withdrawn things later on.
+_WITHDRAWN = re.compile(
+    r"\s*(\*[^*]+\.\*\s*)?[*(]*(withdrawn|(superseded|retired)(?! in part))", re.IGNORECASE
+)
 
 
 def in_scope(path):
@@ -121,8 +124,9 @@ def self_test():
         "- **S7** *Engine restart.* *Retired with the bundled engine; kept as a record.*\n"
         "- **S8** *Superseded by S4*: groups became zones.\n"
         "- **S9** *Network loss, as tested.* *Retired in part*: the hint stands.\n"
+        "- **S10** *Superseded in part by S4*: the range still holds.\n"
     )
-    if spec_ids(spec) != {"S1", "S2", "S4", "S6", "S9"}:
+    if spec_ids(spec) != {"S1", "S2", "S4", "S6", "S9", "S10"}:
         failures.append(f"spec_ids: got {sorted(spec_ids(spec))}")
     text = "// covers: S1\n    // covers: S2, S3\n/// What it covers: x\n//covers:S1\n"
     got = problems_in("a.rs", text, {"S1", "S2"})
