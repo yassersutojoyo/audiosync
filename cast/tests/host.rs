@@ -842,6 +842,41 @@ fn certificate_changes(events: &[HostEvent]) -> Vec<(Fingerprint, Fingerprint)> 
 
 // covers: C21
 #[test]
+fn a_certificate_seen_only_by_a_failed_start_is_not_recorded() {
+    let first = FakeDevice::start(Behavior::default());
+    let refuses = FakeDevice::start(Behavior {
+        on_load: OnLoad::Error("LOAD_FAILED", json!({})),
+        ..Behavior::default()
+    });
+    let last = FakeDevice::start(Behavior::default());
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let mut events = Vec::new();
+    for device in [&first, &refuses, &last] {
+        let (_feed, reader) = ring();
+        host.start(target(A, device), 48_000, Metadata::default(), reader)
+            .expect("starts");
+        if !std::ptr::eq(device, &refuses) {
+            events.extend(wait_for(&host, Duration::from_secs(10), started(A)));
+            host.stop();
+        }
+        events.extend(wait_for(&host, Duration::from_secs(15), ended(A)));
+    }
+    assert_eq!(
+        certificate_changes(&events),
+        [(
+            Fingerprint::of(&first.certificate_der),
+            Fingerprint::of(&last.certificate_der)
+        )],
+        "{events:?}"
+    );
+    assert!(host.shutdown());
+    for device in [first, refuses, last] {
+        device.join();
+    }
+}
+
+// covers: C21
+#[test]
 fn a_device_back_with_a_new_certificate_is_logged_once_and_still_plays() {
     let device = FakeDevice::start(Behavior {
         new_certificate_each_connection: true,

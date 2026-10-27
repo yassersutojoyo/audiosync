@@ -6,12 +6,13 @@
 mod common;
 
 use std::net::{IpAddr, SocketAddr, TcpListener};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
+use audiosync_cast::client::FingerprintBook;
 use audiosync_cast::discovery::{
     BrowseEvent, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent, ServiceRecord,
 };
@@ -19,7 +20,7 @@ use audiosync_cast::group::{GroupMember, GroupRecords, MemberList, MultizoneMess
 use audiosync_cast::host::{CastHost, CastTarget, DeviceMemory, StartRefused};
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::{NS_MEDIA, NS_MULTIZONE, NS_RECEIVER, PLATFORM};
-use audiosync_cast::session::{CastSession, SessionConfig, SessionEnd, SessionEvent};
+use audiosync_cast::session::{CastSession, Fingerprints, SessionConfig, SessionEnd, SessionEvent};
 use audiosync_cast::stream::{
     Popped, ResponseEnd, Responses, ServerEvent, StreamConfig, StreamServer,
 };
@@ -101,6 +102,13 @@ fn feed(writer: AudioWriter) -> Feed {
 /// A group session whose records point at `leader`; the configured
 /// addresses are a dead end, so only the records can make it connect.
 fn start_group(leader: &FakeDevice) -> (CastSession, GroupRecords, Feed) {
+    start_group_with(leader, None)
+}
+
+fn start_group_with(
+    leader: &FakeDevice,
+    fingerprints: Option<Fingerprints>,
+) -> (CastSession, GroupRecords, Feed) {
     let records = GroupRecords::new(vec![leader.address]);
     let config = SessionConfig {
         addresses: vec![SocketAddr::new(v4(99), 1)],
@@ -108,7 +116,7 @@ fn start_group(leader: &FakeDevice) -> (CastSession, GroupRecords, Feed) {
         metadata: Metadata::default(),
         artwork: None,
         group: Some(records.clone()),
-        fingerprints: None,
+        fingerprints,
     };
     let (writer, reader) = audio_ring(48_000);
     let feed = feed(writer);
@@ -436,7 +444,11 @@ fn a_leader_handover_reconnects_to_the_new_records_and_relaunches() {
         members: Some(members_json()),
         ..Behavior::default()
     });
-    let (mut session, records, _feed) = start_group(&old_leader);
+    let fingerprints = Fingerprints {
+        id: DeviceId([0x6A; 16]),
+        book: Arc::new(Mutex::new(FingerprintBook::new())),
+    };
+    let (mut session, records, _feed) = start_group_with(&old_leader, Some(fingerprints));
     records.set_group(vec![new_leader.address]);
     old_leader.join();
     let seen = run_until(&mut session, Duration::from_secs(15), |event| {
@@ -445,6 +457,13 @@ fn a_leader_handover_reconnects_to_the_new_records_and_relaunches() {
     assert!(
         seen.iter()
             .any(|event| matches!(event, SessionEvent::Recovered { relaunched: true })),
+        "{seen:?}"
+    );
+    // C21: another leader is another device, not a changed certificate.
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, SessionEvent::CertificateChanged { .. })),
         "{seen:?}"
     );
     assert_eq!(new_leader.connection_count(), 1);
