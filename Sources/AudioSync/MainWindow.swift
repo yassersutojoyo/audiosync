@@ -90,8 +90,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     func windowDidDeminiaturize(_ notification: Notification) { updateOnScreen() }
     func windowDidBecomeKey(_ notification: Notification) {
         updateOnScreen()
-        // The window turns key again as the menu bar panel closes; the refresh waits for its fade.
-        model.whenPanelQuiet(PanelSwitches.windowRefreshLabel) { [weak self] in self?.model.actions.refreshExternalState() }
+        // The window turns key again as the menu bar panel closes; the refresh waits until it is gone.
+        model.whenPanelQuiet("window refresh") { [weak self] in self?.model.actions.refreshExternalState() }
     }
 
     func windowWillClose(_ notification: Notification) {

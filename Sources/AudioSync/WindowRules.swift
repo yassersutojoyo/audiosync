@@ -104,23 +104,32 @@ enum CastAddRow: Equatable {
     }
 }
 
-/// When work that follows a menu bar panel open or close may run: once the
-/// popover's animation, its bounce included, is over. Main-thread work that
-/// lands inside it drops the animation's frames.
+/// When work that follows a menu bar panel open or close may run: once its
+/// animation is over. Main-thread work that lands inside it drops frames.
 struct PanelQuiet: Equatable {
     enum Animation { case open, close }
 
-    /// From the click to the end of the open's bounce, and the close's fade,
-    /// as measured on the Mac against Outlook's popover.
-    static func duration(_ animation: Animation) -> TimeInterval {
-        animation == .open ? 0.6 : 0.25
+    /// The popover's own grow and fade (`system`), from the click to the end
+    /// of its bounce and of its fade as measured on the Mac; else the
+    /// panel's fade-in and its instant close.
+    static func duration(_ animation: Animation, system: Bool) -> TimeInterval {
+        switch (animation, system) {
+        case (.open, true): return 0.6
+        case (.close, true): return 0.25
+        case (.open, false): return 0.2
+        case (.close, false): return 0
+        }
     }
+
+    var system = false
 
     /// System uptime when the last animation ends.
     private(set) var busyUntil: TimeInterval = 0
 
+    init(system: Bool = false) { self.system = system }
+
     mutating func began(_ animation: Animation, at now: TimeInterval) {
-        busyUntil = max(busyUntil, now + Self.duration(animation))
+        busyUntil = max(busyUntil, now + Self.duration(animation, system: system))
     }
 
     func wait(at now: TimeInterval) -> TimeInterval { max(0, busyUntil - now) }

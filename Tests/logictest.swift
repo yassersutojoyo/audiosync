@@ -4717,6 +4717,8 @@ do {
     let duringClose = StatusItemClick.pressDuringClose
     check(duringClose(30.1, 30.25) && !duringClose(30.25, 30.25) && !duringClose(31, 30.25) && !duringClose(30.1, nil),
           "menu bar icon: only a press while the panel still fades out is ignored, as Outlook does")
+    check(!duringClose(30.01, 30 + PanelQuiet.duration(.close, system: false)),
+          "menu bar icon: after the panel's own instant close, the next press opens it")
 
     func sizing(_ events: [PanelSizing.Event]) -> PanelSizing {
         events.reduce(PanelSizing.closed) { $0.after($1) }
@@ -4735,7 +4737,14 @@ do {
           "menu bar panel: reopened mid-close, the old close's notice doesn't end the new open")
 
     func near(_ a: TimeInterval, _ b: TimeInterval) -> Bool { abs(a - b) < 1e-9 }
-    var quiet = PanelQuiet()
+    var own = PanelQuiet()
+    own.began(.open, at: 40)
+    check(near(own.wait(at: 40.1), 0.1) && own.wait(at: 40.2) == 0,
+          "menu bar panel: with the panel's own fade-in, work after an open waits only for the fade")
+    own.began(.close, at: 41)
+    check(own.wait(at: 41) == 0, "menu bar panel: with the panel's own instant close, work after a close runs at once")
+
+    var quiet = PanelQuiet(system: true)
     check(quiet.wait(at: 5) == 0, "menu bar panel: with no animation, deferred work runs at once")
     quiet.began(.open, at: 10)
     check(near(quiet.wait(at: 10.2), 0.4) && quiet.wait(at: 10.6) == 0,
@@ -4749,6 +4758,7 @@ do {
     check(near(quiet.wait(at: 11.3), 0.5), "menu bar panel: a quick reopen pushes waiting work past its own bounce")
 
     var queue = QuietQueue()
+    queue.quiet = PanelQuiet(system: true)
     queue.quiet.began(.open, at: 20)
     check(queue.enqueue("refresh") && !queue.enqueue("refresh") && queue.enqueue("rebuild"),
           "menu bar panel: a second request under a label already waiting is dropped")
