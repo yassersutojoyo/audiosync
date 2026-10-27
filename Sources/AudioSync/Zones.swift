@@ -260,6 +260,34 @@ enum ZoneLayout {
         speakers.filter { !zoned.contains(key($0)) }
     }
 
+    /// The speakers of `speakers` whose key is in a zone, order kept: their
+    /// compact rows follow the section's full rows.
+    static func zoned<T>(_ speakers: [T], key: (T) -> String, zoned: Set<String>) -> [T] {
+        speakers.filter { zoned.contains(key($0)) }
+    }
+
+    /// A zone member as Only This Speaker sees it.
+    struct Member {
+        let key: String
+        let listed, on, cast: Bool
+    }
+
+    /// The switches Only This Speaker makes for member `key`, in order: it
+    /// comes on unless it is, and every other listed member that is on goes
+    /// off. Another Cast member goes off before it comes on, since one Cast
+    /// speaker plays at a time; the rest after, so streaming never stops in
+    /// between. Nobody leaves the zone.
+    static func onlyThis(_ key: String, members: [Member]) -> [(key: String, on: Bool)] {
+        guard let this = members.first(where: { $0.key == key }), this.listed else { return [] }
+        let others = members.filter { $0.key != key && $0.listed && $0.on }
+        var steps: [(key: String, on: Bool)] = []
+        if !this.on && !this.cast { steps.append((key: key, on: true)) }
+        for member in others where member.cast { steps.append((key: member.key, on: false)) }
+        if !this.on && this.cast { steps.append((key: key, on: true)) }
+        for member in others where !member.cast { steps.append((key: member.key, on: false)) }
+        return steps
+    }
+
     /// A zone header's count, `total` being its members that aren't hidden
     /// (rows and count agree): "No speakers", "None of 3 found" while none is
     /// present, else "2 of 3 on" with ", 1 waiting" when one waits.

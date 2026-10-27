@@ -1159,6 +1159,56 @@ impl AppState {
         connected.sort_by_key(|s| s.name.to_lowercase());
         (this_pc, connected)
     }
+
+    /// A section's speakers split into its full rows and, after them, the
+    /// compact rows of those in a zone, each with its zone; order kept.
+    pub fn split_zoned<'a>(
+        &'a self,
+        section: Vec<&'a Speaker>,
+    ) -> (Vec<&'a Speaker>, Vec<(&'a Speaker, &'a Zone)>) {
+        let mut full = Vec::new();
+        let mut zoned = Vec::new();
+        for speaker in section {
+            match self.zone_of(&speaker.id) {
+                Some(zone) => zoned.push((speaker, zone)),
+                None => full.push(speaker),
+            }
+        }
+        (full, zoned)
+    }
+
+    /// The switches Only This Speaker makes for zone member `id`, in order:
+    /// it comes on unless it is, and every other present member of its zone
+    /// that is on goes off. Another Cast member goes off before it comes on,
+    /// since one Cast speaker plays at a time; the rest after, so streaming
+    /// never stops in between. A hidden member is left alone, and nobody
+    /// leaves the zone.
+    pub fn only_this_steps(&self, id: &str) -> Vec<(String, bool)> {
+        let (Some(zone), Some(this)) = (self.zone_of(id), self.speaker(id)) else {
+            return Vec::new();
+        };
+        let hidden = |key: &str| self.hidden.iter().any(|hidden| hidden.id == key);
+        if hidden(id) {
+            return Vec::new();
+        }
+        let (cast, rest): (Vec<&Speaker>, Vec<&Speaker>) = self
+            .zone_members(zone)
+            .filter(|s| s.id != id && s.enabled && !hidden(&s.id))
+            .partition(|s| s.kind == SpeakerKind::Cast);
+        let off = |s: &&Speaker| (s.id.clone(), false);
+        let mut steps = Vec::new();
+        if !this.enabled {
+            if this.kind == SpeakerKind::Cast {
+                steps.extend(cast.iter().map(off));
+            }
+            steps.push((this.id.clone(), true));
+        }
+        if this.enabled || this.kind != SpeakerKind::Cast {
+            steps.extend(cast.iter().map(off));
+        }
+        steps.extend(rest.iter().map(off));
+        steps
+    }
 }
 
 /// Why Add by Address… turned an address down.
@@ -1302,6 +1352,13 @@ pub trait Backend {
     fn move_to_zone(&mut self, speaker_id: &str, zone_id: &str);
     /// Takes speaker `speaker_id` out of its zone.
     fn remove_from_zone(&mut self, speaker_id: &str);
+    /// Only This Speaker in a zone member's menu, through each speaker's
+    /// own switch.
+    fn only_this_speaker(&mut self, speaker_id: &str) {
+        for (id, on) in self.snapshot().only_this_steps(speaker_id) {
+            self.set_speaker_enabled(&id, on);
+        }
+    }
     /// Sets zone `id`'s volume, 0 to 100, which scales each member's own
     /// volume (spec S249).
     fn set_zone_volume(&mut self, id: &str, volume: f64);
@@ -2921,6 +2978,110 @@ mod tests {
         assert_eq!(zone.name, "Office");
         assert_eq!(zone.members, ["local:desk"]);
         assert!(state.zones[0].members.is_empty(), "the empty zone stays");
+    }
+
+    #[test]
+    fn a_zone_member_keeps_a_compact_row_after_its_sections_full_rows() {
+        let mut backend = MockBackend::new();
+        backend.add_zone(
+            "zone:a",
+            "Upstairs",
+            &["airplay:bedroom", "local:headphones"],
+        );
+        let state = backend.snapshot();
+        let (this_pc, connected) = state.layout();
+        let ids = |rows: &[&Speaker]| rows.iter().map(|s| s.id.clone()).collect::<Vec<_>>();
+        let (full, zoned) = state.split_zoned(this_pc);
+        assert_eq!(ids(&full), ["local:speakers"]);
+        let zoned: Vec<(&str, &str)> = zoned
+            .iter()
+            .map(|(s, zone)| (s.id.as_str(), zone.name.as_str()))
+            .collect();
+        assert_eq!(zoned, [("local:headphones", "Upstairs")]);
+        let (full, zoned) = state.split_zoned(connected);
+        assert!(!ids(&full).contains(&"airplay:bedroom".to_owned()));
+        assert_eq!(zoned.len(), 1);
+        assert_eq!(zoned[0].0.id, "airplay:bedroom");
+    }
+
+    #[test]
+    fn only_this_speaker_turns_the_zones_others_off_and_keeps_them_in_it() {
+        let mut backend = MockBackend::new();
+        backend.add_zone(
+            "zone:a",
+            "Living",
+            &["airplay:kitchen", "local:speakers", "local:desk", "gone"],
+        );
+        backend.set_speaker_enabled("local:bt", true);
+        backend.only_this_speaker("local:desk");
+        let state = backend.snapshot();
+        let on = |id: &str| state.speaker(id).is_some_and(|s| s.enabled);
+        assert!(on("local:desk"), "it plays");
+        assert!(!on("airplay:kitchen") && !on("local:speakers"));
+        assert!(on("local:bt"), "a speaker in no zone stays on");
+        assert_eq!(
+            state.zones[0].members,
+            ["airplay:kitchen", "local:speakers", "local:desk", "gone"],
+            "nobody leaves the zone"
+        );
+        backend.only_this_speaker("local:bt");
+        assert!(
+            backend.snapshot().speaker("local:bt").unwrap().enabled,
+            "no zone: nothing"
+        );
+    }
+
+    #[test]
+    fn only_this_speaker_leaves_hidden_members_alone() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:a", "Living", &["local:speakers", "local:desk"]);
+        backend.set_speaker_enabled("local:speakers", true);
+        let mut state = backend.snapshot();
+        state.hidden.push(HiddenSpeaker {
+            id: "local:speakers".into(),
+            name: "Speakers".into(),
+            kind_text: String::new(),
+            present: Some(SpeakerKind::BuiltIn),
+        });
+        assert_eq!(
+            state.only_this_steps("local:desk"),
+            [("local:desk".to_owned(), true)]
+        );
+        assert!(state.only_this_steps("local:speakers").is_empty());
+    }
+
+    #[test]
+    fn only_this_speaker_frees_the_cast_place_before_a_cast_member_comes_on() {
+        let mut backend = MockBackend::new();
+        let template = backend.snapshot().speakers[2].clone();
+        for (id, name) in [("cc:attic", "Attic"), ("cc:den", "Den")] {
+            backend.add_speaker(Speaker {
+                id: id.into(),
+                name: name.into(),
+                kind: SpeakerKind::Cast,
+                enabled: id == "cc:attic",
+                ..template.clone()
+            });
+        }
+        backend.add_zone(
+            "zone:a",
+            "Living",
+            &["cc:attic", "local:speakers", "cc:den"],
+        );
+        let state = backend.snapshot();
+        assert_eq!(
+            state.only_this_steps("cc:den"),
+            [
+                ("cc:attic".to_owned(), false),
+                ("cc:den".to_owned(), true),
+                ("local:speakers".to_owned(), false),
+            ]
+        );
+        assert_eq!(
+            state.only_this_steps("local:speakers"),
+            [("cc:attic".to_owned(), false)],
+            "already on: only the others switch"
+        );
     }
 
     #[test]

@@ -373,6 +373,7 @@ extension AppDelegate {
         a.newZoneWithSpeaker = { [weak self] key, name in self?.promptNewZone(with: key, name: name) }
         a.moveToZone = { [weak self] key, id in self?.moveToZone(key, id) }
         a.removeFromZone = { [weak self] key in self?.removeFromZone(key) }
+        a.onlyThisSpeaker = { [weak self] key in self?.onlyThisSpeaker(key) }
         a.recallPreset = { [weak self] id in self?.recallPreset(id, from: .app) }
         a.savePreset = { [weak self] in self?.promptSavePreset() }
         a.renamePreset = { [weak self] id in self?.promptRenamePreset(id) }

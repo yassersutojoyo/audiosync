@@ -964,9 +964,16 @@ struct UIStrings {
     func hideZoneSpeakers(_ name: String) -> String { "Hide speakers in \(name)" }
     /// A new zone's name when none was typed.
     func numberedZone(_ n: Int) -> String { "Zone \(n)" }
-    /// This Mac and Connected Speakers when each of their speakers is in a zone.
-    let thisMacAllInZones = "Every output on this Mac is in a zone."
-    let connectedAllInZones = "Every connected speaker is in a zone."
+    /// A zone member's compact row under its own section, after the full
+    /// rows: the label above them, the link to its zone, what VoiceOver reads
+    /// for its switch and for the link, and its menu.
+    let inZones = "In zones"
+    func inZone(_ zone: String) -> String { "in \(zone)" }
+    func inZoneLabel(_ speaker: String, zone: String) -> String { "\(speaker), in \(zone)" }
+    func goToZoneLabel(_ zone: String) -> String { "Go to \(zone)" }
+    let goToZone = "Go to Zone"
+    /// In a zone member's ⋯ menu under its zone: the other members go off.
+    let onlyThisSpeaker = "Only This Speaker"
     /// A zone member that plays as part of a stereo pair or home theater (S247).
     func zoneMemberInTarget(_ target: String) -> String { "Plays as part of \(target)" }
     /// The zone menu's way to put that target in the member's place.
@@ -981,7 +988,7 @@ struct UIStrings {
     func speakerMovedToZone(_ speaker: String, zone: String) -> String { "\(speaker) moved to \(zone)" }
     func zoneDeleted(_ name: String) -> String { "\(name) deleted" }
     /// The notice at the first launch after the groups became zones (S248).
-    let groupsBecameZones = "Your groups are zones now. Each zone has its own volume, and its speakers show under it instead of in the speaker lists."
+    let groupsBecameZones = "Your groups are zones now. Each zone has its own volume, and its speakers show under it."
 
     // MARK: Speaker presets (S259 to S269)
 
@@ -1497,12 +1504,17 @@ struct UIStrings {
           speaker is on, every local speaker also waits the AirPlay Delay
           under Connected Speakers for it.
         - Zones: turn on the speakers you want, then choose 'New Zone from Active
-          Speakers' in the gear menu. A speaker is in one zone at a time, and it
-          shows under its zone instead of under This Mac or Connected Speakers.
-          Click the zone's round icon to switch its speakers at once; a
-          click elsewhere on its header shows or hides them. To move a
-          speaker, choose Move to Zone from its ⋯ button. To rename or delete
-          a zone, right-click it or use its ⋯ button.
+          Speakers' in the gear menu. A speaker is in one zone at a time. It
+          shows under its zone and keeps a short row under This Mac or
+          Connected Speakers: click its round button there to play it by
+          itself, or the link after its name to go to its zone. Click the
+          zone's round icon to switch its speakers at once; a click elsewhere
+          on its header shows or hides them. To play one speaker of a zone
+          alone, choose Only This Speaker from its ⋯ button under the zone;
+          the others turn off and stay in the zone. For a mix of speakers you
+          turn on again and again, save a preset instead. To move a speaker,
+          choose Move to Zone from its ⋯ button. To rename or delete a zone,
+          right-click it or use its ⋯ button.
         - Presets: turn on the speakers you want and set their volumes, the
           zone volumes, Master Volume and the equalizer curve, then click
           Save as Preset… in the Presets card. Delays and the preamp aren't

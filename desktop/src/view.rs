@@ -213,6 +213,9 @@ struct Models {
     mix_apps: Rc<VecModel<MixAppItem>>,
     this_pc: Rc<VecModel<SpeakerItem>>,
     connected: Rc<VecModel<SpeakerItem>>,
+    /// The compact rows of the speakers in a zone, under their own section.
+    this_pc_zoned: Rc<VecModel<SpeakerItem>>,
+    connected_zoned: Rc<VecModel<SpeakerItem>>,
     /// The flyout's speakers in no zone.
     all_speakers: Rc<VecModel<SpeakerItem>>,
     zones: Rc<VecModel<ZoneItem>>,
@@ -844,6 +847,8 @@ impl App {
             input_pairs: Rc::new(VecModel::default()),
             mix_apps: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
+            this_pc_zoned: Rc::new(VecModel::default()),
+            connected_zoned: Rc::new(VecModel::default()),
             connected: Rc::new(VecModel::default()),
             all_speakers: Rc::new(VecModel::default()),
             zones: Rc::new(VecModel::default()),
@@ -1439,6 +1444,10 @@ impl App {
         self.main.set_mix_apps(ModelRc::from(m.mix_apps.clone()));
         self.main.set_this_pc(ModelRc::from(m.this_pc.clone()));
         self.main.set_connected(ModelRc::from(m.connected.clone()));
+        self.main
+            .set_this_pc_zoned(ModelRc::from(m.this_pc_zoned.clone()));
+        self.main
+            .set_connected_zoned(ModelRc::from(m.connected_zoned.clone()));
         self.main.set_zones(ModelRc::from(m.zones.clone()));
         self.main.set_notices(ModelRc::from(m.notices.clone()));
         self.main
@@ -1543,30 +1552,31 @@ impl App {
             row.availability = with_switch(row.availability, ui.airplay2_experimental);
             row.cast_group_note = cast_group_note(&strings, speaker);
             row.group_note = group_note(&strings, speaker);
-            let zone = state.zone_of(&speaker.id);
-            row.zone_id = zone.map_or_else(SharedString::default, |zone| zone.id.as_str().into());
+            if let Some(zone) = state.zone_of(&speaker.id) {
+                row.zone_id = zone.id.as_str().into();
+                row.zone_name = zone.name.as_str().into();
+                if let Some(note) = state.zone_note(zone, ui_model::ZoneRow::Listed(speaker)) {
+                    row.zone_note = zone_note(&strings, note);
+                }
+            }
             row
         };
         let (this_pc, connected) = state.layout();
         let lists = |s: &ui_model::Speaker| ui.listed_virtual.lists(s, ui.show_virtual);
         let connected_virtual_hidden = only_virtual_outputs_hidden(&connected, lists);
         let listed = |s: &&ui_model::Speaker| lists(s);
-        // A speaker in a zone is listed under it instead (spec S245).
-        let zoned = |s: &&ui_model::Speaker| state.zone_of(&s.id).is_some();
-        let this_pc: Vec<&ui_model::Speaker> = this_pc.into_iter().filter(listed).collect();
-        let connected: Vec<&ui_model::Speaker> = connected.into_iter().filter(listed).collect();
-        let this_pc_all_in_zones = !this_pc.is_empty() && this_pc.iter().all(zoned);
-        let connected_all_in_zones = !connected.is_empty() && connected.iter().all(zoned);
-        let this_pc: Vec<SpeakerItem> = this_pc
-            .into_iter()
-            .filter(|s| !zoned(s))
-            .map(|s| item(s, false))
-            .collect();
-        let connected: Vec<SpeakerItem> = connected
-            .into_iter()
-            .filter(|s| !zoned(s))
-            .map(|s| item(s, true))
-            .collect();
+        // A speaker in a zone shows under it, and keeps a compact row in its
+        // own section after the full rows.
+        let (this_pc, this_pc_zoned) =
+            state.split_zoned(this_pc.into_iter().filter(listed).collect());
+        let (connected, connected_zoned) =
+            state.split_zoned(connected.into_iter().filter(listed).collect());
+        let this_pc_zoned: Vec<SpeakerItem> =
+            this_pc_zoned.iter().map(|(s, _)| item(s, false)).collect();
+        let connected_zoned: Vec<SpeakerItem> =
+            connected_zoned.iter().map(|(s, _)| item(s, true)).collect();
+        let this_pc: Vec<SpeakerItem> = this_pc.into_iter().map(|s| item(s, false)).collect();
+        let connected: Vec<SpeakerItem> = connected.into_iter().map(|s| item(s, true)).collect();
         let zones: Vec<ZoneRowsBuilt> = state
             .zones
             .iter()
@@ -1632,8 +1642,6 @@ impl App {
         drop(ui);
         self.main
             .set_connected_virtual_hidden(connected_virtual_hidden);
-        self.main.set_this_pc_all_in_zones(this_pc_all_in_zones);
-        self.main.set_connected_all_in_zones(connected_all_in_zones);
         self.main.set_airplay_none_found(state.airplay_none_found);
         self.flyout.set_airplay_none_found(state.airplay_none_found);
         self.main.set_airplay_searching(state.airplay_searching);
@@ -1810,6 +1818,8 @@ impl App {
         }
         sync_model(&m.this_pc, this_pc);
         sync_model(&m.connected, connected);
+        sync_model(&m.this_pc_zoned, this_pc_zoned);
+        sync_model(&m.connected_zoned, connected_zoned);
         sync_model(&m.all_speakers, flyout_speakers);
         self.sync_zones(zones);
         sync_model(&m.notices, main_notices);
@@ -2343,6 +2353,10 @@ impl App {
         let w = weak.clone();
         main.on_speaker_remove_from_zone_requested(move |id| {
             with_app(&w, |app| app.update(|b| b.remove_from_zone(&id)))
+        });
+        let w = weak.clone();
+        main.on_speaker_only_this_requested(move |id| {
+            with_app(&w, |app| app.update(|b| b.only_this_speaker(&id)))
         });
         let w = weak.clone();
         main.on_refresh_devices(move || with_app(&w, |app| app.update(|b| b.refresh_devices())));
@@ -4067,6 +4081,7 @@ pub fn speaker_item(
         cast_group_note: SharedString::default(),
         group_note: SharedString::default(),
         zone_id: SharedString::default(),
+        zone_name: SharedString::default(),
         zone_movable: speaker.in_target.is_none(),
         // Needs the zone: set by the caller (`App::refresh`).
         zone_note: SharedString::default(),
@@ -7451,7 +7466,22 @@ mod tests {
             "airplay:left"
         );
         assert_eq!(m.zones.row_data(2).unwrap().total, 0, "Office is empty");
-        assert!(!app.main.get_this_pc_all_in_zones());
+        let compact = ids(&m.connected_zoned);
+        assert!(
+            compact.iter().any(|id| id == "airplay:kitchen"),
+            "{compact:?}"
+        );
+        assert!(
+            compact.iter().all(|id| zoned.contains(&id.as_str())),
+            "only zone members get a compact row"
+        );
+        let kitchen = m
+            .connected_zoned
+            .iter()
+            .find(|row| row.id == "airplay:kitchen")
+            .unwrap();
+        assert_eq!(kitchen.zone_name, "Living Room");
+        assert_eq!(kitchen.zone_id, "zone:living");
     }
 
     // covers: S245 (a zone's rows and its count agree; a hidden member has

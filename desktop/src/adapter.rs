@@ -4125,6 +4125,46 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.take_events();
     }
 
+    /// Each switch as the member's own would make it, streaming started or
+    /// stopped once at the end (S162): a Cast member going off for another
+    /// would otherwise end the session the next one starts again.
+    fn only_this_speaker(&mut self, id: &str) {
+        let state = self.snapshot();
+        let steps = state.only_this_steps(id);
+        let turns_on = steps.iter().any(|(step, on)| step == id && *on);
+        // Another app took it: the others would go off for nothing, and its
+        // notice already says why.
+        if turns_on
+            && matches!(SpeakerKey::parse(id), Some(SpeakerKey::Cast(cast_id))
+                if self.cast_taken_over(&cast_id))
+        {
+            self.log
+                .log(|| format!("only {id}: another app has it, nothing switches"));
+            return;
+        }
+        if steps.is_empty() {
+            return;
+        }
+        self.log.log(|| {
+            let name = state
+                .speaker(id)
+                .map_or(id, |speaker| speaker.name.as_str());
+            format!("the user chose only {name} in its zone")
+        });
+        for (step, on) in &steps {
+            let Some(key) = SpeakerKey::parse(step) else {
+                continue;
+            };
+            self.unwatch(step);
+            self.switch_zone_member(&key, *on);
+        }
+        if turns_on {
+            self.start_if_switched_on();
+        }
+        self.stop_if_idle();
+        self.take_events();
+    }
+
     fn set_speaker_volume(&mut self, id: &str, position: f64) {
         match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => {
@@ -10967,6 +11007,56 @@ mod tests {
 
         adapter.set_zone_volume("zone:9", 10.0);
         assert_eq!(fake.state().volumes.len(), 3, "no such zone: nothing");
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_members_own_row_keeps_one_cast_speaker_at_a_time() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![cc(CAST_KITCHEN), cc(CAST_LIVING), key(SPEAKERS)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
+        assert!(messages(&adapter).contains(&cast_cant_play("Living Room", UiCastProblem::Busy)));
+        let state = adapter.snapshot();
+        assert!(!state.speaker(&cc(CAST_LIVING)).unwrap().enabled);
+
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        adapter.only_this_speaker(&cc(CAST_LIVING));
+        let state = adapter.snapshot();
+        assert!(state.running, "streaming goes on");
+        assert!(state.speaker(&cc(CAST_LIVING)).unwrap().enabled);
+        assert!(!state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+        assert!(!enabled(&adapter, SPEAKERS));
+        assert_eq!(state.zones[0].members.len(), 3, "nobody leaves the zone");
+    }
+
+    // covers: S162, S246
+    #[test]
+    fn only_this_speaker_between_cast_members_never_stops_streaming() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![cc(CAST_KITCHEN), cc(CAST_LIVING)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        assert!(adapter.snapshot().running);
+        let captures = adapter.audio.driver().captures_started().len();
+
+        adapter.only_this_speaker(&cc(CAST_LIVING));
+        let state = adapter.snapshot();
+        assert!(state.running);
+        assert!(state.speaker(&cc(CAST_LIVING)).unwrap().enabled);
+        assert!(!state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+        assert_eq!(
+            adapter.audio.driver().captures_started().len(),
+            captures,
+            "streaming never stopped in between"
+        );
     }
 
     // covers: S246

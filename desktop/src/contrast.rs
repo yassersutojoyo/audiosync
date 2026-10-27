@@ -715,7 +715,7 @@ fn no_text_promises_airplay() {
     assert!(strings.contains("connected-none: @tr(\"No connected speakers\")"));
     assert!(
         include_str!("../ui/main.slint")
-            .contains("root.connected.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-all-in-zones ? Strings.connected-all-in-zones : root.airplay-searching ? Strings.looking-for-speakers : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
+            .contains("root.connected.length > 0 || root.connected-zoned.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? Strings.looking-for-speakers : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
         "the empty Connected Speakers list says it looks while AirPlay searches, then uses the plain note"
     );
     assert!(

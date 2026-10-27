@@ -345,6 +345,41 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// Only This Speaker in a member's ⋯ menu under its zone: each switch
+    /// as the member's own would make it, streaming started or stopped once.
+    func onlyThisSpeaker(_ key: String) {
+        guard let zone = zones.first(where: { $0.members.contains(key) }) else { return }
+        let members = zone.members.compactMap(memberState)
+        let steps = ZoneLayout.onlyThis(key, members: members.map {
+            ZoneLayout.Member(key: $0.key, listed: $0.facts.listed, on: $0.facts.on, cast: $0.kind == .cast)
+        })
+        guard !steps.isEmpty else { return }
+        // An offline Cast speaker can't come on: the others would go off for
+        // nothing, and its row already says why.
+        if let this = members.first(where: { $0.key == key }), this.kind == .cast, this.facts.busy,
+           steps.contains(where: { $0.key == key && $0.on }) {
+            DebugTrace.log("[AudioSync] only \(key): the Cast speaker is offline, nothing switches")
+            return
+        }
+        DebugTrace.log("[AudioSync] only \(key) plays in zone \"\(zone.name)\"")
+        var attempts: [String] = []
+        for step in steps {
+            guard let member = members.first(where: { $0.key == step.key }) else { continue }
+            switchZoneMember(member, on: step.on, attempts: &attempts)
+        }
+        beginNativeAttempts(attempts)
+        if steps.contains(where: \.on) && !engine.isRunning {
+            startEngine(origin: .user)
+        } else if engine.isRunning {
+            applyAirPlaySelection()
+            syncLocalOutputs(origin: .user)
+        }
+        syncCast()
+        stopIfIdle()
+        retimeLocalOutputs()
+        pushModel()
+    }
+
     /// Use <target> Instead (S247): the target takes the member's place,
     /// and the target's other members in the zone leave it.
     func useTargetInstead(in id: String, for key: String) {
