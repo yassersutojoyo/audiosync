@@ -9498,19 +9498,24 @@ do {
 
     let card = window.components(separatedBy: "private struct ZoneCard").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
-    check(count(card, "TapGesture(count: 2).onEnded { model.actions.renameZone(zone.id) }") == 1
+    check(count(card, "TapGesture(count: 2).onEnded { model.startRename(zone) }") == 1
             && count(card, ".exclusively(before: TapGesture().onEnded { hit(.name) })") == 1,
           "main window zone header: a double-click on the name renames the zone, a single click still folds it")
+    let zonesCode = read("Sources/AudioSync/AppDelegate+Zones.swift")
+    check(count(card, "InlineNameField(") == 1 && count(card, "Button(t.renameZone) { model.startRename(zone) }") == 1
+            && count(card, ".accessibilityAction(named: t.renameZone) { model.startRename(zone) }") == 2
+            && !zonesCode.isEmpty && count(zonesCode, "promptRenameZone") == 0 && count(zonesCode, "renameZoneTitle") == 0,
+          "main window zone header: Rename Zone edits the name in place like a speaker's, with no alert, and VoiceOver has the action")
 
     let compact = window.components(separatedBy: "private struct ZoneMemberCompactRow").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
     check(count(compact, "TapGesture(count: 2).onEnded { model.startRename(speaker, in: .inZones) }") == 1
-            && count(compact, "SpeakerNameField(") == 1
+            && count(compact, "InlineNameField(") == 1
             && count(compact, ".accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker, in: .inZones) }") == 1,
           "In zones row: a double-click on the name renames the speaker in place, VoiceOver has the Rename action")
     let row = window.components(separatedBy: "struct SpeakerRow: View").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
-    check(count(row, "SpeakerNameField(") == 1 && count(row, "TapGesture(count: 2).onEnded { model.startRename(speaker) }") == 1,
+    check(count(row, "InlineNameField(") == 1 && count(row, "TapGesture(count: 2).onEnded { model.startRename(speaker) }") == 1,
           "speaker row: a zone's member rows and every other row rename through the same field")
 }
 
