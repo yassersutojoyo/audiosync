@@ -562,6 +562,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The AirPlay 2 flag of this launch (spec S312): the AirPlay 2 path is
     /// on whatever the switch says.
     airplay2_auto: bool,
+    /// The AirPlay 2 switch as saved at launch, which the sender keeps until
+    /// the next launch.
+    airplay2_at_launch: bool,
     /// What a session does when the app it captures quits (spec S227).
     when_source_quits: WhenSourceQuits,
     /// The microphone calibration running, or letting its cut-off sweep
@@ -678,6 +681,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             ptp_taken: None,
             view: ViewSettings::default(),
             airplay2_auto: crate::audio::airplay::airplay2_auto_on(),
+            airplay2_at_launch: false,
             when_source_quits: WhenSourceQuits::Stop,
             calibration_run: None,
             calibration: calibration::Status::default(),
@@ -825,6 +829,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             remote: saved.remote,
             airplay2_experimental: saved.airplay2_experimental,
         };
+        self.airplay2_at_launch = saved.airplay2_experimental;
         self.saved = saved;
     }
 
@@ -1995,10 +2000,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     listed: listed.is_some() && !keep_off.contains(text),
                     on,
                     busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
-                    needs_airplay2: listed.is_none()
-                        && !self.view.airplay2_experimental
-                        && !self.airplay2_auto
-                        && matches!(&key, SpeakerKey::AirPlay(id) if is_airplay_target(id)),
+                    needs_airplay2: listed.is_none() && self.needs_airplay2(&key),
                     in_target: matches!(&key, SpeakerKey::AirPlay(id)
                         if self.audio.airplay_holding_target(id).is_some()),
                 };
@@ -2045,6 +2047,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.stop_if_idle();
         }
         self.take_events();
+    }
+
+    /// Whether `key` is a stereo pair or home theater this launch can't play:
+    /// the sender's AirPlay 2 path stays as it was at launch.
+    fn needs_airplay2(&self, key: &SpeakerKey) -> bool {
+        !self.airplay2_at_launch
+            && !self.airplay2_auto
+            && matches!(key, SpeakerKey::AirPlay(id) if is_airplay_target(id))
     }
 
     fn post_pair_first(&mut self, key: &SpeakerKey, name: &str) {
@@ -2110,11 +2120,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 hidden: hidden.is_some(),
                 on: listed.is_some_and(|speaker| speaker.enabled),
                 busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
-                needs_airplay2: listed.is_none()
-                    && hidden.is_none()
-                    && !self.view.airplay2_experimental
-                    && !self.airplay2_auto
-                    && matches!(&key, SpeakerKey::AirPlay(id) if is_airplay_target(id)),
+                needs_airplay2: listed.is_none() && hidden.is_none() && self.needs_airplay2(&key),
                 in_target,
                 fixed_volume: listed
                     .and_then(|speaker| speaker.cast.as_ref())
