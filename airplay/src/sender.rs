@@ -121,7 +121,7 @@ pub struct SenderConfig {
     pub pairing_hold: Duration,
     /// Runs first on the driver thread, which keeps what it returns until it
     /// ends. A host raises the thread's priority here: at normal priority a
-    /// busy Windows PC wakes it past a packet's time (P84).
+    /// busy Windows PC wakes it past a packet's time (P226).
     pub on_driver_thread: Option<fn() -> Box<dyn Any>>,
 }
 

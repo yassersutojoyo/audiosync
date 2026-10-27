@@ -257,6 +257,17 @@ pub fn airplay2_on(saved: bool, env: Option<&str>) -> bool {
     saved || airplay2_switch(env)
 }
 
+/// The app's sender configuration; on Windows its driver thread runs as a
+/// Pro Audio task (engine spec S323).
+fn sender_config(saved_airplay2: bool, env: Option<&str>) -> SenderConfig {
+    SenderConfig {
+        airplay2: airplay2_on(saved_airplay2, env),
+        #[cfg(windows)]
+        on_driver_thread: Some(super::wasapi::pro_audio_thread),
+        ..SenderConfig::default()
+    }
+}
+
 /// The real sender.
 pub struct SenderLink {
     sender: Sender,
@@ -268,15 +279,10 @@ impl SenderLink {
     /// gives its audio input for the capture. `saved_airplay2` is File >
     /// AirPlay 2 (Experimental) as read at launch.
     pub fn start(saved_airplay2: bool) -> io::Result<(SenderLink, InputWriter)> {
-        let config = SenderConfig {
-            airplay2: airplay2_on(
-                saved_airplay2,
-                std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
-            ),
-            #[cfg(windows)]
-            on_driver_thread: Some(super::wasapi::pro_audio_thread),
-            ..SenderConfig::default()
-        };
+        let config = sender_config(
+            saved_airplay2,
+            std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
+        );
         let airplay2 = config.airplay2;
         let (sender, input) = Sender::start(config)?;
         Ok((SenderLink { sender, airplay2 }, input))
@@ -6745,6 +6751,13 @@ pub mod tests {
         assert!(!airplay2_on(false, Some("0")));
         assert!(airplay2_on(true, None));
         assert!(airplay2_on(false, Some("1")));
+    }
+
+    // covers: S323
+    #[test]
+    fn the_app_raises_the_airplay_driver_thread_on_windows() {
+        let config = sender_config(false, None);
+        assert_eq!(config.on_driver_thread.is_some(), cfg!(windows));
     }
 
     #[test]

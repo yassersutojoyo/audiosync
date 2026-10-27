@@ -1,6 +1,6 @@
 //! The host's hook on the driver thread. A normal-priority driver thread on
 //! Windows woke more than 5 ms late on about 0.1% of packets under CPU load
-//! (P84); the host raises the thread's priority through this hook.
+//! (P84); the host raises the thread's priority through this hook (P226).
 
 use std::any::Any;
 use std::sync::Mutex;
@@ -26,7 +26,7 @@ fn raise() -> Box<dyn Any> {
     Box::new(Held)
 }
 
-// covers: P84
+// covers: P226
 #[test]
 fn the_hook_runs_on_the_driver_thread_and_holds_its_value_until_the_driver_ends() {
     let (sender, _writer) = Sender::start(SenderConfig {
