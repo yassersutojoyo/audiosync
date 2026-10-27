@@ -2296,6 +2296,7 @@ mod tests {
         settings
     }
 
+    // covers: S180
     #[test]
     fn old_trims_become_offsets_relative_to_the_reference() {
         let mut settings = trims();
