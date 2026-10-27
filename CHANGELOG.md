@@ -2,6 +2,12 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
+## [Unreleased]
+
+### Changed
+
+- On the Mac, renaming a zone now edits its name in place in the main window, like a speaker's, instead of opening a dialog: Return keeps the new name, Escape the old one.
+
 ## [0.7.1] - 2026-10-27
 
 ### Changed
@@ -11,7 +17,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A speaker in a zone keeps a short row in its own section, This Mac (This PC on Windows) or Connected Speakers, under "In zones": its switch, its name and a link to its zone. Its switch there turns only that speaker on or off, and the zone's other speakers stay as they are; Go to Zone and Remove from Zone are in its menu. On the Mac and on Windows.
 - Go to Zone puts the keyboard focus on the zone's round icon, or on its arrow while none of the zone's speakers is found, so VoiceOver always reads where the focus lands. On the Mac.
 - Only This Speaker, in a speaker's menu under its zone, plays this speaker and turns off the zone's other speakers that are on; speakers you hid stay as they are. When this one is a Google Cast speaker that's offline or that another app took over, nothing switches. Nobody leaves the zone. On the Mac and on Windows.
-- On the Mac, a zone's name is edited right in its header in the main window, the same way as a speaker's: double-click the name or choose Rename Zone…, type, then press Return, or Escape to keep the old name. It used to open a separate Rename Zone box. A single click on the name still shows or hides the zone's speakers.
+- On the Mac, double-click a zone's name in the main window to rename it, as you already could with a speaker's name. A single click on the name still shows or hides the zone's speakers.
 - On the Mac, double-click the name of a speaker in a zone to rename it in its short row under "In zones", as you already could in its row under the zone.
 - On the Mac, a zone's speakers sit in one tinted box in the main window, under the zone and under "IN ZONES", with thin lines between them instead of a box around each speaker that plays. The short rows are a little taller, and the link to the zone after a speaker's name is now a small button with the zone's icon and name. The "IN ZONES" label and the lines between rows start where the speaker names do.
 - On the Mac, Switch to All System Audio When the Source App Quits is now on unless you turned it off. When the app you capture quits, AudioSync keeps playing all system audio instead of stopping.
