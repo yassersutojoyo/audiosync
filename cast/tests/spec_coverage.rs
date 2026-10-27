@@ -457,6 +457,63 @@ fn the_exempt_list_is_well_formed_and_names_spec_clauses() {
         "exempt clauses the spec doesn't have: {}",
         list(unknown)
     );
+    let repo = crate_dir().join("..");
+    let mut broken = Vec::new();
+    for (id, reason) in &exempt {
+        let tests = host_tests(reason);
+        if tests.is_empty() {
+            broken.push(format!("{id}: names no `<test> (<path>.rs)`"));
+        }
+        for (name, path) in tests {
+            let defined = fs::read_to_string(repo.join(path)).is_ok_and(|text| {
+                text.contains(&format!("fn {name}(")) || text.contains(&format!("fn {name}<"))
+            });
+            if !defined {
+                broken.push(format!("{id}: no `fn {name}` in {path}"));
+            }
+        }
+    }
+    assert!(
+        broken.is_empty(),
+        "exempt clauses whose host test is gone (rename it here too):\n{}",
+        broken.join("\n")
+    );
+}
+
+/// The host tests a reason names as `<test> (<path>.rs)`, the path relative
+/// to the repository root.
+fn host_tests(reason: &str) -> Vec<(&str, &str)> {
+    let mut found = Vec::new();
+    let mut before = "";
+    for (index, part) in reason.split(" (").enumerate() {
+        if index > 0
+            && let Some((path, _)) = part.split_once(')')
+            && path.ends_with(".rs")
+            && let Some(name) = before.split_whitespace().last()
+            && !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        {
+            found.push((name, path));
+        }
+        before = part;
+    }
+    found
+}
+
+#[test]
+fn an_exempt_reason_names_its_host_tests_with_their_files() {
+    assert_eq!(
+        host_tests("Cap: its test a_burst (desktop/src/audio/cast.rs) covers it."),
+        vec![("a_burst", "desktop/src/audio/cast.rs")]
+    );
+    assert_eq!(
+        host_tests("Guess: its tests one (core/tests/a.rs) and two_2 (desktop/src/b.rs) cover it."),
+        vec![("one", "core/tests/a.rs"), ("two_2", "desktop/src/b.rs")]
+    );
+    assert!(host_tests("Host only (no test named here).").is_empty());
+    assert!(host_tests("A Test (core/tests/a.rs).").is_empty());
 }
 
 #[test]

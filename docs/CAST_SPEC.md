@@ -241,7 +241,8 @@ The sender's tests run against a fake receiver in the same process: a TLS server
 | group_stream_access | C97, C103 | fetches from the group's and members' addresses are served, one response per address; another address gets 403, and so does an address the group's records dropped; a new `GET` ends only the older response from its own address |
 | group_volume | C100 | `SET_VOLUME` goes to the group's `receiver-0`; the control follows the group's reported level; nothing goes to a member |
 | group_offset | C101, C102 | the offset is stored under the group's `id`; a member's offset never seeds the group's, nor the reverse |
-| hardware_latency | C74 to C77 | *hardware*: G7, G8 and G9 |
+| offset_never_corrected | C77 | `BUFFERING`, a `currentTime` far off and a queue the sender did not load change neither the stored offset nor anything else in the device memory, and bring no reload and no message of their own (`queue_state_and_current_time_never_change_the_offset_or_reload` on the fake device) |
+| hardware_latency | C74 to C76 | *hardware*: G7, G8 and G9 |
 | hardware_groups | C89 to C103 | *hardware*: G1 |
 
 ## Sources
