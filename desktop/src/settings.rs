@@ -2241,6 +2241,7 @@ mod tests {
         settings
     }
 
+    // covers: S180
     #[test]
     fn old_trims_become_offsets_relative_to_the_reference() {
         let mut settings = trims();
@@ -2273,6 +2274,7 @@ mod tests {
         assert_eq!(settings.outputs["bluetooth"].delay_ms, -2000.0);
     }
 
+    // covers: S180
     #[test]
     fn the_references_old_trim_becomes_the_airplay_adjustment_and_airplay_delays_stay() {
         let mut settings = trims();
@@ -2286,6 +2288,7 @@ mod tests {
         assert_eq!(settings.outputs["builtin"].delay_ms, 250.0);
     }
 
+    // covers: S180
     #[test]
     fn a_late_airplay_speaker_lined_up_by_the_references_trim_stays_lined_up() {
         use audiosync_core::policy::delay::{Participant, hold_backs, native_airplay_latency_ms};

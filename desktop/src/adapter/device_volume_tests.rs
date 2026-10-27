@@ -65,7 +65,7 @@ fn unmute() -> VolumeWrite {
     }
 }
 
-// S196, S198
+// covers: S196, S198
 #[test]
 fn a_switched_on_output_at_13_percent_shows_the_low_hint() {
     let mut audio = audio();
@@ -101,7 +101,7 @@ fn a_switched_on_output_at_13_percent_shows_the_low_hint() {
     assert_eq!(hint(&adapter, SPEAKERS), None);
 }
 
-// S196, S198
+// covers: S196, S198
 #[test]
 fn a_muted_output_shows_the_unmute_fix() {
     let mut audio = audio();
@@ -125,7 +125,7 @@ fn a_muted_output_shows_the_unmute_fix() {
     assert_eq!(row(&adapter, SPEAKERS), (DeviceVolumeHint::Low, 13));
 }
 
-// S197
+// covers: S197
 #[test]
 fn the_fix_sets_75_percent_and_unmutes_once_each() {
     let mut audio = audio();
@@ -189,7 +189,7 @@ fn the_fix_sets_75_percent_and_unmutes_once_each() {
     assert_eq!(record.writes().len(), 5);
 }
 
-// S192, S197
+// covers: S192, S197
 #[test]
 fn nothing_is_written_without_a_click() {
     let dir = test_dir("adapter-device-volume-writes");

@@ -45,6 +45,7 @@ func warmUpThenFlat(minutes: Int) -> [MemorySample] {
     }
 }
 
+// covers: S225 (the memory rule, through "Edges and the limit")
 // MARK: Warm-up, then flat: no leak
 let soak10 = warmUpThenFlat(minutes: 10)
 check(approx(soak10.last!.mb - soak10.first!.mb, 30.1, 1e-6),
