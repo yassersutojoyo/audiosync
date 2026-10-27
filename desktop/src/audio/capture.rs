@@ -2155,6 +2155,10 @@ mod tests {
         assert_eq!(fill, 960);
         counters.count_packet(480, false, fill, jumped);
         assert_eq!(counters.glitches(), CaptureGlitches::default());
+        // The next packet comes 10 ms late: a real jump, counted.
+        let (fill, _, jumped) = gaps.packet(80 * HNS_PER_MS, 480, false);
+        counters.count_packet(480, false, fill, jumped);
+        assert_eq!(counters.glitches().gap_fill_frames, 480);
     }
 
     #[test]
