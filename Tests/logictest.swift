@@ -627,6 +627,25 @@ do {
                                                  gains: [0.5, 12, -12, 0, 0, 0, 0, 0, 0, 0])],
           "presets: stored presets keep one Cast key, one preset per ID, levels within range (an AirPlay own volume may pass 100)",
           "\(store.load().presets)")
+
+    // covers: S251 (an own volume that isn't a number is none, a master that isn't one is 100, a preset without ten gains is dropped alone)
+    stored.values[Keys.presets] = Data(#"""
+        [{"id":"p1","name":"Bad levels","members":[{"key":"lc:a","volume":"loud"},{"key":7,"volume":5},{"key":"lc:b","volume":40}],
+          "zones":[{"id":"z1","volume":"half"},{"id":"z2","volume":30}],"master":null,"gains":[0,0,0,0,0,0,0,0,0,0]},
+         {"id":"p2","name":"No gains","members":[],"zones":[],"master":50},
+         {"id":"p3","name":"Bad gain","members":[],"zones":[],"master":50,"gains":[0,0,0,0,"x",0,0,0,0,0]},
+         "junk",
+         {"id":"p4","name":"Fine","members":[{"key":"lc:c","volume":null}],"zones":[],"master":60,"gains":[0,0,0,0,0,0,0,0,0,0]}]
+        """#.utf8)
+    let oneBad = store.load().presets
+    check(oneBad == [SpeakerPreset(id: "p1", name: "Bad levels",
+                                   members: [.init(key: "lc:a", volume: nil), .init(key: "lc:b", volume: 40)],
+                                   zones: [.init(id: "z1", volume: 100), .init(id: "z2", volume: 30)], master: 100, gains: flat),
+                     SpeakerPreset(id: "p4", name: "Fine", members: [.init(key: "lc:c", volume: nil)], zones: [],
+                                   master: 60, gains: flat)],
+          "presets: a stored value that can't be read loses only that value, or its preset, never the others", "\(oneBad)")
+    stored.values[Keys.presets] = Data(#"{"id":"p1"}"#.utf8)
+    check(store.load().presets.isEmpty, "presets: stored presets that aren't a list read as none")
 }
 
 // MARK: Output devices — virtual ones hidden unless asked for or chosen
