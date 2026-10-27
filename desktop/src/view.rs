@@ -4014,6 +4014,60 @@ impl App {
     pub fn hide_flyout(&self) {
         let _ = self.flyout.hide();
     }
+
+    /// Sizes the flyout to show every part down to its buttons, at most
+    /// `room` logical pixels high, and returns that height. Windows makes it
+    /// at Slint's preferred height, which counts a wrapped notice as one line
+    /// and cut the buttons off. On a screen too short for it all, the zones
+    /// and speakers list gets less room and scrolls; when that is not enough,
+    /// everything between the header and the buttons scrolls.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn fit_flyout(&self, room: f32) -> f32 {
+        let flyout = &self.flyout;
+        let set_list_cut = |cut: f32| {
+            if flyout.get_list_cut() != cut {
+                flyout.set_list_cut(cut);
+            }
+        };
+        let set_body_cut = |cut: f32| {
+            if flyout.get_body_cut() != cut {
+                flyout.set_body_cut(cut);
+            }
+        };
+        let cut = flyout.get_list_cut() > 0.0 || flyout.get_body_cut() > 0.0;
+        let mut height = flyout.get_fit_height();
+        if !flyout_fit_holds(height, room, cut) {
+            set_list_cut(0.0);
+            set_body_cut(0.0);
+            height = flyout.get_fit_height();
+            if height > room {
+                set_list_cut(height - room);
+                height = flyout.get_fit_height();
+            }
+            if height > room {
+                set_body_cut(height - room);
+                height = flyout.get_fit_height();
+            }
+        }
+        let height = height.min(room);
+        let window = flyout.window();
+        let size = window.size().to_logical(window.scale_factor());
+        if (size.height - height).abs() >= 0.5 {
+            window.set_size(slint::LogicalSize::new(size.width, height));
+        }
+        height
+    }
+}
+
+/// Whether the flyout's cuts still fit its content in `room`, so the
+/// refresh every 500 ms makes no layout pass: with a cut it fills the room
+/// exactly, without one it fits.
+fn flyout_fit_holds(fit: f32, room: f32, cut: bool) -> bool {
+    if cut {
+        (fit - room).abs() < 0.5
+    } else {
+        fit <= room
+    }
 }
 
 /// The properties the main window and the flyout share.
@@ -8590,6 +8644,145 @@ mod tests {
             !only_virtual_outputs_hidden(&[&cable, desk], hiding),
             "another speaker is listed"
         );
+    }
+
+    /// Windows made the flyout at Slint's preferred height, which counts the
+    /// zones notice's wrapped text as one line: the Open and Exit buttons
+    /// were cut off at its bottom edge.
+    #[test]
+    fn the_flyout_shows_its_buttons_under_a_wrapped_notice() {
+        let app = app_over(MockBackend::zones_preview());
+        app.refresh();
+        draw_frames();
+        let flyout = &app.flyout;
+        let window = flyout.window();
+        let preferred = flyout.get_made_height();
+        window.set_size(slint::LogicalSize::new(340.0, preferred));
+        let height = app.fit_flyout(1000.0);
+        let size = window.size().to_logical(window.scale_factor());
+        assert_eq!(size.height, height);
+        let bottom = flyout.get_footer_bottom();
+        assert!(
+            bottom + 16.0 <= height,
+            "buttons end at {bottom}, window {height} high (Slint asked for {preferred})"
+        );
+        assert!(height <= bottom + 16.5, "no room left under the buttons");
+    }
+
+    /// On a screen too short for the whole flyout, the list scrolls and the
+    /// buttons still show.
+    #[test]
+    fn a_short_screen_shortens_the_flyout_list_not_the_buttons() {
+        let app = app_over(MockBackend::zones_preview());
+        app.refresh();
+        draw_frames();
+        let flyout = &app.flyout;
+        let window = flyout.window();
+        window.set_size(slint::LogicalSize::new(340.0, 400.0));
+        let full = app.fit_flyout(1000.0);
+        let room = full - 40.0;
+        let height = app.fit_flyout(room);
+        assert_eq!(height, room);
+        let bottom = flyout.get_footer_bottom();
+        assert!(bottom + 16.0 <= room, "buttons end at {bottom} in {room}");
+        assert_eq!(app.fit_flyout(1000.0), full, "the list gets its room back");
+    }
+
+    /// The refresh refits the flyout every 500 ms: a cut that still fits
+    /// stays, and a change in content or room starts over.
+    #[test]
+    fn the_flyout_keeps_its_cuts_while_they_still_fit() {
+        assert!(flyout_fit_holds(300.0, 300.0, true), "cut, fills the room");
+        assert!(flyout_fit_holds(300.2, 300.0, true), "rounding");
+        assert!(!flyout_fit_holds(340.0, 300.0, true), "the content grew");
+        assert!(
+            !flyout_fit_holds(260.0, 300.0, true),
+            "it shrank or the room grew"
+        );
+        assert!(flyout_fit_holds(260.0, 300.0, false), "no cut, fits");
+        assert!(!flyout_fit_holds(340.0, 300.0, false), "no cut, too tall");
+
+        let app = app_over(MockBackend::zones_preview());
+        app.refresh();
+        draw_frames();
+        let flyout = &app.flyout;
+        flyout
+            .window()
+            .set_size(slint::LogicalSize::new(340.0, 400.0));
+        let room = app.fit_flyout(1000.0) - 40.0;
+        assert_eq!(app.fit_flyout(room), room);
+        let cuts = (flyout.get_list_cut(), flyout.get_body_cut());
+        assert!(cuts.0 > 0.0, "the list is cut");
+        app.refresh();
+        draw_frames();
+        assert_eq!(app.fit_flyout(room), room);
+        assert_eq!(
+            (flyout.get_list_cut(), flyout.get_body_cut()),
+            cuts,
+            "nothing changed, the cuts stay"
+        );
+
+        let shorter = room - 40.0;
+        assert_eq!(app.fit_flyout(shorter), shorter);
+        let grown = flyout.get_list_cut() + flyout.get_body_cut();
+        assert!(grown > cuts.0 + cuts.1, "less room, a deeper cut");
+        assert!(
+            flyout.get_footer_bottom() + 16.0 <= shorter + 0.5,
+            "the buttons still show"
+        );
+        assert_eq!(app.fit_flyout(room), room);
+        assert_eq!(
+            (flyout.get_list_cut(), flyout.get_body_cut()),
+            cuts,
+            "the room back, the cuts as before"
+        );
+    }
+
+    /// A flyout with two notices, presets and an input's channel pairs, on a
+    /// screen as short as 1366x768 at 150%: the list stops shrinking at
+    /// three rows, or there is none, and the buttons still show.
+    fn crowded_flyout_keeps_its_buttons(mut backend: MockBackend, case: &str) {
+        backend.post("source", NoticeMessage::CaptureLost, "09.40");
+        backend.add_preset("evening", "Evening", &["local:desk"]);
+        backend.add_preset("party", "Party", &["local:desk"]);
+        let app = app_over(backend);
+        let line_in = app
+            .snapshot()
+            .sources
+            .iter()
+            .position(|source| source.id == "input:line")
+            .expect("listed");
+        app.flyout.invoke_source_selected(line_in as i32);
+        app.refresh();
+        draw_frames();
+        let flyout = &app.flyout;
+        assert!(
+            flyout.get_input_pairs().row_count() > 0,
+            "{case}: pairs show"
+        );
+        assert!(flyout.get_presets().row_count() > 0, "{case}: presets show");
+        flyout
+            .window()
+            .set_size(slint::LogicalSize::new(340.0, 400.0));
+        let full = app.fit_flyout(1000.0);
+        let room = 300.0;
+        assert!(full > room + 100.0, "{case}: {full} fits {room} anyway");
+        let height = app.fit_flyout(room);
+        assert_eq!(height, room, "{case}");
+        let bottom = flyout.get_footer_bottom();
+        assert!(
+            bottom + 16.0 <= room + 0.5,
+            "{case}: buttons end at {bottom} in {room}"
+        );
+        assert_eq!(app.fit_flyout(1000.0), full, "{case}: the room comes back");
+    }
+
+    #[test]
+    fn a_crowded_flyout_on_a_short_screen_keeps_its_buttons() {
+        crowded_flyout_keeps_its_buttons(MockBackend::zones_preview(), "zones");
+        let mut bare = MockBackend::new();
+        bare.retain_speakers(|s| s.kind.is_this_pc());
+        crowded_flyout_keeps_its_buttons(bare, "no list");
     }
 
     #[test]
