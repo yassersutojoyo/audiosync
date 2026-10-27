@@ -20,7 +20,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - The notice for an AirPlay speaker turned off because it asks for a code now says whether it needs a PIN or a password, on the Mac and on Windows.
 - On Windows, AirPlay audio keeps its timing better while the PC is busy, since AudioSync asks Windows to treat its AirPlay sending as audio work.
 - On the Mac, renaming a zone now edits its name in place in the main window, like a speaker's, instead of opening a dialog: Return keeps the new name, Escape the old one.
-- On Windows, the main window and the tray panel look more like the Mac app. A speaker row is one line, with its kind as a small icon after the name and the device name in the name's tooltip. Card titles are small grey capitals, a zone's arrow sits at the left with its speakers in one tinted box, the AirPlay delay sits in the Connected Speakers card, and Several Apps sits right under the source. The tray panel lists this PC's speakers under the volume, then zones, then connected speakers.
+- On Windows, the main window and the tray panel look more like the Mac app. A speaker's name, kind and note share one line, with the kind as a small icon after the name and the device name in the name's tooltip. Card titles are small grey capitals, a zone's arrow sits at the left with its speakers in one tinted box, the AirPlay delay sits in the Connected Speakers card, and Several Apps sits right under the source. The tray panel lists this PC's speakers under the volume, then zones, then connected speakers.
 
 ### Fixed
 
