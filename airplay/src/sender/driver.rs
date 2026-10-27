@@ -45,7 +45,7 @@ use crate::volume::Volume;
 
 use super::{
     NowPlaying, Progress, ReceiverEvent, ReceiverInfo, SenderEvent, SpeakerError, SpeakerEvent,
-    SpeakerOptions, SpeakerState,
+    SpeakerOptions, SpeakerState, TimingMemory,
 };
 
 /// Waits shorter than this are slept precisely; longer ones wait on the
@@ -313,8 +313,9 @@ pub(crate) struct Driver {
     airplay2: bool,
     /// The AirPlay 2 preference (P214).
     airplay2_preferred: bool,
-    /// Devices whose session SETUP took PTP timing (P157).
-    ptp_timing: BTreeSet<DeviceKey>,
+    /// The timing entry of each device: the host's, or the timing a
+    /// session SETUP took during this run (P157, P217).
+    timing_memory: BTreeMap<DeviceKey, TimingMemory>,
     /// HomeKit credentials a password pairing gave during this run (P152).
     homekit: BTreeMap<DeviceKey, HomeKitCredentials>,
     /// Devices whose HomeKit credentials an answer turned down during this
@@ -389,7 +390,7 @@ impl Driver {
             stopping: None,
             airplay2: false,
             airplay2_preferred: false,
-            ptp_timing: BTreeSet::new(),
+            timing_memory: BTreeMap::new(),
             homekit: BTreeMap::new(),
             homekit_turned_down: BTreeSet::new(),
             device_id: random_device_id(),

@@ -1312,6 +1312,8 @@ fn session_status(event: &SpeakerEvent) -> bool {
             | SpeakerEvent::AudioJack(_)
             | SpeakerEvent::VolumeReported(_)
             | SpeakerEvent::PtpOpened
+            | SpeakerEvent::TimingRemembered(_)
+            | SpeakerEvent::TimingForgotten
             | SpeakerEvent::Trace(_)
     )
 }

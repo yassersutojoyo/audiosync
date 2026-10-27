@@ -2200,10 +2200,12 @@ impl AirPlaySpeakers {
         }
     }
 
-    /// Forgets the speaker's AirPlay 2 credentials, if AudioSync keeps any.
-    /// Returns whether it did.
+    /// Forgets the speaker's AirPlay 2 credentials and timing entry (P217),
+    /// here and in the sender, if AudioSync keeps any. Returns whether it
+    /// had credentials.
     fn forget_homekit(&mut self, id: &str) -> bool {
-        if self.store.homekit(id).is_none() {
+        let homekit = self.store.homekit(id).is_some();
+        if !homekit && self.store.timing(id).is_none() {
             return false;
         }
         let key = self
@@ -2215,6 +2217,12 @@ impl AirPlaySpeakers {
         self.homekit_keys.remove(id);
         if let Some(key) = key {
             self.link.forget_homekit(&key);
+        }
+        if !homekit {
+            let _ = self.store.forget_timing(id);
+            self.log
+                .log(|| format!("AirPlay speaker {}: timing entry forgotten", self.label(id)));
+            return false;
         }
         let saved = self.store.remove_homekit(id);
         self.store_written(saved.is_ok());
@@ -2984,6 +2992,7 @@ impl AirPlaySpeakers {
         options.delay = self.sent_delay(id);
         options.credentials = self.store.get(id).cloned();
         options.homekit_credentials = self.store.homekit(id).cloned();
+        options.timing = self.store.timing(id).cloned();
         options.password = self.password(id);
         options.pcm = self.pcm_devices.contains(id);
         options.trace = self.log.enabled();
@@ -3095,6 +3104,7 @@ impl AirPlaySpeakers {
                 let mut own = options.clone();
                 own.credentials = self.store.get(&id).cloned();
                 own.homekit_credentials = self.store.homekit(&id).cloned();
+                own.timing = self.store.timing(&id).cloned();
                 own.password = self.password(&id);
                 (member.key.clone(), own)
             })
@@ -4181,6 +4191,27 @@ impl AirPlaySpeakers {
                 self.keep_homekit(id, credentials);
                 false
             }
+            SpeakerEvent::TimingRemembered(memory) => {
+                let timing = memory.timing;
+                let saved = self.store.keep_timing(id, memory);
+                self.log.log(|| {
+                    let saved = match &saved {
+                        Ok(()) => String::new(),
+                        Err(error) => format!(" for this run only ({error})"),
+                    };
+                    format!(
+                        "AirPlay speaker {}: {timing:?} timing kept{saved}",
+                        self.label(id)
+                    )
+                });
+                false
+            }
+            SpeakerEvent::TimingForgotten => {
+                let _ = self.store.forget_timing(id);
+                self.log
+                    .log(|| format!("AirPlay speaker {}: timing entry forgotten", self.label(id)));
+                false
+            }
             SpeakerEvent::Trace(line) => {
                 self.log
                     .log(|| format!("AirPlay speaker {} trace: {line}", self.label(id)));
@@ -4454,6 +4485,9 @@ pub mod tests {
         Password(String, String),
         /// The speaker added just before may use PCM.
         Pcm(String),
+        /// The speaker added just before came with this stored timing entry
+        /// (P217).
+        Timing(String, audiosync_airplay::ap2::Timing),
         StartPairing(String),
         SubmitPin(String, String),
         CancelPairing(String),
@@ -4664,6 +4698,9 @@ pub mod tests {
             }
             if options.pcm {
                 state.calls.push(Call::Pcm(id_of(device)));
+            }
+            if let Some(memory) = &options.timing {
+                state.calls.push(Call::Timing(id_of(device), memory.timing));
             }
             None
         }
@@ -5503,6 +5540,90 @@ pub mod tests {
             "{events:?}"
         );
         assert_eq!(airplay.store.homekit(&id), None, "forgotten all the same");
+    }
+
+    // covers: P217
+    #[test]
+    fn a_timing_entry_reaches_the_next_launch_and_leaves_the_identity_file_alone() {
+        use crate::audio::pairings::tests::sealer;
+        use crate::audio::pairings::{AIRPLAY2_FILE_NAME, FILE_NAME};
+        use audiosync_airplay::ap2::Timing;
+        use audiosync_airplay::sender::TimingMemory;
+
+        let folder = crate::debug_log::test_dir("airplay2-timing-relaunch");
+        let speaker = airplay2_device(12, "Study", false);
+        let id = id_of(&speaker);
+        let launch = |fake: &FakeAirPlay| {
+            fake.set_airplay2(true);
+            let (store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+            AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store)
+        };
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = launch(&fake);
+        let identity = folder.join(AIRPLAY2_FILE_NAME);
+        let before = std::fs::read(&identity).expect("the identity file");
+        fake.push(SenderEvent::Speaker {
+            key: speaker.key.clone(),
+            event: SpeakerEvent::TimingRemembered(TimingMemory::of(&speaker, Timing::Ptp)),
+        });
+        airplay.poll();
+        // An older AudioSync reads only identity format 1, and a newer one
+        // would cost it every AirPlay 2 pairing.
+        let after = std::fs::read(&identity).expect("the identity file");
+        assert_eq!(after, before, "the identity file is left as it was");
+        let plain = sealer().open(&after).expect("sealed by the test sealer");
+        assert_eq!(
+            plain[audiosync_core::airplay2_identity::MAGIC.len()],
+            1,
+            "identity format 1"
+        );
+        drop(airplay);
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = launch(&fake);
+        fake.appear(&speaker);
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.set_streaming(true);
+        airplay.poll();
+        let calls = fake.take_calls();
+        assert!(
+            calls.contains(&Call::Timing(id.clone(), Timing::Ptp)),
+            "{calls:?}"
+        );
+    }
+
+    // covers: P217
+    #[test]
+    fn forget_pairing_drops_the_timing_entry_of_a_speaker_without_airplay2_credentials() {
+        use audiosync_airplay::ap2::Timing;
+        use audiosync_airplay::sender::TimingMemory;
+
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        let speaker = airplay2_device(13, "Porch", false);
+        let id = id_of(&speaker);
+        fake.appear(&speaker);
+        fake.push(SenderEvent::Speaker {
+            key: speaker.key.clone(),
+            event: SpeakerEvent::TimingRemembered(TimingMemory::of(&speaker, Timing::Ptp)),
+        });
+        airplay.poll();
+        airplay
+            .passwords
+            .insert(id.clone(), Secret::from("hunter2"));
+        assert!(airplay.store.timing(&id).is_some());
+        assert!(airplay.store.homekit(&id).is_none(), "a password only");
+        fake.take_calls();
+
+        airplay.forget_pairing(&id);
+        assert!(airplay.store.timing(&id).is_none(), "the entry goes too");
+        assert!(
+            fake.take_calls().contains(&Call::ForgetHomeKit(id.clone())),
+            "the sender drops its copy too"
+        );
     }
 
     #[test]
