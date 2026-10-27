@@ -1144,6 +1144,6 @@ pub mod tests {
         assert!(!install.join("audiosync.exe.new").exists());
         assert!(temp_folders(&f.env).is_empty());
         drop(f);
-        fs::remove_dir_all(install.parent().unwrap()).unwrap();
+        let _ = fs::remove_dir_all(install.parent().unwrap());
     }
 }
