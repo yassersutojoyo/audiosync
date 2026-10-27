@@ -25,6 +25,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- A Google Cast speaker added by address that doesn't answer, for example because it's switched off, no longer counts as online, and it plays once it answers again. AudioSync checks it every 15 seconds. On the Mac and on Windows.
 - A local speaker whose sound starts late catches up in one step within its first 3 seconds, instead of playing late or drifting into place. On the Mac and on Windows.
 - Calibration times a speaker by the sound that reaches the microphone first, so a louder reflection off a wall no longer makes it read late, and a knock or hiss just before the test sound isn't taken for it. On the Mac and on Windows.
 - When calibration can't start, its message names only what's off instead of asking for all of it. Calibrate All and Measure Again say it the same way. On the Mac and on Windows.
