@@ -108,7 +108,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 
 ## Windows
 
-A Windows 11 version (x64 and ARM64) is on the way, with the same Rust engine and its own AirPlay sender. Not released yet. CI builds it, and [desktop/README.md](desktop/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on the Mac, there in the File menu), it asks for AirPlay passwords, and it hasn't been tried on a real speaker yet.
+A Windows 11 version (x64 and ARM64) is out as a preview since 0.7.1, with the same Rust engine and its own AirPlay sender. The zips are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. CI builds it too, and [desktop/README.md](desktop/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on the Mac, there in the File menu), it asks for AirPlay passwords, and it hasn't been tried on a real speaker yet.
 
 ## Linux
 
