@@ -1053,6 +1053,7 @@ fn spec_device_volume_wording() -> Vec<(String, String, String)> {
         .collect()
 }
 
+// covers: S199, S200 (the Windows host)
 /// The device-volume hint under a speaker's volume slider (S198 to S200):
 /// worded as the spec says, in strings.slint; one text element whose label
 /// names the output; the fix a link-style button whose label starts with its

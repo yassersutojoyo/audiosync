@@ -683,6 +683,7 @@ do {
 }
 
 // MARK: Debug log — opt-in, one UTC line per message, capped, never through a link
+// covers: S170 (all but the first line's versions and local time)
 do {
     check(DebugTrace.isEnabled(environment: ["AUDIOSYNC_DEBUG": "1"]), "debug log: on with AUDIOSYNC_DEBUG=1")
     check(!DebugTrace.isEnabled(environment: [:]) && !DebugTrace.isEnabled(environment: ["AUDIOSYNC_DEBUG": "0"])
@@ -1981,6 +1982,7 @@ do {
     check(notStarted.outcome == nil && notStarted.steps.suffix(3) == ["close old", "start new", "discard new"],
           "app retap: a new tap that can't start reading is discarded")
 
+    // covers: S216
     // Closing a capture. A source switch (S141) or a rate restart (S20) closes
     // the running capture and starts the next one in one turn of the main
     // queue; `nextTurn` holds what was left for a later turn.
@@ -2008,6 +2010,7 @@ do {
 }
 
 // MARK: Retired engine choice — noted once, no effect
+// covers: S213
 check(RetiredEngineChoice.defaultsKey == "engineImpl" && RetiredEngineChoice.environmentKey == "AUDIOSYNC_ENGINE",
       "retired engine choice: the setting and the variable older builds read")
 check(RetiredEngineChoice.launchNote(environment: nil, stored: nil) == nil
@@ -3871,6 +3874,7 @@ do {
 }
 
 // MARK: Track info — what AirPlay receivers with a screen show
+// covers: S218
 do {
     typealias Track = NowPlayingMonitor.Track
     let cover = NSImage(size: NSSize(width: 1, height: 1))
@@ -3960,6 +3964,7 @@ do {
 }
 
 // MARK: Track info on AudioSync's own sender — a new track never goes out with the last one's cover
+// covers: S219
 do {
     let song = TrackMetadata.Fields(title: "Song", artist: "Band", album: "Record")
     let cover = TrackMetadata.Artwork(large: Data([0xFF, 0xD8, 0xFF, 0x01]), small: Data([0xFF, 0xD8, 0xFF, 0x03]))
@@ -3986,6 +3991,7 @@ do {
 }
 
 // MARK: Track info the app gives its own sender — what goes out and what a repeat skips (SentTrackInfo)
+// covers: S219
 do {
     let cover = NSImage(size: NSSize(width: 1, height: 1)), nextCover = NSImage(size: NSSize(width: 1, height: 1))
     let icon = NSImage(size: NSSize(width: 1, height: 1))
@@ -4331,6 +4337,7 @@ do {
 }
 
 // MARK: Windows and the view model (WindowRules.swift)
+// covers: S211, S212, S214
 do {
     let screen = CGRect(x: 0, y: 0, width: 1440, height: 875)
     let second = CGRect(x: 1440, y: 0, width: 1920, height: 1055)
@@ -4710,6 +4717,7 @@ do {
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)
+// covers: S212
 do {
     typealias Keys = AppSettings.Keys
     final class Stored { var values: [String: Any] = [:] }
@@ -5029,6 +5037,7 @@ do {
 }
 
 // MARK: Speaker names — a name the user gives a speaker, by speaker key (SpeakerNames)
+// covers: S228
 do {
     final class Stored { var values: [String: Any] = [:] }
     let stored = Stored()
@@ -5118,6 +5127,7 @@ do {
 }
 
 // MARK: Delay field — typed text applies on Return or focus loss, once (DelayFieldDraft)
+// covers: S220, S221
 do {
     let t = UIStrings()
     let offset = LocalDelay.sanitizedOffset
@@ -5471,6 +5481,7 @@ do {
 }
 
 // MARK: Delay field input — digits after one leading sign; out of range is marked (LocalDelay.fieldText)
+// covers: S220
 do {
     let t = UIStrings()
     let kept: [String: String] = ["12": "12", "+150": "+150", "−250": "−250", "-30": "-30", "1a2": "12",
@@ -6034,6 +6045,7 @@ do {
 }
 
 // MARK: Launch, second launch and session events (AppLifecycle.swift)
+// covers: S215
 do {
     let open = AEEventID(kAEOpenApplication)
     let atLogin = OSType(keyAELaunchedAsLogInItem)
@@ -6442,6 +6454,7 @@ do {
 }
 
 // MARK: The way out on an exit signal (SignalQuit, AppLifecycle.swift)
+// covers: S111
 /// What a `SignalQuit` did, in order. Its quit steps end only when the test
 /// says so (`finishQuit`); its exit records the status instead of exiting.
 final class SignalQuitProbe: @unchecked Sendable {

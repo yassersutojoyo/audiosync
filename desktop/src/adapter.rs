@@ -9817,6 +9817,7 @@ mod tests {
         assert_eq!(adapter.snapshot().reference_name.as_deref(), Some("Desk"));
     }
 
+    // covers: S180
     #[test]
     fn an_older_settings_file_is_migrated_once_and_saved_in_the_new_version() {
         let dir = test_dir("adapter-settings-delay-migration");

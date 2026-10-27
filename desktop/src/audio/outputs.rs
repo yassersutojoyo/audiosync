@@ -1088,6 +1088,7 @@ mod tests {
         }
     }
 
+    // covers: S174
     #[test]
     fn the_built_in_output_with_the_smallest_endpoint_id_is_the_reference() {
         let mut listed = vec![
