@@ -4,7 +4,7 @@
 # test, so this list only shrinks. "Partly done" names what already exists.
 
 # Connection.
-C20 TLS 1.2 with ECDHE-RSA AES-GCM and CBC suites: the platform TLS stacks offer them, but native-tls can't pin a server suite in a test; G4 records what devices accept (partly done: TLS 1.2 minimum, a TLS 1.2-only server connects, handshake errors carry the TLS stack's reason).
+C20 AES-CBC-SHA suites for older devices: the fake device's TLS server is rustls, which has no CBC suites, so only the platform TLS stacks' offer stands for them; G4 records what devices accept (partly done: TLS 1.2 minimum, a TLS 1.2-only server connects, an RSA-keyed server pinned to each ECDHE-RSA AES-GCM suite connects on it, handshake errors carry the TLS stack's reason).
 
 # Timing: hardware.
 C74 Latency of seconds: hardware, G7.

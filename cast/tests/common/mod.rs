@@ -13,7 +13,7 @@ use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -22,8 +22,10 @@ use audiosync_cast::message::{
     CastMessage, DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_HEARTBEAT, NS_MEDIA, NS_MULTIZONE,
     NS_RECEIVER, PLATFORM, PayloadType, ProtocolVersion,
 };
+use rsa::pkcs8::EncodePrivateKey;
+use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
-use rustls::{ServerConfig, ServerConnection, StreamOwned};
+use rustls::{CipherSuite, ServerConfig, ServerConnection, StreamOwned, SupportedCipherSuite};
 use serde_json::{Value, json};
 
 /// How the fake device answers `LAUNCH`.
@@ -68,6 +70,15 @@ pub enum OnMediaStatus {
     Ignore,
 }
 
+/// The key type of the fake device's certificate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServerKey {
+    /// ECDSA P-256: rustls then negotiates only ECDHE-ECDSA suites in TLS 1.2.
+    Ecdsa,
+    /// RSA 2048, for the ECDHE-RSA suites devices negotiate (C20).
+    Rsa,
+}
+
 /// The fake device's switches.
 #[derive(Clone, Debug)]
 pub struct Behavior {
@@ -87,6 +98,10 @@ pub struct Behavior {
     pub volume: Value,
     /// Only TLS 1.2 on the server side.
     pub tls12_only: bool,
+    pub key: ServerKey,
+    /// The one cipher suite the server accepts; `None` accepts all of
+    /// rustls's.
+    pub suite: Option<SupportedCipherSuite>,
     /// The certificate's subject names; never the address the client uses.
     pub names: Vec<String>,
     /// A group's `status.devices`, sent as `MULTIZONE_STATUS` to a
@@ -109,6 +124,8 @@ impl Default for Behavior {
             apps: Vec::new(),
             volume: json!({"level": 0.4, "muted": false, "controlType": "attenuation", "stepInterval": 0.05}),
             tls12_only: false,
+            key: ServerKey::Ecdsa,
+            suite: None,
             names: vec!["not-this-device.example".to_owned()],
             members: None,
         }
@@ -192,6 +209,8 @@ pub struct FakeDevice {
     /// Accepted connections whose serving ended.
     hangups: Arc<Mutex<u32>>,
     pub certificate_der: Vec<u8>,
+    /// The cipher suite each finished handshake negotiated, in order.
+    suites: Arc<Mutex<Vec<CipherSuite>>>,
     commands: mpsc::Sender<Command>,
     stop_fetching: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -199,11 +218,26 @@ pub struct FakeDevice {
 
 impl FakeDevice {
     pub fn start(behavior: Behavior) -> FakeDevice {
-        let key = rcgen::generate_simple_self_signed(behavior.names.clone()).expect("certificate");
-        let certificate = key.cert.der().clone();
-        let private =
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.signing_key.serialize_der()));
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let key_pair = match behavior.key {
+            ServerKey::Ecdsa => rcgen::KeyPair::generate().expect("ECDSA key"),
+            ServerKey::Rsa => rcgen::KeyPair::from_pkcs8_der_and_sign_algo(
+                &PrivatePkcs8KeyDer::from(rsa_pkcs8().to_vec()),
+                &rcgen::PKCS_RSA_SHA256,
+            )
+            .expect("RSA key"),
+        };
+        let certificate = rcgen::CertificateParams::new(behavior.names.clone())
+            .expect("names")
+            .self_signed(&key_pair)
+            .expect("certificate")
+            .der()
+            .clone();
+        let private = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+        let mut provider = rustls::crypto::ring::default_provider();
+        if let Some(suite) = behavior.suite {
+            provider.cipher_suites = vec![suite];
+        }
+        let provider: Arc<CryptoProvider> = Arc::new(provider);
         let versions: &[&rustls::SupportedProtocolVersion] = if behavior.tls12_only {
             &[&rustls::version::TLS12]
         } else {
@@ -223,6 +257,7 @@ impl FakeDevice {
         let connections = Arc::new(Mutex::new(0));
         let hangups = Arc::new(Mutex::new(0));
         let stop_fetching = Arc::new(AtomicBool::new(false));
+        let suites = Arc::new(Mutex::new(Vec::new()));
         let (commands, receiver) = mpsc::channel();
         let mut device = Device {
             apps: behavior.apps.clone(),
@@ -236,6 +271,7 @@ impl FakeDevice {
         let thread_log = Arc::clone(&log);
         let thread_connections = Arc::clone(&connections);
         let thread_hangups = Arc::clone(&hangups);
+        let thread_suites = Arc::clone(&suites);
         let config = Arc::new(config);
         let thread = thread::spawn(move || {
             loop {
@@ -247,7 +283,14 @@ impl FakeDevice {
                     Ok((tcp, _)) => {
                         *thread_connections.lock().expect("count") += 1;
                         let _ = tcp.set_nonblocking(false);
-                        let shut_down = serve(tcp, &config, &mut device, &thread_log, &receiver);
+                        let shut_down = serve(
+                            tcp,
+                            &config,
+                            &mut device,
+                            &thread_log,
+                            &thread_suites,
+                            &receiver,
+                        );
                         *thread_hangups.lock().expect("hangups") += 1;
                         if shut_down {
                             return;
@@ -264,6 +307,7 @@ impl FakeDevice {
             connections,
             hangups,
             certificate_der: certificate.to_vec(),
+            suites,
             commands,
             stop_fetching,
             thread: Some(thread),
@@ -350,6 +394,10 @@ impl FakeDevice {
 
     pub fn fetches(&self) -> Vec<Fetch> {
         self.fetches.lock().expect("fetches").clone()
+    }
+
+    pub fn negotiated_suites(&self) -> Vec<CipherSuite> {
+        self.suites.lock().expect("suites").clone()
     }
 
     pub fn connection_count(&self) -> u32 {
@@ -644,6 +692,7 @@ fn serve(
     config: &Arc<ServerConfig>,
     device: &mut Device,
     log: &Mutex<Vec<CastMessage>>,
+    suites: &Mutex<Vec<CipherSuite>>,
     commands: &mpsc::Receiver<Command>,
 ) -> bool {
     let _ = tcp.set_read_timeout(Some(Duration::from_millis(10)));
@@ -654,7 +703,15 @@ fn serve(
     let mut reader = FrameReader::new();
     let mut buffer = vec![0u8; 16 * 1024];
     let mut stalled = false;
+    let mut suite_recorded = false;
     loop {
+        if !suite_recorded
+            && !stream.conn.is_handshaking()
+            && let Some(suite) = stream.conn.negotiated_cipher_suite()
+        {
+            suites.lock().expect("suites").push(suite.suite());
+            suite_recorded = true;
+        }
         loop {
             match commands.try_recv() {
                 Ok(Command::Send(message)) => write(&mut stream, &message),
@@ -712,4 +769,14 @@ fn write(stream: &mut StreamOwned<ServerConnection, PeekedTcp>, message: &CastMe
     let frame = encode_frame(message).expect("frame");
     let _ = stream.write_all(&frame);
     let _ = stream.flush();
+}
+
+/// One RSA 2048 key in PKCS#8 for every fake device of a test binary, made
+/// once since generating it takes a while.
+fn rsa_pkcs8() -> &'static [u8] {
+    static KEY: OnceLock<Vec<u8>> = OnceLock::new();
+    KEY.get_or_init(|| {
+        let key = rsa::RsaPrivateKey::new(&mut rand_core::OsRng, 2048).expect("RSA key");
+        key.to_pkcs8_der().expect("PKCS#8").as_bytes().to_vec()
+    })
 }

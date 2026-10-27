@@ -21,7 +21,7 @@ use audiosync_cast::message::{
     DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_DEVICE_AUTH, NS_HEARTBEAT, NS_RECEIVER, PLATFORM,
     SENDER,
 };
-use common::{Behavior, Command, FakeDevice, OnLaunch, app, json_message};
+use common::{Behavior, Command, FakeDevice, OnLaunch, ServerKey, app, json_message};
 use serde_json::json;
 
 fn connect(device: &FakeDevice) -> CastClient {
@@ -70,6 +70,35 @@ fn a_tls_1_2_only_device_connects() {
     assert!(client.status().is_some());
     let _ = client.stop(Duration::from_secs(1));
     device.join();
+}
+
+// C20's ECDHE-RSA AES-GCM half; its CBC half stays pending (rustls has no CBC
+// suites to serve).
+#[test]
+fn a_tls_1_2_device_with_an_rsa_key_connects_on_each_ecdhe_rsa_aes_gcm_suite() {
+    use rustls::crypto::ring::cipher_suite::{
+        TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+    };
+    for suite in [
+        TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+        TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+    ] {
+        let device = FakeDevice::start(Behavior {
+            tls12_only: true,
+            key: ServerKey::Rsa,
+            suite: Some(suite),
+            ..Behavior::default()
+        });
+        let client = connect(&device);
+        assert!(client.status().is_some(), "{:?}", suite.suite());
+        assert_eq!(
+            client.fingerprint(),
+            Some(Fingerprint::of(&device.certificate_der))
+        );
+        assert_eq!(device.negotiated_suites(), vec![suite.suite()]);
+        let _ = client.stop(Duration::from_secs(1));
+        device.join();
+    }
 }
 
 #[test]

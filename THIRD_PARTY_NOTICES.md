@@ -374,8 +374,12 @@ fake device's TLS server, with `rustls-pki-types`, `yasna`, `x509-parser`,
 `asn1-rs`, `der-parser`, `oid-registry`, `nom` (MIT), `data-encoding` (MIT),
 `time`, `time-core`, `deranged`, `powerfmt`, `num-conv`, `subtle`
 (BSD-3-Clause), `zeroize`, `asn1-rs-derive`, `asn1-rs-impl`, `num-bigint`,
-`num-integer` and `rusticata-macros` (MIT OR Apache-2.0); those are never
-part of a build that ships. CI
+`num-integer` and `rusticata-macros` (MIT OR Apache-2.0), and `rsa` and
+`rand_core` to make that server an RSA key, with `num-bigint-dig`,
+`num-iter`, `pkcs1`, `pkcs8`, `spki`, `der`, `const-oid`, `base64ct`,
+`signature`, `smallvec`, `rand`, `rand_chacha`, `ppv-lite86` (MIT OR
+Apache-2.0), `zerocopy` and `zerocopy-derive` (BSD-2-Clause OR Apache-2.0 OR
+MIT) and `libm` (MIT); those are never part of a build that ships. CI
 checks every crate of `cast/`, development dependencies included, with `cargo
 deny check licenses` against `cast/deny.toml`.
 

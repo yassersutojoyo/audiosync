@@ -151,9 +151,11 @@ ed25519-dalek = { version = "3.0.0", default-features = false, features = ["zero
 hkdf = { version = "0.13.0", default-features = false }
 md-5 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
 plist = { version = "1.8.0", default-features = false }
-rcgen = { version = "0.14.5", default-features = false, features = ["crypto", "ring"] }
+rand_core = { version = "0.6.4", default-features = false, features = ["getrandom"] }
+rcgen ={ version = "0.14.5", default-features = false, features = ["crypto", "ring"] }
+rsa = { version = "0.9.8", default-features = false, features = ["std", "u64_digit"] }
 rustls = { version = "0.23.31", default-features = false, features = ["ring", "std", "tls12"] }
-sha1 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
+sha1 ={ version = "0.11.0", default-features = false, features = ["zeroize"] }
 sha2 = { version = "0.11.0", default-features = false, features = ["zeroize"] }
 x25519-dalek = { version = "3.0.0", default-features = false, features = ["static_secrets", "zeroize"] }
 
