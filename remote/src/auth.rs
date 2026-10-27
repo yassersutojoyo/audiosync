@@ -212,7 +212,8 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn from_hex(text: &str) -> Option<TokenHash> {
-    if text.len() != 64 || !text.is_ascii() {
+    // from_str_radix alone would read a leading "+", which the Mac's count rejects.
+    if text.len() != 64 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
     let mut hash = [0u8; 32];
