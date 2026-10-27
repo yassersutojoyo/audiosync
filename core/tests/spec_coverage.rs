@@ -41,6 +41,33 @@ fn clauses(spec: &str) -> Vec<(u32, String)> {
         .collect()
 }
 
+/// Clauses that are retired or superseded as a whole; none yet.
+fn withdrawn_numbers(_spec: &str) -> BTreeSet<u32> {
+    BTreeSet::new()
+}
+
+#[test]
+fn retired_and_superseded_clauses_are_withdrawn_unless_only_in_part() {
+    let spec = "\
+- **S1** *Required.* A live clause that mentions a retired engine later on.
+- **S2** *Retired with the bundled engine; kept as a record.* *Observed*.
+- **S3** *Retired in part with the bundled engine*: the rest holds.
+- **S4** *Engine restart.* *Retired with the bundled engine; kept as a record.*
+- **S5** *Superseded by S1*: groups became zones.
+- **S6** *Network loss, as tested.* *Retired in part*: the hint stands.
+- **S7** *Superseded in part by S1*: the range still holds.
+- **S8** (withdrawn) *Observed*.
+- **S9** *Retired.* *Observed* in an old build.
+- **S10** *superseded by S1.*
+  - **S11** *Retired with the FIFO feed.*
+- **S12** *Observed* (`Retired.swift`). Not withdrawn.
+";
+    assert_eq!(
+        withdrawn_numbers(spec),
+        BTreeSet::from([2, 4, 5, 8, 9, 10, 11])
+    );
+}
+
 fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
     let mut entries: Vec<PathBuf> = fs::read_dir(dir)
         .unwrap_or_else(|error| panic!("{}: {error}", dir.display()))
