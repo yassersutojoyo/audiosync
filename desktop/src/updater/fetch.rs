@@ -387,6 +387,7 @@ pub mod tests {
         }
     }
 
+    // covers: S294
     #[test]
     fn the_feed_is_https_only_with_its_size_and_time_limits() {
         assert_eq!(

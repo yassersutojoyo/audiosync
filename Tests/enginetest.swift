@@ -41,6 +41,7 @@ let producer = Thread {
 producer.start()
 Thread.sleep(forTimeInterval: 3.5)   // build up history beyond the largest delay tested
 
+// covers: S60, S61, S66, S67 (on every listed output device, at gain 0)
 let devices = AudioDevices().allOutputDevices().filter { !$0.uid.isEmpty && !$0.name.contains("Aggregate") }
 check(!devices.isEmpty, "found output devices", devices.map(\.name).joined(separator: ", "))
 
@@ -123,8 +124,8 @@ for dev in devices {
     check(fadeStates.last == .closed && renderedWhileFading >= Int64(r.fadeFrames) && (playedFirst || beyondCap),
           "\(dev.name): stop fades out before the output stops", fadeDetail)
 
-    // S186: a switch-off the way the session makes it returns once the fade
-    // has played, never later than 500 ms after the request.
+    // covers: S186 (a switch-off the way the session makes it returns once the fade
+    // has played, never later than 500 ms after the request)
     do {
         try r.start(on: dev.id, captureRate: rate, delayMs: 150)
         r.setGain(linear: 0)

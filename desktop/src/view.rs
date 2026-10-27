@@ -222,6 +222,9 @@ struct Models {
     mix_apps: Rc<VecModel<MixAppItem>>,
     this_pc: Rc<VecModel<SpeakerItem>>,
     connected: Rc<VecModel<SpeakerItem>>,
+    /// The compact rows of the speakers in a zone, under their own section.
+    this_pc_zoned: Rc<VecModel<SpeakerItem>>,
+    connected_zoned: Rc<VecModel<SpeakerItem>>,
     /// The flyout's speakers in no zone.
     all_speakers: Rc<VecModel<SpeakerItem>>,
     zones: Rc<VecModel<ZoneItem>>,
@@ -258,6 +261,12 @@ fn zone_shape(lengths: impl Iterator<Item = usize>) -> u64 {
     lengths.fold(1, |shape, length| {
         shape.wrapping_mul(31).wrapping_add(length as u64 + 1)
     })
+}
+
+/// How many member rows a zone lists under its header: none while its
+/// speakers are hidden, so folding a zone counts as removing them.
+fn listed_members(expanded: bool, members: usize) -> usize {
+    if expanded { members } else { 0 }
 }
 
 /// How many notices the main window lists, newest first.
@@ -862,6 +871,8 @@ impl App {
             input_pairs: Rc::new(VecModel::default()),
             mix_apps: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
+            this_pc_zoned: Rc::new(VecModel::default()),
+            connected_zoned: Rc::new(VecModel::default()),
             connected: Rc::new(VecModel::default()),
             all_speakers: Rc::new(VecModel::default()),
             zones: Rc::new(VecModel::default()),
@@ -1471,6 +1482,10 @@ impl App {
         self.main.set_mix_apps(ModelRc::from(m.mix_apps.clone()));
         self.main.set_this_pc(ModelRc::from(m.this_pc.clone()));
         self.main.set_connected(ModelRc::from(m.connected.clone()));
+        self.main
+            .set_this_pc_zoned(ModelRc::from(m.this_pc_zoned.clone()));
+        self.main
+            .set_connected_zoned(ModelRc::from(m.connected_zoned.clone()));
         self.main.set_zones(ModelRc::from(m.zones.clone()));
         self.main.set_notices(ModelRc::from(m.notices.clone()));
         self.main
@@ -1499,7 +1514,6 @@ impl App {
         self.guide
             .set_steps(ModelRc::from(self.guide_steps.clone()));
         self.about.set_version(env!("CARGO_PKG_VERSION").into());
-        self.about.set_core_version(audiosync_core::VERSION.into());
     }
 
     /// Reads a snapshot and shows it in every window.
@@ -1575,30 +1589,31 @@ impl App {
             row.availability = with_switch(row.availability, ui.airplay2_experimental);
             row.cast_group_note = cast_group_note(&strings, speaker);
             row.group_note = group_note(&strings, speaker);
-            let zone = state.zone_of(&speaker.id);
-            row.zone_id = zone.map_or_else(SharedString::default, |zone| zone.id.as_str().into());
+            if let Some(zone) = state.zone_of(&speaker.id) {
+                row.zone_id = zone.id.as_str().into();
+                row.zone_name = zone.name.as_str().into();
+                if let Some(note) = state.zone_note(zone, ui_model::ZoneRow::Listed(speaker)) {
+                    row.zone_note = zone_note(&strings, note);
+                }
+            }
             row
         };
         let (this_pc, connected) = state.layout();
         let lists = |s: &ui_model::Speaker| ui.listed_virtual.lists(s, ui.show_virtual);
         let connected_virtual_hidden = only_virtual_outputs_hidden(&connected, lists);
         let listed = |s: &&ui_model::Speaker| lists(s);
-        // A speaker in a zone is listed under it instead (spec S245).
-        let zoned = |s: &&ui_model::Speaker| state.zone_of(&s.id).is_some();
-        let this_pc: Vec<&ui_model::Speaker> = this_pc.into_iter().filter(listed).collect();
-        let connected: Vec<&ui_model::Speaker> = connected.into_iter().filter(listed).collect();
-        let this_pc_all_in_zones = !this_pc.is_empty() && this_pc.iter().all(zoned);
-        let connected_all_in_zones = !connected.is_empty() && connected.iter().all(zoned);
-        let this_pc: Vec<SpeakerItem> = this_pc
-            .into_iter()
-            .filter(|s| !zoned(s))
-            .map(|s| item(s, false))
-            .collect();
-        let connected: Vec<SpeakerItem> = connected
-            .into_iter()
-            .filter(|s| !zoned(s))
-            .map(|s| item(s, true))
-            .collect();
+        // A speaker in a zone shows under it, and keeps a compact row in its
+        // own section after the full rows.
+        let (this_pc, this_pc_zoned) =
+            state.split_zoned(this_pc.into_iter().filter(listed).collect());
+        let (connected, connected_zoned) =
+            state.split_zoned(connected.into_iter().filter(listed).collect());
+        let this_pc_zoned: Vec<SpeakerItem> =
+            this_pc_zoned.iter().map(|(s, _)| item(s, false)).collect();
+        let connected_zoned: Vec<SpeakerItem> =
+            connected_zoned.iter().map(|(s, _)| item(s, true)).collect();
+        let this_pc: Vec<SpeakerItem> = this_pc.into_iter().map(|s| item(s, false)).collect();
+        let connected: Vec<SpeakerItem> = connected.into_iter().map(|s| item(s, true)).collect();
         let zones: Vec<ZoneRowsBuilt> = state
             .zones
             .iter()
@@ -1662,8 +1677,6 @@ impl App {
         drop(ui);
         self.main
             .set_connected_virtual_hidden(connected_virtual_hidden);
-        self.main.set_this_pc_all_in_zones(this_pc_all_in_zones);
-        self.main.set_connected_all_in_zones(connected_all_in_zones);
         self.main.set_airplay_none_found(state.airplay_none_found);
         self.flyout.set_airplay_none_found(state.airplay_none_found);
         self.main.set_airplay_searching(state.airplay_searching);
@@ -1788,7 +1801,11 @@ impl App {
             listed_notices: flyout_notices.len(),
             zones: zones.len(),
             speakers: flyout_speakers.len(),
-            zone_members: zone_shape(zones.iter().map(|zone| zone.members.len())),
+            zone_members: zone_shape(
+                zones
+                    .iter()
+                    .map(|zone| listed_members(zone.item.expanded, zone.members.len())),
+            ),
         });
         let main_lists = MainLists {
             notices: newest_notices(&notices, MAIN_NOTICE_LIMIT),
@@ -1836,6 +1853,8 @@ impl App {
         }
         sync_model(&m.this_pc, this_pc);
         sync_model(&m.connected, connected);
+        sync_model(&m.this_pc_zoned, this_pc_zoned);
+        sync_model(&m.connected_zoned, connected_zoned);
         sync_model(&m.all_speakers, flyout_speakers);
         self.sync_zones(zones);
         sync_model(&m.notices, main_notices);
@@ -1999,12 +2018,14 @@ impl App {
         sync_model(&m.zones, items);
     }
 
-    /// The shape of the zones' member lists the windows show now.
+    /// The shape of the zones' member lists the flyout shows now.
     fn zone_shape_shown(&self) -> u64 {
         let kept = self.models.zone_models.borrow();
         zone_shape(self.models.zones.iter().map(|zone| {
-            kept.get(zone.id.as_str())
-                .map_or(0, |models| models.members.row_count())
+            let members = kept
+                .get(zone.id.as_str())
+                .map_or(0, |models| models.members.row_count());
+            listed_members(zone.expanded, members)
         }))
     }
 
@@ -2372,6 +2393,10 @@ impl App {
             with_app(&w, |app| app.update(|b| b.remove_from_zone(&id)))
         });
         let w = weak.clone();
+        main.on_speaker_only_this_requested(move |id| {
+            with_app(&w, |app| app.update(|b| b.only_this_speaker(&id)))
+        });
+        let w = weak.clone();
         main.on_refresh_devices(move || with_app(&w, |app| app.update(|b| b.refresh_devices())));
         let w = weak.clone();
         main.on_show_virtual_devices_toggled(move |on| {
@@ -2502,6 +2527,10 @@ impl App {
         flyout.on_speaker_toggled(move |id| with_app(&w, |app| app.toggle_speaker(&id)));
         let w = weak.clone();
         flyout.on_zone_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_zone(&id))));
+        let w = weak.clone();
+        flyout.on_zone_expanded_changed(move |id, open| {
+            with_app(&w, |app| app.set_zone_expanded(&id, open))
+        });
         let w = weak.clone();
         flyout.on_preset_recall_requested(move |id| with_app(&w, |app| app.recall_preset(&id)));
         let w = weak.clone();
@@ -4279,6 +4308,7 @@ pub fn speaker_item(
         cast_group_note: SharedString::default(),
         group_note: SharedString::default(),
         zone_id: SharedString::default(),
+        zone_name: SharedString::default(),
         zone_movable: speaker.in_target.is_none(),
         // Needs the zone: set by the caller (`App::refresh`).
         zone_note: SharedString::default(),
@@ -4312,7 +4342,6 @@ fn missing_item(strings: &Strings<'_>, state: &AppState, zone_id: &str, id: &str
     }
 }
 
-/// The words of a zone member's note.
 /// Whether a zone member's row is dimmed: as on the Mac, one that can't
 /// play with its zone, whether it is listed or not.
 fn zone_row_dimmed(row: ui_model::ZoneRow<'_>, note: ui_model::ZoneNote<'_>) -> bool {
@@ -4323,6 +4352,7 @@ fn zone_row_dimmed(row: ui_model::ZoneRow<'_>, note: ui_model::ZoneNote<'_>) -> 
         )
 }
 
+/// The words of a zone member's note.
 fn zone_note(strings: &Strings<'_>, note: ui_model::ZoneNote<'_>) -> SharedString {
     match note {
         ui_model::ZoneNote::NeedsAirPlay2 => strings.get_needs_airplay2(),
@@ -7414,6 +7444,7 @@ mod tests {
         }
     }
 
+    // covers: S308 (every updater notice's text comes from strings.slint)
     #[test]
     fn the_updater_texts() {
         use ui_model::UpdaterNotice as N;
@@ -8099,7 +8130,22 @@ mod tests {
             "airplay:left"
         );
         assert_eq!(m.zones.row_data(2).unwrap().total, 0, "Office is empty");
-        assert!(!app.main.get_this_pc_all_in_zones());
+        let compact = ids(&m.connected_zoned);
+        assert!(
+            compact.iter().any(|id| id == "airplay:kitchen"),
+            "{compact:?}"
+        );
+        assert!(
+            compact.iter().all(|id| zoned.contains(&id.as_str())),
+            "only zone members get a compact row"
+        );
+        let kitchen = m
+            .connected_zoned
+            .iter()
+            .find(|row| row.id == "airplay:kitchen")
+            .unwrap();
+        assert_eq!(kitchen.zone_name, "Living Room");
+        assert_eq!(kitchen.zone_id, "zone:living");
     }
 
     // covers: S245 (a zone's rows and its count agree; a hidden member has
@@ -8192,6 +8238,27 @@ mod tests {
         );
     }
 
+    /// As on the Mac, the Cast note needs a Cast speaker on: a zone of the
+    /// PC's speakers and a Cast speaker that is off has no note.
+    // covers: S246
+    #[test]
+    fn a_cast_member_off_beside_a_local_speaker_has_no_note() {
+        let mut backend = MockBackend::zones_preview();
+        backend.add_zone("zone:pc", "PC", &["local:speakers", "cc:attic"]);
+        backend.retain_speakers(|s| s.id != "cc:porch");
+        let app = app_over(backend);
+        let state = app.snapshot();
+        let zone = state.zones.iter().find(|z| z.id == "zone:pc").unwrap();
+        assert!(state.speaker("local:speakers").unwrap().enabled);
+        let attic = state.speaker("cc:attic").unwrap();
+        assert!(!attic.enabled);
+        assert_eq!(
+            state.zone_note(zone, ui_model::ZoneRow::Listed(attic)),
+            None,
+            "no Cast speaker is on, so nothing kept this one off"
+        );
+    }
+
     #[test]
     fn a_zone_header_counts_its_speakers() {
         let app = app_over(MockBackend::new());
@@ -8206,10 +8273,46 @@ mod tests {
             strings.invoke_zone_value(2, 5, 1),
             "2 of 5 speakers on, 1 waiting"
         );
+        assert_eq!(strings.invoke_zone_value(1, 1, 0), "1 of 1 speaker on");
+        assert_eq!(
+            strings.invoke_zone_value(1, 1, 1),
+            "1 of 1 speaker on, 1 waiting"
+        );
         assert_eq!(
             strings.invoke_zone_label("Living Room".into()),
             "Living Room, zone"
         );
+    }
+
+    #[test]
+    fn go_to_zone_with_no_member_found_lands_on_the_arrow_which_folds_it() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:garage", "Garage", &["airplay:not-here"]);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        draw_frames();
+        let expanded = || {
+            app.models
+                .zones
+                .iter()
+                .find(|zone| zone.id == "zone:garage")
+                .expect("the zone is listed")
+                .expanded
+        };
+        assert!(expanded());
+
+        app.main.set_focus_zone_part(RowPart::Toggle);
+        app.main.set_focus_zone_id("zone:garage".into());
+        draw_frames();
+        assert_eq!(
+            app.main_focus.borrow().zone,
+            Some(("zone:garage".into(), RowPart::Toggle)),
+            "the arrow stands in for the toggle, which has nothing to switch"
+        );
+        press(app.main.window(), " ");
+        assert!(!expanded(), "Space folded the zone");
+        press(app.main.window(), Key::Return);
+        assert!(expanded(), "Enter unfolded it");
     }
 
     #[test]
@@ -8234,6 +8337,13 @@ mod tests {
         main.invoke_zone_expanded_changed("zone:office".into(), false);
         assert!(!app.models.zones.row_data(2).unwrap().expanded);
         main.invoke_zone_expanded_changed("zone:office".into(), true);
+        assert!(app.models.zones.row_data(2).unwrap().expanded);
+        // The flyout folds the same zone the main window does, until AudioSync quits.
+        app.flyout
+            .invoke_zone_expanded_changed("zone:office".into(), false);
+        assert!(!app.models.zones.row_data(2).unwrap().expanded);
+        app.flyout
+            .invoke_zone_expanded_changed("zone:office".into(), true);
         assert!(app.models.zones.row_data(2).unwrap().expanded);
 
         main.invoke_speaker_remove_from_zone_requested("local:speakers".into());
@@ -8502,6 +8612,37 @@ mod tests {
         assert!(
             FLYOUT.removed_by(member_moved).speakers,
             "a zone's member rows are rebuilt"
+        );
+    }
+
+    #[test]
+    fn folding_a_zone_in_the_flyout_removes_its_member_rows() {
+        assert_eq!(listed_members(true, 3), 3);
+        assert_eq!(listed_members(false, 3), 0);
+        let open = FlyoutCounts {
+            zone_members: zone_shape([listed_members(true, 2)].into_iter()),
+            ..FLYOUT
+        };
+        let folded = FlyoutCounts {
+            zone_members: zone_shape([listed_members(false, 2)].into_iter()),
+            ..FLYOUT
+        };
+        assert!(
+            open.removed_by(folded).speakers,
+            "a member that had the focus gives it back"
+        );
+        let empty_open = FlyoutCounts {
+            zone_members: zone_shape([listed_members(true, 0)].into_iter()),
+            ..FLYOUT
+        };
+        let empty_folded = FlyoutCounts {
+            zone_members: zone_shape([listed_members(false, 0)].into_iter()),
+            ..FLYOUT
+        };
+        assert_eq!(
+            empty_open.removed_by(empty_folded),
+            FlyoutParts::default(),
+            "an empty zone has no rows to remove"
         );
     }
 

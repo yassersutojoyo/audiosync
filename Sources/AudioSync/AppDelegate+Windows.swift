@@ -28,7 +28,7 @@ extension AppDelegate {
         nowPlaying.onAutomationDenied = { [weak self] bundleID, denied in
             self?.automationChanged(bundleID, denied: denied)
         }
-        nowPlaying.mayRaisePrompt = permissions.step(.automation, state: .notAsked, userAction: false) == .go
+        nowPlaying.mayRaisePrompt = permissions.mayRaiseAutomationPrompt
         nowPlaying.onPromptHeld = { [weak self] in
             _ = self?.permissionAllows(.automation, state: .notAsked, origin: .automatic)
         }
@@ -171,7 +171,9 @@ extension AppDelegate {
     private func showPermissionOffer() {
         // The setup window asks for these itself while it is open.
         let offer = setupWindow?.isOpen == true ? nil : permissions.offer
-        if appModel.permissionOffer != offer { appModel.permissionOffer = offer }
+        guard appModel.permissionOffer != offer else { return }
+        DebugTrace.log("Permission card: \(offer?.rawValue ?? "none")")
+        appModel.permissionOffer = offer
     }
 
     // MARK: - Permission setup window
@@ -351,6 +353,7 @@ extension AppDelegate {
         a.openWebRemote = { [weak self] in self?.openWebRemoteWindow() }
         a.refreshDevices = { [weak self] in self?.rescanDevices() }
         a.refreshExternalState = { [weak self] in self?.rereadExternalState() }
+        a.refreshModel = { [weak self] in self?.pushModel() }
         a.mainWindowVisible = { [weak self] visible in
             guard let self, visible != self.nowPlayingOnScreen else { return }
             self.nowPlayingOnScreen = visible   // Now Playing polls only while someone sees it
@@ -365,13 +368,14 @@ extension AppDelegate {
         }
         a.toggleZone = { [weak self] id in self?.toggleZone(id) }
         a.deleteZone = { [weak self] id in self?.deleteZone(id) }
-        a.renameZone = { [weak self] id in self?.promptRenameZone(id) }
+        a.renameZone = { [weak self] id, typed in self?.renameZone(id, to: typed) }
         a.calibrateZone = { [weak self] id in self?.calibrateZone(id) }
         a.setZoneVolume = { [weak self] id, position in self?.setZoneVolume(id, position) }
         a.newZone = { [weak self] in self?.promptNewZone() }
         a.newZoneWithSpeaker = { [weak self] key, name in self?.promptNewZone(with: key, name: name) }
         a.moveToZone = { [weak self] key, id in self?.moveToZone(key, id) }
         a.removeFromZone = { [weak self] key in self?.removeFromZone(key) }
+        a.onlyThisSpeaker = { [weak self] key in self?.onlyThisSpeaker(key) }
         a.recallPreset = { [weak self] id in self?.recallPreset(id, from: .app) }
         a.savePreset = { [weak self] in self?.promptSavePreset() }
         a.renamePreset = { [weak self] id in self?.promptRenamePreset(id) }
@@ -531,6 +535,7 @@ extension AppDelegate {
         publishEqualizerCurve()
         rememberZoneNames()
         publish(\.zones, zoneSnapshot())
+        appModel.zonesListed(Set(appModel.zones.map(\.id)))
         publishPresets()
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)

@@ -301,37 +301,31 @@ final class StreamEngine {
         detachOutputs(uids: [uid])
     }
 
-    /// Switches output `uid` off like `detachOutputs`; `completion` runs on
-    /// the main thread once it stopped, at once when `uid` isn't attached.
-    func detachOutput(uid: String, then completion: @escaping () -> Void) {
-        guard let renderer = renderers.removeValue(forKey: uid) else {
-            completion()
-            return
-        }
-        let bluetooth = bluetoothOutputs + (renderer.isBluetooth ? 1 : 0)
-        DebugTrace.log("[AudioSync] output(s) fading out: \(uid)")
-        retirement.remove([renderer]) {
-            StreamEngine.logStopped(uid, renderer, why: "removed", bluetoothOutputs: bluetooth)
-            completion()
-        }
-        watchFades()
+    /// The `LocalOutputEngine` requirement; see `detachOutputs(uids:then:)`.
+    func detachOutputs(uids: [String]) {
+        detachOutputs(uids: uids, then: nil)
     }
 
     /// Switches outputs off (S185, S186): all of them fade out at once and
     /// stop together once their devices have played the fades, at most
     /// 500 ms later, without holding up the main thread. Unknown UIDs are
-    /// skipped.
-    func detachOutputs(uids: [String]) {
+    /// skipped. `completion` runs on the main thread once they stopped, at
+    /// once when none of `uids` is attached.
+    func detachOutputs(uids: [String], then completion: (() -> Void)?) {
         let bluetooth = bluetoothOutputs
         let leaving = uids.sorted().compactMap { uid in
             renderers.removeValue(forKey: uid).map { (uid: uid, renderer: $0) }
         }
-        guard !leaving.isEmpty else { return }
+        guard !leaving.isEmpty else {
+            completion?()
+            return
+        }
         DebugTrace.log("[AudioSync] output(s) fading out: " + leaving.map { $0.uid }.joined(separator: ", "))
         retirement.remove(leaving.map { $0.renderer }) {
             for output in leaving {
                 StreamEngine.logStopped(output.uid, output.renderer, why: "removed", bluetoothOutputs: bluetooth)
             }
+            completion?()
         }
         watchFades()
     }
@@ -342,6 +336,20 @@ final class StreamEngine {
         guard let renderer = renderers[uid] else { return }
         renderer.setDelay(ms: ms)
         DebugTrace.log("[AudioSync] output \(uid): delay \(ms) ms")
+    }
+
+    /// For the debug log: how far output `uid`'s reader trails the newest
+    /// frame against its delay, which drift may move inside the 50 ms dead
+    /// band (S50, S56), and the corrections it counted (S158).
+    func driftNote(uid: String) -> String {
+        guard let renderer = renderers[uid] else { return "\(uid): no renderer" }
+        let lag = renderer.lagFrames
+        let delay = renderer.newestDelayFrames
+        let counted = renderer.counters
+        let ms = captureRate > 0 ? Double(lag - delay) * 1000 / captureRate : 0
+        return "\(uid): lag \(lag) delay \(delay) frames, lag-delay \(ms) ms, drift skips \(counted.driftSkips) "
+            + "(\(counted.driftSkipFrames) frames), drift silences \(counted.driftSilences) "
+            + "(\(counted.driftSilenceFrames) frames)"
     }
 
     /// A new linear gain for output `uid`, applied from its next callback (S64).

@@ -90,7 +90,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     func windowDidDeminiaturize(_ notification: Notification) { updateOnScreen() }
     func windowDidBecomeKey(_ notification: Notification) {
         updateOnScreen()
-        model.actions.refreshExternalState()
+        // The window turns key again as the menu bar panel closes; the refresh waits until it is gone.
+        model.whenPanelQuiet("window refresh") { [weak self] in self?.model.actions.refreshExternalState() }
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -108,8 +109,8 @@ private let accent = Brand.teal
 struct MainView: View {
     @ObservedObject var model: AppModel
     @StateObject private var gearAnchor = MenuAnchor.Box()
-    @StateObject private var zoneDisclosure = ZoneDisclosure()
     @StateObject private var sheetRoom = SheetRoom()
+    @StateObject private var zoneDisclosure = ZoneDisclosure()
 
     var body: some View {
         let t = model.text
@@ -131,29 +132,33 @@ struct MainView: View {
                 FadingScroll(onBlankTap: { model.closeDelayPanels() }) {
                     let all = model.layout
                     let layout = model.zonelessLayout
-                    VStack(alignment: .leading, spacing: BrandTokens.Spacing.sectionGap) {
-                        if model.noSpeakerOn {
-                            Text(t.noSpeakerOn)
-                                .font(.callout)
-                                .foregroundStyle(Brand.secondaryText)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(.leading, 4)
+                    let zoned = model.zonedLayout
+                    ScrollViewReader { proxy in
+                        VStack(alignment: .leading, spacing: BrandTokens.Spacing.sectionGap) {
+                            if model.noSpeakerOn {
+                                Text(t.noSpeakerOn)
+                                    .font(.callout)
+                                    .foregroundStyle(Brand.secondaryText)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(.leading, 4)
+                            }
+                            // This Mac first: few, stable rows that don't shift as
+                            // other speakers come and go. Then the zones, then every
+                            // connected speaker (AirPlay and local) by name; a
+                            // speaker in a zone has its full row under its zone and
+                            // a compact one in its section.
+                            speakerSection(t.thisMacSection, speakers: layout.thisMac, zoned: zoned.thisMac,
+                                           empty: model.hidden.inThisMac ? t.allSpeakersHidden : t.thisMacNone,
+                                           scroll: proxy)
+                            if !model.zones.isEmpty { zonesSection(t) }
+                            speakerSection(t.connectedSection, speakers: layout.connected, zoned: zoned.connected,
+                                           empty: model.hidden.inConnected ? t.allSpeakersHidden
+                                               : model.networkEmptyText,
+                                           scroll: proxy,
+                                           connected: true, airPlayListed: all.connected.contains { $0.isAirPlay },
+                                           problem: model.airPlayProblem,
+                                           localNetworkHint: model.localNetworkHint)
                         }
-                        // This Mac first: few, stable rows that don't shift as
-                        // other speakers come and go. Then the zones, then every
-                        // connected speaker (AirPlay and local) by name; a
-                        // speaker in a zone shows only under its zone.
-                        speakerSection(t.thisMacSection, speakers: layout.thisMac,
-                                       empty: model.hidden.inThisMac ? t.allSpeakersHidden
-                                           : model.allInZones(all.thisMac) ? t.thisMacAllInZones : t.thisMacNone)
-                        if !model.zones.isEmpty { zonesSection(t) }
-                        speakerSection(t.connectedSection, speakers: layout.connected,
-                                       empty: model.hidden.inConnected ? t.allSpeakersHidden
-                                           : model.allInZones(all.connected) ? t.connectedAllInZones
-                                           : model.networkEmptyText,
-                                       connected: true, airPlayListed: all.connected.contains { $0.isAirPlay },
-                                       problem: model.airPlayProblem,
-                                       localNetworkHint: model.localNetworkHint)
                     }
                     .padding(.bottom, 4)
                 }
@@ -351,6 +356,7 @@ struct MainView: View {
             VStack(spacing: BrandTokens.Spacing.cardGap) {
                 ForEach(model.zones) { zone in
                     ZoneCard(model: model, disclosure: zoneDisclosure, zone: zone)
+                        .id(ZoneAnchor(id: zone.id))
                 }
             }
         }
@@ -363,11 +369,15 @@ struct MainView: View {
     /// Network hint. Denied Local Network access shows even over a stale list.
     /// `airPlayListed`: an AirPlay speaker is listed, in a zone or not, so
     /// the AirPlay delay stays here.
-    private func speakerSection(_ title: String, speakers: [AppModel.Speaker], empty: String,
+    /// `zoned`: its speakers that are in a zone, as compact rows after the
+    /// others; `scroll` brings a zone into view for their zone chips.
+    private func speakerSection(_ title: String, speakers: [AppModel.Speaker], zoned: [AppModel.Speaker],
+                                empty: String, scroll: ScrollViewProxy,
                                 connected: Bool = false, airPlayListed: Bool = false, problem: String? = nil,
                                 localNetworkHint: LocalNetworkHint = .none) -> some View {
         let hint = model.text.localNetworkHint(localNetworkHint, short: false)
         let hasAirPlay = airPlayListed || speakers.contains { $0.isAirPlay }
+        let listsNone = speakers.isEmpty && zoned.isEmpty
         return VStack(alignment: .leading, spacing: 6) {
             SectionTitle(title).padding(.leading, 4)
             Card(padding: 4) {
@@ -376,28 +386,29 @@ struct MainView: View {
                         AirPlayProblemView(message: problem, canRetry: true,
                                            text: model.text) { model.actions.retryAirPlay() }
                             .padding(10)
-                        if !speakers.isEmpty { Divider() }
-                    } else if speakers.isEmpty {
+                        if !listsNone { Divider() }
+                    } else if listsNone {
                         emptyNote(empty, hint: hint, under: [])
                     } else if hasAirPlay && localNetworkHint == .denied, let hint {
                         LocalNetworkHintView(message: hint, text: model.text).padding(10)
                         Divider()
                     }
                     ForEach(Array(speakers.enumerated()), id: \.element.id) { index, speaker in
-                        if index > 0 { Divider().padding(.leading, 52) }
+                        if index > 0 { Divider().padding(.leading, ZoneLook.nameColumn) }
                         SpeakerRow(model: model, speaker: speaker, showTag: connected)
                     }
                     if connected && problem == nil && hasAirPlay {
                         // One AirPlay delay for every local speaker, not on any row (S181).
-                        Divider().padding(.leading, 52)
+                        if !speakers.isEmpty { Divider().padding(.leading, ZoneLook.nameColumn) }
                         AirPlayDelayRow(model: model)
                     }
-                    if connected && problem == nil && !speakers.isEmpty, let note = model.networkNote {
+                    if !zoned.isEmpty { zonedRows(zoned, scroll: scroll) }
+                    if connected && problem == nil && !listsNone, let note = model.networkNote {
                         // Say where AirPlay or the Google Cast search stands, under the rows.
                         Divider()
                         // The note leaves the network advice to the hint, so show it unless it is above.
                         emptyNote(note, hint: hasAirPlay && localNetworkHint == .denied ? nil : hint,
-                                  under: speakers)
+                                  under: zoned.isEmpty ? speakers : [])
                     }
                     if connected && model.castCanAdd {
                         Divider()
@@ -407,6 +418,48 @@ struct MainView: View {
                             .accessibilityHint(model.text.castAddBody)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(10)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The compact rows of a section's speakers that are in a zone, under a
+    /// label whose line is the separator above them, one box per zone. Their
+    /// chip scrolls to the zone and focuses its switch.
+    private func zonedRows(_ speakers: [AppModel.Speaker], scroll: ScrollViewProxy) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: ZoneLook.labelLineGap) {
+                Text(model.text.inZones.uppercased())
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Brand.secondaryText)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .accessibilityLabel(model.text.inZones)
+                    .accessibilityAddTraits(.isHeader)
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(height: 1)
+                    .accessibilityHidden(true)
+            }
+            .padding(.leading, ZoneLook.nameColumn)
+            .padding(.trailing, BrandTokens.Spacing.rowPaddingX)
+            .padding(.top, ZoneLook.labelTop)
+            .padding(.bottom, ZoneLook.labelBottom)
+            VStack(spacing: ZoneLook.groupGap) {
+                ForEach(ZoneLayout.byZone(speakers) { model.zone(holding: $0.key)?.id }) { group in
+                    if let zone = model.zones.first(where: { $0.id == group.zone }) {
+                        ZoneMemberGroup {
+                            ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, speaker in
+                                if index > 0 { Divider().padding(.leading, ZoneLook.nameColumn) }
+                                ZoneMemberCompactRow(model: model, speaker: speaker, zone: zone) {
+                                    withAnimation(AppModel.delayPanelAnimation) {
+                                        scroll.scrollTo(ZoneAnchor(id: zone.id), anchor: .top)
+                                    }
+                                    model.focusZone = zone.id
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -470,6 +523,20 @@ private struct Card<Content: View>: View {
                 .fill(Color(nsColor: .controlBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: BrandTokens.Radius.card)
                 .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+    }
+}
+
+/// One tinted box around a zone's member rows; whether a member plays shows
+/// in its badge and bold name, not in a box of its own.
+private struct ZoneMemberGroup<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(spacing: 0) { content }
+            .background(RoundedRectangle(cornerRadius: ZoneLook.groupRadius)
+                .fill(accent.opacity(ZoneLook.groupFill)))
+            .overlay(RoundedRectangle(cornerRadius: ZoneLook.groupRadius)
+                .strokeBorder(accent.opacity(ZoneLook.groupBorder), lineWidth: ZoneLook.groupBorderWidth))
     }
 }
 
@@ -581,16 +648,32 @@ private struct PresetsCard: View {
     }
 }
 
-/// The zones collapsed in this window; every zone opens expanded, and
-/// nothing is saved. An object rather than @State: the Command Line Tools
-/// toolchain ships without SwiftUI's macro plugins.
+/// The zones collapsed in one view: the main window and the menu bar panel
+/// each keep their own. Every zone opens expanded, and nothing is saved. An
+/// object rather than @State: the Command Line Tools toolchain ships without
+/// SwiftUI's macro plugins.
 final class ZoneDisclosure: ObservableObject {
     @Published private(set) var collapsed: Set<String> = []
+    /// True from a fold until its motion is over (`PanelFold`).
+    @Published private(set) var moving = false
+    private var folds = 0
 
     func isExpanded(_ id: String) -> Bool { !collapsed.contains(id) }
 
     func toggle(_ id: String) {
         if collapsed.remove(id) == nil { collapsed.insert(id) }
+        folds += 1
+        let fold = folds
+        let motion = PanelFold(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        guard motion.moves else {
+            moving = false
+            return
+        }
+        moving = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + motion.duration + 0.05) { [weak self] in
+            guard let self, self.folds == fold else { return }
+            self.moving = false
+        }
     }
 }
 
@@ -609,19 +692,32 @@ private struct ZoneCard: View {
 
     private var state: SpeakerState { model.state(of: zone) }
     private var expanded: Bool { disclosure.isExpanded(zone.id) }
+    // The icon greys out and folds then: unfolding still lists the missing speakers.
+    private var nonePresent: Bool { zone.present == 0 }
+    /// The header part that takes the focus from a member's Go to Zone.
+    @FocusState private var focused: ZoneHeaderHit.Area?
 
     var body: some View {
         let t = model.text
         Card(padding: 4) {
             VStack(spacing: 0) {
                 header(t)
-                if expanded {
-                    ForEach(zone.members) { member in
-                        Divider().padding(.leading, 52)
-                        if let speaker = model.speaker(of: member) {
-                            SpeakerRow(model: model, speaker: speaker, showTag: true, zoneNote: member.note)
-                        } else {
-                            ZoneMemberPlaceholder(member: member, text: t)
+                    .onChange(of: model.focusZone, initial: true) { _, id in
+                        if id == zone.id {
+                            focused = ZoneHeaderHit.goToZoneFocus(nonePresent: nonePresent)
+                            model.focusZone = nil
+                        }
+                    }
+                if expanded && !zone.members.isEmpty {
+                    ZoneMemberGroup {
+                        ForEach(Array(zone.members.enumerated()), id: \.element.id) { index, member in
+                            if index > 0 { Divider().padding(.leading, ZoneLook.nameColumn) }
+                            if let speaker = model.speaker(of: member) {
+                                SpeakerRow(model: model, speaker: speaker, showTag: true, zoneNote: member.note,
+                                           grouped: true)
+                            } else {
+                                ZoneMemberPlaceholder(member: member, text: t)
+                            }
                         }
                     }
                 }
@@ -632,7 +728,7 @@ private struct ZoneCard: View {
     }
 
     private func hit(_ area: ZoneHeaderHit.Area) {
-        switch ZoneHeaderHit.action(for: area) {
+        switch ZoneHeaderHit.action(for: area, nonePresent: nonePresent) {
         case .fold: withAnimation(AppModel.delayPanelAnimation) { disclosure.toggle(zone.id) }
         case .toggleZone: model.actions.toggleZone(zone.id)
         case .none: break
@@ -651,33 +747,49 @@ private struct ZoneCard: View {
             .buttonStyle(.plain)
             .foregroundStyle(Brand.secondaryText)
             .accessibilityLabel(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
+            .accessibilityValue(nonePresent ? model.countText(of: zone) : "")
             .help(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
+            // With nothing to switch the chevron speaks for the header, so it has the action too.
+            .accessibilityAction(named: t.renameZone) { model.startRename(zone) }
+            .focused($focused, equals: .chevron)
 
             Button { hit(.zoneIcon) } label: {
                 SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: state, size: 32)
             }
             .buttonStyle(.plain)
-            .disabled(zone.present == 0)   // none of its speakers is here
-            .opacity(zone.present == 0 ? 0.45 : 1)
+            .opacity(nonePresent ? 0.45 : 1)
+            // With nothing to switch, the chevron speaks for the header.
+            .accessibilityHidden(nonePresent)
             .accessibilityLabel(t.zoneLabel(zone.name))
-            .accessibilityValue(zone.present == 0 ? model.countText(of: zone)
+            .accessibilityValue(nonePresent ? model.countText(of: zone)
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
             .accessibilityHint(t.rowHint(state, note: nil))
+            .accessibilityAction(named: t.renameZone) { model.startRename(zone) }
             .help(t.help(state))
+            .focused($focused, equals: .zoneIcon)
             // The badge's gap to the name, as in a speaker row.
             .padding(.trailing, 4)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(zone.name)
-                    .font(.body.weight(state == .playing ? .semibold : .regular))
-                    .lineLimit(1)
-                    // Read through the switch's label.
-                    .accessibilityHidden(true)
-                    .onTapGesture { hit(.name) }
+                if model.isRenaming(zone) {
+                    InlineNameField(model: model, id: zone.id, placeholder: zone.name,
+                                    label: model.text.nameField(for: zone.name))
+                } else {
+                    Text(zone.name)
+                        .font(.body.weight(state == .playing ? .semibold : .regular))
+                        .lineLimit(1)
+                        // Read through the switch's label, whose Rename action replaces the double-click.
+                        .accessibilityHidden(true)
+                        // As on a speaker's name: a double-click renames, a single
+                        // click folds once it can't be a double-click.
+                        .gesture(TapGesture(count: 2).onEnded { model.startRename(zone) }
+                            .exclusively(before: TapGesture().onEnded { hit(.name) }))
+                }
                 countLine(t)
                     .onTapGesture { hit(.count) }
             }
-            .opacity(zone.present == 0 ? 0.45 : 1)
+            // The name field keeps full contrast while the user types.
+            .opacity(nonePresent && !model.isRenaming(zone) ? 0.45 : 1)
 
             Spacer(minLength: 8)
 
@@ -718,7 +830,7 @@ private struct ZoneCard: View {
     /// secondary text; read through the switch's value instead.
     private func countLine(_ t: UIStrings) -> some View {
         HStack(spacing: 0) {
-            if zone.present == 0 {
+            if nonePresent {
                 Text(model.countText(of: zone)).foregroundStyle(Brand.secondaryText)
             } else {
                 Text(t.zoneCount(on: zone.on, of: zone.total))
@@ -741,7 +853,7 @@ private struct ZoneCard: View {
 
     @ViewBuilder
     private func menuItems(_ t: UIStrings) -> some View {
-        Button(t.renameZone) { model.actions.renameZone(zone.id) }
+        Button(t.renameZone) { model.startRename(zone) }
         ForEach(targetChoices) { member in
             if let target = member.target {
                 Button(t.useTargetInstead(target.name)) { model.actions.useTargetInstead(zone.id, member.key) }
@@ -753,6 +865,141 @@ private struct ZoneCard: View {
                                                       present: zone.present))
         Divider()
         Button(t.deleteZone, role: .destructive) { model.delete(zone) }
+    }
+}
+
+/// Where Go to Zone scrolls: a zone's card, apart from every row's ID.
+private struct ZoneAnchor: Hashable {
+    let id: String
+}
+
+/// A zone member's compact row in its own section: the switch, which works
+/// as the one on its row under the zone, its name and a chip to the zone.
+/// No volume, delay or equalizer; its menu holds Go to Zone and Remove from
+/// Zone.
+private struct ZoneMemberCompactRow: View {
+    @ObservedObject var model: AppModel
+    let speaker: AppModel.Speaker
+    let zone: AppModel.Zone
+    let goToZone: () -> Void
+
+    private var state: SpeakerState { model.state(of: speaker) }
+
+    /// What its row under the zone says: a Cast speaker's state, the wait
+    /// for AirPlay 2, or the zone's note on it.
+    private var note: String? {
+        model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                           waitingForPtp: speaker.waitingForPtp,
+                           unannounced: speaker.unannounced, target: speaker.airPlayTarget)
+            ?? zone.members.first { $0.key == speaker.key }?.note
+    }
+
+    var body: some View {
+        let t = model.text
+        HStack(spacing: 12) {
+            Button { model.setEnabled(speaker, state.clickTurnsOn) } label: {
+                // As wide as a full row's switch, so the names line up.
+                SpeakerBadge(symbol: speaker.symbol, state: state, size: ZoneLook.compactBadge)
+                    .frame(width: ZoneLook.badgeColumn)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(t.inZoneLabel(speaker.name, zone: zone.name))
+            .accessibilityValue(t.value(state))
+            .accessibilityHint(t.rowHint(state, note: note))
+            .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker, in: .inZones) }
+            .help(t.help(state))
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    if model.isRenaming(speaker, in: .inZones) {
+                        InlineNameField(model: model, id: speaker.id, placeholder: speaker.systemName,
+                                        label: model.text.nameField(for: speaker.systemName))
+                    } else {
+                        Text(speaker.name)
+                            .font(.body.weight(state == .playing ? .semibold : .regular))
+                            .lineLimit(1)
+                            // The switch's Rename action replaces the double-click.
+                            .accessibilityHidden(true)
+                            // As on its row under the zone; a single click does nothing here.
+                            .gesture(TapGesture(count: 2).onEnded { model.startRename(speaker, in: .inZones) })
+                    }
+                    Button(action: goToZone) {
+                        HStack(spacing: 4) {
+                            Image(systemName: MenuBarView.zoneSymbol)
+                                .font(.system(size: 9))
+                            Text(zone.name)
+                                .font(.subheadline.weight(.medium))
+                                .lineLimit(1)
+                        }
+                        // The readable teal: the brand teal falls under 4.5:1 for small text.
+                        .foregroundStyle(Brand.tealText)
+                        .padding(.horizontal, ZoneLook.chipPaddingX)
+                        .frame(height: ZoneLook.chipHeight)
+                        .background(Capsule().fill(accent.opacity(ZoneLook.chipFill)))
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    // The name truncates first.
+                    .fixedSize()
+                    .accessibilityLabel(t.goToZoneLabel(zone.name))
+                    .help(t.goToZoneLabel(zone.name))
+                }
+                if let note {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(Brand.secondaryText)
+                        .lineLimit(2)
+                        .accessibilityHidden(true)
+                }
+            }
+            Spacer(minLength: 0)
+            Menu { menuItems(t) } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .tint(Brand.tealText)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel(t.speakerOptions(name: speaker.name))
+            .help(t.speakerOptions(name: speaker.name))
+        }
+        .padding(.vertical, ZoneLook.compactPaddingY)
+        .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
+        .contentShape(Rectangle())
+        .contextMenu { menuItems(t) }
+    }
+
+    @ViewBuilder
+    private func menuItems(_ t: UIStrings) -> some View {
+        Button(t.goToZone, action: goToZone)
+        Button(t.removeFromZone) { model.actions.removeFromZone(speaker.key) }
+    }
+}
+
+/// A speaker's or zone's name, editable in place in its row. Like a delay
+/// field, Return or the focus leaving applies it and Escape drops it; an empty
+/// name brings back `placeholder`: a speaker's system name, a zone's name.
+private struct InlineNameField: View {
+    @ObservedObject var model: AppModel
+    let id: String
+    let placeholder: String
+    let label: String
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(placeholder, text: $model.renameText)
+            .textFieldStyle(.roundedBorder)
+            .frame(maxWidth: 220)
+            .accessibilityLabel(label)
+            .focused($focused)
+            .onSubmit { model.commitRename(id: id) }
+            .onExitCommand { model.dropRename() }
+            // A menu item starts the rename: the field takes the focus once
+            // the menu has closed.
+            .onAppear { DispatchQueue.main.async { focused = true } }
+            .onChange(of: focused) { _, now in
+                if !now { model.commitRename(id: id) }
+            }
     }
 }
 
@@ -790,6 +1037,8 @@ struct SpeakerRow: View {
     var showTag = false
     /// What the speaker's zone says about it, shown when its own note is empty.
     var zoneNote: String? = nil
+    /// In its zone's box, which takes the place of the row's own playing box.
+    var grouped = false
 
     private var tag: String? { showTag ? model.text.speakerTag(speaker.tag, airPlay2: speaker.airPlay2) : nil }
 
@@ -803,8 +1052,6 @@ struct SpeakerRow: View {
     @FocusState private var deviceVolumeFixFocused: Bool
     /// The delay value, which takes the focus back when its panel closes.
     @FocusState private var delayFocused: Bool
-    /// The name field while the speaker is being renamed.
-    @FocusState private var nameFocused: Bool
     /// The switch, which takes the focus when a neighbouring row is hidden.
     @FocusState private var switchFocused: Bool
     /// The volume slider is held; a row closed mid-drag never sees the release.
@@ -828,8 +1075,9 @@ struct SpeakerRow: View {
 
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 6) {
-                        if model.renaming == speaker.id {
-                            nameField(t)
+                        if model.isRenaming(speaker, in: .row) {
+                            InlineNameField(model: model, id: speaker.id, placeholder: speaker.systemName,
+                                        label: model.text.nameField(for: speaker.systemName))
                         } else {
                             Text(speaker.name)
                                 .font(.body.weight(state == .playing ? .semibold : .regular))
@@ -951,7 +1199,7 @@ struct SpeakerRow: View {
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
         .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.row)
-            .fill(state == .playing ? accent.opacity(0.08) : Color.clear))
+            .fill(state == .playing && !grouped ? accent.opacity(0.08) : Color.clear))
         // A click on the row's box, between its dividers and its open
         // panel's blank space included, works like its delay value; a row
         // without one (AirPlay, the reference) is outside every panel. The
@@ -963,25 +1211,6 @@ struct SpeakerRow: View {
 
     private func rowTapped() {
         if speaker.offsetMs != nil { model.toggleDelayPanel(speaker.id) } else { model.closeDelayPanels() }
-    }
-
-    /// The name, editable in place. Like a delay field, Return or the focus
-    /// leaving applies it and Escape drops it; an empty name brings back the
-    /// system name, which the field shows as its placeholder.
-    private func nameField(_ t: UIStrings) -> some View {
-        TextField(speaker.systemName, text: $model.renameText)
-            .textFieldStyle(.roundedBorder)
-            .frame(maxWidth: 220)
-            .accessibilityLabel(t.speakerNameField(system: speaker.systemName))
-            .focused($nameFocused)
-            .onSubmit { model.commitRename(speaker) }
-            .onExitCommand { model.dropRename() }
-            // A menu item starts the rename: the field takes the focus once
-            // the menu has closed.
-            .onAppear { DispatchQueue.main.async { nameFocused = true } }
-            .onChange(of: nameFocused) { _, focused in
-                if !focused { model.commitRename(speaker) }
-            }
     }
 
     @ViewBuilder
@@ -1012,11 +1241,14 @@ struct SpeakerRow: View {
         }
     }
 
-    /// Move to Zone (the other zones, then New Zone…), and Remove from Zone
-    /// while the speaker is in one.
+    /// Move to Zone (the other zones, then New Zone…), and Only This Speaker
+    /// and Remove from Zone while the speaker is in one.
     @ViewBuilder
     private func zoneItems(_ t: UIStrings) -> some View {
         let current = model.zone(holding: speaker.key)
+        if current?.members.contains(where: { $0.key == speaker.key && $0.speakerID != nil }) == true {
+            Button(t.onlyThisSpeaker) { model.actions.onlyThisSpeaker(speaker.key) }
+        }
         Menu(t.moveToZone) {
             let others = model.zones.filter { $0.id != current?.id }
             ForEach(others) { zone in

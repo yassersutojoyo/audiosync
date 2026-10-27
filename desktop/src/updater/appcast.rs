@@ -249,6 +249,7 @@ mod tests {
         v("10.0.22631")
     }
 
+    // covers: S295
     #[test]
     fn an_appcast_with_a_doctype_is_refused_and_a_broken_item_is_skipped() {
         let doctype = format!(
@@ -270,6 +271,7 @@ mod tests {
         assert_eq!(appcast.items[0].short_version, v("0.8"));
     }
 
+    // covers: S295
     #[test]
     fn version_elements_win_over_enclosure_attributes() {
         let text = feed(
@@ -282,6 +284,7 @@ mod tests {
         assert_eq!(appcast.items[1].short_version, v("0.6.2"));
     }
 
+    // covers: S296
     #[test]
     fn versions_compare_as_dotted_numbers_and_a_non_numeric_part_skips_the_item() {
         assert!(v("0.7.10") > v("0.7.9"));
@@ -300,6 +303,7 @@ mod tests {
         assert_eq!(update.version_text, "0.8.1");
     }
 
+    // covers: S296
     #[test]
     fn channel_items_plain_windows_and_a_minimum_system_version_above_the_running_one_are_skipped()
     {
@@ -328,6 +332,7 @@ mod tests {
         assert_eq!(arm.version_text, "1.0");
     }
 
+    // covers: S296
     #[test]
     fn the_newest_above_the_running_version_wins_and_the_same_or_older_offers_nothing() {
         let text = feed(&format!(

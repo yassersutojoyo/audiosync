@@ -2104,6 +2104,7 @@ pub(crate) mod tests {
         );
     }
 
+    // covers: C77a
     #[test]
     fn only_a_cast_speaker_without_an_offset_waits_for_the_unknown_start_guess() {
         use audiosync_cast::audio::Codec;
