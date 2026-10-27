@@ -4472,7 +4472,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn rename_zone(&mut self, id: &str, name: &str) {
-        self.zones.rename(id, name);
+        self.zones
+            .rename(id, &crate::speaker_names::normalized(name));
     }
 
     fn delete_zone(&mut self, id: &str) {
