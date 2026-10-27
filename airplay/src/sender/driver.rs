@@ -2933,6 +2933,92 @@ mod tests {
         true
     }
 
+    // A, queued for AirPlay 2 behind X's connect, holds the one place, so B
+    // is refused; when A's turn comes its records send it to AirPlay 1, and
+    // B gets the place without waiting for another AirPlay 2 session to end.
+    // covers: P169, P222
+    #[test]
+    fn a_queued_airplay2_start_that_ends_before_its_session_hands_the_place_on() {
+        use crate::discovery::{DeviceId, ScopedAddr, ServiceKind, ServiceRecord};
+        use std::net::{IpAddr, Ipv4Addr, TcpListener};
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency)
+            .with_airplay2(true, false, Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]))
+            .with_airplay2_sessions(1);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let port = listener.local_addr().expect("an address").port();
+        let record = |kind: ServiceKind, n: u8, txt: Vec<String>| ServiceRecord {
+            kind,
+            instance: format!("Speaker {n}"),
+            host: format!("speaker-{n}.local"),
+            port,
+            txt: txt.into_iter().map(String::into_bytes).collect(),
+            addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
+        };
+        let raop = |n: u8| {
+            let txt = [
+                "txtvers=1",
+                "ch=2",
+                "cn=0",
+                "et=0",
+                "sr=44100",
+                "ss=16",
+                "tp=UDP",
+            ];
+            record(ServiceKind::Raop, n, txt.map(str::to_owned).to_vec())
+        };
+        let airplay = |n: u8| {
+            let id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, n]);
+            let txt = vec![
+                "features=0x0,0x10040".to_owned(),
+                "flags=0x4".to_owned(),
+                "model=Speaker1,1".to_owned(),
+                format!("deviceid={id}"),
+            ];
+            record(ServiceKind::AirPlay, n, txt)
+        };
+        let key = |n: u8| DeviceKey::Id(DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, n]));
+        let device = |n: u8, raop: Option<&ServiceRecord>, airplay: Option<&ServiceRecord>| {
+            Device::from_records(key(n), raop, airplay).expect("a device")
+        };
+        let options = || SpeakerOptions::new(Volume::Db(-20.0));
+        let counters = || Arc::new(SpeakerCounters::default());
+
+        driver.add_speaker(device(1, Some(&raop(1)), None), options(), counters(), now);
+        assert!(matches!(driver.speakers[&key(1)].phase, Phase::Active(_)));
+        driver.add_speaker(
+            device(2, None, Some(&airplay(2))),
+            options(),
+            counters(),
+            now,
+        );
+        assert!(matches!(
+            driver.speakers[&key(2)].phase,
+            Phase::Queued { ap2: true }
+        ));
+        driver.add_speaker(
+            device(3, None, Some(&airplay(3))),
+            options(),
+            counters(),
+            now,
+        );
+        assert!(driver.speakers[&key(3)].ap2_waiting, "B is refused");
+
+        // Discovery now shows A's RAOP record too, as the device its turn reads.
+        driver.speakers.get_mut(&key(2)).expect("A").device =
+            device(2, Some(&raop(2)), Some(&airplay(2)));
+        driver.run_timers(now + crate::connects::CONNECT_SPACING);
+        assert!(matches!(driver.speakers[&key(2)].phase, Phase::Active(_)));
+        let b = &driver.speakers[&key(3)];
+        assert!(!b.ap2_waiting && b.holds_ap2(), "B gets the place A let go");
+        drop(listener);
+    }
+
     /// A verifier without keys, for driving a session by hand.
     struct OpenVerifier;
 
