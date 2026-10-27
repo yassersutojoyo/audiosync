@@ -78,10 +78,10 @@ struct PanelZoneHeader: View {
         .onHover { hover.isHovered = $0 }
     }
 
-    // No animation: the popover resizes to the new height on its own.
+    // The controller animates the fold, so the panel resizes with the rows.
     private func hit(_ area: ZoneHeaderHit.Area) {
         switch ZoneHeaderHit.action(for: area, nonePresent: nonePresent) {
-        case .fold: disclosure.toggle(zone.id)
+        case .fold: model.foldPanelZone { disclosure.toggle(zone.id) }
         case .toggleZone: model.actions.toggleZone(zone.id)
         case .none: break
         }

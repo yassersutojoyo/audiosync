@@ -230,6 +230,42 @@ struct PanelResize: Equatable {
     }
 }
 
+/// The open panel's window frame for each content size, worked out from the
+/// frame the popover itself gave it once the open was over. A resize that
+/// starts while another runs aims from there too, never from the half-grown
+/// window, so the top edge under the icon never drifts.
+struct PanelRest: Equatable {
+    private(set) var frame: CGRect
+    private(set) var content: CGSize
+
+    init(frame: CGRect, content: CGSize) {
+        self.frame = frame
+        self.content = content
+    }
+
+    /// The frame for content of `size`, which becomes the new rest.
+    mutating func move(to size: CGSize) -> CGRect {
+        frame = PanelResize.windowFrame(frame, content: content, to: size)
+        content = size
+        return frame
+    }
+}
+
+/// How a zone folds or unfolds in the menu bar panel: the rows fade, the
+/// arrow turns and the panel resizes as one motion that starts with the
+/// click, on one ease-in-out curve. With Reduce Motion the panel and the
+/// rows around it change at once, and the zone's own rows only fade.
+struct PanelFold: Equatable {
+    static let duration: TimeInterval = 0.2
+
+    /// How long the panel's resize and the rows' movement take; 0 is at once.
+    var duration: TimeInterval
+
+    init(reduceMotion: Bool) { duration = reduceMotion ? 0 : Self.duration }
+
+    var moves: Bool { duration > 0 }
+}
+
 /// When work that follows a menu bar panel open or close may run: once its
 /// animation is over. Main-thread work that lands inside it drops frames.
 struct PanelQuiet: Equatable {

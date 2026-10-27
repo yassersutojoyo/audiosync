@@ -374,6 +374,9 @@ final class AppModel: ObservableObject {
     var actions = Actions()
     /// Runs work once the menu bar panel isn't animating (set by its controller).
     var whenPanelQuiet: (String, @escaping () -> Void) -> Void = { $1() }
+    /// Folds or unfolds a zone in the menu bar panel; its controller resizes
+    /// the panel with the change.
+    var foldPanelZone: (() -> Void) -> Void = { $0() }
 
     var currentSource: Source? { sources.first { $0.id == sourceID } }
 
@@ -616,6 +619,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var resize = PanelResize()
     /// When the running resize step ends (system uptime).
     private var resizeEndsAt: TimeInterval?
+    /// Bumped by every resize step, so only the latest one's end tells the popover its size.
+    private var resizeStep = 0
+    /// Where the open panel's window sits for its content size, once the open is over.
+    private var rest: PanelRest?
+    private var moveWatch: NSObjectProtocol?
     private var noticeWatch: AnyCancellable?
     let model: AppModel
 
@@ -641,6 +649,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         quietQueue.quiet = PanelQuiet(system: PanelSwitches.systemAnimation)
         model.whenPanelQuiet = { [weak self] label, work in self?.whenQuiet(label, work) }
         host.resized = { [weak self] size in self?.resizeLater(size) }
+        model.foldPanelZone = { [weak self] change in
+            guard let self else { return change() }
+            self.fold(change)
+        }
         DebugTrace.log("[AudioSync] panel animation: \(PanelSwitches.systemAnimation ? "system" : "own grow")")
         // @Published delivers the new value before the property is set.
         noticeWatch = model.$notices.sink { [weak self] list in
@@ -787,6 +799,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         closing += 1
         let ticket = closing
         if motion.grows, case let (layer, anchor)? = panelLayer(window) {
+            // The system's shadow keeps the full size while the panel shrinks.
+            setShadow(window, false)
             let shrink = CABasicAnimation(keyPath: "transform")
             // From where a grow still running has got to, not from full size.
             shrink.fromValue = NSValue(caTransform3D: layer.presentation()?.transform ?? layer.transform)
@@ -858,6 +872,17 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let target = panelLayer(window)
         target?.0.removeAnimation(forKey: Self.motionKey)
         window.alphaValue = 0
+        // The system draws the shadow at the window's full size from the first
+        // frame, a second box around the growing panel; it comes back once grown.
+        let grows = motion.grows && target != nil
+        setShadow(window, !grows)
+        if grows {
+            let ticket = closing
+            DispatchQueue.main.asyncAfter(deadline: .now() + motion.settles) { [weak self, weak window] in
+                guard let self, let window, self.closing == ticket else { return }
+                self.setShadow(window, true)
+            }
+        }
         if motion.grows, case let (layer, anchor)? = target {
             let grow = CASpringAnimation(keyPath: "transform")
             grow.mass = PanelMotion.mass
@@ -875,6 +900,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         }
     }
 
+    private func setShadow(_ window: NSWindow, _ on: Bool) {
+        guard window.hasShadow != on else { return }
+        window.hasShadow = on
+        if on { window.invalidateShadow() }
+    }
+
     /// The panel may still be growing in after this notice. The
     /// refresh may resize the panel.
     func popoverDidShow(_ notification: Notification) { finishOpenWhenQuiet() }
@@ -889,6 +920,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func finishOpen() {
         // Once per open: a didShow after `show()` stood in for it, or one left from an earlier open, does nothing.
         guard host.sizing.finishOpen() else { return }
+        if let window = host.view.window {
+            rest = PanelRest(frame: window.frame, content: popover.contentSize)
+            watchTopEdge(window)
+        }
         model.actions.refreshExternalState()
         let refreshed = Self.uptime
         DispatchQueue.main.async { [weak self] in
@@ -910,38 +945,87 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     private func applyResize() {
-        guard presented, let size = resize.take(at: Self.uptime), size != popover.contentSize else { return }
-        DebugTrace.log(String(format: "[AudioSync] panel resize: %.0fx%.0f to %.0fx%.0f",
-                              popover.contentSize.width, popover.contentSize.height, size.width, size.height))
+        guard presented, let size = resize.take(at: Self.uptime), size != (rest?.content ?? popover.contentSize) else { return }
+        animateResize(to: size, duration: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : PanelResize.duration,
+                      timing: CAMediaTimingFunction(name: .easeOut))
+    }
+
+    /// Folds or unfolds a zone as one motion: the panel starts to resize in
+    /// the click's frame, on the curve the rows move and fade on (`PanelFold`).
+    private func fold(_ change: () -> Void) {
+        let motion = PanelFold(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        let animation: Animation? = motion.moves ? .easeInOut(duration: motion.duration) : nil
+        guard presented, host.sizing.followsContent else { return withAnimation(animation) { change() } }
+        let clicked = Self.uptime
+        withAnimation(animation) {
+            change()
+            host.view.needsLayout = true
+            host.view.layoutSubtreeIfNeeded()
+        }
+        // The layout pass just now asked for this size as a gathered step; this one replaces it.
+        resize = PanelResize()
+        let size = host.sizeThatFits(in: PanelTopLayout.measuring)
+        animateResize(to: size, duration: motion.duration, timing: CAMediaTimingFunction(name: .easeInEaseOut))
+        DebugTrace.log(String(format: "[AudioSync] panel fold: resize began %.1f ms after the click",
+                              (Self.uptime - clicked) * 1000))
+    }
+
+    private func animateResize(to size: NSSize, duration: TimeInterval, timing: CAMediaTimingFunction) {
+        let current = rest?.content ?? popover.contentSize
+        guard size != current else { return }
+        resizeStep += 1
+        DebugTrace.log(String(format: "[AudioSync] panel resize: %.0fx%.0f to %.0fx%.0f in %.0f ms",
+                              current.width, current.height, size.width, size.height, duration * 1000))
         // The popover resizes its window, not the content in it. The content
         // keeps its top edge (`autoresizingMask`) and is never shorter than
         // the window while it grows or shrinks, so the panel's backing fills it.
         let view = host.view
         view.autoresizingMask = [.minYMargin]
-        guard let window = view.window, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+        guard let window = view.window, duration > 0 else {
             setHeight(size.height)
             popover.contentSize = size
+            if let window = view.window { rest = PanelRest(frame: window.frame, content: size) }
             return
         }
         setHeight(max(view.frame.height, size.height))
-        let frame = PanelResize.windowFrame(window.frame, content: popover.contentSize, to: size)
-        resizeEndsAt = Self.uptime + PanelResize.duration
-        let session = closing
+        var aim = rest ?? PanelRest(frame: window.frame, content: popover.contentSize)
+        let frame = aim.move(to: size)
+        rest = aim
+        resizeEndsAt = Self.uptime + duration
+        let session = closing, step = resizeStep
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = PanelResize.duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            context.duration = duration
+            context.timingFunction = timing
             window.animator().setFrame(frame, display: true)
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.closing == session else { return }
+                // A step that began since aims further; this one's end is not the panel's size.
+                guard let self, self.closing == session, self.resizeStep == step else { return }
                 // Already this size on screen; the popover only learns it.
                 let normal = self.popover.animates
                 self.popover.animates = false
                 self.popover.contentSize = size
                 self.popover.animates = normal
                 self.setHeight(size.height)
+                if let moved = self.host.view.window?.frame, moved != frame {
+                    DebugTrace.log("[AudioSync] panel resize: the popover moved the window from \(frame) to \(moved)")
+                }
             }
         })
+    }
+
+    /// Debug log only: logs every move of the open panel's top edge off its
+    /// place under the icon, which should never happen.
+    private func watchTopEdge(_ window: NSWindow) {
+        guard DebugTrace.enabled, moveWatch == nil else { return }
+        moveWatch = NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: window,
+                                                           queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let top = self.rest?.frame.maxY, let now = self.host.view.window?.frame.maxY,
+                      abs(now - top) > 0.5 else { return }
+                DebugTrace.log(String(format: "[AudioSync] panel top edge moved %.1f pt", now - top))
+            }
+        }
     }
 
     /// Sets the content's height, its top edge staying where it is.
@@ -1018,6 +1102,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         quietQueue.quiet.began(.close, at: now)
         closeEndsAt = now + lasting
         resize = PanelResize()
+        rest = nil
+        if let moveWatch { NotificationCenter.default.removeObserver(moveWatch) }
+        moveWatch = nil
         DebugTrace.log("[AudioSync] panel close began")
         rowsStale = true
         host.sizing = host.sizing.after(.willClose)
@@ -1359,6 +1446,8 @@ struct MenuBarView: View {
                         }
                     }
                     .padding(.leading, 12)
+                    // Its own animation, so the rows still fade when Reduce Motion folds without one.
+                    .transition(.opacity.animation(.easeInOut(duration: PanelFold.duration)))
                 }
             }
             ForEach(layout.connected) { speaker in speakerRow(speaker, note: nil) }
