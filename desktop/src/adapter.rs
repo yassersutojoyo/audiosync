@@ -3614,6 +3614,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             BackendEvent::AirPlayFailed { id, problem } => {
                 self.reconnecting.remove(&id);
+                // It is off, so the click that turned it on is spent (S223).
+                self.airplay_on_by_hand.remove(&id);
                 let raises = problem == AirPlayProblem::TimingUnavailable
                     && self
                         .ptp_taken
@@ -4723,6 +4725,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 self.airplay_name(&airplay_id)
             )
         });
+        self.airplay_on_by_hand.remove(&airplay_id);
         self.audio.cancel_airplay_pairing(&airplay_id);
         self.take_events();
     }
@@ -4757,6 +4760,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 self.airplay_name(&airplay_id)
             )
         });
+        self.airplay_on_by_hand.remove(&airplay_id);
         self.audio.cancel_airplay_password(&airplay_id);
         self.stop_if_idle();
         self.take_events();
@@ -7874,6 +7878,63 @@ mod tests {
         assert!(
             adapter.snapshot().speaker(&id).unwrap().enabled,
             "the user's pairing turns it on"
+        );
+    }
+
+    // covers: S223
+    #[test]
+    fn an_every_time_pairing_that_fails_after_the_stream_ended_says_it_needs_a_pin() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.set_running(false);
+        adapter.poll();
+
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(
+            &den,
+            PairingEvent::Failed {
+                error: SessionError::new(ErrorKind::PairingFailed),
+                wrong_pin: false,
+            },
+        );
+        adapter.poll();
+        assert!(!adapter.snapshot().speaker(&id).unwrap().enabled);
+        assert!(
+            messages(&adapter).contains(&NoticeMessage::AirPlayCantPlay {
+                speaker: "Den".to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPin,
+            }),
+            "{:?}",
+            messages(&adapter)
+        );
+        assert!(
+            !adapter.airplay_on_by_hand.contains(&id_of(&den)),
+            "the click's mark ends with its pairing"
+        );
+    }
+
+    // covers: S223
+    #[test]
+    fn closing_the_pin_prompt_after_the_stream_ended_drops_the_by_hand_mark() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.set_running(false);
+        adapter.poll();
+
+        adapter.cancel_pairing(&id);
+        adapter.poll();
+        assert!(!adapter.snapshot().speaker(&id).unwrap().enabled);
+        assert!(
+            !adapter.airplay_on_by_hand.contains(&id_of(&den)),
+            "closing the prompt cancels the click"
         );
     }
 

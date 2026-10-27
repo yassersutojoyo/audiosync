@@ -7824,7 +7824,9 @@ mod tests {
     // covers: S220
     #[test]
     fn an_airplay_delay_over_its_range_applies_clamped_once() {
-        let app = app_over(MockBackend::new());
+        let backend = MockBackend::new();
+        let applied = backend.airplay_delays.clone();
+        let app = app_over(backend);
         let shown = || app.main.get_airplay_delay_text().to_string();
         app.main.invoke_airplay_delay_edited("25000".into());
         assert_eq!(app.snapshot().airplay_delay_ms, Some(1750.0));
@@ -7843,6 +7845,13 @@ mod tests {
         assert!(
             app.ui.borrow().airplay_delay_draft.draft.is_none(),
             "a focus loss after it has nothing to apply"
+        );
+
+        app.main.invoke_airplay_delay_committed();
+        assert_eq!(
+            applied.borrow().len(),
+            1,
+            "a focus loss after Return applies nothing"
         );
     }
 
