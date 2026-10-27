@@ -12,7 +12,7 @@ struct PanelZoneHeader: View {
 
     private var state: SpeakerState { model.state(of: zone) }
     private var expanded: Bool { disclosure.isExpanded(zone.id) }
-    // Only the icon is disabled then: unfolding still lists the missing speakers.
+    // The icon greys out and folds then: unfolding still lists the missing speakers.
     private var nonePresent: Bool { zone.present == 0 }
 
     var body: some View {
@@ -43,8 +43,9 @@ struct PanelZoneHeader: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .disabled(nonePresent)
             .opacity(nonePresent ? 0.45 : 1)
+            // With nothing to switch, the name button speaks for the row.
+            .accessibilityHidden(nonePresent)
             .accessibilityLabel(t.zoneLabel(zone.name))
             .accessibilityValue(nonePresent ? model.countText(of: zone)
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
@@ -66,6 +67,7 @@ struct PanelZoneHeader: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(foldTitle)
+            .accessibilityValue(nonePresent ? model.countText(of: zone) : "")
             .help(foldTitle)
         }
         .frame(height: height)
@@ -76,7 +78,7 @@ struct PanelZoneHeader: View {
 
     // No animation: the popover resizes to the new height on its own.
     private func hit(_ area: ZoneHeaderHit.Area) {
-        switch ZoneHeaderHit.action(for: area) {
+        switch ZoneHeaderHit.action(for: area, nonePresent: nonePresent) {
         case .fold: disclosure.toggle(zone.id)
         case .toggleZone: model.actions.toggleZone(zone.id)
         case .none: break

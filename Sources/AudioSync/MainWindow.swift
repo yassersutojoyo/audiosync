@@ -14,7 +14,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
     init(model: AppModel) {
         self.model = model
-        let host = NSHostingController(rootView: MainView(model: model))
+        let host = NSHostingController(rootView: MainView(model: model, zoneDisclosure: model.zoneDisclosure))
         host.sizingOptions = [.minSize]   // SwiftUI sets the minimum; the user picks the size
         let chrome: NSWindow.StyleMask = [.titled, .resizable, .closable, .miniaturizable]
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 600),
@@ -108,8 +108,8 @@ private let accent = Brand.teal
 
 struct MainView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var zoneDisclosure: ZoneDisclosure
     @StateObject private var gearAnchor = MenuAnchor.Box()
-    @StateObject private var zoneDisclosure = ZoneDisclosure()
     @StateObject private var sheetRoom = SheetRoom()
 
     var body: some View {
@@ -582,9 +582,9 @@ private struct PresetsCard: View {
     }
 }
 
-/// The zones collapsed in this window; every zone opens expanded, and
-/// nothing is saved. An object rather than @State: the Command Line Tools
-/// toolchain ships without SwiftUI's macro plugins.
+/// The zones collapsed in the main window and the panel; every zone opens
+/// expanded, and nothing is saved. An object rather than @State: the Command
+/// Line Tools toolchain ships without SwiftUI's macro plugins.
 final class ZoneDisclosure: ObservableObject {
     @Published private(set) var collapsed: Set<String> = []
 

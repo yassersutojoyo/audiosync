@@ -9251,6 +9251,38 @@ do {
     }
     check(ZoneHeaderHit.Area.allCases.filter { ZoneHeaderHit.action(for: $0) == .toggleZone } == [.zoneIcon],
           "zone header routing table: only the round zone icon switches the zone, so folding leaves it on")
+    check(ZoneHeaderHit.action(for: .zoneIcon, nonePresent: true) == .fold,
+          "zone header routing table: with none of its speakers present, the greyed icon folds the zone")
+    check(ZoneHeaderHit.Area.allCases.allSatisfy { ZoneHeaderHit.action(for: $0, nonePresent: true) != .toggleZone },
+          "zone header routing table: with none of its speakers present, no click switches the zone")
+
+    // The panel's header routes every click through the table above.
+    let header = (try? String(contentsOfFile: "Sources/AudioSync/PanelZoneHeader.swift", encoding: .utf8)) ?? ""
+    func occurrences(_ needle: String) -> Int { header.components(separatedBy: needle).count - 1 }
+    check(occurrences("ZoneHeaderHit.action(for: area, nonePresent: nonePresent)") == 1
+          && occurrences("hit(.chevron)") == 1 && occurrences("hit(.zoneIcon)") == 1 && occurrences("hit(.name)") == 1,
+          "panel zone header: the arrow, the icon and the name each route through ZoneHeaderHit")
+    check(occurrences("model.actions.toggleZone") == 1 && occurrences("disclosure.toggle") == 1
+          && occurrences(".disabled(") == 0,
+          "panel zone header: nothing switches or folds the zone outside the table, and no part is disabled")
+}
+
+// MARK: Menu bar panel rows for zones, folded and unfolded (ZoneLayout.panelRows, shownMembers)
+do {
+    let zones: [(id: String, members: [String])] = [("living", ["tv", "sonos"]), ("kitchen", ["pod"]), ("empty", [])]
+    func rows(_ collapsed: Set<String>) -> Int {
+        ZoneLayout.panelRows(zones, id: { $0.id }, members: { $0.members.count }, collapsed: collapsed)
+    }
+    check(rows([]) == 6, "panel zone rows: unfolded, each zone shows its header and every member", "\(rows([]))")
+    check(rows(["living"]) == 4, "panel zone rows: a folded zone keeps its header and drops its members",
+          "\(rows(["living"]))")
+    check(rows(["living", "kitchen", "empty"]) == 3, "panel zone rows: all folded, only the headers stay",
+          "\(rows(["living", "kitchen", "empty"]))")
+    check(rows(["gone"]) == 6, "panel zone rows: a folded zone that no longer exists changes nothing")
+    check(ZoneLayout.shownMembers(zones[0].members, folded: false) == ["tv", "sonos"],
+          "panel zone members: an unfolded zone lists its members in order")
+    check(ZoneLayout.shownMembers(zones[0].members, folded: true).isEmpty,
+          "panel zone members: a folded zone lists none")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
