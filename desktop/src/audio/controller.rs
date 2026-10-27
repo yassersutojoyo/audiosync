@@ -2541,6 +2541,13 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .and_then(AirPlaySpeakers::password_prompt)
     }
 
+    fn airplay_waiting_for_user(&self) -> BTreeSet<String> {
+        self.airplay
+            .as_ref()
+            .map(AirPlaySpeakers::waiting_for_user)
+            .unwrap_or_default()
+    }
+
     fn airplay_holding_target(&self, id: &str) -> Option<InTarget> {
         self.airplay.as_ref()?.holding_target(id)
     }

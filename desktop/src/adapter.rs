@@ -3435,18 +3435,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// The stream ended, and with it the PIN session each click bought
-    /// (S223). A speaker whose pairing or prompt is still open keeps its
-    /// mark, as the backend keeps it, so the pairing turns it on.
+    /// (S223). A speaker whose pairing or prompt is still open, shown or
+    /// queued, keeps its mark, as the backend keeps it, so the pairing turns
+    /// it on.
     fn end_hand_marks(&mut self) {
-        let mut waiting: BTreeSet<String> = self
-            .audio
-            .airplay_speakers()
-            .into_iter()
-            .filter(|speaker| speaker.pairing)
-            .map(|speaker| speaker.id)
-            .collect();
-        waiting.extend(self.audio.airplay_pin_prompt().map(|prompt| prompt.id));
-        waiting.extend(self.audio.airplay_password_prompt().map(|prompt| prompt.id));
+        let waiting = self.audio.airplay_waiting_for_user();
         self.airplay_on_by_hand.retain(|id| waiting.contains(id));
     }
 

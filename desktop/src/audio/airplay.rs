@@ -1429,14 +1429,12 @@ impl AirPlaySpeakers {
     /// One whose pairing or prompt is under way waits for it instead.
     fn every_time_stream_ended(&mut self, events: &mut Vec<BackendEvent>) -> bool {
         self.paired_by_user.clear();
+        let waiting = self.waiting_for_user();
         let asking: Vec<String> = self
             .settings
             .iter()
             .filter(|(id, settings)| {
-                settings.enabled
-                    && !self.pairings.contains_key(*id)
-                    && !self.password_asks.contains_key(*id)
-                    && self.asks_every_time(id)
+                settings.enabled && !waiting.contains(*id) && self.asks_every_time(id)
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -2501,6 +2499,17 @@ impl AirPlaySpeakers {
 
     /// The password prompt to show: the oldest one waiting, while no PIN
     /// prompt is open, so one dialog asks at a time.
+    /// The speakers whose pairing runs or whose password prompt waits, shown
+    /// or queued, with the target a member's prompt switches on.
+    pub fn waiting_for_user(&self) -> BTreeSet<String> {
+        let mut waiting: BTreeSet<String> = self.pairings.keys().cloned().collect();
+        for (id, ask) in &self.password_asks {
+            waiting.insert(id.clone());
+            waiting.extend(ask.target.clone());
+        }
+        waiting
+    }
+
     pub fn password_prompt(&self) -> Option<AirPlayPasswordPrompt> {
         if self.pin_prompt().is_some() {
             return None;

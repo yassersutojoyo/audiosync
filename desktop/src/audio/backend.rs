@@ -7,7 +7,7 @@
 //! because of them, stays the UI's decision (the session rules in
 //! `audiosync_core::policy::session`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -893,6 +893,10 @@ pub trait AudioBackend {
 
     /// The password prompt to show, if one waits and no PIN prompt is open.
     fn airplay_password_prompt(&self) -> Option<AirPlayPasswordPrompt>;
+
+    /// The AirPlay speakers whose pairing runs or whose password prompt
+    /// waits, shown or queued, with the target a member's prompt switches on.
+    fn airplay_waiting_for_user(&self) -> BTreeSet<String>;
 
     /// The stereo pair or home theater group that holds the AirPlay speaker
     /// `id` (see [`AirPlayProblem::PlaysInGroup`]).
