@@ -4696,6 +4696,22 @@ do {
     check(!pressed(CGPoint(x: 1154, y: 876), icon, 0.05), "menu bar icon: the line below the icon is not on it")
     check(!pressed(CGPoint(x: 700, y: 500), icon, 0.05), "menu bar icon: a press elsewhere is not a press on the icon")
     check(!pressed(CGPoint(x: 1154, y: 888), icon, 3), "menu bar icon: Escape with the pointer resting on the icon is no press")
+
+    func sizing(_ events: [PanelSizing.Event]) -> PanelSizing {
+        events.reduce(PanelSizing.closed) { $0.after($1) }
+    }
+    check(!sizing([]).followsContent && !sizing([.show]).followsContent,
+          "menu bar panel: the size holds while the popover opens")
+    check(sizing([.show, .didShow]).followsContent, "menu bar panel: the size follows the content once fully shown")
+    check(!sizing([.show, .didShow, .willClose]).followsContent
+            && !sizing([.show, .didShow, .willClose, .didClose]).followsContent,
+          "menu bar panel: the size holds from the moment the popover starts to close")
+    check(!sizing([.show, .willClose, .didShow]).followsContent,
+          "menu bar panel: a show notice arriving after the close began keeps the size held")
+    check(sizing([.show, .didShow, .willClose, .show]) == .opening
+            && !sizing([.show, .didShow, .willClose, .show, .didClose]).followsContent
+            && sizing([.show, .didShow, .willClose, .show, .didClose, .didShow]).followsContent,
+          "menu bar panel: reopened mid-close, the old close's notice doesn't end the new open")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)
