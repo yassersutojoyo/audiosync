@@ -3609,6 +3609,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             BackendEvent::AirPlayFailed { id, problem } => {
                 self.reconnecting.remove(&id);
+                // It is off, so the click that turned it on is spent (S223).
+                self.airplay_on_by_hand.remove(&id);
                 let raises = problem == AirPlayProblem::TimingUnavailable
                     && self
                         .ptp_taken
@@ -4718,6 +4720,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 self.airplay_name(&airplay_id)
             )
         });
+        self.airplay_on_by_hand.remove(&airplay_id);
         self.audio.cancel_airplay_pairing(&airplay_id);
         self.take_events();
     }
@@ -4752,6 +4755,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 self.airplay_name(&airplay_id)
             )
         });
+        self.airplay_on_by_hand.remove(&airplay_id);
         self.audio.cancel_airplay_password(&airplay_id);
         self.stop_if_idle();
         self.take_events();

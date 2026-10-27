@@ -958,6 +958,9 @@ struct PairingRun {
     /// When its PIN first showed (counts up), so the prompt stays with the
     /// Apple TV that asked first while another one asks too.
     shown_order: u64,
+    /// A stream ended while it ran: failing, it leaves the speaker needing a
+    /// PIN, since the click's PIN session went with that stream (S223).
+    outlived_stream: bool,
 }
 
 /// A password prompt waiting for the user.
@@ -1429,6 +1432,17 @@ impl AirPlaySpeakers {
     /// One whose pairing or prompt is under way waits for it instead.
     fn every_time_stream_ended(&mut self, events: &mut Vec<BackendEvent>) -> bool {
         self.paired_by_user.clear();
+        let outliving: Vec<String> = self
+            .pairings
+            .keys()
+            .filter(|id| self.asks_every_time(id))
+            .cloned()
+            .collect();
+        for id in outliving {
+            if let Some(run) = self.pairings.get_mut(&id) {
+                run.outlived_stream = true;
+            }
+        }
         let waiting = self.waiting_for_user();
         let asking: Vec<String> = self
             .settings
@@ -2172,6 +2186,7 @@ impl AirPlaySpeakers {
                 wrong_pin: false,
                 shown: false,
                 shown_order: 0,
+                outlived_stream: false,
             },
         );
         Ok(())
@@ -3539,13 +3554,18 @@ impl AirPlaySpeakers {
                 true
             }
             PairingEvent::Failed { .. } => {
-                if self.pairings.remove(id).is_none() {
+                let Some(run) = self.pairings.remove(id) else {
                     return false;
-                }
+                };
                 self.off_after_pairing(id);
+                let problem = if run.outlived_stream {
+                    AirPlayProblem::NeedsPin
+                } else {
+                    AirPlayProblem::PairingFailed
+                };
                 events.push(BackendEvent::AirPlayFailed {
                     id: id.to_owned(),
-                    problem: AirPlayProblem::PairingFailed,
+                    problem,
                 });
                 true
             }
