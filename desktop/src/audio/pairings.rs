@@ -15,6 +15,10 @@
 //! tried once more at launch (another program may hold the file for a
 //! moment), then every few seconds, and while the file still can't be read
 //! nothing is written over it: new pairings last until AudioSync quits.
+//! A file whose framing holds but whose entry doesn't read (a credential
+//! blob a later build wrote, an empty, repeated or garbled ID) costs only
+//! that entry: the file is kept aside the same way, without the notice,
+//! and rewritten at once with the entries that read.
 //!
 //! Next to it, [`AIRPLAY2_FILE_NAME`] keeps the AirPlay 2 path's device ID
 //! and the HomeKit credentials its pairings give, sealed the same way, in
@@ -111,6 +115,9 @@ pub enum Loaded {
     NoFile,
     /// The credentials of this many speakers.
     Speakers(usize),
+    /// The credentials of `speakers` speakers; `skipped` entries didn't
+    /// read and those speakers are paired again.
+    Partly { speakers: usize, skipped: usize },
     /// The file was ignored, for this reason (never a secret).
     Ignored(String),
 }
@@ -121,6 +128,11 @@ impl fmt::Display for Loaded {
             Loaded::NoFile => f.write_str("no paired speakers yet"),
             Loaded::Speakers(1) => f.write_str("credentials loaded for 1 speaker"),
             Loaded::Speakers(n) => write!(f, "credentials loaded for {n} speakers"),
+            Loaded::Partly { speakers, skipped } => write!(
+                f,
+                "credentials loaded for {speakers} speakers; {skipped} unreadable entries \
+                 skipped and the file kept aside, so those speakers pair again"
+            ),
             Loaded::Ignored(reason) => {
                 write!(
                     f,
@@ -144,6 +156,9 @@ pub struct PairingStore {
     /// Where a write kept that file aside, until
     /// [`PairingStore::take_kept_aside`] takes it.
     kept_aside: Option<PathBuf>,
+    /// The copy is for [`PairingStore::take_kept_aside`]: off when only
+    /// some entries didn't read, since the notice says every pairing is lost.
+    tell_kept_aside: bool,
     /// Polls left before [`PairingStore::keep_aside_if_due`] tries again to
     /// keep that file aside.
     keep_aside_wait: u32,
@@ -184,6 +199,7 @@ impl PairingStore {
             entries: BTreeMap::new(),
             keep_aside: false,
             kept_aside: None,
+            tell_kept_aside: true,
             keep_aside_wait: 0,
             airplay2: None,
             timing: TimingStore::in_memory(),
@@ -211,9 +227,13 @@ impl PairingStore {
             Err(reason) => (false, Err(reason)),
         };
         let (entries, loaded) = match read {
-            Ok(Some(entries)) => {
+            Ok(Some((entries, 0))) => {
                 let count = entries.len();
                 (entries, Loaded::Speakers(count))
+            }
+            Ok(Some((entries, skipped))) => {
+                let speakers = entries.len();
+                (entries, Loaded::Partly { speakers, skipped })
             }
             Ok(None) => (BTreeMap::new(), Loaded::NoFile),
             Err(reason) => (BTreeMap::new(), Loaded::Ignored(reason)),
@@ -222,15 +242,20 @@ impl PairingStore {
             path: Some(path),
             sealer,
             entries,
-            keep_aside: matches!(loaded, Loaded::Ignored(_)),
+            keep_aside: matches!(loaded, Loaded::Ignored(_) | Loaded::Partly { .. }),
             kept_aside: None,
+            tell_kept_aside: matches!(loaded, Loaded::Ignored(_)),
             keep_aside_wait: 0,
             airplay2: None,
             timing: TimingStore::in_memory(),
             tightened,
         };
         // While it can't be read, the next try is due a few seconds later.
-        let _ = store.keep_ignored_aside();
+        let _ = if matches!(loaded, Loaded::Partly { .. }) {
+            store.save()
+        } else {
+            store.keep_ignored_aside()
+        };
         (store, loaded)
     }
 
@@ -247,7 +272,9 @@ impl PairingStore {
         }
         match data_folder::keep_aside(path, IGNORED_FILE_NAME) {
             Ok(kept) => {
-                self.kept_aside = kept;
+                if self.tell_kept_aside {
+                    self.kept_aside = kept;
+                }
                 self.keep_aside = false;
                 Ok(())
             }
@@ -538,9 +565,9 @@ fn make_private(_path: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
-/// The entries in the file at `path`: `None` without a file, or why it was
-/// ignored.
-fn read(path: &Path, sealer: Sealer) -> Result<Option<BTreeMap<String, Credentials>>, String> {
+/// The entries in the file at `path` and how many didn't read: `None`
+/// without a file, or why it was ignored.
+fn read(path: &Path, sealer: Sealer) -> Result<Option<Decoded>, String> {
     let sealed = match data_folder::read_at_launch(path) {
         Ok(sealed) => sealed,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -594,18 +621,31 @@ fn take_field<'a>(rest: &mut &'a [u8]) -> Option<&'a [u8]> {
     Some(field)
 }
 
-/// The entries of a plaintext, or `None` when anything in it is off.
-fn decode(plain: &[u8]) -> Option<BTreeMap<String, Credentials>> {
+/// The entries a file held, and how many of its entries didn't read.
+type Decoded = (BTreeMap<String, Credentials>, usize);
+
+/// The entries of a plaintext and how many were skipped: one whose ID is
+/// empty, repeated or not UTF-8, or whose blob doesn't parse. `None` when
+/// the tag or the framing is off.
+fn decode(plain: &[u8]) -> Option<Decoded> {
     let mut rest = plain.strip_prefix(MAGIC)?;
     let mut entries = BTreeMap::new();
+    let mut skipped = 0;
     while !rest.is_empty() {
-        let id = std::str::from_utf8(take_field(&mut rest)?).ok()?.to_owned();
-        let credentials = Credentials::from_bytes(take_field(&mut rest)?).ok()?;
-        if id.is_empty() || entries.insert(id, credentials).is_some() {
-            return None;
+        let id = take_field(&mut rest)?;
+        let blob = take_field(&mut rest)?;
+        let read = std::str::from_utf8(id)
+            .ok()
+            .filter(|id| !id.is_empty() && !entries.contains_key(*id))
+            .zip(Credentials::from_bytes(blob).ok());
+        match read {
+            Some((id, credentials)) => {
+                entries.insert(id.to_owned(), credentials);
+            }
+            None => skipped += 1,
         }
     }
-    Some(entries)
+    Some((entries, skipped))
 }
 
 #[cfg(test)]
@@ -837,8 +877,16 @@ pub mod tests {
         let original = sealer().seal(&plain).unwrap();
         fs::write(&path, &original).unwrap();
 
-        let (store, loaded) = PairingStore::open(path.clone(), sealer());
-        assert!(!matches!(loaded, Loaded::Ignored(_)), "{loaded}");
+        let (mut store, loaded) = PairingStore::open(path.clone(), sealer());
+        assert_eq!(
+            loaded,
+            Loaded::Partly {
+                speakers: 2,
+                skipped: 4
+            }
+        );
+        // The notice says every pairing was lost, which isn't so here.
+        assert_eq!(store.take_kept_aside(), None);
         assert_eq!(store.get("02005E005301"), Some(&first));
         assert_eq!(store.get("02005E005302"), Some(&second));
         assert!(!store.contains("02005E005309"));
@@ -952,13 +1000,19 @@ pub mod tests {
         let mut entries = BTreeMap::new();
         entries.insert("a".to_owned(), credentials("0123456789ABCDEF", 7));
         let plain = encode(&entries).unwrap();
-        assert_eq!(decode(&plain).map(|e| e.len()), Some(1));
+        assert_eq!(
+            decode(&plain).map(|(e, skipped)| (e.len(), skipped)),
+            Some((1, 0))
+        );
         // Every truncation is refused.
         for len in MAGIC.len() + 1..plain.len() {
             assert!(decode(&plain[..len]).is_none(), "{len} bytes");
         }
         assert!(decode(b"something else").is_none());
-        assert_eq!(decode(MAGIC).map(|e| e.len()), Some(0));
+        assert_eq!(
+            decode(MAGIC).map(|(e, skipped)| (e.len(), skipped)),
+            Some((0, 0))
+        );
     }
 
     #[test]
