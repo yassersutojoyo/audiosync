@@ -9389,6 +9389,12 @@ do {
                             seenFile("[\(recent),true]")]
     check(seenAsNow.allSatisfy { $0 == 2 } && seenFile("[\(idle),\"x\"]") == 1,
           "web remote: a seen list of another length counts every device as seen now, an unreadable time only its own device")
+    let floatVersions = ["1.0", "1e0"].map {
+        RemoteDevicesFile.count(devicesJSON("{\"version\":\($0),\"devices\":[\"\(hashA)\"]}"))
+    }
+    let floatTimes = ["\(idle).0", "1.792224e9"].map { seenFile("[\(recent),\($0)]") }
+    check(floatVersions == [0, 0] && floatTimes == [2, 2],
+          "web remote: a version or time written as a float doesn't read, as in the core")
 
     let sixIdle = Array(repeating: String(idle), count: 6).joined(separator: ",")
     let sixHashes = Array(repeating: "\"\(hashA)\"", count: 6).joined(separator: ",")
@@ -9396,7 +9402,7 @@ do {
         + "\"seen\":[\(recent),\(recent),\(recent),\"yesterday\",\(idle)]}"), now: seenNow)
     let badNewest = RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"\(hashA)\",\(sixHashes),"
         + "\"\(hashB)\",\"short\"],\"seen\":[\(recent),\(recent),\(sixIdle),\(recent),\(recent)]}"), now: seenNow)
-    let noSeen = RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"short\",null]}"))
+    let noSeen = RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"short\",null,\"+\(hashA.dropFirst())\"]}"))
     check(oneBad == 2 && badNewest == 2 && noSeen == 1,
           "web remote: a device whose hash doesn't read costs only that device, and the newest 8 are those that read")
 
