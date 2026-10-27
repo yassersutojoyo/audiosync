@@ -697,6 +697,7 @@ pub struct Settings {
     /// The AirPlay delay adjustment A in milliseconds, −2000 to +20 000: the
     /// AirPlay speakers are taken to sound L = L_s + A after a frame reaches
     /// the sender (spec S178).
+    #[serde(deserialize_with = "number_or_nan")]
     pub airplay_adjustment_ms: f64,
     /// What a session does when the app it captures quits, as the core
     /// stores it: `stop` or `system` (spec S227).
