@@ -7592,6 +7592,64 @@ mod tests {
         assert!(!app.main.get_updater_available());
     }
 
+    // covers: S308
+    /// Tab reaches each button of the updater's notice, Space or Enter
+    /// presses it, and the notice reports its focus.
+    #[test]
+    fn the_updater_notice_buttons_take_tab_then_space_or_enter() {
+        let app = main_window_over(MockBackend::new());
+        let item = notice_item(
+            &app.strings(),
+            &ui_model::Notice {
+                id: UPDATER_NOTICE_ID,
+                subject: "update".to_owned(),
+                message: NoticeMessage::Update(ui_model::UpdaterNotice::Available {
+                    new: "0.9.0".to_owned(),
+                    running: "0.8.0".to_owned(),
+                    last: None,
+                }),
+                time: String::new(),
+            },
+        );
+        assert_eq!(
+            item.update_buttons.iter().collect::<Vec<_>>(),
+            [UpdateButton::Download, UpdateButton::NotNow]
+        );
+        let id = item.id;
+        // The test's own handlers: the app's would refresh the notices away.
+        let pressed = Rc::new(RefCell::new(Vec::new()));
+        let log = Rc::clone(&pressed);
+        app.main
+            .on_notice_update_button_pressed(move |button| log.borrow_mut().push(button));
+        let focused = Rc::new(Cell::new(false));
+        let seen = Rc::clone(&focused);
+        app.main.on_notice_focus_changed(move |notice, now| {
+            if notice == id {
+                seen.set(now);
+            }
+        });
+        app.main
+            .set_notices(ModelRc::from(Rc::new(VecModel::from(vec![item]))));
+        draw_frames();
+        let window = app.main.window();
+        let mut steps = 0;
+        while !focused.get() {
+            assert!(steps < 60, "Tab never reached the updater's notice");
+            tab(window, 1);
+            steps += 1;
+        }
+        press(window, " ");
+        assert_eq!(*pressed.borrow(), [UpdateButton::Download], "Space");
+        tab(window, 1);
+        assert!(focused.get(), "Not Now is the next stop");
+        press(window, Key::Return);
+        assert_eq!(
+            *pressed.borrow(),
+            [UpdateButton::Download, UpdateButton::NotNow],
+            "Enter"
+        );
+    }
+
     #[test]
     fn a_cast_row_names_its_kind_and_says_where_it_is() {
         let app = app_over(MockBackend::new());
