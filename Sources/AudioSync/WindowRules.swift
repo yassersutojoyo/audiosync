@@ -207,8 +207,7 @@ struct PanelResize: Equatable {
 
     /// When to apply the step this change joins. `settled` is when the
     /// panel's open animation ends.
-    mutating func changed(to size: CGSize, at now: TimeInterval, settled: TimeInterval,
-                          from current: CGSize? = nil) -> TimeInterval {
+    mutating func changed(to size: CGSize, at now: TimeInterval, settled: TimeInterval) -> TimeInterval {
         pending = size
         let when = due ?? max(now + Self.gather, settled)
         due = when
