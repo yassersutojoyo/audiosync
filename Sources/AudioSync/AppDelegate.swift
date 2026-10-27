@@ -211,6 +211,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var airplayNames: [String: String] = [:]
     /// Outlives the sender, so a Retry keeps what the user turned on.
     var everyTimeGuard = EveryTimeGuard()
+    /// A rebuild stopped the engine and has not started it again (S223).
+    var midRebuild = false
     var airplayAccess: [String: AirPlayPairing.Access] = [:]
     /// The Mac is asleep: the AirPlay reconcile waits for the wake (EC3).
     var macAsleep = false

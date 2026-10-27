@@ -300,6 +300,27 @@ pub fn min_track_size(min: (f64, f64), dpi: u32, frame: (i32, i32)) -> (i32, i32
     (side(min.0, frame.0), side(min.1, frame.1))
 }
 
+/// The outer size a move or resize that asked for `asked` gets, between the
+/// smallest outer size `min` and the largest `max` (physical pixels); `min`
+/// wins when the screen is too small for it.
+#[cfg(any(windows, test))]
+pub fn held_size(asked: (i32, i32), min: (i32, i32), max: (i32, i32)) -> (i32, i32) {
+    (asked.0.min(max.0).max(min.0), asked.1.min(max.1).max(min.1))
+}
+
+/// The largest outer size along one side, from the tracking size metric in
+/// physical pixels (`system`) and the same metric for the window's DPI
+/// (`for_dpi`), which Windows rescales from the system DPI, so it comes out
+/// short on a monitor scaled below the primary one. 0 means unreadable; with
+/// neither, there is no largest size.
+#[cfg(any(windows, test))]
+pub fn largest_track_size(system: i32, for_dpi: i32) -> i32 {
+    match system.max(for_dpi) {
+        size if size > 0 => size,
+        _ => i32::MAX,
+    }
+}
+
 /// `min` (logical pixels, each below 65 536) in the one number a window
 /// subclass carries, and back.
 #[cfg(any(windows, test))]
@@ -317,8 +338,9 @@ fn unpack_min_size(packed: usize) -> (f64, f64) {
 /// against another program's MoveWindow or SetWindowPos: Windows asks the
 /// window for its smallest size (WM_GETMINMAXINFO) on every resize, and a
 /// subclass answers after winit, whose minimum Slint resets when its layout
-/// changes. `false` while the native window doesn't exist yet; repeating it
-/// only updates the size.
+/// changes. A move also stops at the largest size Windows allows a window,
+/// as for any other window. `false` while the native window doesn't exist
+/// yet; repeating it only updates the size.
 #[cfg(windows)]
 pub fn hold_min_size(window: &slint::Window, min: (f64, f64)) -> bool {
     use slint::winit_030::WinitWindowAccessor;
@@ -410,12 +432,14 @@ unsafe extern "system" fn min_size_procedure(
     packed: usize,
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::RECT;
-    use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
+    use windows::Win32::UI::HiDpi::{
+        AdjustWindowRectExForDpi, GetDpiForWindow, GetSystemMetricsForDpi,
+    };
     use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass};
     use windows::Win32::UI::WindowsAndMessaging::{
-        GWL_EXSTYLE, GWL_STYLE, GetMenu, GetWindowLongW, IsIconic, IsZoomed, MINMAXINFO,
-        SWP_NOSIZE, WINDOW_EX_STYLE, WINDOW_STYLE, WINDOWPOS, WM_GETMINMAXINFO, WM_NCDESTROY,
-        WM_WINDOWPOSCHANGING,
+        GWL_EXSTYLE, GWL_STYLE, GetMenu, GetSystemMetrics, GetWindowLongW, IsIconic, IsZoomed,
+        MINMAXINFO, SM_CXMAXTRACK, SM_CYMAXTRACK, SWP_NOSIZE, WINDOW_EX_STYLE, WINDOW_STYLE,
+        WINDOWPOS, WM_GETMINMAXINFO, WM_NCDESTROY, WM_WINDOWPOSCHANGING,
     };
 
     if message == WM_NCDESTROY {
@@ -458,15 +482,21 @@ unsafe extern "system" fn min_size_procedure(
         info.ptMinTrackSize.y = info.ptMinTrackSize.y.max(height);
         return result;
     }
-    // A move that doesn't go through WM_GETMINMAXINFO, as winit may answer
-    // WM_WINDOWPOSCHANGING itself. Minimizing shrinks the window on purpose.
+    // winit answers WM_WINDOWPOSCHANGING without DefWindowProc, which would
+    // ask for WM_GETMINMAXINFO and keep the size between the tracking sizes,
+    // so a move could make the window any size. Minimizing shrinks it on purpose.
     // SAFETY: for WM_WINDOWPOSCHANGING, `lparam` points to the WINDOWPOS
     // that Windows applies once the message returns.
     let position = unsafe { &mut *(lparam.0 as *mut WINDOWPOS) };
     if minimized || maximized || position.flags.contains(SWP_NOSIZE) {
         return result;
     }
-    let clamped = (position.cx.max(width), position.cy.max(height));
+    // SAFETY: both calls only read a system setting.
+    let metric = |index| unsafe {
+        largest_track_size(GetSystemMetrics(index), GetSystemMetricsForDpi(index, dpi))
+    };
+    let largest = (metric(SM_CXMAXTRACK), metric(SM_CYMAXTRACK));
+    let clamped = held_size((position.cx, position.cy), (width, height), largest);
     if clamped != (position.cx, position.cy) {
         let asked = (position.cx, position.cy);
         log_min_size_once(MinSizeEvent::Clamped, || {
@@ -822,6 +852,32 @@ mod tests {
         assert_eq!(min_track_size((860.0, 440.0), 96, (0, 0)), (860, 440));
         // A fraction of a pixel rounds up, so the inner size never falls short.
         assert_eq!(min_track_size((101.0, 101.0), 120, (0, 0)), (127, 127));
+    }
+
+    #[test]
+    fn a_move_past_the_screen_stops_at_the_largest_size_windows_allows() {
+        let min = (876, 499);
+        let max = (1946, 1106);
+        assert_eq!(held_size((996, 1400), min, max), (996, 1106));
+        assert_eq!(held_size((996, 32767), min, max), (996, 1106));
+        assert_eq!(held_size((4000, 739), min, max), (1946, 739));
+        assert_eq!(held_size((996, 739), min, max), (996, 739));
+        assert_eq!(held_size((286, 193), min, max), (876, 499));
+        // A screen shorter than the minimum: the minimum still holds.
+        assert_eq!(held_size((996, 1400), (876, 1200), max), (996, 1200));
+    }
+
+    #[test]
+    fn the_largest_size_takes_the_bigger_metric_and_none_when_both_are_unread() {
+        // A 100 % window next to a 150 % primary: the DPI metric shrinks to 2/3.
+        assert_eq!(largest_track_size(3860, 2573), 3860);
+        assert_eq!(largest_track_size(1946, 2919), 2919);
+        assert_eq!(largest_track_size(0, 1106), 1106);
+        assert_eq!(largest_track_size(1106, 0), 1106);
+        assert_eq!(largest_track_size(0, 0), i32::MAX);
+        let min = (876, 499);
+        let largest = (largest_track_size(0, 0), largest_track_size(0, 0));
+        assert_eq!(held_size((996, 1400), min, largest), (996, 1400));
     }
 
     #[test]

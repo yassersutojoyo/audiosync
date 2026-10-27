@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::reader::Reader;
 use audiosync_core::render::RendererControl;
-use audiosync_core::ring::RingWriter;
+use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 
 use super::backend::{BackendError, OutputKind};
@@ -211,6 +211,8 @@ impl Drop for MockRenderer {
 /// What the driver keeps of each output started.
 struct RendererLink {
     id: String,
+    /// The ring its reader reads.
+    ring: Arc<Ring>,
     ended: Arc<AtomicBool>,
     dropped: Arc<AtomicBool>,
 }
@@ -407,6 +409,26 @@ impl MockDriver {
             .iter()
             .filter(|renderer| renderer.plays())
             .count()
+    }
+
+    /// The ring the running capture writes.
+    pub fn capture_ring(&self) -> Option<Arc<Ring>> {
+        self.capture.as_ref().and_then(|link| {
+            lock(link)
+                .writer
+                .as_ref()
+                .map(|writer| Arc::clone(writer.ring()))
+        })
+    }
+
+    /// The endpoint ID and the ring read of every output still running, in
+    /// start order.
+    pub fn renderer_rings(&self) -> Vec<(String, Arc<Ring>)> {
+        self.renderers
+            .iter()
+            .filter(|renderer| renderer.plays())
+            .map(|renderer| (renderer.id.clone(), Arc::clone(&renderer.ring)))
+            .collect()
     }
 
     /// Whether the last capture started still runs.
@@ -643,7 +665,7 @@ impl Driver for MockDriver {
     fn start_renderer(
         &mut self,
         endpoint: &Endpoint,
-        _reader: Reader,
+        reader: Reader,
         _control: RendererControl,
         _gain: Arc<SharedGain>,
     ) -> Result<MockRenderer, BackendError> {
@@ -660,6 +682,7 @@ impl Driver for MockDriver {
         let dropped = Arc::new(AtomicBool::new(false));
         self.renderers.push(RendererLink {
             id: endpoint.id.clone(),
+            ring: Arc::clone(reader.ring()),
             ended: Arc::clone(&ended),
             dropped: Arc::clone(&dropped),
         });

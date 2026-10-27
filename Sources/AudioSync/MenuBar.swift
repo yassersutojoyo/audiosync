@@ -538,12 +538,12 @@ final class AppModel: ObservableObject {
     /// shows, gives the network advice once for both.
     var networkNote: String? {
         text.networkSpeakersNote(airPlayNone: shownAirPlay.isEmpty && airPlayProblem == nil, cast: castList,
-                                 hint: shownLocalNetworkHint, localNetworkRefused: localNetworkHint != .none,
+                                 hint: shownLocalNetworkHint, localNetworkRefused: localNetworkHint.accessRefused,
                                  airPlaySearching: airplaySearching)
     }
     /// Connected Speakers with no speaker at all.
     var networkEmptyText: String {
-        networkNote ?? text.airPlayNoneFound(hint: shownLocalNetworkHint, localNetworkRefused: localNetworkHint != .none)
+        networkNote ?? text.airPlayNoneFound(hint: shownLocalNetworkHint, localNetworkRefused: localNetworkHint.accessRefused)
     }
     private var shownLocalNetworkHint: LocalNetworkHint { localNetworkHint.shown(airPlayProblem: airPlayProblem != nil) }
 

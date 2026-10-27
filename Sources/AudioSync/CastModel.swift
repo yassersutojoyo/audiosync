@@ -218,12 +218,21 @@ enum CastEvent: Equatable {
     /// `asc_cast_next_event`; `members` reads the playing group's list for a
     /// members event. Nil for a kind this build doesn't know.
     init?(_ raw: AscCastEvent, members: () -> [CastMember] = { [] }) {
+        var underruns = CastUnderruns()
+        self.init(raw, members: members, underruns: &underruns)
+    }
+
+    /// As above; `underruns` keeps each attempt's last underrun count, so a
+    /// diagnostics line shows what changed since the previous one.
+    init?(_ raw: AscCastEvent, members: () -> [CastMember], underruns: inout CastUnderruns) {
         let a = raw.attempt
         let detail = raw.detail.map { String(cString: $0) } ?? ""
         let error = CastError(raw.error)
         switch raw.kind {
         case ASC_CAST_EVENT_STARTED: self = .started(attempt: a, format: raw.format)
-        case ASC_CAST_EVENT_PLAYING: self = .playing(attempt: a)
+        case ASC_CAST_EVENT_PLAYING:
+            underruns.forget(a)
+            self = .playing(attempt: a)
         case ASC_CAST_EVENT_CONNECT_FAILED: self = .connectFailed(attempt: a, error: error, retryMs: raw.retry_ms)
         case ASC_CAST_EVENT_RECOVERING: self = .recovering(attempt: a)
         case ASC_CAST_EVENT_RECOVERED: self = .recovered(attempt: a)
@@ -240,11 +249,14 @@ enum CastEvent: Equatable {
             case ASC_CAST_END_DESELECTED: end = .deselected
             default: end = .failed(error)
             }
+            underruns.forget(a)
             self = .ended(attempt: a, end)
         case ASC_CAST_EVENT_REBUFFERING: self = .note(attempt: a, "the device ran dry")
         case ASC_CAST_EVENT_FORMAT_FALLBACK: self = .formatFallback(attempt: a, format: raw.format)
         case ASC_CAST_EVENT_DIAGNOSTICS:
-            self = .note(attempt: a, String(format: "drift %.0f ms, queued %.0f ms", raw.drift_ms, raw.queued_ms))
+            let silence = underruns.since(attempt: a, total: raw.underrun_frames)
+            self = .note(attempt: a, String(format: "drift %.0f ms, queued %.0f ms", raw.drift_ms, raw.queued_ms)
+                + ", underrun silence \(silence) frames since the previous line")
         case ASC_CAST_EVENT_STREAM: self = .note(attempt: a, "stream: " + detail)
         case ASC_CAST_EVENT_MEMBERS: self = .members(attempt: a, members())
         case ASC_CAST_EVENT_GROUP_LOG: self = .groupLog(detail)
@@ -253,6 +265,24 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_FAILED: self = .failed(detail: detail)
         default: return nil
         }
+    }
+}
+
+/// The underrun silence each attempt reported last. The core counts it from
+/// the stream's `LOAD`, which a playing event marks, so that event resets it.
+struct CastUnderruns {
+    private var last: [UInt64: UInt64] = [:]
+
+    /// The frames `attempt` counted since its previous report; a count that
+    /// went down was restarted, so all of it is new.
+    mutating func since(attempt: UInt64, total: UInt64) -> UInt64 {
+        let before = last[attempt] ?? 0
+        last[attempt] = total
+        return total >= before ? total - before : total
+    }
+
+    mutating func forget(_ attempt: UInt64) {
+        last[attempt] = nil
     }
 }
 

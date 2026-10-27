@@ -1294,6 +1294,77 @@ fn selected_text_in_a_text_box_reaches_4_5_to_1() {
     assert!(CONTRAST_PAIRS.contains(&("surface", "tealText")));
 }
 
+// covers: S308
+/// The updater's notice and menu items: words from strings.slint, token
+/// colors only, text at 4.5:1 on the notice in light and dark, and Narrator
+/// hears the notice's text and each button's name.
+#[test]
+fn the_updater_notice_uses_strings_and_tokens() {
+    let stack = component_body(include_str!("../ui/widgets.slint"), "NoticeStack");
+    for line in stack.lines().map(str::trim) {
+        if ["color:", "background:", "border-color:"]
+            .iter()
+            .any(|key| line.starts_with(key))
+        {
+            assert!(
+                !line.contains('#') && !line.contains("rgb"),
+                "a token, not a literal: {line}"
+            );
+        }
+        if ["text:", "accessible-label:", "label:"]
+            .iter()
+            .any(|key| line.starts_with(key))
+        {
+            assert!(!line.contains('"'), "words from strings.slint: {line}");
+        }
+    }
+    for needle in [
+        "background: Tokens.notice;",
+        "accessible-label: notice.message;",
+        "text: Strings.update-button(button);",
+        "accessible-label: Strings.update-button(button);",
+        "label: Strings.dismiss-notice(notice.title);",
+    ] {
+        assert!(stack.contains(needle), "NoticeStack has {needle}");
+    }
+    // The buttons' own fill and label use Slint's Fluent palette, which no token reaches.
+    for pair in [
+        ("text", "notice"),
+        ("text@secondaryText", "notice"),
+        ("muted", "notice"),
+    ] {
+        assert!(CONTRAST_PAIRS.contains(&pair), "{pair:?} is checked");
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let value = ratio(pair.0, pair.1, appearance);
+            assert!(
+                value >= MIN_TEXT_CONTRAST,
+                "{pair:?} ({appearance:?}): {value:.2}:1"
+            );
+        }
+    }
+    let main = include_str!("../ui/main.slint");
+    for title in [
+        "title: Strings.check-updates-automatically;",
+        "title: Strings.menu-check-for-updates;",
+    ] {
+        assert!(main.contains(title), "main.slint has {title}");
+    }
+    let strings = include_str!("../ui/strings.slint");
+    for label in [
+        "Download and Install",
+        "Not Now",
+        "Cancel",
+        "Try Again",
+        "Open Release Page",
+        "Restart Now",
+    ] {
+        assert!(
+            strings.contains(&format!("@tr(\"{label}\")")),
+            "strings.slint words {label}"
+        );
+    }
+}
+
 // covers: S268 (the Windows host)
 /// The preset controls (spec S267, S268): token colors only, a focus ring,
 /// Narrator's label, value and hint on each row, F2 for Rename, and the
@@ -1346,7 +1417,8 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
 }
 
 /// A zone header works like a speaker row's box: only its badge switches the
-/// zone, and a click anywhere else on the header shows or hides the speakers.
+/// zone, and a click anywhere else on the header shows or hides the speakers
+/// (on the name, once the double-click time has passed).
 #[test]
 fn only_a_zone_headers_badge_switches_the_zone() {
     let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
@@ -1362,8 +1434,8 @@ fn only_a_zone_headers_badge_switches_the_zone() {
     assert!(header[badge..].find("root.toggled();").unwrap() < 800);
     assert_eq!(
         header.matches("TouchArea {").count(),
-        2,
-        "the box and the arrow"
+        3,
+        "the box, the name and the arrow"
     );
     // A FocusScope that takes the focus on click accepts the press (Slint
     // 1.18), so the box's TouchArea would never see a click on the name.
@@ -1372,6 +1444,10 @@ fn only_a_zone_headers_badge_switches_the_zone() {
         header.matches("focus-on-click: false;").count(),
         "every FocusScope in the header lets a click through to the box"
     );
+    let wait = header
+        .find("click-wait := Timer {")
+        .expect("the name waits for a second click");
+    assert!(header[wait..wait + 300].contains("root.expanded-changed(!root.item.expanded);"));
 }
 
 /// The flyout's zone rows follow the main window's header: only the badge

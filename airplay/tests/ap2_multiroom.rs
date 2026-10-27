@@ -5,7 +5,7 @@
 
 mod common;
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::ap2::{Ap2Config, Ap2Event, PtpPeer, Timing};
@@ -30,7 +30,7 @@ fn drain(service: &mut PtpService) -> Vec<PtpTransmit> {
     let mut sent = Vec::new();
     while let Some(transmit) = service.poll_transmit() {
         if transmit.kind == MessageType::Sync {
-            service.sync_sent_to(transmit.sequence_id, transmit.to.ip(), Instant::now());
+            service.sync_sent_to(transmit.sequence_id, transmit.to, Instant::now());
         }
         sent.push(transmit);
     }
@@ -173,7 +173,7 @@ fn ap2_one_ptp_timeline() {
             join_at + Duration::from_secs(second),
         );
     }
-    assert_eq!(joined.poll_outranked(), Some(FIRST));
+    assert_eq!(joined.poll_outranked(), Some(SocketAddr::new(FIRST, 0)));
     assert_eq!(joined.poll_outranked(), None);
     let stranger = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 99));
     for (second, sequence_id) in [(3u64, 1u16), (4, 2)] {
@@ -253,7 +253,7 @@ fn ap2_a_brief_mastership_claim_is_no_other_grandmaster() {
     for (n, ms) in [(4u16, 20_000u64), (5, 21_000), (6, 22_000)] {
         service.handle_message(&receiver_announce(rx, 127, 6, n), from, at(ms));
     }
-    assert_eq!(service.poll_outranked(), Some(FIRST));
+    assert_eq!(service.poll_outranked(), Some(SocketAddr::new(FIRST, 0)));
     assert_eq!(service.poll_outranked(), None);
 }
 
@@ -272,13 +272,72 @@ fn ap2_a_new_session_at_a_warned_address_is_warned_again() {
     let at = |ms: u64| origin + Duration::from_millis(ms);
     service.handle_message(&receiver_announce(rx, 127, 6, 0), from, at(1000));
     service.handle_message(&receiver_announce(rx, 127, 6, 1), from, at(2000));
-    assert_eq!(service.poll_outranked(), Some(FIRST));
+    assert_eq!(service.poll_outranked(), Some(SocketAddr::new(FIRST, 0)));
 
-    service.stop_peer(FIRST);
+    service.stop_peer(SocketAddr::new(FIRST, 7000));
     service.start(SocketAddr::new(FIRST, 7002), at(2500));
     service.handle_message(&receiver_announce(rx, 127, 6, 2), from, at(3000));
     service.handle_message(&receiver_announce(rx, 127, 6, 3), from, at(4000));
-    assert_eq!(service.poll_outranked(), Some(FIRST));
+    assert_eq!(service.poll_outranked(), Some(SocketAddr::new(FIRST, 0)));
+}
+
+fn scope_of(address: SocketAddr) -> u32 {
+    match address {
+        SocketAddr::V6(v6) => v6.scope_id(),
+        SocketAddr::V4(_) => 0,
+    }
+}
+
+fn count_to_scope(sent: &[PtpTransmit], scope: u32, kind: MessageType) -> usize {
+    sent.iter()
+        .filter(|transmit| transmit.kind == kind && scope_of(transmit.to) == scope)
+        .count()
+}
+
+// One link-local address on two interfaces is two receivers (RFC 4007
+// zones), each served on its own schedule with its own scope.
+// covers: P227
+#[test]
+fn ap2_one_link_local_address_on_two_interfaces_is_two_peers() {
+    let link_local = Ipv6Addr::new(0xFE80, 0, 0, 0, 0x0215, 0x5DFF, 0xFEED, 0x0171);
+    let on = |scope: u32| SocketAddr::V6(SocketAddrV6::new(link_local, 7000, 0, scope));
+    let origin = Instant::now();
+    let mut service = PtpService::new(SenderClock::new(origin), IDENTITY, PtpPorts::default());
+    service.start(on(4), origin);
+    service.start(on(9), origin);
+    assert_eq!(service.peers().len(), 2, "{:?}", service.peers());
+
+    let sent = run(&mut service, origin, Duration::from_millis(1100));
+    for scope in [4, 9] {
+        let syncs = count_to_scope(&sent, scope, MessageType::Sync);
+        assert!(
+            count_to_scope(&sent, scope, MessageType::Announce) >= 2,
+            "scope {scope}"
+        );
+        assert!(syncs >= 8, "scope {scope}: {syncs} Syncs");
+        assert_eq!(
+            count_to_scope(&sent, scope, MessageType::FollowUp),
+            syncs,
+            "scope {scope}"
+        );
+    }
+
+    let nine = SocketAddr::V6(SocketAddrV6::new(link_local, 0, 0, 9));
+    let at = |ms: u64| origin + Duration::from_millis(ms);
+    service.handle_message(&delay_req(1), on(9), at(1500));
+    let answer = service.poll_transmit().expect("a Delay_Resp");
+    assert_eq!(answer.kind, MessageType::DelayResp);
+    assert_eq!(scope_of(answer.to), 9);
+    assert_eq!(service.poll_transmit(), None);
+
+    let rx = [0x02, 0x15, 0x5D, 0xFF, 0xFE, 0xED, 0x01, 0x73];
+    service.handle_message(&receiver_announce(rx, 127, 6, 0), on(9), at(2000));
+    service.handle_message(&receiver_announce(rx, 127, 6, 1), on(9), at(3000));
+    assert_eq!(service.poll_outranked(), Some(nine));
+    assert_eq!(service.poll_outranked(), None);
+
+    service.stop_peer(on(4));
+    assert_eq!(service.peers(), &[nine]);
 }
 
 fn ptp_config(peers: Vec<IpAddr>) -> Ap2Config {

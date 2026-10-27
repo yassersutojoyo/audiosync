@@ -185,6 +185,9 @@ component ZoneCard inherits VerticalLayout {
     callback zone-expanded-changed <=> header.expanded-changed;
     callback zone-volume-changed <=> header.volume-changed;
     callback zone-rename <=> header.rename;
+    callback zone-rename-edited <=> header.rename-edited;
+    callback zone-rename-committed <=> header.rename-committed;
+    callback zone-rename-cancelled <=> header.rename-cancelled;
     callback zone-delete <=> header.delete;
     callback zone-calibrate <=> header.calibrate;
     callback zone-use-target <=> header.use-target;
@@ -308,6 +311,14 @@ component SpeakerSection inherits VerticalLayout {
     // The compact rows of its speakers that are in a zone, after the others.
     in property <[SpeakerItem]> zoned;
     callback go-to-zone(string);
+    // A rename asked for in a compact row; its typing, Enter and Escape go
+    // through rename-edited, rename-committed and rename-cancelled.
+    callback in-zones-rename-requested(string);
+    callback in-zones-focus-changed(string, RowPart);
+    // A compact row takes the keyboard focus on in-zones-focus-part while
+    // in-zones-focus-id is its speaker's ID, and clears the ID.
+    in-out property <string> in-zones-focus-id;
+    in-out property <RowPart> in-zones-focus-part;
     // Add by Address…, under the note while no Google Cast speaker is found.
     in property <bool> show-add-address;
     callback add-address();
@@ -345,8 +356,39 @@ component SpeakerSection inherits VerticalLayout {
 
             for speaker in root.zoned: ZoneMemberRow {
                 item: speaker;
+                init => {
+                    if speaker.id == root.in-zones-focus-id {
+                        root.in-zones-focus-id = "";
+                        self.take-focus(root.in-zones-focus-part);
+                    }
+                }
+                property <bool> focus-asked: speaker.id == root.in-zones-focus-id;
+                changed focus-asked => {
+                    if self.focus-asked {
+                        root.in-zones-focus-id = "";
+                        self.take-focus(root.in-zones-focus-part);
+                    }
+                }
                 toggled => {
                     root.toggled(speaker.id);
+                }
+                rename-requested => {
+                    root.in-zones-rename-requested(speaker.id);
+                }
+                rename-edited(text) => {
+                    root.rename-edited(speaker.id, text);
+                }
+                rename-committed => {
+                    root.rename-committed(speaker.id);
+                }
+                rename-cancelled => {
+                    root.rename-cancelled(speaker.id);
+                }
+                blank-clicked => {
+                    root.blank-clicked();
+                }
+                focus-changed(part) => {
+                    root.in-zones-focus-changed(speaker.id, part);
                 }
                 go-to-zone => {
                     root.go-to-zone(speaker.zone-id);
@@ -1297,6 +1339,9 @@ export component MainWindow inherits Window {
     callback speaker-rename-committed(string);
     // Escape in a speaker's name field: keep the old name.
     callback speaker-rename-cancelled(string);
+    // A double-click on a name in an In zones row, or F2 on its switch: the
+    // speaker is renamed in that row.
+    callback speaker-in-zones-rename-requested(string);
     callback forget-pairing-requested(string);
     // The fix under a speaker's device-volume hint.
     callback device-volume-fix-requested(string);
@@ -1329,7 +1374,12 @@ export component MainWindow inherits Window {
     callback zone-toggled(string);
     callback zone-expanded-changed(string, bool);
     callback zone-volume-changed(string, float);
+    // Rename… in a zone's menu, F2 or a double-click on its name: its header
+    // shows a name field, which works like a speaker's.
     callback zone-rename-requested(string);
+    callback zone-rename-edited(string, string);
+    callback zone-rename-committed(string);
+    callback zone-rename-cancelled(string);
     callback zone-deleted(string);
     // Calibrate Zone… in a zone's menu.
     callback zone-calibrate-requested(string);
@@ -1382,10 +1432,14 @@ export component MainWindow inherits Window {
     callback dismiss-all-focus-changed(bool);
     callback speaker-focus-changed(string, RowPart);
     callback zone-focus-changed(string, RowPart);
+    callback in-zones-focus-changed(string, RowPart);
     callback control-focus-changed(MainControl, bool);
     in-out property <int> focus-notice-index: -1;
     in-out property <string> focus-speaker-id;
     in-out property <RowPart> focus-speaker-part;
+    // An In zones row, apart from the speaker's row under its zone.
+    in-out property <string> focus-in-zones-id;
+    in-out property <RowPart> focus-in-zones-part;
     in-out property <string> focus-zone-id;
     in-out property <RowPart> focus-zone-part;
 
@@ -2035,6 +2089,14 @@ export component MainWindow inherits Window {
                         focus-id <=> root.focus-speaker-id;
                         focus-part <=> root.focus-speaker-part;
                         zoned: root.this-pc-zoned;
+                        in-zones-focus-id <=> root.focus-in-zones-id;
+                        in-zones-focus-part <=> root.focus-in-zones-part;
+                        in-zones-rename-requested(id) => {
+                            root.speaker-in-zones-rename-requested(id);
+                        }
+                        in-zones-focus-changed(id, part) => {
+                            root.in-zones-focus-changed(id, part);
+                        }
                         note: root.this-pc.length > 0 || root.this-pc-zoned.length > 0 ? "" : root.this-pc-all-hidden ? Strings.all-speakers-hidden : Strings.this-pc-none;
                         go-to-zone(id) => {
                             root.go-to-zone(id);
@@ -2158,6 +2220,15 @@ export component MainWindow inherits Window {
                             zone-rename => {
                                 root.zone-rename-requested(zone.id);
                             }
+                            zone-rename-edited(text) => {
+                                root.zone-rename-edited(zone.id, text);
+                            }
+                            zone-rename-committed => {
+                                root.zone-rename-committed(zone.id);
+                            }
+                            zone-rename-cancelled => {
+                                root.zone-rename-cancelled(zone.id);
+                            }
                             zone-delete => {
                                 root.zone-deleted(zone.id);
                             }
@@ -2259,6 +2330,14 @@ export component MainWindow inherits Window {
                         zones: root.zones;
                         speakers: root.connected;
                         zoned: root.connected-zoned;
+                        in-zones-focus-id <=> root.focus-in-zones-id;
+                        in-zones-focus-part <=> root.focus-in-zones-part;
+                        in-zones-rename-requested(id) => {
+                            root.speaker-in-zones-rename-requested(id);
+                        }
+                        in-zones-focus-changed(id, part) => {
+                            root.in-zones-focus-changed(id, part);
+                        }
                         go-to-zone(id) => {
                             root.go-to-zone(id);
                         }
