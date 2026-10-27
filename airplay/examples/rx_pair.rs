@@ -351,16 +351,15 @@ fn latency_lines(
             let excess = play - clock.seconds(arrival) - rx.delay.as_secs_f64();
             Some((index + 1, excess * 1000.0 - latency_ms))
         });
-        let reported = outcome.receiver_latency_frames;
-        let reported_ms = reported.map(|frames| f64::from(frames) / RATE * 1000.0);
+        let reported = outcome
+            .receiver_latency_frames
+            .map(|frames| (frames, f64::from(frames) / RATE * 1000.0));
+        let reported_ms = reported.map(|(_, ms)| ms);
         let excess = judged.map_or("none".to_owned(), |(click, ms)| {
             format!("{ms:.3} ms on click {click}")
         });
-        let audio_latency = reported.map_or("none".to_owned(), |frames| {
-            format!(
-                "{frames} frames ({:.3} ms)",
-                f64::from(frames) / RATE * 1000.0
-            )
+        let audio_latency = reported.map_or("none".to_owned(), |(frames, ms)| {
+            format!("{frames} frames ({ms:.3} ms)")
         });
         let gap = judged
             .zip(reported_ms)
