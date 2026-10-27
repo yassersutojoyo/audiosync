@@ -202,6 +202,94 @@ fn a_bad_entry_loses_only_itself_and_the_file_is_kept_aside_before_the_next_writ
 }
 
 #[test]
+fn forgetting_a_receiver_only_a_copy_holds_still_deletes_that_copy() {
+    let base = folder("forget-copy-only");
+    fs::create_dir_all(&base).expect("folder");
+    let path = base.join("airplay-pairings.dat");
+    let good = credentials("0123456789ABCDEF", 7);
+    let secret = credentials("FEDCBA9876543210", 9).to_bytes();
+    let skipped = [
+        MAGIC.to_vec(),
+        vec![VERSION],
+        entry(b"02005E005301", &good.to_bytes()),
+        entry(b"02005E005302", &secret[..secret.len() - 1]),
+    ]
+    .concat();
+    let broken = [
+        MAGIC.to_vec(),
+        vec![VERSION],
+        entry(b"02005E005303", &secret),
+        vec![9, 0, b'x'],
+    ]
+    .concat();
+    for (bytes, forgotten) in [(skipped, "02005E005302"), (broken, "02005E005303")] {
+        for copy in kept_aside(&base) {
+            fs::remove_file(copy).expect("removed");
+        }
+        fs::write(&path, &bytes).expect("written");
+        let (mut store, _) = PairingStore::open(path.clone());
+        assert!(!store.contains(forgotten));
+        store
+            .insert("02005E005304", credentials("00112233445566FF", 3))
+            .expect("written");
+        assert_eq!(kept_aside(&base).len(), 1, "the file is kept aside");
+        assert!(
+            !store.remove(forgotten).expect("the copy is deleted"),
+            "it wasn't paired"
+        );
+        assert!(
+            kept_aside(&base).is_empty(),
+            "a copy holding the forgotten ID is deleted even when only the copy held it"
+        );
+        assert!(store.contains("02005E005304"));
+    }
+}
+
+#[test]
+fn forgetting_a_skipped_receiver_before_any_write_leaves_no_copy_of_it() {
+    let base = folder("forget-before-write");
+    fs::create_dir_all(&base).expect("folder");
+    let path = base.join("airplay-pairings.dat");
+    let secret = credentials("FEDCBA9876543210", 9).to_bytes();
+    fs::write(
+        &path,
+        [
+            MAGIC.to_vec(),
+            vec![VERSION],
+            entry(
+                b"02005E005301",
+                &credentials("0123456789ABCDEF", 7).to_bytes(),
+            ),
+            entry(b"02005E005302", &secret[..secret.len() - 1]),
+        ]
+        .concat(),
+    )
+    .expect("written");
+    let framed = entry(b"02005E005302", b"");
+    let framed = &framed[..framed.len() - 2];
+    let holds_it = |file: &Path| {
+        fs::read(file)
+            .expect("the file")
+            .windows(framed.len())
+            .any(|window| window == framed)
+    };
+
+    let (mut store, _) = PairingStore::open(path.clone());
+    assert!(
+        !store.remove("02005E005302").expect("written"),
+        "it wasn't paired"
+    );
+    store
+        .insert("02005E005303", credentials("00112233445566FF", 3))
+        .expect("written");
+    assert!(!holds_it(&path), "the file no longer holds it");
+    for copy in kept_aside(&base) {
+        assert!(!holds_it(&copy), "no copy holds the forgotten ID: {copy:?}");
+    }
+    assert!(store.contains("02005E005301") && store.contains("02005E005303"));
+}
+
+#[test]
 fn a_newer_file_is_ignored_and_left_as_it_is() {
     let base = folder("newer");
     fs::create_dir_all(&base).expect("folder");

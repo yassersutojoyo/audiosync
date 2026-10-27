@@ -710,7 +710,8 @@ impl CaptureConverter {
 
     /// Converts a chunk of a mix as [`CaptureConverter::push`] converts a
     /// packet of data; `filled` tells per frame whether every lane's share
-    /// was flagged or filled silence, for the zero holes.
+    /// was flagged or filled silence, or no lane had a frame, for the zero
+    /// holes.
     #[cfg_attr(
         not(windows),
         allow(dead_code, reason = "only the WASAPI loopback calls it")

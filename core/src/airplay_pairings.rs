@@ -188,20 +188,29 @@ impl PairingStore {
         self.save()
     }
 
-    /// Forgets the receiver's credentials, writes the file and deletes the
-    /// copies kept aside that hold its ID. Returns whether it was paired;
-    /// when the file can't be written they are forgotten all the same, and
-    /// the error says why.
+    /// Forgets the receiver's credentials, writes the file when it was
+    /// paired or the unusable part read holds its ID, and deletes the copies
+    /// kept aside that hold its ID, also when only a copy held it (an entry
+    /// skipped or a file ignored). Returns whether it was paired; when the
+    /// file can't be written they are forgotten all the same, and the error
+    /// says why.
     pub fn remove(&mut self, id: &str) -> io::Result<bool> {
-        if self.entries.remove(id).is_none() {
-            return Ok(false);
-        }
-        let saved = self.save();
+        let paired = self.entries.remove(id).is_some();
+        let unread = framed_id(id).is_some_and(|framed| {
+            self.unusable
+                .as_ref()
+                .is_some_and(|bytes| holds(bytes, &framed))
+        });
+        let saved = if paired || unread {
+            self.save()
+        } else {
+            Ok(())
+        };
         let pruned = match &self.path {
             Some(path) => prune_copies(path, id),
             None => Ok(()),
         };
-        saved.and(pruned).map(|()| true)
+        saved.and(pruned).map(|()| paired)
     }
 
     /// Writes every entry to the file, through a temporary file renamed over
@@ -391,14 +400,24 @@ fn keep_aside(path: &Path, bytes: &[u8]) -> io::Result<()> {
     ))
 }
 
+/// The receiver ID `id` as the file frames it, after its 16-bit
+/// little-endian length; `None` when it is too long to be in a file.
+fn framed_id(id: &str) -> Option<Vec<u8>> {
+    let id_len = u16::try_from(id.len()).ok()?;
+    Some([&id_len.to_le_bytes()[..], id.as_bytes()].concat())
+}
+
+fn holds(bytes: &[u8], framed: &[u8]) -> bool {
+    bytes.windows(framed.len()).any(|window| window == framed)
+}
+
 /// Deletes the copies kept aside next to the file at `path` that hold the
 /// receiver ID `id` as the file frames it, so a forgotten receiver's secret
 /// doesn't stay behind. A copy that can't be read as its owner's is left.
 fn prune_copies(path: &Path, id: &str) -> io::Result<()> {
-    let Ok(id_len) = u16::try_from(id.len()) else {
+    let Some(framed) = framed_id(id) else {
         return Ok(());
     };
-    let framed = [&id_len.to_le_bytes()[..], id.as_bytes()].concat();
     let (prefix, extension) = copy_name_parts(path);
     let folder = match path.parent() {
         Some(folder) if !folder.as_os_str().is_empty() => folder,
@@ -421,7 +440,7 @@ fn prune_copies(path: &Path, id: &str) -> io::Result<()> {
         let Ok(Contents::Read(bytes, _)) = read_private(&copy) else {
             continue;
         };
-        if bytes.windows(framed.len()).any(|window| window == framed)
+        if holds(&bytes, &framed)
             && let Err(error) = fs::remove_file(&copy)
         {
             result = Err(error);
