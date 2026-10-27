@@ -465,6 +465,41 @@ mod tests {
         assert!(record.watched().is_empty());
     }
 
+    // covers: S194
+    #[test]
+    fn a_failed_activation_or_read_makes_volume_and_mute_both_unknown() {
+        use crate::audio::routing::EndpointVolume;
+        let read = super::device_volume;
+        for failure in [
+            BackendError::System {
+                call: "IMMDevice::Activate(IAudioEndpointVolume)",
+                code: 0x8889_0004_u32 as i32,
+            },
+            BackendError::System {
+                call: "IAudioEndpointVolume::GetMute",
+                code: 0x8000_4005_u32 as i32,
+            },
+            BackendError::DeviceGone,
+        ] {
+            assert_eq!(read(Err(failure)), DeviceVolume::UNKNOWN);
+        }
+        // Mute doesn't zero the scalar: both parts come through as read.
+        assert_eq!(
+            Some(read(Ok(EndpointVolume {
+                muted: true,
+                level: 1.0
+            }))),
+            at(1.0, true)
+        );
+        assert_eq!(
+            Some(read(Ok(EndpointVolume {
+                muted: false,
+                level: 0.0
+            }))),
+            at(0.0, false)
+        );
+    }
+
     // S194, S196
     #[test]
     fn an_endpoint_whose_volume_cannot_be_read_shows_nothing() {
