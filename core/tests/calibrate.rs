@@ -315,6 +315,40 @@ fn a_reflection_stronger_than_the_direct_path_still_times_the_direct_path() {
     assert_eq!(found.frame, 80 * RATE as usize / 1000, "{found:?}");
 }
 
+// A knock or a burst of hiss before a faint sweep correlates with it more
+// than half as strongly as the sweep's peak, so "earliest strong lag" alone
+// would time the noise.
+// covers: S234
+#[test]
+fn loud_noise_before_a_faint_direct_path_is_not_timed() {
+    let mut recording = room(
+        RATE,
+        2.0,
+        &[
+            Path {
+                at_ms: 300.0,
+                gain: 0.006,
+            },
+            Path {
+                at_ms: 322.0,
+                gain: 0.01,
+            },
+        ],
+        1e-4,
+        8,
+    );
+    let mut noise = Noise(108);
+    let burst = RATE as usize / 10;
+    for sample in &mut recording[burst..burst + RATE as usize / 20] {
+        *sample += noise.sample(0.14);
+    }
+    let signal = calibrate::signal(RATE).expect("48 kHz");
+    let measured = calibrate::measure(&signal, &recording, RATE).expect("measured");
+    assert!(measured.echo_share > 0.5, "the burst matters: {measured:?}");
+    let found = arrival(&recording, RATE).expect("accepted");
+    assert_eq!(found.frame, 300 * RATE as usize / 1000, "{found:?}");
+}
+
 /// Why the thresholds sit where they do: noise alone stays well under the
 /// floor threshold, a signal 20 dB under the noise stays well above it, and
 /// the signal's own sidelobes outside the guard window stay far under the
