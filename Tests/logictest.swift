@@ -535,6 +535,20 @@ do {
     stored.values[Keys.zones] = Data("not json".utf8)
     check(store.load().zones.isEmpty && stored.values[Keys.zonesMigrated] as? Bool == true,
           "zones: unreadable zones read as none and never migrate again")
+    // covers: S245 (a stored volume is clamped to 0 to 100; one that isn't a number starts at 100, for that zone only)
+    stored.values[Keys.zones] = Data(#"""
+        [{"id":"z1","name":"Kitchen","members":["lc:a",7,"ap:b"],"volume":"loud","memberNames":{"lc:a":"Desk","ap:b":5}},
+         {"id":"z2","name":"Den","members":["lc:c"],"volume":null},
+         {"id":"z3","members":[]},
+         "junk",
+         {"id":"z4","name":"Fine","members":[],"volume":40}]
+        """#.utf8)
+    let oneBadZone = store.load().zones
+    check(oneBadZone == [SpeakerZone(id: "z1", name: "Kitchen", members: ["lc:a", "ap:b"], volume: 100,
+                                     memberNames: ["lc:a": "Desk"]),
+                         SpeakerZone(id: "z2", name: "Den", members: ["lc:c"], volume: 100),
+                         SpeakerZone(id: "z4", name: "Fine", members: [], volume: 40)],
+          "zones: a stored value that can't be read loses only that value, or its zone, never the others", "\(oneBadZone)")
 
     let unnamed = [SpeakerZone(id: "z1", name: "Kitchen", members: ["ap:native:X", "lc:blank"], volume: 80),
                    SpeakerZone(id: "z2", name: "Den", members: [], volume: 100)]
