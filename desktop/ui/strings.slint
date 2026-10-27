@@ -1341,9 +1341,13 @@ export global Strings {
     // What the name field says about its keys.
     out property <string> speaker-name-field-hint: @tr("Press Enter to apply or Escape to cancel. Leave it empty for the device's own name.");
 
-    // The line under a renamed speaker's name: the name its device reports.
-    public pure function speaker-device-caption(system: string) -> string {
-        return @tr("Device name: {}", system);
+    // The tooltip on a speaker's name in the tray flyout: the full name,
+    // which the row may elide, then the device's own name once renamed.
+    public pure function speaker-tooltip(name: string, system: string) -> string {
+        if system != "" {
+            return @tr("{}\nDevice name: {}", name, system);
+        }
+        return name;
     }
 
     // The tooltip on a speaker's name: the full name, which the row may
@@ -1396,8 +1400,8 @@ export global Strings {
         return @tr("{}. {}", group-note, description);
     }
 
-    // The line under a speaker's name: its kind, its note, or both
-    // ("AirPlay · Asks for a code"); either may be empty.
+    // Two parts of a row's note joined ("2 of 3 on · Waiting for device");
+    // either may be empty.
     public pure function speaker-caption(kind: string, note: string) -> string {
         if kind == "" {
             return note;

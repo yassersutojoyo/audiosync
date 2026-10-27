@@ -1255,7 +1255,7 @@ fn the_flyout_row_shows_the_glyph_and_the_hint_in_its_description() {
     assert!(function.contains("return root.volume-low;"));
 }
 
-/// A tray flyout row shows its speaker's note under the name (a waiting
+/// A tray flyout row shows its speaker's note on the name's line (a waiting
 /// speaker's reason, for one, after a zone's count), as a main window row
 /// does. The source is read
 /// line by line: Windows CI checks it out with CRLF line endings.

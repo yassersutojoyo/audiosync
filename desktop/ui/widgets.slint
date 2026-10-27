@@ -125,6 +125,30 @@ export global Glyphs {
         return root.device;
     }
 
+    // The small glyph after a speaker's name: how it is reached, where the
+    // toggle's glyph shows what it is.
+    public pure function kind-icon(kind: SpeakerKind) -> string {
+        if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 || kind == SpeakerKind.cast {
+            return root.network;
+        }
+        if kind == SpeakerKind.bluetooth {
+            return root.bluetooth;
+        }
+        if kind == SpeakerKind.usb || kind == SpeakerKind.usb-headphones || kind == SpeakerKind.usb-speakers {
+            return root.usb;
+        }
+        if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
+            return root.display;
+        }
+        if kind == SpeakerKind.headphones {
+            return root.headphones;
+        }
+        if kind == SpeakerKind.built-in {
+            return root.speakers;
+        }
+        return root.device;
+    }
+
     public pure function outline(glyph: string) -> string {
         if glyph == root.speakers {
             return "M4.5 1.5 H11.5 A1 1 0 0 1 12.5 2.5 V13.5 A1 1 0 0 1 11.5 14.5 H4.5 A1 1 0 0 1 3.5 13.5 V2.5 A1 1 0 0 1 4.5 1.5 Z M8 7.5 A2.5 2.5 0 0 1 8 12.5 A2.5 2.5 0 0 1 8 7.5 Z";
@@ -374,6 +398,53 @@ export component QuietText inherits HorizontalLayout {
         wrap: root.wrap;
         overflow: root.overflow;
         accessible-role: none;
+    }
+}
+
+// A speaker's kind as a small glyph after its name, as on the Mac. The
+// tooltip names the kind; Narrator reads it from the row's toggle.
+export component KindIcon inherits Rectangle {
+    in property <SpeakerKind> kind;
+    callback clicked();
+
+    width: Tokens.font-size-caption + 2px;
+
+    Glyph {
+        width: 100%;
+        height: 100%;
+        glyph: Glyphs.kind-icon(root.kind);
+        font-size: Tokens.font-size-caption;
+        color: Tokens.secondary-text;
+    }
+
+    TouchArea {
+        clicked => {
+            root.clicked();
+        }
+
+        Tooltip {
+            Rectangle {
+                width: kind-tip.preferred-width + 16px;
+                height: kind-tip.preferred-height + 10px;
+                border-radius: Fluent.radius-control;
+                border-width: 1px;
+                border-color: Fluent.stroke;
+                background: Tokens.surface;
+                drop-shadow-blur: 8px;
+                drop-shadow-offset-y: 2px;
+                drop-shadow-color: Tokens.text.with-alpha(0.18);
+                accessible-role: none;
+
+                kind-tip := Text {
+                    x: 8px;
+                    text: Strings.speaker-kind(root.kind);
+                    font-size: Tokens.font-size-caption;
+                    color: Tokens.text;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+            }
+        }
     }
 }
 
@@ -1567,14 +1638,13 @@ export component SpeakerRow inherits Rectangle {
         root.focus-changed(self.focused-part);
     }
 
-    // The line under the name: the kind of a connected speaker, and the note
-    // of one that can't simply play, or that is on but can't play right now
-    // ("Waiting for device", "Reconnecting…").
+    // The note after the name and kind: why a speaker can't simply play, or
+    // why one that is on can't play right now ("Waiting for device",
+    // "Reconnecting…").
     property <string> cast-note: Strings.cast-note(root.item.cast-state, root.item.muted, root.item.cast-group-note);
     property <string> availability-note: Strings.speaker-availability(root.item.availability, root.item.code-every-time, root.item.state);
     property <string> state-note: root.availability-note != "" ? root.availability-note : Strings.row-note(root.item.state);
     property <string> note: root.item.zone-note != "" ? root.item.zone-note : root.item.cast && root.cast-note != "" ? root.cast-note : root.state-note == "" && root.item.cast-added-by-address ? Strings.cast-added-by-address : root.state-note;
-    property <string> caption: Strings.speaker-caption(root.item.show-kind && !root.item.cast-group ? Strings.speaker-kind(root.item.kind) : "", root.note);
 
     // A click on the row's box works like its delay button; a row without a
     // delay is outside every sync control.
@@ -1898,6 +1968,34 @@ export component SpeakerRow inherits Rectangle {
                                         }
                                     }
 
+                                    if root.item.show-kind && !root.item.cast-group: KindIcon {
+                                        kind: root.item.kind;
+                                        clicked => {
+                                            root.box-clicked();
+                                        }
+                                    }
+
+                                    // An AirPlay speaker's note can be long; it ends in "…"
+                                    // rather than run into the delay column (Narrator reads
+                                    // the whole note from the toggle).
+                                    if root.note != "": Rectangle {
+                                        horizontal-stretch: 1;
+                                        min-width: 0px;
+                                        preferred-width: note-label.preferred-width;
+                                        max-width: note-label.preferred-width;
+
+                                        note-label := Text {
+                                            width: 100%;
+                                            height: 100%;
+                                            text: root.note;
+                                            font-size: Tokens.font-size-caption;
+                                            color: Tokens.secondary-text;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            accessible-role: none;
+                                        }
+                                    }
+
                                     if root.item.auto-connect: Glyph {
                                         glyph: Glyphs.auto-connect;
                                         font-size: Tokens.font-size-caption;
@@ -1905,27 +2003,10 @@ export component SpeakerRow inherits Rectangle {
                                     }
                                 }
 
-                                // A renamed speaker's own name; Narrator reads it
-                                // after the new name, from the toggle.
-                                if root.item.system-name != "": QuietText {
-                                    text: Strings.speaker-device-caption(root.item.system-name);
-                                    wrap: no-wrap;
-                                    overflow: elide;
-                                }
-
                                 // A stereo pair or home theater group names its members
-                                // on a line of its own, above the note.
+                                // on a line of its own, under the name.
                                 if root.item.group-note != "": QuietText {
                                     text: root.item.group-note;
-                                    wrap: no-wrap;
-                                    overflow: elide;
-                                }
-
-                                // An AirPlay speaker's note can be long; it ends in "…"
-                                // rather than run into the delay column (Narrator reads
-                                // the whole note from the toggle).
-                                if root.caption != "": QuietText {
-                                    text: root.caption;
                                     wrap: no-wrap;
                                     overflow: elide;
                                 }

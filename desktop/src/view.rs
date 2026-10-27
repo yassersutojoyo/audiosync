@@ -7073,7 +7073,7 @@ mod tests {
     }
 
     #[test]
-    fn a_renamed_row_shows_its_device_name_under_the_new_one() {
+    fn a_renamed_row_shows_its_device_name_in_the_name_tooltip() {
         let app = app_over(MockBackend::new());
         let strings = app.main.global::<Strings>();
         assert_eq!(
@@ -7101,8 +7101,13 @@ mod tests {
             .invoke_speaker_rename_committed("local:desk".into());
         let row = row_of(&app, "local:desk");
         assert_eq!(
-            strings.invoke_speaker_device_caption(row.system_name.clone()),
-            "Device name: Desk Speaker"
+            strings.invoke_speaker_name_tooltip(row.name.clone(), row.system_name.clone()),
+            "Desk left\nDevice name: Desk Speaker. Double-click to rename."
+        );
+        assert_eq!(
+            strings.invoke_speaker_tooltip(row.name.clone(), row.system_name.clone()),
+            "Desk left\nDevice name: Desk Speaker",
+            "the tray flyout's tooltip names it too"
         );
         let flyout_row = app
             .flyout
