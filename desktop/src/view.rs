@@ -8997,6 +8997,14 @@ mod tests {
             }),
             "Dismiss: Kitchen waiting"
         );
+        // Its row says waiting too, as on the Mac.
+        assert_eq!(
+            dismiss_label(NoticeMessage::AirPlayRetrying {
+                speaker: "Kitchen".into(),
+                problem: ui_model::AirPlayProblem::PtpOtherNetwork,
+            }),
+            "Dismiss: Kitchen waiting"
+        );
         // The names say what happened: the speaker was turned off, and the
         // unreadable file was kept.
         assert_eq!(
