@@ -3,7 +3,7 @@
 //! list keyed by `id`. No test browses the real network.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -406,6 +406,66 @@ fn poll_until_changed(reach: &mut Reachability, list: &mut DeviceList) -> Vec<Li
         std::thread::sleep(Duration::from_millis(5));
     }
     panic!("no check changed the list");
+}
+
+static STALE_PROBES: AtomicUsize = AtomicUsize::new(0);
+static STALE_ANSWER: AtomicBool = AtomicBool::new(true);
+
+// Partly C17 and C18: a check that started before a session opened and
+// ended says nothing about the device now; it is dropped, and a fresh one
+// runs at once.
+#[test]
+fn a_check_older_than_the_last_session_is_dropped_and_run_again() {
+    fn answers(_: SocketAddr) -> bool {
+        let reached = STALE_ANSWER.load(Ordering::SeqCst);
+        STALE_PROBES.fetch_add(1, Ordering::SeqCst);
+        reached
+    }
+    let mut list = DeviceList::new();
+    let address = SocketAddr::new(v4(10), 8009);
+    let key = DeviceKey::Manual(address);
+    list.add_manual(address);
+    let mut reach = Reachability::new(answers);
+    let now = Instant::now();
+    assert!(reach.poll(&mut list, now).is_empty());
+    for _ in 0..400 {
+        if STALE_PROBES.load(Ordering::SeqCst) == 1 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        STALE_PROBES.load(Ordering::SeqCst),
+        1,
+        "the first check ran"
+    );
+
+    // A short session to a dead device opens and ends while that check
+    // reports a device that answered.
+    list.set_in_session(key, true);
+    list.set_in_session(key, false);
+    STALE_ANSWER.store(false, Ordering::SeqCst);
+    for _ in 0..400 {
+        reach.poll(&mut list, now);
+        assert!(
+            !list.get(key).expect("listed").online,
+            "the stale answer is dropped"
+        );
+        if STALE_PROBES.load(Ordering::SeqCst) == 2 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        STALE_PROBES.load(Ordering::SeqCst),
+        2,
+        "checked again at once, not after the interval"
+    );
+    for _ in 0..20 {
+        reach.poll(&mut list, now);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!list.get(key).expect("listed").online);
 }
 
 static PROBES: AtomicUsize = AtomicUsize::new(0);
