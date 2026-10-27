@@ -259,8 +259,12 @@ struct PanelRest: Equatable {
     /// which becomes the new rest.
     mutating func move(to size: CGSize, icon now: CGFloat? = nil) -> CGRect {
         var aim = PanelResize.windowFrame(frame, content: content, to: size)
-        // Once it learns the size the popover re-centers a window it centered on the icon; a screen edge holds the others.
-        if let then = icon, let now, abs(frame.midX - then) <= 1 { aim.origin.x += now - then }
+        // Once it learns the size the popover re-centers the window on the icon, as far as a screen edge lets it.
+        if let then = icon, let now {
+            let off = frame.midX - then
+            let mid = abs(off) <= 1 ? aim.midX + now - then : off < 0 ? min(now, aim.midX) : max(now, aim.midX)
+            aim.origin.x += mid - aim.midX
+        }
         frame = aim
         content = size
         icon = now ?? icon

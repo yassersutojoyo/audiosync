@@ -5096,6 +5096,11 @@ do {
     var edgeHeld = PanelRest(frame: window, content: restSize, icon: window.midX + 60)
     check(edgeHeld.move(to: unfoldedSize, icon: window.midX + 58).minX == window.minX,
           "menu bar panel: a panel the screen edge holds off the icon's middle stays where it is")
+    var leftHeld = PanelRest(frame: window, content: restSize, icon: window.midX - 60)
+    check(edgeHeld.move(to: restSize, icon: window.midX - 10).midX == window.midX - 10
+            && leftHeld.move(to: unfoldedSize, icon: window.midX + 10).midX == window.midX + 10,
+          "menu bar panel: once the icon moves in from the screen edge, a resize centers the panel on it again",
+          "\(edgeHeld.frame) \(leftHeld.frame)")
     check(PanelRest.next(nil, stepRunning: false, window: shifted, content: restSize, icon: 900)
             == PanelRest(frame: shifted, content: restSize, icon: 900),
           "menu bar panel: a resize with no step running aims from the icon where it is now")
