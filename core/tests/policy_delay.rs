@@ -1,8 +1,7 @@
-//! Local output delays and the AirPlay sync rule (S8, S79, S81, S124, S178, S179).
+//! Local output delays and whether an AirPlay speaker is chosen (S79, S124, S178, S179).
 
 use audiosync_core::policy::delay::{
-    DEFAULT_DELAY_MS, MAX_DELAY_MS, SyncRule, airplay_chosen, effective_delay_ms, initial_delay_ms,
-    sanitize_delay_ms,
+    DEFAULT_DELAY_MS, MAX_DELAY_MS, airplay_chosen, initial_delay_ms, sanitize_delay_ms,
 };
 use proptest::prelude::*;
 
@@ -33,26 +32,6 @@ fn non_finite_delay_input_is_ignored_and_other_input_clamped() {
     assert_eq!(sanitize_delay_ms(1820.0), Some(1820.0));
 }
 
-// covers: S8
-#[test]
-fn delay_airplay_chosen_gives_the_configured_delay() {
-    assert_eq!(effective_delay_ms(1820.0, true), 1820.0);
-}
-
-// Records the superseded S78: under S176 an output keeps its offset without AirPlay too.
-#[test]
-fn delay_no_airplay_plays_at_once_and_zero_stays_zero() {
-    assert_eq!(effective_delay_ms(1820.0, false), 0.0);
-    assert_eq!(effective_delay_ms(0.0, true), 0.0);
-    assert_eq!(effective_delay_ms(0.0, false), 0.0);
-    // The configured value is kept either way.
-    let mut rule = SyncRule::default();
-    let configured = 2500.0;
-    assert_eq!(rule.effective_delay_ms(configured), 0.0);
-    rule.update(&["7"], &["7"]);
-    assert_eq!(rule.effective_delay_ms(configured), 2500.0);
-}
-
 // covers: S79
 #[test]
 fn only_a_chosen_and_listed_airplay_speaker_counts() {
@@ -70,53 +49,6 @@ fn only_a_chosen_and_listed_airplay_speaker_counts() {
         "listed but not chosen doesn't count"
     );
     assert!(!airplay_chosen(&["7"], &none));
-}
-
-// covers: S79
-#[test]
-fn the_condition_flips_only_when_a_chosen_and_listed_speaker_comes_or_goes() {
-    let mut rule = SyncRule::default();
-    assert!(!rule.update(&["7"], &["3"]), "nothing chosen yet: no flip");
-    assert!(
-        rule.update(&["7"], &["7", "3"]),
-        "a chosen speaker appears: flip"
-    );
-    assert!(
-        !rule.update(&["7", "3"], &["7", "3"]),
-        "still chosen: no flip"
-    );
-    assert!(rule.update(&["3"], &["7"]), "the enabled set changed: flip");
-}
-
-// Records the superseded S80: under S177 the hold-backs lose only L, never drop to 0.
-#[test]
-fn every_running_output_is_retimed_to_0_when_the_condition_flips_off() {
-    let mut rule = SyncRule::default();
-    let outputs = [("lc:usb", 2000.0), ("lc:hdmi", 1500.0)];
-    assert!(rule.update(&["7"], &["7", "3"]));
-    assert_eq!(
-        rule.retime(&outputs),
-        [("lc:usb", 2000.0), ("lc:hdmi", 1500.0)]
-    );
-    assert!(rule.update(&["3"], &["7"]));
-    assert_eq!(rule.retime(&outputs), [("lc:usb", 0.0), ("lc:hdmi", 0.0)]);
-}
-
-// covers: S81
-#[test]
-fn a_listed_set_kept_through_failed_polls_leaves_the_local_delays_alone() {
-    // A poll that can't read the AirPlay speakers keeps the listed set as it
-    // was (S81): the rule sees the same set again, so nothing flips.
-    let mut rule = SyncRule::default();
-    let listed = ["7".to_owned()];
-    assert!(rule.update(&["7"], &listed));
-    for _ in 0..3 {
-        assert!(
-            !rule.update(&["7"], &listed),
-            "no flap while the speakers can't be read"
-        );
-        assert_eq!(rule.effective_delay_ms(2000.0), 2000.0);
-    }
 }
 
 proptest! {

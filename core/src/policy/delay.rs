@@ -1,20 +1,17 @@
-//! Local output delays (S8, S79, S81, S124, S178), the superseded AirPlay sync rule, and
-//! the local delay model that replaces that rule (S172 to S179).
+//! Local output delays (S8, S79, S124, S178) and the local delay model
+//! (S172 to S179).
 //!
 //! AirPlay speakers play about two seconds late because of the AirPlay
 //! engine's buffer; AudioSync adds no delay on that path (S8).
 //!
-//! Under the old rule (S77, S78, S80) local outputs are delayed to line up
-//! with them, but only while an AirPlay speaker is actually chosen; otherwise
-//! they play at once. Under the local delay model one local output, the
-//! reference, defines time 0; every other local output has an offset relative
-//! to it that always applies, and the host turns the offsets of the outputs
-//! taking part into hold-backs ([`hold_backs`], S176), adding the AirPlay
-//! latency L while an AirPlay speaker is chosen. [`Retimer`] tells which
-//! running outputs need a new hold-back when anything changes (S177), and
-//! [`migrate_mac_delays`] turns the Mac's stored absolute delays into the
-//! model's values once (S179). Delays here are in ms; the renderer converts
-//! them to capture-rate frames (S3, S66).
+//! One local output, the reference, defines time 0; every other local output
+//! has an offset relative to it that always applies, and the host turns the
+//! offsets of the outputs taking part into hold-backs ([`hold_backs`], S176),
+//! adding the AirPlay latency L while an AirPlay speaker is chosen.
+//! [`Retimer`] tells which running outputs need a new hold-back when anything
+//! changes (S177), and [`migrate_mac_delays`] turns the Mac's stored absolute
+//! delays into the model's values once (S179). Delays here are in ms; the
+//! renderer converts them to capture-rate frames (S3, S66).
 
 use std::collections::BTreeMap;
 
@@ -47,50 +44,6 @@ pub fn airplay_chosen<E: AsRef<str>, L: AsRef<str>>(enabled: &[E], listed: &[L])
     enabled
         .iter()
         .any(|id| listed.iter().any(|listed| listed.as_ref() == id.as_ref()))
-}
-
-/// A local output's effective delay: its configured delay while an AirPlay
-/// speaker is chosen, otherwise 0. The configured value is kept either way (S78).
-pub fn effective_delay_ms(configured_ms: f64, airplay_chosen: bool) -> f64 {
-    if airplay_chosen { configured_ms } else { 0.0 }
-}
-
-/// Tracks whether an AirPlay speaker is chosen and reports flips (S80).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SyncRule {
-    chosen: bool,
-}
-
-impl SyncRule {
-    /// Whether an AirPlay speaker is chosen, as of the last update.
-    pub fn chosen(&self) -> bool {
-        self.chosen
-    }
-
-    /// Recomputes the condition after the enabled set or the listed set changed.
-    /// Returns true when it flipped: the host then gives every running local
-    /// output its new effective delay, live (S80; a flip to 0 skips forward, a
-    /// flip back inserts silence). A listed set that a failed poll left
-    /// unchanged (S81) never causes a flip.
-    pub fn update<E: AsRef<str>, L: AsRef<str>>(&mut self, enabled: &[E], listed: &[L]) -> bool {
-        let chosen = airplay_chosen(enabled, listed);
-        let flipped = chosen != self.chosen;
-        self.chosen = chosen;
-        flipped
-    }
-
-    /// The effective delay of a local output with this configured delay (S78).
-    pub fn effective_delay_ms(&self, configured_ms: f64) -> f64 {
-        effective_delay_ms(configured_ms, self.chosen)
-    }
-
-    /// The new effective delay of every running local output, after a flip (S80).
-    pub fn retime<'a, U: AsRef<str>>(&self, outputs: &'a [(U, f64)]) -> Vec<(&'a str, f64)> {
-        outputs
-            .iter()
-            .map(|(uid, configured)| (uid.as_ref(), self.effective_delay_ms(*configured)))
-            .collect()
-    }
 }
 
 /// Smallest offset of a local output relative to the reference, in ms: a

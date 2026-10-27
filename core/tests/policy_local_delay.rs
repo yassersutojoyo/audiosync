@@ -118,7 +118,7 @@ fn a_lone_output_plays_at_once_whatever_its_offset() {
     assert!(hold_backs(&[], Some(L)).is_empty());
 }
 
-// covers: S176
+// covers: S8, S176
 #[test]
 fn an_airplay_speaker_chosen_adds_l_on_top() {
     assert_eq!(
