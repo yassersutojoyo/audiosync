@@ -47,6 +47,16 @@ struct SpeakerGroup: Codable, Equatable {
     var members: [String]       // SpeakerKey values
 }
 
+// A member that can't be read is dropped alone, not the group (S212).
+extension SpeakerGroup {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        members = try container.decodeLossyList(String.self, forKey: .members)
+    }
+}
+
 /// What a typed group name becomes. A blank or whitespace-only name never
 /// becomes a group's name.
 enum GroupName {

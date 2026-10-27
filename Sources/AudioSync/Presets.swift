@@ -16,6 +16,17 @@ struct SpeakerPreset: Codable, Equatable {
             self.volume = volume
         }
 
+        private enum CodingKeys: String, CodingKey {
+            case key, volume
+        }
+
+        // An own volume that isn't a number is none (S251); a key that isn't a string drops the member.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            key = try container.decode(String.self, forKey: .key)
+            volume = try? container.decodeIfPresent(Double.self, forKey: .volume)
+        }
+
         // A missing volume is written as null, as S251 stores it.
         func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
@@ -91,6 +102,27 @@ struct SpeakerPreset: Codable, Equatable {
             out.members = members.map { $0.key == from ? Member(key: to, volume: $0.volume) : $0 }
         }
         return out
+    }
+}
+
+// Read value by value, so one that can't be read is dropped or falls back on its own (S251).
+extension SpeakerPreset {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        members = try container.decodeLossyList(Member.self, forKey: .members)
+        zones = try container.decodeLossyList(ZoneVolume.self, forKey: .zones)
+        master = container.decodeNumberOrNaN(forKey: .master)
+        gains = try container.decode([Double].self, forKey: .gains)
+    }
+}
+
+extension SpeakerPreset.ZoneVolume {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        volume = container.decodeNumberOrNaN(forKey: .volume)
     }
 }
 
