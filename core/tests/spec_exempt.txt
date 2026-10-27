@@ -129,7 +129,7 @@ S307 Hosts only: the Windows updater of section 19; whether SmartScreen prompts 
 S308 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
 S309 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
 S310 No automated test yet: a one-time Mac check that Sparkle offers only the Mac item of the first release appcast carrying Windows items.
-S311 Hosts only: the release appcast's Windows items; a check in the release script will check it.
+S311 Hosts only: the release appcast's Windows items; scripts/check_appcast.py checks it (a Python marker the core's coverage rule doesn't count).
 S314 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
 S315 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
 S316 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.

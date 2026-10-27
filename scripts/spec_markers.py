@@ -3,8 +3,8 @@
 
 The core, cast and airplay crates check their own markers in their
 spec_coverage tests. This covers the rest: tracked Rust and Swift files
-outside those crates (desktop/, remote/, Tests/, Sources/), and shell scripts,
-whose marker is `# covers:`. The letter picks
+outside those crates (desktop/, remote/, Tests/, Sources/), and shell and Python
+files, whose marker is `# covers:`. The letter picks
 the spec: S is docs/ENGINE_SPEC.md, P is docs/AIRPLAY_SPEC.md, C is
 docs/CAST_SPEC.md. A withdrawn or retired clause counts as missing (one
 retired in part does not). Each ID may carry a note in parentheses, and a
@@ -24,7 +24,7 @@ import subprocess
 import sys
 
 MARKER = "// covers:"
-SHELL_MARKER = "# covers:"
+HASH_MARKER = "# covers:"
 SPECS = {"S": "ENGINE_SPEC.md", "P": "AIRPLAY_SPEC.md", "C": "CAST_SPEC.md"}
 CRATES_WITH_OWN_CHECK = ("core/", "cast/", "airplay/")
 _ID = re.compile(r"[SPC][1-9][0-9]*[a-z]?")
@@ -34,11 +34,11 @@ _WITHDRAWN = re.compile(r"\s*[*(]*(withdrawn|retired(?! in part))", re.IGNORECAS
 
 
 def in_scope(path):
-    return path.endswith((".rs", ".swift", ".sh")) and not path.startswith(CRATES_WITH_OWN_CHECK)
+    return path.endswith((".rs", ".swift", ".sh", ".py")) and not path.startswith(CRATES_WITH_OWN_CHECK)
 
 
 def marker_for(path):
-    return SHELL_MARKER if path.endswith(".sh") else MARKER
+    return HASH_MARKER if path.endswith((".sh", ".py")) else MARKER
 
 
 def marker_ids(body):
@@ -130,6 +130,10 @@ def self_test():
     want = ["t.sh:1: S3 is not a clause of ENGINE_SPEC.md"]
     if got != want:
         failures.append(f"problems_in (shell): expected {want}, got {got}")
+    got = problems_in("b.py", "    # covers: S1\n# covers: S9\n// covers: S9\n", {"S1"})
+    want = ["b.py:2: S9 is not a clause of ENGINE_SPEC.md"]
+    if got != want:
+        failures.append(f"problems_in (Python): expected {want}, got {got}")
     scope = {
         "desktop/src/view.rs": True,
         "Tests/logictest.swift": True,
@@ -140,13 +144,14 @@ def self_test():
         "desktop/README.md": False,
         "Tests/shellchecktest.sh": True,
         "core/ffi/build.sh": False,
+        "scripts/check_appcast.py": True,
     }
     for path, want in scope.items():
         if in_scope(path) != want:
             failures.append(f"scope of {path}: expected {want}")
     for failure in failures:
         print(f"self-test: {failure}", file=sys.stderr)
-    cases = len(ids) + 3 + len(scope)
+    cases = len(ids) + 4 + len(scope)
     print(f"self-test: {cases} cases, {len(failures)} failure(s)")
     return 1 if failures else 0
 
