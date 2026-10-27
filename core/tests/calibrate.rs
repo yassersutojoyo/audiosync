@@ -289,6 +289,32 @@ fn an_echo_nearly_as_strong_as_the_first_arrival_is_ambiguous() {
     assert_eq!(close.frame, 80 * RATE as usize / 1000);
 }
 
+// A speaker facing away from the microphone, or hidden behind a laptop lid,
+// can reach it more strongly by a wall than directly; the sound still
+// arrived first by the direct path, so that is the arrival to time.
+// covers: S234
+#[test]
+fn a_reflection_stronger_than_the_direct_path_still_times_the_direct_path() {
+    let recording = room(
+        RATE,
+        2.0,
+        &[
+            Path {
+                at_ms: 80.0,
+                gain: 0.3,
+            },
+            Path {
+                at_ms: 102.0,
+                gain: 0.5,
+            },
+        ],
+        1e-4,
+        5,
+    );
+    let found = arrival(&recording, RATE).expect("accepted");
+    assert_eq!(found.frame, 80 * RATE as usize / 1000, "{found:?}");
+}
+
 /// Why the thresholds sit where they do: noise alone stays well under the
 /// floor threshold, a signal 20 dB under the noise stays well above it, and
 /// the signal's own sidelobes outside the guard window stay far under the
