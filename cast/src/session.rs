@@ -35,10 +35,17 @@ pub const RESYNC_DRIFT: Duration = Duration::from_millis(250);
 pub const STOP_BUDGET: Duration = Duration::from_secs(5);
 /// Session events kept for a host that doesn't poll.
 pub const MAX_SESSION_EVENTS: usize = 64;
+/// How soon after an unrequested `FINISHED` another one ends the session
+/// instead of reloading it again (C86).
+pub const FINISHED_WINDOW: Duration = Duration::from_secs(10 * 60);
 const SLICE: Duration = Duration::from_millis(50);
 
 /// Takes a session event at once, or hands it back when it can't.
 pub type EventSink = Box<dyn FnMut(SessionEvent) -> Result<(), SessionEvent> + Send>;
+
+/// The time the session reads its `FINISHED` window against (C86); a test
+/// may replace it.
+pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
 /// Why a session could not start or carry on.
 #[derive(Debug)]
@@ -144,8 +151,7 @@ pub enum SessionEvent {
         relaunched: bool,
     },
     /// The device saw the stream end while the sender kept it open (C86),
-    /// or lost it during an outage (C81), and the sender loaded it again
-    /// once.
+    /// or lost it during an outage (C81), and the sender loaded it again.
     Reloaded,
     /// The device refused WAV before it played, and the sender loads FLAC
     /// once instead (C84).
@@ -263,7 +269,10 @@ pub struct CastSession {
     stall_since: Option<Instant>,
     next_diagnostics: Instant,
     error_recovered: bool,
-    finished_reloaded: bool,
+    /// When the latest unrequested `FINISHED` arrived, on `clock` (C86).
+    last_finished: Option<Instant>,
+    finished_window: Duration,
+    clock: Clock,
     /// Set by the host once it quits: every teardown from then on keeps to
     /// [`QUIT_BUDGET`] (C88).
     quitting: Arc<AtomicBool>,
@@ -420,7 +429,9 @@ impl CastSession {
             stall_since: None,
             next_diagnostics: Instant::now(),
             error_recovered: false,
-            finished_reloaded: false,
+            last_finished: None,
+            finished_window: FINISHED_WINDOW,
+            clock: Arc::new(Instant::now),
             quitting,
             group,
             members: MemberList::new(),
@@ -552,6 +563,18 @@ impl CastSession {
             _ => self.recover(EndReason::Io("resync failed".to_owned()), true),
         }
         Err(error)
+    }
+
+    /// Sets the window of C86: an unrequested `FINISHED` sooner than this
+    /// after the previous one ends the session. [`FINISHED_WINDOW`] by
+    /// default.
+    pub fn set_finished_window(&mut self, window: Duration) {
+        self.finished_window = window;
+    }
+
+    /// Replaces the clock the `FINISHED` window is read against (C86).
+    pub fn set_clock(&mut self, clock: Clock) {
+        self.clock = clock;
     }
 
     /// Sends the events of every later recovery to `sink` as they happen:
@@ -767,12 +790,16 @@ impl CastSession {
                 }
             }
             Event::PlaybackEnded(PlaybackEnd::Finished) => {
-                if self.finished_reloaded {
+                let now = (self.clock)();
+                let too_soon = self.last_finished.is_some_and(|previous| {
+                    now.saturating_duration_since(previous) < self.finished_window
+                });
+                if too_soon {
                     self.end(SessionEnd::Failed(
                         MediaError::Idle(IdleReason::Finished).into(),
                     ));
                 } else {
-                    self.finished_reloaded = true;
+                    self.last_finished = Some(now);
                     self.reload();
                 }
             }

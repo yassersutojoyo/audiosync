@@ -2,8 +2,9 @@
 # Runs every weekend cell a loopback fake television can prove, and prints
 # one line per cell: <cell> PASS|FAIL|MANUAL <measured value>. The volume,
 # stale row and fake Samsung cells come from the core and AirPlay 2 tests
-# that hold them (each prints a CELL line once it passed); the rest from the
-# airplay example fake_tv_cells.
+# that hold them (each prints a CELL line once it passed), the Google Cast
+# cells from the fake Cast device in cast/tests/fake_cells.rs; the rest from
+# the airplay example fake_tv_cells.
 # A cell that needs the real television prints MANUAL with what to measure.
 # Exits 1 when a cell fails.
 #
@@ -72,8 +73,8 @@ cells_from_tests --lib \
 
 cd "$root/airplay"
 cells_from_tests "--test ap2_volume" \
-    "k1_row_20_reaches_the_samsung_as_minus_24_db_after_the_flush_answer=AP2.K1" \
-    "k1_keep_a_new_session_starts_the_samsung_at_the_level_it_holds=AP2.K1.keep"
+    "row_20_reaches_the_samsung_as_minus_24_db_after_the_flush_answer_without_master_volume=AP2.row20" \
+    "a_new_session_starts_the_samsung_at_the_level_it_holds_without_master_volume=AP2.row20.keep"
 cells_from_tests "--test ap2_samsung" \
     "capture_switch_without_flush=W6.switch" \
     "w2_a_pause_reaches_the_samsung_as_a_flush_within_a_second=W2.flush" \
@@ -82,5 +83,16 @@ cells_from_tests "--test ap2_samsung" \
     "l341_a_busy_or_refusing_samsung_reports_an_error_and_retries_on_the_back_off=L341" \
     "g9_the_latency_the_samsung_reports_reaches_the_host_as_r_s=G9"
 
+cd "$root/cast"
+cells_from_tests "--test fake_cells" \
+    "a_device_that_rounds_levels_to_its_step_moves_one_step_per_press_and_shows_its_own_level=C12" \
+    "mute_and_level_changed_on_the_device_reach_the_host_and_nothing_goes_back=C2.device-volume" \
+    "a_sender_suspended_past_the_devices_ping_timeout_reconnects_and_plays_on=C13" \
+    "current_time_in_any_form_changes_nothing_but_the_diagnostics=C19" \
+    "txt_keys_that_change_with_the_devices_state_keep_one_entry_of_the_same_kind=C16" \
+    "a_tls_1_2_only_device_back_with_a_new_certificate_is_reconnected_and_plays_on=C10" \
+    "a_group_that_answers_with_a_level_of_its_own_is_shown_as_it_says_and_never_chased=C3.e"
+
+cd "$root/airplay"
 cargo run --quiet --locked --example fake_tv_cells -- "$@" || failed=1
 exit "$failed"

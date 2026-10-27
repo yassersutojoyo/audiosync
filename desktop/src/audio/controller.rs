@@ -3382,6 +3382,14 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::AirPlayTrouble { id, problem } => {
             format!("AirPlay speaker ({id}) stopped ({problem:?}); the sender keeps trying")
         }
+        BackendEvent::AirPlayUnannounced { id, unannounced } => format!(
+            "AirPlay speaker ({id}) {}",
+            if *unannounced {
+                "is not on the network; it plays once it is announced"
+            } else {
+                "is announced again"
+            }
+        ),
         BackendEvent::AirPlayFailed { id, problem } => {
             format!("AirPlay speaker ({id}) can't play ({problem:?}); it is turned off")
         }

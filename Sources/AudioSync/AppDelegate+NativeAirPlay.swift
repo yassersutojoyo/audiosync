@@ -1,4 +1,5 @@
 import AppKit
+import CAudioSyncCore
 
 // The AirPlay sender, AudioSync's own: the AirPlay rows come from its
 // discovery under `NativeAirPlayID`s (what an older version saved under a
@@ -44,10 +45,14 @@ extension AppDelegate {
         native.setZones(nativeZoneVolumes())
         let airPlay2On = AppSettings.airPlay2On(setting: airPlay2AtLaunch,
                                                 environment: ProcessInfo.processInfo.environment)
+        // Under the AirPlay 2 flag the path is on and the switch only prefers it (S312).
+        let airPlay2Line = asc_airplay2_auto()
+            ? (airPlay2On ? ", AirPlay 2 on by the flag, preferred" : ", AirPlay 2 on by the flag, not preferred")
+            : (airPlay2On ? ", AirPlay 2 on" : ", AirPlay 2 off")
         native.start(master: masterVolume, airPlay2: airPlay2AtLaunch) { [weak self] started in
             DebugTrace.log("[AudioSync] native AirPlay: "
                 + (started ? "the sender and its discovery started" : "the sender or its discovery could not start")
-                + (airPlay2On ? ", AirPlay 2 on" : ", AirPlay 2 off"))
+                + airPlay2Line)
             self?.nativeStartFinished(native, started: started)
         }
     }
@@ -166,6 +171,8 @@ extension AppDelegate {
             updatePtpPortNotice { $0.reported() }
         case .ptpPortsFree:
             updatePtpPortNotice { $0.portsFree() }
+        case .unannouncedChanged:
+            pushModel()   // the row says it is off the network, or no longer
         }
     }
 

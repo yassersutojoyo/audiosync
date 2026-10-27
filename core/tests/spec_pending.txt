@@ -3,3 +3,4 @@
 # space, what is missing. tests/spec_coverage.rs fails once a clause listed here
 # gains a `// covers:` test, so the line goes when the core implements it. A
 # clause only the host can implement belongs in tests/spec_exempt.txt instead.
+S321 team B T17 jitter: the start run judged on the median of a sliding set with a 5 ms jitter allowance and a settle test, one step per window.

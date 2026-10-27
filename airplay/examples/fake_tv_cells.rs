@@ -82,7 +82,13 @@ impl Tv {
         socket
             .set_read_timeout(Some(Duration::from_millis(200)))
             .expect("a read timeout");
-        let mut fake = television(NAME, pin, CODE, television::FEATURES_METADATA);
+        let mut fake = television(
+            NAME,
+            pin,
+            CODE,
+            television::FEATURES_METADATA,
+            television::DEVICE_ID,
+        );
         fake.data_port = socket.local_addr().expect("its address").port();
         let audio = Arc::new(AtomicUsize::new(0));
         let counted = audio.clone();
@@ -111,10 +117,14 @@ impl Tv {
             instance: NAME.to_owned(),
             host: format!("{}.local", television::HOST_LABEL),
             port: self.server.address.port(),
-            txt: television::txt(self.pin, television::FEATURES_METADATA)
-                .into_iter()
-                .map(|(key, value)| format!("{key}={value}").into_bytes())
-                .collect(),
+            txt: television::txt(
+                self.pin,
+                television::FEATURES_METADATA,
+                television::DEVICE_ID,
+            )
+            .into_iter()
+            .map(|(key, value)| format!("{key}={value}").into_bytes())
+            .collect(),
             addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
         };
         let key = DeviceKey::Id(DeviceId(television::DEVICE_ID));

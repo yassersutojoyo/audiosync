@@ -993,6 +993,44 @@ fn scope_and_protocol_choice() {
     );
 }
 
+// covers: P214
+#[test]
+fn the_airplay2_preference_takes_a_capable_device_with_its_airplay_service_to_airplay2() {
+    let both = device(Some(&["et=0,4"]), Some(&["features=0x0,0x10000"]));
+    assert_eq!(
+        both.choose_path_preferring(true, true, None, false),
+        Ok(ProtocolPath::AirPlay2)
+    );
+    assert_eq!(
+        both.choose_path_preferring(true, false, None, false),
+        Ok(ProtocolPath::AirPlay1),
+        "without the preference P2 chooses"
+    );
+    assert_eq!(
+        both.choose_path_preferring(false, true, None, false),
+        Ok(ProtocolPath::AirPlay1),
+        "with the path off the preference changes nothing"
+    );
+    assert_eq!(
+        both.choose_path_preferring(false, true, None, true),
+        Err(UnsupportedReason::AirPlay2Only)
+    );
+
+    // Without its AirPlay service in view, or not AirPlay 2 capable, P2
+    // chooses.
+    let raop_only = raop_device(&["et=0,4", "ft=0x0,0x10000"]);
+    assert_eq!(
+        raop_only.choose_path_preferring(true, true, None, false),
+        raop_only.choose_path(true, None)
+    );
+    let airplay1_only = device(Some(&["et=0"]), Some(&["features=0x0,0x0"]));
+    assert!(!airplay1_only.verdict.airplay2);
+    assert_eq!(
+        airplay1_only.choose_path_preferring(true, true, None, false),
+        Ok(ProtocolPath::AirPlay1)
+    );
+}
+
 // covers: P46
 #[test]
 fn an_apple_tv_with_the_pin_flags_needs_legacy_pairing() {

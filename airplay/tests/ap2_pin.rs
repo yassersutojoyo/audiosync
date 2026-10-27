@@ -225,19 +225,20 @@ fn the_session_goes_on_over_the_pairing_connection() {
     assert!(framed, "{}", setup.uri);
 }
 
-// covers: P61
+// A receiver set to ask every time keeps no pairing across connections, so
+// the one pair-verify with stored credentials fails and nothing more goes out.
+// covers: P61, P182
 #[test]
-fn stored_credentials_never_verify_with_a_receiver_that_asks_every_time() {
+fn stored_credentials_verify_once_with_a_receiver_that_asks_every_time() {
     let mut rig = PinRig::new(pin_receiver());
     assert_eq!(rig.submit(PIN), Ok(()));
     let credentials = rig.credentials().expect("paired");
-    let mut fake = every_time_receiver();
-    fake.hap.paired = rig.fake.hap.paired.clone();
     let mut config = ap2_config();
     config.credentials = Some(credentials);
-    let session = Ap2Rig::new(config, fake);
+    let session = Ap2Rig::new(config, every_time_receiver());
     let keys = session.keys();
-    assert!(!keys.contains(&"POST /pair-verify"), "{keys:?}");
+    assert!(keys.contains(&"POST /pair-verify"), "{keys:?}");
+    assert!(!keys.contains(&"POST /pair-setup"), "{keys:?}");
     assert!(!keys.contains(&"POST /pair-pin-start"), "{keys:?}");
     let failed = session.events.iter().find_map(|event| match event {
         Ap2Event::Failed(error) => Some(error.kind),

@@ -283,7 +283,8 @@ pub enum TargetChange {
     /// completeness changed.
     Updated(Box<Target>),
     /// No member of it is in view any more, or its members no longer form
-    /// it.
+    /// it. A pair seen together stays while its members' records lapse
+    /// (P216), and goes when one is in view outside it or discovery stops.
     Gone(TargetId),
 }
 
@@ -292,10 +293,14 @@ pub enum TargetChange {
 /// target is incomplete, so the host can name the missing one (P181).
 /// A remembered member is forgotten once it is in view outside its target;
 /// without `psgsz`, the members kept here are what mark a target incomplete.
+/// A stereo pair whose members were in view together stays while their
+/// records lapse, down to none in view (P216).
 #[derive(Debug, Default)]
 pub struct Targets {
     targets: BTreeMap<TargetId, Target>,
     seen: BTreeMap<TargetId, BTreeMap<DeviceKey, String>>,
+    /// Pairs that had two members in view at once in this run (P216).
+    together: BTreeSet<TargetId>,
 }
 
 impl Targets {
@@ -308,8 +313,15 @@ impl Targets {
         devices: impl IntoIterator<Item = &'a Device>,
     ) -> Vec<TargetChange> {
         let devices: Vec<&Device> = devices.into_iter().collect();
-        let in_view: BTreeSet<&DeviceKey> = devices.iter().map(|device| &device.key).collect();
-        let found = find_targets(devices.iter().copied());
+        // Only the `_airplay._tcp` record carries the group keys, so a device
+        // without it says nothing about the target it is in.
+        let in_view: BTreeSet<&DeviceKey> = devices
+            .iter()
+            .filter(|device| device.airplay.is_some())
+            .map(|device| &device.key)
+            .collect();
+        let mut found = find_targets(devices.iter().copied());
+        self.keep_lapsed_pairs(&mut found, &devices, &in_view);
         // A device in view outside a target has left it, so it is never named missing there.
         for (id, seen) in &mut self.seen {
             let target = found.iter().find(|target| target.id == *id);
@@ -318,8 +330,13 @@ impl Targets {
             });
         }
         self.seen.retain(|_, seen| !seen.is_empty());
+        self.together.retain(|id| self.seen.contains_key(id));
         let mut next = BTreeMap::new();
         for mut target in found {
+            let in_view_now = target.members.iter().filter(|m| m.in_view()).count();
+            if target.id.kind == TargetKind::StereoPair && in_view_now >= 2 {
+                self.together.insert(target.id.clone());
+            }
             let seen = self.seen.entry(target.id.clone()).or_default();
             for member in &target.members {
                 seen.insert(member.key.clone(), member.name.clone());
@@ -356,6 +373,71 @@ impl Targets {
         }
         self.targets = next;
         changes
+    }
+
+    /// Adds to `found` each pair seen together that its members' lapsed
+    /// records took out of it: from the members still in view with its
+    /// keys, or from none while no member is in view anywhere else (P216).
+    fn keep_lapsed_pairs(
+        &self,
+        found: &mut Vec<Target>,
+        devices: &[&Device],
+        in_view: &BTreeSet<&DeviceKey>,
+    ) {
+        for id in &self.together {
+            if found.iter().any(|target| target.id == *id) {
+                continue;
+            }
+            let Some(seen) = self.seen.get(id) else {
+                continue;
+            };
+            let taken = |key: &DeviceKey| found.iter().any(|target| target.contains(key));
+            let members: Vec<&Device> = devices
+                .iter()
+                .copied()
+                .filter(|device| {
+                    let keys = device.group_keys();
+                    seen.contains_key(&device.key)
+                        && !taken(&device.key)
+                        && keys.group_public_name.is_some()
+                        && keys
+                            .tight_sync_id
+                            .as_ref()
+                            .is_some_and(|tsid| tsid.eq_ignore_ascii_case(&id.key))
+                })
+                .collect();
+            if members.is_empty() && seen.keys().any(|key| in_view.contains(key)) {
+                continue;
+            }
+            let Some(name) = public_name(&members)
+                .or_else(|| self.targets.get(id).map(|target| target.name.clone()))
+            else {
+                continue;
+            };
+            let target = Target {
+                id: id.clone(),
+                name,
+                leader: leader(&members),
+                control: None,
+                expected_members: Some(2),
+                partner_unreachable: members
+                    .iter()
+                    .any(|device| flags(device).has(StatusFlags::TIGHT_SYNC_PARTNER_UNREACHABLE)),
+                members: members.iter().map(|device| member(device)).collect(),
+            };
+            found.push(target);
+        }
+        found.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+
+    /// Forgets every target, reporting each gone: discovery stopped.
+    pub fn clear(&mut self) -> Vec<TargetChange> {
+        self.seen.clear();
+        self.together.clear();
+        std::mem::take(&mut self.targets)
+            .into_keys()
+            .map(TargetChange::Gone)
+            .collect()
     }
 
     pub fn get(&self, id: &TargetId) -> Option<&Target> {

@@ -69,6 +69,7 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::ap2::Timing;
 use crate::clock::SenderClock;
 use crate::dacp::{DacpAdvertiser, RemoteCommand};
 use crate::discovery::mdns::{DiscoveryError, MdnsBrowser};
@@ -107,6 +108,10 @@ pub struct SenderConfig {
     /// with [`airplay2_switch`]; while it is off nothing of the AirPlay 2
     /// path runs (P170).
     pub airplay2: bool,
+    /// Every AirPlay 2 capable device with its `_airplay._tcp` service in
+    /// view takes the AirPlay 2 path, also one AirPlay 1 could serve (P214).
+    /// It acts only while [`SenderConfig::airplay2`] is on.
+    pub airplay2_preferred: bool,
     /// The AirPlay 2 device ID (P5, P43): a random value the host made once
     /// and stored ([`random_airplay2_device_id`]). `None` gives a random one
     /// for this sender's lifetime, until [`Sender::set_airplay2_device_id`].
@@ -134,6 +139,37 @@ pub const AIRPLAY2_SWITCH_ENV: &str = "AUDIOSYNC_AIRPLAY2";
 /// The switch's value from the environment variable's: on only for `1`.
 pub fn airplay2_switch(value: Option<&str>) -> bool {
     value == Some("1")
+}
+
+/// The environment variable that overrides [`AIRPLAY2_AUTO`] for one
+/// launch (S312).
+pub const AIRPLAY2_AUTO_ENV: &str = "AUDIOSYNC_AIRPLAY2_AUTO";
+
+/// The build's flag for AirPlay 2 per receiver (S312), off until the checks
+/// on real receivers pass.
+pub const AIRPLAY2_AUTO: bool = false;
+
+/// The flag from [`AIRPLAY2_AUTO_ENV`]'s value: `1` on, `0` off, anything
+/// else the build's [`AIRPLAY2_AUTO`].
+pub fn airplay2_auto(value: Option<&str>) -> bool {
+    match value {
+        Some("1") => true,
+        Some("0") => false,
+        _ => AIRPLAY2_AUTO,
+    }
+}
+
+impl SenderConfig {
+    /// The AirPlay 2 path and preference for the flag `auto` and the user's
+    /// switch (S312): with the flag off the switch turns the path on; with
+    /// it on the path is always on and the switch prefers AirPlay 2.
+    pub fn with_airplay2_switch(self, auto: bool, switch: bool) -> SenderConfig {
+        SenderConfig {
+            airplay2: auto || switch,
+            airplay2_preferred: auto && switch,
+            ..self
+        }
+    }
 }
 
 /// The debug hook that lets the devices it names use PCM where they offer
@@ -199,6 +235,7 @@ impl Default for SenderConfig {
             input_frames: DEFAULT_INPUT_FRAMES,
             clock: None,
             airplay2: false,
+            airplay2_preferred: false,
             airplay2_device_id: None,
             ptp_ports: PtpPorts::default(),
             ptp_receiver_ports: PtpPorts::default(),
@@ -226,6 +263,9 @@ pub struct SpeakerOptions {
     /// HomeKit credentials of an earlier pairing on the AirPlay 2 path
     /// (P152): its sessions pair-verify with them (P61). Never logged.
     pub homekit_credentials: Option<HomeKitCredentials>,
+    /// The timing entry the host keeps for this receiver from an earlier
+    /// launch (P217).
+    pub timing: Option<TimingMemory>,
     /// The host keeps a debug log: an AirPlay 2 session reports
     /// [`SpeakerEvent::Trace`] lines and reads the receiver's volume once.
     pub trace: bool,
@@ -241,9 +281,84 @@ impl SpeakerOptions {
             pcm: false,
             credentials: None,
             homekit_credentials: None,
+            timing: None,
             trace: false,
         }
     }
+}
+
+/// The AirPlay 2 timing a receiver's session SETUP took, as the host keeps
+/// it across launches by `deviceid` (P217), with the TXT `features` and
+/// `srcvers` of that SETUP: a change of either makes the sender forget it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimingMemory {
+    pub timing: Timing,
+    pub features: u64,
+    pub srcvers: Option<String>,
+}
+
+impl TimingMemory {
+    /// The byte form a host stores: the timing (0 NTP, 1 PTP), the features
+    /// as 8 little-endian bytes, then 1 and the `srcvers` text, or 0.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(10 + self.srcvers.as_ref().map_or(0, String::len));
+        bytes.push(match self.timing {
+            Timing::Ntp => 0,
+            Timing::Ptp => 1,
+        });
+        bytes.extend_from_slice(&self.features.to_le_bytes());
+        match &self.srcvers {
+            Some(srcvers) => {
+                bytes.push(1);
+                bytes.extend_from_slice(srcvers.as_bytes());
+            }
+            None => bytes.push(0),
+        }
+        bytes
+    }
+
+    /// Reads [`TimingMemory::to_bytes`]; `None` for anything else.
+    pub fn from_bytes(bytes: &[u8]) -> Option<TimingMemory> {
+        let (&timing, rest) = bytes.split_first()?;
+        let timing = match timing {
+            0 => Timing::Ntp,
+            1 => Timing::Ptp,
+            _ => return None,
+        };
+        let (features, rest) = rest.split_first_chunk::<8>()?;
+        let srcvers = match rest.split_first()? {
+            (0, []) => None,
+            (1, text) => Some(std::str::from_utf8(text).ok()?.to_owned()),
+            _ => return None,
+        };
+        Some(TimingMemory {
+            timing,
+            features: u64::from_le_bytes(*features),
+            srcvers,
+        })
+    }
+
+    /// Whether `device`'s TXT record still shows the stored values.
+    pub fn matches(&self, device: &Device) -> bool {
+        self.features == device.features().0 && self.srcvers.as_deref() == srcvers(device)
+    }
+
+    /// The entry for a session SETUP that `device` answered 200 with
+    /// `timing`.
+    pub fn of(device: &Device, timing: Timing) -> TimingMemory {
+        TimingMemory {
+            timing,
+            features: device.features().0,
+            srcvers: srcvers(device).map(str::to_owned),
+        }
+    }
+}
+
+fn srcvers(device: &Device) -> Option<&str> {
+    device
+        .airplay_txt
+        .as_ref()
+        .and_then(|txt| txt.source_version.as_deref())
 }
 
 impl fmt::Debug for SpeakerOptions {
@@ -261,6 +376,7 @@ impl fmt::Debug for SpeakerOptions {
                 "homekit_credentials",
                 &self.homekit_credentials.as_ref().map(|_| "<hidden>"),
             )
+            .field("timing", &self.timing)
             .finish()
     }
 }
@@ -368,6 +484,11 @@ pub enum SpeakerState {
     Playing,
     /// The last session failed; the next starts at `at` (P142).
     Retrying { at: Instant },
+    /// It stopped announcing itself: its RAOP record lapsed, or all of its
+    /// records did. Nothing is tried and nothing more is reported until
+    /// discovery lists it able to play, when a session starts at once
+    /// (P215). Not a failure: the user has nothing to do.
+    Unannounced,
     /// The last session failed with an error that needs the user; no retry
     /// until the host adds the speaker again (P142).
     Failed,
@@ -391,6 +512,10 @@ pub struct SpeakerError {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SpeakerEvent {
     State(SpeakerState),
+    /// The path a new session takes, sent before its Connecting state: a
+    /// receiver that speaks both can play over AirPlay 1 while the AirPlay 2
+    /// place is taken (P214).
+    Path(ProtocolPath),
     Error(SpeakerError),
     /// Something to show; the session goes on.
     Warning(Warning),
@@ -417,6 +542,13 @@ pub enum SpeakerEvent {
     /// them back in [`SpeakerOptions::homekit_credentials`]. The sender
     /// keeps them too, until it stops. `Debug` shows the identifiers only.
     HomeKitPaired(HomeKitCredentials),
+    /// A session SETUP was answered 200 with a timing other than the entry
+    /// the sender held for the receiver: the host keeps this one by
+    /// `deviceid` and hands it back in [`SpeakerOptions::timing`] (P217).
+    TimingRemembered(TimingMemory),
+    /// The receiver's timing entry no longer holds: its TXT record changed,
+    /// or it refused the remembered PTP. The host drops its copy (P217).
+    TimingForgotten,
     /// A line for the host's debug log, only with [`SpeakerOptions::trace`].
     Trace(String),
 }
@@ -525,7 +657,11 @@ impl Sender {
             events_out,
             latency_frames.clone(),
         )
-        .with_airplay2(config.airplay2, config.airplay2_device_id)
+        .with_airplay2(
+            config.airplay2,
+            config.airplay2_preferred,
+            config.airplay2_device_id,
+        )
         .with_ptp_ports(config.ptp_ports, config.ptp_receiver_ports)
         .with_pairing_hold(config.pairing_hold)
         .with_sounding(sounding.clone());
