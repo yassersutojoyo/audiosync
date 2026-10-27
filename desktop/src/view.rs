@@ -4112,7 +4112,6 @@ fn missing_item(strings: &Strings<'_>, state: &AppState, zone_id: &str, id: &str
     }
 }
 
-/// The words of a zone member's note.
 /// Whether a zone member's row is dimmed: as on the Mac, one that can't
 /// play with its zone, whether it is listed or not.
 fn zone_row_dimmed(row: ui_model::ZoneRow<'_>, note: ui_model::ZoneNote<'_>) -> bool {
@@ -4123,6 +4122,7 @@ fn zone_row_dimmed(row: ui_model::ZoneRow<'_>, note: ui_model::ZoneNote<'_>) -> 
         )
 }
 
+/// The words of a zone member's note.
 fn zone_note(strings: &Strings<'_>, note: ui_model::ZoneNote<'_>) -> SharedString {
     match note {
         ui_model::ZoneNote::NeedsAirPlay2 => strings.get_needs_airplay2(),
