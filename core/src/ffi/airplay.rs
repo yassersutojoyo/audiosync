@@ -7665,6 +7665,18 @@ mod tests {
         assert!(receiver.level().is_some_and(|got| same_db(got, db)));
     }
 
+    /// Waits for a volume set after the first `before` to bring `db`. A set
+    /// equal to the last one sent may still be queued behind P120's spacing,
+    /// so [`lands`] alone would let it leave inside the next step.
+    fn lands_after(receiver: &Loopback, before: usize, db: f64) {
+        assert!(
+            wait_for(|| receiver.volume_sets().len() > before),
+            "nothing sent after {before}: {:?}",
+            receiver.volume_sets()
+        );
+        lands(receiver, db);
+    }
+
     // covers: S290, S291
     #[test]
     fn k1_at_master_63_the_row_and_the_television_agree_both_ways() {
@@ -7801,7 +7813,7 @@ mod tests {
                     own = value;
                     // SAFETY: a live handle, used by this thread only; a C string.
                     assert!(unsafe { asc_airplay_set_volume(handle, c_id.as_ptr(), own) });
-                    lands(&receiver, db);
+                    lands_after(&receiver, sets, db);
                     shown = device_level(own, NO_ZONE_POSITION, master);
                 } else if number(step, "tv_level").is_some() {
                     receiver.press(db);
@@ -7810,7 +7822,8 @@ mod tests {
                     (own, shown) = (events[0].volume, events[0].device_level);
                     assert_eq!(receiver.volume_sets().len(), sets, "{name}: sent back");
                 } else if number(step, "device_volume").is_some() {
-                    // A slow runner: P120's 100 ms spacing passes before the command.
+                    // As slow as a CI runner: a set still queued by the last step
+                    // would leave inside this one (P120 spaces sets 100 ms apart).
                     std::thread::sleep(Duration::from_millis(150));
                     receiver.press(db);
                     let key = inside(handle).added[&id].key.clone();
@@ -7820,7 +7833,7 @@ mod tests {
                     assert_eq!(events.len(), 1, "{name}: {step}: {events:?}");
                     (own, shown) = (events[0].volume, events[0].device_level);
                     // Sent back as after a drag, which starts S271's window.
-                    lands(&receiver, db);
+                    lands_after(&receiver, sets, db);
                     assert_eq!(receiver.volume_sets().len(), sets + 1, "{name}");
                     // The speaker echoes that set inside the window, as sent
                     // and 0.2 dB off as it rounds: nothing.
@@ -7837,11 +7850,11 @@ mod tests {
                     master = value;
                     // SAFETY: a live handle, used by this thread only.
                     unsafe { asc_airplay_set_master(handle, master) };
-                    lands(&receiver, db);
+                    lands_after(&receiver, sets, db);
                     shown = device_level(own, NO_ZONE_POSITION, master);
                 } else if let Some(row) = number(step, "row_move") {
                     own = move_row(handle, &id, row, master);
-                    lands(&receiver, db);
+                    lands_after(&receiver, sets, db);
                     shown = device_level(own, NO_ZONE_POSITION, master);
                 } else {
                     panic!("{name}: no fake for step {step}");
