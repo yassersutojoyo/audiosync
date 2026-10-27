@@ -9308,6 +9308,14 @@ do {
     check(inCard(".accessibilityHidden(nonePresent)") == 1
           && inCard(".accessibilityValue(nonePresent ? model.countText(of: zone) : \"\")") == 1,
           "main window zone header: VoiceOver skips the greyed icon and the fold button carries the count")
+    // Go to Zone lands on a part VoiceOver can reach: the greyed icon is hidden from it.
+    check(ZoneHeaderHit.goToZoneFocus(nonePresent: false) == .zoneIcon,
+          "Go to Zone: with a speaker of the zone present, the focus lands on the zone's round icon")
+    check(ZoneHeaderHit.goToZoneFocus(nonePresent: true) == .chevron,
+          "Go to Zone: with none of the zone's speakers present, the focus lands on the arrow, not the hidden icon")
+    check(inCard("focused = ZoneHeaderHit.goToZoneFocus(nonePresent: nonePresent)") == 1
+          && inCard(".focused($focused, equals: .chevron)") == 1 && inCard(".focused($focused, equals: .zoneIcon)") == 1,
+          "main window zone header: Go to Zone focuses the part ZoneHeaderHit.goToZoneFocus names")
 }
 
 // MARK: Menu bar panel rows for zones, folded and unfolded (ZoneLayout.panelRows, shownMembers)
