@@ -997,9 +997,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         var material = holders.flatMap { Self.material(of: $0) }
         let drewOnce = found.isEmpty && material.isEmpty
         if drewOnce {
-            // The popover's frame builds its material layer only when it first
-            // draws, which on the first open after launch hasn't happened yet.
-            // The window is still transparent here, so the pass shows nothing.
+            // The frame builds its material layer on its first draw, which hasn't
+            // happened on the first open; the window is still at alpha 0 here.
             window.layoutIfNeeded()
             window.displayIfNeeded()
             found = Self.backgrounds(in: root, skipping: host.view)
