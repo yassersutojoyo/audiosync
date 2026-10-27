@@ -15,7 +15,7 @@ First bump `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist` (`
 ```bash
 ./build.sh --release                        # the release flag turns the updater on
 Tests/run-tests.sh --hardware
-Tests/soak.sh                               # 60 min, silent; must end with VERDICT: PASS
+Tests/soak.sh                               # 60 min, silent; only when the audio path changed; must end with VERDICT: PASS
 
 VERSION=x.y.z
 NOTES=path/to/release-notes.md          # your local notes file, not committed
@@ -34,7 +34,7 @@ gh release create "v$VERSION" --title "AudioSync $VERSION" --notes-file "$NOTES"
 
 The app updates itself with Sparkle from `releases/latest/download/appcast.xml`, so every release needs its own `appcast.xml` next to the zip. Sparkle checks each download against the EdDSA public key in `Info.plist` (`SUPublicEDKey`). The key pair comes from Sparkle's `generate_keys` (in `.build/artifacts` after `swift build`, under `Sparkle/bin`), run once on the release Mac: it keeps the private key in the login keychain and prints the public key. Paste that public key into `Info.plist` once and commit it; it isn't a secret. The key alone doesn't turn updates on: only `./build.sh --release` adds `AudioSyncReleaseBuild` to the built app's `Info.plist`, and the app checks for updates only with both, so a plain `./build.sh` and CI builds never check. `--release` stops when the key is missing, and `scripts/sign_appcast.sh` refuses a zip whose app lacks the key or the flag. Back the private key up the same way as the signing keychain (`generate_keys -x` exports it): without it, released builds can't take another update. When `scripts/sign_appcast.sh` reads the key, macOS asks whether the program may use it. The prompt should name "AudioSync Release Signing", which is Sparkle's `generate_appcast` under our name (not yet confirmed on a Mac). Click Allow. Allow grants this one access, so the dialog comes back on every release ([docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#signing) explains why not Always Allow).
 
-Run `Tests/soak.sh` for the full 60 minutes before every release and only go on when it ends with `VERDICT: PASS`. It's silent and unattended, and judges against `Tests/baseline/rust.json` ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)). If that baseline is missing, the soak says `NO BASELINE` and exits 3: run `Tests/bench.sh` first (an hour), commit the baseline and the updated `docs/BENCHMARKS.md`, then run the soak.
+Run `Tests/soak.sh` for the full 60 minutes before a release that changes the audio path (capture, the ring, delay, renderers or senders), and only go on when it ends with `VERDICT: PASS`. A release that leaves the audio path alone skips it. It's silent and unattended, and judges against `Tests/baseline/rust.json` ([docs/BENCHMARKS.md](docs/BENCHMARKS.md)). If that baseline is missing, the soak says `NO BASELINE` and exits 3: run `Tests/bench.sh` first (an hour), commit the baseline and the updated `docs/BENCHMARKS.md`, then run the soak.
 
 Write your release notes file before tagging. Start from the CHANGELOG entry, keep them short and user-facing, and include the install notes (macOS 15 or later, Open Anyway). Leave the title out of the file, since `--title` sets it.
 
