@@ -33,6 +33,7 @@ import argparse
 import base64
 import contextlib
 import io
+import json
 import os
 import sys
 import tempfile
@@ -405,6 +406,51 @@ def self_test():
                 got = main(["--strays", where, "0.8.0"])
             if got != want:
                 failures.append(f"--strays on {name}: exit {got}, expected {want}")
+
+        def against_assets(name, items, assets, want, use_file=None):
+            nonlocal cases
+            cases += 1
+            appcast = os.path.join(folder, f"{name}.xml")
+            write_appcast(appcast, items)
+            argv = ["--assets", appcast, "0.8.0"]
+            if use_file is None:
+                argv += assets
+            else:
+                listing = os.path.join(folder, f"{name}.assets")
+                with open(listing, "w", encoding="utf-8") as f:
+                    f.write(use_file(assets))
+                argv += ["--assets-file", listing]
+            out = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+                    got = main(argv)
+            except SystemExit as stop:
+                got = f"exit {stop.code}"
+            lines = out.getvalue()
+            if want is None and got != 0:
+                failures.append(f"{name}: expected a pass, got {got}: {lines!r}")
+            elif want is not None and (got != 1 or want not in lines):
+                failures.append(f"{name}: expected exit 1 and a line with {want!r}, got {got}: {lines!r}")
+
+        names = [os.path.basename(path) for path in everything]
+        other_assets = ["AudioSync-0.8.0.dmg", "SHA256SUMS.txt", "appcast.xml"]
+        x64_name, arm_name = names[1], names[2]
+        against_assets("assets of a full release", good(), names + other_assets, None)
+        against_assets("assets of a Mac-only release", good()[:1], names[:1] + other_assets, None)
+        against_assets("Windows zips attached, appcast Mac-only", good()[:1], names + other_assets,
+                       f"{x64_name} is attached but has no appcast item")
+        against_assets("arm64 zip attached without its item", good()[:2], names + other_assets,
+                       f"{arm_name} is attached but has no appcast item")
+        against_assets("an item whose zip is not attached", good(), names[:2] + other_assets,
+                       f"{arm_name}, which is not attached")
+        against_assets("Mac zip attached without its item", good()[1:], names + other_assets,
+                       f"{names[0]} is attached but has no appcast item")
+        against_assets("assets from gh release view --json assets", good()[:1], names + other_assets,
+                       f"{x64_name} is attached but has no appcast item",
+                       use_file=lambda listed: json.dumps(
+                           {"assets": [{"name": n, "size": 1} for n in listed]}))
+        against_assets("assets one name per line", good(), names + other_assets, None,
+                       use_file=lambda listed: "\n".join(listed) + "\n")
     for failure in failures:
         print(f"self-test: {failure}", file=sys.stderr)
     print(f"self-test: {cases} cases, {len(failures)} failure(s)")

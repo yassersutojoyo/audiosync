@@ -267,6 +267,9 @@ Tests/shellchecktest.sh || status=1
 echo "▶ disk image detach (Tests/dmgdetachtest.sh)"
 Tests/dmgdetachtest.sh || status=1
 
+echo "▶ appcast signing choice (Tests/signappcasttest.sh)"
+Tests/signappcasttest.sh || status=1
+
 echo "▶ updater words (Tests/updatertexttest.sh)"
 Tests/updatertexttest.sh || status=1
 
