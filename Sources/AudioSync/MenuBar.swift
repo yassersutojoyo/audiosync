@@ -614,8 +614,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             self.noticeCount = list.count
             self.refreshIcon()
         }
-        // The first build of the rows is the slowest; it happens now, not on the first click.
-        DispatchQueue.main.async { [weak self] in self?.host.view.layoutSubtreeIfNeeded() }
+        // The first build and drawing of the rows is the slowest; it happens once launch settles.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.prewarm() }
         DebugTrace.log("[AudioSync] status item visible=\(statusItem.isVisible) button=\(statusItem.button != nil)")
         DebugTrace.log("[AudioSync] brand font \(Brand.fontName) loaded=\(NSFont(name: Brand.fontName, size: 13) != nil)")
     }
@@ -730,6 +730,23 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     func popoverDidClose(_ notification: Notification) {
         host.sizing = host.sizing.after(.didClose)
         if host.sizing == .closed { prepareNextOpen() }
+    }
+
+    /// Draws the panel once, at its screen's scale and in the app's
+    /// appearance, in a window that is never shown, then frees the view
+    /// for the popover. Size changes meanwhile wait (`PanelSizing.closed`).
+    private func prewarm() {
+        guard !presented, host.view.window == nil else { return }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 280, height: 400), styleMask: [.borderless],
+                              backing: .buffered, defer: false, screen: statusItem.button?.window?.screen ?? NSScreen.main)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSApp.effectiveAppearance
+        window.contentView = host.view
+        host.view.layoutSubtreeIfNeeded()
+        if let rep = host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds) {
+            host.view.cacheDisplay(in: host.view.bounds, to: rep)
+        }
+        host.view.removeFromSuperview()
     }
 
     /// Rebuilds the rows while the panel is hidden (a row the pointer was
