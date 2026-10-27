@@ -7790,6 +7790,121 @@ mod tests {
         );
     }
 
+    // covers: S181 (the hint beside the delay fields)
+    #[test]
+    fn the_sync_hint_names_the_reference_and_says_which_way_to_move_a_value() {
+        let app = app_over(MockBackend::new());
+        let strings = app.main.global::<Strings>();
+        assert_eq!(
+            strings.invoke_sync_hint("Speakers".into()),
+            "Relative to Speakers. Heard this speaker first? Raise the value. Heard it late? Lower it."
+        );
+        assert_eq!(
+            strings.invoke_sync_hint("".into()),
+            "The speaker with the lowest value plays first, and the others wait by the difference. Heard this speaker first? Raise the value. Heard it late? Lower it."
+        );
+
+        let mut state = MockBackend::new().snapshot();
+        let desk = state.speaker("local:desk").unwrap().clone();
+        assert_eq!(
+            speaker_item(&state, &desk, true, true, None).reference_name,
+            "Speakers"
+        );
+        state.reference_name = None;
+        assert_eq!(
+            speaker_item(&state, &desk, true, true, None).reference_name,
+            "",
+            "without a reference the row asks for the no-reference hint"
+        );
+
+        let widgets = include_str!("../ui/widgets.slint");
+        let controls = &widgets[widgets
+            .find("export component SyncControls")
+            .expect("the sync controls")..];
+        let field = controls
+            .find("text: root.delay-text;")
+            .expect("the delay field");
+        let hint = controls
+            .find("text: root.cast ? Strings.cast-sync-hint : Strings.sync-hint(root.reference-name);")
+            .expect("the hint beside the delay field");
+        let end = controls[1..]
+            .find("export component")
+            .map_or(controls.len(), |at| at + 1);
+        assert!(field < end && hint < end, "both in the sync controls");
+        assert!(widgets.contains("reference-name: root.item.reference-name;"));
+    }
+
+    // covers: S181 (other input is ignored and the stored value shows again)
+    #[test]
+    fn a_delay_that_is_not_a_signed_whole_number_applies_nothing_and_shows_the_stored_value() {
+        let app = app_over(MockBackend::new());
+        app.main.invoke_sync_toggled("local:desk".into());
+        assert_eq!(delay_of(&app, "local:desk"), Some(120.0));
+        for typed in ["", " ", "+", "\u{2212}", "-", "+x", "\u{2212}ms", "abc"] {
+            app.main
+                .invoke_delay_edited("local:desk".into(), typed.into());
+            app.main.invoke_delay_committed("local:desk".into());
+            assert_eq!(
+                delay_of(&app, "local:desk"),
+                Some(120.0),
+                "{typed:?} applies nothing"
+            );
+            assert_eq!(desk_delay_text(&app), "+120", "{typed:?}: the stored value");
+            assert!(!desk_row(&app).delay_pending, "{typed:?} leaves no draft");
+        }
+    }
+
+    // covers: S199 (the Windows app writes "13%" in every locale)
+    #[test]
+    fn the_device_volume_percent_reads_n_percent_without_a_space_in_every_locale() {
+        // No translation catalog is built in, so no locale can turn "{}%"
+        // into "13 %"; Slint writes an int the same way in every locale.
+        let manifest = include_str!("../Cargo.toml");
+        assert!(!manifest.contains("\"gettext\""), "no gettext catalogs");
+        assert!(
+            !include_str!("../build.rs").contains("translations"),
+            "no bundled translations"
+        );
+
+        let app = app_over(MockBackend::new());
+        let strings = app.main.global::<Strings>();
+        let system = if cfg!(target_os = "linux") {
+            "PipeWire"
+        } else {
+            "Windows"
+        };
+        for n in [0, 5, 13, 25] {
+            assert_eq!(
+                strings.invoke_device_volume_hint(DeviceVolumeHint::Low, n),
+                format!("{system} volume is {n}%")
+            );
+            assert_eq!(
+                strings.invoke_device_volume_hint(DeviceVolumeHint::MutedLow, n),
+                format!("Muted in {system}, volume {n}%")
+            );
+            assert_eq!(
+                strings.invoke_device_volume_hint_label(
+                    "Speakers".into(),
+                    DeviceVolumeHint::Low,
+                    n
+                ),
+                format!("Speakers: {system} volume is {n}%")
+            );
+        }
+        assert_eq!(
+            strings.invoke_device_volume_fix(DeviceVolumeHint::Low),
+            "Set to 75%"
+        );
+        assert_eq!(
+            strings.invoke_device_volume_fix(DeviceVolumeHint::MutedLow),
+            "Unmute at 75%"
+        );
+        assert_eq!(
+            strings.invoke_device_volume_fix_label("Speakers".into(), DeviceVolumeHint::MutedLow),
+            "Unmute at 75%, Speakers"
+        );
+    }
+
     #[test]
     fn a_typed_delay_stays_in_the_field() {
         let state = MockBackend::new().snapshot();
