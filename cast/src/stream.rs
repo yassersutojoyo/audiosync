@@ -278,6 +278,9 @@ pub struct StreamStats {
     pub frames_queued: u64,
     /// Whether a stream response is open now.
     pub streaming: bool,
+    /// Silent frames the pump sent because the ring ran dry for longer than
+    /// the underrun wait (C52).
+    pub underrun_frames: u64,
 }
 
 /// The blocks waiting for the response, capped at a duration of audio
@@ -503,6 +506,7 @@ struct Shared {
     fetches: AtomicU64,
     frames_sent: AtomicU64,
     ring_dropped: AtomicU64,
+    underrun_frames: AtomicU64,
     events: Mutex<VecDeque<ServerEvent>>,
     connections: Mutex<Vec<(TcpStream, JoinHandle<()>)>>,
 }
@@ -603,6 +607,7 @@ impl StreamServer {
             fetches: AtomicU64::new(0),
             frames_sent: AtomicU64::new(0),
             ring_dropped: AtomicU64::new(0),
+            underrun_frames: AtomicU64::new(0),
             events: Mutex::new(VecDeque::new()),
             connections: Mutex::new(Vec::new()),
         });
@@ -710,6 +715,7 @@ impl StreamServer {
             queue_frames_dropped,
             frames_queued: live.responses.frames_queued() as u64,
             streaming: !live.responses.is_empty(),
+            underrun_frames: self.shared.underrun_frames.load(Ordering::Relaxed),
         }
     }
 
@@ -1123,6 +1129,9 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
                 blocks.push(block);
             } else if due - emitted > underrun_blocks {
                 blocks.push(vec![0; block_frames * FRAME_BYTES]);
+                shared
+                    .underrun_frames
+                    .fetch_add(block_frames as u64, Ordering::Relaxed);
             } else {
                 break;
             }

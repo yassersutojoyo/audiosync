@@ -661,6 +661,26 @@ fn diagnostics_count_drift_and_resync_is_only_the_users() {
     device.join();
 }
 
+// covers: C52, C78
+#[test]
+fn underrun_silence_counts_from_the_latest_load() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, feed) = start(&device);
+    // The host's input stops: the stream carries silence from then on.
+    drop(feed);
+    session.run_for(Duration::from_millis(1_000));
+    let before = session.diagnostics();
+    assert!(before.underrun_frames > 0, "{before:?}");
+    session.resync().expect("the user's Resync plays again");
+    let fresh = session.diagnostics();
+    assert!(
+        fresh.underrun_frames < before.underrun_frames,
+        "{fresh:?} after {before:?}"
+    );
+    session.stop();
+    device.join();
+}
+
 // covers: C83
 #[test]
 fn a_failed_resync_reloads_once_then_ends_with_its_reason() {

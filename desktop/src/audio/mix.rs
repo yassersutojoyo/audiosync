@@ -728,7 +728,7 @@ mod tests {
             }
             let packets = std::mem::take(&mut script.packets);
             for &(start, frames, value) in &packets {
-                let (fill, skip) = gaps.packet(start, frames, false);
+                let (fill, skip, _) = gaps.packet(start, frames, false);
                 if fill > 0 {
                     deliver(&[], fill, true);
                 }
