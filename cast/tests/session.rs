@@ -123,8 +123,10 @@ fn client_hello(listener: TcpListener) -> ([u8; 2], Vec<u16>) {
     let suites = session_id + 1 + usize::from(body[session_id]);
     let length = usize::from(u16::from_be_bytes([body[suites], body[suites + 1]]));
     let offered = body[suites + 2..suites + 2 + length]
-        .chunks_exact(2)
-        .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_be_bytes(*pair))
         .collect();
     (version, offered)
 }
