@@ -562,8 +562,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The AirPlay 2 flag of this launch (spec S312): the AirPlay 2 path is
     /// on whatever the switch says.
     airplay2_auto: bool,
-    /// The AirPlay 2 switch as saved at launch, which the sender keeps until
-    /// the next launch.
+    /// Whether the sender's AirPlay 2 path is on this launch: the switch as
+    /// saved at launch, or `AUDIOSYNC_AIRPLAY2`.
     airplay2_at_launch: bool,
     /// `AUDIOSYNC_AIRPLAY2`, which turns the sender's AirPlay 2 path on with
     /// the switch off.
@@ -833,7 +833,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             remote: saved.remote,
             airplay2_experimental: saved.airplay2_experimental,
         };
-        self.airplay2_at_launch = saved.airplay2_experimental;
+        self.airplay2_at_launch = crate::audio::airplay::airplay2_on(
+            saved.airplay2_experimental,
+            self.airplay2_switch_env.as_deref(),
+        );
         self.saved = saved;
     }
 
