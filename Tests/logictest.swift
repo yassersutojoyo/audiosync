@@ -4910,7 +4910,7 @@ do {
     check(damaged.localVolumes == ["a": 100, "b": 0, "e": 42],
           "settings: volumes are clamped to 0…100, anything else is dropped (S76)")
     check(damaged.localDelays == ["a": 20_000, "b": 0, "d": 1820],
-          "settings: delays are clamped to 0…20 000 ms, anything else is dropped (S77)")
+          "settings: delays are clamped to 0…20 000 ms, anything else is dropped (S124)")
     check(damaged.airplayVolumes == ["x": 101] && damaged.groups.isEmpty && damaged.enabledLocal == ["lc"]
             && damaged.appearance == .system,
           "settings: unreadable groups, IDs or appearance fall back to the defaults; an AirPlay own volume above 100 stays (S290)")
@@ -4927,7 +4927,7 @@ do {
     check(saved == migrated.localVolumes && stored.values[Keys.legacyLocalGains] == nil,
           "settings: the converted volumes are saved under the current key and the old key is removed")
     check(store.load() == migrated, "settings: a second launch reads the converted volumes as they are")
-    check(migrated.defaultDelayMs == 1500, "settings: an older single delay is where local speakers start (S77)")
+    check(migrated.defaultDelayMs == 1500, "settings: an older single delay is where local speakers start (S179)")
     stored.values = [Keys.legacyDelayMs: 90_000.0]
     check(store.load().defaultDelayMs == 20_000, "settings: an older single delay is clamped to 20 000 ms")
     stored.values = [Keys.localVolumes: ["a": 70.0], Keys.legacyLocalGains: ["a": 3.49]]

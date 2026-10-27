@@ -11,7 +11,7 @@
 //! - [`ring`]: the delay ring, its single writer and its readers (S35-S59).
 //! - [`render`]: the resampler, a local output's output stage (S62-S65) and
 //!   its whole renderer with the fades (S182-S188).
-//! - [`sync`]: the AirPlay sync rule and the delay helpers (S3, S77-S80).
+//! - [`sync`]: the AirPlay sync rule and the delay helpers (S3, S79, S124, S172 to S179).
 //! - [`device_volume`]: what an output device's own volume and mute mean for
 //!   its row, and what the one-click fix writes (S192-S202).
 //! - [`calibrate`]: the microphone calibration's test signal and estimate

@@ -1,5 +1,5 @@
 //! The local delay model and the delay helpers through the C interface (S3,
-//! S77, S124, S172 to S179): pure functions for the control thread.
+//! S124, S172 to S179): pure functions for the control thread.
 //!
 //! The rules themselves are in [`delay`]: [`delay::hold_backs`] and
 //! [`delay::migrate_mac_delays`] for the local delay model; this module only
@@ -10,7 +10,7 @@ use super::{host_slice, host_slice_mut};
 use crate::policy::delay;
 use crate::reader;
 
-/// [`delay::sanitize_delay_ms`] (S77, S124): false, writing nothing, for a
+/// [`delay::sanitize_delay_ms`] (S124): false, writing nothing, for a
 /// non-finite delay or a null `sanitized_ms`.
 ///
 /// # Safety

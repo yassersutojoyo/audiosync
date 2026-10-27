@@ -1,4 +1,4 @@
-//! Local output delays and the AirPlay sync rule (S8, S77 to S81, S124), and
+//! Local output delays and the AirPlay sync rule (S8, S79, S81, S124), and
 //! the local delay model that replaces that rule (S172 to S179).
 //!
 //! AirPlay speakers play about two seconds late because of the AirPlay
@@ -18,14 +18,14 @@
 
 use std::collections::BTreeMap;
 
-/// Delay of a local output the user has never set, in ms (S77).
+/// Delay of a local output the user has never set, in ms (S179).
 pub const DEFAULT_DELAY_MS: f64 = 2000.0;
 
-/// Largest configurable delay, in ms (S77).
+/// Largest configurable delay, in ms (S124).
 pub const MAX_DELAY_MS: f64 = 20_000.0;
 
 /// A delay input from the host, ready to use: non-finite values are ignored
-/// (`None`, keep the previous delay), others clamped to 0…20 000 ms (S77, S124).
+/// (`None`, keep the previous delay), others clamped to 0…20 000 ms (S124).
 pub fn sanitize_delay_ms(delay_ms: f64) -> Option<f64> {
     delay_ms
         .is_finite()
@@ -33,7 +33,7 @@ pub fn sanitize_delay_ms(delay_ms: f64) -> Option<f64> {
 }
 
 /// The configured delay of an output that has none yet: the legacy single
-/// delay when one is stored (clamped), otherwise 2000 ms (S77).
+/// delay when one is stored (clamped), otherwise 2000 ms (S179).
 pub fn initial_delay_ms(legacy_delay_ms: Option<f64>) -> f64 {
     legacy_delay_ms
         .and_then(sanitize_delay_ms)
@@ -97,7 +97,7 @@ impl SyncRule {
 /// wireless output that sounds up to two seconds late (S175).
 pub const MIN_OFFSET_MS: f64 = -2000.0;
 
-/// Largest offset of a local output, in ms: S77's maximum (S175).
+/// Largest offset of a local output, in ms (S175).
 pub const MAX_OFFSET_MS: f64 = 20_000.0;
 
 /// Largest hold-back a renderer gets, in ms: what the ring covers (S36,

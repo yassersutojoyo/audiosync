@@ -33,13 +33,13 @@ fn non_finite_delay_input_is_ignored_and_other_input_clamped() {
     assert_eq!(sanitize_delay_ms(1820.0), Some(1820.0));
 }
 
-// covers: S8
+// The retired S78 rule (superseded by S176); nothing live calls it.
 #[test]
 fn delay_airplay_chosen_gives_the_configured_delay() {
     assert_eq!(effective_delay_ms(1820.0, true), 1820.0);
 }
 
-// covers: S8
+// The retired S78 rule (superseded by S176); nothing live calls it.
 #[test]
 fn delay_no_airplay_plays_at_once_and_zero_stays_zero() {
     assert_eq!(effective_delay_ms(1820.0, false), 0.0);
@@ -72,7 +72,7 @@ fn only_a_chosen_and_listed_airplay_speaker_counts() {
     assert!(!airplay_chosen(&["7"], &none));
 }
 
-// covers: S79
+// The retired S80 rule (superseded by S177); nothing live calls it.
 #[test]
 fn every_running_output_is_retimed_when_the_condition_flips() {
     let mut rule = SyncRule::default();
