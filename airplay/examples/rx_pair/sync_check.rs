@@ -32,11 +32,13 @@ pub const REARM_FRAMES: u64 = 44_100;
 /// leading silence and after a receiver's start-up flush, set the anchor.
 pub const ANCHOR_WINDOW_FRAMES: u64 = 3 * 44_100;
 
-/// One `--rx` value: `host:port[,ap1|ap2][,delay=<ms>]`.
+/// One `--rx` value: `host:port[,ap1|ap2|both][,delay=<ms>]`. `both` offers
+/// the AirPlay 1 and AirPlay 2 services together and leaves `path` as is.
 #[derive(Debug, PartialEq)]
 pub struct RxSpec {
     pub host_port: String,
     pub path: ProtocolPath,
+    pub both: bool,
     pub delay: Duration,
 }
 
@@ -49,12 +51,14 @@ pub fn parse_rx_spec(text: &str) -> Result<RxSpec, String> {
     let mut spec = RxSpec {
         host_port,
         path: ProtocolPath::AirPlay2,
+        both: false,
         delay: Duration::ZERO,
     };
     for part in parts {
         match part {
             "ap1" => spec.path = ProtocolPath::AirPlay1,
             "ap2" => spec.path = ProtocolPath::AirPlay2,
+            "both" => spec.both = true,
             _ => {
                 let Some(value) = part.strip_prefix("delay=") else {
                     return Err(format!("unknown option '{part}' in --rx {text}"));

@@ -16,10 +16,17 @@
 //!
 //! ```text
 //! cargo run --release -p audiosync-airplay --example rx_pair -- \
-//!     --rx <host:port>[,ap1|ap2][,delay=<ms>] [--rx ...] [--seconds <n>] [--tone|--click] [--verbose]
+//!     --rx <host:port>[,ap1|ap2|both][,delay=<ms>] [--rx ...] [--seconds <n>] [--tone|--click] [--verbose] [--auto]
 //! ```
 //!
-//! `ap2` (the default) takes the AirPlay 2 path, `ap1` the AirPlay 1 path.
+//! `ap2` (the default) offers the receiver's AirPlay 2 service only, `ap1`
+//! its AirPlay 1 service only, `both` the two on one address and port.
+//! Without `--auto` the AirPlay 2 path is always on, so `ap2` takes it.
+//! With `--auto` the sender is built as the apps build it (S312): the flag
+//! from `AUDIOSYNC_AIRPLAY2_AUTO` (off by default), the switch from
+//! `AUDIOSYNC_AIRPLAY2` with no saved setting, and each summary line ends
+//! with the protocol the sender planned for that receiver and why; `path=`
+//! is the one it ended on.
 //! `delay=<ms>` is the speaker's d_s (P99), set through the speaker options
 //! as a host sets it, so the click shows the sender's own timing; the
 //! example `rx_onset` and `scripts/two_speaker_sync_wsl.sh` measure it.
@@ -34,6 +41,8 @@
 //! root or a lowered `net.ipv4.ip_unprivileged_port_start` on Linux.
 //! Development only.
 
+#[path = "rx_pair/auto_choice.rs"]
+mod auto_choice;
 #[path = "rx_pair/sync_check.rs"]
 mod sync_check;
 
@@ -47,16 +56,15 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::audio::PACKET_FRAMES;
-use audiosync_airplay::discovery::{
-    Device, DeviceId, DeviceKey, ProtocolPath, ScopedAddr, ServiceKind, ServiceRecord,
-};
+use audiosync_airplay::discovery::{DeviceKey, ProtocolPath};
 use audiosync_airplay::input::InputWriter;
 use audiosync_airplay::sender::{
-    Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
-    random_airplay2_device_id,
+    AIRPLAY2_AUTO_ENV, AIRPLAY2_SWITCH_ENV, Sender, SenderConfig, SenderEvent, SpeakerEvent,
+    SpeakerOptions, SpeakerState, random_airplay2_device_id,
 };
 use audiosync_airplay::stream::SpeakerCounters;
 use audiosync_airplay::volume::Volume;
+use auto_choice::{AutoMode, Services};
 use sync_check::{
     CLICK_FIRST_FRAME, CLICK_PERIOD_FRAMES, ClickPair, RATE, RxSpec, WireLog, click_sample,
     pair_clicks, parse_rx_spec,
@@ -69,7 +77,7 @@ const TONE_LEVEL: f64 = 0.031_622_776;
 
 struct Rx {
     address: SocketAddr,
-    path: ProtocolPath,
+    services: Services,
     delay: Duration,
 }
 
@@ -85,6 +93,7 @@ struct Args {
     seconds: u64,
     source: Source,
     verbose: bool,
+    auto: bool,
 }
 
 #[derive(Default)]
@@ -101,13 +110,14 @@ struct Outcome {
 }
 
 fn usage() -> &'static str {
-    "usage: rx_pair --rx <host:port>[,ap1|ap2][,delay=<ms>] [--rx ...] [--seconds <n>] [--tone|--click] [--verbose]"
+    "usage: rx_pair --rx <host:port>[,ap1|ap2|both][,delay=<ms>] [--rx ...] [--seconds <n>] [--tone|--click] [--verbose] [--auto]"
 }
 
 fn parse_rx(text: &str) -> Result<Rx, String> {
     let RxSpec {
         host_port,
         path,
+        both,
         delay,
     } = parse_rx_spec(text)?;
     let address = host_port
@@ -117,7 +127,7 @@ fn parse_rx(text: &str) -> Result<Rx, String> {
         .ok_or_else(|| format!("--rx {text}: no address"))?;
     Ok(Rx {
         address,
-        path,
+        services: Services::new(path, both),
         delay,
     })
 }
@@ -128,6 +138,7 @@ fn parse_args() -> Result<Args, String> {
         seconds: 20,
         source: Source::Silence,
         verbose: false,
+        auto: false,
     };
     let mut items = std::env::args().skip(1);
     while let Some(item) = items.next() {
@@ -148,6 +159,7 @@ fn parse_args() -> Result<Args, String> {
             "--tone" => args.source = Source::Tone,
             "--click" => args.source = Source::Click,
             "--verbose" => args.verbose = true,
+            "--auto" => args.auto = true,
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
@@ -158,50 +170,6 @@ fn parse_args() -> Result<Args, String> {
         return Err("at most 200 receivers".to_owned());
     }
     Ok(args)
-}
-
-/// The device discovery would have built for this receiver, from the one
-/// service record of its path.
-fn device(rx: &Rx, n: u8) -> Device {
-    let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, n]);
-    let (kind, instance, txt): (_, _, &[&str]) = match rx.path {
-        ProtocolPath::AirPlay1 => (
-            ServiceKind::Raop,
-            format!("{device_id}@Receiver {n}"),
-            &[
-                "txtvers=1",
-                "ch=2",
-                "cn=0,1",
-                "et=0",
-                "sr=44100",
-                "ss=16",
-                "tp=UDP",
-                "md=0,1,2",
-            ],
-        ),
-        ProtocolPath::AirPlay2 => (
-            ServiceKind::AirPlay,
-            format!("Receiver {n}"),
-            &["features=0x0,0x10040", "flags=0x4", "model=Receiver1,1"],
-        ),
-    };
-    let mut txt: Vec<Vec<u8>> = txt.iter().map(|s| s.as_bytes().to_vec()).collect();
-    if rx.path == ProtocolPath::AirPlay2 {
-        txt.push(format!("deviceid={device_id}").into_bytes());
-    }
-    let record = ServiceRecord {
-        kind,
-        instance,
-        host: format!("receiver-{n}.local"),
-        port: rx.address.port(),
-        txt,
-        addresses: vec![ScopedAddr::new(rx.address.ip())],
-    };
-    let (raop, airplay) = match rx.path {
-        ProtocolPath::AirPlay1 => (Some(&record), None),
-        ProtocolPath::AirPlay2 => (None, Some(&record)),
-    };
-    Device::from_records(DeviceKey::Id(device_id), raop, airplay).expect("a device from a record")
 }
 
 /// A capture thread at real-time pace, as a host's would be.
@@ -246,7 +214,13 @@ fn path_name(path: Option<ProtocolPath>) -> &'static str {
     }
 }
 
-fn summary(rx: &Rx, outcome: &Outcome, counters: &SpeakerCounters, ok: bool) -> String {
+fn summary(
+    rx: &Rx,
+    outcome: &Outcome,
+    counters: &SpeakerCounters,
+    ok: bool,
+    choice: Option<&str>,
+) -> String {
     let first_sound = outcome
         .first_sound
         .map_or("none".to_owned(), |seconds| format!("{seconds:.6}"));
@@ -257,7 +231,7 @@ fn summary(rx: &Rx, outcome: &Outcome, counters: &SpeakerCounters, ok: bool) -> 
     };
     format!(
         "rx {} {} path={} delay_ms={} state={:?} frames_sent={} packets_sent={} first_sound_s={} \
-         resend_requests={} packets_resent={} late_packets={} warnings={} errors={}",
+         resend_requests={} packets_resent={} late_packets={} warnings={} errors={}{}",
         rx.address,
         if ok { "OK" } else { "FAIL" },
         path_name(outcome.path),
@@ -271,6 +245,7 @@ fn summary(rx: &Rx, outcome: &Outcome, counters: &SpeakerCounters, ok: bool) -> 
         counters.late_packets(),
         outcome.warnings,
         errors,
+        choice.map_or(String::new(), |choice| format!(" choice: {choice}")),
     )
 }
 
@@ -360,10 +335,28 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let auto = args.auto.then(|| {
+        let auto_env = std::env::var(AIRPLAY2_AUTO_ENV).ok();
+        let switch_env = std::env::var(AIRPLAY2_SWITCH_ENV).ok();
+        let mode = AutoMode::from_env(auto_env.as_deref(), switch_env.as_deref());
+        eprintln!(
+            "auto: {AIRPLAY2_AUTO_ENV}={} -> flag {}, {AIRPLAY2_SWITCH_ENV}={} -> switch {}",
+            auto_env.as_deref().unwrap_or("unset"),
+            if mode.auto { "on" } else { "off" },
+            switch_env.as_deref().unwrap_or("unset"),
+            if mode.switch { "on" } else { "off" },
+        );
+        mode
+    });
     let config = SenderConfig {
-        airplay2: true,
         airplay2_device_id: random_airplay2_device_id(),
-        ..SenderConfig::default()
+        ..auto.map_or(
+            SenderConfig {
+                airplay2: true,
+                ..SenderConfig::default()
+            },
+            AutoMode::config,
+        )
     };
     let (sender, writer) = match Sender::start(config) {
         Ok(started) => started,
@@ -380,8 +373,10 @@ fn main() -> ExitCode {
     let mut keys = BTreeMap::new();
     let mut outcomes: BTreeMap<DeviceKey, Outcome> = BTreeMap::new();
     let mut counters = Vec::new();
+    let mut choices = Vec::new();
     for (index, rx) in args.receivers.iter().enumerate() {
-        let device = device(rx, index as u8 + 1);
+        let device = auto_choice::device(rx.address, rx.services, index as u8 + 1);
+        choices.push(auto.map(|mode| mode.choice(&device)));
         let key = device.key.clone();
         let mut options = SpeakerOptions::new(Volume::Db(-20.0));
         options.delay = rx.delay;
@@ -455,11 +450,17 @@ fn main() -> ExitCode {
     }
 
     let mut failed = false;
-    for ((rx, key), counters) in args.receivers.iter().zip(&order).zip(&counters) {
+    for (((rx, key), counters), choice) in args
+        .receivers
+        .iter()
+        .zip(&order)
+        .zip(&counters)
+        .zip(&choices)
+    {
         let outcome = &outcomes[key];
         let ok = outcome.played && outcome.errors.is_empty();
         failed |= !ok;
-        println!("{}", summary(rx, outcome, counters, ok));
+        println!("{}", summary(rx, outcome, counters, ok, choice.as_deref()));
     }
     let sender_failed = args.source == Source::Click && !sender_check(&args, &order, &outcomes);
     stop.store(true, Ordering::Relaxed);

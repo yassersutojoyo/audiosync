@@ -78,6 +78,8 @@ fn a_receiver_option_carries_the_speakers_delay() {
     );
     assert!(parse_rx_spec("h:1,delay=20001").is_err());
     assert!(parse_rx_spec("h:1,delay=-1").is_err());
+    assert!(parse_rx_spec("h:1,both,ap1").unwrap().both);
+    assert!(!plain.both);
     assert!(parse_rx_spec("h:1,ap3").is_err());
     assert!(parse_rx_spec(",ap1").is_err());
 }
