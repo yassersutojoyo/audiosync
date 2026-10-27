@@ -142,8 +142,9 @@ enum CastAddRow: Equatable {
 
 /// How the menu bar panel opens and closes: it grows out of the menu bar icon
 /// on a spring too damped to bounce, and shrinks back quickly as it fades.
-/// With Reduce Motion it only fades. Only the panel's layer scales; the
-/// window keeps its final size, so nothing is laid out again per frame.
+/// With Reduce Motion it only fades. The open grows a mask over the panel
+/// (`PanelReveal`) and the close scales its layer; the window keeps its
+/// final size, so nothing is laid out again per frame.
 struct PanelMotion: Equatable {
     /// Where an open starts, or where a close ends; 1 is a plain fade.
     var scale: Double
@@ -258,6 +259,38 @@ struct PanelRest: Equatable {
     }
 }
 
+/// The panel grows in under a pixel-aligned mask, its content at its own size:
+/// a scaled layer is resampled, so its hairlines blur until the scale ends.
+enum PanelReveal {
+    /// The panel's body scaled by `scale` about the arrow's tip, its edges
+    /// rounded to the nearest `pixel`.
+    static func body(_ body: CGRect, scale: Double, about tip: CGPoint, pixel: CGFloat) -> CGRect {
+        let s = CGFloat(scale)
+        func snap(_ value: CGFloat) -> CGFloat { pixel > 0 ? (value / pixel).rounded() * pixel : value }
+        func scaled(_ value: CGFloat, _ origin: CGFloat) -> CGFloat { snap(origin + (value - origin) * s) }
+        let minX = scaled(body.minX, tip.x), maxX = scaled(body.maxX, tip.x)
+        let minY = scaled(body.minY, tip.y), maxY = scaled(body.maxY, tip.y)
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    /// The open's spring, one scale per `step` from `motion.scale` to exactly 1
+    /// at `motion.settles`, matching a `CASpringAnimation` with no initial velocity.
+    static func scales(_ motion: PanelMotion, step: TimeInterval) -> [Double] {
+        guard motion.grows, motion.stiffness > 0, step > 0 else { return [motion.scale, 1] }
+        let natural = (motion.stiffness / PanelMotion.mass).squareRoot()
+        let ratio = min(motion.dampingRatio, 0.999)
+        let damped = natural * (1 - ratio * ratio).squareRoot()
+        let count = Int((motion.settles / step).rounded(.up))
+        return (0...count).map { index in
+            guard index > 0 else { return motion.scale }
+            guard index < count else { return 1 }
+            let t = Double(index) * step
+            let left = exp(-ratio * natural * t) * (cos(damped * t) + ratio * natural / damped * sin(damped * t))
+            return 1 - (1 - motion.scale) * left
+        }
+    }
+}
+
 /// The shadow AudioSync draws around the menu bar panel while it grows in or
 /// shrinks away, so it scales with the panel: the system's own shadow keeps
 /// the window's full size. It stands in for the system's only during the
@@ -335,9 +368,14 @@ enum PanelBackdrop {
         walk(node, children: children, isContent: isContent, isStandIn: isStandIn, isBackground: isBackground).hidden
     }
 
-    /// The sublayers of a view's layer that no subview owns.
-    static func material<Layer: AnyObject>(in sublayers: [Layer], keeping owned: [Layer]) -> [Layer] {
-        sublayers.filter { layer in !owned.contains { $0 === layer } }
+    /// The sublayers of a view's layer that no subview owns, apart from
+    /// AppKit's focus ring: it belongs to the focused control, and AppKit
+    /// hides and shows it on its own.
+    static func material<Layer: AnyObject>(in sublayers: [Layer], keeping owned: [Layer],
+                                           name: (Layer) -> String? = { _ in nil }) -> [Layer] {
+        sublayers.filter { layer in
+            !owned.contains { $0 === layer } && !(name(layer)?.contains("FocusRing") ?? false)
+        }
     }
 
     private static func walk<Node>(_ node: Node, children: (Node) -> [Node], isContent: (Node) -> Bool,
