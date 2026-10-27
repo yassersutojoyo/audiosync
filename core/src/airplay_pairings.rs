@@ -188,20 +188,19 @@ impl PairingStore {
         self.save()
     }
 
-    /// Forgets the receiver's credentials, writes the file and deletes the
-    /// copies kept aside that hold its ID. Returns whether it was paired;
-    /// when the file can't be written they are forgotten all the same, and
-    /// the error says why.
+    /// Forgets the receiver's credentials, writes the file when it was
+    /// paired, and deletes the copies kept aside that hold its ID, also when
+    /// only a copy held it (an entry skipped or a file ignored). Returns
+    /// whether it was paired; when the file can't be written they are
+    /// forgotten all the same, and the error says why.
     pub fn remove(&mut self, id: &str) -> io::Result<bool> {
-        if self.entries.remove(id).is_none() {
-            return Ok(false);
-        }
-        let saved = self.save();
+        let paired = self.entries.remove(id).is_some();
+        let saved = if paired { self.save() } else { Ok(()) };
         let pruned = match &self.path {
             Some(path) => prune_copies(path, id),
             None => Ok(()),
         };
-        saved.and(pruned).map(|()| true)
+        saved.and(pruned).map(|()| paired)
     }
 
     /// Writes every entry to the file, through a temporary file renamed over
