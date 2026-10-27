@@ -2028,8 +2028,8 @@ do {
           "capture close: an input device's capture has no tap, so nothing is left for later")
 }
 
-// covers: S213
 // MARK: Retired engine choice — noted once, no effect
+// covers: S213
 check(RetiredEngineChoice.defaultsKey == "engineImpl" && RetiredEngineChoice.environmentKey == "AUDIOSYNC_ENGINE",
       "retired engine choice: the setting and the variable older builds read")
 check(RetiredEngineChoice.launchNote(environment: nil, stored: nil) == nil
@@ -2046,8 +2046,8 @@ check(RetiredEngineChoice.launchNote(environment: "rust", stored: "swift")
          + "every session runs on the Rust core",
       "retired engine choice: both are noted in one line")
 
-// covers: S213
 // MARK: Retired AirPlay sender choice — noted once, no effect
+// covers: S213
 check(RetiredAirPlayChoice.defaultsKey == "airplayImpl" && RetiredAirPlayChoice.environmentKey == "AUDIOSYNC_AIRPLAY",
       "retired airplay choice: the setting and the variable older builds read")
 check(RetiredAirPlayChoice.launchNote(environment: nil, stored: nil) == nil
@@ -2062,8 +2062,8 @@ check(RetiredAirPlayChoice.launchNote(environment: "native", stored: "owntone")
          + "the AirPlay sender: AudioSync's own sender is the only one",
       "retired airplay choice: both are noted in one line")
 
-// covers: S213
 // MARK: Retired choices at launch — noted once, then removed from the settings
+// covers: S213
 do {
     final class Stored { var values: [String: Any] = [:] }
     let stored = Stored()
