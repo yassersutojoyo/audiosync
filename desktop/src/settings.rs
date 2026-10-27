@@ -205,10 +205,12 @@ pub struct SavedSpeaker {
     /// Whether the user switched it on.
     pub enabled: bool,
     /// The volume slider position, 0 to 100.
+    #[serde(deserialize_with = "number_or_nan")]
     pub volume: f64,
     /// The delay in milliseconds: for an output its offset relative to the
     /// reference, −2000 to +20 000 (0 to 20 000 in format 1, where it was
     /// the output's own trim); 0 to 20 000 for an AirPlay speaker's own delay.
+    #[serde(deserialize_with = "number_or_nan")]
     pub delay_ms: f64,
 }
 
@@ -641,6 +643,7 @@ pub struct Settings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_mix: Option<SavedMix>,
     /// The master volume slider position, 0 to 100.
+    #[serde(deserialize_with = "number_or_nan")]
     pub master_volume: f64,
     /// The local outputs, by endpoint ID.
     pub outputs: BTreeMap<String, SavedSpeaker>,
@@ -717,6 +720,13 @@ pub struct Settings {
         deserialize_with = "record_that_reads"
     )]
     pub update_record: Option<UpdateRecord>,
+}
+
+/// A stored number, or NaN for anything else, which `clamped` replaces with
+/// the default: a value that isn't a number costs only itself (S212).
+fn number_or_nan<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_f64().unwrap_or(f64::NAN))
 }
 
 fn record_that_reads<'de, D: serde::Deserializer<'de>>(
@@ -1949,7 +1959,7 @@ mod tests {
             &b"{\"version\": 1, \"master_volume\": "[..],
             b"not json at all",
             b"[1, 2, 3]",
-            b"{\"version\": 1, \"master_volume\": \"loud\"}",
+            b"{\"version\": \"one\", \"master_volume\": 40}",
             b"\xff\xfe\x00garbage",
             b"",
         ] {
