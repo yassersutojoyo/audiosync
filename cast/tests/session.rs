@@ -146,11 +146,12 @@ fn the_client_hello_offers_tls_1_2_with_ecdhe_rsa_aes_gcm_and_aes_cbc_sha() {
     assert!(matches!(error, ConnectError::Tls { .. }), "{error}");
     let (version, suites) = device.join().expect("a ClientHello");
     assert_eq!(version, [3, 3], "TLS 1.2, or 1.3 behind it");
-    for suite in [
-        ECDHE_RSA_AES_128_GCM_SHA256,
-        ECDHE_RSA_AES_256_GCM_SHA384,
-        ECDHE_RSA_AES_256_CBC_SHA,
-    ] {
+    let mut wanted = vec![ECDHE_RSA_AES_128_GCM_SHA256, ECDHE_RSA_AES_256_GCM_SHA384];
+    // Schannel's suite list is Windows policy, and Windows Server 2025 leaves the CBC suites out.
+    if !cfg!(windows) {
+        wanted.push(ECDHE_RSA_AES_256_CBC_SHA);
+    }
+    for suite in wanted {
         assert!(suites.contains(&suite), "{suite:#06x} in {suites:04x?}");
     }
 }
