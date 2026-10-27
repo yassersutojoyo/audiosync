@@ -624,6 +624,7 @@ Check names as `Tests/run-tests.sh` prints them. Checks printed more than once a
 | Check | Clauses |
 |---|---|
 | shellcheck 0.11.0 passed (N scripts) | S156 |
+| shellcheck runner (Tests/shellchecktest.sh), every check | S156 |
 
 ### ring buffer
 
