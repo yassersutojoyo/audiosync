@@ -259,11 +259,8 @@ struct PanelRest: Equatable {
     }
 }
 
-/// How the menu bar panel grows in without scaling its content: a mask
-/// shaped like the panel grows out of the icon over the content, which stays
-/// at its own size. A scaled layer is resampled, and its hairlines, edges and
-/// text blur until the scale ends; the mask's edges sit on the pixel grid at
-/// every step, so nothing snaps sharp at the end.
+/// The panel grows in under a pixel-aligned mask, its content at its own size:
+/// a scaled layer is resampled, so its hairlines blur until the scale ends.
 enum PanelReveal {
     /// The panel's body scaled by `scale` about the arrow's tip, its edges
     /// rounded to the nearest `pixel`.

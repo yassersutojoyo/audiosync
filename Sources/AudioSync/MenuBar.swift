@@ -659,6 +659,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var systemMaterial: [CALayer] = []
     /// The panel layer the open's reveal mask (`PanelReveal`) sits on.
     private weak var revealed: CALayer?
+    private var revealSteps: (began: CFTimeInterval, scales: [Double])?
     private var noticeWatch: AnyCancellable?
     let model: AppModel
 
@@ -837,10 +838,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         var shadow: PanelShadowWindow?
         // Without its own shadow and background the panel would shrink inside a full-size box: it only fades.
         if motion.grows, case let (layer, anchor)? = panelLayer(window), case let (own, tip, _)? = ownShadow(window) {
-            // From where a grow still running has got to, not from full size.
-            func shrink(_ layer: CALayer, about anchor: CGPoint) {
+            // From where a grow or reveal still running has got to, not from full size.
+            let revealedTo = revealScale()
+            dropReveal()
+            func shrink(_ layer: CALayer, about anchor: CGPoint, from start: CATransform3D? = nil) {
                 let shrink = CABasicAnimation(keyPath: "transform")
-                shrink.fromValue = NSValue(caTransform3D: layer.presentation()?.transform ?? layer.transform)
+                shrink.fromValue = NSValue(caTransform3D: start ?? layer.presentation()?.transform ?? layer.transform)
                 shrink.toValue = NSValue(caTransform3D: Self.scaled(motion.scale, about: anchor))
                 shrink.duration = motion.duration
                 shrink.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -848,7 +851,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 shrink.isRemovedOnCompletion = false
                 layer.add(shrink, forKey: Self.motionKey)
             }
-            shrink(layer, about: anchor)
+            shrink(layer, about: anchor, from: revealedTo.map { Self.scaled($0, about: anchor) })
             shadow = own
             shrink(own.panel, about: tip)
         }
@@ -961,11 +964,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         if on { window.invalidateShadow() }
     }
 
-    /// Puts AudioSync's shadow under the panel in place of the system's, which
-    /// would keep the window's full size while the panel scales. It returns
-    /// the shadow, the arrow's tip in its panel layer and the panel's body in
-    /// the window; nil when the panel's shape or its background can't be
-    /// found, and the system's shadow stays.
+    /// Puts AudioSync's own shadow under the panel while it scales, returning it, the arrow's tip and the
+    /// panel's body (window coordinates); nil, with the system's shadow kept, when shape or background is missing.
     private func ownShadow(_ window: NSWindow) -> (PanelShadowWindow, CGPoint, CGRect)? {
         guard let content = window.contentView, let frame = content.superview,
               let button = statusItem.button, let item = button.window else { return nil }
@@ -1024,9 +1024,18 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         mask.add(steps, forKey: Self.motionKey)
         Self.unanimated { layer.mask = mask }
         revealed = layer
+        revealSteps = (CACurrentMediaTime(), PanelReveal.scales(motion, step: Self.revealStep))
+    }
+
+    /// How far a reveal still running has grown; nil with none.
+    private func revealScale() -> Double? {
+        guard revealed != nil, let steps = revealSteps, !steps.scales.isEmpty else { return nil }
+        let index = Int((CACurrentMediaTime() - steps.began) / Self.revealStep)
+        return steps.scales[min(max(index, 0), steps.scales.count - 1)]
     }
 
     private func dropReveal() {
+        revealSteps = nil
         guard let layer = revealed else { return }
         revealed = nil
         Self.unanimated { layer.mask = nil }
