@@ -7691,6 +7691,48 @@ do {
           "calibrate all: the progress line names the speaker and the sweep, and says when a Cast speaker is searched")
 }
 
+// MARK: A calibration that can't start names only what is off, in the order streaming, the speaker, the reference
+do {
+    let t = UIStrings()
+    func press(streaming: Bool, playing: [String]) -> String {
+        CalibrationFlow.blocker(streaming: streaming, reference: "mac", chosen: "usb", playing: playing)
+            .map(t.calibrationFailure) ?? ""
+    }
+    func tip(streaming: Bool, speakerOn: Bool) -> String {
+        CalibrationFlow.unavailable(streaming: streaming, hasReference: true, speakerOn: speakerOn)
+            .map(t.calibrationUnavailable) ?? ""
+    }
+    let pressed = [press(streaming: false, playing: ["mac", "usb"]), press(streaming: true, playing: ["mac"]),
+                   press(streaming: true, playing: ["usb"]), press(streaming: true, playing: [])]
+    check(pressed == ["Turn on streaming to calibrate.", "Turn on this speaker to calibrate it.",
+                      "Turn on the built-in speakers to calibrate.",
+                      "Turn on this speaker and the built-in speakers to calibrate it."],
+          "calibration refusal: the press names only streaming, the speaker or the built-in speakers that are off",
+          "\(pressed)")
+    let tips = [tip(streaming: false, speakerOn: true), tip(streaming: true, speakerOn: false),
+                tip(streaming: false, speakerOn: false)]
+    check(tips == ["Turn on streaming to calibrate.", "Turn on this speaker to calibrate it.",
+                   "Turn on streaming and this speaker to calibrate it."],
+          "calibration refusal: the tooltip names only streaming or the speaker that is off", "\(tips)")
+
+    let everyone = CalibrateAllFlow.Inputs(
+        streaming: true, reference: "mac",
+        localOutputs: [(id: "mac", name: "MacBook Speakers"), (id: "usb", name: "Desk")],
+        localOffsets: ["usb": 150], holdBacks: [:], cast: nil, airPlay: [],
+        airPlayDelayMs: 1750, airPlayHoldBackMs: 0, airPlaySenderMs: nil)
+    func all(_ inputs: CalibrateAllFlow.Inputs) -> String {
+        if case .failure(let blocker) = CalibrateAllFlow.plan(inputs) { return t.calibrateAllUnavailable(blocker) }
+        return ""
+    }
+    var stopped = everyone
+    stopped.streaming = false
+    var referenceSilent = everyone
+    referenceSilent.localOutputs = [(id: "usb", name: "Desk")]
+    let allTexts = [all(stopped), all(referenceSilent)]
+    check(allTexts == ["Turn on streaming to calibrate.", "Turn on the built-in speakers to calibrate."],
+          "calibrate all refusal: names only streaming or the built-in speakers, whichever is off", "\(allTexts)")
+}
+
 // MARK: Calibrate Zone: the zone's plan, the speakers silenced outside it and the AirPlay line (S255)
 do {
     let inputs = CalibrateAllFlow.Inputs(

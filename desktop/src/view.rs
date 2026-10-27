@@ -5903,6 +5903,120 @@ mod tests {
     }
 
     #[test]
+    fn a_calibration_that_cannot_start_names_only_what_is_off() {
+        fn switch(state: &mut AppState, streaming: bool, desk: bool, reference: bool) {
+            state.running = streaming;
+            for speaker in &mut state.speakers {
+                match speaker.id.as_str() {
+                    "local:desk" => speaker.enabled = desk,
+                    "local:speakers" => speaker.enabled = reference,
+                    _ => {}
+                }
+            }
+        }
+        fn engine(session: Option<u64>, playing: &[&str]) -> calibration::Engine {
+            calibration::Engine {
+                session,
+                playing: playing.iter().map(|id| id.to_string()).collect(),
+                reference: Some("builtin".into()),
+                ..Default::default()
+            }
+        }
+        fn lineup(session: Option<u64>, ids: &[&str]) -> crate::audio::calibrate_all::Lineup {
+            crate::audio::calibrate_all::Lineup {
+                session,
+                reference: Some("builtin".into()),
+                members: ids
+                    .iter()
+                    .map(|id| crate::audio::calibrate_all::Member {
+                        id: id.to_string(),
+                        class: audiosync_core::calibrate_all::Class::Local,
+                        offset_ms: Some(0.0),
+                        latency_ms: 2500.0,
+                    })
+                    .collect(),
+                ..Default::default()
+            }
+        }
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let mut state = app.snapshot();
+        state.reference_name = Some("Speakers".into());
+        let row = |state: &AppState| {
+            let desk = state.speaker("local:desk").unwrap().clone();
+            calibration_status(&strings, state, &desk).to_string()
+        };
+        let mut rows = Vec::new();
+        for (streaming, desk, reference) in [
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+            (false, false, true),
+            (false, true, false),
+            (false, false, false),
+        ] {
+            switch(&mut state, streaming, desk, reference);
+            rows.push(row(&state));
+        }
+        assert_eq!(
+            rows,
+            [
+                "Turn on streaming to calibrate.",
+                "Turn on this speaker to calibrate it.",
+                "Turn on Speakers to calibrate.",
+                "Turn on streaming and this speaker to calibrate it.",
+                "Turn on streaming and Speakers to calibrate.",
+                "Turn on streaming, this speaker and Speakers to calibrate it.",
+            ],
+            "the line under the button"
+        );
+
+        let pressed: Vec<String> = [
+            engine(None, &["builtin", "usb"]),
+            engine(Some(1), &["builtin"]),
+            engine(Some(1), &["usb"]),
+            engine(Some(1), &[]),
+        ]
+        .iter()
+        .map(|engine| {
+            let failure = calibration::blocker(engine, "usb").expect("it can't start");
+            calibration_failure(&strings, "Speakers", failure).to_string()
+        })
+        .collect();
+        assert_eq!(
+            pressed,
+            [
+                "Turn on streaming to calibrate.",
+                "Turn on this speaker to calibrate it.",
+                "Turn on Speakers to calibrate.",
+                "Turn on this speaker and Speakers to calibrate it.",
+            ],
+            "the press"
+        );
+
+        let none = std::collections::BTreeSet::new();
+        let all: Vec<String> = [lineup(None, &["builtin", "usb"]), lineup(Some(1), &["usb"])]
+            .iter()
+            .map(|lineup| {
+                let mut state = app.snapshot();
+                state.reference_name = Some("Speakers".into());
+                state.calibrate_all.phase = AllPhase::Idle;
+                state.calibrate_all.other_running = false;
+                state.calibrate_all.blocked = crate::audio::calibrate_all::blocked(lineup, &none);
+                calibrate_all_card(&strings, &state).status.to_string()
+            })
+            .collect();
+        assert_eq!(
+            all,
+            [
+                "Turn on streaming to calibrate.",
+                "Turn on Speakers to calibrate."
+            ],
+            "Calibrate All"
+        );
+    }
+
+    #[test]
     fn outputs_left_out_by_kind_show_why_on_the_card_and_in_their_delay_controls() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
