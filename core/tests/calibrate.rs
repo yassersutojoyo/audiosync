@@ -344,7 +344,14 @@ fn loud_noise_before_a_faint_direct_path_is_not_timed() {
     }
     let signal = calibrate::signal(RATE).expect("48 kHz");
     let measured = calibrate::measure(&signal, &recording, RATE).expect("measured");
+    // The strongest lag besides the peak is the burst's, past the first
+    // 20 ms, so the local floor and not the recording's start passes it over.
     assert!(measured.echo_share > 0.5, "the burst matters: {measured:?}");
+    let burst_lags = 20 * RATE as usize / 1000..150 * RATE as usize / 1000;
+    assert!(
+        burst_lags.contains(&measured.echo_frame),
+        "the burst matters: {measured:?}"
+    );
     let found = arrival(&recording, RATE).expect("accepted");
     assert_eq!(found.frame, 300 * RATE as usize / 1000, "{found:?}");
 }

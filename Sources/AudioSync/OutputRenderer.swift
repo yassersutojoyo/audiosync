@@ -136,7 +136,7 @@ final class OutputRenderer: FadingOutput {
     var lagFrames: Int64 { target?.renderer.lagFrames ?? 0 }
 
     /// The newest delay asked for, in capture-rate frames.
-    var delayFrames: Int64 { target?.renderer.delayFrames ?? 0 }
+    var newestDelayFrames: Int64 { delayFrames.load(ordering: .relaxed) }
 
     /// The reader's diagnostic counters (S158).
     var counters: CoreDelayReader.Counters { target?.renderer.counters ?? CoreDelayReader.Counters() }

@@ -350,7 +350,7 @@ final class StreamEngine {
     func driftNote(uid: String) -> String {
         guard let renderer = renderers[uid] else { return "\(uid): no renderer" }
         let lag = renderer.lagFrames
-        let delay = renderer.delayFrames
+        let delay = renderer.newestDelayFrames
         let counted = renderer.counters
         let ms = captureRate > 0 ? Double(lag - delay) * 1000 / captureRate : 0
         return "\(uid): lag \(lag) delay \(delay) frames, lag-delay \(ms) ms, drift skips \(counted.driftSkips) "
