@@ -104,6 +104,56 @@ enum CastAddRow: Equatable {
     }
 }
 
+/// How the menu bar panel opens and closes: it grows out of the menu bar icon
+/// on a spring too damped to bounce, and shrinks back quickly as it fades.
+/// With Reduce Motion it only fades. Only the panel's layer scales; the
+/// window keeps its final size, so nothing is laid out again per frame.
+struct PanelMotion: Equatable {
+    /// Where an open starts, or where a close ends; 1 is a plain fade.
+    var scale: Double
+    /// The fade, and for a close the shrink too.
+    var duration: TimeInterval
+    /// A spring for the open's growth; none when 0.
+    var stiffness = 0.0
+    var damping = 0.0
+
+    static let mass = 1.0
+
+    static func open(reduceMotion: Bool) -> PanelMotion {
+        PanelMotion(scale: reduceMotion ? 1 : 0.92, duration: 0.18, stiffness: 400, damping: 36.8)
+    }
+
+    static func close(reduceMotion: Bool) -> PanelMotion {
+        PanelMotion(scale: reduceMotion ? 1 : 0.96, duration: 0.14)
+    }
+
+    var grows: Bool { scale != 1 }
+
+    /// 1 is critical damping; just under it the overshoot stays far below a point.
+    var dampingRatio: Double { stiffness > 0 ? damping / (2 * (stiffness * Self.mass).squareRoot()) : 1 }
+
+    /// The fraction of the growth the spring overshoots by.
+    var overshoot: Double {
+        let ratio = dampingRatio
+        return ratio < 1 ? exp(-Double.pi * ratio / (1 - ratio * ratio).squareRoot()) : 0
+    }
+
+    /// When the growth stays within 2% of its end; the fade alone without a spring.
+    var settles: TimeInterval {
+        guard stiffness > 0, grows else { return duration }
+        let ratio = min(dampingRatio, 0.999)
+        let decay = ratio * (stiffness / Self.mass).squareRoot()
+        return max(duration, (log(50) - log((1 - ratio * ratio).squareRoot())) / decay)
+    }
+
+    /// The shift that keeps `anchor` (measured from the layer's anchor point)
+    /// in place while the layer scales by `scale`.
+    static func pin(_ anchor: CGPoint, scale: Double) -> CGPoint {
+        let rest = CGFloat(1 - scale)
+        return CGPoint(x: anchor.x * rest, y: anchor.y * rest)
+    }
+}
+
 /// When work that follows a menu bar panel open or close may run: once its
 /// animation is over. Main-thread work that lands inside it drops frames.
 struct PanelQuiet: Equatable {
@@ -111,13 +161,13 @@ struct PanelQuiet: Equatable {
 
     /// The popover's own grow and fade (`system`), from the click to the end
     /// of its bounce and of its fade as measured on the Mac; else the
-    /// panel's fade-in and its instant close.
+    /// panel's own motion (`PanelMotion`).
     static func duration(_ animation: Animation, system: Bool) -> TimeInterval {
         switch (animation, system) {
         case (.open, true): return 0.6
         case (.close, true): return 0.25
-        case (.open, false): return 0.2
-        case (.close, false): return 0
+        case (.open, false): return PanelMotion.open(reduceMotion: false).settles
+        case (.close, false): return PanelMotion.close(reduceMotion: false).duration
         }
     }
 

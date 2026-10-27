@@ -4717,8 +4717,25 @@ do {
     let duringClose = StatusItemClick.pressDuringClose
     check(duringClose(30.1, 30.25) && !duringClose(30.25, 30.25) && !duringClose(31, 30.25) && !duringClose(30.1, nil),
           "menu bar icon: only a press while the panel still fades out is ignored, as Outlook does")
-    check(!duringClose(30.01, 30 + PanelQuiet.duration(.close, system: false)),
-          "menu bar icon: after the panel's own instant close, the next press opens it")
+    let shrink = PanelQuiet.duration(.close, system: false)
+    check(duringClose(30 + shrink / 2, 30 + shrink) && !duringClose(30 + shrink + 0.01, 30 + shrink),
+          "menu bar icon: a press is ignored only while the panel shrinks away; right after, it opens it")
+
+    let grow = PanelMotion.open(reduceMotion: false), shrinkBack = PanelMotion.close(reduceMotion: false)
+    check(grow.scale >= 0.9 && grow.scale < 1 && grow.settles >= 0.25 && grow.settles <= 0.3,
+          "menu bar panel: it grows out of the icon and settles in about a quarter second")
+    check(grow.dampingRatio >= 0.85 && grow.dampingRatio <= 1 && grow.overshoot * (1 - grow.scale) * 400 < 0.5,
+          "menu bar panel: the growth never bounces by half a point, even on a tall panel")
+    check(shrinkBack.scale > grow.scale && shrinkBack.scale < 1 && shrinkBack.duration >= 0.12 && shrinkBack.duration <= 0.15,
+          "menu bar panel: the close is a quick, small shrink")
+    check(!PanelMotion.open(reduceMotion: true).grows && !PanelMotion.close(reduceMotion: true).grows
+            && PanelMotion.open(reduceMotion: true).duration > 0,
+          "menu bar panel: with Reduce Motion it only fades")
+    let pinned = PanelMotion.pin(CGPoint(x: 140, y: 420), scale: grow.scale)
+    check(abs(140 * grow.scale + Double(pinned.x) - 140) < 1e-9 && abs(420 * grow.scale + Double(pinned.y) - 420) < 1e-9,
+          "menu bar panel: the point under the icon stays put while the panel grows")
+    check(PanelQuiet.duration(.open, system: false) == grow.settles && shrink == shrinkBack.duration,
+          "menu bar panel: deferred work waits exactly for the panel's own motion")
 
     func sizing(_ events: [PanelSizing.Event]) -> PanelSizing {
         events.reduce(PanelSizing.closed) { $0.after($1) }
@@ -4739,10 +4756,11 @@ do {
     func near(_ a: TimeInterval, _ b: TimeInterval) -> Bool { abs(a - b) < 1e-9 }
     var own = PanelQuiet()
     own.began(.open, at: 40)
-    check(near(own.wait(at: 40.1), 0.1) && own.wait(at: 40.2) == 0,
-          "menu bar panel: with the panel's own fade-in, work after an open waits only for the fade")
+    check(near(own.wait(at: 40.1), grow.settles - 0.1) && own.wait(at: 40 + grow.settles) == 0 && grow.settles < 0.6,
+          "menu bar panel: with the panel's own grow, work after an open waits less than for the system's bounce")
     own.began(.close, at: 41)
-    check(own.wait(at: 41) == 0, "menu bar panel: with the panel's own instant close, work after a close runs at once")
+    check(near(own.wait(at: 41), shrinkBack.duration) && own.wait(at: 41 + shrinkBack.duration) == 0,
+          "menu bar panel: work after the panel's own close waits only for its shrink")
 
     var quiet = PanelQuiet(system: true)
     check(quiet.wait(at: 5) == 0, "menu bar panel: with no animation, deferred work runs at once")
