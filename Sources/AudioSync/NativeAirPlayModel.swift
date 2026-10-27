@@ -59,9 +59,12 @@ enum NativeTarget {
 /// asks for a code every time stays on when it appears again.
 struct EveryTimeGuard: Equatable {
     private(set) var byHand: Set<String> = []
+    /// Marks kept past a stream end for a pairing or prompt still open.
+    private(set) var outlived: Set<String> = []
 
     mutating func turnedOnByHand(_ ids: [String]) {
         byHand.formUnion(ids)
+        outlived.subtract(ids)   // a new attempt
     }
 
     /// Of `asking` (rows asking for a code every time,
@@ -69,25 +72,38 @@ struct EveryTimeGuard: Equatable {
     /// switched on by hand. A speaker no longer on is forgotten first.
     mutating func turnsOff(_ asking: [String], enabled: Set<String>) -> [String] {
         byHand.formIntersection(enabled)
+        outlived.formIntersection(byHand)
         return asking.filter { enabled.contains($0) && !byHand.contains($0) }
     }
 
     /// When `cause` ends a stream that ran, it ends the PIN session each
     /// click bought, so every mark goes (a retry or a source change inside
-    /// the stream keeps them, S223). Of `asking`, the speakers still on go
-    /// off with the notice that they need a PIN.
+    /// the stream keeps them, S223), except for a speaker in `awaitingUser`
+    /// (`NativeAirPlayModel.awaitingUser`), whose pairing turns it on, as on
+    /// Windows. Of `asking`, the speakers still on go off with the notice
+    /// that they need a PIN.
     mutating func streamEnded(_ cause: StreamEnd, streaming: Bool, midRebuild: Bool = false,
                               asking: [String], enabled: Set<String>,
                               awaitingUser: Set<String> = []) -> [NativeAirPlayPlan.TurnOff] {
         guard cause.endsStream(streaming: streaming, midRebuild: midRebuild) else { return [] }
-        byHand.removeAll()
+        // A failed sender took its pairings and prompts with it.
+        byHand.formIntersection(cause == .senderFailed ? Set<String>() : awaitingUser)
+        outlived = byHand
         return turnsOff(asking, enabled: enabled).map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
     }
 
-    mutating func paired(_ id: String) {}
+    /// The speaker `id` paired: a later failure is its own again.
+    mutating func paired(_ id: String) {
+        outlived.remove(id)
+    }
 
+    /// The speaker `id` goes off for `reason`, and its mark with it. A
+    /// pairing that outlived the stream and fails says the speaker needs a
+    /// PIN, since no stream waits for it; the user's Cancel stays a cancel.
     mutating func turnedOff(_ id: String, reason: NativeTurnOff) -> NativeTurnOff {
-        reason
+        byHand.remove(id)
+        guard outlived.remove(id) != nil, reason != .cancelled else { return reason }
+        return .needsCode
     }
 }
 

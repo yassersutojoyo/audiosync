@@ -23,6 +23,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On the Mac, stopping streaming while an AirPlay speaker that asks for a PIN every time is still pairing, or its PIN prompt is open, no longer turns it off. Type the PIN and it stays on, as on Windows. If the pairing fails, it turns off with the notice that it needs a PIN, and closing the prompt cancels.
 - A damaged entry in the AirPlay 2 timing cache now costs only that speaker, which goes back to its first-connect timing check, instead of the whole cache. On Windows, a saved Google Cast speakers file that AudioSync can't read is kept as a copy next to it before AudioSync first saves over it, so the delays and formats in it aren't lost.
 - A Google Cast speaker added by address that doesn't answer, for example because it's switched off, no longer counts as online, and it plays once it answers again. AudioSync checks it every 15 seconds. On the Mac and on Windows.
 - A local speaker whose sound starts late catches up in one step within its first 3 seconds, instead of playing late or drifting into place. On the Mac and on Windows.
