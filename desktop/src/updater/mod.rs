@@ -13,9 +13,9 @@ pub mod swap;
 pub mod version;
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use appcast::{Arch, Update};
 use flow::{Checked, Env, Installed};
@@ -28,6 +28,9 @@ pub use crate::ui_model::{UpdateRecord, UpdateRecordReason, UpdaterButton, Updat
 /// `SUFeedURL` in `Info.plist`.
 pub const FEED_URL: &str =
     "https://github.com/yassersutojoyo/audiosync/releases/latest/download/appcast.xml";
+/// How long a quit waits for a failed restart's undo (spec S303).
+const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub const RELEASE_PAGE: &str = "https://github.com/yassersutojoyo/audiosync/releases/latest";
 
 /// Whether this exe updates itself: only a build the release CI job made
@@ -57,7 +60,28 @@ enum Event {
     Checked(Trigger, Checked),
     Progress(Option<u8>),
     Installed(String, Installed),
-    Started(Start),
+    /// The new version's start, and the undo of the swap the worker ran
+    /// when it didn't signal.
+    Started(Start, Option<Undone>),
+}
+
+/// The undo of a swap after a failed restart (spec S303).
+struct Undone {
+    result: Result<(), swap::SwapError>,
+    steps: swap::StepLog,
+}
+
+/// Undoes `swapped`, each delete and rename with the lock retries of spec
+/// S315; on the worker thread after a failed restart, since they can wait.
+fn undo(env: &Env, swapped: &swap::Swapped) -> Undone {
+    let files = files::Retrying {
+        inner: env.files.as_ref(),
+        log: &env.log,
+        pause: &env.pause,
+    };
+    let mut steps = swap::StepLog::new();
+    let result = swap::undo_completed(&env.install_dir, swapped, &files, &mut steps);
+    Undone { result, steps }
 }
 
 /// What [`Updater::poll`] saw.
@@ -95,6 +119,10 @@ pub struct Updater {
     manual_waiting: bool,
     cancel: Arc<AtomicBool>,
     swapped: Option<(String, swap::Swapped)>,
+    /// Held by the restart's worker through its undo; a quit that stops
+    /// waiting for that worker sets it, so no undo starts that the end of
+    /// the process could cut in half.
+    undo_closed: Arc<Mutex<bool>>,
     /// The version that failed its first start or was blocked (spec S316).
     record: Option<UpdateRecord>,
 }
@@ -113,6 +141,7 @@ impl Updater {
             manual_waiting: false,
             cancel: Arc::new(AtomicBool::new(false)),
             swapped: None,
+            undo_closed: Arc::new(Mutex::new(false)),
             record: None,
         }
     }
@@ -321,20 +350,28 @@ impl Updater {
                     self.check(Trigger::Manual);
                 }
             }
-            Event::Started(start) => {
+            Event::Started(start, undone) => {
                 self.work = Work::Idle;
-                match start {
-                    Start::Signalled { pid } => {
+                let Some(undone) = undone else {
+                    if let Start::Signalled { pid } = start {
                         self.env.log.log(|| {
                             format!("updater: process {pid} signalled its start, quitting")
                         });
                         polled.quit = true;
                     }
+                    return;
+                };
+                match start {
                     Start::Failed(error)
                         if files::is_blocked(&error)
                             || error.kind() == std::io::ErrorKind::NotFound =>
                     {
-                        self.start_failed(&error.to_string(), UpdateRecordReason::Blocked, polled);
+                        self.start_failed(
+                            &error.to_string(),
+                            UpdateRecordReason::Blocked,
+                            undone,
+                            polled,
+                        );
                     }
                     other => {
                         let why = match other {
@@ -346,9 +383,11 @@ impl Updater {
                                 self.env.start_wait.as_millis()
                             ),
                             Start::Failed(error) => format!("the exe didn't start ({error})"),
-                            Start::Signalled { .. } => unreachable!("handled above"),
+                            Start::Signalled { pid } => {
+                                format!("process {pid} signalled, yet the swap was undone")
+                            }
                         };
-                        self.start_failed(&why, UpdateRecordReason::FailedStart, polled);
+                        self.start_failed(&why, UpdateRecordReason::FailedStart, undone, polled);
                     }
                 }
             }
@@ -422,13 +461,17 @@ impl Updater {
     /// Starts the installed exe on the worker thread, which waits for its
     /// start signal while streaming goes on (spec S303, S314).
     fn restart(&mut self) {
-        if self.swapped.is_none() || self.work != Work::Idle {
+        let Some((_, swapped)) = self.swapped.clone() else {
+            return;
+        };
+        if self.work != Work::Idle {
             return;
         }
         let exe = self.env.install_dir.join(archive::EXE_NAME);
         self.work = Work::Restarting;
         let env = self.env.clone();
         let sender = self.sender.clone();
+        let undo_closed = self.undo_closed.clone();
         self.spawn(move || {
             // An installed exe gone since the swap was removed by Windows
             // security (spec S315).
@@ -437,7 +480,17 @@ impl Updater {
             } else {
                 Start::Failed(std::io::Error::from(std::io::ErrorKind::NotFound))
             };
-            let _ = sender.send(Event::Started(start));
+            if matches!(start, Start::Signalled { .. }) {
+                let _ = sender.send(Event::Started(start, None));
+                return;
+            }
+            let closed = undo_closed.lock().unwrap_or_else(PoisonError::into_inner);
+            if *closed {
+                return;
+            }
+            let undone = undo(&env, &swapped);
+            drop(closed);
+            let _ = sender.send(Event::Started(start, Some(undone)));
         });
     }
 
@@ -463,29 +516,28 @@ impl Updater {
         }
     }
 
-    /// The new exe couldn't be started or gave no start signal: the new
-    /// files go and each `.bak` the swap made is renamed back (spec S303).
-    fn start_failed(&mut self, why: &str, reason: UpdateRecordReason, polled: &mut Polled) {
+    /// The new exe couldn't be started or gave no start signal, and `undone`
+    /// deleted the new files and renamed each `.bak` back (spec S303).
+    fn start_failed(
+        &mut self,
+        why: &str,
+        reason: UpdateRecordReason,
+        undone: Undone,
+        polled: &mut Polled,
+    ) {
         self.env
             .log
             .log(|| format!("updater: restart failed ({why})"));
-        let Some((version, swapped)) = self.swapped.take() else {
+        let Some((version, _)) = self.swapped.take() else {
             return;
         };
         self.keep_record(Some(UpdateRecord { version, reason }), polled);
-        let mut steps = swap::StepLog::new();
-        let undone = swap::undo_completed(
-            &self.env.install_dir,
-            &swapped,
-            self.env.files.as_ref(),
-            &mut steps,
-        );
-        for (step, code) in &steps {
+        for (step, code) in &undone.steps {
             self.env
                 .log
                 .log(|| format!("updater: {step} (error {code})"));
         }
-        self.set_notice(Some(match undone {
+        self.set_notice(Some(match undone.result {
             Err(swap::SwapError::RestoreFailed { renames }) => UpdaterNotice::RestoreFailed {
                 renames: notice_renames(renames),
             },
@@ -494,20 +546,58 @@ impl Updater {
         }));
     }
 
-    /// At quit, after a swap: an exe Windows security removed gets the
-    /// `.bak` back, so the next start finds one (spec S315). True when the
-    /// record changed.
+    /// At quit, after a swap: a failed restart's undo still running ends
+    /// first (spec S303), and an exe Windows security removed gets the
+    /// `.bak` back, so the next start finds one (spec S315). Lock retries
+    /// share [`files::QUIT_RETRY_BUDGET`]. True when the record changed.
     pub fn at_quit(&mut self) -> bool {
-        if self.swapped.is_none() || self.env.install_dir.join(archive::EXE_NAME).exists() {
-            return false;
-        }
+        self.env.pause.quit();
         let mut polled = Polled::default();
+        if self.work == Work::Restarting {
+            self.finish_restart(&mut polled);
+        }
+        let Some((_, swapped)) = &self.swapped else {
+            return polled.record_changed;
+        };
+        if self.env.install_dir.join(archive::EXE_NAME).exists() {
+            return polled.record_changed;
+        }
+        let undone = undo(&self.env, swapped);
         self.start_failed(
             "the installed exe is gone at quit",
             UpdateRecordReason::Blocked,
+            undone,
             &mut polled,
         );
         polled.record_changed
+    }
+
+    /// Waits up to [`QUIT_WAIT`] for the restart's worker; past that, a
+    /// running undo still ends, but none starts any more.
+    fn finish_restart(&mut self, polled: &mut Polled) {
+        let deadline = std::time::Instant::now() + QUIT_WAIT;
+        while self.work == Work::Restarting {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.events.recv_timeout(left) {
+                Ok(event) => self.apply(event, polled),
+                Err(_) => break,
+            }
+        }
+        if self.work != Work::Restarting {
+            return;
+        }
+        *self
+            .undo_closed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = true;
+        while let Ok(event) = self.events.try_recv() {
+            self.apply(event, polled);
+        }
+        if self.work == Work::Restarting {
+            self.env
+                .log
+                .log(|| "updater: quit while the new version's start was awaited".to_owned());
+        }
     }
 
     /// Closing the notice of a running download (its X or Dismiss All)
@@ -578,6 +668,7 @@ pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
         log,
         launch: Arc::new(relaunch::ProcessLaunch),
         start_wait: relaunch::START_WAIT,
+        pause: Arc::new(files::Pause::real()),
     }))
 }
 
@@ -1220,5 +1311,200 @@ pub mod tests {
         );
         assert_eq!(folder(&updater), old_folder());
         assert_eq!(std::fs::read_dir(temp_root).unwrap().count(), 0);
+    }
+
+    /// Real files, except that deleting `audiosync.exe` meets a sharing
+    /// violation `locked` times, as while Defender still scans the new exe,
+    /// and each try records the thread it ran on.
+    struct Scanned {
+        locked: Mutex<u32>,
+        threads: Mutex<Vec<Option<String>>>,
+    }
+
+    impl crate::updater::files::Files for Scanned {
+        fn create(
+            &self,
+            path: &Path,
+            exclusive: bool,
+        ) -> std::io::Result<Box<dyn crate::updater::files::Sink>> {
+            RealFiles.create(path, exclusive)
+        }
+        fn remove(&self, path: &Path) -> std::io::Result<()> {
+            if path
+                .file_name()
+                .is_some_and(|name| name == archive::EXE_NAME)
+            {
+                self.threads
+                    .lock()
+                    .unwrap()
+                    .push(std::thread::current().name().map(str::to_owned));
+                let mut locked = self.locked.lock().unwrap();
+                if *locked > 0 {
+                    *locked -= 1;
+                    return Err(std::io::Error::from_raw_os_error(32));
+                }
+            }
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            RealFiles.rename(from, to)
+        }
+    }
+
+    /// A new version that ends before its start signal.
+    struct Exits;
+
+    impl relaunch::Launch for Exits {
+        fn start(&self, _: &Path, _: std::time::Duration) -> Start {
+            Start::Exited {
+                pid: 1,
+                code: Some(1),
+            }
+        }
+    }
+
+    // covers: S303, S315
+    #[test]
+    fn a_new_exe_still_scanned_after_a_failed_restart_is_deleted_on_a_retry() {
+        let files = Arc::new(Scanned {
+            locked: Mutex::new(2),
+            threads: Mutex::new(Vec::new()),
+        });
+        let waits = Arc::new(Mutex::new(Vec::new()));
+        let mut f = fixture(
+            "scanned-after-restart",
+            false,
+            files.clone(),
+            DebugLog::default(),
+        );
+        let counted = waits.clone();
+        f.env.pause = Arc::new(files::Pause::counted(move |wait| {
+            counted.lock().unwrap().push(wait);
+        }));
+        f.env.launch = Arc::new(Exits);
+        let mut updater = Updater::new(f.env);
+        updater.check(Trigger::Manual);
+        updater.wait();
+        updater.press(UpdaterButton::Download);
+        updater.wait();
+        assert!(matches!(
+            updater.notice(),
+            Some(UpdaterNotice::Installed { .. })
+        ));
+
+        assert_eq!(updater.press(UpdaterButton::RestartNow), Action::Nothing);
+        let polled = updater.wait();
+        assert!(!polled.quit);
+        assert_eq!(updater.notice(), Some(&UpdaterNotice::RelaunchFailed));
+        assert_eq!(folder(&updater), old_folder());
+        assert_eq!(
+            *waits.lock().unwrap(),
+            [
+                std::time::Duration::from_millis(250),
+                std::time::Duration::from_millis(500)
+            ]
+        );
+        let threads = files.threads.lock().unwrap();
+        assert_eq!(threads.len(), 3, "two locked tries, then the delete");
+        assert!(
+            threads
+                .iter()
+                .all(|name| name.as_deref() == Some("audiosync-updater")),
+            "the undo runs on the worker, never on the UI thread: {threads:?}"
+        );
+    }
+
+    /// An updater with `files` and the counting `sleep` that has swapped
+    /// 0.9.0 in and offers Restart Now, which a new version that exits
+    /// before its signal answers.
+    fn swapped_with(
+        name: &str,
+        files: Arc<dyn crate::updater::files::Files>,
+        sleep: impl Fn(std::time::Duration) + Send + Sync + 'static,
+    ) -> Updater {
+        let mut f = fixture(name, false, files, DebugLog::default());
+        f.env.pause = Arc::new(files::Pause::counted(sleep));
+        f.env.launch = Arc::new(Exits);
+        let mut updater = Updater::new(f.env);
+        updater.check(Trigger::Manual);
+        updater.wait();
+        updater.press(UpdaterButton::Download);
+        updater.wait();
+        assert!(matches!(
+            updater.notice(),
+            Some(UpdaterNotice::Installed { .. })
+        ));
+        updater
+    }
+
+    // covers: S303, S315
+    #[test]
+    fn a_quit_during_the_undo_of_a_failed_restart_waits_for_it_and_keeps_the_record() {
+        let files = Arc::new(Scanned {
+            locked: Mutex::new(3),
+            threads: Mutex::new(Vec::new()),
+        });
+        let (entered_sender, entered) = mpsc::channel();
+        let (release, gate) = mpsc::channel::<()>();
+        let (entered_sender, gate) = (Mutex::new(entered_sender), Mutex::new(gate));
+        let mut updater = swapped_with("quit-during-undo", files, move |_| {
+            let _ = entered_sender.lock().unwrap().send(());
+            let _ = gate.lock().unwrap().recv();
+        });
+        assert_eq!(updater.press(UpdaterButton::RestartNow), Action::Nothing);
+        entered
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("the undo waits to retry the locked exe");
+        drop(release);
+        assert!(updater.at_quit(), "the quit stores the record");
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::FailedStart).as_ref()
+        );
+        assert_eq!(folder(&updater), old_folder());
+    }
+
+    /// Real files, except that renaming a `.bak` back always meets a
+    /// sharing violation.
+    struct LockedBaks;
+
+    impl crate::updater::files::Files for LockedBaks {
+        fn create(
+            &self,
+            path: &Path,
+            exclusive: bool,
+        ) -> std::io::Result<Box<dyn crate::updater::files::Sink>> {
+            RealFiles.create(path, exclusive)
+        }
+        fn remove(&self, path: &Path) -> std::io::Result<()> {
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            if from.extension().is_some_and(|extension| extension == "bak") {
+                return Err(std::io::Error::from_raw_os_error(32));
+            }
+            RealFiles.rename(from, to)
+        }
+    }
+
+    // covers: S315
+    #[test]
+    fn the_undo_at_quit_spends_at_most_two_seconds_on_lock_retries() {
+        let waits = Arc::new(Mutex::new(Vec::new()));
+        let counted = waits.clone();
+        let mut updater = swapped_with("quit-retry-budget", Arc::new(LockedBaks), move |wait| {
+            counted.lock().unwrap().push(wait);
+        });
+        std::fs::remove_file(updater.env.install_dir.join(archive::EXE_NAME)).unwrap();
+        assert!(updater.at_quit());
+        let spent: std::time::Duration = waits.lock().unwrap().iter().sum();
+        assert!(
+            spent <= std::time::Duration::from_secs(2),
+            "one budget for the whole undo at quit, {spent:?}"
+        );
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::Blocked).as_ref()
+        );
     }
 }

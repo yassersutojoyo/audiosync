@@ -14,7 +14,7 @@ use ed25519_dalek::VerifyingKey;
 use super::appcast::{self, Arch, Update};
 use super::archive::{self, ArchiveError};
 use super::fetch::{self, Fetch, FetchError, Kind};
-use super::files::{Files, Retrying, is_blocked, is_disk_full};
+use super::files::{Files, Pause, Retrying, is_blocked, is_disk_full};
 use super::relaunch::Launch;
 use super::signature;
 use super::swap::{self, Rename, StepLog, SwapError, Swapped};
@@ -42,6 +42,8 @@ pub struct Env {
     pub launch: Arc<dyn Launch>,
     /// How long Restart Now waits for the new version's start signal.
     pub start_wait: Duration,
+    /// The waits before lock retries (spec S315), which a quit cuts short.
+    pub pause: Arc<Pause>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -197,6 +199,7 @@ fn install_in(
     let files = Retrying {
         inner: env.files.as_ref(),
         log: &env.log,
+        pause: &env.pause,
     };
     let enclosure = &update.enclosure;
     let zip = dir.join("update.zip");
@@ -493,6 +496,7 @@ pub mod tests {
                 log,
                 launch: Arc::new(NoLaunch),
                 start_wait: Duration::from_millis(300),
+                pause: Arc::new(Pause::real()),
             },
             fetch,
         }
