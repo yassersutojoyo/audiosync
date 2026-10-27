@@ -201,6 +201,10 @@ pub const START_STEP_GAP_NS: i64 = 2_000_000;
 /// its older and newer halves may lie apart for it to count as settled.
 pub const START_JITTER_NS: i64 = 5_000_000;
 
+/// The newest wakes whose lowest gap a pull endpoint's unheard silence is
+/// measured on (S324).
+pub const PULL_GAP_WAKES: usize = 4;
+
 /// The most timed callbacks the start set holds (S321).
 pub const START_SET_LEN: usize = 256;
 
@@ -891,11 +895,16 @@ pub struct Renderer {
     /// of applying S209's rule (S318).
     step_floor_set: bool,
     /// A pull endpoint in its start window (S324): its first wake's time,
-    /// the device frames its later wakes asked for, this wake's time since
-    /// the first less those frames, and that value's lowest since the
-    /// reader's latest anchor, with S209's leak, in ns.
+    /// the device frames its later wakes asked for, each wake's time since
+    /// the first less those frames over the newest [`PULL_GAP_WAKES`] wakes
+    /// (a ring, the next slot and how many are kept), their lowest at this
+    /// wake, and that lowest's own lowest since the reader's latest anchor,
+    /// with S209's leak, in ns.
     pull_origin: Option<u64>,
     pull_asked: u64,
+    pull_gaps: [i64; PULL_GAP_WAKES],
+    pull_gaps_next: usize,
+    pull_gaps_kept: usize,
     pull_gap_ns: i64,
     pull_low_ns: i64,
     /// A confirmed pull start step, waiting for the fade-out and a wake
@@ -997,6 +1006,9 @@ impl Renderer {
             step_floor_set: false,
             pull_origin: None,
             pull_asked: 0,
+            pull_gaps: [0; PULL_GAP_WAKES],
+            pull_gaps_next: 0,
+            pull_gaps_kept: 0,
             pull_gap_ns: 0,
             pull_low_ns: 0,
             pull_step_due: false,
@@ -1590,9 +1602,10 @@ impl Renderer {
 
     /// The silence a pull endpoint (a period and no output times) played
     /// unheard by the core while its start window is open, in ns, at a wake
-    /// at `now` that asks for `frames` device frames (S324): the time since
-    /// its first wake less the frames its later wakes asked for, above that
-    /// value's lowest since the reader's latest anchor. 0 otherwise.
+    /// at `now` that asks for `frames` device frames (S324): the lowest,
+    /// over its newest [`PULL_GAP_WAKES`] wakes, of the time since its first
+    /// wake less the frames its later wakes asked for, above that lowest's
+    /// own lowest since the reader's latest anchor. 0 otherwise.
     fn pull_silence(&mut self, frames: usize, now: u64) -> i64 {
         if self.period_frames == 0
             || (self.start_window == StartWindow::Closed && !self.pull_step_due)
@@ -1608,6 +1621,18 @@ impl Renderer {
         let asked_ns = u128::from(self.pull_asked) * 1_000_000_000 / rate;
         let gap = i128::from(now.saturating_sub(origin)) - asked_ns as i128;
         let gap = gap.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+        // A late wake that still found buffer left raises the gap for itself
+        // only, and the next wake on time lowers it again; silence the device
+        // played raises it for good, so only the lowest of the newest wakes
+        // counts.
+        self.pull_gaps[self.pull_gaps_next] = gap;
+        self.pull_gaps_next = (self.pull_gaps_next + 1) % PULL_GAP_WAKES;
+        self.pull_gaps_kept = (self.pull_gaps_kept + 1).min(PULL_GAP_WAKES);
+        let gap = self.pull_gaps[..self.pull_gaps_kept]
+            .iter()
+            .copied()
+            .min()
+            .unwrap_or(gap);
         // The leak follows a device clock slower than the stamps' clock.
         let leak = (frames as u128 * u128::from(EARLIEST_LEAK_NS_PER_S) / rate) as i64;
         self.pull_low_ns = self.pull_low_ns.saturating_add(leak).min(gap);
