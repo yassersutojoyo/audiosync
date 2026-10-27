@@ -1134,6 +1134,7 @@ impl Renderer {
         self.update_lead(frames);
         let mut pull_silence_ns = 0;
         let mut pull_late = 0;
+        let mut pull_wake_ns = 0;
         let floor_late_ns = match (time, now) {
             (Some(time), Some(now)) => {
                 let late_ns = self.lateness(time, now, frames);
@@ -1148,6 +1149,7 @@ impl Renderer {
                 pull_silence_ns = self.pull_silence(frames, now);
                 self.judge_pull_start(frames, pull_silence_ns);
                 pull_late = self.land_pull_step(frames);
+                pull_wake_ns = self.pull_wake_ns(frames);
                 0
             }
             _ => {
@@ -1182,8 +1184,12 @@ impl Renderer {
         self.reader.set_capture_frames(capture);
         // The capture's clock is judged at the time the callback would have
         // read at had it come as early as the earliest ones did when the
-        // reader anchored.
-        let judged_ns = i128::from(late_ns) + i128::from(shift_ns);
+        // reader anchored, or a pull endpoint's wake had it come on time. A
+        // callback below the anchor floor is that callback's jitter, which
+        // the anchor floor's fall follows; taken in full, one stray stamp
+        // moved the running average past the dead zone (S207).
+        let judged_ns =
+            i128::from(late_ns) + i128::from(shift_ns.max(0)) + i128::from(pull_wake_ns);
         let now =
             now.map(|now| (i128::from(now) - judged_ns).clamp(0, i128::from(u64::MAX)) as u64);
         if !self.start_lead_fixed {
@@ -1613,6 +1619,18 @@ impl Renderer {
         self.pull_low_ns = self.pull_low_ns.saturating_add(leak).min(gap);
         self.pull_gap_ns = gap;
         gap.saturating_sub(self.pull_low_ns)
+    }
+
+    /// How late a pull endpoint's wake of `frames` device frames came, in ns
+    /// of device time (S207): its frames beyond the period, which its buffer
+    /// drained while it waited; negative for a wake that asks for less, as
+    /// one right after a late wake does. 0 without a period.
+    fn pull_wake_ns(&self, frames: usize) -> i64 {
+        if self.period_frames == 0 {
+            return 0;
+        }
+        let beyond = frames as i64 - self.period_frames as i64;
+        beyond * 1_000_000_000 / i64::from(self.device_rate.max(1))
     }
 
     /// The start window at a pull endpoint's wake of `frames` device frames
