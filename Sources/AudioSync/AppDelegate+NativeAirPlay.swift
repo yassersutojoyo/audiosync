@@ -545,7 +545,8 @@ extension AppDelegate {
         switch reason {
         case .needsCode, .needsPassword:
             guard let words = text.nativeAirPlayAsksForCode(name: name, reason: reason, unasked: unasked) else {
-                preconditionFailure("no PIN or password notice for \(reason)")
+                assertionFailure("no PIN or password notice for \(reason)")
+                return text.nativeAirPlayNotAccepted(name: name)
             }
             return words
         case .unreachable: return text.airPlayTurnedOff(name: name, reason: .unreachable)
