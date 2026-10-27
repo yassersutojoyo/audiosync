@@ -212,7 +212,8 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn from_hex(text: &str) -> Option<TokenHash> {
-    if text.len() != 64 || !text.is_ascii() {
+    // from_str_radix alone would read a leading "+", which the Mac's count rejects.
+    if text.len() != 64 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
     let mut hash = [0u8; 32];
@@ -1105,6 +1106,34 @@ mod tests {
         assert!(problem.is_none());
         assert!(store.contains(&token, day_zero() + DAY * 89));
         assert!(store.take_rewrite().is_some());
+    }
+
+    #[test]
+    fn a_hash_reads_only_as_two_hex_digits_per_byte() {
+        let hash = token_hash("phone");
+        let text = hex(&hash);
+        assert_eq!(from_hex(&text), Some(hash));
+        assert_eq!(from_hex(&text.to_uppercase()), Some(hash));
+        let signed = format!("+{}", &text[1..]);
+        assert_eq!(from_hex(&signed), None, "{signed}");
+        let file = json!({ "version": 1, "devices": [text, signed] }).to_string();
+        let (devices, _, skipped) = parse_file(file.as_bytes(), 0).unwrap();
+        assert_eq!((devices.len(), skipped), (1, 1));
+    }
+
+    #[test]
+    fn a_whole_number_written_as_a_float_doesnt_read() {
+        let hash = hex(&token_hash("phone"));
+        for version in ["1.0", "1e0"] {
+            let file = format!(r#"{{"version":{version},"devices":["{hash}"]}}"#);
+            assert!(parse_file(file.as_bytes(), 5).is_none(), "{version}");
+        }
+        for seen in ["1.8e9", "1800000000.0", "-1"] {
+            let file = format!(r#"{{"version":1,"devices":["{hash}"],"seen":[{seen}]}}"#);
+            let (devices, rewrite, _) = parse_file(file.as_bytes(), 5).unwrap();
+            assert_eq!(devices[0].seen, 5, "{seen} counts as seen now");
+            assert!(rewrite, "{seen}");
+        }
     }
 
     /// What the copies kept aside next to `path` hold.
