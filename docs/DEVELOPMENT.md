@@ -37,6 +37,8 @@ On the first build, `build.sh` runs `make-local-cert.sh`, which creates a self-s
 
 With an ad-hoc signature the code hash changes on every build, and the permission quietly stops working: the toggle in System Settings stays on, but capture is silent. That's why `build.sh` signs ad-hoc only with `AUDIOSYNC_ADHOC=1`, or when there's no local identity and `make-local-cert.sh` can't create one, and says so loudly. If the local identity exists but can't sign, the build stops before it quits or replaces the installed app.
 
+The updater's EdDSA private key sits in the release Mac's login keychain, where Sparkle's `generate_keys` put it. The program that creates a keychain item is trusted with it by default ([TN2206](https://developer.apple.com/library/archive/technotes/tn2206/_index.html), table 1); when a program the item doesn't trust asks for it, macOS shows a dialog naming that program, with Deny, Allow and Always Allow ([Access Control Lists](https://developer.apple.com/documentation/security/access-control-lists)). `scripts/sign_appcast.sh` runs `generate_appcast` from a copy named "AudioSync Release Signing", so the dialog shows that name instead of Sparkle's tool name. The copy keeps Sparkle's code signature, since re-signing it would make it a different program to the keychain. The keychain tracks a program by its designated requirement, not by its path or file name (TN2206), so "Always Allow" would trust every build Sparkle signs the same way, under any name. Click Allow instead: the copy lives in a temporary folder that the script deletes, and the dialog comes back on every release.
+
 ## Running and testing
 
 ```bash
