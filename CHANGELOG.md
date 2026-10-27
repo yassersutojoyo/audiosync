@@ -39,6 +39,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, while an AirPlay problem is showing, the "no speakers found" note asks you to check Local Network access only once macOS has refused it, not while AudioSync merely can't tell yet.
 - On Windows, when another program resizes the main window past the screen, it now stops at the largest size Windows gives any window, instead of growing taller than the screen.
 - On Windows, an AirPlay speaker that was on at launch and asks for a PIN or password goes off with a notice, instead of reading On while nothing plays.
+- On Windows, an AirPlay speaker set to ask for a code every time that you turned on yourself goes off with a notice when streaming stops, and the next click asks for a new code, as on the Mac. Before, it stayed On after a stop and a start while nothing played.
 - On Windows, pasting something that isn't a whole number, such as "1,5", into a delay box no longer leaves just its digits behind ("15"), which Enter then applied. The paste is ignored and the box keeps what it showed, as on the Mac.
 
 ## [0.7.1] - 2026-10-27

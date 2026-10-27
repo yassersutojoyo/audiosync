@@ -3421,7 +3421,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn forget_stale_waits(&mut self) {
         let running = self.running();
         if std::mem::replace(&mut self.streamed, running) && !running {
-            self.airplay_on_by_hand.clear();
+            self.end_hand_marks();
         }
         if !running {
             self.busy.clear();
@@ -3432,6 +3432,22 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.busy.retain(|id| outputs.contains(id));
         let airplay = self.audio.enabled_airplay();
         self.reconnecting.retain(|id, _| airplay.contains(id));
+    }
+
+    /// The stream ended, and with it the PIN session each click bought
+    /// (S223). A speaker whose pairing or prompt is still open keeps its
+    /// mark, as the backend keeps it, so the pairing turns it on.
+    fn end_hand_marks(&mut self) {
+        let mut waiting: BTreeSet<String> = self
+            .audio
+            .airplay_speakers()
+            .into_iter()
+            .filter(|speaker| speaker.pairing)
+            .map(|speaker| speaker.id)
+            .collect();
+        waiting.extend(self.audio.airplay_pin_prompt().map(|prompt| prompt.id));
+        waiting.extend(self.audio.airplay_password_prompt().map(|prompt| prompt.id));
+        self.airplay_on_by_hand.retain(|id| waiting.contains(id));
     }
 
     fn handle(&mut self, event: BackendEvent) {
@@ -3597,6 +3613,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             // Its Retry starts a new sender (`retry_airplay`).
             BackendEvent::AirPlayStopped => {
                 self.reconnecting.clear();
+                // Retry starts a new stream, though capture runs on.
+                self.end_hand_marks();
                 self.post(NoticeSubject::AirPlay, NoticeMessage::AirPlayStopped);
             }
             BackendEvent::AirPlayPtpFree => {
@@ -7828,6 +7846,24 @@ mod tests {
             }),
             "{:?}",
             messages(&adapter)
+        );
+
+        let next = FakeAirPlay::new();
+        next.set_airplay2(true);
+        let started = next.clone();
+        adapter.audio.set_airplay_starter(Box::new(move || {
+            Some(StartedSender::browsing(started.link(), None))
+        }));
+        adapter.retry_airplay();
+        next.appear(&den);
+        adapter.poll();
+        assert!(!adapter.snapshot().speaker(&id).unwrap().enabled);
+        next.take_calls();
+        adapter.set_speaker_enabled(&id, true);
+        assert_eq!(
+            next.take_calls(),
+            [Call::StartPairing(id_of(&den))],
+            "after Retry the next click asks for a new code"
         );
     }
 
