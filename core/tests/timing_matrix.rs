@@ -19,8 +19,9 @@
 //! - I2: no drift skip or silence at any time, the start included.
 //! - I3: S206's slow-down makes up no shortage. A late-first output's I1
 //!   and I3 count from 1 s after its callbacks came on time. Neither counts
-//!   for an output whose wander brings its callbacks earlier faster than
-//!   S207's trim can carry it later (S209), which runs its lead's slack down.
+//!   the callbacks on the falling half of a wander that brings them earlier
+//!   faster than S207's trim can carry the output later (S209), which runs
+//!   its lead's slack down, nor those after it still below the anchor floor.
 //! - I4: over the last quarter, any two outputs' mean delays, less their
 //!   latencies and hold-backs, lie within a capture block plus 2 ms.
 //! - I5: over the last quarter, each output's delay stays within 2 ms.
@@ -586,6 +587,13 @@ struct Output {
     /// How much later than its stamps said its stray-stamped callbacks came,
     /// up to each stray, in ms.
     misread_ms: f64,
+    /// Whether its wander outruns S207's trim, whether this callback comes
+    /// on the wander's falling half, and the dry reads and shortage frames
+    /// from `settled_at` on of such callbacks and of those after the trough
+    /// still below the anchor floor, which I1 and I3 don't count.
+    outruns: bool,
+    falling: bool,
+    excused: (u64, u64),
     mac: bool,
     /// Windows: frames written, the prefilled silence included, and how
     /// much later than its wakes the device plays after its stalls and
@@ -655,6 +663,7 @@ impl Output {
         let nominal = self.nominal(self.pulls);
         let d = &self.d;
         let phase = (nominal / d.wander_s + d.phase).fract();
+        let falling = phase >= 0.5;
         let triangle = if phase < 0.5 {
             2.0 * phase
         } else {
@@ -674,6 +683,7 @@ impl Output {
             late_ms += ms;
         }
         self.next_at = (nominal + late_ms / 1000.0).max(self.last_at);
+        self.falling = falling;
     }
 }
 
@@ -809,6 +819,9 @@ fn simulate(case: &Case) -> Outcome {
                 rng: d.seed | 1,
                 strays_left: 2,
                 misread_ms: 0.0,
+                outruns: wander_outruns_trim(d),
+                falling: false,
+                excused: (0, 0),
                 written: if mac { 0 } else { d.callback as u64 * 2 },
                 mac,
                 played_shift: 0.0,
@@ -891,6 +904,10 @@ fn simulate(case: &Case) -> Outcome {
         }
         let o = &mut outputs[next];
         let rate = o.rate;
+        let before = (
+            o.control.counters().starved_renders,
+            o.control.shortage_frames(),
+        );
         let (frames, played_at) = if mac {
             let frames = o.d.callback;
             let output_at = o.nominal(o.pulls) + o.d.latency_ms / 1000.0;
@@ -979,6 +996,13 @@ fn simulate(case: &Case) -> Outcome {
                 o.delay_before_ms = (played_at - captured_at) * 1000.0;
             }
         }
+        // Until the callbacks are back up to the anchor floor, past the
+        // trough, the slack the fall took is still missing.
+        let below_anchor = o.renderer.floor_shift_frames() < 0;
+        if o.outruns && (o.falling || below_anchor) && pull_at >= o.settled_at {
+            o.excused.0 += o.control.counters().starved_renders - before.0;
+            o.excused.1 += o.control.shortage_frames() - before.1;
+        }
         if o.trim_from.is_none() && pull_at >= o.trim_judged_from {
             o.trim_from = Some((o.control.slowed_frames(), o.control.sped_frames()));
         }
@@ -1030,10 +1054,9 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         let mut own = [false; 8];
         let mut trim = String::new();
         if !case.is_stall() {
-            let outruns = wander_outruns_trim(d);
-            own[0] = dry > 0 && !outruns;
+            own[0] = dry > o.excused.0;
             own[1] = corrections > 0;
-            own[2] = shortage > 0 && !outruns;
+            own[2] = shortage > o.excused.1;
             own[4] = o.tail.count == 0 || spread > STEADY_MS;
             if d.wander_ms == 0.0 && d.ppm.abs() >= TRIM_JUDGED_PPM {
                 let judged_s = case.seconds - o.trim_judged_from;
@@ -1721,7 +1744,9 @@ fn every_output_of_every_mix_holds_every_invariant() {
 }
 
 /// Draws of the random run that failed, as `(seed, index)` for
-/// [`random_case`].
+/// [`random_case`]. An index names a draw only for the proptest version
+/// locked in Cargo.lock and the strategies of [`raw_case`] as they stand;
+/// a change to either redraws them, and the failing cases are found anew.
 const RANDOM_REGRESSIONS: [(u64, usize); 43] = [
     (0x5EED, 2),
     (0x5EED, 24),
