@@ -1291,13 +1291,13 @@ fn a_late_second_callback_neither_corrects_drift_nor_moves_the_output_in_a_mac_c
     assert_eq!(shown, 0, "\n{}", lines.join("\n"));
 }
 
-// covers: S207
+// covers: S207, S323
 #[test]
 fn a_windows_wake_that_comes_after_the_buffer_ran_dry_moves_no_output_and_corrects_no_drift() {
     // A second wake 27 to 80 ms late finds the 20 ms buffer dry: the device
-    // played silence the core never hears of. Its reference took that silence
+    // played silence the core never hears of. S207's reference used to take it
     // in, so the output played up to 50 ms later than its on-time twin all run,
-    // or a drift correction made it up.
+    // or a drift correction made it up; a start step now skips it.
     let windows: Vec<&Case> = matrix()
         .cases_where(|c| !c.is_stall() && c.k % 4 == 1 && c.platform == Platform::Windows)
         .into_iter()

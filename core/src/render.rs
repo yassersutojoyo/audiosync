@@ -686,12 +686,12 @@ impl RendererControl {
     }
 }
 
-/// A renderer's start window (S317).
+/// A renderer's start window (S317, S323).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StartWindow {
-    /// No timed callback yet.
+    /// No timed callback, or pull endpoint's wake, yet.
     Unopened,
-    /// Device frames of timed callbacks since it opened.
+    /// Device frames of those callbacks since it opened.
     Open {
         elapsed: u64,
     },
@@ -890,6 +890,18 @@ pub struct Renderer {
     /// The anchor floor a start step set: the next anchor keeps it instead
     /// of applying S209's rule (S318).
     step_floor_set: bool,
+    /// A pull endpoint in its start window (S323): its first wake's time,
+    /// the device frames its later wakes asked for, this wake's time since
+    /// the first less those frames, and that value's lowest since the
+    /// reader's latest anchor, with S209's leak, in ns.
+    pull_origin: Option<u64>,
+    pull_asked: u64,
+    pull_gap_ns: i64,
+    pull_low_ns: i64,
+    /// A confirmed pull start step, waiting for the fade-out and a wake
+    /// that asks for at least its period, or the one after (S323).
+    pull_step_due: bool,
+    pull_step_waited: bool,
 }
 
 impl fmt::Debug for Renderer {
@@ -983,6 +995,12 @@ impl Renderer {
             start_floor_ns: None,
             step_due: None,
             step_floor_set: false,
+            pull_origin: None,
+            pull_asked: 0,
+            pull_gap_ns: 0,
+            pull_low_ns: 0,
+            pull_step_due: false,
+            pull_step_waited: false,
         })
     }
 
@@ -1114,6 +1132,8 @@ impl Renderer {
         let channels = self.channels;
         let frames = out.len() / channels;
         self.update_lead(frames);
+        let mut pull_silence_ns = 0;
+        let mut pull_late = 0;
         let floor_late_ns = match (time, now) {
             (Some(time), Some(now)) => {
                 let late_ns = self.lateness(time, now, frames);
@@ -1121,12 +1141,22 @@ impl Renderer {
                 self.judge_start(frames);
                 if self.warming { 0 } else { late_ns }
             }
+            (None, Some(now)) => {
+                self.warming = false;
+                // Counted as Jf, so neither the drift judgement nor S207's fill
+                // takes the silence in before the step (S323).
+                pull_silence_ns = self.pull_silence(frames, now);
+                self.judge_pull_start(frames, pull_silence_ns);
+                pull_late = self.land_pull_step(frames);
+                0
+            }
             _ => {
                 self.warming = false;
                 0
             }
         };
         let (floor_shift_ns, drop_ns) = self.floor_shift_ns(frames);
+        let floor_shift_ns = floor_shift_ns.saturating_add(pull_silence_ns);
         // Jt counts from the anchor floor while the floor lies below it, so
         // early stamps the anchor floor didn't follow move no anchor and
         // count no callback as late; the drift is judged as before.
@@ -1141,8 +1171,8 @@ impl Renderer {
             }
         }
         let late = late_ns as u128 * u128::from(self.capture_rate) / 1_000_000_000;
-        self.reader
-            .set_late_frames(i64::try_from(late).unwrap_or(i64::MAX));
+        let late = i64::try_from(late).unwrap_or(i64::MAX);
+        self.reader.set_late_frames(late.saturating_add(pull_late));
         let shift = i128::from(shift_ns) * i128::from(self.capture_rate) / 1_000_000_000;
         self.reader
             .set_floor_shift_frames(shift.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64);
@@ -1558,6 +1588,110 @@ impl Renderer {
         }
     }
 
+    /// The silence a pull endpoint (a period and no output times) played
+    /// unheard by the core while its start window is open, in ns, at a wake
+    /// at `now` that asks for `frames` device frames (S323): the time since
+    /// its first wake less the frames its later wakes asked for, above that
+    /// value's lowest since the reader's latest anchor. 0 otherwise.
+    fn pull_silence(&mut self, frames: usize, now: u64) -> i64 {
+        if self.period_frames == 0
+            || (self.start_window == StartWindow::Closed && !self.pull_step_due)
+        {
+            return 0;
+        }
+        let rate = u128::from(self.device_rate.max(1));
+        let Some(origin) = self.pull_origin else {
+            self.pull_origin = Some(now);
+            return 0;
+        };
+        self.pull_asked = self.pull_asked.saturating_add(frames as u64);
+        let asked_ns = u128::from(self.pull_asked) * 1_000_000_000 / rate;
+        let gap = i128::from(now.saturating_sub(origin)) - asked_ns as i128;
+        let gap = gap.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64;
+        // The leak follows a device clock slower than the stamps' clock.
+        let leak = (frames as u128 * u128::from(EARLIEST_LEAK_NS_PER_S) / rate) as i64;
+        self.pull_low_ns = self.pull_low_ns.saturating_add(leak).min(gap);
+        self.pull_gap_ns = gap;
+        gap.saturating_sub(self.pull_low_ns)
+    }
+
+    /// The start window at a pull endpoint's wake of `frames` device frames
+    /// that found `silence_ns` of unheard silence (S323): opens it at the
+    /// first wake, closes it as [`Renderer::judge_start`] does, and while
+    /// it is open makes a start step once S321's set of those silences
+    /// confirms one.
+    fn judge_pull_start(&mut self, frames: usize, silence_ns: i64) {
+        if self.period_frames == 0 {
+            return;
+        }
+        let elapsed = match self.start_window {
+            StartWindow::Closed => return,
+            StartWindow::Unopened => 0,
+            StartWindow::Open { elapsed } => elapsed,
+        };
+        if elapsed >= self.start_window_frames || self.stop != Stop::None {
+            self.start_window = StartWindow::Closed;
+            self.start_set.clear();
+            return;
+        }
+        self.start_window = StartWindow::Open {
+            elapsed: elapsed.saturating_add(frames as u64),
+        };
+        if !self.reader_anchored || self.pull_step_due {
+            return;
+        }
+        self.start_set.push(silence_ns, frames as u64);
+        let set = &mut self.start_set;
+        let Some(count) = set.spanning(FLOOR_FORM_CALLBACKS as usize, self.floor_form_frames)
+        else {
+            return;
+        };
+        let level = set.median(count, 0, count);
+        if level <= START_STEP_GAP_NS {
+            return;
+        }
+        let older = count / 2;
+        let settled = set.median(count, 0, older) - set.median(count, older, count - older);
+        if settled.abs() > START_JITTER_NS {
+            return;
+        }
+        set.clear();
+        self.start_window = StartWindow::Closed;
+        let rate = u64::from(self.capture_rate);
+        let moved = u64::try_from(level).unwrap_or(0).saturating_mul(rate) / 1_000_000_000;
+        self.shared
+            .start_step_frames
+            .fetch_add(moved, Ordering::Relaxed);
+        self.pull_step_due = true;
+        if !self.fade.is_closed() {
+            self.begin_fade_out(None);
+        }
+    }
+
+    /// Makes a confirmed pull start step at a wake of `frames` device frames
+    /// once the fade-out is over (S323): the reader anchors anew at this
+    /// callback's first read, which skips the silence the endpoint played.
+    /// Returns the capture frames this wake came late by, its frames beyond
+    /// the period, for Jr; a wake that asks for less follows a late one, so
+    /// the step waits one wake for a better one.
+    fn land_pull_step(&mut self, frames: usize) -> i64 {
+        if !self.pull_step_due || !self.fade.is_closed() {
+            return 0;
+        }
+        if frames < self.period_frames && !self.pull_step_waited {
+            self.pull_step_waited = true;
+            return 0;
+        }
+        self.pull_step_due = false;
+        self.pull_step_waited = false;
+        self.reader_control.request_resync();
+        self.awaiting_resync = true;
+        self.shared.start_steps.fetch_add(1, Ordering::Relaxed);
+        let beyond = frames.saturating_sub(self.period_frames) as u64;
+        let late = beyond * u64::from(self.capture_rate) / u64::from(self.device_rate.max(1));
+        i64::try_from(late).unwrap_or(i64::MAX)
+    }
+
     /// Sets the anchor floor to `step` and has the reader anchor against it
     /// at its next read (S318), counting the step.
     fn make_start_step(&mut self, step: i64) {
@@ -1662,6 +1796,8 @@ impl Renderer {
             // No start step once a stop's fade-out was asked for (S317).
             self.start_window = StartWindow::Closed;
             self.step_due = None;
+            self.pull_step_due = false;
+            self.pull_step_waited = false;
             self.begin_fade_out(None);
         }
         if take(&self.shared.delay_flag) {
@@ -1774,6 +1910,8 @@ impl Renderer {
         }
         if report.correction != Correction::None {
             self.reader_anchored = true;
+            // A pull endpoint's silence counts from here (S323).
+            self.pull_low_ns = self.pull_gap_ns;
             // What this callback's Jt counted from, so Jf is 0 from here; a
             // start step already set it (S318).
             if std::mem::take(&mut self.step_floor_set) {
@@ -1870,6 +2008,7 @@ impl Renderer {
             || self.awaiting_resync
             || self.correction_due
             || self.step_due.is_some()
+            || self.pull_step_due
     }
 
     /// Starts a fade-out; one that ends at once (nothing audible) ends after
