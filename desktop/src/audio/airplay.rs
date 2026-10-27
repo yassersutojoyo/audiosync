@@ -271,8 +271,14 @@ pub fn airplay2_auto_on() -> bool {
 
 /// The sender's AirPlay 2 path and preference (S312): the switch is the
 /// saved setting or `switch_env`, and the flag `auto` decides what it means.
+/// On Windows the driver thread runs as a Pro Audio task (S323).
 pub fn airplay2_config(saved: bool, switch_env: Option<&str>, auto: bool) -> SenderConfig {
-    SenderConfig::default().with_airplay2_switch(auto, airplay2_on(saved, switch_env))
+    SenderConfig {
+        #[cfg(windows)]
+        on_driver_thread: Some(super::wasapi::pro_audio_thread),
+        ..SenderConfig::default()
+    }
+    .with_airplay2_switch(auto, airplay2_on(saved, switch_env))
 }
 
 /// The real sender.
@@ -7147,6 +7153,13 @@ pub mod tests {
         assert!(!airplay2_on(false, Some("0")));
         assert!(airplay2_on(true, None));
         assert!(airplay2_on(false, Some("1")));
+    }
+
+    // covers: S323
+    #[test]
+    fn the_app_raises_the_airplay_driver_thread_on_windows() {
+        let config = airplay2_config(false, None, false);
+        assert_eq!(config.on_driver_thread.is_some(), cfg!(windows));
     }
 
     #[test]

@@ -133,3 +133,4 @@ S311 Hosts only: the release appcast's Windows items; a check in the release scr
 S314 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
 S315 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
 S316 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
+S323 Hosts only: the Windows app registers the AirPlay driver thread with MMCSS through the sender's setup function and notes a refusal once; the Windows tests check it.

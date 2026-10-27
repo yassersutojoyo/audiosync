@@ -58,6 +58,7 @@
 mod driver;
 mod remote;
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
@@ -126,6 +127,10 @@ pub struct SenderConfig {
     /// AirPlay 2 sessions at once, [`AIRPLAY2_SESSIONS`] (P204); a test
     /// picks fewer so it needs fewer receivers.
     pub airplay2_sessions: usize,
+    /// Runs first on the driver thread, which keeps what it returns until it
+    /// ends. A host raises the thread's priority here: at normal priority a
+    /// busy Windows PC wakes it past a packet's time (P226).
+    pub on_driver_thread: Option<fn() -> Box<dyn Any>>,
 }
 
 /// The most AirPlay 2 sessions a sender runs at once, each member of a
@@ -243,6 +248,7 @@ impl Default for SenderConfig {
             ptp_receiver_ports: PtpPorts::default(),
             pairing_hold: PAIRING_HOLD,
             airplay2_sessions: AIRPLAY2_SESSIONS,
+            on_driver_thread: None,
         }
     }
 }
@@ -677,9 +683,13 @@ impl Sender {
         .with_airplay2_sessions(config.airplay2_sessions)
         .with_sounding(sounding.clone());
         let dacp_counters = driver.dacp_counters();
+        let setup = config.on_driver_thread;
         let handle = thread::Builder::new()
             .name("airplay-driver".to_owned())
-            .spawn(move || driver.run())?;
+            .spawn(move || {
+                let _held = setup.map(|setup| setup());
+                driver.run();
+            })?;
         let sender = Sender {
             inputs,
             events,
