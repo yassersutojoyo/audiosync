@@ -534,6 +534,8 @@ impl LaneInput {
     /// Converts a packet of `frames` frames in the lane's format (silence
     /// when `silent`, whatever `data` holds) and hands the stereo frames to
     /// `out` piece by piece, with whether they came from silence.
+    /// Resampled frames take the packet's flag, so a few at a switch between
+    /// data and silence carry the wrong one (it only feeds the zero holes).
     pub fn convert(
         &mut self,
         data: &[u8],
