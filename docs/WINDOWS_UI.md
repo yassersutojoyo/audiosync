@@ -72,7 +72,8 @@ File > AirPlay 2 (Experimental), the web remote's switch and port, the Cast
 speakers added by address, and the main window's size and place (fitted to the
 monitor it opens on) and whether it was maximized. A file from a newer
 AudioSync is ignored and kept as `settings.newer-<UTC time>.json` before the
-first save over it. One that's damaged, or that can't be read at launch even
+first save over it. A value in the file that doesn't read goes back to its
+default on its own, and the rest is kept. One that's damaged, or that can't be read at launch even
 at a second try half a second later (another program may hold it for a
 moment), is ignored too and kept as `settings.ignored-<UTC time>.json`: right
 at launch when it can be read then, otherwise as soon as it can (tried every

@@ -419,6 +419,7 @@ mod tests {
 
     use super::*;
 
+    // covers: S170
     #[test]
     fn the_log_is_on_only_when_audiosync_debug_is_exactly_1() {
         let dir = Path::new("logs");
@@ -432,6 +433,7 @@ mod tests {
         assert_eq!(log_path(None, dir), None);
     }
 
+    // covers: S170
     #[test]
     fn a_log_that_is_off_creates_no_file_and_builds_no_message() {
         let dir = test_dir("log-off");
@@ -491,6 +493,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    // covers: S170
     #[test]
     fn each_launch_empties_the_last_log() {
         let dir = test_dir("log-truncate");

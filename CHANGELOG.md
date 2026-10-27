@@ -29,6 +29,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - When calibration can't start, its message names only what's off instead of asking for all of it. Calibrate All and Measure Again say it the same way. On the Mac and on Windows.
 - With AirPlay 2 on, a paired speaker that also announces it asks for a PIN plays with its stored pairing. Only a speaker that turns the pairing down asks for the PIN again. On the Mac and on Windows.
 - With AirPlay 2 on, a speaker that offers AirPlay 1 and AirPlay 2 and turns AirPlay 1 down now gets the AirPlay 2 PIN prompt. On the Mac and on Windows.
+- On Windows, a damaged value in your settings, zones or presets no longer resets all your settings. That one value goes back to its default and the rest is kept. A damaged entry among your AirPlay pairings, or among the phones paired with the web remote (on the Mac too), now costs only that speaker or phone, which pairs again; the old file is kept as a copy first.
 - With AirPlay 2 on, a pairing step that never gets an answer no longer leaves the speaker on Connecting. It fails and tries again like any other failed start. On the Mac and on Windows.
 - On the Mac, while macOS asks for microphone access for a new input, picking the source that's already playing cancels the switch.
 - On Windows, pasting something that isn't a whole number, such as "1,5", into a delay box no longer leaves just its digits behind ("15"), which Enter then applied. The paste is ignored and the box keeps what it showed, as on the Mac.

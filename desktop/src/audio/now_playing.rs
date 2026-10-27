@@ -1052,6 +1052,7 @@ mod tests {
         );
     }
 
+    // covers: S219
     #[test]
     fn a_track_reaches_the_sender_with_its_artwork_once_read() {
         let reader = FakeReader::with_icon(ICON);
@@ -1071,6 +1072,7 @@ mod tests {
         assert_eq!(sent.progress, None);
     }
 
+    // covers: S219
     #[test]
     fn an_unchanged_track_is_not_sent_again() {
         let reader = FakeReader::with_icon(ICON);
@@ -1086,6 +1088,7 @@ mod tests {
         assert_eq!(info.sync(Some(&whole_system()), later + ARTWORK_WAIT), None);
     }
 
+    // covers: S219
     #[test]
     fn a_new_track_is_sent_as_it_changes() {
         let reader = FakeReader::with_icon(ICON);
@@ -1106,6 +1109,7 @@ mod tests {
         assert_eq!(large_of(&sent), Some(&b"second"[..]));
     }
 
+    // covers: S219
     #[test]
     fn with_no_session_receivers_get_audiosyncs_labels_and_icon() {
         let reader = FakeReader::with_icon(ICON);
@@ -1292,6 +1296,51 @@ mod tests {
             .sync(Some(&whole_system()), later)
             .expect("the same track goes again");
         assert_eq!(sent.track, fields("Song", "Song artist", "Song album"));
+    }
+
+    // covers: S219
+    #[test]
+    fn another_image_for_the_same_track_goes_out_once() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(track("Spotify.exe", "Song", true, Some(COVER))));
+        assert!(info.sync(Some(&whole_system()), start).is_some());
+
+        let later = start + POLL_INTERVAL;
+        reader.read(Some(track("Spotify.exe", "Song", true, Some(b"new cover"))));
+        let sent = info
+            .sync(Some(&whole_system()), later)
+            .expect("the new image goes out");
+        assert_eq!(sent.track, fields("Song", "Song artist", "Song album"));
+        assert_eq!(large_of(&sent), Some(&b"new cover"[..]));
+        reader.read(Some(track("Spotify.exe", "Song", true, Some(b"new cover"))));
+        assert_eq!(
+            info.sync(Some(&whole_system()), later + POLL_INTERVAL),
+            None
+        );
+    }
+
+    // covers: S219
+    #[test]
+    fn a_restarted_sender_gets_the_track_and_its_artwork_again() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(track("Spotify.exe", "Song", true, Some(COVER))));
+        assert!(info.sync(Some(&whole_system()), start).is_some());
+        info.sync(None, start);
+
+        let restart = start + POLL_INTERVAL;
+        info.sync(Some(&whole_system()), restart);
+        reader.read(Some(track("Spotify.exe", "Song", true, Some(COVER))));
+        let sent = info
+            .sync(Some(&whole_system()), restart)
+            .expect("the same track goes again");
+        assert_eq!(sent.track, fields("Song", "Song artist", "Song album"));
+        assert_eq!(large_of(&sent), Some(COVER), "with its artwork");
     }
 
     #[test]
@@ -1666,7 +1715,7 @@ mod tests {
         assert_quality_before_side(&tries, (600, 300));
     }
 
-    // covers: S272
+    // covers: S217, S272
     #[test]
     fn a_busy_cover_takes_a_lower_quality_before_a_smaller_side() {
         let mut tries = Vec::new();
@@ -1697,11 +1746,64 @@ mod tests {
         assert!(artwork.small.len() <= SMALL_ARTWORK.bytes);
     }
 
+    // covers: S217
     #[test]
     fn artwork_that_never_fits_or_fails_to_encode_is_none() {
         let too_big = |_, _, _| Some(vec![0; LARGE_ARTWORK.bytes + 1]);
         assert_eq!(fit_artwork(500, 500, too_big), None);
         assert_eq!(fit_artwork(500, 500, |_, _, _| None), None);
         assert_eq!(fit_artwork(0, 500, |_, _, _| Some(Vec::new())), None);
+    }
+
+    // covers: S217
+    #[test]
+    fn a_tighter_byte_limit_gives_a_smaller_image_of_the_same_shape() {
+        let tight = ArtworkLimits {
+            side: 600,
+            bytes: 6060,
+        };
+        let (small, small_side) = fit_jpeg(
+            2000,
+            1000,
+            SMALL_ARTWORK,
+            &mut encoder(&mut Vec::new(), 1.0),
+        )
+        .expect("fits");
+        let mut tries = Vec::new();
+        let (jpeg, side) =
+            fit_jpeg(2000, 1000, tight, &mut encoder(&mut tries, 1.0)).expect("it fits");
+        assert!(jpeg.len() <= 6060 && jpeg.len() < small.len());
+        assert!(side < small_side && side <= 600);
+        let (width, height, _) = *tries.last().expect("tried");
+        assert_eq!(width.max(height), side);
+        assert!(
+            width.abs_diff(height * 2) <= 1,
+            "2:1 kept: {width}x{height}"
+        );
+    }
+
+    // covers: S217
+    #[test]
+    fn a_small_image_is_never_scaled_up() {
+        let mut tries = Vec::new();
+        let (_, side) =
+            fit_jpeg(50, 50, SMALL_ARTWORK, &mut encoder(&mut tries, 1.0)).expect("it fits");
+        assert_eq!(side, 50);
+        assert_eq!(tries, [(50, 50, JPEG_QUALITIES[0])]);
+    }
+
+    // covers: S217
+    #[test]
+    fn the_side_never_steps_below_64_px() {
+        let mut tries = Vec::new();
+        let never = |width: u32, height: u32, quality: f32| {
+            tries.push((width, height, quality));
+            Some(vec![0; SMALL_ARTWORK.bytes + 1])
+        };
+        assert_eq!(fit_jpeg(2000, 1000, SMALL_ARTWORK, &mut { never }), None);
+        let smallest = tries.iter().map(|t| t.0.max(t.1)).min();
+        assert_eq!(smallest, Some(SMALLEST_SIDE));
+        let last: Vec<f32> = tries.iter().rev().take(3).map(|t| t.2).rev().collect();
+        assert_eq!(last, JPEG_QUALITIES, "each quality at the smallest side");
     }
 }

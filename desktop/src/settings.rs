@@ -195,6 +195,7 @@ pub struct SavedMixApp {
 #[serde(default)]
 pub struct SavedMix {
     pub mode: MixMode,
+    #[serde(deserialize_with = "entries_that_read")]
     pub apps: Vec<SavedMixApp>,
 }
 
@@ -203,12 +204,15 @@ pub struct SavedMix {
 #[serde(default)]
 pub struct SavedSpeaker {
     /// Whether the user switched it on.
+    #[serde(deserialize_with = "bool_or_false")]
     pub enabled: bool,
     /// The volume slider position, 0 to 100.
+    #[serde(deserialize_with = "number_or_nan")]
     pub volume: f64,
     /// The delay in milliseconds: for an output its offset relative to the
     /// reference, −2000 to +20 000 (0 to 20 000 in format 1, where it was
     /// the output's own trim); 0 to 20 000 for an AirPlay speaker's own delay.
+    #[serde(deserialize_with = "number_or_nan")]
     pub delay_ms: f64,
 }
 
@@ -255,7 +259,9 @@ impl SavedSpeaker {
 #[serde(default)]
 pub struct SavedGroup {
     pub id: String,
+    #[serde(deserialize_with = "or_default")]
     pub name: String,
+    #[serde(deserialize_with = "strings_that_read")]
     pub members: Vec<String>,
 }
 
@@ -266,10 +272,16 @@ pub struct SavedGroup {
 #[serde(default)]
 pub struct SavedZone {
     pub id: String,
+    #[serde(deserialize_with = "or_default")]
     pub name: String,
+    #[serde(deserialize_with = "strings_that_read")]
     pub members: Vec<String>,
+    #[serde(deserialize_with = "number_or_nan")]
     pub volume: f64,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "names_that_are_text"
+    )]
     pub member_names: BTreeMap<String, String>,
 }
 
@@ -303,6 +315,7 @@ impl From<Zone> for SavedZone {
 #[serde(default)]
 pub struct SavedPresetMember {
     pub key: String,
+    #[serde(deserialize_with = "or_default")]
     pub volume: Option<f64>,
 }
 
@@ -311,6 +324,7 @@ pub struct SavedPresetMember {
 #[serde(default)]
 pub struct SavedPresetZone {
     pub id: String,
+    #[serde(deserialize_with = "number_or_nan")]
     pub volume: f64,
 }
 
@@ -330,12 +344,17 @@ impl Default for SavedPresetZone {
 #[serde(default)]
 pub struct SavedPreset {
     pub id: String,
+    #[serde(deserialize_with = "or_default")]
     pub name: String,
+    #[serde(deserialize_with = "entries_that_read")]
     pub members: Vec<SavedPresetMember>,
+    #[serde(deserialize_with = "entries_that_read")]
     pub zones: Vec<SavedPresetZone>,
+    #[serde(deserialize_with = "number_or_nan")]
     pub master_volume: f64,
     /// Band 0 (32 Hz) to band 9 (16 kHz), in dB; an entry without ten is
-    /// skipped when read.
+    /// skipped when read, and a gain that isn't a number reads as 0 dB.
+    #[serde(deserialize_with = "ten_gains")]
     pub gains_db: [f64; BAND_COUNT],
 }
 
@@ -406,6 +425,24 @@ impl SavedPreset {
             gains_db: self.gains_db,
         }
     }
+}
+
+/// A preset's ten stored gains; a gain that isn't a number is 0 dB, as in
+/// a saved curve, and another count leaves the preset unreadable.
+fn ten_gains<'de, D>(deserializer: D) -> Result<[f64; BAND_COUNT], D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let stored = value
+        .as_array()
+        .filter(|gains| gains.len() == BAND_COUNT)
+        .ok_or_else(|| serde::de::Error::custom("a preset keeps ten gains"))?;
+    let mut gains_db = [0.0; BAND_COUNT];
+    for (gain, stored) in gains_db.iter_mut().zip(stored) {
+        *gain = stored.as_f64().unwrap_or(0.0);
+    }
+    Ok(gains_db)
 }
 
 /// A stored list read leniently: an entry that doesn't read is skipped, and
@@ -625,9 +662,13 @@ pub struct Settings {
     pub version: u32,
     /// The source; the whole system while [`Settings::input_device`] names
     /// the source, so an older build falls back to it.
+    #[serde(deserialize_with = "or_default")]
     pub source: SavedSource,
     /// The input device chosen as the source, if one is.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "or_default"
+    )]
     pub input_device: Option<SavedInput>,
     /// The channel pair each input device plays, by endpoint ID, as an
     /// index (1 for channels 3-4); a device without an entry plays 1-2.
@@ -638,15 +679,22 @@ pub struct Settings {
     pub input_pairs: BTreeMap<String, u16>,
     /// Several apps chosen as the source, if they are; the source above is
     /// the whole system meanwhile.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "or_default"
+    )]
     pub source_mix: Option<SavedMix>,
     /// The master volume slider position, 0 to 100.
+    #[serde(deserialize_with = "number_or_nan")]
     pub master_volume: f64,
     /// The local outputs, by endpoint ID.
+    #[serde(deserialize_with = "speakers_that_read")]
     pub outputs: BTreeMap<String, SavedSpeaker>,
     /// The AirPlay speakers, by the ID they announce.
+    #[serde(deserialize_with = "speakers_that_read")]
     pub airplay: BTreeMap<String, SavedSpeaker>,
     /// The speakers marked auto-connect, by speaker key.
+    #[serde(deserialize_with = "strings_that_read")]
     pub auto_connect: BTreeSet<String>,
     /// The names the user gave speakers, by speaker key (spec S228).
     #[serde(
@@ -661,22 +709,28 @@ pub struct Settings {
         deserialize_with = "hidden_that_read"
     )]
     pub hidden_speakers: Vec<SavedHidden>,
+    /// A group that doesn't read is skipped (S212), so a format 2 file's
+    /// other groups still become zones.
+    #[serde(deserialize_with = "entries_that_read")]
     pub groups: Vec<SavedGroup>,
     /// The zones, in order, each speaker in at most one (spec S245).
     #[serde(deserialize_with = "entries_that_read")]
     pub speaker_zones: Vec<SavedZone>,
     /// The groups were moved to zones (spec S248). A file without it, as
     /// every version 2 file, has not been migrated; the defaults have, since
-    /// there are no groups to move.
-    #[serde(default)]
+    /// there are no groups to move. A mark that isn't a bool was written by
+    /// a build that had migrated, so it reads as set.
+    #[serde(default, deserialize_with = "bool_or_true")]
     pub speaker_zones_migrated: bool,
     /// The speaker presets, in order (spec S251).
     #[serde(deserialize_with = "entries_that_read")]
     pub speaker_presets: Vec<SavedPreset>,
     /// The groups that lost a member to the zones became presets (spec
     /// S254). A file without it has not been migrated; the defaults have.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "bool_or_true")]
     pub speaker_presets_migrated: bool,
+    /// Unreadable settings give the defaults (S212).
+    #[serde(deserialize_with = "or_default")]
     pub equalizer: SavedEqualizer,
     /// The equalizer curves the user saved, in the picker's order (spec
     /// S270); left out of the file while there are none.
@@ -686,29 +740,39 @@ pub struct Settings {
     )]
     pub equalizer_curves: Vec<SavedCurve>,
     /// View > Show Virtual Devices.
+    #[serde(deserialize_with = "bool_or_false")]
     pub show_virtual_devices: bool,
     /// View > Appearance.
     pub appearance: Appearance,
-    /// The main window's place and size, once it has been shown.
+    /// The main window's place and size, once it has been shown; an
+    /// unreadable one gives the default place and size.
+    #[serde(deserialize_with = "or_default")]
     pub window: Option<WindowFrame>,
     /// The AirPlay delay adjustment A in milliseconds, −2000 to +20 000: the
     /// AirPlay speakers are taken to sound L = L_s + A after a frame reaches
     /// the sender (spec S178).
+    #[serde(deserialize_with = "number_or_nan")]
     pub airplay_adjustment_ms: f64,
     /// What a session does when the app it captures quits, as the core
     /// stores it: `stop` or `system` (spec S227).
+    #[serde(deserialize_with = "or_default")]
     pub when_source_quits: String,
     /// File > Web Remote: whether it is on, and its port.
+    #[serde(deserialize_with = "or_default")]
     pub remote: RemoteSettings,
     /// The Google Cast speakers added by address (spec C18), as
     /// `host` or `host:port`.
+    #[serde(deserialize_with = "strings_that_read")]
     pub cast_addresses: Vec<String>,
     /// File > AirPlay 2 (Experimental); read at launch only (spec P170).
+    #[serde(deserialize_with = "bool_or_false")]
     pub airplay2_experimental: bool,
     /// File > Check for Updates Automatically (spec S305), on by default.
+    #[serde(deserialize_with = "bool_or_true")]
     pub check_updates_automatically: bool,
     /// The last update check that read the appcast, in seconds since the
     /// Unix epoch (spec S305).
+    #[serde(deserialize_with = "or_default")]
     pub last_update_check: Option<u64>,
     /// The version that failed its first start or was blocked (spec S316);
     /// one that doesn't read is no record.
@@ -719,11 +783,76 @@ pub struct Settings {
     pub update_record: Option<UpdateRecord>,
 }
 
+/// A stored number, or NaN for anything else, which `clamped` replaces with
+/// the default: a value that isn't a number costs only itself (S212).
+fn number_or_nan<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_f64().unwrap_or(f64::NAN))
+}
+
 fn record_that_reads<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<UpdateRecord>, D::Error> {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(serde_json::from_value(value).ok())
+}
+
+/// A stored value, or its type's default when it doesn't read (S212).
+fn or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+pub(crate) fn bool_or_false<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<bool, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_bool().unwrap_or(false))
+}
+
+fn bool_or_true<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_bool().unwrap_or(true))
+}
+
+/// The text entries of a stored list; anything that isn't a list is none.
+fn strings_that_read<'de, D, C>(deserializer: D) -> Result<C, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    C: FromIterator<String>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let entries = match value {
+        serde_json::Value::Array(entries) => entries,
+        _ => Vec::new(),
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            serde_json::Value::String(text) => Some(text),
+            _ => None,
+        })
+        .collect())
+}
+
+/// The stored speakers: one that isn't a speaker is dropped, and anything
+/// that isn't a map is none.
+fn speakers_that_read<'de, D>(deserializer: D) -> Result<BTreeMap<String, SavedSpeaker>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Object(entries) = value else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|(id, speaker)| Some((id, serde_json::from_value(speaker).ok()?)))
+        .collect())
 }
 
 impl Default for Settings {
@@ -1632,6 +1761,7 @@ mod tests {
                 ("z1", vec!["cc:attic", "lc:desk"], 100.0),
                 ("z2", vec![], 0.0),
                 ("z3", vec!["ap:kitchen"], 100.0),
+                ("z4", vec![], 100.0),
             ]
         );
         assert!(Settings::default().speaker_zones_migrated);
@@ -1949,7 +2079,7 @@ mod tests {
             &b"{\"version\": 1, \"master_volume\": "[..],
             b"not json at all",
             b"[1, 2, 3]",
-            b"{\"version\": 1, \"master_volume\": \"loud\"}",
+            b"{\"version\": \"one\", \"master_volume\": 40}",
             b"\xff\xfe\x00garbage",
             b"",
         ] {
@@ -2145,6 +2275,7 @@ mod tests {
         assert!(!Settings::default().to_json().contains("input_pairs"));
     }
 
+    // covers: S212 (the master, volume and delay clamps)
     #[test]
     fn values_out_of_range_are_clamped() {
         let text = r#"{
@@ -2231,6 +2362,38 @@ mod tests {
                 maximized: false,
             })
         );
+    }
+
+    // covers: S212 (a value that isn't a number costs only that value)
+    #[test]
+    fn a_master_or_speaker_value_that_isnt_a_number_is_dropped_and_the_rest_reads() {
+        for master in [r#""x""#, "null", "[]"] {
+            let text = format!(
+                r#"{{
+                    "version": 2,
+                    "master_volume": {master},
+                    "outputs": {{"desk": {{"enabled": true, "volume": "x", "delay_ms": null}}}},
+                    "airplay": {{"far": {{"volume": "loud", "delay_ms": "slow"}}}},
+                    "auto_connect": ["lc:desk"],
+                    "airplay_adjustment_ms": {master}
+                }}"#
+            );
+            let (settings, _) = Settings::from_json(&text).expect("one odd value spoils nothing");
+            assert_eq!(settings.master_volume, 100.0, "master {master}");
+            assert_eq!(settings.airplay_adjustment_ms, 0.0, "adjustment {master}");
+            assert_eq!(
+                settings.outputs.get("desk"),
+                Some(&SavedSpeaker {
+                    enabled: true,
+                    ..SavedSpeaker::default()
+                })
+            );
+            assert_eq!(settings.airplay["far"], SavedSpeaker::default());
+            assert_eq!(
+                settings.auto_connect,
+                BTreeSet::from(["lc:desk".to_owned()])
+            );
+        }
     }
 
     #[test]
@@ -2592,5 +2755,259 @@ mod tests {
         file.save(&sample()).expect("saved");
         file.save(&Settings::default()).expect("saved again");
         assert!(!folder.join("settings.newer.json").exists());
+    }
+
+    /// `fields`, beside a master of 40, read; the master shows the rest of
+    /// the file was kept.
+    fn read_beside_a_kept_master(fields: &str) -> Settings {
+        let text = format!(r#"{{"version": 3, "master_volume": 40, {fields}}}"#);
+        let (settings, _) =
+            Settings::from_json(&text).unwrap_or_else(|why| panic!("{fields}: {why}"));
+        assert_eq!(settings.master_volume, 40.0, "{fields}");
+        settings
+    }
+
+    // covers: S212 (a value that isn't a number costs only that value; unreadable groups, IDs and the equalizer fall back to their defaults)
+    #[test]
+    fn an_unreadable_value_in_any_field_costs_only_that_value() {
+        let outputs = read_beside_a_kept_master(
+            r#""outputs": {"desk": {"enabled": "yes", "volume": 30}, "gone": null, "odd": 7},
+               "airplay": {"far": {"enabled": null, "delay_ms": 300}}"#,
+        );
+        assert_eq!(
+            outputs.outputs,
+            BTreeMap::from([(
+                "desk".to_owned(),
+                SavedSpeaker {
+                    volume: 30.0,
+                    ..SavedSpeaker::default()
+                }
+            )])
+        );
+        assert_eq!(outputs.airplay["far"].delay_ms, 300.0);
+        for whole in [r#""outputs": null"#, r#""airplay": 5"#] {
+            read_beside_a_kept_master(whole);
+        }
+
+        for equalizer in [
+            r#"{"enabled": true, "preamp_db": -3, "gains_db": [1, null]}"#,
+            r#"{"enabled": "on", "preamp_db": -3, "gains_db": [1]}"#,
+            r#"{"enabled": true, "preamp_db": "loud", "gains_db": [1]}"#,
+            "null",
+        ] {
+            let read = read_beside_a_kept_master(&format!(r#""equalizer": {equalizer}"#));
+            assert_eq!(read.equalizer, SavedEqualizer::default(), "{equalizer}");
+        }
+
+        for groups in [r#""none""#, "null"] {
+            let read = read_beside_a_kept_master(&format!(r#""groups": {groups}"#));
+            assert!(read.groups.is_empty(), "{groups}");
+        }
+        let groups = read_beside_a_kept_master(
+            r#""groups": [{"id": "g", "name": "G", "members": ["lc:a", 5]}, 7, {"id": 8}]"#,
+        );
+        assert_eq!(
+            groups.groups,
+            [SavedGroup {
+                id: "g".to_owned(),
+                name: "G".to_owned(),
+                members: vec!["lc:a".to_owned()],
+            }]
+        );
+        // A format 2 file's groups become its zones once: one bad member
+        // must not cost the group before the mark is set.
+        let (older, _) = Settings::from_json(
+            r#"{"version": 2, "groups": [{"id": "g", "name": "G", "members": ["lc:a", null]}]}"#,
+        )
+        .expect("read");
+        assert!(older.speaker_zones_migrated);
+        assert_eq!(
+            older
+                .speaker_zones
+                .iter()
+                .map(|zone| zone.members.clone())
+                .collect::<Vec<_>>(),
+            [vec!["lc:a".to_owned()]]
+        );
+
+        for window in [
+            r#"{"x": 100.5, "y": 0, "width": 800, "height": 600}"#,
+            r#"{"x": 9999999999, "y": 0, "width": 800, "height": 600}"#,
+            r#"{"x": 0, "y": 0, "height": 600}"#,
+            "7",
+        ] {
+            let read = read_beside_a_kept_master(&format!(r#""window": {window}"#));
+            assert_eq!(read.window, None, "{window}");
+        }
+
+        for (remote, kept) in [
+            (
+                r#"{"on": true, "port": 70000}"#,
+                RemoteSettings {
+                    on: true,
+                    ..RemoteSettings::default()
+                },
+            ),
+            (
+                r#"{"on": true, "port": -1}"#,
+                RemoteSettings {
+                    on: true,
+                    ..RemoteSettings::default()
+                },
+            ),
+            (
+                r#"{"on": true, "port": 2048.5}"#,
+                RemoteSettings {
+                    on: true,
+                    ..RemoteSettings::default()
+                },
+            ),
+            (
+                r#"{"on": "yes", "port": 2048}"#,
+                RemoteSettings {
+                    on: false,
+                    port: 2048,
+                },
+            ),
+            ("null", RemoteSettings::default()),
+        ] {
+            let read = read_beside_a_kept_master(&format!(r#""remote": {remote}"#));
+            assert_eq!(read.remote, kept, "{remote}");
+        }
+
+        let ids = read_beside_a_kept_master(
+            r#""auto_connect": ["lc:desk", 5, null], "cast_addresses": ["192.0.2.10:8010", 7]"#,
+        );
+        assert_eq!(ids.auto_connect, BTreeSet::from(["lc:desk".to_owned()]));
+        assert_eq!(ids.cast_addresses, vec!["192.0.2.10:8010".to_owned()]);
+        for whole in [r#""auto_connect": "lc:desk""#, r#""cast_addresses": null"#] {
+            read_beside_a_kept_master(whole);
+        }
+
+        for source in [
+            r#"{"kind": "playlist"}"#,
+            r#"{"kind": "app", "executable": 5}"#,
+            "null",
+        ] {
+            let read = read_beside_a_kept_master(&format!(r#""source": {source}"#));
+            assert_eq!(read.source, SavedSource::System, "{source}");
+        }
+        let input = read_beside_a_kept_master(r#""input_device": {"id": 5, "name": "Mic"}"#);
+        assert_eq!(input.input_device, None);
+        let mix = read_beside_a_kept_master(
+            r#""source_mix": {"mode": "shuffle", "apps": [{"executable": "a.exe"}]}"#,
+        );
+        assert_eq!(mix.source_mix, None);
+        let mix = read_beside_a_kept_master(
+            r#""source_mix": {"mode": "all_except", "apps": [{"executable": "a.exe"}, 5, {"executable": 6}]}"#,
+        );
+        assert_eq!(
+            mix.source_mix,
+            Some(SavedMix {
+                mode: MixMode::AllExcept,
+                apps: vec![SavedMixApp {
+                    executable: "a.exe".to_owned(),
+                    name: String::new(),
+                }],
+            })
+        );
+
+        let flags = read_beside_a_kept_master(
+            r#""speaker_zones_migrated": "yes", "speaker_presets_migrated": null,
+               "show_virtual_devices": 1, "airplay2_experimental": "on",
+               "check_updates_automatically": "no", "when_source_quits": 5,
+               "last_update_check": -5"#,
+        );
+        assert!(flags.speaker_zones_migrated);
+        assert!(flags.speaker_presets_migrated);
+        assert!(!flags.show_virtual_devices);
+        assert!(!flags.airplay2_experimental);
+        assert!(flags.check_updates_automatically);
+        assert_eq!(
+            flags.when_source_quits,
+            Settings::default().when_source_quits
+        );
+        assert_eq!(flags.last_update_check, None);
+        let late = read_beside_a_kept_master(r#""last_update_check": 1.5"#);
+        assert_eq!(late.last_update_check, None);
+    }
+
+    // covers: S212 (a file that isn't settings at all still gives the defaults)
+    #[test]
+    fn a_file_that_isnt_json_or_has_no_readable_version_is_still_refused() {
+        for text in [
+            "not json",
+            r#"{"version": "x", "master_volume": 40}"#,
+            "null",
+        ] {
+            assert!(Settings::from_json(text).is_err(), "{text}");
+        }
+    }
+
+    // covers: S245 (a zone volume that isn't a number is the default), S212
+    #[test]
+    fn a_zone_with_an_unreadable_volume_member_or_name_keeps_the_rest() {
+        let text = r#"{"version": 3, "speaker_zones_migrated": true,
+            "speaker_zones": [
+                {"id": "z1", "name": "Den", "members": ["lc:desk", 5, "ap:far"], "volume": "x",
+                 "member_names": {"lc:desk": "Desk", "ap:far": 9}},
+                {"id": "z2", "name": 4, "members": ["lc:hall"], "volume": null}
+            ]
+        }"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        assert_eq!(
+            read.speaker_zones,
+            [
+                SavedZone {
+                    id: "z1".to_owned(),
+                    name: "Den".to_owned(),
+                    members: vec!["lc:desk".to_owned(), "ap:far".to_owned()],
+                    volume: DEFAULT_ZONE_VOLUME,
+                    member_names: BTreeMap::from([("lc:desk".to_owned(), "Desk".to_owned())]),
+                },
+                SavedZone {
+                    id: "z2".to_owned(),
+                    members: vec!["lc:hall".to_owned()],
+                    ..SavedZone::default()
+                },
+            ]
+        );
+    }
+
+    // covers: S251 (an own volume that isn't a number is none, a master that isn't one is 100)
+    #[test]
+    fn a_preset_with_an_unreadable_volume_or_gain_keeps_the_rest() {
+        let text = r#"{"version": 3, "speaker_zones_migrated": true, "speaker_presets_migrated": true,
+            "speaker_presets": [
+                {"id": "p1", "name": "Evening",
+                 "members": [{"key": "lc:desk", "volume": "x"}, {"key": 5}, {"key": "ap:far", "volume": 30}],
+                 "zones": [{"id": "z1", "volume": "loud"}, 3],
+                 "master_volume": null, "gains_db": [1, null, 0, 0, 0, 0, 0, 0, 0, "x"]}
+            ]
+        }"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        assert_eq!(
+            read.speaker_presets,
+            [SavedPreset {
+                id: "p1".to_owned(),
+                name: "Evening".to_owned(),
+                members: vec![
+                    SavedPresetMember {
+                        key: "lc:desk".to_owned(),
+                        volume: None,
+                    },
+                    SavedPresetMember {
+                        key: "ap:far".to_owned(),
+                        volume: Some(30.0),
+                    },
+                ],
+                zones: vec![SavedPresetZone {
+                    id: "z1".to_owned(),
+                    volume: DEFAULT_ZONE_VOLUME,
+                }],
+                master_volume: 100.0,
+                gains_db: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            }]
+        );
     }
 }
