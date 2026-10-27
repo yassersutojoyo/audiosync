@@ -2297,6 +2297,21 @@ fn a_pin_flag_from_txt_alone_verifies_first_and_only_a_failed_verify_offers_the_
                 credential_events(&speaker.events, &speaker.key).is_empty(),
                 "{case}"
             );
+            speaker.sender.start_pairing(speaker.device.clone());
+            let pin_requested = |event: &PairingEvent| *event == PairingEvent::PinRequested;
+            assert!(
+                wait_pairing(
+                    &mut speaker.events,
+                    &speaker.sender,
+                    &speaker.key,
+                    2,
+                    pin_requested
+                )
+                .is_some(),
+                "{case}: {:?}",
+                pairing_events(&speaker.events, &speaker.key)
+            );
+            speaker.sender.cancel_pairing(&speaker.key);
         }
         speaker.sender.shutdown();
     }
@@ -2330,12 +2345,19 @@ fn a_pin_flag_and_a_verify_answered_5xx_is_refused_and_keeps_the_credentials() {
     }
 }
 
-// Errors 3 to 6 describe the receiver's state, not the credentials.
+// Errors 1 and 3 to 7 describe the receiver's state, not the credentials.
 // covers: P150, P154
 #[test]
-fn a_pin_flag_and_a_verify_error_3_to_6_fails_the_pairing_and_keeps_the_credentials() {
+fn a_pin_flag_and_a_verify_error_other_than_2_fails_and_keeps_the_credentials() {
     let _serial = serial();
-    for (id, code) in [(82u8, 3u8), (83, 4), (84, 5), (85, 6)] {
+    for (id, code, kind) in [
+        (82u8, 3u8, ErrorKind::PairingFailed),
+        (83, 4, ErrorKind::PairingFailed),
+        (84, 5, ErrorKind::PairingFailed),
+        (85, 6, ErrorKind::PairingFailed),
+        (88, 1, ErrorKind::PairingFailed),
+        (89, 7, ErrorKind::Busy),
+    ] {
         let case = format!("error {code}");
         let mut speaker = paired_then_pin_flagged(id);
         speaker
@@ -2345,11 +2367,7 @@ fn a_pin_flag_and_a_verify_error_3_to_6_fails_the_pairing_and_keeps_the_credenti
             .answers
             .push((("/pair-verify", 1), Answer::Error(code)));
         let (seen, keys) = speaker.first_error(speaker.device.clone(), &case);
-        assert_eq!(
-            seen.first(),
-            Some(&ErrorKind::PairingFailed),
-            "{case}: {seen:?}"
-        );
+        assert_eq!(seen.first(), Some(&kind), "{case}: {seen:?}");
         assert!(
             !seen.contains(&ErrorKind::PairingRequired),
             "{case}: {seen:?}"
@@ -2361,7 +2379,7 @@ fn a_pin_flag_and_a_verify_error_3_to_6_fails_the_pairing_and_keeps_the_credenti
 }
 
 // A connection lost during the verify says nothing about the credentials.
-// covers: P134, P154
+// covers: P141, P154
 #[test]
 fn a_pin_flag_and_a_connection_lost_during_the_verify_asks_for_no_pin() {
     let _serial = serial();
