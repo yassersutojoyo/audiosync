@@ -14,7 +14,7 @@ use crate::ap2::bodies::uuid_text;
 use crate::ap2::session::{FEATURE_PTP, with_port};
 use crate::ap2::{Ap2Config, Ap2Event, Ap2Output, Ap2Session, Ap2State, PtpPeer, Timing};
 use crate::error::{UnsupportedReason, Warning};
-use crate::ptp::{MessageType, PtpService, clock_identity};
+use crate::ptp::{MessageType, PtpService, clock_identity, same_peer};
 use crate::session::{Connection, MediaDestinations};
 use crate::stream::Ap2Audio;
 use crate::transport::{PtpIo, Queued};
@@ -551,7 +551,7 @@ impl Driver {
             self.stream_ids.remove(&id);
         }
         if let (Some(run), Some(remote), true) = (&mut self.ptp, remote, served) {
-            run.service.stop_peer(remote.ip());
+            run.service.stop_peer(remote);
             run.share_peers();
         }
     }
@@ -646,7 +646,7 @@ impl Driver {
                             && active
                                 .session
                                 .remote()
-                                .is_some_and(|remote| remote.ip().to_canonical() == source) =>
+                                .is_some_and(|remote| same_peer(remote, source)) =>
                     {
                         active.outranked_told = true;
                         Some(key.clone())
@@ -850,7 +850,7 @@ impl Driver {
             run.io.send(transmit.port, transmit.to, &transmit.bytes);
             if transmit.kind == MessageType::Sync {
                 run.service
-                    .sync_sent_to(transmit.sequence_id, transmit.to.ip(), Instant::now());
+                    .sync_sent_to(transmit.sequence_id, transmit.to, Instant::now());
             }
         }
         sent

@@ -8,7 +8,7 @@
 //! follow IEEE 1588-2008 version 2.
 
 use std::collections::VecDeque;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::time::{Duration, Instant};
 
 use crate::clock::{PtpTime, SenderClock};
@@ -164,12 +164,12 @@ pub struct PtpService {
     identity: [u8; 8],
     remote_ports: PtpPorts,
     /// The receivers it serves while their PTP sessions run (P167, P205),
-    /// with the scope of a link-local address (P17); the port is unused.
+    /// as `peer_key` makes them (P227).
     peers: Vec<SocketAddr>,
     schedules: Vec<Schedule>,
     transmits: VecDeque<PtpTransmit>,
     /// Served receivers whose Announce named a better grandmaster (P206).
-    outranked: VecDeque<IpAddr>,
+    outranked: VecDeque<SocketAddr>,
 }
 
 impl PtpService {
@@ -203,15 +203,8 @@ impl PtpService {
     /// Announce goes at once and its Sync every 125 ms from now on, with
     /// sequenceIds from 0; no other receiver's schedule moves (P205).
     pub fn start(&mut self, peer: SocketAddr, now: Instant) {
-        let peer = match peer.ip().to_canonical() {
-            IpAddr::V6(_) => {
-                let mut scoped = peer;
-                scoped.set_port(0);
-                scoped
-            }
-            ip => SocketAddr::new(ip, 0),
-        };
-        if let Some(index) = self.peers.iter().position(|known| known.ip() == peer.ip()) {
+        let peer = peer_key(peer);
+        if let Some(index) = self.position(peer) {
             self.schedules[index].sessions += 1;
             return;
         }
@@ -236,9 +229,8 @@ impl PtpService {
     }
 
     /// One receiver's session ended; the others are still served as before.
-    pub fn stop_peer(&mut self, peer: IpAddr) {
-        let peer = peer.to_canonical();
-        let Some(index) = self.peers.iter().position(|known| known.ip() == peer) else {
+    pub fn stop_peer(&mut self, peer: SocketAddr) {
+        let Some(index) = self.position(peer) else {
             return;
         };
         let schedule = &mut self.schedules[index];
@@ -250,7 +242,8 @@ impl PtpService {
         }
         self.peers.remove(index);
         self.schedules.remove(index);
-        self.transmits.retain(|transmit| transmit.to.ip() != peer);
+        self.transmits
+            .retain(|transmit| !same_peer(transmit.to, peer));
         if self.peers.is_empty() {
             self.stop();
         }
@@ -269,7 +262,7 @@ impl PtpService {
 
     /// A served receiver that became a qualified foreign master whose
     /// grandmaster ranks ahead of the sender's, once per claim (P206).
-    pub fn poll_outranked(&mut self) -> Option<IpAddr> {
+    pub fn poll_outranked(&mut self) -> Option<SocketAddr> {
         self.outranked.pop_front()
     }
 
@@ -304,18 +297,18 @@ impl PtpService {
     /// The Sync with `sequence_id` left at `sent`: its Follow_Up carries
     /// that time (P161). For the first receiver served.
     pub fn sync_sent(&mut self, sequence_id: u16, sent: Instant) {
-        if let Some(peer) = self.peer() {
+        if let Some(&peer) = self.peers.first() {
             self.sync_sent_to(sequence_id, peer, sent);
         }
     }
 
     /// The Sync with `sequence_id` left for `peer` at `sent`: that
     /// receiver's Follow_Up carries the time.
-    pub fn sync_sent_to(&mut self, sequence_id: u16, peer: IpAddr, sent: Instant) {
-        let peer = peer.to_canonical();
-        let Some(&peer) = self.peers.iter().find(|known| known.ip() == peer) else {
+    pub fn sync_sent_to(&mut self, sequence_id: u16, peer: SocketAddr, sent: Instant) {
+        let Some(index) = self.position(peer) else {
             return;
         };
+        let peer = self.peers[index];
         let bytes = self.follow_up(sequence_id, self.clock.ptp(sent));
         self.queue(MessageType::FollowUp, peer, sequence_id, bytes);
     }
@@ -325,17 +318,15 @@ impl PtpService {
     /// (P162), and an Announce from one is only compared with the sender's
     /// (P206); everything else changes nothing.
     pub fn handle_message(&mut self, bytes: &[u8], source: SocketAddr, received: Instant) {
-        let Some(index) = self
-            .peers
-            .iter()
-            .position(|peer| crate::transport::from_receiver(source, peer.ip()))
-        else {
+        let Some(index) = self.peers.iter().position(|peer| {
+            crate::transport::from_receiver(source, peer.ip()) && scope(source) == scope(*peer)
+        }) else {
             return;
         };
         if let Some(foreign) = ForeignAnnounce::parse(bytes) {
             let own = self.own_dataset();
             if qualifies(&mut self.schedules[index].claim, &foreign, &own, received) {
-                self.outranked.push_back(self.peers[index].ip());
+                self.outranked.push_back(self.peers[index]);
             }
             return;
         }
@@ -361,6 +352,10 @@ impl PtpService {
             sequence_id: request.sequence_id,
             bytes: out,
         });
+    }
+
+    fn position(&self, peer: SocketAddr) -> Option<usize> {
+        self.peers.iter().position(|&known| same_peer(known, peer))
     }
 
     fn queue(&mut self, kind: MessageType, peer: SocketAddr, sequence_id: u16, bytes: Vec<u8>) {
@@ -475,6 +470,29 @@ impl PtpService {
         out.extend_from_slice(&self.identity);
         out
     }
+}
+
+/// The interface scope that tells two receivers at one IPv6 link-local
+/// address apart (P227, RFC 4007); no other address has one here.
+fn scope(address: SocketAddr) -> u32 {
+    match address {
+        SocketAddr::V6(v6) if v6.ip().is_unicast_link_local() => v6.scope_id(),
+        _ => 0,
+    }
+}
+
+/// A served receiver as the service keeps it: its canonical address with
+/// port 0, and the scope of a link-local one (P17, P227).
+fn peer_key(peer: SocketAddr) -> SocketAddr {
+    match peer.ip().to_canonical() {
+        IpAddr::V6(ip) => SocketAddr::V6(SocketAddrV6::new(ip, 0, 0, scope(peer))),
+        ip => SocketAddr::new(ip, 0),
+    }
+}
+
+/// Whether `a` and `b` are one receiver, whatever their ports (P227).
+pub fn same_peer(a: SocketAddr, b: SocketAddr) -> bool {
+    a.ip().to_canonical() == b.ip().to_canonical() && scope(a) == scope(b)
 }
 
 /// The next time on a schedule of `interval` from `due` that is after
