@@ -877,9 +877,8 @@ struct UIStrings {
     let connectedSection = "Connected Speakers"
     /// `hint`: the Local Network hint on screen, which carries the network
     /// advice in its place. `localNetworkRefused`: Local Network access was
-    /// asked for and refused, or may have been (`LocalNetworkHint` other than
-    /// `.none`, before an AirPlay problem hides it); until then the advice
-    /// leaves it out.
+    /// asked for and refused (`LocalNetworkHint.accessRefused`); until then
+    /// the advice leaves it out.
     func airPlayNoneFound(hint: LocalNetworkHint = .none, localNetworkRefused: Bool = false) -> String {
         UIStrings.withNetworkAdvice("No AirPlay speakers found yet.", hint: hint, refused: localNetworkRefused)
     }

@@ -9890,6 +9890,16 @@ do {
     check(t.airPlayNoneFound(localNetworkRefused: true).contains("Local Network")
             && t.airPlayNoneFound(hint: .denied, localNetworkRefused: true) == "No AirPlay speakers found yet.",
           "local network: once refused, the advice names it, unless the hint on screen already does")
+    // The soft hint comes from an empty list alone, before macOS has asked for Local Network.
+    let hidden = LocalNetworkHint.possible.shown(airPlayProblem: true)
+    check(t.networkSpeakersNote(airPlayNone: true, cast: .noneFound, hint: hidden,
+                                localNetworkRefused: LocalNetworkHint.possible.accessRefused)?
+            .contains("Local Network") == false
+            && !t.airPlayNoneFound(hint: hidden, localNetworkRefused: LocalNetworkHint.possible.accessRefused)
+            .contains("Local Network"),
+          "local network: a maybe-denied hint never puts Local Network in the advice")
+    check(LocalNetworkHint.denied.accessRefused && !LocalNetworkHint.none.accessRefused,
+          "local network: only denied access counts as refused")
 }
 
 // MARK: Permission setup window (PermissionFlow.swift, PermissionSetup)
