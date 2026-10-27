@@ -1,16 +1,20 @@
 //! Plays one stream to receivers given by address, with no discovery and no
 //! UI, through the same sender the apps drive: every receiver is a speaker
-//! of one sender on one timeline. It sends digital silence, or with
-//! `--tone` a 440 Hz sine at -30 dBFS, for `--seconds` (20 by default),
-//! then prints one summary line per receiver. Exits 1 when a receiver never
-//! started playing or reported an error, 2 on bad arguments.
+//! of one sender on one timeline. It sends digital silence, with `--tone`
+//! a 440 Hz sine at -30 dBFS, or with `--click` a short burst every 4 s from
+//! 6 s on, for `--seconds` (20 by default), then prints one summary line per
+//! receiver. Exits 1 when a receiver never started playing or reported an
+//! error, 2 on bad arguments.
 //!
 //! ```text
 //! cargo run --release -p audiosync-airplay --example rx_pair -- \
-//!     --rx <host:port>[,ap1|ap2] --rx <host:port>[,ap1|ap2] [--seconds <n>] [--tone] [--verbose]
+//!     --rx <host:port>[,ap1|ap2][,delay=<ms>] [--rx ...] [--seconds <n>] [--tone|--click] [--verbose]
 //! ```
 //!
 //! `ap2` (the default) takes the AirPlay 2 path, `ap1` the AirPlay 1 path.
+//! `delay=<ms>` is the speaker's d_s (P99), set through the speaker options
+//! as a host sets it, so the click shows the sender's own timing; the
+//! example `rx_onset` and `scripts/two_speaker_sync_wsl.sh` measure it.
 //! The check is the protocol side only: sessions set up and packets go
 //! out. Whether the receivers share one anchor is read from their logs. It
 //! never says the receivers sound in step. With two AirPlay 2 receivers on the PTP timeline the sender names
@@ -20,6 +24,9 @@
 //! address), and the sender binds the PTP ports 319 and 320, which takes
 //! root or a lowered `net.ipv4.ip_unprivileged_port_start` on Linux.
 //! Development only.
+
+#[path = "rx_pair/sync_check.rs"]
+mod sync_check;
 
 use std::collections::BTreeMap;
 use std::f64::consts::TAU;
@@ -41,8 +48,8 @@ use audiosync_airplay::sender::{
 };
 use audiosync_airplay::stream::SpeakerCounters;
 use audiosync_airplay::volume::Volume;
+use sync_check::{RATE, RxSpec, click_sample, parse_rx_spec};
 
-const RATE: f64 = 44_100.0;
 const BLOCK_FRAMES: usize = 441;
 const TONE_HZ: f64 = 440.0;
 /// -30 dBFS.
@@ -51,12 +58,20 @@ const TONE_LEVEL: f64 = 0.031_622_776;
 struct Rx {
     address: SocketAddr,
     path: ProtocolPath,
+    delay: Duration,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Source {
+    Silence,
+    Tone,
+    Click,
 }
 
 struct Args {
     receivers: Vec<Rx>,
     seconds: u64,
-    tone: bool,
+    source: Source,
     verbose: bool,
 }
 
@@ -71,29 +86,32 @@ struct Outcome {
 }
 
 fn usage() -> &'static str {
-    "usage: rx_pair --rx <host:port>[,ap1|ap2] [--rx ...] [--seconds <n>] [--tone] [--verbose]"
+    "usage: rx_pair --rx <host:port>[,ap1|ap2][,delay=<ms>] [--rx ...] [--seconds <n>] [--tone|--click] [--verbose]"
 }
 
 fn parse_rx(text: &str) -> Result<Rx, String> {
-    let (host_port, path) = match text.rsplit_once(',') {
-        Some((head, "ap1")) => (head, ProtocolPath::AirPlay1),
-        Some((head, "ap2")) => (head, ProtocolPath::AirPlay2),
-        Some((_, other)) => return Err(format!("unknown path '{other}' in --rx {text}")),
-        None => (text, ProtocolPath::AirPlay2),
-    };
+    let RxSpec {
+        host_port,
+        path,
+        delay,
+    } = parse_rx_spec(text)?;
     let address = host_port
         .to_socket_addrs()
         .map_err(|error| format!("--rx {text}: {error}"))?
         .next()
         .ok_or_else(|| format!("--rx {text}: no address"))?;
-    Ok(Rx { address, path })
+    Ok(Rx {
+        address,
+        path,
+        delay,
+    })
 }
 
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         receivers: Vec::new(),
         seconds: 20,
-        tone: false,
+        source: Source::Silence,
         verbose: false,
     };
     let mut items = std::env::args().skip(1);
@@ -109,7 +127,11 @@ fn parse_args() -> Result<Args, String> {
                     .parse()
                     .map_err(|_| format!("--seconds {value}: not a whole number"))?;
             }
-            "--tone" => args.tone = true,
+            "--tone" | "--click" if args.source != Source::Silence => {
+                return Err("--tone and --click exclude each other".to_owned());
+            }
+            "--tone" => args.source = Source::Tone,
+            "--click" => args.source = Source::Click,
             "--verbose" => args.verbose = true,
             other => return Err(format!("unknown argument '{other}'")),
         }
@@ -168,20 +190,28 @@ fn device(rx: &Rx, n: u8) -> Device {
 }
 
 /// A capture thread at real-time pace, as a host's would be.
-fn capture(mut writer: InputWriter, tone: bool, stop: Arc<AtomicBool>) -> thread::JoinHandle<()> {
+fn capture(
+    mut writer: InputWriter,
+    source: Source,
+    stop: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let start = Instant::now();
         let mut written: u64 = 0;
         let mut block = vec![0f32; BLOCK_FRAMES * 2];
         while !stop.load(Ordering::Relaxed) {
-            if tone {
-                for (index, pair) in block.chunks_exact_mut(2).enumerate() {
-                    let n = written + index as u64;
-                    let phase = (n as f64 * TONE_HZ / RATE).fract();
-                    let sample = (TONE_LEVEL * (TAU * phase).sin()) as f32;
-                    pair[0] = sample;
-                    pair[1] = sample;
-                }
+            for (index, pair) in block.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+                let n = written + index as u64;
+                let sample = match source {
+                    Source::Silence => 0.0,
+                    Source::Tone => {
+                        let phase = (n as f64 * TONE_HZ / RATE).fract();
+                        (TONE_LEVEL * (TAU * phase).sin()) as f32
+                    }
+                    Source::Click => click_sample(n),
+                };
+                pair[0] = sample;
+                pair[1] = sample;
             }
             writer.write_f32(&block, Instant::now());
             written += BLOCK_FRAMES as u64;
@@ -211,11 +241,12 @@ fn summary(rx: &Rx, outcome: &Outcome, counters: &SpeakerCounters, ok: bool) -> 
         outcome.errors.join("; ")
     };
     format!(
-        "rx {} {} path={} state={:?} frames_sent={} packets_sent={} first_sound_s={} \
+        "rx {} {} path={} delay_ms={} state={:?} frames_sent={} packets_sent={} first_sound_s={} \
          resend_requests={} packets_resent={} late_packets={} warnings={} errors={}",
         rx.address,
         if ok { "OK" } else { "FAIL" },
         path_name(outcome.path),
+        rx.delay.as_millis(),
         outcome.state,
         counters.packets_sent() * PACKET_FRAMES,
         counters.packets_sent(),
@@ -250,7 +281,7 @@ fn main() -> ExitCode {
     };
     let clock = sender.clock();
     let stop = Arc::new(AtomicBool::new(false));
-    let audio = capture(writer, args.tone, stop.clone());
+    let audio = capture(writer, args.source, stop.clone());
 
     let mut order = Vec::new();
     let mut keys = BTreeMap::new();
@@ -260,6 +291,7 @@ fn main() -> ExitCode {
         let device = device(rx, index as u8 + 1);
         let key = device.key.clone();
         let mut options = SpeakerOptions::new(Volume::Db(-20.0));
+        options.delay = rx.delay;
         options.trace = args.verbose;
         counters.push(sender.add_speaker(device, options));
         keys.insert(key.clone(), rx.address);
