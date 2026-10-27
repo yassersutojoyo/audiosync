@@ -4,6 +4,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
 use crate::debug_log::DebugLog;
@@ -112,12 +113,79 @@ pub const LOCK_RETRIES: [Duration; 5] = [
     Duration::from_secs(4),
 ];
 
+/// What the lock retries may still wait once a quit started, all steps
+/// together, so the quit ends inside the time a session end allows.
+pub const QUIT_RETRY_BUDGET: Duration = Duration::from_secs(2);
+
+/// The waits between lock retries. A quit ends a running wait at once and
+/// gives the retries after it one shared [`QUIT_RETRY_BUDGET`].
+pub struct Pause {
+    /// Tests count the waits instead of sleeping.
+    clock: Option<Arc<dyn Fn(Duration) + Send + Sync>>,
+    /// The budget left, once a quit started.
+    left: Mutex<Option<Duration>>,
+    quit: Condvar,
+}
+
+impl Pause {
+    pub fn real() -> Pause {
+        Pause {
+            clock: None,
+            left: Mutex::new(None),
+            quit: Condvar::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn counted(clock: impl Fn(Duration) + Send + Sync + 'static) -> Pause {
+        Pause {
+            clock: Some(Arc::new(clock)),
+            ..Pause::real()
+        }
+    }
+
+    pub fn quit(&self) {
+        let mut left = self.left.lock().unwrap_or_else(PoisonError::into_inner);
+        left.get_or_insert(QUIT_RETRY_BUDGET);
+        self.quit.notify_all();
+    }
+
+    /// Waits `wait` before a retry; false when the quit budget has no room
+    /// for it, so no retry follows.
+    fn wait(&self, wait: Duration) -> bool {
+        let mut left = self.left.lock().unwrap_or_else(PoisonError::into_inner);
+        match (left.as_mut(), &self.clock) {
+            (Some(budget), _) => {
+                if wait > *budget {
+                    return false;
+                }
+                *budget -= wait;
+                drop(left);
+                match &self.clock {
+                    Some(clock) => clock(wait),
+                    None => std::thread::sleep(wait),
+                }
+            }
+            (None, Some(clock)) => {
+                drop(left);
+                clock(wait);
+            }
+            (None, None) => {
+                let _ = self
+                    .quit
+                    .wait_timeout_while(left, wait, |left| left.is_none());
+            }
+        }
+        true
+    }
+}
+
 /// `inner`, with each operation on a locked file tried again after the
 /// [`LOCK_RETRIES`] waits; no other error is tried again.
 pub struct Retrying<'a> {
     pub inner: &'a dyn Files,
     pub log: &'a DebugLog,
-    pub sleep: &'a (dyn Fn(Duration) + Send + Sync),
+    pub pause: &'a Pause,
 }
 
 impl Retrying<'_> {
@@ -144,7 +212,15 @@ impl Retrying<'_> {
                             wait.as_millis()
                         )
                     });
-                    (self.sleep)(*wait);
+                    if !self.pause.wait(*wait) {
+                        self.log.log(|| {
+                            format!(
+                                "updater: {what} {} still locked (error {code}), quitting",
+                                file_name(path)
+                            )
+                        });
+                        return Err(error);
+                    }
                 }
                 other => return other,
             }

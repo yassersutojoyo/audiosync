@@ -13,9 +13,9 @@ pub mod swap;
 pub mod version;
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use appcast::{Arch, Update};
 use flow::{Checked, Env, Installed};
@@ -28,6 +28,9 @@ pub use crate::ui_model::{UpdateRecord, UpdateRecordReason, UpdaterButton, Updat
 /// `SUFeedURL` in `Info.plist`.
 pub const FEED_URL: &str =
     "https://github.com/yassersutojoyo/audiosync/releases/latest/download/appcast.xml";
+/// How long a quit waits for a failed restart's undo (spec S303).
+const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub const RELEASE_PAGE: &str = "https://github.com/yassersutojoyo/audiosync/releases/latest";
 
 /// Whether this exe updates itself: only a build the release CI job made
@@ -74,7 +77,7 @@ fn undo(env: &Env, swapped: &swap::Swapped) -> Undone {
     let files = files::Retrying {
         inner: env.files.as_ref(),
         log: &env.log,
-        sleep: env.sleep.as_ref(),
+        pause: &env.pause,
     };
     let mut steps = swap::StepLog::new();
     let result = swap::undo_completed(&env.install_dir, swapped, &files, &mut steps);
@@ -116,6 +119,10 @@ pub struct Updater {
     manual_waiting: bool,
     cancel: Arc<AtomicBool>,
     swapped: Option<(String, swap::Swapped)>,
+    /// Held by the restart's worker through its undo; a quit that stops
+    /// waiting for that worker sets it, so no undo starts that the end of
+    /// the process could cut in half.
+    undo_closed: Arc<Mutex<bool>>,
     /// The version that failed its first start or was blocked (spec S316).
     record: Option<UpdateRecord>,
 }
@@ -134,6 +141,7 @@ impl Updater {
             manual_waiting: false,
             cancel: Arc::new(AtomicBool::new(false)),
             swapped: None,
+            undo_closed: Arc::new(Mutex::new(false)),
             record: None,
         }
     }
@@ -463,6 +471,7 @@ impl Updater {
         self.work = Work::Restarting;
         let env = self.env.clone();
         let sender = self.sender.clone();
+        let undo_closed = self.undo_closed.clone();
         self.spawn(move || {
             // An installed exe gone since the swap was removed by Windows
             // security (spec S315).
@@ -471,8 +480,17 @@ impl Updater {
             } else {
                 Start::Failed(std::io::Error::from(std::io::ErrorKind::NotFound))
             };
-            let undone = (!matches!(start, Start::Signalled { .. })).then(|| undo(&env, &swapped));
-            let _ = sender.send(Event::Started(start, undone));
+            if matches!(start, Start::Signalled { .. }) {
+                let _ = sender.send(Event::Started(start, None));
+                return;
+            }
+            let closed = undo_closed.lock().unwrap_or_else(PoisonError::into_inner);
+            if *closed {
+                return;
+            }
+            let undone = undo(&env, &swapped);
+            drop(closed);
+            let _ = sender.send(Event::Started(start, Some(undone)));
         });
     }
 
@@ -528,18 +546,23 @@ impl Updater {
         }));
     }
 
-    /// At quit, after a swap: an exe Windows security removed gets the
-    /// `.bak` back, so the next start finds one (spec S315). True when the
-    /// record changed.
+    /// At quit, after a swap: a failed restart's undo still running ends
+    /// first (spec S303), and an exe Windows security removed gets the
+    /// `.bak` back, so the next start finds one (spec S315). Lock retries
+    /// share [`files::QUIT_RETRY_BUDGET`]. True when the record changed.
     pub fn at_quit(&mut self) -> bool {
+        self.env.pause.quit();
+        let mut polled = Polled::default();
+        if self.work == Work::Restarting {
+            self.finish_restart(&mut polled);
+        }
         let Some((_, swapped)) = &self.swapped else {
-            return false;
+            return polled.record_changed;
         };
         if self.env.install_dir.join(archive::EXE_NAME).exists() {
-            return false;
+            return polled.record_changed;
         }
         let undone = undo(&self.env, swapped);
-        let mut polled = Polled::default();
         self.start_failed(
             "the installed exe is gone at quit",
             UpdateRecordReason::Blocked,
@@ -547,6 +570,34 @@ impl Updater {
             &mut polled,
         );
         polled.record_changed
+    }
+
+    /// Waits up to [`QUIT_WAIT`] for the restart's worker; past that, a
+    /// running undo still ends, but none starts any more.
+    fn finish_restart(&mut self, polled: &mut Polled) {
+        let deadline = std::time::Instant::now() + QUIT_WAIT;
+        while self.work == Work::Restarting {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.events.recv_timeout(left) {
+                Ok(event) => self.apply(event, polled),
+                Err(_) => break,
+            }
+        }
+        if self.work != Work::Restarting {
+            return;
+        }
+        *self
+            .undo_closed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = true;
+        while let Ok(event) = self.events.try_recv() {
+            self.apply(event, polled);
+        }
+        if self.work == Work::Restarting {
+            self.env
+                .log
+                .log(|| "updater: quit while the new version's start was awaited".to_owned());
+        }
     }
 
     /// Closing the notice of a running download (its X or Dismiss All)
@@ -617,7 +668,7 @@ pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
         log,
         launch: Arc::new(relaunch::ProcessLaunch),
         start_wait: relaunch::START_WAIT,
-        sleep: Arc::new(std::thread::sleep),
+        pause: Arc::new(files::Pause::real()),
     }))
 }
 
@@ -1327,7 +1378,9 @@ pub mod tests {
             DebugLog::default(),
         );
         let counted = waits.clone();
-        f.env.sleep = Arc::new(move |wait| counted.lock().unwrap().push(wait));
+        f.env.pause = Arc::new(files::Pause::counted(move |wait| {
+            counted.lock().unwrap().push(wait);
+        }));
         f.env.launch = Arc::new(Exits);
         let mut updater = Updater::new(f.env);
         updater.check(Trigger::Manual);
@@ -1370,7 +1423,7 @@ pub mod tests {
         sleep: impl Fn(std::time::Duration) + Send + Sync + 'static,
     ) -> Updater {
         let mut f = fixture(name, false, files, DebugLog::default());
-        f.env.sleep = Arc::new(sleep);
+        f.env.pause = Arc::new(files::Pause::counted(sleep));
         f.env.launch = Arc::new(Exits);
         let mut updater = Updater::new(f.env);
         updater.check(Trigger::Manual);
