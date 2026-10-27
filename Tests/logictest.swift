@@ -4849,6 +4849,14 @@ do {
           "menu bar panel: reopened while its close fade still shows it, the open finishes now though AppKit sends no new didShow")
     check(!fading.finishOpen() && fading == .shown,
           "menu bar panel: a late didShow after the reopen finished brings no second refresh")
+    // The panel's show() finishes a reopen itself, since AppKit sends no didShow then.
+    let menuBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let showBody = menuBar.components(separatedBy: "    func show() {").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    func inShow(_ needle: String) -> Int { showBody.components(separatedBy: needle).count - 1 }
+    check(!showBody.isEmpty && inShow("let finishNow = host.sizing.show(onScreen: popover.isShown)") == 1
+          && inShow("if finishNow { finishOpenWhenQuiet() }") == 1,
+          "menu bar panel: show() finishes the open at once when it reopens a panel still on screen")
     var first = PanelSizing.closed
     check(!first.show(onScreen: false) && first == .opening && first.finishOpen() && first == .shown,
           "menu bar panel: a first open waits for AppKit's didShow to finish")
