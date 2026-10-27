@@ -985,6 +985,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         slack_ms.push(slack);
         dry_from_start.push(end.starved_renders);
         let mut own = [false; 8];
+        let mut trim = String::new();
         if !case.is_stall() {
             own[0] = dry > 0;
             own[1] = corrections > 0;
@@ -1002,6 +1003,10 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
                 let carried = if d.ppm < 0.0 { stray_fall_frames(d) } else { 0 };
                 own[5] = (with as f64) < gained * TRIM_WITH_SHARE
                     || against > TRIM_AGAINST_FRAMES + carried;
+                trim = format!(
+                    " trim with {with} of {gained:.0} against {against} of {}",
+                    TRIM_AGAINST_FRAMES + carried
+                );
             }
             // A start step anchors through a resync, but re-times nothing (S318).
             own[6] = case.airplay && (lead_moved || end.resyncs > o.control.start_steps());
@@ -1023,7 +1028,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
             .filter_map(|(name, f)| f.then_some(*name))
             .collect();
         lines.push(format!(
-            "  o{i}{} {} Hz hb {:.1} ms {:+.0} ppm cb {} lat {:.0} wander {:.1}/{:.0}s 2nd {:.1} early {:.0} strays {:?} first late {:?} | dry {dry} skips {} silences {} resyncs {} start steps {} shortage {shortage} slowed {slowed} sped {sped} slack {:.2} | tail {:.2} ms norm {:.2} {failed:?}",
+            "  o{i}{} {} Hz hb {:.1} ms {:+.0} ppm cb {} lat {:.0} wander {:.1}/{:.0}s 2nd {:.1} early {:.0} strays {:?} first late {:?} | dry {dry} skips {} silences {} resyncs {} start steps {} shortage {shortage} slowed {slowed} sped {sped} slack {:.2} | tail {:.2} ms norm {:.2}{trim} {failed:?}",
             if d.bluetooth { " bt" } else { "" },
             d.rate,
             d.hold_back_ms,
@@ -1608,26 +1613,135 @@ fn late_first_cases_on_draws_of_their_own_hold_every_invariant() {
     );
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: 512,
-        max_shrink_iters: 64,
-        rng_seed: proptest::test_runner::RngSeed::Fixed(SEED),
-        ..ProptestConfig::default()
-    })]
+/// Cases in the random run.
+const RANDOM_CASES: usize = 512;
 
-    // covers: S50, S206, S207, S208, S209
-    #[test]
-    #[ignore = "512 cases of up to 180 s take minutes"]
-    fn every_output_of_every_mix_holds_every_invariant(raw in raw_case()) {
-        let case = if !raw.stall && late_first_strata(raw.k) && raw.seed % 2 == 1 {
-            build_late_first(&raw, raw.k)
-        } else {
-            build(&raw, raw.k, raw.stall)
-        };
-        let outcome = simulate(&case);
-        prop_assert!(!outcome.fails.iter().any(|&f| f), "{}", outcome.lines.join("\n"));
-    }
+/// The random run's seed: `TIMING_MATRIX_SEED` (decimal or 0x hex), else
+/// [`SEED`].
+fn random_seed() -> u64 {
+    std::env::var("TIMING_MATRIX_SEED").map_or(SEED, |text| {
+        let text = text.trim();
+        match text.strip_prefix("0x") {
+            Some(hex) => u64::from_str_radix(hex, 16),
+            None => text.parse(),
+        }
+        .expect("TIMING_MATRIX_SEED is a u64")
+    })
+}
+
+/// The first `count` cases of the random run of `seed`. An odd draw seed on
+/// late-first strata makes the draw its late-first case.
+fn random_cases(seed: u64, count: usize) -> Vec<Case> {
+    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed_bytes(seed));
+    let mut runner = TestRunner::new_with_rng(Config::default(), rng);
+    let strategy = raw_case();
+    (0..count)
+        .map(|_| {
+            let raw = strategy.new_tree(&mut runner).unwrap().current();
+            if !raw.stall && late_first_strata(raw.k) && raw.seed % 2 == 1 {
+                build_late_first(&raw, raw.k)
+            } else {
+                build(&raw, raw.k, raw.stall)
+            }
+        })
+        .collect()
+}
+
+/// Case `index` of the random run of `seed`.
+fn random_case(seed: u64, index: usize) -> Case {
+    random_cases(seed, index + 1).swap_remove(index)
+}
+
+// covers: S50, S206, S207, S208, S209
+#[test]
+#[ignore = "512 cases of up to 180 s take minutes"]
+fn every_output_of_every_mix_holds_every_invariant() {
+    let seed = random_seed();
+    let cases = random_cases(seed, RANDOM_CASES);
+    let (outcomes, one_core_seconds) = run_all(&cases);
+    let failing: Vec<String> = outcomes
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| o.fails.iter().any(|&f| f))
+        .map(|(i, o)| format!("random_case({seed:#x}, {i}):\n{}", o.lines.join("\n")))
+        .collect();
+    println!(
+        "seed {seed:#x}: {} of {RANDOM_CASES} cases fail ({one_core_seconds:.1} s on one core)",
+        failing.len()
+    );
+    assert!(failing.is_empty(), "{}", failing.join("\n"));
+}
+
+/// Draws of the random run that failed, as `(seed, index)` for
+/// [`random_case`].
+const RANDOM_REGRESSIONS: [(u64, usize); 42] = [
+    (0x5EED, 2),
+    (0x5EED, 24),
+    (0x5EED, 56),
+    (0x5EED, 74),
+    (0x5EED, 137),
+    (0x5EED, 295),
+    (0x5EED, 297),
+    (0x5EED, 300),
+    (0x5EED, 401),
+    (0x5EED, 449),
+    (0x5EED, 489),
+    (0x5EED, 497),
+    (0x5EED, 504),
+    (1, 5),
+    (1, 45),
+    (1, 134),
+    (1, 168),
+    (1, 180),
+    (1, 215),
+    (1, 239),
+    (1, 295),
+    (1, 370),
+    (1, 434),
+    (1, 442),
+    (1, 443),
+    (1, 461),
+    (1, 501),
+    (2, 5),
+    (2, 13),
+    (2, 85),
+    (2, 95),
+    (2, 110),
+    (2, 148),
+    (2, 149),
+    (2, 188),
+    (2, 203),
+    (2, 264),
+    (2, 295),
+    (2, 327),
+    (2, 340),
+    (2, 388),
+    (2, 432),
+];
+
+// covers: S206, S207, S209
+#[test]
+fn the_random_draws_that_failed_hold_every_invariant() {
+    let cases: Vec<Case> = RANDOM_REGRESSIONS
+        .iter()
+        .map(|&(seed, index)| random_case(seed, index))
+        .collect();
+    let (outcomes, _) = run_all(&cases);
+    let failing: Vec<String> = RANDOM_REGRESSIONS
+        .iter()
+        .zip(&outcomes)
+        .filter(|(_, o)| o.fails.iter().any(|&f| f))
+        .map(|((seed, index), o)| {
+            format!("random_case({seed:#x}, {index}):\n{}", o.lines.join("\n"))
+        })
+        .collect();
+    assert!(
+        failing.is_empty(),
+        "{} of {} fail:\n{}",
+        failing.len(),
+        RANDOM_REGRESSIONS.len(),
+        failing.join("\n")
+    );
 }
 
 /// Three outputs on steady clocks with callbacks on time, at the three
