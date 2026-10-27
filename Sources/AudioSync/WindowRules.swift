@@ -325,6 +325,39 @@ struct PanelFold: Equatable {
     }
 }
 
+/// Which parts of the popover's own background the panel's stand-in hides
+/// while the panel scales. A background view that holds the panel's content
+/// (the popover's frame) stays, or the content and arrow would go with it;
+/// of such a view only its material layers are hidden.
+enum PanelBackdrop {
+    static func hidden<Node>(in node: Node, children: (Node) -> [Node], isContent: (Node) -> Bool,
+                             isStandIn: (Node) -> Bool, isBackground: (Node) -> Bool) -> [Node] {
+        walk(node, children: children, isContent: isContent, isStandIn: isStandIn, isBackground: isBackground).hidden
+    }
+
+    /// The sublayers of a view's layer that no subview owns.
+    static func material<Layer: AnyObject>(in sublayers: [Layer], keeping owned: [Layer]) -> [Layer] {
+        sublayers.filter { layer in !owned.contains { $0 === layer } }
+    }
+
+    private static func walk<Node>(_ node: Node, children: (Node) -> [Node], isContent: (Node) -> Bool,
+                                   isStandIn: (Node) -> Bool,
+                                   isBackground: (Node) -> Bool) -> (hidden: [Node], holdsContent: Bool) {
+        if isContent(node) { return ([], true) }
+        if isStandIn(node) { return ([], false) }
+        var hidden: [Node] = []
+        var holdsContent = false
+        for child in children(node) {
+            let below = walk(child, children: children, isContent: isContent, isStandIn: isStandIn,
+                             isBackground: isBackground)
+            hidden += below.hidden
+            holdsContent = holdsContent || below.holdsContent
+        }
+        if isBackground(node) && !holdsContent { hidden.insert(node, at: 0) }
+        return (hidden, holdsContent)
+    }
+}
+
 /// When work that follows a menu bar panel open or close may run: once its
 /// animation is over. Main-thread work that lands inside it drops frames.
 struct PanelQuiet: Equatable {

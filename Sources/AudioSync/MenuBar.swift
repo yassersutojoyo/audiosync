@@ -652,6 +652,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// window's full size whatever the panel's layer does.
     private var standIn: NSVisualEffectView?
     private var systemBackground: [NSView] = []
+    private var systemMaterial: [CALayer] = []
     private var noticeWatch: AnyCancellable?
     let model: AppModel
 
@@ -828,7 +829,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         closing += 1
         let ticket = closing
         var shadow: PanelShadowWindow?
-        if motion.grows, case let (layer, anchor)? = panelLayer(window) {
+        // Without its own shadow and background the panel would shrink inside a full-size box: it only fades.
+        if motion.grows, case let (layer, anchor)? = panelLayer(window), case let (own, tip)? = ownShadow(window) {
             // From where a grow still running has got to, not from full size.
             func shrink(_ layer: CALayer, about anchor: CGPoint) {
                 let shrink = CABasicAnimation(keyPath: "transform")
@@ -841,10 +843,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 layer.add(shrink, forKey: Self.motionKey)
             }
             shrink(layer, about: anchor)
-            if case let (own, tip)? = ownShadow(window) {
-                shadow = own
-                shrink(own.panel, about: tip)
-            }
+            shadow = own
+            shrink(own.panel, about: tip)
         }
         window.ignoresMouseEvents = true
         // A fade-in still running has already set the window's alpha this far.
@@ -911,7 +911,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         dropOwnShadow()
         window.alphaValue = 0
         var shadow: PanelShadowWindow?
-        if motion.grows, case let (layer, anchor)? = target {
+        // Without its own shadow and background the panel would grow inside a full-size box: it only fades in.
+        if motion.grows, case let (layer, anchor)? = target, case let (own, tip)? = ownShadow(window) {
             func grow(_ layer: CALayer, about anchor: CGPoint) {
                 let grow = CASpringAnimation(keyPath: "transform")
                 grow.mass = PanelMotion.mass
@@ -923,17 +924,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 layer.add(grow, forKey: Self.motionKey)
             }
             grow(layer, about: anchor)
-            if case let (own, tip)? = ownShadow(window) {
-                shadow = own
-                grow(own.panel, about: tip)
-                let ticket = closing
-                DispatchQueue.main.asyncAfter(deadline: .now() + motion.settles) { [weak self, weak window] in
-                    guard let self, let window, self.closing == ticket, !PanelSwitches.holdOwnShadow else { return }
-                    self.setShadow(window, true)
-                    self.dropOwnShadow(fade: Self.handBackFade)
-                }
-            } else {
-                setShadow(window, true)
+            shadow = own
+            grow(own.panel, about: tip)
+            let ticket = closing
+            DispatchQueue.main.asyncAfter(deadline: .now() + motion.settles) { [weak self, weak window] in
+                guard let self, let window, self.closing == ticket, !PanelSwitches.holdOwnShadow else { return }
+                self.setShadow(window, true)
+                self.dropOwnShadow(fade: Self.handBackFade)
             }
         } else {
             setShadow(window, true)
@@ -955,7 +952,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// Puts AudioSync's shadow under the panel in place of the system's, which
     /// would keep the window's full size while the panel scales. It returns
     /// the shadow and the arrow's tip in its panel layer; nil when the
-    /// panel's shape can't be found, and the system's shadow stays.
+    /// panel's shape or its background can't be found, and the system's
+    /// shadow stays.
     private func ownShadow(_ window: NSWindow) -> (PanelShadowWindow, CGPoint)? {
         guard let content = window.contentView, let frame = content.superview,
               let button = statusItem.button, let item = button.window else { return nil }
@@ -964,6 +962,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard !body.isEmpty else { return nil }
         let icon = item.convertToScreen(button.convert(button.bounds, to: nil))
         let tip = CGPoint(x: window.convertPoint(fromScreen: NSPoint(x: icon.midX, y: window.frame.maxY)).x, y: edge.maxY)
+        guard standInBackground(window, in: frame, outline: PanelShadow.outline(body: body, tip: tip), edge: edge) else {
+            return nil
+        }
         let shadow = shadowWindow ?? PanelShadowWindow.make()
         shadowWindow = shadow
         if shadow.parent !== window {
@@ -976,7 +977,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                                   + "body %.0fx%.0f, arrow %.1f pt", style.radius, style.opacity, style.offsetY,
                                   body.width, body.height, edge.maxY - body.maxY))
         }
-        standInBackground(window, in: frame, outline: PanelShadow.outline(body: body, tip: tip), edge: edge)
         setShadow(window, false)
         return (shadow, tip)
     }
@@ -986,12 +986,21 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     /// Hides the system's background and puts one under the panel's content
     /// that scales with it; `outline` and `edge` are in the window's coordinates.
-    private func standInBackground(_ window: NSWindow, in frame: NSView, outline: CGPath, edge: CGRect) {
-        guard standIn == nil else { return }
+    /// False, with nothing changed, when no part of the system's background
+    /// can be hidden without the content.
+    private func standInBackground(_ window: NSWindow, in frame: NSView, outline: CGPath, edge: CGRect) -> Bool {
+        guard standIn == nil else { return true }
         var root: NSView = frame
         while let up = root.superview { root = up }
         let found = Self.backgrounds(in: root, skipping: host.view)
-        let model = found.first
+        let holders = Self.backgroundsHolding(host.view)
+        let material = holders.flatMap { Self.material(of: $0) }
+        guard !found.isEmpty || !material.isEmpty else {
+            DebugTrace.log("[AudioSync] panel background: no part of it can be hidden apart from the content; "
+                           + "the panel fades in at full size")
+            return false
+        }
+        let model = found.first ?? holders.first
         let view = PanelStandInView(frame: frame.bounds)
         view.material = model?.material ?? .popover
         view.blendingMode = PanelSwitches.standInBehindWindow ? .behindWindow : .withinWindow
@@ -1009,24 +1018,60 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         }
         frame.addSubview(view, positioned: .below, relativeTo: nil)
         found.forEach { $0.alphaValue = 0 }
+        Self.unanimated { material.forEach { $0.isHidden = true } }
         systemBackground = found
+        systemMaterial = material
         standIn = view
         DebugTrace.log("[AudioSync] panel background: stand-in \(view.blendingMode == .behindWindow ? "behind" : "within") "
-                       + "window, hid \(found.count) system view(s) \(found.map { String(describing: type(of: $0)) })")
+                       + "window, hid \(found.count) system view(s) \(found.map { String(describing: type(of: $0)) }) "
+                       + "and \(material.count) material layer(s) of \(holders.map { String(describing: type(of: $0)) })")
+        if DebugTrace.enabled {
+            for holder in holders {
+                let layers = (holder.layer?.sublayers ?? []).map { layer in
+                    "\(type(of: layer))\(layer.name.map { " \($0)" } ?? "")\(material.contains { $0 === layer } ? " hidden" : "")"
+                }
+                DebugTrace.log("[AudioSync] panel background: \(type(of: holder)) subviews "
+                               + "\(holder.subviews.map { String(describing: type(of: $0)) }), sublayers \(layers)")
+            }
+        }
+        return true
     }
 
-    /// The system's background views in the popover window, outside the panel's own content.
-    private static func backgrounds(in view: NSView, skipping content: NSView) -> [NSVisualEffectView] {
-        // A stand-in still fading out from the last hand-back is not the system's.
-        guard view !== content, !(view is PanelStandInView) else { return [] }
-        let own = (view as? NSVisualEffectView).map { [$0] } ?? []
-        return own + view.subviews.flatMap { backgrounds(in: $0, skipping: content) }
+    /// The system's background views in the popover window that hold no part
+    /// of the panel's own content.
+    private static func backgrounds(in root: NSView, skipping content: NSView) -> [NSVisualEffectView] {
+        PanelBackdrop.hidden(in: root, children: { $0.subviews }, isContent: { $0 === content },
+                             isStandIn: { $0 is PanelStandInView }, isBackground: { $0 is NSVisualEffectView })
+            .compactMap { $0 as? NSVisualEffectView }
+    }
+
+    /// The system's background views that hold the panel's content, such as the popover's frame.
+    private static func backgroundsHolding(_ content: NSView) -> [NSVisualEffectView] {
+        sequence(first: content, next: { $0.superview }).dropFirst().compactMap { $0 as? NSVisualEffectView }
+    }
+
+    /// A background view's material: its visible sublayers that hold none of its subviews.
+    private static func material(of view: NSView) -> [CALayer] {
+        guard let layer = view.layer else { return [] }
+        let owned = view.subviews.compactMap { sub in
+            sub.layer.flatMap { start in sequence(first: start, next: { $0.superlayer }).first { $0.superlayer === layer } }
+        }
+        return PanelBackdrop.material(in: layer.sublayers ?? [], keeping: owned).filter { !$0.isHidden }
+    }
+
+    private static func unanimated(_ change: () -> Void) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        change()
+        CATransaction.commit()
     }
 
     /// Gives the background back to the system, at once or fading the stand-in out over it.
     private func restoreBackground(fade: TimeInterval) {
         systemBackground.forEach { $0.alphaValue = 1 }
         systemBackground = []
+        Self.unanimated { systemMaterial.forEach { $0.isHidden = false } }
+        systemMaterial = []
         guard let view = standIn else { return }
         standIn = nil
         guard fade > 0 else { return view.removeFromSuperview() }
@@ -1139,19 +1184,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         rest = aim
         resizeEndsAt = Self.uptime + duration
         let session = closing, step = resizeStep
-        traceLayers(window, "start")
-        if DebugTrace.enabled {
-            DispatchQueue.main.asyncAfter(deadline: .now() + duration / 2) { [weak self, weak window] in
-                if let window { self?.traceLayers(window, "middle") }
-            }
-        }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = duration
             context.timingFunction = timing
             window.animator().setFrame(frame, display: true)
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                self?.traceLayers(window, "end")
                 // A step that began since aims further; this one's end is not the panel's size.
                 guard let self, self.closing == session, self.resizeStep == step else { return }
                 self.resizeEndsAt = nil
@@ -1166,27 +1204,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 }
             }
         })
-    }
-
-    /// Debug log only: what is drawn at the panel's top edge during a resize,
-    /// to tell which layer darkens its top row.
-    private func traceLayers(_ window: NSWindow, _ when: String) {
-        guard DebugTrace.enabled, let frame = window.contentView?.superview else { return }
-        var root: NSView = frame
-        while let up = root.superview { root = up }
-        let system = Self.backgrounds(in: root, skipping: host.view).map { String(format: "%.2f", $0.alphaValue) }
-        let standIns = frame.subviews.compactMap { $0 as? PanelStandInView }.map { String(format: "%.2f", $0.alphaValue) }
-        let children = (window.childWindows ?? []).map { "\(type(of: $0)) visible=\($0.isVisible)" }
-        let scale = frame.layer?.presentation()?.transform.m11 ?? frame.layer?.transform.m11 ?? 1
-        let hostTop = host.view.superview.map {
-            $0.isFlipped ? host.view.frame.minY : $0.bounds.maxY - host.view.frame.maxY
-        } ?? 0
-        let windowTop = window.frame.maxY - window.convertToScreen(frame.convert(frame.bounds, to: nil)).maxY
-        DebugTrace.log(String(format: "[AudioSync] panel resize layers (%@): system shadow=%@, children %@, "
-                              + "system background alpha %@, stand-in alpha %@, frame scale %.3f, "
-                              + "content top gap %.2f pt, frame top gap %.2f pt", when,
-                              window.hasShadow ? "on" : "off", children.description, system.description,
-                              standIns.description, scale, hostTop, windowTop))
     }
 
     /// Debug log only: logs every move of the open panel's top edge off its
