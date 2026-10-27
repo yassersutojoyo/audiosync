@@ -922,6 +922,10 @@ impl App {
             now_playing: RefCell::default(),
             now_playing_source: RefCell::default(),
         });
+        let sessions = i32::try_from(audiosync_airplay::sender::AIRPLAY2_SESSIONS);
+        app.main
+            .global::<Strings>()
+            .set_airplay2_sessions(sessions.unwrap_or(i32::MAX));
         app.attach_models();
         app.connect_main();
         app.connect_flyout();
@@ -6702,6 +6706,13 @@ mod tests {
                 audiosync_airplay::sender::AIRPLAY2_SESSIONS
             )
         );
+        // The number comes from the sender, not from the strings file.
+        strings.set_airplay2_sessions(2);
+        assert_eq!(
+            strings.invoke_notice_airplay(AirPlayProblem::TooManyAirplay2Speakers, "Loft".into()),
+            "AudioSync plays up to 2 AirPlay 2 speakers at once, so Loft waits. \
+             It starts once one of them stops."
+        );
         assert_eq!(
             strings.invoke_notice_airplay(AirPlayProblem::PtpOtherNetwork, "Loft".into()),
             "Loft waits while AudioSync plays to AirPlay 2 speakers on another network. \
@@ -8999,7 +9010,7 @@ mod tests {
             }),
             "Dismiss: Kitchen waiting"
         );
-        // Its row says waiting too, as on the Mac.
+        // Its notice is titled waiting too, as on the Mac.
         assert_eq!(
             dismiss_label(NoticeMessage::AirPlayRetrying {
                 speaker: "Kitchen".into(),

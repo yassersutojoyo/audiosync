@@ -9,6 +9,8 @@
 import { SpeakerKind, Availability, AirPlayProblem, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, NoticeKind, PinPhase, RowState, SpeakerGroup, UpdateButton } from "types.slint";
 
 export global Strings {
+    // The sender's AirPlay 2 session limit, set from Rust (AIRPLAY2_SESSIONS).
+    in property <int> airplay2-sessions;
     // Main window
     out property <string> app-name: "AudioSync";
     out property <string> main-window-title: "AudioSync";
@@ -742,7 +744,7 @@ export global Strings {
             return @tr("{} needs PTP timing, which isn't available, so it's off. Another app may be using ports 319 and 320.", speaker);
         }
         if problem == AirPlayProblem.too-many-airplay2-speakers {
-            return @tr("AudioSync plays up to 16 AirPlay 2 speakers at once, so {} waits. It starts once one of them stops.", speaker);
+            return @tr("AudioSync plays up to {0} AirPlay 2 speakers at once, so {1} waits. It starts once one of them stops.", root.airplay2-sessions, speaker);
         }
         if problem == AirPlayProblem.ptp-other-network {
             return @tr("{0} waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off and {0} starts.", speaker);

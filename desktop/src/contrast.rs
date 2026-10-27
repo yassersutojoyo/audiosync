@@ -680,7 +680,7 @@ fn no_text_promises_airplay() {
                     "airplay-none-found: Platform.os == OperatingSystemType.linux ? \
                      @tr(\"No AirPlay speakers found yet.",
                 )
-                || line.contains("plays up to 16 AirPlay 2 speakers at once, so {} waits.")
+                || line.contains("plays up to {0} AirPlay 2 speakers at once, so {1} waits.")
                 || line.contains("@tr(\"Waiting: too many AirPlay 2 speakers\")")
                 || line.contains(
                     "waits while AudioSync plays to AirPlay 2 speakers on another network."
