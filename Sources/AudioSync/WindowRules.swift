@@ -258,6 +258,13 @@ struct PanelRest: Equatable {
     }
 }
 
+/// How the menu bar panel grows in without scaling its content.
+enum PanelReveal {
+    static func body(_ body: CGRect, scale: Double, about tip: CGPoint, pixel: CGFloat) -> CGRect { body }
+
+    static func scales(_ motion: PanelMotion, step: TimeInterval) -> [Double] { [] }
+}
+
 /// The shadow AudioSync draws around the menu bar panel while it grows in or
 /// shrinks away, so it scales with the panel: the system's own shadow keeps
 /// the window's full size. It stands in for the system's only during the

@@ -5010,6 +5010,33 @@ do {
           "menu bar panel: a label can wait again once its work ran; one still waiting stays deduplicated")
 }
 
+// MARK: The panel's lines stay sharp while it grows in (MenuBar.swift, WindowRules.swift)
+do {
+    let revealBody = CGRect(x: 0.5, y: 0, width: 300, height: 400)
+    let revealTip = CGPoint(x: 150.5, y: 410)
+    let revealStart = PanelReveal.body(revealBody, scale: 0.92, about: revealTip, pixel: 0.5)
+    let revealEdges = [revealStart.minX, revealStart.minY, revealStart.maxX, revealStart.maxY]
+    check(revealEdges.allSatisfy { ($0 * 2).rounded() == $0 * 2 } && abs(revealStart.width - 276) <= 0.5
+            && abs(revealStart.maxY - 400.8) <= 0.25 && abs(revealStart.midX - 150.5) <= 0.25,
+          "menu bar panel: each step of the open's reveal is the body scaled about the arrow's tip with every edge on the pixel grid, so edges never blur",
+          "\(revealStart)")
+    check(PanelReveal.body(revealBody, scale: 1, about: revealTip, pixel: 0.5) == revealBody,
+          "menu bar panel: the reveal ends at the panel's full body")
+    let revealMotion = PanelMotion.open(reduceMotion: false)
+    let revealSteps = PanelReveal.scales(revealMotion, step: 1.0 / 120)
+    check(revealSteps.count == Int((revealMotion.settles * 120).rounded(.up)) + 1 && revealSteps.first == 0.92
+            && revealSteps.last == 1 && revealSteps.allSatisfy { $0 <= 1 + 0.08 * revealMotion.overshoot + 1e-9 }
+            && abs(revealSteps[12] - 1) < abs(revealSteps[6] - 1),
+          "menu bar panel: the reveal follows the open's spring, one step per 120 Hz frame, from 0.92 to exactly 1",
+          "\(revealSteps.count) \(revealSteps.first ?? 0) \(revealSteps.last ?? 0)")
+    let revealSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let revealOpen = revealSource.components(separatedBy: "private func animateOpen(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(revealOpen.contains("reveal(") && revealOpen.contains("if PanelSwitches.scaleContent")
+            && revealSource.contains("calculationMode = .discrete") && !revealSource.contains("shouldRasterize"),
+          "menu bar panel source: the open reveals the content at its own size instead of scaling it, so its hairlines stay on the pixel grid")
+}
+
 // MARK: The panel's stand-in on the first open after launch (MenuBar.swift, WindowRules.swift)
 do {
     final class FrameSublayer {
