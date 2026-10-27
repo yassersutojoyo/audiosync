@@ -3965,6 +3965,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             when_source_quits: self.when_source_quits,
             cast_list: self.cast_list(),
             cast_by_address: self.audio.cast_discovery() != CastDiscovery::Off,
+            cast_on: self.audio.cast_on(),
             calibration: CalibrationState {
                 speaker_id: self.calibration.id.as_deref().map(speaker_key),
                 phase: self.calibration.phase,
@@ -11645,6 +11646,38 @@ mod tests {
                 Some(ui_model::ZoneNote::NeedsAirPlay2),
                 Some(ui_model::ZoneNote::NotFound)
             ]
+        );
+    }
+
+    /// As on the Mac, the Cast note reads the Cast speaker that is on, not
+    /// the listed rows: one that left the network while streaming is off
+    /// still refuses the zone's Cast member, so the member keeps its note.
+    // covers: S246
+    #[test]
+    fn a_cast_member_kept_off_by_an_unlisted_cast_speaker_keeps_its_note() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.add_zone("Lounge", &[key(SPEAKERS), cc(CAST_LIVING)]);
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.set_running(false);
+        fake.withdraw(CAST_KITCHEN, "Kitchen");
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(!state.running);
+        assert!(state.speaker(&cc(CAST_KITCHEN)).is_none());
+        let zone = state.zones[0].clone();
+        adapter.toggle_zone(&zone.id);
+        let state = adapter.snapshot();
+        let living = state
+            .speaker(&cc(CAST_LIVING))
+            .expect("Living Room is listed");
+        assert!(
+            !living.enabled,
+            "Kitchen is still on, so Living Room is refused"
+        );
+        assert_eq!(
+            state.zone_note(&zone, ui_model::ZoneRow::Listed(living)),
+            Some(ui_model::ZoneNote::CastStayedOff)
         );
     }
 

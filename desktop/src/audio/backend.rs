@@ -941,6 +941,11 @@ pub trait AudioBackend {
         CastDiscovery::Off
     }
 
+    /// A Cast speaker is on, listed or not: turning on another is refused.
+    fn cast_on(&self) -> bool {
+        false
+    }
+
     /// Turns a Cast speaker on or off. One plays at a time: turning one on
     /// while another is on is refused with [`CastProblem::Busy`] (spec C2).
     /// While streaming, one turned on connects at once.

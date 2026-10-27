@@ -835,6 +835,8 @@ pub struct AppState {
     pub cast_list: CastList,
     /// A Google Cast sender runs, so Add by Address… can list a speaker.
     pub cast_by_address: bool,
+    /// A Cast speaker is on, listed or not, so another one is refused.
+    pub cast_on: bool,
     /// The microphone calibration a row shows.
     pub calibration: CalibrationState,
     /// Calibrate All Speakers, in its own card.
@@ -1036,7 +1038,8 @@ impl AppState {
     }
 
     /// The note on `row` under `zone`, if it has one. The Cast note needs
-    /// another member on: the click plan switches on one Cast member at most.
+    /// another member on and a Cast speaker on, as on the Mac: the click
+    /// plan switches on one Cast member at most.
     pub fn zone_note<'a>(&self, zone: &Zone, row: ZoneRow<'a>) -> Option<ZoneNote<'a>> {
         let speaker = match row {
             ZoneRow::NotFound(id) => {
@@ -1066,6 +1069,7 @@ impl AppState {
         (speaker.kind == SpeakerKind::Cast
             && !speaker.enabled
             && speaker.availability == Availability::Open
+            && self.cast_on
             && other_on())
         .then_some(ZoneNote::CastStayedOff)
     }
@@ -1819,6 +1823,7 @@ impl MockBackend {
             when_source_quits: WhenSourceQuits::Stop,
             cast_list: CastList::Quiet,
             cast_by_address: true,
+            cast_on: false,
             calibration: CalibrationState::default(),
             calibrate_all: CalibrateAllState::default(),
         };
@@ -1929,8 +1934,9 @@ impl MockBackend {
     }
 
     /// The example data with zones, for `AUDIOSYNC_PREVIEW_ZONES`: Living
-    /// Room holds a waiting speaker, a stereo pair, a Google Cast speaker,
-    /// a hidden one (not counted) and one not found yet; Upstairs a speaker
+    /// Room holds a waiting speaker, a stereo pair, a Google Cast speaker
+    /// kept off while Porch plays, a hidden one (not counted) and one not
+    /// found yet; Upstairs a speaker
     /// that plays as part of the pair; Office is empty. Streaming is on, and
     /// the notice of groups that became zones shows.
     pub fn zones_preview() -> Self {
@@ -1983,7 +1989,14 @@ impl MockBackend {
             }),
             ..template
         };
-        state.speakers.extend([pair, left, attic]);
+        let porch = Speaker {
+            id: "cc:porch".into(),
+            name: "Porch".into(),
+            system_name: "Porch".into(),
+            enabled: true,
+            ..attic.clone()
+        };
+        state.speakers.extend([pair, left, attic, porch]);
         if let Some(kitchen) = state
             .speakers
             .iter_mut()
@@ -2122,6 +2135,10 @@ impl Backend for MockBackend {
 
     fn snapshot(&self) -> AppState {
         let mut state = self.state.clone();
+        state.cast_on = state
+            .speakers
+            .iter()
+            .any(|speaker| speaker.kind == SpeakerKind::Cast && speaker.enabled);
         show_presets(&mut state, &self.presets);
         state
     }
