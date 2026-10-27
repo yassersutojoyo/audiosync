@@ -118,8 +118,11 @@ def self_test():
         "- **S4** *Required.* Replaces the withdrawn S3.\n"
         "- **S5** *Retired with the bundled engine; kept as a record.*\n"
         "- **S6** *Retired in part with the bundled engine*: the rest holds.\n"
+        "- **S7** *Engine restart.* *Retired with the bundled engine; kept as a record.*\n"
+        "- **S8** *Superseded by S4*: groups became zones.\n"
+        "- **S9** *Network loss, as tested.* *Retired in part*: the hint stands.\n"
     )
-    if spec_ids(spec) != {"S1", "S2", "S4", "S6"}:
+    if spec_ids(spec) != {"S1", "S2", "S4", "S6", "S9"}:
         failures.append(f"spec_ids: got {sorted(spec_ids(spec))}")
     text = "// covers: S1\n    // covers: S2, S3\n/// What it covers: x\n//covers:S1\n"
     got = problems_in("a.rs", text, {"S1", "S2"})
