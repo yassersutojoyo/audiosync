@@ -102,10 +102,16 @@ impl DebugLog {
         let Some(file) = path.and_then(|path| open_file(&path, empty)) else {
             return DebugLog::default();
         };
+        // An append counts what the file already holds toward the limit.
+        let written = if empty {
+            0
+        } else {
+            file.metadata().map_or(max_bytes, |meta| meta.len())
+        };
         let (writer, requests) = mpsc::channel();
         let started = thread::Builder::new()
             .name("audiosync-debug-log".to_owned())
-            .spawn(move || write_requests(&requests, file, max_bytes));
+            .spawn(move || write_requests(&requests, file, written, max_bytes));
         DebugLog {
             writer: started.ok().map(|_| writer),
         }
@@ -251,12 +257,12 @@ impl<W: Write> Write for Counted<W> {
 
 /// The writer thread: appends each line and flushes whenever no request
 /// waits, until every clone of the log is gone. A line that can't be
-/// written is dropped. Once the file holds `max_bytes`, one last line says
-/// so and later lines are dropped.
-fn write_requests(requests: &Receiver<Request>, file: File, max_bytes: u64) {
+/// written is dropped. Once the file holds `max_bytes`, `written` of them
+/// before the first line, one last line says so and later lines are dropped.
+fn write_requests(requests: &Receiver<Request>, file: File, written: u64, max_bytes: u64) {
     let mut out = Counted {
         inner: BufWriter::new(file),
-        written: 0,
+        written,
     };
     while let Ok(request) = requests.recv() {
         let mut next = Some(request);

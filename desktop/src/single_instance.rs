@@ -530,6 +530,6 @@ mod tests {
         assert!(linux.contains("acquire_in("));
         let claim = body_of(include_str!("os/claim.rs"), "pub fn claim<");
         assert!(claim.contains("acquire()"));
-        assert!(!claim.contains("DebugLog::from_env()"));
+        assert!(!claim.contains("DebugLog::from_env("));
     }
 }
