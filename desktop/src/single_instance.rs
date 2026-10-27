@@ -514,7 +514,7 @@ mod tests {
         let main = include_str!("main.rs");
         let body = &main[main.find("fn main() -> ExitCode").expect("main")..];
         let claim = body.find("os::claim_instance()").expect("claim");
-        let log = body.find("DebugLog::from_env()").expect("log");
+        let log = body.find("DebugLog::from_env(").expect("log");
         let run = body.find("match run(").expect("run");
         assert!(claim < log && log < run);
         let body_of = |source: &'static str, head: &str| {
@@ -530,6 +530,6 @@ mod tests {
         assert!(linux.contains("acquire_in("));
         let claim = body_of(include_str!("os/claim.rs"), "pub fn claim<");
         assert!(claim.contains("acquire()"));
-        assert!(!claim.contains("DebugLog::from_env()"));
+        assert!(!claim.contains("DebugLog::from_env("));
     }
 }
