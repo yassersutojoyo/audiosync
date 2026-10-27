@@ -6,8 +6,8 @@ spec_coverage tests. This covers the rest: tracked Rust and Swift files
 outside those crates (desktop/, remote/, Tests/, Sources/), and shell and Python
 files, whose marker is `# covers:`. The letter picks
 the spec: S is docs/ENGINE_SPEC.md, P is docs/AIRPLAY_SPEC.md, C is
-docs/CAST_SPEC.md. A withdrawn or retired clause counts as missing (one
-retired in part does not). Each ID may carry a note in parentheses, and a
+docs/CAST_SPEC.md. A withdrawn, retired or superseded clause counts as
+missing (one retired or superseded in part does not). Each ID may carry a note in parentheses, and a
 note may run on to the next lines:
 
     // covers: S290, S291 (a level set on the speaker is kept)
@@ -30,7 +30,7 @@ CRATES_WITH_OWN_CHECK = ("core/", "cast/", "airplay/")
 _ID = re.compile(r"[SPC][1-9][0-9]*[a-z]?")
 _CLAUSE = re.compile(r"\s*- \*\*([SPC][1-9][0-9]*[a-z]?)\*\*(.*)")
 # Only the opening words: a live clause may mention withdrawn things later on.
-_WITHDRAWN = re.compile(r"\s*[*(]*(withdrawn|retired(?! in part))", re.IGNORECASE)
+_WITHDRAWN = re.compile(r"\s*[*(]*(withdrawn|(retired|superseded)(?! in part))", re.IGNORECASE)
 
 
 def in_scope(path):
@@ -118,8 +118,10 @@ def self_test():
         "- **S4** *Required.* Replaces the withdrawn S3.\n"
         "- **S5** *Retired with the bundled engine; kept as a record.*\n"
         "- **S6** *Retired in part with the bundled engine*: the rest holds.\n"
+        "- **S7** *Superseded by S4.* *Observed* (the old rule).\n"
+        "- **S8** *Superseded in part by S4*: the rest holds.\n"
     )
-    if spec_ids(spec) != {"S1", "S2", "S4", "S6"}:
+    if spec_ids(spec) != {"S1", "S2", "S4", "S6", "S8"}:
         failures.append(f"spec_ids: got {sorted(spec_ids(spec))}")
     text = "// covers: S1\n    // covers: S2, S3\n/// What it covers: x\n//covers:S1\n"
     got = problems_in("a.rs", text, {"S1", "S2"})
