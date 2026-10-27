@@ -368,18 +368,38 @@ impl ClickPair {
     }
 }
 
-/// Pairs two speakers' clicks in trace order.
+/// Pairs two speakers' clicks by frame, so a click one of them lost or an
+/// extra one stays a position of its own instead of shifting the rest.
 pub fn pair_clicks(reference: &[WireClick], other: &[WireClick]) -> Vec<ClickPair> {
-    (0..reference.len().max(other.len()))
-        .map(|k| {
-            let (a, b) = (reference.get(k).copied(), other.get(k).copied());
-            ClickPair {
-                frame: a.or(b).map_or(0, |click| click.frame),
-                reference: a,
-                other: b,
-            }
-        })
-        .collect()
+    let mut all: Vec<(bool, WireClick)> = reference
+        .iter()
+        .map(|&click| (false, click))
+        .chain(other.iter().map(|&click| (true, click)))
+        .collect();
+    all.sort_by_key(|(_, click)| click.frame);
+    let mut pairs: Vec<ClickPair> = Vec::new();
+    for (is_other, click) in all {
+        let slot = pairs
+            .last_mut()
+            .filter(|pair| click.frame - pair.frame < REARM_FRAMES / 2)
+            .map(|pair| {
+                if is_other {
+                    &mut pair.other
+                } else {
+                    &mut pair.reference
+                }
+            })
+            .filter(|slot| slot.is_none());
+        match slot {
+            Some(slot) => *slot = Some(click),
+            None => pairs.push(ClickPair {
+                frame: click.frame,
+                reference: (!is_other).then_some(click),
+                other: is_other.then_some(click),
+            }),
+        }
+    }
+    pairs
 }
 
 /// P102 on the two streams: the k-th onset of each is the k-th click; their
