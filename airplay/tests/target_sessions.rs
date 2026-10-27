@@ -1621,6 +1621,39 @@ fn the_ptp_service_serves_every_member_until_the_last_leaves() {
     assert_eq!(service.poll_timeout(), None);
 }
 
+// covers: P167, P205
+#[test]
+fn a_speaker_turned_off_leaves_the_clock_of_another_receiver_at_the_same_address() {
+    let _serial = serial();
+    let first = Ap2Server::start(ptp_fake());
+    let second = Ap2Server::start(ptp_fake());
+    let listener = PtpListener::bind();
+    let (sender, _host) = ptp_sender(&listener);
+    let mut events = Events::default();
+    let (da, db) = (
+        airplay2_only(&first, 1, "0x0,0x10240"),
+        airplay2_only(&second, 2, "0x0,0x10240"),
+    );
+    sender.add_speaker(da.clone(), options());
+    sender.add_speaker(db.clone(), options());
+    for key in [&da.key, &db.key] {
+        assert!(
+            playing(&mut events, &sender, key, 1),
+            "{:?}",
+            events.of(key)
+        );
+    }
+    assert_one_clock_keeps_syncing(&listener);
+    sender.remove_speaker(&da.key);
+    assert!(wait_until(Duration::from_secs(3), || first
+        .fake()
+        .last("TEARDOWN")
+        .is_some()));
+    listener.syncs(Duration::from_millis(300));
+    assert_one_clock_keeps_syncing(&listener);
+    sender.shutdown();
+}
+
 /// A browser the test feeds while the sender runs.
 #[derive(Clone, Default)]
 struct Script(Arc<Mutex<VecDeque<BrowseEvent>>>);
