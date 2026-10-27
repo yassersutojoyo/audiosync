@@ -270,6 +270,8 @@ enum ZoneLayout {
     struct Member {
         let key: String
         let listed, on, cast: Bool
+        /// A Cast speaker offline or taken over by another app: it can't start now.
+        var busy = false
     }
 
     /// The switches Only This Speaker makes for member `key`, in order: it

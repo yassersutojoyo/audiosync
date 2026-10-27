@@ -4525,6 +4525,12 @@ do {
           "zones: Only This Speaker frees the Cast place before a Cast member comes on")
     check(onlyThis("ap:native:gone", [memberGone, memberDen]).isEmpty,
           "zones: Only This Speaker does nothing for a member that isn't listed")
+    let hallBusy = ZoneLayout.Member(key: "cc:hall", listed: true, on: false, cast: true, busy: true)
+    check(onlyThis("cc:hall", [hallBusy, memberDen, memberAttic]).isEmpty,
+          "zones: Only This Speaker switches nothing for a Cast member that can't start now")
+    let atticBusy = ZoneLayout.Member(key: "cc:attic", listed: true, on: true, cast: true, busy: true)
+    check(onlyThis("cc:attic", [atticBusy, memberDen]) == ["ap:native:den off"],
+          "zones: Only This Speaker on a Cast member already playing still turns the others off")
 
     let living = SpeakerZone(id: "z1", name: "Living Room", members: ["lc:usb", "ap:native:den"], volume: 80)
     let kitchen = SpeakerZone(id: "z2", name: "Kitchen", members: ["cc:kitchen"], volume: 100)
