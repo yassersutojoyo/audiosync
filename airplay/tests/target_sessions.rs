@@ -1645,10 +1645,14 @@ fn a_speaker_turned_off_leaves_the_clock_of_another_receiver_at_the_same_address
     }
     assert_one_clock_keeps_syncing(&listener);
     sender.remove_speaker(&da.key);
-    assert!(wait_until(Duration::from_secs(3), || first
-        .fake()
-        .last("TEARDOWN")
-        .is_some()));
+    // Stopped is told only after the session released its PTP place.
+    assert!(
+        events
+            .wait_state(&sender, &da.key, 1, LONG, |s| *s == SpeakerState::Stopped)
+            .is_some(),
+        "{:?}",
+        events.of(&da.key)
+    );
     listener.syncs(Duration::from_millis(300));
     assert_one_clock_keeps_syncing(&listener);
     sender.shutdown();
