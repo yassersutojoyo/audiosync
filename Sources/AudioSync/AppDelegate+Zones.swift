@@ -351,14 +351,11 @@ extension AppDelegate {
         guard let zone = zones.first(where: { $0.members.contains(key) }) else { return }
         let members = zone.members.compactMap(memberState)
         let steps = ZoneLayout.onlyThis(key, members: members.map {
-            ZoneLayout.Member(key: $0.key, listed: $0.facts.listed, on: $0.facts.on, cast: $0.kind == .cast)
+            ZoneLayout.Member(key: $0.key, listed: $0.facts.listed, on: $0.facts.on, cast: $0.kind == .cast,
+                              busy: $0.facts.busy)
         })
-        guard !steps.isEmpty else { return }
-        // A Cast speaker offline or taken over by another app can't come on:
-        // the others would go off for nothing, and its row or notice says why.
-        if let this = members.first(where: { $0.key == key }), this.kind == .cast, this.facts.busy,
-           steps.contains(where: { $0.key == key && $0.on }) {
-            DebugTrace.log("[AudioSync] only \(key): the Cast speaker can't start now, nothing switches")
+        guard !steps.isEmpty else {
+            DebugTrace.log("[AudioSync] only \(key): nothing switches")
             return
         }
         DebugTrace.log("[AudioSync] only \(key) plays in zone \"\(zone.name)\"")

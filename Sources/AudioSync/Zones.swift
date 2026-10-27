@@ -278,9 +278,11 @@ enum ZoneLayout {
     /// comes on unless it is, and every other listed member that is on goes
     /// off. Another Cast member goes off before it comes on, since one Cast
     /// speaker plays at a time; the rest after, so streaming never stops in
-    /// between. Nobody leaves the zone.
+    /// between. Nobody leaves the zone. A Cast member that can't start now
+    /// switches nothing: the others would go off for nothing.
     static func onlyThis(_ key: String, members: [Member]) -> [(key: String, on: Bool)] {
         guard let this = members.first(where: { $0.key == key }), this.listed else { return [] }
+        if this.cast && this.busy && !this.on { return [] }
         let others = members.filter { $0.key != key && $0.listed && $0.on }
         var steps: [(key: String, on: Bool)] = []
         if !this.on && !this.cast { steps.append((key: key, on: true)) }
