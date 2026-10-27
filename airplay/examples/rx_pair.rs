@@ -11,9 +11,9 @@
 //! ```
 //!
 //! `ap2` (the default) takes the AirPlay 2 path, `ap1` the AirPlay 1 path.
-//! The check is the protocol side only: sessions set up, packets go out,
-//! the receivers share one anchor. It never says the receivers sound in
-//! step. With two AirPlay 2 receivers on the PTP timeline the sender names
+//! The check is the protocol side only: sessions set up and packets go
+//! out. Whether the receivers share one anchor is read from their logs. It
+//! never says the receivers sound in step. With two AirPlay 2 receivers on the PTP timeline the sender names
 //! both in each SETPEERS and updates the first when the second joins (P207,
 //! P209); this driver can't see those requests, the receivers' logs can.
 //! An AirPlay 2 receiver needs an IP address of its own (one PTP peer per
@@ -269,6 +269,14 @@ fn main() -> ExitCode {
 
     let end = Instant::now() + Duration::from_secs(args.seconds);
     while let Some(left) = end.checked_duration_since(Instant::now()) {
+        // A dead driver thread makes wait_event return at once, every time.
+        if !sender.is_running() {
+            eprintln!("the sender's driver thread stopped");
+            for outcome in outcomes.values_mut() {
+                outcome.errors.push("SenderStopped".to_owned());
+            }
+            break;
+        }
         let Some(event) = sender.wait_event(left) else {
             continue;
         };
