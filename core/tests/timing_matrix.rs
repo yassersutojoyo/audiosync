@@ -18,16 +18,21 @@
 //! - I1: no read runs dry.
 //! - I2: no drift skip or silence at any time, the start included.
 //! - I3: S206's slow-down makes up no shortage. A late-first output's I1
-//!   and I3 count from 1 s after its callbacks came on time.
+//!   and I3 count from 1 s after its callbacks came on time. Neither counts
+//!   the callbacks on the falling half of a wander that brings them earlier
+//!   faster than S207's trim can carry the output later (S209), which runs
+//!   its lead's slack down, nor those after it still below the anchor floor.
 //! - I4: over the last quarter, any two outputs' mean delays, less their
 //!   latencies and hold-backs, lie within a capture block plus 2 ms.
 //! - I5: over the last quarter, each output's delay stays within 2 ms.
 //! - I6: an output without wander whose clock is at least 20 ppm off is
 //!   trimmed with its clock by 9/10 of what it gained, against it by at most
 //!   16 frames, on a slow clock plus what the anchor floor falls toward its
-//!   stray stamps (S209 moves it later by that); a late-first output from
-//!   its start window's end plus one ANCHOR_FALL_MS, its late start made up
-//!   by a start step (S320).
+//!   stray stamps (S209 moves it later by that), which may come off what it
+//!   trims with the clock instead, on a fast clock plus what stray stamps on
+//!   late callbacks, which read as on time, move the trim; a late-first
+//!   output from its start window's end plus one ANCHOR_FALL_MS, its late
+//!   start made up by a start step (S320).
 //! - I7: with AirPlay chosen, the session lead stays 0 and no output
 //!   re-times; a start step anchors through a resync and re-times nothing.
 //! - I8 (stall cases only): a device that consumes nothing for 50 to 200 ms
@@ -50,7 +55,10 @@ use std::time::Instant;
 
 use audiosync_core::fade::FadeState;
 use audiosync_core::reader::{Reader, ReaderCounters};
-use audiosync_core::render::{ANCHOR_FALL_MS, Renderer, RendererControl};
+use audiosync_core::render::{
+    ANCHOR_FALL_MS, Renderer, RendererControl, TRACK_CALLBACKS, TRACK_MS, TRIM_DEAD_ZONE_FRAMES,
+    TRIM_SHARE,
+};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 use proptest::prelude::*;
@@ -576,6 +584,16 @@ struct Output {
     stalls: Vec<(f64, f64)>,
     rng: u64,
     strays_left: u8,
+    /// How much later than its stamps said its stray-stamped callbacks came,
+    /// up to each stray, in ms.
+    misread_ms: f64,
+    /// Whether its wander outruns S207's trim, whether this callback comes
+    /// on the wander's falling half, and the dry reads and shortage frames
+    /// from `settled_at` on of such callbacks and of those after the trough
+    /// still below the anchor floor, which I1 and I3 don't count.
+    outruns: bool,
+    falling: bool,
+    excused: (u64, u64),
     mac: bool,
     /// Windows: frames written, the prefilled silence included, and how
     /// much later than its wakes the device plays after its stalls and
@@ -645,6 +663,7 @@ impl Output {
         let nominal = self.nominal(self.pulls);
         let d = &self.d;
         let phase = (nominal / d.wander_s + d.phase).fract();
+        let falling = phase >= 0.5;
         let triangle = if phase < 0.5 {
             2.0 * phase
         } else {
@@ -664,6 +683,7 @@ impl Output {
             late_ms += ms;
         }
         self.next_at = (nominal + late_ms / 1000.0).max(self.last_at);
+        self.falling = falling;
     }
 }
 
@@ -708,7 +728,7 @@ fn write_block(writer: &mut RingWriter, samples: &mut [f32], first: u64, at: f64
 /// Capture frames by which the anchor floor falls toward a device's two
 /// stray stamps, `1 - e^(-t / ANCHOR_FALL_MS)` of the gap at each (S209):
 /// the output is to move later by as much, so on a slow clock the trim
-/// carries it there against the clock.
+/// carries it there against the clock or by trimming that much less with it.
 fn stray_fall_frames(d: &Device) -> u64 {
     let Some((_, ms)) = d.strays else {
         return 0;
@@ -717,6 +737,37 @@ fn stray_fall_frames(d: &Device) -> u64 {
     let kept = (-span_ms / f64::from(ANCHOR_FALL_MS)).exp();
     let fall_ms = ms * (1.0 - kept * kept);
     (fall_ms * f64::from(CAPTURE_RATE) / 1000.0).ceil() as u64
+}
+
+/// Whether a device's wander brings its callbacks earlier faster than S207's
+/// trim, at most a [`TRIM_SHARE`]th of a callback's reads and at least one
+/// frame, can carry it later toward the falling anchor floor (S209), less
+/// what a fast clock takes of that trim: its lead's slack then runs down
+/// and S206's slow-down makes up the rest.
+fn wander_outruns_trim(d: &Device) -> bool {
+    if d.wander_ms == 0.0 {
+        return false;
+    }
+    let need = (d.callback as u64 * u64::from(CAPTURE_RATE)).div_ceil(u64::from(d.rate));
+    let most = (need / TRIM_SHARE as u64).max(1) as f64;
+    let callbacks_per_s = f64::from(d.rate) / d.callback as f64;
+    let trim_ms_per_s =
+        most * callbacks_per_s * 1000.0 / f64::from(CAPTURE_RATE) - d.ppm.max(0.0) * 1e-3;
+    2.0 * d.wander_ms / d.wander_s > trim_ms_per_s
+}
+
+/// Capture frames S207's trim may make against a fast clock for stray
+/// stamps on late callbacks, `misread_ms` of them in all: a stamp early on a
+/// callback that came late reads as that much less late, which the renderer
+/// cannot tell from a callback that was, so its fill counts the lesser of
+/// the two in capture too many. Each fill moves the running average by its
+/// share, and the trim follows what lies beyond the dead zone.
+fn misread_frames(d: &Device, misread_ms: f64) -> u64 {
+    let track = (f64::from(d.rate) * f64::from(TRACK_MS) / 1000.0)
+        .max((TRACK_CALLBACKS * d.callback) as f64);
+    let share = 1.0 - (-(d.callback as f64) / track).exp();
+    let moved = share * misread_ms * f64::from(CAPTURE_RATE) / 1000.0;
+    (moved - TRIM_DEAD_ZONE_FRAMES).max(0.0).ceil() as u64
 }
 
 fn simulate(case: &Case) -> Outcome {
@@ -767,6 +818,10 @@ fn simulate(case: &Case) -> Outcome {
                 stalls,
                 rng: d.seed | 1,
                 strays_left: 2,
+                misread_ms: 0.0,
+                outruns: wander_outruns_trim(d),
+                falling: false,
+                excused: (0, 0),
                 written: if mac { 0 } else { d.callback as u64 * 2 },
                 mac,
                 played_shift: 0.0,
@@ -849,6 +904,10 @@ fn simulate(case: &Case) -> Outcome {
         }
         let o = &mut outputs[next];
         let rate = o.rate;
+        let before = (
+            o.control.counters().starved_renders,
+            o.control.shortage_frames(),
+        );
         let (frames, played_at) = if mac {
             let frames = o.d.callback;
             let output_at = o.nominal(o.pulls) + o.d.latency_ms / 1000.0;
@@ -863,6 +922,7 @@ fn simulate(case: &Case) -> Outcome {
             {
                 o.strays_left -= 1;
                 early_ms += ms;
+                o.misread_ms += ms.min((pull_at - o.nominal(o.pulls)) * 1000.0);
             }
             let stamped = output_at + early_ms / 1000.0;
             o.renderer
@@ -936,6 +996,13 @@ fn simulate(case: &Case) -> Outcome {
                 o.delay_before_ms = (played_at - captured_at) * 1000.0;
             }
         }
+        // Until the callbacks are back up to the anchor floor, past the
+        // trough, the slack the fall took is still missing.
+        let below_anchor = o.renderer.floor_shift_frames() < 0;
+        if o.outruns && (o.falling || below_anchor) && pull_at >= o.settled_at {
+            o.excused.0 += o.control.counters().starved_renders - before.0;
+            o.excused.1 += o.control.shortage_frames() - before.1;
+        }
         if o.trim_from.is_none() && pull_at >= o.trim_judged_from {
             o.trim_from = Some((o.control.slowed_frames(), o.control.sped_frames()));
         }
@@ -985,10 +1052,11 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         slack_ms.push(slack);
         dry_from_start.push(end.starved_renders);
         let mut own = [false; 8];
+        let mut trim = String::new();
         if !case.is_stall() {
-            own[0] = dry > 0;
+            own[0] = dry > o.excused.0;
             own[1] = corrections > 0;
-            own[2] = shortage > 0;
+            own[2] = shortage > o.excused.1;
             own[4] = o.tail.count == 0 || spread > STEADY_MS;
             if d.wander_ms == 0.0 && d.ppm.abs() >= TRIM_JUDGED_PPM {
                 let judged_s = case.seconds - o.trim_judged_from;
@@ -999,9 +1067,17 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
                 } else {
                     (sped, slowed)
                 };
-                let carried = if d.ppm < 0.0 { stray_fall_frames(d) } else { 0 };
-                own[5] = (with as f64) < gained * TRIM_WITH_SHARE
-                    || against > TRIM_AGAINST_FRAMES + carried;
+                let (carried, misread) = if d.ppm < 0.0 {
+                    (stray_fall_frames(d), 0)
+                } else {
+                    (0, misread_frames(d, o.misread_ms))
+                };
+                own[5] = ((with + carried) as f64) < gained * TRIM_WITH_SHARE
+                    || against > TRIM_AGAINST_FRAMES + carried + misread;
+                trim = format!(
+                    " trim with {with} (+{carried}) of {gained:.0} against {against} of {}",
+                    TRIM_AGAINST_FRAMES + carried + misread
+                );
             }
             // A start step anchors through a resync, but re-times nothing (S318).
             own[6] = case.airplay && (lead_moved || end.resyncs > o.control.start_steps());
@@ -1023,7 +1099,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
             .filter_map(|(name, f)| f.then_some(*name))
             .collect();
         lines.push(format!(
-            "  o{i}{} {} Hz hb {:.1} ms {:+.0} ppm cb {} lat {:.0} wander {:.1}/{:.0}s 2nd {:.1} early {:.0} strays {:?} first late {:?} | dry {dry} skips {} silences {} resyncs {} start steps {} shortage {shortage} slowed {slowed} sped {sped} slack {:.2} | tail {:.2} ms norm {:.2} {failed:?}",
+            "  o{i}{} {} Hz hb {:.1} ms {:+.0} ppm cb {} lat {:.0} wander {:.1}/{:.0}s 2nd {:.1} early {:.0} strays {:?} first late {:?} | dry {dry} skips {} silences {} resyncs {} start steps {} shortage {shortage} slowed {slowed} sped {sped} slack {:.2} | tail {:.2} ms norm {:.2}{trim} {failed:?}",
             if d.bluetooth { " bt" } else { "" },
             d.rate,
             d.hold_back_ms,
@@ -1285,6 +1361,50 @@ fn a_late_second_callback_neither_corrects_drift_nor_moves_the_output_in_a_mac_c
         lines.push(format!(
             "case {}: {:.2} ms later than on time, drift corrected {corrected}",
             case.k, late_ms
+        ));
+    }
+    println!("{}", lines.join("\n"));
+    assert_eq!(shown, 0, "\n{}", lines.join("\n"));
+}
+
+// covers: S207, S324
+#[test]
+fn a_windows_wake_that_comes_after_the_buffer_ran_dry_moves_no_output_and_corrects_no_drift() {
+    // A second wake 27 to 80 ms late finds the 20 ms buffer dry: the device
+    // played silence the core never hears of. S207's reference used to take it
+    // in, so the output played up to 50 ms later than its on-time twin all run,
+    // or a drift correction made it up; a start step now skips it.
+    let windows: Vec<&Case> = matrix()
+        .cases_where(|c| !c.is_stall() && c.k % 4 == 1 && c.platform == Platform::Windows)
+        .into_iter()
+        .map(|(case, _)| case)
+        .collect();
+    assert!(!windows.is_empty());
+    let mut late = Vec::new();
+    let mut on_time = Vec::new();
+    for ms in [27.0, 48.0, 60.0, 80.0] {
+        for case in &windows {
+            let mut case = (*case).clone();
+            case.devices[0].second_late_ms = ms;
+            late.push(case.clone());
+            case.devices[0].second_late_ms = 0.0;
+            on_time.push(case);
+        }
+    }
+    let mut lines = Vec::new();
+    let mut shown = 0;
+    for ((case, outcome), twin) in late
+        .iter()
+        .zip(simulate_all(&late))
+        .zip(simulate_all(&on_time))
+    {
+        let late_ms = outcome.norms[0] - twin.norms[0];
+        let corrected = outcome.fails[1];
+        let steps = outcome.start_steps[0];
+        shown += usize::from(corrected || late_ms.abs() > ALIGN_SLACK_MS || steps != 1);
+        lines.push(format!(
+            "case {} second wake {:.0} ms late: {late_ms:.2} ms later than on time, drift corrected {corrected}, start steps {steps}",
+            case.k, case.devices[0].second_late_ms
         ));
     }
     println!("{}", lines.join("\n"));
@@ -1565,26 +1685,138 @@ fn late_first_cases_on_draws_of_their_own_hold_every_invariant() {
     );
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: 512,
-        max_shrink_iters: 64,
-        rng_seed: proptest::test_runner::RngSeed::Fixed(SEED),
-        ..ProptestConfig::default()
-    })]
+/// Cases in the random run.
+const RANDOM_CASES: usize = 512;
 
-    // covers: S50, S206, S207, S208, S209
-    #[test]
-    #[ignore = "512 cases of up to 180 s take minutes"]
-    fn every_output_of_every_mix_holds_every_invariant(raw in raw_case()) {
-        let case = if !raw.stall && late_first_strata(raw.k) && raw.seed % 2 == 1 {
-            build_late_first(&raw, raw.k)
-        } else {
-            build(&raw, raw.k, raw.stall)
-        };
-        let outcome = simulate(&case);
-        prop_assert!(!outcome.fails.iter().any(|&f| f), "{}", outcome.lines.join("\n"));
-    }
+/// The random run's seed: `TIMING_MATRIX_SEED` (decimal or 0x hex), else
+/// [`SEED`].
+fn random_seed() -> u64 {
+    std::env::var("TIMING_MATRIX_SEED").map_or(SEED, |text| {
+        let text = text.trim();
+        match text.strip_prefix("0x") {
+            Some(hex) => u64::from_str_radix(hex, 16),
+            None => text.parse(),
+        }
+        .expect("TIMING_MATRIX_SEED is a u64")
+    })
+}
+
+/// The first `count` cases of the random run of `seed`. An odd draw seed on
+/// late-first strata makes the draw its late-first case.
+fn random_cases(seed: u64, count: usize) -> Vec<Case> {
+    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed_bytes(seed));
+    let mut runner = TestRunner::new_with_rng(Config::default(), rng);
+    let strategy = raw_case();
+    (0..count)
+        .map(|_| {
+            let raw = strategy.new_tree(&mut runner).unwrap().current();
+            if !raw.stall && late_first_strata(raw.k) && raw.seed % 2 == 1 {
+                build_late_first(&raw, raw.k)
+            } else {
+                build(&raw, raw.k, raw.stall)
+            }
+        })
+        .collect()
+}
+
+/// Case `index` of the random run of `seed`.
+fn random_case(seed: u64, index: usize) -> Case {
+    random_cases(seed, index + 1).swap_remove(index)
+}
+
+// covers: S50, S206, S207, S208, S209
+#[test]
+#[ignore = "512 cases of up to 180 s take minutes"]
+fn every_output_of_every_mix_holds_every_invariant() {
+    let seed = random_seed();
+    let cases = random_cases(seed, RANDOM_CASES);
+    let (outcomes, one_core_seconds) = run_all(&cases);
+    let failing: Vec<String> = outcomes
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| o.fails.iter().any(|&f| f))
+        .map(|(i, o)| format!("random_case({seed:#x}, {i}):\n{}", o.lines.join("\n")))
+        .collect();
+    println!(
+        "seed {seed:#x}: {} of {RANDOM_CASES} cases fail ({one_core_seconds:.1} s on one core)",
+        failing.len()
+    );
+    assert!(failing.is_empty(), "{}", failing.join("\n"));
+}
+
+/// Draws of the random run that failed, as `(seed, index)` for
+/// [`random_case`]. An index names a draw only for the proptest version
+/// locked in Cargo.lock and the strategies of [`raw_case`] as they stand;
+/// a change to either redraws them, and the failing cases are found anew.
+const RANDOM_REGRESSIONS: [(u64, usize); 43] = [
+    (0x5EED, 2),
+    (0x5EED, 24),
+    (0x5EED, 56),
+    (0x5EED, 74),
+    (0x5EED, 137),
+    (0x5EED, 295),
+    (0x5EED, 297),
+    (0x5EED, 300),
+    (0x5EED, 401),
+    (0x5EED, 449),
+    (0x5EED, 489),
+    (0x5EED, 497),
+    (0x5EED, 504),
+    (1, 5),
+    (1, 45),
+    (1, 134),
+    (1, 168),
+    (1, 180),
+    (1, 215),
+    (1, 239),
+    (1, 295),
+    (1, 370),
+    (1, 434),
+    (1, 442),
+    (1, 443),
+    (1, 461),
+    (1, 501),
+    (2, 5),
+    (2, 13),
+    (2, 85),
+    (2, 95),
+    (2, 110),
+    (2, 148),
+    (2, 149),
+    (2, 188),
+    (2, 203),
+    (2, 264),
+    (2, 295),
+    (2, 327),
+    (2, 340),
+    (2, 388),
+    (2, 432),
+    (3, 88),
+];
+
+// covers: S206, S207, S209
+#[test]
+fn the_random_draws_that_failed_hold_every_invariant() {
+    let cases: Vec<Case> = RANDOM_REGRESSIONS
+        .iter()
+        .map(|&(seed, index)| random_case(seed, index))
+        .collect();
+    let (outcomes, _) = run_all(&cases);
+    let failing: Vec<String> = RANDOM_REGRESSIONS
+        .iter()
+        .zip(&outcomes)
+        .filter(|(_, o)| o.fails.iter().any(|&f| f))
+        .map(|((seed, index), o)| {
+            format!("random_case({seed:#x}, {index}):\n{}", o.lines.join("\n"))
+        })
+        .collect();
+    assert!(
+        failing.is_empty(),
+        "{} of {} fail:\n{}",
+        failing.len(),
+        RANDOM_REGRESSIONS.len(),
+        failing.join("\n")
+    );
 }
 
 /// Three outputs on steady clocks with callbacks on time, at the three
