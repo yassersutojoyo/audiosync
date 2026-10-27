@@ -1932,16 +1932,20 @@ impl Driver {
     /// connection opens.
     fn begin_session(&mut self, key: &DeviceKey, now: Instant) -> bool {
         let held = self.speakers.get_mut(key).is_some_and(|speaker| {
+            let held = speaker.holds_ap2();
             speaker.ap2_waiting = false;
             speaker.ptp_waiting = false;
-            std::mem::take(&mut speaker.ap2_retry)
+            speaker.ap2_retry = false;
+            held
         });
         self.open_session(key, now);
-        if let Some(speaker) = self.speakers.get_mut(key) {
+        let holds = self.speakers.get_mut(key).is_some_and(|speaker| {
             speaker.told_connecting = false;
-        }
-        // A retry that ends anywhere but a running AirPlay 2 session hands its place on (P169).
-        if held {
+            speaker.holds_ap2()
+        });
+        // A queued start or a retry that ends anywhere but an AirPlay 2
+        // session hands its place on (P169, P222).
+        if held && !holds {
             self.wake_ap2_waiter(now);
         }
         match self.speakers.get(key).map(|speaker| &speaker.phase) {
