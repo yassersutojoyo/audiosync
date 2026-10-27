@@ -617,7 +617,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// the panel was reopened or already closed leaves it alone.
     private var closing = 0
     private var resize = PanelResize()
-    /// When the running resize step ends (system uptime).
+    /// When the running resize step ends (system uptime); nil once none runs.
     private var resizeEndsAt: TimeInterval?
     /// Bumped by every resize step, so only the latest one's end tells the popover its size.
     private var resizeStep = 0
@@ -984,11 +984,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard let window = view.window, duration > 0 else {
             setHeight(size.height)
             popover.contentSize = size
+            resizeEndsAt = nil
             if let window = view.window { rest = PanelRest(frame: window.frame, content: size) }
             return
         }
         setHeight(max(view.frame.height, size.height))
-        var aim = rest ?? PanelRest(frame: window.frame, content: popover.contentSize)
+        var aim = PanelRest.next(rest, stepRunning: resizeEndsAt != nil, window: window.frame,
+                                 content: popover.contentSize)
         let frame = aim.move(to: size)
         rest = aim
         resizeEndsAt = Self.uptime + duration
@@ -1001,6 +1003,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             MainActor.assumeIsolated {
                 // A step that began since aims further; this one's end is not the panel's size.
                 guard let self, self.closing == session, self.resizeStep == step else { return }
+                self.resizeEndsAt = nil
                 // Already this size on screen; the popover only learns it.
                 let normal = self.popover.animates
                 self.popover.animates = false
@@ -1102,6 +1105,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         quietQueue.quiet.began(.close, at: now)
         closeEndsAt = now + lasting
         resize = PanelResize()
+        resizeEndsAt = nil
         rest = nil
         if let moveWatch { NotificationCenter.default.removeObserver(moveWatch) }
         moveWatch = nil
@@ -1446,8 +1450,8 @@ struct MenuBarView: View {
                         }
                     }
                     .padding(.leading, 12)
-                    // Its own animation, so the rows still fade when Reduce Motion folds without one.
-                    .transition(.opacity.animation(.easeInOut(duration: PanelFold.duration)))
+                    // Fades only in the fold's animation; a speaker joining or leaving a zone shows at once.
+                    .transition(.opacity)
                 }
             }
             ForEach(layout.connected) { speaker in speakerRow(speaker, note: nil) }

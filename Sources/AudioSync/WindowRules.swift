@@ -243,6 +243,13 @@ struct PanelRest: Equatable {
         self.content = content
     }
 
+    /// Where the next resize aims from: the window as it is when no step
+    /// runs, as AppKit may have moved the open panel since; else the rest.
+    static func next(_ rest: PanelRest?, stepRunning: Bool, window: CGRect, content: CGSize) -> PanelRest {
+        guard stepRunning, let rest else { return PanelRest(frame: window, content: content) }
+        return rest
+    }
+
     /// The frame for content of `size`, which becomes the new rest.
     mutating func move(to size: CGSize) -> CGRect {
         frame = PanelResize.windowFrame(frame, content: content, to: size)
@@ -253,8 +260,7 @@ struct PanelRest: Equatable {
 
 /// How a zone folds or unfolds in the menu bar panel: the rows fade, the
 /// arrow turns and the panel resizes as one motion that starts with the
-/// click, on one ease-in-out curve. With Reduce Motion the panel and the
-/// rows around it change at once, and the zone's own rows only fade.
+/// click, on one ease-in-out curve. With Reduce Motion it all changes at once.
 struct PanelFold: Equatable {
     static let duration: TimeInterval = 0.2
 
