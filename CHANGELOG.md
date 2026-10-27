@@ -6,7 +6,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
-- In the Mac's menu bar panel, a zone works like its header in the main window: the round icon switches the zone on or off, and the arrow, the name or the space around them shows or hides the zone's speakers. Before, a click on the name switched the whole zone, and its speakers were always listed.
+- In the Mac's menu bar panel and the Windows tray flyout, a zone works like its header in the main window: the round icon switches the zone on or off, and the arrow, the name or the space around them shows or hides the zone's speakers. Before, a click on the name switched the whole zone in the panel and anywhere on the row did in the flyout, and the speakers were always listed. On Windows the main window and the flyout show or hide a zone's speakers together.
 
 ## [0.7.0] - unreleased
 

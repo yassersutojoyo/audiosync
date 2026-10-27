@@ -1369,3 +1369,29 @@ fn only_a_zone_headers_badge_switches_the_zone() {
         "every FocusScope in the header lets a click through to the box"
     );
 }
+
+/// The flyout's zone rows follow the main window's header: only the badge
+/// switches the zone, a click anywhere else shows or hides its speakers, and
+/// a folded zone lists none.
+#[test]
+fn only_a_flyout_zone_badge_switches_the_zone() {
+    let flyout = include_str!("../ui/flyout.slint");
+    let header = component_body(flyout, "FlyoutZoneHeader");
+    let hover = header
+        .find("hover := TouchArea {")
+        .expect("the row has its click");
+    assert!(header[hover..hover + 120].contains("root.expanded-changed(!root.item.expanded);"));
+    assert_eq!(header.matches("root.toggled();").count(), 1);
+    let badge = header
+        .find("SpeakerBadge {")
+        .expect("the row has its badge");
+    assert!(header[badge..].find("root.toggled();").unwrap() < 800);
+    assert!(
+        header.contains("expandable: true;"),
+        "Left and Right fold it"
+    );
+    assert_eq!(header.matches("TouchArea {").count(), 1, "the row only");
+    assert!(header.contains("accessible-expanded: root.item.expanded;"));
+    assert!(flyout.contains("for speaker in zone.expanded ? zone.members : []: FlyoutRow {"));
+    assert!(flyout.contains("root.zone-expanded-changed(zone.id, open);"));
+}

@@ -178,6 +178,98 @@ component FlyoutRow inherits HorizontalLayout {
     }
 }
 
+// A zone's row, routed like its header in the main window: only the round
+// toggle switches the zone, and a click anywhere else on the row, the name
+// and the arrow included, shows or hides its speakers. Left and Right on the
+// toggle do that from the keyboard, so the arrow stays out of the Tab order.
+component FlyoutZoneHeader inherits Rectangle {
+    in property <ZoneItem> item;
+    callback toggled();
+    callback expanded-changed(bool);
+    // The toggle gained (true) or lost (false) keyboard focus.
+    callback focus-changed(bool);
+
+    border-radius: Fluent.radius-control;
+    background: hover.has-hover ? Fluent.hover : transparent;
+    animate background { duration: Fluent.fast; }
+
+    hover := TouchArea {
+        clicked => {
+            root.expanded-changed(!root.item.expanded);
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            padding-top: 4px;
+            padding-bottom: 4px;
+            padding-right: 8px;
+
+            SpeakerBadge {
+                size: 28px;
+                glyph: Glyphs.zone;
+                state: root.item.state;
+                enabled: root.item.present > 0;
+                label: Strings.zone-label(root.item.name);
+                value-text: Strings.zone-value(root.item.on, root.item.total, root.item.waiting);
+                description: Strings.row-note(root.item.state);
+                expandable: true;
+                expanded: root.item.expanded;
+                toggled => {
+                    root.toggled();
+                }
+                focus-changed(focused) => {
+                    root.focus-changed(focused);
+                }
+                expanded-changed(open) => {
+                    root.expanded-changed(open);
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 1px;
+                horizontal-stretch: 1;
+
+                Text {
+                    text: root.item.name;
+                    color: Tokens.text;
+                    font-weight: root.item.state == RowState.playing ? 600 : 400;
+                    overflow: elide;
+                    accessible-role: none;
+                }
+
+                QuietText {
+                    text: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state));
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+
+                Rectangle {
+                    width: 16px;
+                    height: 16px;
+                    accessible-role: button;
+                    accessible-label: root.item.expanded ? Strings.hide-zone-speakers(root.item.name) : Strings.show-zone-speakers(root.item.name);
+                    accessible-expandable: true;
+                    accessible-expanded: root.item.expanded;
+                    accessible-action-default => {
+                        root.expanded-changed(!root.item.expanded);
+                    }
+
+                    Glyph {
+                        glyph: root.item.expanded ? Glyphs.chevron-up : Glyphs.chevron-down;
+                        font-size: 12px;
+                        color: Tokens.secondary-text;
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component TrayFlyout inherits Window {
     in property <bool> running;
     in property <string> status;
@@ -215,6 +307,9 @@ export component TrayFlyout inherits Window {
     callback master-volume-changed(float);
     callback speaker-toggled(string);
     callback zone-toggled(string);
+    // A zone's speakers shown (true) or hidden; the main window's arrow
+    // shares this state.
+    callback zone-expanded-changed(string, bool);
     callback preset-recall-requested(string);
     // Ctrl+1 to Ctrl+9: recall the preset in that place (spec S261).
     callback preset-shortcut(int);
@@ -444,25 +539,22 @@ export component TrayFlyout inherits Window {
                         accessible-role: groupbox;
                         accessible-label: zone.name;
 
-                        FlyoutRow {
-                            glyph: Glyphs.zone;
-                            name: zone.name;
-                            label: Strings.zone-label(zone.name);
-                            value-text: Strings.zone-value(zone.on, zone.total, zone.waiting);
-                            caption: zone.total == 0 ? Strings.zone-empty : Strings.zone-count(zone.on, zone.total, zone.waiting, zone.present);
-                            description: Strings.row-note(zone.state);
-                            state: zone.state;
-                            enabled: zone.present > 0;
+                        FlyoutZoneHeader {
+                            item: zone;
                             toggled => {
                                 root.zone-toggled(zone.id);
+                            }
+                            expanded-changed(open) => {
+                                root.zone-expanded-changed(zone.id, open);
                             }
                             focus-changed(focused) => {
                                 root.zone-focused = focused;
                             }
                         }
 
-                        // Its speakers, indented by the toggle's width.
-                        for speaker in zone.members: FlyoutRow {
+                        // Its speakers while it is unfolded, indented by the
+                        // toggle's width.
+                        for speaker in zone.expanded ? zone.members : []: FlyoutRow {
                             padding-left: 38px;
                             glyph: Glyphs.speaker(speaker.kind);
                             name: speaker.name;
