@@ -2,6 +2,12 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
+## [Unreleased]
+
+### Changed
+
+- On Windows, a zone is renamed in place like a speaker: double-click its name, press F2 or choose Rename Zone…, type, then press Enter. A speaker in its row under In zones renames the same way. No dialog opens.
+
 ## [0.7.1] - 2026-10-27
 
 ### Changed
@@ -352,6 +358,7 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
+[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.7.1...HEAD
 [0.7.1]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.1
 [0.7.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.0
 [0.6.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.6.0
