@@ -180,6 +180,88 @@ fn ap2_one_ptp_timeline() {
     assert_eq!(joined.poll_outranked(), None, "only served receivers count");
 }
 
+/// Where each grandmaster field of the dataset comparison sits in an
+/// Announce, in the order IEEE 1588-2008 compares them.
+const PRIORITY1: usize = 34 + 10 + 3;
+const CLOCK_CLASS: usize = PRIORITY1 + 1;
+const CLOCK_ACCURACY: usize = PRIORITY1 + 2;
+const VARIANCE: usize = PRIORITY1 + 3;
+const PRIORITY2: usize = PRIORITY1 + 5;
+const GRANDMASTER: usize = PRIORITY1 + 6;
+
+/// An Announce with the byte at `at` moved by `by`.
+fn moved(bytes: &[u8], at: usize, by: i16) -> Vec<u8> {
+    let mut bytes = bytes.to_vec();
+    bytes[at] = (i16::from(bytes[at]) + by) as u8;
+    bytes
+}
+
+fn with_grandmaster(bytes: &[u8], identity: [u8; 8]) -> Vec<u8> {
+    let mut bytes = bytes.to_vec();
+    bytes[GRANDMASTER..GRANDMASTER + 8].copy_from_slice(&identity);
+    bytes
+}
+
+fn warns(service: &mut PtpService, announce: &[u8], at: Instant) -> bool {
+    service.handle_message(announce, SocketAddr::new(FIRST, 320), at);
+    let warned = service.poll_outranked() == Some(FIRST);
+    while service.poll_outranked().is_some() {}
+    warned
+}
+
+// covers: P206
+#[test]
+fn ap2_outranked_grandmaster_follows_the_dataset_order() {
+    let origin = Instant::now();
+    let mut service = PtpService::new(SenderClock::new(origin), IDENTITY, PtpPorts::default());
+    service.start(SocketAddr::new(FIRST, 7000), origin);
+    let sent = drain(&mut service);
+    let own = sent_to(&sent, FIRST, MessageType::Announce)[0]
+        .bytes
+        .clone();
+    let ahead = with_grandmaster(&own, [0x00, 0x11, 0x22, 0xFF, 0xFE, 0x33, 0x44, 0x55]);
+    let behind = with_grandmaster(&own, [0xFF; 8]);
+
+    // A later field decides only while every earlier one ties.
+    for (name, field) in [
+        ("clockClass", CLOCK_CLASS),
+        ("clockAccuracy", CLOCK_ACCURACY),
+        ("offsetScaledLogVariance", VARIANCE + 1),
+        ("priority2", PRIORITY2),
+    ] {
+        assert!(
+            warns(&mut service, &moved(&behind, field, -1), origin),
+            "{name} lower"
+        );
+        assert!(
+            !warns(&mut service, &moved(&ahead, field, 1), origin),
+            "{name} higher"
+        );
+        let earlier_behind = moved(&moved(&ahead, field, -1), field - 1, 1);
+        assert!(
+            !warns(&mut service, &earlier_behind, origin),
+            "{name} lower after a higher earlier field"
+        );
+    }
+    assert!(
+        warns(&mut service, &moved(&behind, VARIANCE, -1), origin),
+        "offsetScaledLogVariance read big-endian"
+    );
+
+    // With every quality field tied, the lower identity ranks first.
+    assert!(warns(&mut service, &ahead, origin), "identity lower");
+    assert!(!warns(&mut service, &behind, origin), "identity higher");
+
+    // The sender's own grandmaster never warns, whatever its fields say.
+    for field in [PRIORITY1, CLOCK_CLASS, CLOCK_ACCURACY, VARIANCE, PRIORITY2] {
+        assert!(
+            !warns(&mut service, &moved(&own, field, -1), origin),
+            "own identity"
+        );
+    }
+    assert!(!warns(&mut service, &own, origin), "own identity");
+}
+
 fn ptp_config(peers: Vec<IpAddr>) -> Ap2Config {
     let mut config = ap2_config();
     config.ptp = Some(PtpPeer {
