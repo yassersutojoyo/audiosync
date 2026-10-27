@@ -6,6 +6,7 @@
 //! network; [`mdns`] feeds it from a live browser.
 
 pub mod mdns;
+pub mod reach;
 
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
@@ -326,9 +327,11 @@ impl DeviceList {
         self.entries.iter_mut().find(|entry| entry.key == key)
     }
 
-    /// Adds a device by address, keyed by that address (C18). An address
-    /// and port a listed device already has names that device instead:
-    /// `Updated` with its key, and nothing is added (C16).
+    /// Adds a device by address, keyed by that address (C18), offline until
+    /// [`DeviceList::set_reachable`] says a check reached it: no record
+    /// vouches for it. An address and port a listed device already has
+    /// names that device instead: `Updated` with its key, and nothing is
+    /// added (C16).
     pub fn add_manual(&mut self, address: SocketAddr) -> ListEvent {
         if let Some(entry) = self
             .entries
@@ -342,10 +345,24 @@ impl DeviceList {
             key,
             device: None,
             addresses: vec![address],
-            online: true,
+            online: false,
             in_session: false,
         });
         ListEvent::Added(key)
+    }
+
+    /// What a check of a device added by address found: online when it
+    /// reached the device. `Updated` when that changes the entry; nothing
+    /// for another key, or while a session holds it, whose own health
+    /// decides (C17).
+    pub fn set_reachable(&mut self, address: SocketAddr, reached: bool) -> Option<ListEvent> {
+        let key = DeviceKey::Manual(address);
+        let entry = self.get_mut(key)?;
+        if entry.in_session || entry.online == reached {
+            return None;
+        }
+        entry.online = reached;
+        Some(ListEvent::Updated(key))
     }
 
     /// Takes back a device added by address that no browse has found yet;
@@ -357,12 +374,14 @@ impl DeviceList {
         Some(ListEvent::Removed(key))
     }
 
-    /// Marks whether a session with the device is open (C17).
+    /// Marks whether a session with the device is open (C17). A device
+    /// added by address stays listed when it ends: only the user takes it
+    /// back.
     pub fn set_in_session(&mut self, key: DeviceKey, open: bool) {
         let mut gone = false;
         if let Some(entry) = self.get_mut(key) {
             entry.in_session = open;
-            gone = !open && !entry.online;
+            gone = !open && !entry.online && matches!(key, DeviceKey::Id(_));
         }
         if gone {
             self.entries.retain(|entry| entry.key != key);
