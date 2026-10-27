@@ -191,6 +191,7 @@ check(AudioSource.app(bundleID: "com.spotify.client").defaultsValue == "com.spot
 check(AudioSource.system.bundleID == nil, "source: the whole system has no bundle ID")
 
 // MARK: Several apps as one source
+// covers: S10, S242 (the Mac's mix and all-except sources, AudioSync never in them)
 do {
     let music = "com.apple.Music", safari = "com.apple.Safari", own = "com.example.audiosync"
     let both = AudioSource.mixed(.only, bundleIDs: [music, safari])
@@ -293,6 +294,7 @@ do {
 }
 
 // MARK: Audio processes — which Core Audio process objects make up an app
+// covers: S10, S11 (an app source's process objects, AudioSync's own never among them)
 do {
     typealias Listed = AudioProcesses.Listed
     let appPID: pid_t = 100, ownPID: pid_t = 900
@@ -320,6 +322,7 @@ do {
 }
 
 // MARK: Appearance — stored choice
+// covers: S155
 for a in AppAppearance.allCases {
     check(AppAppearance(defaultsValue: a.defaultsValue) == a, "appearance: round-trip \(a)")
 }
@@ -370,6 +373,7 @@ do {
 }
 
 // MARK: Speaker IDs — the bundled engine's output IDs move to the native sender's receiver IDs (S204)
+// covers: S204
 do {
     typealias Migration = SpeakerIDMigration
     // Device ID AA:BB:CC:DD:EE:01: the bundled engine's output 187723572702721
@@ -649,6 +653,7 @@ do {
           && !AudioDevices.isPrivateAggregate(composition: [kAudioAggregateDeviceNameKey: "Multi-Output Device"]),
           "devices: only a private aggregate (the capture's own) is left out of the lists")
 
+    // covers: S171
     let usb = kAudioDeviceTransportTypeUSB
     let aggregate = kAudioDeviceTransportTypeAggregate
     let listedUSB = AudioDevices.entry(id: 7, alive: 1, channels: 2, transport: usb, composition: nil,
@@ -1022,6 +1027,7 @@ do {
 }
 
 // MARK: Local Network hint — denied access at once; a guess only when unknown
+// covers: S101, S154 (the hint, when the host looks again, and the browser states)
 do {
     let t0 = Date(timeIntervalSince1970: 2_000_000)
     let wait = LocalNetworkHint.emptyBeforeHint
@@ -1114,6 +1120,7 @@ check(SpeakerState(enabled: false, streaming: false) == .off, "speaker: off whil
 check(!SpeakerState.playing.clickTurnsOn, "speaker: click on a playing speaker turns it off")
 check(SpeakerState.willPlay.clickTurnsOn, "speaker: click on a waiting speaker turns it on (and starts streaming)")
 check(SpeakerState.off.clickTurnsOn, "speaker: click on an off speaker turns it on")
+// covers: S106 (the access kinds that stand)
 check(SpeakerAvailability(.open) == .open, "availability: open")
 check(SpeakerAvailability(.code(password: false)) == .needsCode, "availability: PIN asks for a code")
 check(SpeakerAvailability(.code(password: true)) == .needsCode, "availability: password asks for a code")
@@ -1256,6 +1263,7 @@ do {
     let builtIn: AudioDeviceID = 41
     let uid = "BuiltInSpeakerDevice"
 
+    // covers: S192, S193, S195, S198, S199, S200, S202 (through a fake Core Audio volume and mute)
     // The quiet MacBook speakers: AudioSync at 100, the device at 13 %.
     do {
         let host = Host()
@@ -1942,6 +1950,7 @@ do {
     check(pairsBack == ["mic-uid": 1] && pairStore.values[AppSettings.Keys.inputChannelPairs] == nil,
           "channel pairs: a pair is kept per device UID, and the key goes once all are on 1-2")
 
+    // covers: S10, S11 (the tap follows the app's audio processes)
     check(AppTapFollow.decide(tapped: [5, 7], found: [7, 5], appRunning: true) == .keep,
           "app tap: the same processes in another order keep the tap")
     check(AppTapFollow.decide(tapped: [5], found: [5, 9], appRunning: true) == .retap([5, 9]),
@@ -1960,6 +1969,7 @@ do {
     check(AppTapFollow.candidates([9, 3, 9, 42], own: 42) == [3, 9] && AppTapFollow.candidates([3], own: nil) == [3],
           "app tap: AudioSync's own process is never tapped, even when the app launched it")
 
+    // covers: S13 (a retap keeps the app muted throughout)
     // Moving the tap to new processes: the steps it takes, in order. "old"
     // is the running capture, which mutes the app until it is closed.
     struct Failed: Error {}
@@ -2097,6 +2107,7 @@ do {
 }
 
 // MARK: Native AirPlay sender — its IDs, rows, speaker plan, events and sync rule
+// covers: S222
 do {
     check(NativeAirPlayID.pcmDebugIDs(nil).isEmpty && NativeAirPlayID.pcmDebugIDs(" , ").isEmpty,
           "native airplay: no AUDIOSYNC_AIRPLAY_PCM names no receiver")
@@ -3697,7 +3708,7 @@ do {
     check(longSplit.connected.map(\.name) == ["Den", long + " A", long + " B"],
           "EC11 long names: names that differ only at the end still sort and stay whole")
 
-    // EC12: the network to the AirPlay speakers drops.
+    // covers: S154, S167 (an empty list with Local Network allowed never hints)
     check(LocalNetworkHint.decide(access: .allowed, senderUp: true, emptySince: t0,
                                   now: t0.addingTimeInterval(600)) == .none,
           "EC12 network loss: an empty list with Local Network allowed shows no permission hint")
@@ -3865,6 +3876,7 @@ do {
 }
 
 // MARK: Explicit pause of the AirPlay speakers (P213, ExplicitPause in NowPlaying.swift)
+// covers: S292 (the Mac host)
 do {
     let spotify = NowPlayingMonitor.spotify, music = NowPlayingMonitor.music
     let t0 = Date(timeIntervalSinceReferenceDate: 0)
@@ -4619,7 +4631,7 @@ do {
     check(gone.action == .nothing && gone.steps == [.absent],
           "zones: a zone with no member listed does nothing on a click")
 
-    // Presets in the windows, the menus and the panel (S259 to S269).
+    // covers: S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel)
     let presetText = UIStrings()
     let presetFlat = [Double](repeating: 0, count: Equalizer.frequencies.count)
     let livingZone = SpeakerZone(id: "z1", name: "Living Room", members: ["lc:usb:out", "lc:tv"], volume: 60)
@@ -4969,7 +4981,7 @@ do {
           "local delay: a Bluetooth speaker at −250 ms makes the built-in speakers wait 250 ms",
           "\(holds([r, bt])), \(holds([r, usb, bt]))")
 
-    // S173: which listed output is the reference.
+    // covers: S173 (which listed output is the reference)
     let builtIn = kAudioDeviceTransportTypeBuiltIn
     let speakerTerminal = UInt32(kAudioStreamTerminalTypeSpeaker)
     let headphoneTerminal = UInt32(kAudioStreamTerminalTypeHeadphones)
@@ -5024,7 +5036,7 @@ do {
           "local delay: editing the lowest offset re-times the others",
           "\(LocalDelay.retimes(applied: withBT, holdBacks: holds([r, usb, bt], offsets: edited)))")
 
-    // S178, S181: the AirPlay delay field.
+    // covers: S178, S181 (the AirPlay delay field)
     var native = AirPlayDelay(adjustmentMs: 250)
     let shown = native.latencyMs(senderMs: 1750)
     let followed = native.latencyMs(senderMs: 1800)
@@ -5131,7 +5143,7 @@ do {
             && coreMessage != t.streamingStartMessage(for: SourceCapture.CaptureError.tapNotCreated(-1)),
           "start error: the audio core failing to set up asks to reopen the app", coreMessage)
 
-    // S181: what the rows show and the fields take.
+    // covers: S181 (what the rows show and the fields take)
     check(t.offsetValue(ms: 150) == "+150 ms" && t.offsetValue(ms: -250) == "−250 ms" && t.offsetValue(ms: 0) == "0 ms"
             && t.offsetValue(ms: -0.4) == "0 ms",
           "offset text: +150 ms, −250 ms and 0 ms",
@@ -5702,6 +5714,7 @@ do {
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
+// covers: S186 (the Mac's stop order)
 
 /// A host clock that the checks move on by hand and that `finishAll`'s pauses
 /// move on too, and the events the fakes below note, in order.
@@ -6106,6 +6119,7 @@ do {
           "S36 start failure: one alert gives the rate only when every failure it names was refused for it",
           "\(String(describing: LocalOutputSync.sharedRefusedRate(mixedFailures)))")
 
+    // covers: S72
     // S72: a master change gives each running local speaker its gain again;
     // one switched on but not running (here "tv") gets no call.
     let playing = RefusingEngine(active: ["usb", "bt"], refusing: [])
@@ -6114,7 +6128,7 @@ do {
           "S72 master: every running local speaker gets its gain again, and only those",
           "regained \(playing.regained), gains \(playing.gains)")
 
-    // S186: speakers switched off in one sync leave in one call, so they fade out at once.
+    // covers: S186 (speakers switched off in one sync leave in one call, so they fade out at once)
     final class BatchingEngine: LocalOutputEngine {
         var activeOutputUIDs: [String] = ["a", "b", "c"]
         var calls: [[String]] = []
@@ -6172,6 +6186,7 @@ do {
           "launch: any other launch is not a login-item launch")
     check(AppLifecycle.opensMainWindow(loginItemLaunch: false) && !AppLifecycle.opensMainWindow(loginItemLaunch: true),
           "launch: the main window opens at launch, but not at login")
+    // covers: S101 (the safety net and the next due reconcile)
     check(AppLifecycle.safetyNetInterval == 30,
           "reconcile: with no event, the host reconciles by itself only every 30 s, the safety net (S101)")
     do {
@@ -8427,6 +8442,7 @@ do {
             && debugStart["local_name"] == nil && normalStart["log_pairing_codes"] == nil
             && normalStart["local_name"] as? String == "den" && normalStart["devices_path"] as? String == "/devices.json",
           "web remote: only the debug log asks the core for the pairing codes")
+    // covers: S288 (the Mac host)
     let switchOn = ["AUDIOSYNC_WEB_REMOTE": "1"]
     check(RemoteDebugSwitch.port(environment: switchOn, debugLog: true, savedPort: 8080) == 8080
             && RemoteDebugSwitch.port(environment: switchOn.merging(["AUDIOSYNC_WEB_REMOTE_PORT": "9000"]) { $1 },
