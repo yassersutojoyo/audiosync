@@ -31,10 +31,17 @@ final class AboutPanel: NSObject {
             .foregroundColor: NSColor.secondaryLabelColor,
             .paragraphStyle: paragraph,
         ])
-        NSApp.orderFrontStandardAboutPanel(options: [
-            .credits: credits,
-            NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): text.aboutCopyright,
-        ])
+        let options = Self.options(credits: credits, copyright: text.aboutCopyright,
+                                   info: Bundle.main.infoDictionary ?? [:])
+        NSApp.orderFrontStandardAboutPanel(options: options)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    nonisolated static func options(credits: NSAttributedString, copyright: String,
+                                    info: [String: Any]) -> [NSApplication.AboutPanelOptionKey: Any] {
+        [
+            .credits: credits,
+            NSApplication.AboutPanelOptionKey(rawValue: "Copyright"): copyright,
+        ]
     }
 }

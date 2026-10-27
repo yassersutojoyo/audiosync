@@ -9363,5 +9363,16 @@ do {
           "panel zone members: a folded zone lists none")
 }
 
+// MARK: About panel shows the version without the build number (AboutPanel.options)
+do {
+    let options = AboutPanel.options(credits: NSAttributedString(string: "credits"), copyright: "copyright",
+                                     info: ["CFBundleShortVersionString": "0.7.1", "CFBundleVersion": "11"])
+    check(options[.applicationVersion] as? String == "0.7.1", "about: the version line is the short version",
+          String(describing: options[.applicationVersion]))
+    check(options[.version] as? String == "", "about: no build number in parentheses",
+          String(describing: options[.version]))
+    check(options[.credits] is NSAttributedString, "about: the license credits stay")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
