@@ -39,7 +39,7 @@ fn delay_airplay_chosen_gives_the_configured_delay() {
     assert_eq!(effective_delay_ms(1820.0, true), 1820.0);
 }
 
-// covers: S8
+// Records the superseded S78: under S176 an output keeps its offset without AirPlay too.
 #[test]
 fn delay_no_airplay_plays_at_once_and_zero_stays_zero() {
     assert_eq!(effective_delay_ms(1820.0, false), 0.0);
@@ -74,26 +74,31 @@ fn only_a_chosen_and_listed_airplay_speaker_counts() {
 
 // covers: S79
 #[test]
-fn every_running_output_is_retimed_when_the_condition_flips() {
+fn the_condition_flips_only_when_a_chosen_and_listed_speaker_comes_or_goes() {
     let mut rule = SyncRule::default();
-    let outputs = [("lc:usb", 2000.0), ("lc:hdmi", 1500.0)];
     assert!(!rule.update(&["7"], &["3"]), "nothing chosen yet: no flip");
     assert!(
         rule.update(&["7"], &["7", "3"]),
         "a chosen speaker appears: flip"
     );
-    assert_eq!(
-        rule.retime(&outputs),
-        [("lc:usb", 2000.0), ("lc:hdmi", 1500.0)]
-    );
     assert!(
         !rule.update(&["7", "3"], &["7", "3"]),
         "still chosen: no flip"
     );
-    assert!(
-        rule.update(&["3"], &["7"]),
-        "the enabled set changed: flip to 0"
+    assert!(rule.update(&["3"], &["7"]), "the enabled set changed: flip");
+}
+
+// Records the superseded S80: under S177 the hold-backs lose only L, never drop to 0.
+#[test]
+fn every_running_output_is_retimed_to_0_when_the_condition_flips_off() {
+    let mut rule = SyncRule::default();
+    let outputs = [("lc:usb", 2000.0), ("lc:hdmi", 1500.0)];
+    assert!(rule.update(&["7"], &["7", "3"]));
+    assert_eq!(
+        rule.retime(&outputs),
+        [("lc:usb", 2000.0), ("lc:hdmi", 1500.0)]
     );
+    assert!(rule.update(&["3"], &["7"]));
     assert_eq!(rule.retime(&outputs), [("lc:usb", 0.0), ("lc:hdmi", 0.0)]);
 }
 
