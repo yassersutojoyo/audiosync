@@ -7810,6 +7810,8 @@ mod tests {
                     (own, shown) = (events[0].volume, events[0].device_level);
                     assert_eq!(receiver.volume_sets().len(), sets, "{name}: sent back");
                 } else if number(step, "device_volume").is_some() {
+                    // A slow runner: P120's 100 ms spacing passes before the command.
+                    std::thread::sleep(Duration::from_millis(150));
                     receiver.press(db);
                     let key = inside(handle).added[&id].key.clone();
                     let command = RemoteCommand::DeviceVolume(Volume::Db(db));
