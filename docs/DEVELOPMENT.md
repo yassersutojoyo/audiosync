@@ -161,8 +161,10 @@ For debug runs, `AUDIOSYNC_AIRPLAY_PCM=<id>[,<id>…]` lets the listed speakers 
 For a dry run against a receiver that behaves like the Samsung television (`FakeAp2::samsung()` in `airplay/tests/common/ap2.rs`), `airplay/examples/fake_tv.rs` serves that fake. By default it listens on 127.0.0.1 only and advertises nothing; with `--lan` it serves the LAN and advertises itself over mDNS as "AudioSync Test TV", under `_airplay._tcp` only, so a sender with the AirPlay 2 switch on finds it and takes the AirPlay 2 path. It prints which mode it runs in. It's an example, so no release build contains it. Run it from the repository on a Mac or a Windows PC on the same network as the app:
 
 ```bash
-cargo run -p audiosync-airplay --example fake_tv -- [--lan] [--pin every|once] [--code 4821] [--port 0] [--name "AudioSync Test TV"] [--summary]
+cargo run -p audiosync-airplay --example fake_tv -- [--lan] [--pin every|once] [--code 4821] [--port 0] [--name "AudioSync Test TV"] [--deviceid 02:00:5E:00:53:55] [--summary]
 ```
+
+To run two copies at once, give each its own `--deviceid` (six colon-separated hex bytes), since a sender tells speakers apart by it; a copy with another id also gets its own name and mDNS host unless `--name` sets one.
 
 Without `--pin` it pairs transiently with no code. `--pin every` asks for the code on every connection (flags bit 3) and `--pin once` only the first time (bit 9); the code is 4821 unless `--code` gives another. The port is picked at random unless `--port` names one (macOS keeps 7000 for its own AirPlay receiver). With `--lan` a firewall may ask whether to let it accept connections (Windows Firewall asks again for each new build); `scripts/pc_test.sh` builds it but never runs it. Every request goes to stdout with its answer status, marked `(encrypted)` once the pairing is done. Typing `vol -30` moves the level the way the television's remote does (on its 0.3 dB grid), and `quit` stops it. A pause shows up as a FLUSH, and a volume change as a SET_PARAMETER answered 500 that still moves the level (on a 0.6 dB grid):
 

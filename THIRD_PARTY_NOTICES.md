@@ -51,8 +51,8 @@ TV pairing, RustCrypto's `sha1`, `sha2`, `aes`, `aes-gcm`, `ctr` and
 for HomeKit pairing, RustCrypto's `chacha20poly1305` and `hkdf` with
 `chacha20`, `poly1305` and `hmac`;
 `ed25519-dalek`, `x25519-dalek` and `curve25519-dalek` (BSD-3-Clause) with
-`ed25519`, `signature` and `subtle` (BSD-3-Clause); `zeroize`; and `plist`
-(MIT) for the pairing's property lists, with `quick-xml` (MIT), `time`,
+`ed25519` and `signature` (Apache-2.0 OR MIT) and `subtle` (BSD-3-Clause);
+`zeroize`; and `plist` (MIT) for the pairing's property lists, with `quick-xml` (MIT), `time`,
 `time-core`, `deranged`, `powerfmt`, `num-conv`, `num-traits`, `base64`,
 `indexmap`, `equivalent`, `hashbrown` and `memchr` (Unlicense OR MIT). The
 others are under MIT OR Apache-2.0. CI checks every crate in the core's build
@@ -280,6 +280,11 @@ The Windows app reads and writes its settings file with `serde` and
 `serde_json` (MIT OR Apache-2.0), which bring in `serde_core`, `serde_derive`
 and `itoa` (MIT OR Apache-2.0) and `zmij` (MIT), next to `memchr`, which the
 app already contained.
+
+The Windows app's updater, which runs in release builds only, reads the
+appcast with `roxmltree` (MIT OR Apache-2.0), checks each download's signature
+with `ed25519-dalek` (BSD-3-Clause) and `base64` (MIT OR Apache-2.0), and
+unpacks it with `zip` (MIT) and `typed-path` (MIT OR Apache-2.0).
 
 The Windows app's other Rust dependencies are under permissive licenses. CI
 checks them with `cargo deny check licenses` against the list in

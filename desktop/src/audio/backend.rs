@@ -537,6 +537,15 @@ pub enum BackendEvent {
         /// What went wrong.
         problem: AirPlayProblem,
     },
+    /// An AirPlay speaker stopped announcing itself on the network, or was
+    /// announced again (`unannounced` false) without playing yet. It stays
+    /// on, and the sender starts it once it is announced (P215).
+    AirPlayUnannounced {
+        /// The speaker's ID.
+        id: String,
+        /// Whether it is out of view now.
+        unannounced: bool,
+    },
     /// An AirPlay speaker can't play from AudioSync, so it was turned off.
     AirPlayFailed {
         /// The speaker's ID.

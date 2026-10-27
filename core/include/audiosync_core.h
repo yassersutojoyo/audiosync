@@ -175,6 +175,7 @@ extern "C" {
 #define ASC_AIRPLAY_STATE_RETRYING 3   /* its session failed; the next starts in .retry_ms */
 #define ASC_AIRPLAY_STATE_FAILED 4     /* its session failed and needs the user; no retry */
 #define ASC_AIRPLAY_STATE_STOPPED 5    /* removed, or the sender shut down */
+#define ASC_AIRPLAY_STATE_UNANNOUNCED 6 /* it stopped announcing itself; a session starts once it is listed able to play; not a failure */
 
 /* What to tell the user about an error that ended a session (AscAirPlayEvent.error). */
 #define ASC_AIRPLAY_ERROR_NOT_RESPONDING 1    /* the speaker didn't answer */
@@ -1557,6 +1558,14 @@ AscAirPlay *asc_airplay_create(void);
  * no AirPlay 2 traffic.
  */
 AscAirPlay *asc_airplay_create_with_airplay2(bool airplay2);
+
+/*
+ * Whether AirPlay 2 is automatic per receiver: the build's flag, or
+ * AUDIOSYNC_AIRPLAY2_AUTO=1 (on) or 0 (off) for this launch. While it is on,
+ * AirPlay 2 only receivers play with the setting off, and the setting means
+ * "Prefer AirPlay 2" for receivers that speak both.
+ */
+bool asc_airplay2_auto(void);
 
 /*
  * Stops the sender and frees it: every speaker is torn down and its threads

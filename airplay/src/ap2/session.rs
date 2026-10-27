@@ -82,7 +82,7 @@ pub struct Ap2Config {
     /// The random device ID of `deviceID` and `macAddress` (P5, P43).
     pub device_id: [u8; 6],
     /// The timing the first session SETUP asks for: NTP, or PTP when it was
-    /// remembered for the device (P157).
+    /// remembered for the device (P157, P217).
     pub timing: Timing,
     /// The PTP service's clock, when it runs (P158). Without it a session
     /// never asks for PTP.
@@ -195,7 +195,7 @@ pub enum Ap2Event {
     /// connection (P153), which waits for [`Ap2Session::proceed`].
     Verified,
     /// A session SETUP with this timing was answered 200; the host
-    /// remembers PTP for the device (P157).
+    /// remembers it for the device (P157, P217).
     TimingChosen(Timing),
     /// RECORD was answered 200: under PTP the receiver now belongs on the
     /// other sessions' SETPEERS lists (P207, P208).
@@ -209,6 +209,10 @@ pub enum Ap2Event {
         added: bool,
         first_accepted: bool,
     },
+    /// The session SETUP with the remembered PTP got an answer other than
+    /// 200: the entry is dropped and a new connection asks for NTP first
+    /// (P217).
+    TimingRefused,
     /// The stream is set up and flushed (P42).
     Ready(StreamPorts),
     /// A FLUSH after the stream was ready got its answer, success or not
@@ -349,6 +353,8 @@ pub struct Ap2Session {
     state: Ap2State,
     timing: Timing,
     ptp_retried: bool,
+    /// The SETUP asks for PTP because it was remembered (P217).
+    remembered: bool,
     /// A pair-verify on this session succeeded (P66).
     pair_verified: bool,
     attempt: usize,
@@ -481,6 +487,7 @@ impl Ap2Session {
             state: Ap2State::Connecting,
             timing,
             ptp_retried: timing == Timing::Ptp,
+            remembered: timing == Timing::Ptp,
             pair_verified: false,
             attempt: 0,
             attempt_started: now,
@@ -582,6 +589,12 @@ impl Ap2Session {
     /// The timing of the current or last session SETUP.
     pub fn timing(&self) -> Timing {
         self.timing
+    }
+
+    /// The session has the PTP service's clock, so it may ask for PTP
+    /// (P158).
+    pub fn has_ptp(&self) -> bool {
+        self.config.ptp.is_some()
     }
 
     /// The receiver's `timingPeerInfo` from a PTP session SETUP (P164).
@@ -2163,6 +2176,7 @@ impl Ap2Session {
             _ => Timing::Ntp,
         };
         self.ptp_retried = self.timing == Timing::Ptp;
+        self.remembered = self.ptp_retried;
         self.connection = Some(connection);
         self.send(Kind::SessionSetup, now, false);
     }
@@ -2179,6 +2193,13 @@ impl Ap2Session {
             self.event(Ap2Event::Trace(line));
         }
         if !response.is_success() {
+            if self.remembered {
+                self.remembered = false;
+                self.ptp_retried = false;
+                self.timing = Timing::Ntp;
+                self.event(Ap2Event::TimingRefused);
+                return self.reconnect(Restart::None, now);
+            }
             let ptp_possible = self.timing == Timing::Ntp
                 && !self.ptp_retried
                 && self.config.ptp.is_some()

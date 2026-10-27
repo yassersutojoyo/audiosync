@@ -6,7 +6,7 @@
 // English only for now. @tr marks each string for Slint's gettext translation
 // when a second language is added.
 
-import { SpeakerKind, Availability, AirPlayProblem, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, NoticeKind, PinPhase, RowState, SpeakerGroup } from "types.slint";
+import { SpeakerKind, Availability, AirPlayProblem, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, NoticeKind, PinPhase, RowState, SpeakerGroup, UpdateButton } from "types.slint";
 
 export global Strings {
     // Main window
@@ -20,12 +20,14 @@ export global Strings {
     out property <string> will-play: @tr("Will play");
     out property <string> will-play-help: @tr("Plays when streaming starts. Select to start streaming.");
     // A speaker that is on while streaming is on, but can't play right now:
-    // another app holds its device, or AudioSync keeps trying to reach an
-    // AirPlay speaker. Its row says so instead of showing it as playing.
+    // another app holds its device, AudioSync keeps trying to reach an
+    // AirPlay speaker, or the speaker isn't announced on the network. Its
+    // row says so instead of showing it as playing.
     out property <string> waiting-for-device: @tr("Waiting for device");
     out property <string> reconnecting: @tr("Reconnecting…");
     out property <string> waiting-for-airplay2: @tr("Waiting: too many AirPlay 2 speakers");
     out property <string> waiting-for-ptp: @tr("Waiting: AirPlay 2 speakers on another network");
+    out property <string> not-on-network: @tr("Not on the network right now, plays once it's back");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
     // The flyout's speaker list when it has no speaker and no zone.
@@ -156,6 +158,10 @@ export global Strings {
     // sender keeps the mode it started with until the next launch.
     out property <string> notice-airplay2-on-next-launch: @tr("AirPlay 2 (Experimental) is on. AudioSync plays to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it.");
     out property <string> notice-airplay2-off-next-launch: @tr("AirPlay 2 (Experimental) is off. AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it.");
+    // The same item under the AirPlay 2 flag (spec S313), which moves only
+    // speakers that also play AirPlay 1.
+    out property <string> notice-airplay2-prefer-on-next-launch: @tr("Prefer AirPlay 2 is on. Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync.");
+    out property <string> notice-airplay2-prefer-off-next-launch: @tr("Prefer AirPlay 2 is off. Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync.");
     out property <string> notice-no-sound-output: Platform.os == OperatingSystemType.linux ? @tr("PipeWire has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.") : @tr("Windows has no working sound output, so apps have nowhere to play and AudioSync has nothing to send to your speakers. Connect or turn on an output in Sound settings.");
 
     // Pairing with an Apple TV that asks for a PIN: the dialog and the
@@ -350,6 +356,12 @@ export global Strings {
     out property <string> launch-at-login: @tr("Launch at Sign-In");
     // File > AirPlay 2 (Experimental): read at launch only.
     out property <string> airplay2-experimental: @tr("AirPlay 2 (Experimental)");
+    // The same item under the AirPlay 2 flag (spec S313): AirPlay 2 only
+    // speakers play anyway, and the item prefers AirPlay 2 for the rest.
+    out property <string> airplay2-prefer: @tr("Prefer AirPlay 2");
+    // The updater's menu items (Windows release builds only).
+    out property <string> check-updates-automatically: @tr("Check for Updates Automatically");
+    out property <string> menu-check-for-updates: @tr("Check for Updates…");
 
     // File > Web Remote… and its window: a page on the home network that a
     // paired phone uses to switch speakers and set their volume and delay.
@@ -468,6 +480,70 @@ export global Strings {
     public pure function window-failed(detail: string) -> string {
         return @tr("AudioSync couldn't open a window: {}", detail);
     }
+
+    // The buttons of the updater's notice.
+    public pure function update-button(button: UpdateButton) -> string {
+        if button == UpdateButton.download {
+            return @tr("Download and Install");
+        }
+        if button == UpdateButton.not-now {
+            return @tr("Not Now");
+        }
+        if button == UpdateButton.cancel {
+            return @tr("Cancel");
+        }
+        if button == UpdateButton.try-again {
+            return @tr("Try Again");
+        }
+        if button == UpdateButton.open-release-page {
+            return @tr("Open Release Page");
+        }
+        return @tr("Restart Now");
+    }
+
+    // The updater's notices. `new` and `running` are version numbers such
+    // as 0.8.0; `percent` is how much is downloaded, a whole number.
+    public pure function notice-update-available(new: string, running: string) -> string {
+        return @tr("AudioSync {} is available. You have {}.", new, running);
+    }
+    // The same notice for a version that Windows security blocked, or that
+    // didn't start, the last time it was installed.
+    public pure function notice-update-available-blocked-before(new: string, running: string) -> string {
+        return @tr("AudioSync {} is available. You have {}. Windows security blocked this version last time.", new, running);
+    }
+    public pure function notice-update-available-failed-before(new: string, running: string) -> string {
+        return @tr("AudioSync {} is available. You have {}. This version didn't start last time.", new, running);
+    }
+    public pure function notice-update-downloading(percent: string) -> string {
+        return @tr("Downloading the update: {}%", percent);
+    }
+    out property <string> notice-update-checking: @tr("Checking for updates…");
+    out property <string> notice-update-downloading-started: @tr("Downloading the update.");
+    public pure function notice-update-installed(version: string) -> string {
+        return @tr("AudioSync {} is installed. It takes effect after AudioSync restarts.", version);
+    }
+    public pure function notice-update-up-to-date(running: string) -> string {
+        return @tr("AudioSync {} is the latest version.", running);
+    }
+    out property <string> notice-update-unreachable: @tr("AudioSync couldn't reach the update server. Check your connection, then try again.");
+    out property <string> notice-update-download-failed: @tr("The update didn't download completely, so nothing was installed. The running version stays.");
+    out property <string> notice-update-bad-signature: @tr("The download didn't pass its check, so nothing was installed. The running version stays. Try again later, or download the new version from the release page.");
+    out property <string> notice-update-broken: @tr("The download is broken, so nothing was installed. The running version stays.");
+    out property <string> notice-update-disk-full: @tr("There isn't enough disk space for the update, so nothing was installed. The running version stays.");
+    out property <string> notice-update-read-only: @tr("AudioSync can't write to its own folder, so it can't install the update. The running version stays. You can download the new version from the release page.");
+    out property <string> notice-update-in-use: @tr("Another copy of AudioSync is using its files, for example in another user's session. Close the other copies, then try again. The running version stays.");
+    out property <string> notice-update-failed: @tr("The update couldn't be installed. The running version stays. Try again later, or download the new version from the release page.");
+    // `renames` is one or more of notice-update-rename joined by list-and,
+    // the exe first.
+    public pure function notice-update-restore-failed(renames: string) -> string {
+        return @tr("The update failed and AudioSync couldn't put its old version back. In the AudioSync folder, rename {}.", renames);
+    }
+    // A file left under its .bak name and the name it goes back to.
+    public pure function notice-update-rename(bak: string, live: string) -> string {
+        return @tr("{} to {}", bak, live);
+    }
+    out property <string> notice-update-relaunch-failed: @tr("The new version couldn't start, so AudioSync put the old version back. The running version stays. You can download the new version from the release page.");
+    out property <string> notice-update-blocked: @tr("Windows security blocked the update file, so nothing was installed. The running version stays. You can download the new version from the release page.");
 
     // Windows audio couldn't be reached at startup, so AudioSync exits;
     // `detail` is the system's reason.
@@ -912,7 +988,9 @@ export global Strings {
     out property <string> help-more-linux: @tr("To make a zone, turn on the speakers you want, then choose Speakers > New Zone from Active Speakers (Ctrl+N). They move under the zone, and a speaker is in one zone at most. Select the zone's round icon to turn its speakers on or off at once; select anywhere else on its header to show or hide them. Each zone has its own volume. To rename or delete a zone, right-click it or use its … button; F2 renames the zone you're on. Deleting a zone puts its speakers back under This PC or Connected Speakers. To move a speaker, right-click it or use its … button and choose Move to Zone or Remove from Zone.\n\nTo save a preset, turn on the speakers you want and set their volumes, the zone volumes, the master volume and the curve, then select Save as Preset… in the Presets card or in View > Presets. Delays and the preamp aren't saved. To recall a preset, select it in the card, or press Ctrl+1 to Ctrl+9 for the first nine. Speakers you hid are never saved in a preset, and recalling one leaves them hidden. To rename, update or delete a preset, right-click it or use its … button.\n\nTo rename a speaker, double-click its name, or right-click it or use its … button and choose Rename. Type a name and press Enter. Leave it empty to use the device's own name; while a speaker is renamed, its tooltip shows that name.\n\nTo have a speaker turn on whenever it appears, right-click it or use its … button, and choose Auto-Connect When Available. At launch, AudioSync starts streaming only when such a speaker is there.\n\nTo keep a speaker you never use out of the lists, choose Hide Speaker in its menu. A speaker that is on turns off first. Hidden Speakers in the Speakers menu lists what you hid; choose one to show it again, off, with its volume and delay as you left them.\n\nThe equalizer shapes the sound on every speaker at once, with ten bands, a preamp, preset curves and curves you save yourself. Open it from its card or with View > Equalizer (Ctrl+E).\n\nAirPlay speakers with a screen, such as a TV, show the track's title, artist, album and artwork, taken from the media players that share it over MPRIS. With All System Audio, that's the track that is playing; with one app, that app's track, even while paused. Otherwise they show AudioSync, the source's name, the album From your PC and AudioSync's icon.\n\nVirtual outputs, such as PipeWire null sinks, are hidden unless one is on. View > Show Virtual Devices lists them all. Speakers > Refresh Devices (F5) reads the sources and outputs again.\n\nTo start AudioSync when you sign in, choose File > Launch at Sign-In, or Launch at Sign-In in the menu of the AudioSync tray icon. AudioSync adds itself to your desktop's autostart programs, then starts in the tray without opening its window; on a desktop without tray icons, it opens its window.\n\nView > Appearance: Match System follows your desktop's light or dark setting; Light or Dark keeps AudioSync's windows that way.\n\nAudioSync saves the source, each speaker's switch, delay, volume and name, the speakers you hid, your zones and the equalizer, and restores them the next time it starts.");
     out property <string> help-airplay-title: @tr("AirPlay");
     out property <string> help-airplay: @tr("AudioSync finds AirPlay speakers on your network by itself. If none show up, check that this PC is on the same network as your speakers and that the network is set to Private. If it has to stay Public, allow AudioSync on Public networks in Windows Firewall.\n\nAudioSync for Windows plays to AirPlay 1 receivers. A speaker that plays only AirPlay 2, or needs something else AudioSync for Windows can't do yet, is listed with a note saying so, and stays off unless AirPlay 2 (Experimental) is on.\n\nAn Apple TV that asks for a PIN shows “Asks for a code”. When you turn it on, the TV shows a PIN: type it in the dialog that opens. AudioSync keeps the pairing, so the PIN isn't asked again. Forget Pairing in the speaker's … menu removes it. Auto-connect never starts a pairing: it shows a notice instead. A speaker set to ask for a code every time shows “Asks for a code every time”. Auto-connect leaves it off, and AudioSync asks for the code each time you turn it on.\n\nA speaker protected by a password shows “Asks for a code” too. When you turn it on, type the password set for it in the Home app or in the speaker's settings. AudioSync keeps it in memory until it quits, so it asks once each time AudioSync starts. A wrong password brings the dialog back; Cancel leaves the speaker off. If a speaker turns the password down after it has started playing, it goes off with a notice. A speaker that auto-connect turned on goes off with a notice instead: turn it on yourself to type the password.\n\nIf AudioSync's AirPlay sender stops or can't start, a notice says so, with a Retry button.\n\nAirPlay 2 (Experimental), in the File menu, lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups. It's off at first; turn it on, then quit and reopen AudioSync. With it on, a stereo pair or home theater group shows as one row, and its note names the speakers in it.");
+    out property <string> help-airplay-prefer: @tr("AudioSync finds AirPlay speakers on your network by itself. If none show up, check that this PC is on the same network as your speakers and that the network is set to Private. If it has to stay Public, allow AudioSync on Public networks in Windows Firewall.\n\nAudioSync for Windows plays to AirPlay 1 and AirPlay 2 receivers. A speaker that needs something AudioSync for Windows can't do yet is listed with a note saying so.\n\nAn Apple TV that asks for a PIN shows “Asks for a code”. When you turn it on, the TV shows a PIN: type it in the dialog that opens. AudioSync keeps the pairing, so the PIN isn't asked again. Forget Pairing in the speaker's … menu removes it. Auto-connect never starts a pairing: it shows a notice instead. A speaker set to ask for a code every time shows “Asks for a code every time”. Auto-connect leaves it off, and AudioSync asks for the code each time you turn it on.\n\nA speaker protected by a password shows “Asks for a code” too. When you turn it on, type the password set for it in the Home app or in the speaker's settings. AudioSync keeps it in memory until it quits, so it asks once each time AudioSync starts. A wrong password brings the dialog back; Cancel leaves the speaker off. If a speaker turns the password down after it has started playing, it goes off with a notice. A speaker that auto-connect turned on goes off with a notice instead: turn it on yourself to type the password.\n\nIf AudioSync's AirPlay sender stops or can't start, a notice says so, with a Retry button.\n\nA speaker that plays both AirPlay 1 and AirPlay 2 uses AirPlay 1 unless Prefer AirPlay 2, in the File menu, is on; turn it on, then quit and reopen AudioSync. While another speaker plays over AirPlay 2, such a speaker plays over AirPlay 1, and its row says AirPlay. A stereo pair or home theater group shows as one row, and its note names the speakers in it.");
     out property <string> help-airplay-linux: @tr("AudioSync finds AirPlay speakers on your network by itself. If none show up, check that this PC is on the same network as your speakers and that no firewall on this PC blocks AudioSync.\n\nAudioSync for Linux plays to AirPlay 1 receivers. A speaker that plays only AirPlay 2, or needs something else AudioSync for Linux can't do yet, is listed with a note saying so, and stays off unless AirPlay 2 (Experimental) is on.\n\nAn Apple TV that asks for a PIN shows “Asks for a code”. When you turn it on, the TV shows a PIN: type it in the dialog that opens. AudioSync keeps the pairing, so the PIN isn't asked again. Forget Pairing in the speaker's … menu removes it. Auto-connect never starts a pairing: it shows a notice instead. A speaker set to ask for a code every time shows “Asks for a code every time”. Auto-connect leaves it off, and AudioSync asks for the code each time you turn it on.\n\nA speaker protected by a password shows “Asks for a code” too. When you turn it on, type the password set for it in the Home app or in the speaker's settings. AudioSync keeps it in memory until it quits, so it asks once each time AudioSync starts. A wrong password brings the dialog back; Cancel leaves the speaker off. If a speaker turns the password down after it has started playing, it goes off with a notice. A speaker that auto-connect turned on goes off with a notice instead: turn it on yourself to type the password.\n\nIf AudioSync's AirPlay sender stops or can't start, a notice says so, with a Retry button.\n\nAirPlay 2 (Experimental), in the File menu, lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups. It's off at first; turn it on, then quit and reopen AudioSync. With it on, a stereo pair or home theater group shows as one row, and its note names the speakers in it.");
+    out property <string> help-airplay-linux-prefer: @tr("AudioSync finds AirPlay speakers on your network by itself. If none show up, check that this PC is on the same network as your speakers and that no firewall on this PC blocks AudioSync.\n\nAudioSync for Linux plays to AirPlay 1 and AirPlay 2 receivers. A speaker that needs something AudioSync for Linux can't do yet is listed with a note saying so.\n\nAn Apple TV that asks for a PIN shows “Asks for a code”. When you turn it on, the TV shows a PIN: type it in the dialog that opens. AudioSync keeps the pairing, so the PIN isn't asked again. Forget Pairing in the speaker's … menu removes it. Auto-connect never starts a pairing: it shows a notice instead. A speaker set to ask for a code every time shows “Asks for a code every time”. Auto-connect leaves it off, and AudioSync asks for the code each time you turn it on.\n\nA speaker protected by a password shows “Asks for a code” too. When you turn it on, type the password set for it in the Home app or in the speaker's settings. AudioSync keeps it in memory until it quits, so it asks once each time AudioSync starts. A wrong password brings the dialog back; Cancel leaves the speaker off. If a speaker turns the password down after it has started playing, it goes off with a notice. A speaker that auto-connect turned on goes off with a notice instead: turn it on yourself to type the password.\n\nIf AudioSync's AirPlay sender stops or can't start, a notice says so, with a Retry button.\n\nA speaker that plays both AirPlay 1 and AirPlay 2 uses AirPlay 1 unless Prefer AirPlay 2, in the File menu, is on; turn it on, then quit and reopen AudioSync. While another speaker plays over AirPlay 2, such a speaker plays over AirPlay 1, and its row says AirPlay. A stereo pair or home theater group shows as one row, and its note names the speakers in it.");
     out property <string> help-remote-title: @tr("Web Remote");
     out property <string> help-remote: @tr("A phone on the same network as this PC can switch your speakers on and off, and set their volume, their delay and the master volume. It also shows what's playing. Choose File > Web Remote…, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen before you enter the code, then open AudioSync from the new icon and pair there: on iPhone, a pairing made in Safari doesn't carry over to the Home Screen app. The window shows these steps for iPhone and Android. Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.\n\nThe page uses plain HTTP, so use the web remote only on your home network. On a network Windows calls Public, the window and a notice say so. Forget All Remote Devices unpairs every phone, also while the remote is off. If another app already uses the port, the window says so and lets you pick another one.");
     out property <string> help-remote-linux: @tr("A phone on the same network as this PC can switch your speakers on and off, and set their volume, their delay and the master volume. It also shows what's playing. Choose File > Web Remote…, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen before you enter the code, then open AudioSync from the new icon and pair there: on iPhone, a pairing made in Safari doesn't carry over to the Home Screen app. The window shows these steps for iPhone and Android. Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.\n\nThe page uses plain HTTP, so use the web remote only on your home network. Forget All Remote Devices unpairs every phone, also while the remote is off. If another app already uses the port, the window says so and lets you pick another one.");
@@ -1015,6 +1093,9 @@ export global Strings {
         if kind == NoticeKind.airplay2-next-launch {
             return @tr("AirPlay 2 after restart");
         }
+        if kind == NoticeKind.update {
+            return @tr("update");
+        }
         if kind == NoticeKind.remote-public-network {
             return @tr("web remote on Public network");
         }
@@ -1063,7 +1144,8 @@ export global Strings {
             return root.will-play;
         }
         if state == RowState.waiting-for-device || state == RowState.reconnecting
-                || state == RowState.waiting-for-airplay2 || state == RowState.waiting-for-ptp {
+                || state == RowState.waiting-for-airplay2 || state == RowState.waiting-for-ptp
+                || state == RowState.not-on-network {
             return root.row-note(state);
         }
         return root.on;
@@ -1083,6 +1165,9 @@ export global Strings {
         }
         if state == RowState.waiting-for-ptp {
             return root.waiting-for-ptp;
+        }
+        if state == RowState.not-on-network {
+            return root.not-on-network;
         }
         return "";
     }

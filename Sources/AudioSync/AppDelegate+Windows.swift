@@ -641,6 +641,7 @@ extension AppDelegate {
                                     airPlay2: receiver.map { native?.reachedOverAirPlay2($0) == true } ?? false,
                                     waitingForAirPlay2: receiver.map { native?.waitReason($0) == .tooManyAirPlay2 } ?? false,
                                     waitingForPtp: receiver.map { native?.waitReason($0) == .ptpOtherNetwork } ?? false,
+                                    unannounced: receiver.map { native?.isUnannounced($0) == true } ?? false,
                                     paired: receiver.map { native?.isPaired($0) == true } ?? false,
                                     holdsCredentials: receiver.map { native?.keepsCredentials($0) == true } ?? false,
                                     holdsPassword: receiver.map { native?.holdsPassword($0) == true } ?? false,

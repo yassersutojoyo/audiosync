@@ -628,6 +628,8 @@ fn keyboard_shortcuts_are_declared() {
 /// for the one AirPlay 2 slot show only behind the AirPlay 2 switch, whose
 /// File menu item says it is experimental, as do the notice that turning
 /// the item on or off applies at the next launch and its short name.
+/// Under the AirPlay 2 flag, off by default, the item reads Prefer AirPlay 2
+/// (spec S313).
 /// The row note and notice for a speaker that plays only AirPlay 2 name
 /// that item, and show only for a receiver the sender found; so does the
 /// note on a zone's stereo pair or home theater that needs it.
@@ -685,9 +687,12 @@ fn no_text_promises_airplay() {
                 )
                 || line.contains("@tr(\"Waiting: AirPlay 2 speakers on another network\")")
                 || line.contains("airplay2-experimental: @tr(\"AirPlay 2 (Experimental)\")")
+                || line.contains("airplay2-prefer: @tr(\"Prefer AirPlay 2\")")
                 || line.contains("needs-airplay2: @tr(\"Needs AirPlay 2 (Experimental)\")")
                 || line.contains("property <string> notice-airplay2-on-next-launch: @tr(")
                 || line.contains("property <string> notice-airplay2-off-next-launch: @tr(")
+                || line.contains("property <string> notice-airplay2-prefer-on-next-launch: @tr(")
+                || line.contains("property <string> notice-airplay2-prefer-off-next-launch: @tr(")
                 || line.contains("return @tr(\"AirPlay 2 after restart\");")
                 || line.contains(
                     "network-none-found: Platform.os == OperatingSystemType.linux ? \
@@ -707,6 +712,8 @@ fn no_text_promises_airplay() {
                     "help-airplay-title",
                     "help-airplay",
                     "help-airplay-linux",
+                    "help-airplay-prefer",
+                    "help-airplay-linux-prefer",
                     "help-calibration",
                     "help-calibration-linux",
                 ]
@@ -1352,5 +1359,12 @@ fn only_a_zone_headers_badge_switches_the_zone() {
         header.matches("TouchArea {").count(),
         2,
         "the box and the arrow"
+    );
+    // A FocusScope that takes the focus on click accepts the press (Slint
+    // 1.18), so the box's TouchArea would never see a click on the name.
+    assert_eq!(
+        header.matches("FocusScope {").count(),
+        header.matches("focus-on-click: false;").count(),
+        "every FocusScope in the header lets a click through to the box"
     );
 }
