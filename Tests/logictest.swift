@@ -4708,6 +4708,12 @@ do {
     check(!pressed(CGPoint(x: 1154, y: 876), icon, 0.05), "menu bar icon: the line below the icon is not on it")
     check(!pressed(CGPoint(x: 700, y: 500), icon, 0.05), "menu bar icon: a press elsewhere is not a press on the icon")
     check(!pressed(CGPoint(x: 1154, y: 888), icon, 3), "menu bar icon: Escape with the pointer resting on the icon is no press")
+    let addRow = CastAddRow.state
+    check(addRow(true, .searching) == .reserved && addRow(true, .noneFound) == .shown,
+          "menu bar panel: the Add by Address row keeps its room while the Cast search runs, so the panel never grows when it ends")
+    check(addRow(true, .failed) == .shown && addRow(true, .quiet) == .none && addRow(false, .searching) == .none
+            && addRow(false, .noneFound) == .none,
+          "menu bar panel: no Add by Address row once speakers are listed or when adding isn't possible")
     let duringClose = StatusItemClick.pressDuringClose
     check(duringClose(30.1, 30.25) && !duringClose(30.25, 30.25) && !duringClose(31, 30.25) && !duringClose(30.1, nil),
           "menu bar icon: only a press while the panel still fades out is ignored, as Outlook does")
