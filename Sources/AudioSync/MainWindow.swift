@@ -664,8 +664,13 @@ final class ZoneDisclosure: ObservableObject {
         if collapsed.remove(id) == nil { collapsed.insert(id) }
         folds += 1
         let fold = folds
+        let motion = PanelFold(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        guard motion.moves else {
+            moving = false
+            return
+        }
         moving = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + PanelFold.duration + 0.05) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + motion.duration + 0.05) { [weak self] in
             guard let self, self.folds == fold else { return }
             self.moving = false
         }

@@ -992,7 +992,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         while let up = root.superview { root = up }
         let found = Self.backgrounds(in: root, skipping: host.view)
         let model = found.first
-        let view = NSVisualEffectView(frame: frame.bounds)
+        let view = PanelStandInView(frame: frame.bounds)
         view.material = model?.material ?? .popover
         view.blendingMode = PanelSwitches.standInBehindWindow ? .behindWindow : .withinWindow
         view.state = .active
@@ -1017,7 +1017,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     /// The system's background views in the popover window, outside the panel's own content.
     private static func backgrounds(in view: NSView, skipping content: NSView) -> [NSVisualEffectView] {
-        guard view !== content else { return [] }
+        // A stand-in still fading out from the last hand-back is not the system's.
+        guard view !== content, !(view is PanelStandInView) else { return [] }
         let own = (view as? NSVisualEffectView).map { [$0] } ?? []
         return own + view.subviews.flatMap { backgrounds(in: $0, skipping: content) }
     }
@@ -1138,12 +1139,19 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         rest = aim
         resizeEndsAt = Self.uptime + duration
         let session = closing, step = resizeStep
+        traceLayers(window, "start")
+        if DebugTrace.enabled {
+            DispatchQueue.main.asyncAfter(deadline: .now() + duration / 2) { [weak self, weak window] in
+                if let window { self?.traceLayers(window, "middle") }
+            }
+        }
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = duration
             context.timingFunction = timing
             window.animator().setFrame(frame, display: true)
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
+                self?.traceLayers(window, "end")
                 // A step that began since aims further; this one's end is not the panel's size.
                 guard let self, self.closing == session, self.resizeStep == step else { return }
                 self.resizeEndsAt = nil
@@ -1158,6 +1166,27 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 }
             }
         })
+    }
+
+    /// Debug log only: what is drawn at the panel's top edge during a resize,
+    /// to tell which layer darkens its top row.
+    private func traceLayers(_ window: NSWindow, _ when: String) {
+        guard DebugTrace.enabled, let frame = window.contentView?.superview else { return }
+        var root: NSView = frame
+        while let up = root.superview { root = up }
+        let system = Self.backgrounds(in: root, skipping: host.view).map { String(format: "%.2f", $0.alphaValue) }
+        let standIns = frame.subviews.compactMap { $0 as? PanelStandInView }.map { String(format: "%.2f", $0.alphaValue) }
+        let children = (window.childWindows ?? []).map { "\(type(of: $0)) visible=\($0.isVisible)" }
+        let scale = frame.layer?.presentation()?.transform.m11 ?? frame.layer?.transform.m11 ?? 1
+        let hostTop = host.view.superview.map {
+            $0.isFlipped ? host.view.frame.minY : $0.bounds.maxY - host.view.frame.maxY
+        } ?? 0
+        let windowTop = window.frame.maxY - window.convertToScreen(frame.convert(frame.bounds, to: nil)).maxY
+        DebugTrace.log(String(format: "[AudioSync] panel resize layers (%@): system shadow=%@, children %@, "
+                              + "system background alpha %@, stand-in alpha %@, frame scale %.3f, "
+                              + "content top gap %.2f pt, frame top gap %.2f pt", when,
+                              window.hasShadow ? "on" : "off", children.description, system.description,
+                              standIns.description, scale, hostTop, windowTop))
     }
 
     /// Debug log only: logs every move of the open panel's top edge off its
@@ -1417,6 +1446,10 @@ final class PanelShadowWindow: NSWindow {
     }
 }
 
+/// The panel's background while it grows in or shrinks away, told apart
+/// from the system's own.
+private final class PanelStandInView: NSVisualEffectView {}
+
 /// The panel's popover. Escape closes it, as it closes a menu.
 final class MenuBarPopover: NSPopover {
     override func cancelOperation(_ sender: Any?) { performClose(sender) }
@@ -1675,7 +1708,6 @@ struct MenuBarView: View {
     }
 }
 
-/// One speaker or group in the panel: the whole row switches it on or off.
 /// A zone's clip in the panel (`PanelFold.clip`). It has no animatable data,
 /// so it switches at once while the zone's frame it follows animates.
 private struct FoldClip: Shape {
@@ -1684,6 +1716,7 @@ private struct FoldClip: Shape {
     func path(in rect: CGRect) -> Path { Path(PanelFold.clip(rect, moving: moving)) }
 }
 
+/// One speaker or group in the panel: the whole row switches it on or off.
 private struct CompactRow: View {
     let name, symbol: String
     let state: SpeakerState
