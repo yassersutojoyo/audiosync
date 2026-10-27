@@ -100,6 +100,7 @@ impl SpeakerNames {
 mod tests {
     use super::*;
 
+    // covers: S228
     #[test]
     fn a_typed_name_is_trimmed_kept_on_one_line_and_cut() {
         assert_eq!(normalized("  Desk\r\nLeft  "), "Desk  Left");
@@ -110,6 +111,7 @@ mod tests {
         assert_eq!(shown_after(" Desk ", "Speakers"), "Desk");
     }
 
+    // covers: S228
     #[test]
     fn set_clear_and_unknown_keys() {
         let mut names = SpeakerNames::default();
@@ -147,6 +149,7 @@ mod tests {
         );
     }
 
+    // covers: S228
     #[test]
     fn names_survive_the_saved_form_and_follow_a_moved_speaker() {
         let mut names = SpeakerNames::default();
@@ -161,5 +164,17 @@ mod tests {
         moved.move_key("lc:desk", "lc:desk-2");
         assert_eq!(moved.shown("lc:desk-2", "Speakers"), "Desk");
         assert_eq!(moved.shown("lc:desk", "Speakers"), "Speakers");
+    }
+
+    // covers: S228
+    #[test]
+    fn the_system_name_typed_with_spaces_or_a_line_break_removes_the_key() {
+        let mut names = SpeakerNames::default();
+        for typed in ["  Speakers ", "Speakers\r\n", "\nSpeakers"] {
+            assert!(names.rename("lc:desk", "Desk", "Speakers"));
+            assert!(names.rename("lc:desk", typed, "Speakers"), "{typed:?}");
+            assert!(!names.contains("lc:desk"), "{typed:?}");
+            assert!(names.saved().is_empty(), "{typed:?}");
+        }
     }
 }

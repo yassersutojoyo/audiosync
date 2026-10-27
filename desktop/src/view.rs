@@ -5898,6 +5898,7 @@ mod tests {
             .expect("the desk has a row")
     }
 
+    // covers: S220
     #[test]
     fn a_draft_is_typed_text_other_than_the_applied_value() {
         assert!(!is_draft(None, "+120"), "nothing typed");
@@ -7731,6 +7732,7 @@ mod tests {
         assert_eq!(desk_delay_text(&app), "+120");
     }
 
+    // covers: S220
     #[test]
     fn escape_in_the_airplay_delay_field_leaves_the_applied_delay() {
         let app = app_over(MockBackend::new());
@@ -7763,6 +7765,31 @@ mod tests {
             "leaving the field after Escape applies nothing"
         );
         assert_eq!(shown(), format_ms(1750.0));
+    }
+
+    // covers: S220
+    #[test]
+    fn an_airplay_delay_over_its_range_applies_clamped_once() {
+        let app = app_over(MockBackend::new());
+        let shown = || app.main.get_airplay_delay_text().to_string();
+        app.main.invoke_airplay_delay_edited("25000".into());
+        assert_eq!(app.snapshot().airplay_delay_ms, Some(1750.0));
+
+        app.main.invoke_airplay_delay_committed();
+        assert_eq!(
+            app.snapshot().airplay_delay_ms,
+            Some(ui_model::MAX_DELAY_MS)
+        );
+        assert_eq!(
+            shown(),
+            format_ms(ui_model::MAX_DELAY_MS),
+            "the field shows it clamped"
+        );
+        assert!(!app.main.get_airplay_delay_pending());
+        assert!(
+            app.ui.borrow().airplay_delay_draft.draft.is_none(),
+            "a focus loss after it has nothing to apply"
+        );
     }
 
     #[test]
@@ -8497,6 +8524,7 @@ mod tests {
         assert_eq!(row.delay_ms, 120);
     }
 
+    // covers: S220
     #[test]
     fn a_typed_airplay_delay_applies_only_when_committed() {
         // With a sender latency above 2 s the delay can't go under 2100 ms,
@@ -8527,6 +8555,7 @@ mod tests {
         );
     }
 
+    // covers: S220
     #[test]
     fn escape_drops_the_typed_airplay_delay() {
         let shown = Some(2100.0);

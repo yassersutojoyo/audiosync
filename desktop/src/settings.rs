@@ -2155,6 +2155,7 @@ mod tests {
         assert!(!Settings::default().to_json().contains("input_pairs"));
     }
 
+    // covers: S212 (the master, volume and delay clamps)
     #[test]
     fn values_out_of_range_are_clamped() {
         let text = r#"{

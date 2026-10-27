@@ -2050,6 +2050,40 @@ S112 and S113 describe the hosts, so they stay listed in `core/tests/spec_exempt
 | what_the_audio_side_reports_waits_for_the_ui_threads_poll (`desktop/src/adapter.rs`) | S113 |
 | the engine's callbacks start on the main queue (`Tests/run-tests.sh`) | S113 |
 
+### Host settings, debug log, track info, artwork, speaker names and the delay field: Windows (`cargo test` in `desktop/`)
+
+S170, S212, S217, S219, S220 and S228 describe the hosts, so they stay listed in `core/tests/spec_exempt.txt`; the Mac logic suite checks them too. S212's user defaults keys and its equalizer band count rule belong to the Mac's storage: the Windows settings file keeps the gains it has and leaves the rest flat. The draft cue of S220 compares text on both hosts, so a saved offset typed again without its sign ("120" over "+120") is a draft.
+
+Windows (`desktop/src/audio/now_playing.rs` unless named):
+
+| Test | Clauses |
+|---|---|
+| values_out_of_range_are_clamped (`desktop/src/settings.rs`) | S212 |
+| a_master_or_speaker_value_that_isnt_a_number_is_dropped_and_the_rest_reads (`desktop/src/settings.rs`) | S212 |
+| the_log_is_on_only_when_audiosync_debug_is_exactly_1 (`desktop/src/debug_log.rs`) | S170 |
+| a_log_that_is_off_creates_no_file_and_builds_no_message (`desktop/src/debug_log.rs`) | S170 |
+| each_launch_empties_the_last_log (`desktop/src/debug_log.rs`) | S170 |
+| a_track_reaches_the_sender_with_its_artwork_once_read | S219 |
+| an_unchanged_track_is_not_sent_again | S219 |
+| a_new_track_is_sent_as_it_changes | S219 |
+| with_no_session_receivers_get_audiosyncs_labels_and_icon | S219 |
+| another_image_for_the_same_track_goes_out_once | S219 |
+| a_restarted_sender_gets_the_track_and_its_artwork_again | S219 |
+| a_busy_cover_takes_a_lower_quality_before_a_smaller_side | S217, S272 |
+| artwork_that_never_fits_or_fails_to_encode_is_none | S217 |
+| a_tighter_byte_limit_gives_a_smaller_image_of_the_same_shape | S217 |
+| a_small_image_is_never_scaled_up | S217 |
+| the_side_never_steps_below_64_px | S217 |
+| a_typed_name_is_trimmed_kept_on_one_line_and_cut (`desktop/src/speaker_names.rs`) | S228 |
+| set_clear_and_unknown_keys (`desktop/src/speaker_names.rs`) | S228 |
+| names_survive_the_saved_form_and_follow_a_moved_speaker (`desktop/src/speaker_names.rs`) | S228 |
+| the_system_name_typed_with_spaces_or_a_line_break_removes_the_key (`desktop/src/speaker_names.rs`) | S228 |
+| a_draft_is_typed_text_other_than_the_applied_value (`desktop/src/view.rs`) | S220 |
+| a_typed_airplay_delay_applies_only_when_committed (`desktop/src/view.rs`) | S220 |
+| escape_drops_the_typed_airplay_delay (`desktop/src/view.rs`) | S220 |
+| escape_in_the_airplay_delay_field_leaves_the_applied_delay (`desktop/src/view.rs`) | S220 |
+| an_airplay_delay_over_its_range_applies_clamped_once (`desktop/src/view.rs`) | S220 |
+
 ### Windows updater: Windows (`cargo test` in `desktop/`)
 
 The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host-only, stay listed in `core/tests/spec_exempt.txt`. The fake appcast is a fixture `appcast.xml` next to zips signed with a throwaway test key made for the test; the release key's private half never reaches a test. Only `the_fake_appcast_on_loopback` serves it on 127.0.0.1, and only in CI (it skips without the `CI` variable, so a local run opens no listening socket); every other test feeds the appcast and the zip through an in-memory fetch.

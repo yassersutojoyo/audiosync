@@ -56,7 +56,7 @@ S160 Retired with the FIFO feed: its diagnostic counters.
 S167 Retired in part with the bundled engine: its list and reconcile; what stands, the Local Network hint for an empty list, is the host's (S154), which the Mac logic suite checks.
 S168 Retired with the bundled engine: track info after each start of the pipe; the core's policy::track_info went too.
 S169 Retired with the FIFO feed: the live edge on every open of the pipe.
-S170 The Mac app's debug log file, which its logic suite checks; the Windows app keeps its own log outside the core.
+S170 The hosts' debug log files, which the Mac logic suite and the Windows host's tests check; neither lives in the core.
 S171 Mac host only: Core Audio device lists, their alive state, channel counts and private aggregate devices; its logic suite checks it.
 S173 Mac host only: the reference output, from Core Audio transport types and stream terminal types; its logic suite checks it.
 S174 The Windows app's reference output, from its endpoint kinds and endpoint IDs.
@@ -74,19 +74,19 @@ S202 Hosts only: re-reads when a device goes away, comes back or its row is swit
 S203 Retired with the FIFO feed: the live edge after a stall of the pipe.
 S204 Mac host only: settings the Mac app saved under the bundled engine's output IDs move to the native sender's receiver IDs; its logic suite checks it.
 S211 Mac host only: the source picker's entries; its logic suite checks it.
-S212 Mac host only: settings kept in the user defaults; its logic suite checks it.
+S212 Hosts only: stored settings read back and clamped (the user defaults on the Mac, a JSON file on Windows); the Mac logic suite and the Windows host's tests check it.
 S213 Mac host only: notes on choices older builds read; its logic suite checks it.
 S214 Mac host only: where a window reopens; its logic suite checks it.
 S215 Mac host only: login-item launches, second launches and the core-setup start message; its logic suite checks it.
 S216 Mac host only: closing a Core Audio process tap and its aggregate device; its logic suite checks it.
-S217 Mac host only: artwork encoded as a JPEG for the AirPlay sender; its logic suite checks it.
+S217 Hosts only: artwork encoded as a JPEG for the AirPlay sender; the Mac logic suite and the Windows host's tests check it.
 S218 Mac host only: the now-playing fields and artwork the receivers show; its logic suite checks it.
-S219 Mac host only: what the app hands its own AirPlay sender as track info; its logic suite checks it.
-S220 Mac host only: the delay field's typed text and when it applies; its logic suite checks it.
+S219 Hosts only: what the app hands its own AirPlay sender as track info; the Mac logic suite and the Windows host's tests check it.
+S220 Hosts only: the delay field's typed text and when it applies; the Mac logic suite and the Windows host's tests check it.
 S221 Mac host only: the delay panels of the speaker rows; its logic suite checks it.
 S222 Mac host only: the window's model of the native AirPlay sender's receivers, speakers and failures; its logic suite checks it.
 S225 Test harness only: the soak run's memory rule; the soak rules suite checks it.
-S228 Mac host only: the names the user gives speakers and the inline rename; its logic suite checks it.
+S228 Hosts only: the names the user gives speakers and the inline rename; the Mac logic suite and the Windows host's tests check it.
 S256 Web remote and hosts only: the snapshot's zones, presets and calibrating flag; the remote crate's, the Windows host's and the Mac logic suites check it.
 S257 Web remote and hosts only: the zone and preset routes and what the hosts apply; the remote crate's, the Windows host's and the Mac logic suites check it.
 S258 Web remote and hosts only: writes wait out a microphone run; the remote crate's, the Windows host's and the Mac logic suites check it.
