@@ -99,12 +99,47 @@ fn clauses(spec: &str) -> Vec<Clause> {
     found
 }
 
+/// The rule of `scripts/spec_markers.py` and the core check: only the words
+/// right after the ID, or after an italic title such as `*Engine restart.*`,
+/// count, since a live clause may mention withdrawn things later on.
+fn opens_withdrawn(after_id: &str) -> bool {
+    let body = after_id.trim_start();
+    opens_with_withdrawn_word(body) || opens_with_withdrawn_word(after_title(body))
+}
+
+/// The text after a leading italic title that ends with a period, or the whole
+/// text when it has none.
+fn after_title(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix('*') else {
+        return text;
+    };
+    match rest.split_once('*') {
+        Some((title, after)) if title.len() > 1 && title.ends_with('.') => after.trim_start(),
+        _ => text,
+    }
+}
+
+fn opens_with_withdrawn_word(text: &str) -> bool {
+    let words = text
+        .trim_start()
+        .trim_start_matches(['*', '('])
+        .to_ascii_lowercase();
+    words.starts_with("withdrawn")
+        || ["retired", "superseded"].iter().any(|word| {
+            words
+                .strip_prefix(*word)
+                .is_some_and(|rest| !rest.starts_with(" in part"))
+        })
+}
+
 fn is_withdrawn(clause: &Clause) -> bool {
     clause
         .text
         .lines()
         .next()
-        .is_some_and(|line| line.to_ascii_lowercase().contains("withdrawn"))
+        .and_then(|line| line.trim_start().strip_prefix("- **"))
+        .and_then(|rest| rest.split_once("**"))
+        .is_some_and(|(_, after_id)| opens_withdrawn(after_id))
 }
 
 fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
@@ -209,11 +244,30 @@ fn clause_list(file: &str) -> (BTreeMap<Id, String>, Vec<String>) {
     (listed, malformed)
 }
 
-fn spec_ids() -> BTreeSet<Id> {
-    clauses(&spec_text())
+fn live_ids(spec: &str) -> BTreeSet<Id> {
+    clauses(spec)
         .into_iter()
         .filter(|clause| !is_withdrawn(clause))
         .map(|clause| clause.id)
+        .collect()
+}
+
+fn spec_ids() -> BTreeSet<Id> {
+    live_ids(&spec_text())
+}
+
+fn missing(
+    known: &BTreeSet<Id>,
+    covered: &BTreeMap<Id, Vec<String>>,
+    exempt: &BTreeMap<Id, String>,
+    pending: &BTreeMap<Id, String>,
+) -> Vec<Id> {
+    known
+        .iter()
+        .copied()
+        .filter(|id| {
+            !covered.contains_key(id) && !exempt.contains_key(id) && !pending.contains_key(id)
+        })
         .collect()
 }
 
@@ -341,6 +395,32 @@ fn clause_text_runs_to_the_next_clause_or_heading() {
     );
     assert_eq!(found[2].id.to_string(), "C2a");
     assert!(!found[2].text.contains("Text."));
+}
+
+#[test]
+fn a_withdrawn_retired_or_superseded_clause_needs_no_marker_but_a_live_one_does() {
+    let spec = "- **C1** One.\n- **C2** *Withdrawn*: gone.\n\
+                - **C3** *Required.* Replaces the withdrawn C2.\n\
+                - **C3a** *Retired with the bundled engine; kept as a record.*\n\
+                - **C4** *Retired in part with the bundled engine*: the rest holds.\n\
+                - **C5** (Superseded by C3.) The old rule.\n\
+                - **C6** *Superseded in part by C3*: the rest holds.\n\
+                - **C7** Applied by the host.\n\
+                - **C8** *Engine restart.* *Retired with the bundled engine.*\n\
+                - **C9** *Network loss, as tested.* *Retired in part*: the hint stands.\n";
+    let live = live_ids(spec);
+    let want: BTreeSet<Id> = ids(&["C1", "C3", "C4", "C6", "C7", "C9"])
+        .into_iter()
+        .collect();
+    assert_eq!(live, want);
+    let covered = BTreeMap::from([
+        (ids(&["C1"])[0], vec!["a.rs".to_owned()]),
+        (ids(&["C4"])[0], vec!["b.rs".to_owned()]),
+        (ids(&["C9"])[0], vec!["b.rs".to_owned()]),
+    ]);
+    let exempt = BTreeMap::from([(ids(&["C7"])[0], "the host".to_owned())]);
+    let pending = BTreeMap::from([(ids(&["C6"])[0], "a later stage".to_owned())]);
+    assert_eq!(missing(&live, &covered, &exempt, &pending), ids(&["C3"]));
 }
 
 #[test]
@@ -522,13 +602,7 @@ fn every_clause_is_covered_exempt_or_pending() {
     let (covered, _) = covers();
     let (exempt, _) = exemptions();
     let (pending, _) = pending();
-    let missing: Vec<Id> = known
-        .iter()
-        .copied()
-        .filter(|id| {
-            !covered.contains_key(id) && !exempt.contains_key(id) && !pending.contains_key(id)
-        })
-        .collect();
+    let missing = missing(&known, &covered, &exempt, &pending);
     let stale_exempt: Vec<Id> = exempt
         .keys()
         .copied()

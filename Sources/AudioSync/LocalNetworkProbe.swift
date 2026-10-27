@@ -46,6 +46,12 @@ enum LocalNetworkHint: Equatable {
     /// The hint as the views show it: an AirPlay problem takes its place.
     func shown(airPlayProblem: Bool) -> LocalNetworkHint { airPlayProblem ? .none : self }
 
+    /// Whether the speaker notes may name Local Network access in their
+    /// network advice (`UIStrings.airPlayNoneFound`), for the hint before an
+    /// AirPlay problem hides it. Only `.denied` is certain: `.possible` comes
+    /// from an empty list alone, maybe before macOS ever asked.
+    var accessRefused: Bool { self == .denied }
+
     /// When the soft hint would show if nothing changes, while that is still
     /// ahead of `now`: no event says the time has passed, so the host
     /// reconciles then (`AppLifecycle.nextDueReconcile`), and `decide` shows

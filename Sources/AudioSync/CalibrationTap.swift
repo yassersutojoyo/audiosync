@@ -44,6 +44,8 @@ enum CalibrationTap {
     private static let position = Atomic<Int>(-1)
     /// Host ticks of the block that carried the signal's first frame; 0 before.
     private static let startTicks = Atomic<UInt64>(0)
+    /// That block came from `CalibrationFill`, not the capture.
+    private static let startFilled = Atomic<Bool>(false)
     /// The signal's level in frames of its fade-out; written by the capture
     /// thread while it plays, by `play` before it does.
     private static let signalLevel = Atomic<Int>(fadeFrames)
@@ -79,9 +81,10 @@ enum CalibrationTap {
 
     /// Adds the signal's next frames into `block`, both channels, when one is
     /// asked for; `ticks` is the host time kept when the block carries the
-    /// signal's first frame. Real-time safe: atomics and sums.
+    /// signal's first frame, `filled` whether the fill wrote the block.
+    /// Real-time safe: atomics and sums.
     @inline(__always)
-    static func addSignal(_ block: UnsafeMutablePointer<Float>, frames: Int, at ticks: UInt64) {
+    static func addSignal(_ block: UnsafeMutablePointer<Float>, frames: Int, at ticks: UInt64, filled: Bool = false) {
         _ = users.wrappingAdd(1, ordering: .sequentiallyConsistent)
         defer { _ = users.wrappingSubtract(1, ordering: .sequentiallyConsistent) }
         let at = position.load(ordering: .sequentiallyConsistent)
@@ -89,7 +92,10 @@ enum CalibrationTap {
         let total = signalFrames.load(ordering: .sequentiallyConsistent)
         let samples = raw.assumingMemoryBound(to: Float.self)
         let count = max(0, min(frames, total - at))
-        if at == 0 { startTicks.store(max(ticks, 1), ordering: .sequentiallyConsistent) }
+        if at == 0 {
+            startFilled.store(filled, ordering: .sequentiallyConsistent)
+            startTicks.store(max(ticks, 1), ordering: .sequentiallyConsistent)
+        }
         let fading = stopping.load(ordering: .sequentiallyConsistent)
         var l = signalLevel.load(ordering: .relaxed)
         for i in 0..<count {
@@ -144,6 +150,10 @@ enum CalibrationTap {
         let ticks = startTicks.load(ordering: .sequentiallyConsistent)
         return ticks == 0 ? nil : ticks
     }
+
+    /// The signal's first frame rode a block of the calibration's silence
+    /// fill rather than a captured one; read once `playedAtTicks` is set.
+    static var playedOnFill: Bool { startFilled.load(ordering: .sequentiallyConsistent) }
 
     /// Takes the signal out of the capture path and returns once no capture
     /// call can still be reading it, so its owner may free it. It may wait

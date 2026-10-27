@@ -55,6 +55,7 @@ pub mod test_key {
 mod tests {
     use super::*;
 
+    // covers: S299
     #[test]
     fn the_compiled_in_key_equals_su_public_ed_key_in_info_plist() {
         let plist = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -74,6 +75,7 @@ mod tests {
         assert!(key(RELEASE_KEY).is_some());
     }
 
+    // covers: S299
     #[test]
     fn a_missing_signature_or_one_by_another_key_is_a_bad_signature() {
         let signer = test_key::new();

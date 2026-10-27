@@ -163,7 +163,7 @@ fn assert_plays_on(run: &Run, from_ns: u64, to_ns: u64, what: &str) {
 
 const DEVICE_RATES: [u32; 2] = [48_000, 44_100];
 
-// covers: S77, S175
+// covers: S175
 #[test]
 fn an_output_started_at_20_s_sounds_20_s_after_the_capture_and_plays_on() {
     for device_rate in DEVICE_RATES {

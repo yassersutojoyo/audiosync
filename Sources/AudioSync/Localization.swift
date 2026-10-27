@@ -188,9 +188,25 @@ struct UIStrings {
 
     /// The calibrate button's tooltip and VoiceOver hint while it is off.
     func calibrationUnavailable(_ reason: CalibrationFailure) -> String {
-        reason == .noReference
-            ? "Calibration measures against the Mac's built-in speakers, and they aren't listed."
-            : "Turn on streaming and this speaker to calibrate it."
+        calibrationFailure(reason)
+    }
+
+    /// What a calibration needs that is off, in the order streaming, the
+    /// speaker (`speaker`), the built-in speakers; all three when none is given.
+    func calibrationNeeds(_ missing: CalibrationMissing, speaker: String = "this speaker") -> String {
+        let missing = missing.isEmpty ? CalibrationMissing.all : missing
+        var names: [String] = []
+        if missing.contains(.streaming) { names.append("streaming") }
+        if missing.contains(.speaker) { names.append(speaker) }
+        if missing.contains(.reference) { names.append("the built-in speakers") }
+        guard let last = names.popLast() else { return "" }
+        return names.isEmpty ? last : names.joined(separator: ", ") + " and " + last
+    }
+
+    /// Why a calibration of one speaker, or of all of them, can't start.
+    func calibrationTurnOn(_ missing: CalibrationMissing) -> String {
+        let it = missing.isEmpty || missing.contains(.speaker) ? " it" : ""
+        return "Turn on \(calibrationNeeds(missing)) to calibrate\(it)."
     }
 
     /// What a running calibration is doing.
@@ -225,8 +241,8 @@ struct UIStrings {
         switch failure {
         case .noReference:
             return "Calibration measures against the Mac's built-in speakers, and they aren't listed."
-        case .notPlaying:
-            return "Turn on streaming, this speaker and the built-in speakers first."
+        case .notPlaying(let missing):
+            return calibrationTurnOn(missing)
         case .referenceHeadphones:
             return calibrateAllUnavailable(.referenceHeadphones)
         case .microphoneDenied:
@@ -315,7 +331,7 @@ struct UIStrings {
     func calibrateAllUnavailable(_ blocker: CalibrateAllBlocker) -> String {
         switch blocker {
         case .noReference: "Calibration measures against the Mac's built-in speakers, and they aren't listed."
-        case .notPlaying: "Turn on streaming and the built-in speakers first."
+        case .notPlaying(let missing): calibrationTurnOn(missing)
         case .noOtherSpeaker: "Only the built-in speakers are on. Turn on another speaker to calibrate it."
         case .onlyLeftOut: "The other speakers that are on are headphones or virtual outputs, which the "
             + "microphone can't hear. Turn on another speaker, or choose Include Anyway for one in \(calibrateAll)."
@@ -458,6 +474,9 @@ struct UIStrings {
         case .sourceChanged: "The source was switched during the measurement."
         case .rateChanged: "The audio's sample rate changed during the measurement."
         case .delaysChanged: "A delay changed during the measurement."
+        // A run over all speakers has no one speaker to call "this speaker".
+        case .failed(.notPlaying(let missing)):
+            "Turn on \(calibrationNeeds(missing, speaker: "another speaker")) to calibrate."
         case .failed(let failure): calibrationFailure(failure)
         }
     }
@@ -471,8 +490,8 @@ struct UIStrings {
             return calibrateAllEndReason(end) + " The row for \(name) wasn't changed."
         case .changedSinceMeasured:
             return "A delay changed after the measurement, so nothing was applied. Calibrate again."
-        case .cannotMeasureAgain(let name):
-            return "Turn on streaming, the built-in speakers and \(name) to measure it again."
+        case .cannotMeasureAgain(let name, let missing):
+            return "Turn on \(calibrationNeeds(missing, speaker: name)) to measure it again."
         case .applied:
             return "New delays applied."
         case .undone:
@@ -858,9 +877,8 @@ struct UIStrings {
     let connectedSection = "Connected Speakers"
     /// `hint`: the Local Network hint on screen, which carries the network
     /// advice in its place. `localNetworkRefused`: Local Network access was
-    /// asked for and refused, or may have been (`LocalNetworkHint` other than
-    /// `.none`, before an AirPlay problem hides it); until then the advice
-    /// leaves it out.
+    /// asked for and refused (`LocalNetworkHint.accessRefused`); until then
+    /// the advice leaves it out.
     func airPlayNoneFound(hint: LocalNetworkHint = .none, localNetworkRefused: Bool = false) -> String {
         UIStrings.withNetworkAdvice("No AirPlay speakers found yet.", hint: hint, refused: localNetworkRefused)
     }
@@ -979,8 +997,7 @@ struct UIStrings {
     let moveToZone = "Move to Zone"
     let newZoneItem = "New Zone…"
     let removeFromZone = "Remove from Zone"
-    let renameZone = "Rename Zone…"
-    let renameZoneTitle = "Rename Zone"
+    let renameZone = "Rename…"
     func renameMessage(_ name: String) -> String { "Enter a new name for “\(name)”." }
     let deleteZone = "Delete Zone"
     /// A zone header's count; `zoneWaiting` follows it when a member waits.
@@ -999,9 +1016,15 @@ struct UIStrings {
     func hideZoneSpeakers(_ name: String) -> String { "Hide speakers in \(name)" }
     /// A new zone's name when none was typed.
     func numberedZone(_ n: Int) -> String { "Zone \(n)" }
-    /// This Mac and Connected Speakers when each of their speakers is in a zone.
-    let thisMacAllInZones = "Every output on this Mac is in a zone."
-    let connectedAllInZones = "Every connected speaker is in a zone."
+    /// A zone member's compact row under its own section, after the full
+    /// rows: the label above them (shown in capitals), what VoiceOver reads
+    /// for its switch and for the chip that goes to its zone, and its menu.
+    let inZones = "In zones"
+    func inZoneLabel(_ speaker: String, zone: String) -> String { "\(speaker), in \(zone)" }
+    func goToZoneLabel(_ zone: String) -> String { "Go to \(zone)" }
+    let goToZone = "Go to Zone"
+    /// In a zone member's ⋯ menu under its zone: the other members go off.
+    let onlyThisSpeaker = "Only This Speaker"
     /// A zone member that plays as part of a stereo pair or home theater (S247).
     func zoneMemberInTarget(_ target: String) -> String { "Plays as part of \(target)" }
     /// The zone menu's way to put that target in the member's place.
@@ -1016,7 +1039,7 @@ struct UIStrings {
     func speakerMovedToZone(_ speaker: String, zone: String) -> String { "\(speaker) moved to \(zone)" }
     func zoneDeleted(_ name: String) -> String { "\(name) deleted" }
     /// The notice at the first launch after the groups became zones (S248).
-    let groupsBecameZones = "Your groups are zones now. Each zone has its own volume, and its speakers show under it instead of in the speaker lists."
+    let groupsBecameZones = "Your groups are zones now. Each zone has its own volume, and its speakers show under it."
 
     // MARK: Speaker presets (S259 to S269)
 
@@ -1061,7 +1084,7 @@ struct UIStrings {
     let renameSpeaker = "Rename…"
     /// The name field's VoiceOver label; the field's placeholder is the
     /// system name, which an empty field brings back.
-    func speakerNameField(system: String) -> String { "Name for \(system)" }
+    func nameField(for name: String) -> String { "Name for \(name)" }
     /// The tooltip on a speaker's name: the full name, which the row may
     /// truncate, then how to rename it.
     func speakerNameHelp(name: String, system: String, renamed: Bool) -> String {
@@ -1536,12 +1559,17 @@ struct UIStrings {
           speaker is on, every local speaker also waits the AirPlay Delay
           under Connected Speakers for it.
         - Zones: turn on the speakers you want, then choose 'New Zone from Active
-          Speakers' in the gear menu. A speaker is in one zone at a time, and it
-          shows under its zone instead of under This Mac or Connected Speakers.
-          Click the zone's round icon to switch its speakers at once; a
-          click elsewhere on its header shows or hides them. To move a
-          speaker, choose Move to Zone from its ⋯ button. To rename or delete
-          a zone, right-click it or use its ⋯ button.
+          Speakers' in the gear menu. A speaker is in one zone at a time. It
+          shows under its zone and keeps a short row under This Mac or
+          Connected Speakers: its round button there turns only that speaker
+          on or off, and the button with its zone's name goes to the zone. Click the
+          zone's round icon to switch its speakers at once; a click elsewhere
+          on its header shows or hides them. To play one speaker of a zone
+          alone, choose Only This Speaker from its ⋯ button under the zone;
+          the others turn off and stay in the zone. For a mix of speakers you
+          turn on again and again, save a preset instead. To move a speaker,
+          choose Move to Zone from its ⋯ button. To rename a zone, double-click
+          its name; to rename or delete it, right-click it or use its ⋯ button.
         - Presets: turn on the speakers you want and set their volumes, the
           zone volumes, Master Volume and the equalizer curve, then click
           Save as Preset… in the Presets card. Delays and the preamp aren't
@@ -1574,9 +1602,10 @@ struct UIStrings {
           doesn't open at login; click the Dock icon to bring it back.
         - Appearance: in the gear menu, or in the AudioSync menu. Match System
           follows macOS; Light or Dark keeps AudioSync's windows that way.
-        - When the source app quits, streaming stops. To keep playing all system
-          audio instead, turn on 'Switch to All System Audio When the Source App
-          Quits' in the gear menu or the AudioSync menu.
+        - When the source app quits, AudioSync switches to all system audio and
+          keeps playing. To stop streaming instead, turn off 'Switch to All
+          System Audio When the Source App Quits' in the gear menu or the
+          AudioSync menu.
 
         Calibration
         A microphone can measure the delays for you. Put it where you listen

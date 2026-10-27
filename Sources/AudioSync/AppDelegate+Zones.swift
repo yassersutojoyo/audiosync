@@ -41,7 +41,7 @@ extension AppDelegate {
             let found = castModel.devices[id] != nil && castModel.rows.contains(id)
             return ZoneMemberState(key: key, kind: kind, appID: CastID.app(id),
                                    facts: ZoneMemberFacts(kind: .cast, listed: !hidden && found, on: castModel.enabled == id,
-                                                          busy: castModel.devices[id]?.offline == true),
+                                                          busy: castModel.cantStartNow(id)),
                                    found: found)
         case .airplay:
             let on = enabledAirPlay.contains(id)
@@ -297,29 +297,24 @@ extension AppDelegate {
         pushModel()
     }
 
-    /// Rename Zone…; a blank name keeps the current one.
-    func promptRenameZone(_ id: String) {
-        guard let current = zones.first(where: { $0.id == id })?.name,
-              let typed = askZoneName(title: text.renameZoneTitle, message: text.renameMessage(current),
-                                      current: current, button: text.rename),
-              let index = zones.firstIndex(where: { $0.id == id }) else { return }
-        let name = GroupName.afterRename(typed: typed, current: current)
-        guard name != zones[index].name else { return }
-        zones[index].name = name   // saved by `zones`' didSet
+    /// The name typed in zone `id`'s header; a blank name keeps the current one.
+    func renameZone(_ id: String, to typed: String) {
+        let renamed = ZoneEdit.renaming(id, to: typed, in: zones)
+        guard renamed != zones else { return }
+        zones = renamed   // saved by `zones`' didSet
         rereadCalibrateZoneSheet()
         pushModel()
     }
 
     /// The name typed in a zone's name alert, which the user opened; nil
     /// when cancelled.
-    private func askZoneName(title: String, message: String, current: String = "", button: String) -> String? {
+    private func askZoneName(title: String, message: String, button: String) -> String? {
         menuBar?.close()
         NSApp.activate(ignoringOtherApps: true)
         let prompt = NSAlert()
         prompt.messageText = title
         prompt.informativeText = message
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.stringValue = current
         field.placeholderString = text.newZonePlaceholder
         field.setAccessibilityLabel(text.newZoneFieldLabel)
         prompt.accessoryView = field
@@ -344,6 +339,38 @@ extension AppDelegate {
 
     func removeFromZone(_ key: String) {
         zones = ZoneEdit.removing(key, from: zones)
+        pushModel()
+    }
+
+    /// Only This Speaker in a member's ⋯ menu under its zone: each switch
+    /// as the member's own would make it, streaming started or stopped once.
+    func onlyThisSpeaker(_ key: String) {
+        guard let zone = zones.first(where: { $0.members.contains(key) }) else { return }
+        let members = zone.members.compactMap(memberState)
+        let steps = ZoneLayout.onlyThis(key, members: members.map {
+            ZoneLayout.Member(key: $0.key, listed: $0.facts.listed, on: $0.facts.on, cast: $0.kind == .cast,
+                              busy: $0.facts.busy)
+        })
+        guard !steps.isEmpty else {
+            DebugTrace.log("[AudioSync] only \(key): nothing switches")
+            return
+        }
+        DebugTrace.log("[AudioSync] only \(key) plays in zone \"\(zone.name)\"")
+        var attempts: [String] = []
+        for step in steps {
+            guard let member = members.first(where: { $0.key == step.key }) else { continue }
+            switchZoneMember(member, on: step.on, attempts: &attempts)
+        }
+        beginNativeAttempts(attempts)
+        if steps.contains(where: \.on) && !engine.isRunning {
+            startEngine(origin: .user)
+        } else if engine.isRunning {
+            applyAirPlaySelection()
+            syncLocalOutputs(origin: .user)
+        }
+        syncCast()
+        stopIfIdle()
+        retimeLocalOutputs()
         pushModel()
     }
 

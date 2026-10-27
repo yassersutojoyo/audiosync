@@ -614,6 +614,8 @@ pub mod tests {
         port
     }
 
+    // covers: S307 (what WinHTTP downloads and the swap installs carries no mark; whether
+    // SmartScreen prompts at the relaunch is checked by hand)
     #[test]
     fn the_fake_appcast_on_loopback() {
         if std::env::var_os("CI").is_none() {
@@ -667,6 +669,9 @@ pub mod tests {
         assert!(matches!(run(&happy.env, &update), Installed::Done(_)));
         let exe = fs::read(happy.env.install_dir.join(archive::EXE_NAME)).unwrap();
         assert!(exe.ends_with(b"served exe"));
+        assert!(!marked_from_the_web(
+            &happy.env.install_dir.join(archive::EXE_NAME)
+        ));
         assert_eq!(
             fs::read(happy.env.install_dir.join("audiosync.exe.bak")).unwrap(),
             b"old exe"
@@ -704,6 +709,7 @@ pub mod tests {
         );
     }
 
+    // covers: S299
     #[test]
     fn a_bad_signature_deletes_the_download_and_changes_nothing() {
         let f = fixture(
@@ -722,6 +728,7 @@ pub mod tests {
         assert!(temp_folders(&f.env).is_empty());
     }
 
+    // covers: S297, S306
     #[test]
     fn nothing_downloads_before_the_click() {
         let f = fixture(
@@ -735,6 +742,7 @@ pub mod tests {
         assert!(temp_folders(&f.env).is_empty());
     }
 
+    // covers: S298
     #[test]
     fn a_download_over_its_length_or_the_cap_stops_and_is_deleted() {
         let f = fixture(
@@ -765,6 +773,7 @@ pub mod tests {
         );
     }
 
+    // covers: S298
     #[test]
     fn a_disk_full_write_deletes_every_partial_file() {
         struct Full;
@@ -822,6 +831,7 @@ pub mod tests {
         }
     }
 
+    // covers: S304
     #[test]
     fn leftover_new_files_and_temp_folders_go_at_launch_and_the_bak_stays() {
         let f = fixture("leftovers", false, Arc::new(RealFiles), DebugLog::default());
@@ -838,6 +848,7 @@ pub mod tests {
         assert_eq!(temp_folders(&f.env), ["Other-folder"]);
     }
 
+    // covers: S305
     #[test]
     fn the_launch_check_runs_once_a_day_and_a_failed_check_stores_no_time() {
         let now = 1_800_000_000;
@@ -862,6 +873,7 @@ pub mod tests {
         assert_eq!(check(&offline.env), Checked::Failed);
     }
 
+    // covers: S309
     #[test]
     fn the_updater_writes_its_debug_log_lines() {
         let dir = crate::debug_log::test_dir("updater-log");
@@ -1077,20 +1089,26 @@ pub mod tests {
         assert!(!f.env.install_dir.join("audiosync.exe.new").exists());
     }
 
+    /// Whether `path` carries a Mark of the Web, a `Zone.Identifier` stream.
+    fn marked_from_the_web(path: &Path) -> bool {
+        assert!(path.exists(), "{}", path.display());
+        let mut stream = path.as_os_str().to_owned();
+        stream.push(":Zone.Identifier");
+        match fs::File::open(PathBuf::from(stream)) {
+            Ok(_) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => panic!("{}: {error}", path.display()),
+        }
+    }
+
     // covers: S315
     #[test]
     fn the_updater_writes_no_zone_identifier_stream() {
         let f = fixture("zone", false, Arc::new(RealFiles), DebugLog::default());
         let update = update_of(&f.env);
         assert!(matches!(run(&f.env, &update), Installed::Done(_)));
-        let exe = f.env.install_dir.join(archive::EXE_NAME);
-        assert!(exe.exists());
-        let mut stream = exe.into_os_string();
-        stream.push(":Zone.Identifier");
-        let opened = fs::File::open(PathBuf::from(stream));
-        assert_eq!(
-            opened.map(drop).map_err(|e| e.kind()),
-            Err(io::ErrorKind::NotFound)
-        );
+        assert!(!marked_from_the_web(
+            &f.env.install_dir.join(archive::EXE_NAME)
+        ));
     }
 }

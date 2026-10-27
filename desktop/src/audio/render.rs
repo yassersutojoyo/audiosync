@@ -19,6 +19,7 @@
 //! since ([`RenderPipeline::has_played_its_fade`]).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use audiosync_core::clock;
 use audiosync_core::reader::Reader;
@@ -154,6 +155,60 @@ impl RenderPipeline {
     }
 }
 
+/// The wakes of an output's render loop that came late, for the debug log's
+/// status line: written by the render thread, read by the status timer. A
+/// late wake found more than one and a half device periods free, so it came
+/// at least half a period after the device asked; an empty one found nothing
+/// queued, so the device had played all it was given and may have played a
+/// gap before the refill.
+#[derive(Debug, Default)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    allow(dead_code, reason = "only the WASAPI render loop counts its wakes")
+)]
+pub struct WakeCounters {
+    late: AtomicU64,
+    empty: AtomicU64,
+}
+
+#[cfg_attr(
+    all(not(windows), not(test)),
+    allow(dead_code, reason = "only the WASAPI render loop counts its wakes")
+)]
+impl WakeCounters {
+    /// Counts a wake that found `padding` of the stream's `buffer_frames`
+    /// still queued, on a device whose period is `period_frames` (0 when
+    /// unknown: then no wake counts as late). Never allocates, locks or
+    /// blocks.
+    pub fn count_wake(&self, padding: u32, buffer_frames: u32, period_frames: usize) {
+        let free = u64::from(buffer_frames.saturating_sub(padding));
+        if period_frames > 0 && free * 2 > period_frames as u64 * 3 {
+            self.late.fetch_add(1, Ordering::Relaxed);
+        }
+        if padding == 0 {
+            self.empty.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// The wakes counted so far.
+    pub fn counts(&self) -> WakeCounts {
+        WakeCounts {
+            late: self.late.load(Ordering::Relaxed),
+            empty: self.empty.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// An output's [`WakeCounters`] as the status line shows them; zero for an
+/// output that doesn't count them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WakeCounts {
+    /// Wakes that came at least half a period late.
+    pub late: u64,
+    /// Wakes that found the device's buffer empty.
+    pub empty: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use std::f64::consts::PI;
@@ -162,6 +217,28 @@ mod tests {
     use audiosync_core::ring::{Ring, RingWriter};
 
     use super::*;
+
+    #[test]
+    fn a_wake_counts_as_late_past_half_a_period_and_as_empty_with_nothing_queued() {
+        // A 20 ms buffer of two 10 ms periods at 48 kHz.
+        let (buffer, period) = (960, 480);
+        let wakes = WakeCounters::default();
+        // On time: one period free.
+        wakes.count_wake(480, buffer, period);
+        // Just under half a period late.
+        wakes.count_wake(241, buffer, period);
+        assert_eq!(wakes.counts(), WakeCounts::default());
+        // Over half a period late.
+        wakes.count_wake(239, buffer, period);
+        assert_eq!(wakes.counts(), WakeCounts { late: 1, empty: 0 });
+        // A whole period late: the device played everything.
+        wakes.count_wake(0, buffer, period);
+        assert_eq!(wakes.counts(), WakeCounts { late: 2, empty: 1 });
+        // Without a known period only an empty buffer counts.
+        wakes.count_wake(0, buffer, 0);
+        wakes.count_wake(100, buffer, 0);
+        assert_eq!(wakes.counts(), WakeCounts { late: 2, empty: 2 });
+    }
 
     struct Setup {
         writer: RingWriter,

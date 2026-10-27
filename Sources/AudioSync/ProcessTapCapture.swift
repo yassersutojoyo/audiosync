@@ -101,6 +101,14 @@ final class SourceCapture {
     /// Some frame this session captured was not silent; false while stopped.
     var sessionHeard: Bool { sink?.heard.load(ordering: .relaxed) ?? false }
 
+    /// The running session's callbacks, frames and callbacks without usable
+    /// channels so far, for the debug log; nil while stopped.
+    var counts: CaptureCounts? {
+        sink.map { CaptureCounts(callbacks: $0.callbacks.load(ordering: .relaxed),
+                                 frames: $0.frames.load(ordering: .relaxed),
+                                 silentCallbacks: $0.silentCallbacks.load(ordering: .relaxed)) }
+    }
+
     private var source: AudioSource?
     /// The stored channel pair (`InputChannelPair.index`) an input source reads.
     private var inputPair = 0
@@ -607,7 +615,7 @@ private extension SourceCapture {
     /// What the capture IOProc uses: the session's parts and a scratch block for
     /// the stereo frames. It is made before the first IOProc starts and freed when
     /// the last IOProc holding it is destroyed. The counters are relaxed atomics
-    /// that only the main thread reads (for the debug log at stop); the IOProc
+    /// that only the main thread reads (for the debug log); the IOProc
     /// itself never logs.
     final class CaptureSink {
         let parts: EngineParts
