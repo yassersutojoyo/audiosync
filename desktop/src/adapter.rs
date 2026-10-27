@@ -3965,6 +3965,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             when_source_quits: self.when_source_quits,
             cast_list: self.cast_list(),
             cast_by_address: self.audio.cast_discovery() != CastDiscovery::Off,
+            cast_on: self.audio.cast_on(),
             calibration: CalibrationState {
                 speaker_id: self.calibration.id.as_deref().map(speaker_key),
                 phase: self.calibration.phase,

@@ -835,6 +835,8 @@ pub struct AppState {
     pub cast_list: CastList,
     /// A Google Cast sender runs, so Add by Address… can list a speaker.
     pub cast_by_address: bool,
+    /// A Cast speaker is on, listed or not, so another one is refused.
+    pub cast_on: bool,
     /// The microphone calibration a row shows.
     pub calibration: CalibrationState,
     /// Calibrate All Speakers, in its own card.
@@ -1064,16 +1066,11 @@ impl AppState {
             self.zone_members(zone)
                 .any(|member| member.enabled && member.id != speaker.id)
         };
-        let cast_on = || {
-            self.speakers
-                .iter()
-                .any(|s| s.kind == SpeakerKind::Cast && s.enabled)
-        };
         (speaker.kind == SpeakerKind::Cast
             && !speaker.enabled
             && speaker.availability == Availability::Open
-            && other_on()
-            && cast_on())
+            && self.cast_on
+            && other_on())
         .then_some(ZoneNote::CastStayedOff)
     }
 
@@ -1826,6 +1823,7 @@ impl MockBackend {
             when_source_quits: WhenSourceQuits::Stop,
             cast_list: CastList::Quiet,
             cast_by_address: true,
+            cast_on: false,
             calibration: CalibrationState::default(),
             calibrate_all: CalibrateAllState::default(),
         };
@@ -2137,6 +2135,10 @@ impl Backend for MockBackend {
 
     fn snapshot(&self) -> AppState {
         let mut state = self.state.clone();
+        state.cast_on = state
+            .speakers
+            .iter()
+            .any(|speaker| speaker.kind == SpeakerKind::Cast && speaker.enabled);
         show_presets(&mut state, &self.presets);
         state
     }

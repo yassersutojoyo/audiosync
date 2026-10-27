@@ -2573,6 +2573,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .map_or(CastDiscovery::Off, CastSpeakers::discovery)
     }
 
+    fn cast_on(&self) -> bool {
+        self.cast.as_ref().is_some_and(CastSpeakers::is_on)
+    }
+
     fn set_cast_enabled(&mut self, id: &str, enabled: bool) -> Result<(), CastProblem> {
         let Some(cast) = self.cast.as_mut() else {
             return if enabled {
