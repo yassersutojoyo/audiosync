@@ -19,6 +19,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - When several AirPlay speakers start together, they connect one after another, half a second apart, and a pairing's key exchange no longer holds up the sound of a speaker that's already playing. On the Mac and on Windows.
 - The notice for an AirPlay speaker turned off because it asks for a code now says whether it needs a PIN or a password, on the Mac and on Windows.
 - On Windows, AirPlay audio keeps its timing better while the PC is busy, since AudioSync asks Windows to treat its AirPlay sending as audio work.
+- On the Mac, renaming a zone now edits its name in place in the main window, like a speaker's, instead of opening a dialog: Return keeps the new name, Escape the old one.
 
 ### Fixed
 

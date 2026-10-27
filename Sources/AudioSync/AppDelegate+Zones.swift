@@ -297,29 +297,24 @@ extension AppDelegate {
         pushModel()
     }
 
-    /// Rename Zone…; a blank name keeps the current one.
-    func promptRenameZone(_ id: String) {
-        guard let current = zones.first(where: { $0.id == id })?.name,
-              let typed = askZoneName(title: text.renameZoneTitle, message: text.renameMessage(current),
-                                      current: current, button: text.rename),
-              let index = zones.firstIndex(where: { $0.id == id }) else { return }
-        let name = GroupName.afterRename(typed: typed, current: current)
-        guard name != zones[index].name else { return }
-        zones[index].name = name   // saved by `zones`' didSet
+    /// The name typed in zone `id`'s header; a blank name keeps the current one.
+    func renameZone(_ id: String, to typed: String) {
+        let renamed = ZoneEdit.renaming(id, to: typed, in: zones)
+        guard renamed != zones else { return }
+        zones = renamed   // saved by `zones`' didSet
         rereadCalibrateZoneSheet()
         pushModel()
     }
 
     /// The name typed in a zone's name alert, which the user opened; nil
     /// when cancelled.
-    private func askZoneName(title: String, message: String, current: String = "", button: String) -> String? {
+    private func askZoneName(title: String, message: String, button: String) -> String? {
         menuBar?.close()
         NSApp.activate(ignoringOtherApps: true)
         let prompt = NSAlert()
         prompt.messageText = title
         prompt.informativeText = message
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.stringValue = current
         field.placeholderString = text.newZonePlaceholder
         field.setAccessibilityLabel(text.newZoneFieldLabel)
         prompt.accessoryView = field

@@ -152,6 +152,14 @@ enum ZoneEdit {
         return out
     }
 
+    /// Zone `id` named `typed`, trimmed; a blank name keeps the current one.
+    static func renaming(_ id: String, to typed: String, in zones: [SpeakerZone]) -> [SpeakerZone] {
+        guard let index = zones.firstIndex(where: { $0.id == id }) else { return zones }
+        var out = zones
+        out[index].name = GroupName.afterRename(typed: typed, current: zones[index].name)
+        return out
+    }
+
     /// `zones` with a new zone of `members` after them, at volume 100; each
     /// member leaves the zone that held it.
     static func adding(id: String, name: String, members: [String], to zones: [SpeakerZone]) -> [SpeakerZone] {

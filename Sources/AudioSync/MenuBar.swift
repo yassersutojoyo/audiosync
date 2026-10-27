@@ -171,7 +171,8 @@ final class AppModel: ObservableObject {
         var permissionNotNow: (Permission) -> Void = { _ in }
         var toggleZone: (String) -> Void = { _ in }
         var deleteZone: (String) -> Void = { _ in }
-        var renameZone: (String) -> Void = { _ in }
+        /// Zone ID, the name typed (`ZoneEdit.renaming`).
+        var renameZone: (String, String) -> Void = { _, _ in }
         /// Calibrate Zone… for zone `id` (S255).
         var calibrateZone: (String) -> Void = { _ in }
         /// The zone slider's position, 0 to 100.
@@ -309,26 +310,36 @@ final class AppModel: ObservableObject {
         drafts[id] = d
         return d
     }
-    /// The speaker whose name is being edited in its row, and the text typed
-    /// there. Like a delay field: Return or the focus leaving applies it,
-    /// Escape drops it.
-    @Published private(set) var rename = SpeakerRename()
-    func isRenaming(_ speaker: Speaker, in place: SpeakerRename.Place) -> Bool { rename.isOpen(speaker.id, in: place) }
+    /// The speaker or zone whose name is being edited in its row, and the
+    /// text typed there. Like a delay field: Return or the focus leaving
+    /// applies it, Escape drops it.
+    @Published private(set) var rename = InlineRename()
+    func isRenaming(_ speaker: Speaker, in place: InlineRename.Place) -> Bool { rename.isOpen(speaker.id, in: place) }
+    func isRenaming(_ zone: Zone) -> Bool { rename.isOpen(zone.id, in: .row) }
     var renameText: String {
         get { rename.text }
         set { rename.text = newValue }
     }
-    func startRename(_ speaker: Speaker, in place: SpeakerRename.Place = .row) {
-        let target = SpeakerRename.Target(id: speaker.id, key: speaker.key, system: speaker.systemName)
+    func startRename(_ speaker: Speaker, in place: InlineRename.Place = .row) {
+        let target = InlineRename.Target(id: speaker.id, key: speaker.key, system: speaker.systemName)
         apply(rename.start(target, name: speaker.name, in: place))
     }
-    func commitRename(_ speaker: Speaker) { apply(rename.commit(id: speaker.id)) }
+    func startRename(_ zone: Zone) {
+        let target = InlineRename.Target(id: zone.id, key: zone.id, system: zone.name, kind: .zone)
+        apply(rename.start(target, name: zone.name))
+    }
+    func commitRename(id: String) { apply(rename.commit(id: id)) }
     func dropRename() { rename.drop() }
     /// The host listed `ids` as the speakers there are.
     func speakersListed(_ ids: Set<String>) { apply(rename.listed(ids)) }
-    private func apply(_ finished: SpeakerRename.Apply?) {
+    /// The host listed `ids` as the zones there are.
+    func zonesListed(_ ids: Set<String>) { apply(rename.listed(ids, kind: .zone)) }
+    private func apply(_ finished: InlineRename.Apply?) {
         guard let finished else { return }
-        actions.renameSpeaker(finished.key, finished.system, finished.typed)
+        switch finished.kind {
+        case .speaker: actions.renameSpeaker(finished.key, finished.system, finished.typed)
+        case .zone: actions.renameZone(finished.key, finished.typed)
+        }
     }
     /// Quit drops every typed delay not applied yet: it's never saved.
     func dropDelayDrafts() {
