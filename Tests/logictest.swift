@@ -4783,6 +4783,10 @@ let closeAsked = PopoverCloseRequest.answer
             && !sizing([.show, .didShow, .willClose, .show, .didClose]).followsContent
             && sizing([.show, .didShow, .willClose, .show, .didClose, .didShow]).followsContent,
           "menu bar panel: reopened mid-close, the old close's notice doesn't end the new open")
+    check(sizing([.show, .didShow, .willClose] + PanelSizing.showEvents(onScreen: true)) == .shown,
+          "menu bar panel: reopened while its close fade still shows it, the size follows the content though AppKit sends no new didShow")
+    check(sizing([.show, .didShow, .willClose] + PanelSizing.showEvents(onScreen: false)) == .opening,
+          "menu bar panel: reopened once the popover left the screen, the size waits for AppKit's didShow")
 
     var own = PanelQuiet()
     own.began(.open, at: 40)
