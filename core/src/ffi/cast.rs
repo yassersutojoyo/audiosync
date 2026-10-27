@@ -5,7 +5,9 @@
 //! The host creates a handle with the device memory it stored last time,
 //! starts browsing, and takes the devices discovery finds, one change at a
 //! time, by their ID: the `id` TXT value in hex, or `manual:<address>` for a
-//! device the user added by address (C18). It starts one device at a time
+//! device the user added by address (C18), which is listed offline until a
+//! TCP connect to its address succeeds, checked again every 15 s while no
+//! session holds it. It starts one device at a time
 //! (C2) by that ID and gets an attempt number back; everything that happens
 //! to the attempt arrives as events carrying that number, and every attempt
 //! ends with exactly one [`CAST_EVENT_ENDED`]. A Cast device is a
@@ -14,7 +16,8 @@
 //!
 //! Threads: every `asc_cast_*` call on a handle runs on one control thread at
 //! a time, never an audio thread. None of them waits on the network: the
-//! sender's worker thread makes every network call (C8). The one call that
+//! sender's worker thread makes every network call (C8), and each check of
+//! a device added by address runs on a thread of its own. The one call that
 //! waits is [`asc_cast_destroy`], for the teardown of C88, at most about
 //! 3.5 s. An input handle's write runs on one capture thread at a time, its
 //! rate and fade-out requests on any thread, and its destroy once no write
@@ -33,10 +36,11 @@ use std::panic::{self, AssertUnwindSafe};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, Codec, audio_ring};
 use audiosync_cast::discovery::mdns::MdnsBrowser;
+use audiosync_cast::discovery::reach::Reachability;
 use audiosync_cast::discovery::{
     BrowseEvent, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent,
 };
@@ -248,6 +252,9 @@ pub struct AscCastEvent {
     pub drift_ms: f64,
     /// Diagnostics: audio waiting in the sender's queue (C64).
     pub queued_ms: f64,
+    /// Diagnostics: silent frames sent since the `LOAD` because the input
+    /// ran dry (C52, C78).
+    pub underrun_frames: u64,
     /// Diagnostics: the drift is over 250 ms; the host may offer Resync.
     pub resync_offered: bool,
     pub relaunched: bool,
@@ -299,6 +306,7 @@ struct Pending {
     step: f64,
     drift_ms: f64,
     queued_ms: f64,
+    underrun_frames: u64,
     resync_offered: bool,
     relaunched: bool,
     detail: String,
@@ -320,6 +328,7 @@ impl Pending {
             step: 0.0,
             drift_ms: 0.0,
             queued_ms: 0.0,
+            underrun_frames: 0,
             resync_offered: false,
             relaunched: false,
             detail: String::new(),
@@ -483,6 +492,8 @@ pub struct AscCast {
     members: Vec<GroupMember>,
     /// The strings of the last member handed out: ID, name.
     member_strings: [CString; 2],
+    /// Whether each device added by address answers (C18).
+    reach: Reachability,
 }
 
 /// `text` as a C string; a NUL inside becomes U+FFFD.
@@ -739,7 +750,16 @@ impl AscCast {
         }
     }
 
+    /// Takes in what the checks of devices added by address found, and
+    /// starts the ones due.
+    fn check_manual(&mut self) {
+        for event in self.reach.poll(&mut self.list, Instant::now()) {
+            self.listed(event);
+        }
+    }
+
     fn pump_discovery(&mut self) {
+        self.check_manual();
         let Some(browser) = self.browser.as_mut() else {
             return;
         };
@@ -957,6 +977,7 @@ impl AscCast {
             step: pending.step,
             drift_ms: pending.drift_ms,
             queued_ms: pending.queued_ms,
+            underrun_frames: pending.underrun_frames,
             resync_offered: pending.resync_offered,
             relaunched: pending.relaunched,
             detail: self.event_strings[1].as_ptr(),
@@ -971,6 +992,7 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             let mut pending = Pending::new(CAST_EVENT_DIAGNOSTICS);
             pending.drift_ms = millis(diagnostics.drift);
             pending.queued_ms = millis(diagnostics.queued);
+            pending.underrun_frames = diagnostics.underrun_frames;
             pending.resync_offered = diagnostics.resync_offered;
             pending.detail = format!("{diagnostics:?}");
             pending
@@ -1127,6 +1149,11 @@ fn create_with(memory_json: &str, open_browser: OpenBrowser) -> *mut AscCast {
             failure_reported: false,
             members: Vec::new(),
             member_strings: Default::default(),
+            #[cfg(not(test))]
+            reach: Reachability::default(),
+            // Unit tests never reach the network; one that needs an answer sets a probe.
+            #[cfg(test)]
+            reach: Reachability::new(|_| false),
         }))
     });
     created.unwrap_or_else(|_| {
@@ -1222,6 +1249,7 @@ pub unsafe extern "C" fn asc_cast_add_device(cast: *mut AscCast, address: *const
         live(cast, false, |cast| {
             let event = cast.list.add_manual(address);
             cast.listed(event);
+            cast.check_manual();
             true
         })
     }
@@ -2160,6 +2188,7 @@ mod tests {
             step: 0.0,
             drift_ms: 0.0,
             queued_ms: 0.0,
+            underrun_frames: 0,
             resync_offered: false,
             relaunched: false,
             detail: ptr::null(),
@@ -2226,6 +2255,32 @@ mod tests {
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_cast_destroy(&mut handle) };
         assert!(handle.is_null());
+    }
+
+    /// The Mac's Cast debug line reads the underrun silence from here (C78).
+    #[test]
+    fn a_diagnostics_event_carries_the_sessions_underrun_count() {
+        let handle = create();
+        let diagnostics = audiosync_cast::session::Diagnostics {
+            sent: Duration::from_secs(12),
+            queued: Duration::from_millis(250),
+            current_time: None,
+            player_state: None,
+            frames_dropped: 0,
+            rebuffers: 0,
+            drift: Duration::from_millis(40),
+            resync_offered: false,
+            underrun_frames: 4_800,
+        };
+        let pending = session_event(SessionEvent::Diagnostics(diagnostics), |_| {});
+        inside(handle).events.push_back(pending);
+        let mut event = blank_event();
+        // SAFETY: a live handle, used by this thread only.
+        assert!(unsafe { asc_cast_next_event(handle, &mut event) });
+        assert_eq!(event.kind, CAST_EVENT_DIAGNOSTICS);
+        assert_eq!(event.underrun_frames, 4_800);
+        assert_eq!((event.drift_ms, event.queued_ms), (40.0, 250.0));
+        destroy(handle);
     }
 
     #[test]
@@ -2466,12 +2521,47 @@ mod tests {
         destroy(handle);
     }
 
+    // No record vouches for a device added by address, so it is offline
+    // until a check reaches it, and again once it stops answering.
+    // CAST_SPEC: C18
+    #[test]
+    fn a_device_added_by_address_is_online_only_while_it_answers() {
+        let handle = create();
+        let changes_until = |count: usize| {
+            let mut seen = Vec::new();
+            for _ in 0..400 {
+                seen.extend(devices(handle).into_iter().map(|c| (c.event, c.flags)));
+                if seen.len() >= count {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            seen
+        };
+        inside(handle).reach = Reachability::new(|_| true);
+        add(handle, "192.0.2.5");
+        assert_eq!(
+            changes_until(2),
+            [
+                (CAST_APPEARED, CAST_FLAG_MANUAL | CAST_FLAG_OFFLINE),
+                (CAST_CHANGED, CAST_FLAG_MANUAL),
+            ]
+        );
+        inside(handle).reach = Reachability::new(|_| false);
+        assert_eq!(
+            changes_until(1),
+            [(CAST_CHANGED, CAST_FLAG_MANUAL | CAST_FLAG_OFFLINE)]
+        );
+        destroy(handle);
+    }
+
     // CAST_SPEC: C18
     #[test]
     fn a_device_added_by_address_is_listed_until_a_browse_finds_its_id() {
         let handle = create();
         add(handle, "192.0.2.5");
         add(handle, "[fe80::1]:8010");
+        let offline = CAST_FLAG_MANUAL | CAST_FLAG_OFFLINE;
         let manual = |event: i32, id: &str, flags: u32| Change {
             event,
             id: id.to_owned(),
@@ -2483,8 +2573,8 @@ mod tests {
         assert_eq!(
             devices(handle),
             [
-                manual(CAST_APPEARED, "manual:192.0.2.5:8009", CAST_FLAG_MANUAL),
-                manual(CAST_APPEARED, "manual:[fe80::1]:8010", CAST_FLAG_MANUAL),
+                manual(CAST_APPEARED, "manual:192.0.2.5:8009", offline),
+                manual(CAST_APPEARED, "manual:[fe80::1]:8010", offline),
             ]
         );
         let found = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));

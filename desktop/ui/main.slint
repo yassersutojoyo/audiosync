@@ -9,7 +9,7 @@ import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, Disclosure, Divider, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, NoticeStack, PairPicker, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark, ZoneHeader } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, Disclosure, Divider, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, NoticeStack, PairPicker, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -54,6 +54,7 @@ component SpeakerRows inherits VerticalLayout {
     callback move-to-zone(string, string);
     callback new-zone(string);
     callback remove-from-zone(string);
+    callback only-this(string);
     callback focus-changed(string, RowPart);
     callback blank-clicked();
     callback cancel-calibration();
@@ -156,6 +157,9 @@ component SpeakerRows inherits VerticalLayout {
             remove-from-zone => {
                 root.remove-from-zone(speaker.id);
             }
+            only-this => {
+                root.only-this(speaker.id);
+            }
             focus-changed(part) => {
                 root.focus-changed(speaker.id, part);
             }
@@ -181,6 +185,9 @@ component ZoneCard inherits VerticalLayout {
     callback zone-expanded-changed <=> header.expanded-changed;
     callback zone-volume-changed <=> header.volume-changed;
     callback zone-rename <=> header.rename;
+    callback zone-rename-edited <=> header.rename-edited;
+    callback zone-rename-committed <=> header.rename-committed;
+    callback zone-rename-cancelled <=> header.rename-cancelled;
     callback zone-delete <=> header.delete;
     callback zone-calibrate <=> header.calibrate;
     callback zone-use-target <=> header.use-target;
@@ -208,10 +215,22 @@ component ZoneCard inherits VerticalLayout {
     callback move-to-zone <=> rows.move-to-zone;
     callback new-zone <=> rows.new-zone;
     callback remove-from-zone <=> rows.remove-from-zone;
+    callback only-this <=> rows.only-this;
     callback focus-changed <=> rows.focus-changed;
     callback blank-clicked <=> rows.blank-clicked;
     callback cancel-calibration <=> rows.cancel-calibration;
     callback calibration-privacy <=> rows.calibration-privacy;
+    // While reveal-zone-id is its zone's ID, the card clears it and reports
+    // where it is, for the list to scroll to it (Go to Zone).
+    in-out property <string> reveal-zone-id;
+    callback revealed(length);
+    property <bool> reveal-asked: root.item.id == root.reveal-zone-id;
+    changed reveal-asked => {
+        if self.reveal-asked {
+            root.reveal-zone-id = "";
+            root.revealed(self.absolute-position.y);
+        }
+    }
     // The header takes the keyboard focus on focus-zone-part while
     // focus-zone-id is its zone's ID, and clears it; the rows as in
     // SpeakerRows.
@@ -289,6 +308,17 @@ component SpeakerSection inherits VerticalLayout {
     callback blank-clicked <=> rows.blank-clicked;
     callback cancel-calibration <=> rows.cancel-calibration;
     callback calibration-privacy <=> rows.calibration-privacy;
+    // The compact rows of its speakers that are in a zone, after the others.
+    in property <[SpeakerItem]> zoned;
+    callback go-to-zone(string);
+    // A rename asked for in a compact row; its typing, Enter and Escape go
+    // through rename-edited, rename-committed and rename-cancelled.
+    callback in-zones-rename-requested(string);
+    callback in-zones-focus-changed(string, RowPart);
+    // A compact row takes the keyboard focus on in-zones-focus-part while
+    // in-zones-focus-id is its speaker's ID, and clears the ID.
+    in-out property <string> in-zones-focus-id;
+    in-out property <RowPart> in-zones-focus-part;
     // Add by Address…, under the note while no Google Cast speaker is found.
     in property <bool> show-add-address;
     callback add-address();
@@ -311,8 +341,66 @@ component SpeakerSection inherits VerticalLayout {
             zones: root.zones;
         }
 
-        if root.note != "": VerticalLayout {
+        if root.zoned.length > 0: VerticalLayout {
             if root.speakers.length > 0: Divider { }
+
+            HorizontalLayout {
+                padding-left: Fluent.name-inset;
+                padding-top: 6px;
+                padding-bottom: 2px;
+                SecondaryText {
+                    text: Strings.in-zones;
+                    font-size: Tokens.font-size-caption;
+                }
+            }
+
+            for speaker in root.zoned: ZoneMemberRow {
+                item: speaker;
+                init => {
+                    if speaker.id == root.in-zones-focus-id {
+                        root.in-zones-focus-id = "";
+                        self.take-focus(root.in-zones-focus-part);
+                    }
+                }
+                property <bool> focus-asked: speaker.id == root.in-zones-focus-id;
+                changed focus-asked => {
+                    if self.focus-asked {
+                        root.in-zones-focus-id = "";
+                        self.take-focus(root.in-zones-focus-part);
+                    }
+                }
+                toggled => {
+                    root.toggled(speaker.id);
+                }
+                rename-requested => {
+                    root.in-zones-rename-requested(speaker.id);
+                }
+                rename-edited(text) => {
+                    root.rename-edited(speaker.id, text);
+                }
+                rename-committed => {
+                    root.rename-committed(speaker.id);
+                }
+                rename-cancelled => {
+                    root.rename-cancelled(speaker.id);
+                }
+                blank-clicked => {
+                    root.blank-clicked();
+                }
+                focus-changed(part) => {
+                    root.in-zones-focus-changed(speaker.id, part);
+                }
+                go-to-zone => {
+                    root.go-to-zone(speaker.zone-id);
+                }
+                remove-from-zone => {
+                    root.remove-from-zone(speaker.id);
+                }
+            }
+        }
+
+        if root.note != "": VerticalLayout {
+            if root.speakers.length > 0 || root.zoned.length > 0: Divider { }
 
             // Under a list, the note belongs to the last row's box: a click
             // works like one on that row. Alone, it is outside every row.
@@ -320,7 +408,7 @@ component SpeakerSection inherits VerticalLayout {
             // get it.
             TouchArea {
                 clicked => {
-                    if root.speakers.length > 0 && root.speakers[root.speakers.length - 1].has-delay {
+                    if root.zoned.length == 0 && root.speakers.length > 0 && root.speakers[root.speakers.length - 1].has-delay {
                         root.sync-toggled(root.speakers[root.speakers.length - 1].id);
                     } else {
                         root.blank-clicked();
@@ -1170,8 +1258,15 @@ export component MainWindow inherits Window {
     in property <bool> this-pc-all-hidden;
     in property <bool> connected-all-hidden;
     // A section lists nothing because each of its speakers is in a zone.
-    in property <bool> this-pc-all-in-zones;
-    in property <bool> connected-all-in-zones;
+    in property <[SpeakerItem]> this-pc-zoned;
+    in property <[SpeakerItem]> connected-zoned;
+    // Go to Zone: the zone card that scrolls into view.
+    property <string> reveal-zone-id;
+    function go-to-zone(id: string) {
+        root.focus-zone-part = RowPart.toggle;
+        root.focus-zone-id = id;
+        root.reveal-zone-id = id;
+    }
     // Speakers > Hidden Speakers.
     in property <[HiddenItem]> hidden-speakers;
     // AirPlay discovery runs but has found no speaker for 20 seconds.
@@ -1244,6 +1339,9 @@ export component MainWindow inherits Window {
     callback speaker-rename-committed(string);
     // Escape in a speaker's name field: keep the old name.
     callback speaker-rename-cancelled(string);
+    // A double-click on a name in an In zones row, or F2 on its switch: the
+    // speaker is renamed in that row.
+    callback speaker-in-zones-rename-requested(string);
     callback forget-pairing-requested(string);
     // The fix under a speaker's device-volume hint.
     callback device-volume-fix-requested(string);
@@ -1276,7 +1374,12 @@ export component MainWindow inherits Window {
     callback zone-toggled(string);
     callback zone-expanded-changed(string, bool);
     callback zone-volume-changed(string, float);
+    // Rename… in a zone's menu, F2 or a double-click on its name: its header
+    // shows a name field, which works like a speaker's.
     callback zone-rename-requested(string);
+    callback zone-rename-edited(string, string);
+    callback zone-rename-committed(string);
+    callback zone-rename-cancelled(string);
     callback zone-deleted(string);
     // Calibrate Zone… in a zone's menu.
     callback zone-calibrate-requested(string);
@@ -1288,6 +1391,8 @@ export component MainWindow inherits Window {
     callback speaker-move-to-zone-requested(string, string);
     callback speaker-new-zone-requested(string);
     callback speaker-remove-from-zone-requested(string);
+    // Only This Speaker in a zone member's menu under its zone.
+    callback speaker-only-this-requested(string);
     callback refresh-devices();
     callback show-virtual-devices-toggled(bool);
     callback appearance-chosen(Appearance);
@@ -1327,10 +1432,14 @@ export component MainWindow inherits Window {
     callback dismiss-all-focus-changed(bool);
     callback speaker-focus-changed(string, RowPart);
     callback zone-focus-changed(string, RowPart);
+    callback in-zones-focus-changed(string, RowPart);
     callback control-focus-changed(MainControl, bool);
     in-out property <int> focus-notice-index: -1;
     in-out property <string> focus-speaker-id;
     in-out property <RowPart> focus-speaker-part;
+    // An In zones row, apart from the speaker's row under its zone.
+    in-out property <string> focus-in-zones-id;
+    in-out property <RowPart> focus-in-zones-part;
     in-out property <string> focus-zone-id;
     in-out property <RowPart> focus-zone-part;
 
@@ -1979,7 +2088,19 @@ export component MainWindow inherits Window {
                         speakers: root.this-pc;
                         focus-id <=> root.focus-speaker-id;
                         focus-part <=> root.focus-speaker-part;
-                        note: root.this-pc.length > 0 ? "" : root.this-pc-all-hidden ? Strings.all-speakers-hidden : root.this-pc-all-in-zones ? Strings.this-pc-all-in-zones : Strings.this-pc-none;
+                        zoned: root.this-pc-zoned;
+                        in-zones-focus-id <=> root.focus-in-zones-id;
+                        in-zones-focus-part <=> root.focus-in-zones-part;
+                        in-zones-rename-requested(id) => {
+                            root.speaker-in-zones-rename-requested(id);
+                        }
+                        in-zones-focus-changed(id, part) => {
+                            root.in-zones-focus-changed(id, part);
+                        }
+                        note: root.this-pc.length > 0 || root.this-pc-zoned.length > 0 ? "" : root.this-pc-all-hidden ? Strings.all-speakers-hidden : Strings.this-pc-none;
+                        go-to-zone(id) => {
+                            root.go-to-zone(id);
+                        }
                         toggled(id) => {
                             root.speaker-toggled(id);
                         }
@@ -2077,6 +2198,14 @@ export component MainWindow inherits Window {
                             zones: root.zones;
                             focus-zone-id <=> root.focus-zone-id;
                             focus-zone-part <=> root.focus-zone-part;
+                            reveal-zone-id <=> root.reveal-zone-id;
+                            // The card's top at the top of the list.
+                            revealed(y) => {
+                                scroll.content-y = max(min(0px, scroll.visible-height - scroll.content-height), min(0px, speaker-list.absolute-position.y - y));
+                            }
+                            only-this(id) => {
+                                root.speaker-only-this-requested(id);
+                            }
                             focus-id <=> root.focus-speaker-id;
                             focus-part <=> root.focus-speaker-part;
                             zone-toggled => {
@@ -2090,6 +2219,15 @@ export component MainWindow inherits Window {
                             }
                             zone-rename => {
                                 root.zone-rename-requested(zone.id);
+                            }
+                            zone-rename-edited(text) => {
+                                root.zone-rename-edited(zone.id, text);
+                            }
+                            zone-rename-committed => {
+                                root.zone-rename-committed(zone.id);
+                            }
+                            zone-rename-cancelled => {
+                                root.zone-rename-cancelled(zone.id);
                             }
                             zone-delete => {
                                 root.zone-deleted(zone.id);
@@ -2191,6 +2329,18 @@ export component MainWindow inherits Window {
                         title: Strings.connected-section;
                         zones: root.zones;
                         speakers: root.connected;
+                        zoned: root.connected-zoned;
+                        in-zones-focus-id <=> root.focus-in-zones-id;
+                        in-zones-focus-part <=> root.focus-in-zones-part;
+                        in-zones-rename-requested(id) => {
+                            root.speaker-in-zones-rename-requested(id);
+                        }
+                        in-zones-focus-changed(id, part) => {
+                            root.in-zones-focus-changed(id, part);
+                        }
+                        go-to-zone(id) => {
+                            root.go-to-zone(id);
+                        }
                         focus-id <=> root.focus-speaker-id;
                         focus-part <=> root.focus-speaker-part;
                         show-add-address: root.cast-by-address && root.cast-list == CastList.none-found;
@@ -2204,7 +2354,7 @@ export component MainWindow inherits Window {
                         // sentence when neither finds a speaker.
                         property <bool> both-none: root.airplay-none-found && root.cast-list == CastList.none-found;
                         property <string> none-found: self.both-none ? Strings.network-none-found : Strings.airplay-none-found;
-                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + self.none-found : self.none-found) : root.connected.length > 0 ? "" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.connected-all-in-zones ? Strings.connected-all-in-zones : root.airplay-searching ? Strings.looking-for-speakers : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
+                        property <string> list-note: root.airplay-none-found ? (root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden + " " + self.none-found : self.none-found) : root.connected.length > 0 || root.connected-zoned.length > 0 ? "" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? Strings.looking-for-speakers : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;
                         property <string> cast-note: self.both-none || self.list-note == Strings.looking-for-speakers ? "" : Strings.cast-list(root.cast-list);
                         note: self.cast-note == "" ? self.list-note : self.list-note == "" || self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                         toggled(id) => {

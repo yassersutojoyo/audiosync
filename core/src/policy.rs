@@ -7,7 +7,7 @@
 //! ID (AirPlay) or device UID (local), never by display name (S147). None of
 //! this runs on an audio thread, so it may allocate.
 //!
-//! - [`delay`]: local output delays and the AirPlay sync rule (S3, S77 to S81).
+//! - [`delay`]: local output delays and the AirPlay sync rule (S3, S79, S81, S124, S172 to S179).
 //! - [`device_volume`]: an output device's own volume and mute, and the fix (S192 to S202).
 //! - [`source`]: capture sources, the microphone permission and app quits (S12, S15, S164).
 //! - [`source_quit`]: stopping or going on with whole-system audio when the source app quits (S227).

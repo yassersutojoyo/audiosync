@@ -75,7 +75,7 @@ use super::backend::{
 };
 use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::capture::{
-    Activation, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode, SampleType,
+    Activation, CaptureAttempt, CaptureGlitches, CaptureTarget, Feeds, LoopbackMode, SampleType,
     decide_apps_capture, decide_capture, decide_except_capture, describe_pair, display_name,
     input_sources, running_app, source_list,
 };
@@ -90,6 +90,7 @@ use super::outputs::{
 };
 use super::pairings::PairingStore;
 use super::process::ProcessTable;
+use super::render::WakeCounts;
 use super::routing::{
     self, Captured, DirectPath, DirectReason, EndpointAudio, EndpointVolume, PlayedOn,
 };
@@ -179,6 +180,12 @@ pub trait CaptureHandle {
     fn holds_all(&self) -> bool {
         true
     }
+
+    /// The discontinuities and gap fill counted so far, for the status
+    /// line; zero for a capture that doesn't count them.
+    fn glitches(&self) -> CaptureGlitches {
+        CaptureGlitches::default()
+    }
 }
 
 /// A running output. Dropping it stops the output at once and waits for its
@@ -203,6 +210,12 @@ pub trait RendererHandle {
     /// probe time, for the debug log: once, when every sample is in.
     fn clock_queue(&self) -> Option<ClockQueue> {
         None
+    }
+
+    /// Its render thread's late and empty wakes so far, for the status line;
+    /// zero for an output that doesn't count them.
+    fn wakes(&self) -> WakeCounts {
+        WakeCounts::default()
     }
 }
 
@@ -1463,10 +1476,17 @@ impl<D: Driver> Controller<D> {
                     shortfall_frames: playing.control.shortfall_frames(),
                     shortage_frames: playing.control.shortage_frames(),
                     least_slack_ns: playing.control.least_slack_ns(),
+                    wakes: playing.handle.wakes(),
                 })
                 .collect();
             let airplay = self.airplay.as_ref().and_then(AirPlaySpeakers::status);
-            describe_status(&session.source, span, &outputs, airplay.as_deref())
+            describe_status(
+                &session.source,
+                span,
+                session.capture.glitches(),
+                &outputs,
+                airplay.as_deref(),
+            )
         });
     }
 
@@ -2597,6 +2617,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .map_or(CastDiscovery::Off, CastSpeakers::discovery)
     }
 
+    fn cast_on(&self) -> bool {
+        self.cast.as_ref().is_some_and(CastSpeakers::is_on)
+    }
+
     fn set_cast_enabled(&mut self, id: &str, enabled: bool) -> Result<(), CastProblem> {
         let Some(cast) = self.cast.as_mut() else {
             return if enabled {
@@ -3283,23 +3307,30 @@ struct OutputStatus {
     /// before the observer's warm-up (S229).
     shortage_frames: u64,
     least_slack_ns: Option<i64>,
+    /// Its render thread's late and empty wakes.
+    wakes: WakeCounts,
 }
 
-/// A status line: what the session captures from `source` and how fast
-/// over `span`, then a line per output in `outputs` (or that none plays),
-/// then the AirPlay sender's status when it has one.
+/// A status line: what the session captures from `source`, how fast over
+/// `span` and the capture's `glitches` so far, then a line per output in
+/// `outputs` (or that none plays), then the AirPlay sender's status when it
+/// has one.
 fn describe_status(
     source: &SourceId,
     span: StatusSpan,
+    glitches: CaptureGlitches,
     outputs: &[OutputStatus],
     airplay: Option<&str>,
 ) -> String {
     let seconds = span.elapsed.as_secs_f64();
     let mut text = format!(
-        "status: capturing {}; {} frames captured, {:.0} frames/s over {seconds:.1} s",
+        "status: capturing {}; {} frames captured, {:.0} frames/s over {seconds:.1} s; \
+         discontinuities {}, gap fill {} frames",
         describe_source(source),
         span.frames,
         span.frames.saturating_sub(span.frames_then) as f64 / seconds,
+        glitches.discontinuities,
+        glitches.gap_fill_frames,
     );
     for output in outputs {
         let counters = output.counters;
@@ -3307,7 +3338,8 @@ fn describe_status(
             "\n  output {}: delay {} ms ({} frames), volume {} (gain {:.3}), lag {} frames; \
              primes {}, resyncs {}, starved reads {} ({} frames), drift skips {} ({} frames), \
              drift silences {} ({} frames), rejected copies {}, slowed {} frames, \
-             sped {} frames, shortfall {} frames, shortage {} frames, least slack {}",
+             sped {} frames, shortfall {} frames, shortage {} frames, least slack {}, \
+             late wakes {}, empty wakes {}",
             output.label,
             output.hold_back_ms,
             output.delay_frames,
@@ -3330,6 +3362,8 @@ fn describe_status(
             output
                 .least_slack_ns
                 .map_or("n/a".to_owned(), |ns| format!("{:.1} ms", ns as f64 / 1e6)),
+            output.wakes.late,
+            output.wakes.empty,
         ));
     }
     if outputs.is_empty() {
@@ -3657,6 +3691,47 @@ mod tests {
         backend.start(&SourceId::WholeSystem).unwrap();
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
         assert_eq!(backend.driver().renderers_started(), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S6 (the Windows host; the capture feeds AudioSync's own AirPlay sender, not a FIFO)
+    #[test]
+    fn one_capture_writes_one_equalized_ring_that_each_output_on_reads() {
+        let mut backend = backend();
+        backend.connect_output("tv", "TV");
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        backend.set_airplay(fake.link(), Some(FeedSlot::new(input)));
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        backend.poll();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: 6.0,
+            ..EqSettings::default()
+        });
+
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(backend.driver().captures_started().len(), 1);
+        assert!(backend.driver().capture_feeds_airplay());
+        let ring = backend.driver().capture_ring().expect("the capture runs");
+        let rings = backend.driver().renderer_rings();
+        let ids: Vec<&str> = rings.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, [HEADPHONES, SPEAKERS], "the TV is off");
+        assert!(
+            rings.iter().all(|(_, read)| Arc::ptr_eq(read, &ring)),
+            "every output reads the capture's ring"
+        );
+
+        let before = ring.frames_written();
+        let raised = 0.25 * 10f32.powf(6.0 / 20.0);
+        let written = backend.feed_capture_level(4, 0.25);
+        assert!(
+            written.iter().all(|s| (s - raised).abs() < 1e-4),
+            "equalized on the way into the ring: {written:?}"
+        );
+        assert_eq!(ring.frames_written(), before + 4);
     }
 
     #[test]
@@ -5731,11 +5806,12 @@ mod tests {
                 "session ended:",
             ],
         );
-        // Nothing reads the mock's ring, so every reader counter is 0.
+        // Nothing reads the mock's ring, so every reader counter is 0, and
+        // the mock's outputs count no wakes.
         let counters = "lag 0 frames; primes 0, resyncs 0, starved reads 0 (0 frames), \
                         drift skips 0 (0 frames), drift silences 0 (0 frames), rejected copies 0, \
                         slowed 0 frames, sped 0 frames, shortfall 0 frames, shortage 0 frames, \
-                        least slack n/a";
+                        least slack n/a, late wakes 0, empty wakes 0";
         let outputs = messages.iter().filter(|m| m.starts_with("  output "));
         assert!(outputs.clone().count() == 2 && outputs.clone().all(|m| m.ends_with(counters)));
         let _ = std::fs::remove_dir_all(dir);

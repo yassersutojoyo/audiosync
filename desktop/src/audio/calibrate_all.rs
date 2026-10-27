@@ -26,8 +26,8 @@ use audiosync_core::policy::speakers::SpeakerKey;
 
 use super::backend::{AudioBackend, CastStatus};
 use super::calibration::{
-    CalibrationTap, Failure, LATENCY_ALLOWANCE_S, Microphone, MicrophoneError, MicrophoneId, Route,
-    SIGNAL_WAIT_S, STALL_S, WARM_UP_LIMIT_S, WARM_UP_S, ns, trim_start,
+    CalibrationTap, Failure, LATENCY_ALLOWANCE_S, Microphone, MicrophoneError, MicrophoneId,
+    Missing, Route, SIGNAL_WAIT_S, STALL_S, WARM_UP_LIMIT_S, WARM_UP_S, ns, trim_start,
 };
 use super::outputs::{DeviceTraits, MicKind};
 use crate::debug_log::DebugLog;
@@ -100,6 +100,10 @@ pub struct Lineup {
     /// The playing local outputs' devices, by endpoint ID; an output
     /// missing here takes part.
     pub devices: BTreeMap<String, LocalDevice>,
+    /// The reference's switch is off: named with streaming while nothing plays.
+    pub reference_off: bool,
+    /// Every speaker whose switch is off, by class and ID, for the same text.
+    pub switched_off: Vec<(Class, String)>,
 }
 
 /// A playing local output's device, as the plan reads it.
@@ -162,8 +166,14 @@ pub fn blocked(lineup: &Lineup, included: &BTreeSet<String>) -> Option<Failure> 
         .members
         .iter()
         .any(|m| m.class == Class::Local && m.id == reference);
-    if lineup.session.is_none() || !reference_plays {
-        return Some(Failure::NotPlaying);
+    if lineup.session.is_none() {
+        return Some(Failure::NotPlaying(Missing {
+            reference: lineup.reference_off,
+            ..Missing::STREAMING
+        }));
+    }
+    if !reference_plays {
+        return Some(Failure::NotPlaying(Missing::REFERENCE));
     }
     let (planned, left_out) = lineup.plan(included);
     if planned.members.len() >= 2 {
@@ -331,12 +341,36 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
             offset_ms: Some(shown_ms),
         })
         .collect();
+    let reference_off = outputs
+        .iter()
+        .any(|output| output.is_reference && !output.enabled);
+    let switched_off = outputs
+        .iter()
+        .filter(|output| !output.enabled)
+        .map(|output| (Class::Local, output.id.clone()))
+        .chain(
+            audio
+                .airplay_speakers()
+                .into_iter()
+                .filter(|speaker| !speaker.enabled)
+                .map(|speaker| (Class::AirPlay, speaker.id)),
+        )
+        .chain(
+            audio
+                .cast_speakers()
+                .into_iter()
+                .filter(|cast| !cast.enabled)
+                .map(|cast| (Class::Cast, cast.id)),
+        )
+        .collect();
     Lineup {
         session: engine.session,
         reference: engine.reference,
         members: locals.into_iter().chain(airplay).chain(casts).collect(),
         hold_backs_ms: engine.hold_backs_ms,
         devices,
+        reference_off,
+        switched_off,
     }
 }
 
@@ -500,7 +534,7 @@ impl AllRun {
         let (Some(reference), Some(session), Some(tap)) =
             (everyone.reference.clone(), everyone.session, rig.tap())
         else {
-            return refuse(Failure::NotPlaying);
+            return refuse(Failure::NotPlaying(Missing::STREAMING));
         };
         let rows = match zone.map(|zone| zone.rows(&everyone)) {
             None => everyone
@@ -615,7 +649,23 @@ impl AllRun {
             now_of(reference),
             now_of(measured),
         ) else {
-            return refuse(Failure::NotPlaying);
+            let stopped = lineup.session.is_none() || rig.tap().is_none();
+            return refuse(Failure::NotPlaying(Missing {
+                streaming: stopped,
+                speaker: if stopped {
+                    lineup
+                        .switched_off
+                        .iter()
+                        .any(|(class, id)| *class == measured.class && *id == measured.id)
+                } else {
+                    now_of(measured).is_none()
+                },
+                reference: if stopped {
+                    lineup.reference_off
+                } else {
+                    now_of(reference).is_none()
+                },
+            }));
         };
         // An off row was read while it didn't play: it starts from its values now (S255).
         let run = if off {
@@ -1338,6 +1388,8 @@ pub(crate) mod tests {
                         ("usb".to_owned(), 2150.0),
                     ]),
                     devices: BTreeMap::new(),
+                    reference_off: false,
+                    switched_off: Vec::new(),
                 },
                 tap: Arc::new(CalibrationTap::new()),
                 solo: None,
@@ -1880,7 +1932,7 @@ pub(crate) mod tests {
         rig.lineup.session = None;
         assert_eq!(
             AllRun::start(&mut rig, &BTreeSet::new(), now, DebugLog::default()).err(),
-            Some(Failure::NotPlaying)
+            Some(Failure::NotPlaying(Missing::STREAMING))
         );
         assert!(!rig.tap.is_active());
         // Its recording wouldn't fit the estimate's limit at this rate.
@@ -2048,7 +2100,38 @@ pub(crate) mod tests {
             now,
             DebugLog::default(),
         );
-        assert_eq!(again.err(), Some(Failure::NotPlaying));
+        assert_eq!(again.err(), Some(Failure::NotPlaying(Missing::SPEAKER)));
+        given_back(&rig);
+    }
+
+    #[test]
+    fn measure_again_while_stopped_names_the_speaker_only_when_its_switch_is_off() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let members = run.members().to_vec();
+        let sheet = run_to_end(&mut rig, &mut run, |_, _| {})
+            .sheet
+            .expect("a sheet");
+        rig.lineup.session = None;
+        rig.lineup.members.clear();
+        let refusal = |rig: &mut FakeRig| {
+            let now = rig.now.get();
+            AllRun::again(rig, &sheet, &members, MIC_RATE, 1, now, DebugLog::default()).err()
+        };
+        assert_eq!(
+            refusal(&mut rig),
+            Some(Failure::NotPlaying(Missing::STREAMING))
+        );
+        rig.lineup
+            .switched_off
+            .push((members[1].class, members[1].id.clone()));
+        assert_eq!(
+            refusal(&mut rig),
+            Some(Failure::NotPlaying(Missing {
+                speaker: true,
+                ..Missing::STREAMING
+            }))
+        );
         given_back(&rig);
     }
 
@@ -2104,6 +2187,7 @@ pub(crate) mod tests {
         );
     }
 
+    // covers: C77a
     #[test]
     fn only_a_cast_speaker_without_an_offset_waits_for_the_unknown_start_guess() {
         use audiosync_cast::audio::Codec;

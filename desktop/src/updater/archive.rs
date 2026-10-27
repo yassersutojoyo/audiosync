@@ -207,6 +207,7 @@ pub mod tests {
         (dir, result)
     }
 
+    // covers: S300
     #[test]
     fn zip_entries_with_folders_dot_dot_or_drive_letters_are_refused() {
         let exe = fake_exe(Arch::X64.pe_machine(), b"new");
@@ -232,6 +233,7 @@ pub mod tests {
         assert!(plain_name("README.md"));
     }
 
+    // covers: S300
     #[test]
     fn a_zip_without_audiosync_exe_or_with_an_exe_for_the_other_machine_is_refused() {
         let (_, result) = unpack_bytes("no-exe", &zip_of(&[(NOTICES_NAME, b"n")]));

@@ -37,9 +37,12 @@ use crate::latency::ReportedLatency;
 use crate::metadata::Metadata;
 use crate::pairing::{self, LegacyVerifier, Pairing, PairingEvent, PairingState};
 use crate::reconnect::Backoff;
+use crate::rtp::{HEADER_BYTES as RTP_HEADER_BYTES, RtpHeader, SyncPacket};
 use crate::sdp::Codec;
 use crate::secret::Secret;
-use crate::session::{Output, Session, SessionConfig, SessionEvent, State, TEARDOWN_TIMEOUT};
+use crate::session::{
+    Output, Session, SessionConfig, SessionEvent, State, TEARDOWN_TIMEOUT, UdpSendResult,
+};
 use crate::stream::{self, SpeakerConfig, SpeakerCounters, Stream, StreamEvent, Transmit};
 use crate::targets::{Target, TargetId, Targets};
 use crate::transport::{self, IoEvent, RtspIo, SessionIo, SessionKey};
@@ -1440,6 +1443,41 @@ impl Driver {
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Stopped));
     }
 
+    fn traced(&self, key: &DeviceKey) -> bool {
+        self.speakers
+            .get(key)
+            .is_some_and(|speaker| speaker.options.trace_timing)
+    }
+
+    /// What an AirPlay 1 datagram that left for the receiver carries, read
+    /// back from its bytes: a sync's stated time, and an audio packet's RTP
+    /// numbers and the first non-zero payload byte when it has one (silence
+    /// is not traced). The sender's side of P102, which a receiver's output
+    /// can't show.
+    fn trace_sent(&self, key: &DeviceKey, kind: stream::PacketKind, bytes: &[u8]) {
+        let line = match kind {
+            stream::PacketKind::Sync => SyncPacket::parse(bytes).map(|sync| {
+                let at = self.stream.clock().seconds_of(sync.time);
+                format!(
+                    "sync rtp_heard={} at_s={at:.9} next_rtp={}",
+                    sync.rtp_heard, sync.next_rtp
+                )
+            }),
+            stream::PacketKind::Audio => RtpHeader::parse(bytes).and_then(|header| {
+                let payload = &bytes[RTP_HEADER_BYTES..];
+                let sound_at = payload.iter().position(|&byte| byte != 0)?;
+                Some(format!(
+                    "audio seq={} rtp={} sound_at={sound_at}",
+                    header.seq, header.timestamp
+                ))
+            }),
+            _ => None,
+        };
+        if let Some(line) = line {
+            self.emit_speaker(key, SpeakerEvent::Trace(line));
+        }
+    }
+
     fn transmit(&mut self, transmit: Transmit, now: Instant) {
         let Some(key) = self.stream_ids.get(&transmit.speaker).cloned() else {
             return;
@@ -1451,6 +1489,7 @@ impl Driver {
         {
             return self.ap2_transmit(&key, transmit, now);
         }
+        let traced = self.traced(&key);
         let Some(active) = self.active(&key) else {
             return;
         };
@@ -1460,8 +1499,13 @@ impl Driver {
         let Some(io) = &active.io else {
             return;
         };
-        if let Some(result) = io.send(transmit.from, transmit.to, &transmit.bytes) {
-            active.session.handle_udp_send(result, now);
+        let Some(result) = io.send(transmit.from, transmit.to, &transmit.bytes) else {
+            return;
+        };
+        let sent = result == UdpSendResult::Sent;
+        active.session.handle_udp_send(result, now);
+        if traced && sent {
+            self.trace_sent(&key, transmit.kind, &transmit.bytes);
         }
     }
 
@@ -1483,10 +1527,21 @@ impl Driver {
                     self.stream.flush_answered(speaker);
                 }
             }
-            StreamEvent::FirstSound { speaker, .. } => {
+            StreamEvent::FirstSound {
+                speaker,
+                packet,
+                rtptime,
+                at,
+            } => {
                 let Some(key) = self.stream_ids.get(&speaker).cloned() else {
                     return;
                 };
+                if self.traced(&key) {
+                    let at = self.stream.clock().seconds(at);
+                    let line =
+                        format!("first_sound packet={packet} rtptime={rtptime} at_s={at:.6}");
+                    self.emit_speaker(&key, SpeakerEvent::Trace(line));
+                }
                 if let Some(latency) = self.stream.speaker_latency(speaker) {
                     self.emit_speaker(&key, SpeakerEvent::Latency(latency));
                 }
@@ -1884,7 +1939,16 @@ impl Driver {
         }
         // Reported unannounced, never Connecting while it waits (P215, P224).
         if self.still_unannounced(key) {
+            let held = self.speakers.get_mut(key).is_some_and(|speaker| {
+                let held = speaker.holds_ap2();
+                speaker.ap2_retry = false;
+                held
+            });
             self.unannounce(key);
+            // Its retry's place goes on, as at any end before its session (P169).
+            if held {
+                self.wake_ap2_waiter(now);
+            }
             return false;
         }
         let ap2 = self.plans_ap2(key);
@@ -1932,16 +1996,20 @@ impl Driver {
     /// connection opens.
     fn begin_session(&mut self, key: &DeviceKey, now: Instant) -> bool {
         let held = self.speakers.get_mut(key).is_some_and(|speaker| {
+            let held = speaker.holds_ap2();
             speaker.ap2_waiting = false;
             speaker.ptp_waiting = false;
-            std::mem::take(&mut speaker.ap2_retry)
+            speaker.ap2_retry = false;
+            held
         });
         self.open_session(key, now);
-        if let Some(speaker) = self.speakers.get_mut(key) {
+        let holds = self.speakers.get_mut(key).is_some_and(|speaker| {
             speaker.told_connecting = false;
-        }
-        // A retry that ends anywhere but a running AirPlay 2 session hands its place on (P169).
-        if held {
+            speaker.holds_ap2()
+        });
+        // A queued start or a retry that ends anywhere but an AirPlay 2
+        // session hands its place on (P169, P222).
+        if held && !holds {
             self.wake_ap2_waiter(now);
         }
         match self.speakers.get(key).map(|speaker| &speaker.phase) {
@@ -2931,6 +2999,205 @@ mod tests {
         assert!(matches!(b.phase, Phase::Active(_)), "B is not on AirPlay 1");
         drop((listener_v6, listener_v4));
         true
+    }
+
+    /// A driver with one AirPlay 2 place, and a receiver that takes the
+    /// connection and never answers.
+    fn one_place_driver(now: Instant) -> (Driver, std::net::TcpListener) {
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let driver = Driver::new(stream, receiver, inputs, events, latency)
+            .with_airplay2(true, false, Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]))
+            .with_airplay2_sessions(1);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a listener");
+        (driver, listener)
+    }
+
+    fn place_key(n: u8) -> DeviceKey {
+        DeviceKey::Id(crate::discovery::DeviceId([
+            0x02, 0x00, 0x5E, 0x00, 0x53, n,
+        ]))
+    }
+
+    fn place_record(
+        kind: crate::discovery::ServiceKind,
+        n: u8,
+        port: u16,
+    ) -> crate::discovery::ServiceRecord {
+        use crate::discovery::{ScopedAddr, ServiceKind, ServiceRecord};
+        use std::net::{IpAddr, Ipv4Addr};
+        let txt = match kind {
+            ServiceKind::Raop => [
+                "txtvers=1",
+                "ch=2",
+                "cn=0",
+                "et=0",
+                "sr=44100",
+                "ss=16",
+                "tp=UDP",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            ServiceKind::AirPlay => vec![
+                "features=0x0,0x10040".to_owned(),
+                "flags=0x4".to_owned(),
+                "model=Speaker1,1".to_owned(),
+                format!("deviceid=02:00:5E:00:53:{n:02X}"),
+            ],
+        };
+        ServiceRecord {
+            kind,
+            instance: format!("Speaker {n}"),
+            host: format!("speaker-{n}.local"),
+            port,
+            txt: txt.into_iter().map(String::into_bytes).collect(),
+            addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
+        }
+    }
+
+    fn place_device(n: u8, port: u16, raop: bool, airplay: bool) -> Device {
+        use crate::discovery::ServiceKind;
+        let raop = raop.then(|| place_record(ServiceKind::Raop, n, port));
+        let airplay = airplay.then(|| place_record(ServiceKind::AirPlay, n, port));
+        Device::from_records(place_key(n), raop.as_ref(), airplay.as_ref()).expect("a device")
+    }
+
+    /// Discovery that runs and reports nothing more.
+    struct QuietBrowser;
+
+    impl crate::discovery::Browser for QuietBrowser {
+        fn poll_event(&mut self) -> Option<crate::discovery::BrowseEvent> {
+            None
+        }
+    }
+
+    /// Discovery saw the speaker's AirPlay record and then its goodbye (P215).
+    fn lapse(driver: &mut Driver, n: u8, port: u16) {
+        use crate::discovery::{BrowseEvent, ServiceKind};
+        driver.browser = Some(Box::new(QuietBrowser));
+        let record = place_record(ServiceKind::AirPlay, n, port);
+        let instance = record.instance.clone();
+        driver.directory.apply(BrowseEvent::Resolved(record));
+        driver.directory.apply(BrowseEvent::Removed {
+            kind: ServiceKind::AirPlay,
+            instance,
+        });
+        assert!(driver.lapsed(&place_key(n)));
+    }
+
+    fn place_options() -> SpeakerOptions {
+        SpeakerOptions::new(Volume::Db(-20.0))
+    }
+
+    fn place_counters() -> Arc<SpeakerCounters> {
+        Arc::new(SpeakerCounters::default())
+    }
+
+    /// X (AirPlay 1) takes the connect turn, so A (AirPlay 2) waits in the
+    /// queue holding the one place and B is refused for it.
+    fn a_queued_and_b_refused(driver: &mut Driver, port: u16, now: Instant) {
+        let (x, a, b) = (
+            place_device(1, port, true, false),
+            place_device(2, port, false, true),
+            place_device(3, port, false, true),
+        );
+        driver.add_speaker(x, place_options(), place_counters(), now);
+        assert!(matches!(
+            driver.speakers[&place_key(1)].phase,
+            Phase::Active(_)
+        ));
+        driver.add_speaker(a, place_options(), place_counters(), now);
+        assert!(matches!(
+            driver.speakers[&place_key(2)].phase,
+            Phase::Queued { ap2: true }
+        ));
+        driver.add_speaker(b, place_options(), place_counters(), now);
+        assert!(driver.speakers[&place_key(3)].ap2_waiting, "B is refused");
+    }
+
+    fn b_got_the_place(driver: &Driver) -> bool {
+        let b = &driver.speakers[&place_key(3)];
+        !b.ap2_waiting && b.holds_ap2()
+    }
+
+    // A, queued for AirPlay 2, holds the one place, so B is refused; when
+    // A's turn comes its records send it to AirPlay 1, and B gets the place
+    // without waiting for another AirPlay 2 session to end.
+    // covers: P169, P222
+    #[test]
+    fn a_queued_airplay2_start_that_ends_before_its_session_hands_the_place_on() {
+        let now = Instant::now();
+        let (mut driver, listener) = one_place_driver(now);
+        let port = listener.local_addr().expect("an address").port();
+        a_queued_and_b_refused(&mut driver, port, now);
+
+        // Discovery now shows A's RAOP record too, as the device its turn reads.
+        driver.speakers.get_mut(&place_key(2)).expect("A").device =
+            place_device(2, port, true, true);
+        driver.run_timers(now + crate::connects::CONNECT_SPACING);
+        assert!(matches!(
+            driver.speakers[&place_key(2)].phase,
+            Phase::Active(_)
+        ));
+        assert!(b_got_the_place(&driver), "B gets the place A let go");
+        drop(listener);
+    }
+
+    // The same with A's records gone by its turn: A is unannounced and B
+    // gets the place.
+    // covers: P215, P222
+    #[test]
+    fn a_queued_airplay2_start_whose_records_lapse_hands_the_place_on() {
+        let now = Instant::now();
+        let (mut driver, listener) = one_place_driver(now);
+        let port = listener.local_addr().expect("an address").port();
+        a_queued_and_b_refused(&mut driver, port, now);
+
+        lapse(&mut driver, 2, port);
+        driver.run_timers(now + crate::connects::CONNECT_SPACING);
+        assert!(matches!(
+            driver.speakers[&place_key(2)].phase,
+            Phase::Unannounced
+        ));
+        assert!(b_got_the_place(&driver), "B gets the place A let go");
+        drop(listener);
+    }
+
+    // A's AirPlay 2 session dropped and waits for its retry, keeping the one
+    // place, so B is refused; A's records lapse before the retry falls due,
+    // so the retry ends unannounced and hands the place to B.
+    // covers: P169, P215
+    #[test]
+    fn an_airplay2_retry_whose_records_lapse_hands_the_place_on() {
+        let now = Instant::now();
+        let (mut driver, listener) = one_place_driver(now);
+        let port = listener.local_addr().expect("an address").port();
+        let (a, b) = (
+            place_device(2, port, false, true),
+            place_device(3, port, false, true),
+        );
+        driver.add_speaker(a, place_options(), place_counters(), now);
+        assert!(matches!(
+            driver.speakers[&place_key(2)].phase,
+            Phase::Ap2(_)
+        ));
+        let retry_at = now + Duration::from_secs(1);
+        driver.end_session(&place_key(2), Phase::Waiting(retry_at));
+        let waiting = driver.speakers.get_mut(&place_key(2)).expect("A");
+        waiting.ap2_retry = true;
+        waiting.next_start = StartKind::Retry;
+        driver.add_speaker(b, place_options(), place_counters(), now);
+        assert!(driver.speakers[&place_key(3)].ap2_waiting, "B is refused");
+
+        lapse(&mut driver, 2, port);
+        driver.run_timers(retry_at);
+        let a = &driver.speakers[&place_key(2)];
+        assert!(matches!(a.phase, Phase::Unannounced));
+        assert!(!a.ap2_retry, "A holds no place for a later start");
+        assert!(b_got_the_place(&driver), "B gets the place A let go");
+        drop(listener);
     }
 
     /// A verifier without keys, for driving a session by hand.

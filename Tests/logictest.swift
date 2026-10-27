@@ -191,6 +191,7 @@ check(AudioSource.app(bundleID: "com.spotify.client").defaultsValue == "com.spot
 check(AudioSource.system.bundleID == nil, "source: the whole system has no bundle ID")
 
 // MARK: Several apps as one source
+// covers: S10, S242 (the Mac's mix and all-except sources, AudioSync never in them)
 do {
     let music = "com.apple.Music", safari = "com.apple.Safari", own = "com.example.audiosync"
     let both = AudioSource.mixed(.only, bundleIDs: [music, safari])
@@ -290,9 +291,22 @@ do {
           "\(offered.map(\.name))")
     let twins = SourceApps.offered([app(20, "com.b", "Same"), app(21, "com.a", "same")], ownPID: ownPID, ownBundleID: nil)
     check(twins.map(\.bundleID) == ["com.a", "com.b"], "source apps: names that sort alike are ordered by bundle ID")
+
+    // Hundreds of background processes are listed; reading each one's name
+    // and icon held the main thread about 25 ms on every panel open.
+    final class Reads { var pids: [pid_t] = [] }
+    let reads = Reads()
+    let listed: [(pid: pid_t, regular: Bool)] = [(1, false), (2, true), (3, false), (4, true)]
+    let read = SourceApps.regularApps(listed, isRegular: { $0.regular }) { entry in
+        reads.pids.append(entry.pid)
+        return app(entry.pid, "com.example.\(entry.pid)", "App \(entry.pid)")
+    }
+    check(read.map(\.pid) == [2, 4] && reads.pids == [2, 4],
+          "source apps: only regular apps have their name and icon read, in the listed order", "\(reads.pids)")
 }
 
 // MARK: Audio processes — which Core Audio process objects make up an app
+// covers: S10, S11 (an app source's process objects, AudioSync's own never among them)
 do {
     typealias Listed = AudioProcesses.Listed
     let appPID: pid_t = 100, ownPID: pid_t = 900
@@ -320,6 +334,7 @@ do {
 }
 
 // MARK: Appearance — stored choice
+// covers: S155
 for a in AppAppearance.allCases {
     check(AppAppearance(defaultsValue: a.defaultsValue) == a, "appearance: round-trip \(a)")
 }
@@ -370,6 +385,7 @@ do {
 }
 
 // MARK: Speaker IDs — the bundled engine's output IDs move to the native sender's receiver IDs (S204)
+// covers: S204
 do {
     typealias Migration = SpeakerIDMigration
     // Device ID AA:BB:CC:DD:EE:01: the bundled engine's output 187723572702721
@@ -649,6 +665,7 @@ do {
           && !AudioDevices.isPrivateAggregate(composition: [kAudioAggregateDeviceNameKey: "Multi-Output Device"]),
           "devices: only a private aggregate (the capture's own) is left out of the lists")
 
+    // covers: S171
     let usb = kAudioDeviceTransportTypeUSB
     let aggregate = kAudioDeviceTransportTypeAggregate
     let listedUSB = AudioDevices.entry(id: 7, alive: 1, channels: 2, transport: usb, composition: nil,
@@ -1022,6 +1039,7 @@ do {
 }
 
 // MARK: Local Network hint — denied access at once; a guess only when unknown
+// covers: S101, S154 (the hint, when the host looks again, and the browser states)
 do {
     let t0 = Date(timeIntervalSince1970: 2_000_000)
     let wait = LocalNetworkHint.emptyBeforeHint
@@ -1114,6 +1132,7 @@ check(SpeakerState(enabled: false, streaming: false) == .off, "speaker: off whil
 check(!SpeakerState.playing.clickTurnsOn, "speaker: click on a playing speaker turns it off")
 check(SpeakerState.willPlay.clickTurnsOn, "speaker: click on a waiting speaker turns it on (and starts streaming)")
 check(SpeakerState.off.clickTurnsOn, "speaker: click on an off speaker turns it on")
+// covers: S106 (the access kinds that stand)
 check(SpeakerAvailability(.open) == .open, "availability: open")
 check(SpeakerAvailability(.code(password: false)) == .needsCode, "availability: PIN asks for a code")
 check(SpeakerAvailability(.code(password: true)) == .needsCode, "availability: password asks for a code")
@@ -1256,6 +1275,7 @@ do {
     let builtIn: AudioDeviceID = 41
     let uid = "BuiltInSpeakerDevice"
 
+    // covers: S192, S193, S195, S198, S199, S200, S202 (through a fake Core Audio volume and mute)
     // The quiet MacBook speakers: AudioSync at 100, the device at 13 %.
     do {
         let host = Host()
@@ -1982,6 +2002,7 @@ do {
     check(pairsBack == ["mic-uid": 1] && pairStore.values[AppSettings.Keys.inputChannelPairs] == nil,
           "channel pairs: a pair is kept per device UID, and the key goes once all are on 1-2")
 
+    // covers: S10, S11 (the tap follows the app's audio processes)
     check(AppTapFollow.decide(tapped: [5, 7], found: [7, 5], appRunning: true) == .keep,
           "app tap: the same processes in another order keep the tap")
     check(AppTapFollow.decide(tapped: [5], found: [5, 9], appRunning: true) == .retap([5, 9]),
@@ -2000,6 +2021,7 @@ do {
     check(AppTapFollow.candidates([9, 3, 9, 42], own: 42) == [3, 9] && AppTapFollow.candidates([3], own: nil) == [3],
           "app tap: AudioSync's own process is never tapped, even when the app launched it")
 
+    // covers: S13 (a retap keeps the app muted throughout)
     // Moving the tap to new processes: the steps it takes, in order. "old"
     // is the running capture, which mutes the app until it is closed.
     struct Failed: Error {}
@@ -2137,6 +2159,7 @@ do {
 }
 
 // MARK: Native AirPlay sender — its IDs, rows, speaker plan, events and sync rule
+// covers: S222
 do {
     check(NativeAirPlayID.pcmDebugIDs(nil).isEmpty && NativeAirPlayID.pcmDebugIDs(" , ").isEmpty,
           "native airplay: no AUDIOSYNC_AIRPLAY_PCM names no receiver")
@@ -3091,6 +3114,89 @@ do {
     check(retried == nil && pin.withdrawPrompt() == nil,
           "every time: a refusal the sender retries while the PIN prompt is open starts no second pairing and keeps the prompt",
           "\(String(describing: retried))")
+
+    // S223: switched on by hand lasts only for the PIN session that click
+    // bought. Once the stream ends the speaker goes off with the needs-a-PIN
+    // notice, the next stream opens no prompt, and the next click pairs again.
+    var session = NativeAirPlayModel()
+    session.apply(.appeared(tv("S1", .needsPin, everyTime: true)))
+    var hand = EveryTimeGuard()
+    hand.turnedOnByHand(["native:S1"])
+    _ = session.turnedOnByUser("S1")
+    session.added("S1")
+    _ = session.apply(.state(id: "S1", .playing, retryMs: nil))
+    for id in session.plan(streaming: false, enabled: ["native:S1"]).remove { session.removed(id) }
+    let ended = hand.streamEnded(.stopped(.powerSwitch), streaming: true,
+                                 asking: session.askingEveryTime(session.rows(enabled: ["native:S1"])),
+                                 enabled: ["native:S1"])
+    for off in ended { _ = session.turnedOff(off.id) }
+    let enabledAfter: Set<String> = ended.isEmpty ? ["native:S1"] : []
+    let restart = session.plan(streaming: true, enabled: enabledAfter)
+    let reopened = session.nextPrompt()
+    let relisted = hand.turnsOff(session.askingEveryTime(session.rows(enabled: enabledAfter)), enabled: enabledAfter)
+    check(ended == [NativeAirPlayPlan.TurnOff(id: "native:S1", reason: .needsCode)]
+            && restart.add.isEmpty && reopened == nil && relisted.isEmpty,
+          "every time: stop then start: row off + notice",
+          "ended \(ended), restart \(restart), prompt \(String(describing: reopened)), relisted \(relisted)")
+    check(session.turnedOnByUser("S1") == .startPairing("S1"),
+          "every time: after the stream ended, the next click on it pairs again")
+
+    // Inside the stream the sender retries a lost connection; the receiver
+    // refuses credentials from the earlier connection, so it needs a new PIN.
+    var again = NativeAirPlayModel()
+    again.apply(.appeared(tv("S2", .needsPin, everyTime: true)))
+    var kept = EveryTimeGuard()
+    kept.turnedOnByHand(["native:S2"])
+    _ = again.turnedOnByUser("S2")
+    again.added("S2")
+    _ = again.apply(.state(id: "S2", .playing, retryMs: nil))
+    let lost = again.apply(.error(id: "S2", .connectionLost, retryMs: 1000, detail: ""))
+    let keptOn = kept.turnsOff(again.askingEveryTime(again.rows(enabled: ["native:S2"])), enabled: ["native:S2"])
+    let refusedAgain = again.apply(.error(id: "S2", .pairingRequired, retryMs: nil, detail: ""))
+    check(lost == nil && keptOn.isEmpty && refusedAgain == .turnOff("native:S2", .needsCode) && again.nextPrompt() == nil,
+          "every time: a reconnect inside the stream that the receiver refuses: row off + notice, no prompt",
+          "lost \(String(describing: lost)), kept \(keptOn), refused \(String(describing: refusedAgain))")
+
+    // The other ways a stream ends drop the mark too; with every speaker off
+    // nothing is left to turn off.
+    let ends: [(StreamEnd, Set<String>, [NativeAirPlayPlan.TurnOff], String)] = [
+        (.stopped(.noSpeakerOn), [], [], "every speaker off"),
+        (.senderFailed, ["native:S1"], [.init(id: "native:S1", reason: .needsCode)], "a sender failure that stops streaming"),
+        (.sleep, ["native:S1"], [.init(id: "native:S1", reason: .needsCode)], "sleep"),
+    ]
+    for (cause, enabled, expected, what) in ends {
+        var marked = EveryTimeGuard()
+        marked.turnedOnByHand(["native:S1"])
+        let off = marked.streamEnded(cause, streaming: true, asking: ["native:S1"], enabled: enabled)
+        check(off == expected && marked.byHand.isEmpty,
+              "every time: \(what) ends the stream: the by-hand mark is gone", "\(off), \(marked.byHand)")
+    }
+    // A rebuild (a source change, say) stops the engine before it starts it
+    // again; when that start fails, streaming has stopped and the mark ends.
+    var rebuilt = EveryTimeGuard()
+    rebuilt.turnedOnByHand(["native:S1"])
+    let failedRebuild = rebuilt.streamEnded(.stopped(.startFailed), streaming: false, midRebuild: true,
+                                            asking: ["native:S1"], enabled: ["native:S1"])
+    check(failedRebuild == [.init(id: "native:S1", reason: .needsCode)] && rebuilt.byHand.isEmpty,
+          "every time: a rebuild after a source change that fails to start ends the stream: the by-hand mark is gone",
+          "\(failedRebuild), \(rebuilt.byHand)")
+    var quitMidRebuild = EveryTimeGuard()
+    quitMidRebuild.turnedOnByHand(["native:S1"])
+    let quitOff = quitMidRebuild.streamEnded(.stopped(.quitting), streaming: false, midRebuild: true,
+                                             asking: ["native:S1"], enabled: ["native:S1"])
+    check(quitOff.isEmpty && quitMidRebuild.byHand == ["native:S1"],
+          "every time: quitting during a rebuild keeps the by-hand mark", "\(quitOff)")
+    // A source change rebuilds inside the stream, and quitting leaves the
+    // switches for the next launch: the mark stays.
+    let keeps: [(StreamEnd, Bool)] = [(.stopped(.sourceChanged), true), (.stopped(.quitting), true),
+                                      (.stopped(.powerSwitch), false)]
+    for (cause, streaming) in keeps {
+        var marked = EveryTimeGuard()
+        marked.turnedOnByHand(["native:S1"])
+        let off = marked.streamEnded(cause, streaming: streaming, asking: ["native:S1"], enabled: ["native:S1"])
+        check(off.isEmpty && marked.byHand == ["native:S1"],
+              "every time: \(cause) with streaming \(streaming) keeps the by-hand mark", "\(off)")
+    }
 }
 
 // MARK: Every time at launch: on from the last run and discovered, it stays off with no pairing for 15 s
@@ -3737,7 +3843,7 @@ do {
     check(longSplit.connected.map(\.name) == ["Den", long + " A", long + " B"],
           "EC11 long names: names that differ only at the end still sort and stay whole")
 
-    // EC12: the network to the AirPlay speakers drops.
+    // covers: S154, S167 (an empty list with Local Network allowed never hints)
     check(LocalNetworkHint.decide(access: .allowed, senderUp: true, emptySince: t0,
                                   now: t0.addingTimeInterval(600)) == .none,
           "EC12 network loss: an empty list with Local Network allowed shows no permission hint")
@@ -3905,6 +4011,7 @@ do {
 }
 
 // MARK: Explicit pause of the AirPlay speakers (P213, ExplicitPause in NowPlaying.swift)
+// covers: S292 (the Mac host)
 do {
     let spotify = NowPlayingMonitor.spotify, music = NowPlayingMonitor.music
     let t0 = Date(timeIntervalSinceReferenceDate: 0)
@@ -4624,6 +4731,32 @@ do {
           "zones: the speaker lists keep only the speakers in no zone, in their order")
     check(ZoneLayout.zoneless(["lc:usb"], key: { $0 }, zoned: zoned).isEmpty,
           "zones: a list whose speakers are all in zones is empty")
+    check(ZoneLayout.zoned(["lc:built-in", "lc:usb", "ap:native:den", "cc:kitchen"], key: { $0 }, zoned: zoned)
+            == ["lc:usb", "ap:native:den"],
+          "zones: a zone member keeps a compact row in its own section, in the section's order")
+
+    func onlyThis(_ key: String, _ members: [ZoneLayout.Member]) -> [String] {
+        ZoneLayout.onlyThis(key, members: members).map { "\($0.key) \($0.on ? "on" : "off")" }
+    }
+    let memberUSB = ZoneLayout.Member(key: "lc:usb", listed: true, on: false, cast: false)
+    let memberDen = ZoneLayout.Member(key: "ap:native:den", listed: true, on: true, cast: false)
+    let memberGone = ZoneLayout.Member(key: "ap:native:gone", listed: false, on: true, cast: false)
+    let memberAttic = ZoneLayout.Member(key: "cc:attic", listed: true, on: true, cast: true)
+    let memberHall = ZoneLayout.Member(key: "cc:hall", listed: true, on: false, cast: true)
+    check(onlyThis("lc:usb", [memberUSB, memberDen, memberGone]) == ["lc:usb on", "ap:native:den off"],
+          "zones: Only This Speaker turns it on first, then the other present members off")
+    check(onlyThis("ap:native:den", [memberUSB, memberDen, memberAttic]) == ["cc:attic off"],
+          "zones: Only This Speaker on a member that plays only turns the others off")
+    check(onlyThis("cc:hall", [memberHall, memberDen, memberAttic]) == ["cc:attic off", "cc:hall on", "ap:native:den off"],
+          "zones: Only This Speaker frees the Cast place before a Cast member comes on")
+    check(onlyThis("ap:native:gone", [memberGone, memberDen]).isEmpty,
+          "zones: Only This Speaker does nothing for a member that isn't listed")
+    let hallBusy = ZoneLayout.Member(key: "cc:hall", listed: true, on: false, cast: true, busy: true)
+    check(onlyThis("cc:hall", [hallBusy, memberDen, memberAttic]).isEmpty,
+          "zones: Only This Speaker switches nothing for a Cast member that can't start now")
+    let atticBusy = ZoneLayout.Member(key: "cc:attic", listed: true, on: true, cast: true, busy: true)
+    check(onlyThis("cc:attic", [atticBusy, memberDen]) == ["ap:native:den off"],
+          "zones: Only This Speaker on a Cast member already playing still turns the others off")
 
     let living = SpeakerZone(id: "z1", name: "Living Room", members: ["lc:usb", "ap:native:den"], volume: 80)
     let kitchen = SpeakerZone(id: "z2", name: "Kitchen", members: ["cc:kitchen"], volume: 100)
@@ -4659,7 +4792,7 @@ do {
     check(gone.action == .nothing && gone.steps == [.absent],
           "zones: a zone with no member listed does nothing on a click")
 
-    // Presets in the windows, the menus and the panel (S259 to S269).
+    // covers: S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel)
     let presetText = UIStrings()
     let presetFlat = [Double](repeating: 0, count: Equalizer.frequencies.count)
     let livingZone = SpeakerZone(id: "z1", name: "Living Room", members: ["lc:usb:out", "lc:tv"], volume: 60)
@@ -4868,6 +5001,288 @@ do {
     check(!pressed(CGPoint(x: 1154, y: 876), icon, 0.05), "menu bar icon: the line below the icon is not on it")
     check(!pressed(CGPoint(x: 700, y: 500), icon, 0.05), "menu bar icon: a press elsewhere is not a press on the icon")
     check(!pressed(CGPoint(x: 1154, y: 888), icon, 3), "menu bar icon: Escape with the pointer resting on the icon is no press")
+    let addRow = CastAddRow.state
+    check(addRow(true, .searching) == .reserved && addRow(true, .noneFound) == .shown,
+          "menu bar panel: the Add by Address row keeps its room while the Cast search runs, so the panel never grows when it ends")
+    check(addRow(true, .failed) == .shown && addRow(true, .quiet) == .none && addRow(false, .searching) == .none
+            && addRow(false, .noneFound) == .none,
+          "menu bar panel: no Add by Address row once speakers are listed or when adding isn't possible")
+    let duringClose = StatusItemClick.pressDuringClose
+    check(duringClose(30.1, 30.25) && !duringClose(30.25, 30.25) && !duringClose(31, 30.25) && !duringClose(30.1, nil),
+          "menu bar icon: only a press while the panel still fades out is ignored, as Outlook does")
+    func near(_ a: TimeInterval, _ b: TimeInterval) -> Bool { abs(a - b) < 1e-9 }
+    let shrink = PanelQuiet.duration(.close, system: false)
+    check(duringClose(30 + shrink / 2, 30 + shrink) && !duringClose(30 + shrink + 0.01, 30 + shrink),
+          "menu bar icon: a press is ignored only while the panel shrinks away; right after, it opens it")
+
+    let window = CGRect(x: 1000, y: 543, width: 306, height: 386)
+    let grown = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 280, height: 428))
+    check(grown == CGRect(x: 1000, y: 474, width: 306, height: 455),
+          "menu bar panel: a taller panel grows its window downward, its top edge under the icon where it was")
+    let wider = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 300, height: 300))
+    check(wider.maxY == window.maxY && wider.midX == window.midX && wider.size == CGSize(width: 326, height: 327),
+          "menu bar panel: a resize keeps the window's top edge and middle, so the arrow stays on the icon")
+    var rest = PanelRest(frame: window, content: CGSize(width: 280, height: 359))
+    let unfolded = rest.move(to: CGSize(width: 280, height: 428))
+    let folded = rest.move(to: CGSize(width: 280, height: 359))
+    check(unfolded == grown && folded == window && rest.frame == window,
+          "menu bar panel: a fold that starts while the unfold still runs aims from the rest frame, back to the exact frame")
+    var many = PanelRest(frame: window, content: CGSize(width: 280, height: 359))
+    let tops = (0..<50).map { many.move(to: CGSize(width: 280, height: 359 + CGFloat($0 % 7) * 28.5)).maxY }
+    check(tops.allSatisfy { $0 == window.maxY },
+          "menu bar panel: no run of folds and unfolds moves the top edge under the icon")
+    let fold = PanelFold(reduceMotion: false), stillFold = PanelFold(reduceMotion: true)
+    check(fold.moves && fold.duration == 0.2 && !stillFold.moves && stillFold.duration == 0,
+          "menu bar panel: a zone folds in one 0.2 s motion; with Reduce Motion the panel changes at once")
+
+    // The panel's own shadow while it grows in or shrinks away (PanelShadow).
+    let body = CGRect(x: 0, y: 0, width: 306, height: 400), tip = CGPoint(x: 153, y: 412)
+    let outline = PanelShadow.outline(body: body, tip: tip)
+    check(outline.contains(CGPoint(x: 153, y: 200)) && outline.contains(CGPoint(x: 153, y: 410))
+            && !outline.contains(CGPoint(x: 0.5, y: 399.5)) && !outline.contains(CGPoint(x: 100, y: 405)),
+          "menu bar panel shadow: its shape is the rounded body with the arrow up to the icon, not the window's rectangle")
+    let room = body.insetBy(dx: -30, dy: -30)
+    let outside = PanelShadow.outside(outline, in: room)
+    check(!outside.contains(CGPoint(x: 153, y: 200), using: .evenOdd) && !outside.contains(CGPoint(x: 153, y: 410), using: .evenOdd)
+            && outside.contains(CGPoint(x: -10, y: 200), using: .evenOdd)
+            && outside.contains(CGPoint(x: 0.5, y: 399.5), using: .evenOdd),
+          "menu bar panel shadow: it shows only outside the panel, never darkening the translucent panel")
+    let light = PanelShadow.style(dark: false), dark = PanelShadow.style(dark: true)
+    check(dark.opacity > light.opacity && light.opacity > 0 && dark.opacity <= 1 && light.offsetY < 0
+            && light.margin >= light.radius * 2 + abs(light.offsetY) && dark.margin >= dark.radius * 2 + abs(dark.offsetY),
+          "menu bar panel shadow: darker in the dark theme, falling downward, with room to spread in")
+    let barSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    check(barSource.components(separatedBy: ".invalidateShadow()").count - 1 == 1
+            && barSource.components(separatedBy: "hasShadow = on").count - 1 == 1,
+          "menu bar panel source: the system shadow is switched in one place and recomputed once, never per frame")
+    check(barSource.contains("grow(own.panel, about: tip)") && barSource.contains("shrink(own.panel, about: tip)")
+            && barSource.contains("window.addChildWindow(shadow, ordered: .below)"),
+          "menu bar panel source: the own shadow scales with the panel, in a window under it")
+    let resizeBody = barSource.components(separatedBy: "private func animateResize(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(resizeBody.contains("dropOwnShadow()") && resizeBody.contains("setShadow(window, true)"),
+          "menu bar panel source: a resize hands the shadow back to the system, so the own one never keeps an old size")
+    let ownBody = barSource.components(separatedBy: "private func ownShadow(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(ownBody.contains("window.effectiveAppearance.bestMatch") && !ownBody.contains("NSApp.effectiveAppearance"),
+          "menu bar panel source: the own shadow takes the panel window's theme")
+    let bar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let foldBody = bar.components(separatedBy: "private func fold(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(foldBody.contains("animateResize(") && !foldBody.contains("resizeLater(")
+            && foldBody.contains(".easeInOut(duration: motion.duration)") && foldBody.contains("name: .easeInEaseOut"),
+          "menu bar panel source: fold() starts the resize itself, not through the gathered step, on the rows' ease-in-out curve")
+    let rowsSource = bar.components(separatedBy: "private var speakerRows: some View {").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(rowsSource.contains(".transition(.opacity)") && !bar.contains(".opacity.animation("),
+          "menu bar panel source: a zone's rows fade only inside the fold's animation, so a speaker joining or leaving a zone, or a Reduce Motion fold, shows at once")
+    let zoneArea = CGRect(x: 0, y: 0, width: 294, height: 84)
+    check(PanelFold.clip(zoneArea, moving: true) == zoneArea
+            && PanelFold.clip(zoneArea, moving: false).contains(zoneArea.insetBy(dx: -6, dy: -6)),
+          "menu bar panel: while a fold moves, a zone's rows stay inside its own edge; at rest nothing is cut, focus rings included")
+    let mainSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    check(rowsSource.contains(".clipShape(FoldClip(moving: zoneDisclosure.moving))") && mainSource.contains("moving = true"),
+          "menu bar panel source: a fold clips each zone to its own moving edge, so the rows and the footer below never slide over its fading rows")
+    let ownShadowBody = bar.components(separatedBy: "private func ownShadow(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    let dropBody = bar.components(separatedBy: "private func dropOwnShadow(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(ownShadowBody.contains("standInBackground(") && dropBody.contains("restoreBackground("),
+          "menu bar panel source: while the panel scales, its background is a stand-in that scales with it, handed back to the system's with the shadow")
+    final class Pane {
+        let name: String, background: Bool, children: [Pane]
+        init(_ name: String, background: Bool = false, _ children: [Pane] = []) {
+            self.name = name; self.background = background; self.children = children
+        }
+    }
+    let content = Pane("content", background: true, [Pane("row blur", background: true)])
+    let tree = Pane("theme frame", [Pane("popover frame", background: true,
+                                         [Pane("blur", background: true), Pane("content view", [content]),
+                                          Pane("stand-in", background: true)])])
+    let hidden = PanelBackdrop.hidden(in: tree, children: { $0.children }, isContent: { $0 === content },
+                                      isStandIn: { $0.name == "stand-in" }, isBackground: { $0.background })
+    check(hidden.map(\.name) == ["blur"],
+          "menu bar panel: the stand-in hides only background views beside the content, never one holding it, its own rows or itself",
+          "\(hidden.map(\.name))")
+    let blurLayer = NSObject(), contentLayer = NSObject(), standInLayer = NSObject()
+    let material = PanelBackdrop.material(in: [blurLayer, contentLayer, standInLayer], keeping: [contentLayer, standInLayer])
+    check(material.count == 1 && material.first === blurLayer,
+          "menu bar panel: in a background view that holds the content, only the layers no subview owns are its material")
+    let openBody = bar.components(separatedBy: "private func animateOpen(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(!bar.contains("panel resize layers") && openBody.contains("ownShadow(window)")
+            && (openBody.range(of: "ownShadow(window)")?.lowerBound ?? openBody.endIndex)
+                < (openBody.range(of: "grow(layer")?.lowerBound ?? openBody.startIndex),
+          "menu bar panel source: the panel grows only once its background can scale with it; otherwise it fades in at full size")
+
+    // The open panel moved by AppKit (another display, a status item shifting).
+    let shifted = window.offsetBy(dx: -40, dy: -24)
+    let afresh = PanelRest.next(rest, stepRunning: false, window: shifted, content: CGSize(width: 280, height: 359))
+    check(afresh == PanelRest(frame: shifted, content: CGSize(width: 280, height: 359)),
+          "menu bar panel: with no resize running, a fold aims from where the window is now, so it never snaps back")
+    let midStep = PanelRest.next(rest, stepRunning: true, window: shifted, content: CGSize(width: 280, height: 428))
+    check(midStep == rest && PanelRest.next(nil, stepRunning: true, window: shifted, content: CGSize(width: 280, height: 359)) == afresh,
+          "menu bar panel: while a resize runs, a fold aims from the rest frame, not the half-grown window")
+    let closeAsked = PopoverCloseRequest.answer
+    check(closeAsked(false, true, 30, nil) == .closeOurWay && closeAsked(true, true, 30, nil) == .allow,
+          "menu bar panel: an open panel the popover wants closed shrinks away its own way")
+    // A press on the icon mid-grow starts the close, and the popover asks
+    // again about 40 ms later as its window loses key.
+    check(closeAsked(false, false, 30.04, 30 + shrink) == .wait,
+          "menu bar panel: the popover asking again while the panel fades out waits for the fade, so it doesn't vanish at once")
+    check(closeAsked(false, false, 30 + shrink + 0.01, 30 + shrink) == .allow && closeAsked(false, false, 30, nil) == .allow
+            && closeAsked(true, false, 30.04, 30 + shrink) == .allow,
+          "menu bar panel: once the fade is over, or with the popover's own animation, the popover may close")
+
+    let grow = PanelMotion.open(reduceMotion: false), shrinkBack = PanelMotion.close(reduceMotion: false)
+    check(grow.scale >= 0.9 && grow.scale < 1 && grow.settles >= 0.25 && grow.settles <= 0.3,
+          "menu bar panel: it grows out of the icon and settles in about a quarter second")
+    check(grow.dampingRatio >= 0.85 && grow.dampingRatio <= 1 && grow.overshoot * (1 - grow.scale) * 400 < 0.5,
+          "menu bar panel: the growth never bounces by half a point, even on a tall panel")
+    check(shrinkBack.scale > grow.scale && shrinkBack.scale < 1 && shrinkBack.duration >= 0.12 && shrinkBack.duration <= 0.15,
+          "menu bar panel: the close is a quick, small shrink")
+    check(!PanelMotion.open(reduceMotion: true).grows && !PanelMotion.close(reduceMotion: true).grows
+            && PanelMotion.open(reduceMotion: true).duration > 0,
+          "menu bar panel: with Reduce Motion it only fades")
+    let pinned = PanelMotion.pin(CGPoint(x: 140, y: 420), scale: grow.scale)
+    check(abs(140 * grow.scale + Double(pinned.x) - 140) < 1e-9 && abs(420 * grow.scale + Double(pinned.y) - 420) < 1e-9,
+          "menu bar panel: the point under the icon stays put while the panel grows")
+    check(PanelQuiet.duration(.open, system: false) == grow.settles && shrink == shrinkBack.duration,
+          "menu bar panel: deferred work waits exactly for the panel's own motion")
+    check(PanelMotion.tail * (1 - grow.scale) * 600 < 0.5,
+          "menu bar panel: ending the spring at its settle time moves even a 600 pt panel's far edge under half a point")
+
+    var resize = PanelResize()
+    let tall = CGSize(width: 306, height: 455), taller = CGSize(width: 306, height: 478)
+    check(near(resize.changed(to: CGSize(width: 306, height: 420), at: 50, settled: 40), 50.1)
+            && near(resize.changed(to: tall, at: 50.05, settled: 40), 50.1) && resize.take(at: 50.08) == nil,
+          "menu bar panel: size changes within a tenth of a second wait for one step")
+    check(resize.take(at: 50.1) == tall && resize.take(at: 50.2) == nil,
+          "menu bar panel: the step goes to the latest size, once")
+    check(near(resize.changed(to: taller, at: 60, settled: 60.28), 60.28),
+          "menu bar panel: a size change while the panel grows in waits until it has settled")
+
+    func sizing(_ events: [PanelSizing.Event]) -> PanelSizing {
+        events.reduce(PanelSizing.closed) { $0.after($1) }
+    }
+    check(!sizing([]).followsContent && !sizing([.show]).followsContent,
+          "menu bar panel: the size holds while the popover opens")
+    check(sizing([.show, .didShow]).followsContent, "menu bar panel: the size follows the content once fully shown")
+    check(!sizing([.show, .didShow, .willClose]).followsContent
+            && !sizing([.show, .didShow, .willClose, .didClose]).followsContent,
+          "menu bar panel: the size holds from the moment the popover starts to close")
+    check(!sizing([.show, .willClose, .didShow]).followsContent,
+          "menu bar panel: a show notice arriving after the close began keeps the size held")
+    check(sizing([.show, .didShow, .willClose, .show]) == .opening
+            && !sizing([.show, .didShow, .willClose, .show, .didClose]).followsContent
+            && sizing([.show, .didShow, .willClose, .show, .didClose, .didShow]).followsContent,
+          "menu bar panel: reopened mid-close, the old close's notice doesn't end the new open")
+    var fading = sizing([.show, .didShow, .willClose])
+    check(fading.show(onScreen: true) && fading.finishOpen() && fading == .shown,
+          "menu bar panel: reopened while its close fade still shows it, the open finishes now though AppKit sends no new didShow")
+    check(!fading.finishOpen() && fading == .shown,
+          "menu bar panel: a late didShow after the reopen finished brings no second refresh")
+    // The panel's show() finishes a reopen itself, since AppKit sends no didShow then.
+    let menuBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let showBody = menuBar.components(separatedBy: "    func show() {").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    func inShow(_ needle: String) -> Int { showBody.components(separatedBy: needle).count - 1 }
+    check(!showBody.isEmpty && inShow("let finishNow = host.sizing.show(onScreen: popover.isShown)") == 1
+          && inShow("if finishNow { finishOpenWhenQuiet() }") == 1,
+          "menu bar panel: show() finishes the open at once when it reopens a panel still on screen")
+    var first = PanelSizing.closed
+    check(!first.show(onScreen: false) && first == .opening && first.finishOpen() && first == .shown,
+          "menu bar panel: a first open waits for AppKit's didShow to finish")
+    var closingAgain = sizing([.show, .didShow, .willClose])
+    check(!closingAgain.finishOpen() && closingAgain == .closing,
+          "menu bar panel: a didShow left from an earlier open doesn't end a close")
+
+    var own = PanelQuiet()
+    own.began(.open, at: 40)
+    check(near(own.wait(at: 40.1), grow.settles - 0.1) && own.wait(at: 40 + grow.settles) == 0 && grow.settles < 0.6,
+          "menu bar panel: with the panel's own grow, work after an open waits less than for the system's bounce")
+    own.began(.close, at: 41)
+    check(near(own.wait(at: 41), shrinkBack.duration) && own.wait(at: 41 + shrinkBack.duration) == 0,
+          "menu bar panel: work after the panel's own close waits only for its shrink")
+
+    var quiet = PanelQuiet(system: true)
+    check(quiet.wait(at: 5) == 0, "menu bar panel: with no animation, deferred work runs at once")
+    quiet.began(.open, at: 10)
+    check(near(quiet.wait(at: 10.2), 0.4) && quiet.wait(at: 10.6) == 0,
+          "menu bar panel: work after an open waits until its bounce has settled")
+    quiet.began(.close, at: 10.1)
+    check(near(quiet.wait(at: 10.3), 0.3), "menu bar panel: a close during the open's bounce never shortens the wait")
+    quiet.began(.close, at: 11)
+    check(near(quiet.wait(at: 11.1), 0.15) && quiet.wait(at: 11.25) == 0,
+          "menu bar panel: work after a close waits until it has faded out")
+    quiet.began(.open, at: 11.2)
+    check(near(quiet.wait(at: 11.3), 0.5), "menu bar panel: a quick reopen pushes waiting work past its own bounce")
+
+    var queue = QuietQueue()
+    queue.quiet = PanelQuiet(system: true)
+    queue.quiet.began(.open, at: 20)
+    check(queue.enqueue("refresh") && !queue.enqueue("refresh") && queue.enqueue("rebuild"),
+          "menu bar panel: a second request under a label already waiting is dropped")
+    var firstWait: TimeInterval = 0
+    if case .wait(let wait) = queue.step("refresh", at: 20.2) { firstWait = wait }
+    check(near(firstWait, 0.4), "menu bar panel: waiting work waits out the open's bounce", "\(firstWait)")
+    queue.quiet.began(.close, at: 20.5)
+    var secondWait: TimeInterval = 0
+    if case .wait(let wait) = queue.step("refresh", at: 20.6) { secondWait = wait }
+    check(near(secondWait, 0.15), "menu bar panel: a close begun meanwhile makes waiting work wait again", "\(secondWait)")
+    check(queue.step("refresh", at: 20.75) == .run && queue.waiting == ["rebuild"],
+          "menu bar panel: once quiet, the waiting work runs and leaves the queue")
+    check(queue.enqueue("refresh") && !queue.enqueue("rebuild"),
+          "menu bar panel: a label can wait again once its work ran; one still waiting stays deduplicated")
+}
+
+// MARK: The panel's lines stay sharp while it grows in (MenuBar.swift, WindowRules.swift)
+do {
+    let revealBody = CGRect(x: 0.5, y: 0, width: 300, height: 400)
+    let revealTip = CGPoint(x: 150.5, y: 410)
+    let revealStart = PanelReveal.body(revealBody, scale: 0.92, about: revealTip, pixel: 0.5)
+    let revealEdges = [revealStart.minX, revealStart.minY, revealStart.maxX, revealStart.maxY]
+    check(revealEdges.allSatisfy { ($0 * 2).rounded() == $0 * 2 } && abs(revealStart.width - 276) <= 0.5
+            && abs(revealStart.maxY - 400.8) <= 0.25 && abs(revealStart.midX - 150.5) <= 0.25,
+          "menu bar panel: each step of the open's reveal is the body scaled about the arrow's tip with every edge on the pixel grid, so edges never blur",
+          "\(revealStart)")
+    check(PanelReveal.body(revealBody, scale: 1, about: revealTip, pixel: 0.5) == revealBody,
+          "menu bar panel: the reveal ends at the panel's full body")
+    let revealMotion = PanelMotion.open(reduceMotion: false)
+    let revealSteps = PanelReveal.scales(revealMotion, step: 1.0 / 120)
+    check(revealSteps.count == Int((revealMotion.settles * 120).rounded(.up)) + 1 && revealSteps.first == 0.92
+            && revealSteps.last == 1 && revealSteps.allSatisfy { $0 <= 1 + 0.08 * revealMotion.overshoot + 1e-9 }
+            && abs(revealSteps[12] - 1) < abs(revealSteps[6] - 1),
+          "menu bar panel: the reveal follows the open's spring, one step per 120 Hz frame, from 0.92 to exactly 1",
+          "\(revealSteps.count) \(revealSteps.first ?? 0) \(revealSteps.last ?? 0)")
+    let revealSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let revealOpen = revealSource.components(separatedBy: "private func animateOpen(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(revealOpen.contains("reveal(") && revealOpen.contains("if PanelSwitches.scaleContent")
+            && revealSource.contains("calculationMode = .discrete") && !revealSource.contains("shouldRasterize"),
+          "menu bar panel source: the open reveals the content at its own size instead of scaling it, so its hairlines stay on the pixel grid")
+}
+
+// MARK: The panel's stand-in on the first open after launch (MenuBar.swift, WindowRules.swift)
+do {
+    final class FrameSublayer {
+        let name: String?
+        init(_ name: String?) { self.name = name }
+    }
+    let frameBackdrop = FrameSublayer("kCUIVariantPopoverMaterial"), frameRing = FrameSublayer("NSAutomaticFocusRing"),
+        frameHosted = FrameSublayer("NSViewBackingLayer")
+    let frameMaterial = PanelBackdrop.material(in: [frameBackdrop, frameHosted, frameRing], keeping: [frameHosted],
+                                               name: { $0.name })
+    check(frameMaterial.count == 1 && frameMaterial.first === frameBackdrop,
+          "menu bar panel: the popover frame's focus ring is no part of its material, so the stand-in never hides it and handing the background back never shows a stale ring",
+          "\(frameMaterial.map { $0.name ?? "nil" })")
+    let panelSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let standInBody = panelSource.components(separatedBy: "private func standInBackground(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    let drawPass = standInBody.range(of: "displayIfNeeded()")?.lowerBound
+    let fadeOnly = standInBody.range(of: "no part of it can be hidden")?.lowerBound
+    check(drawPass != nil && fadeOnly != nil && drawPass! < fadeOnly!,
+          "menu bar panel source: before the panel settles for a fade, the popover draws once, so the first open after launch finds the frame's material too")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)
@@ -4881,8 +5296,10 @@ do {
     let fresh = store.load()
     check(fresh == AppSettings() && fresh.source == .system && fresh.master == 100 && fresh.defaultDelayMs == 2000
             && fresh.enabledAirPlay.isEmpty && fresh.enabledLocal.isEmpty && fresh.groups.isEmpty
-            && !fresh.showVirtualDevices && fresh.appearance == .system && fresh.whenSourceQuits == .stop,
+            && !fresh.showVirtualDevices && fresh.appearance == .system,
           "settings: nothing stored gives the defaults (whole system, master 100, delays 2000 ms)")
+    check(fresh.whenSourceQuits == .system,
+          "settings: Switch to All System Audio When the Source App Quits is on when nothing is stored (S227)")
     check(!fresh.airPlay2, "settings: AirPlay 2 is off when nothing is stored (P2)")
 
     var wanted = AppSettings()
@@ -4897,7 +5314,7 @@ do {
     wanted.autoConnect = ["ap:airplay-2"]
     wanted.showVirtualDevices = true
     wanted.appearance = .dark
-    wanted.whenSourceQuits = .system
+    wanted.whenSourceQuits = .stop
     wanted.airPlay2 = true
     store.save(source: wanted.source)
     store.save(ids: wanted.enabledAirPlay, forKey: Keys.enabledAirPlay)
@@ -4913,6 +5330,8 @@ do {
     store.save(whenSourceQuits: wanted.whenSourceQuits)
     store.save(airPlay2: wanted.airPlay2)
     check(store.load() == wanted, "settings: every saved setting comes back unchanged")
+    check(stored.values[Keys.whenSourceQuits] as? String == "stop" && store.load().whenSourceQuits == .stop,
+          "settings: Switch to All System Audio When the Source App Quits turned off stays off (S227)")
     check(stored.values[Keys.airPlay2] as? Bool == true, "settings: the AirPlay 2 switch is stored as a Bool")
     store.save(airPlay2: false)
     check(!store.load().airPlay2, "settings: AirPlay 2 switched off again reads back off")
@@ -4943,7 +5362,7 @@ do {
     check(damaged.localVolumes == ["a": 100, "b": 0, "e": 42],
           "settings: volumes are clamped to 0…100, anything else is dropped (S76)")
     check(damaged.localDelays == ["a": 20_000, "b": 0, "d": 1820],
-          "settings: delays are clamped to 0…20 000 ms, anything else is dropped (S77)")
+          "settings: delays are clamped to 0…20 000 ms, anything else is dropped (S179)")
     check(damaged.airplayVolumes == ["x": 101] && damaged.groups.isEmpty && damaged.enabledLocal == ["lc"]
             && damaged.appearance == .system,
           "settings: unreadable groups, IDs or appearance fall back to the defaults; an AirPlay own volume above 100 stays (S290)")
@@ -4960,7 +5379,7 @@ do {
     check(saved == migrated.localVolumes && stored.values[Keys.legacyLocalGains] == nil,
           "settings: the converted volumes are saved under the current key and the old key is removed")
     check(store.load() == migrated, "settings: a second launch reads the converted volumes as they are")
-    check(migrated.defaultDelayMs == 1500, "settings: an older single delay is where local speakers start (S77)")
+    check(migrated.defaultDelayMs == 1500, "settings: an older single delay is where local speakers start (S179)")
     stored.values = [Keys.legacyDelayMs: 90_000.0]
     check(store.load().defaultDelayMs == 20_000, "settings: an older single delay is clamped to 20 000 ms")
     stored.values = [Keys.localVolumes: ["a": 70.0], Keys.legacyLocalGains: ["a": 3.49]]
@@ -5064,7 +5483,7 @@ do {
           "local delay: editing the lowest offset re-times the others",
           "\(LocalDelay.retimes(applied: withBT, holdBacks: holds([r, usb, bt], offsets: edited)))")
 
-    // S178, S181: the AirPlay delay field.
+    // covers: S178, S181 (the AirPlay delay field)
     var native = AirPlayDelay(adjustmentMs: 250)
     let shown = native.latencyMs(senderMs: 1750)
     let followed = native.latencyMs(senderMs: 1800)
@@ -5171,7 +5590,7 @@ do {
             && coreMessage != t.streamingStartMessage(for: SourceCapture.CaptureError.tapNotCreated(-1)),
           "start error: the audio core failing to set up asks to reopen the app", coreMessage)
 
-    // S181: what the rows show and the fields take.
+    // covers: S181 (what the rows show and the fields take)
     check(t.offsetValue(ms: 150) == "+150 ms" && t.offsetValue(ms: -250) == "−250 ms" && t.offsetValue(ms: 0) == "0 ms"
             && t.offsetValue(ms: -0.4) == "0 ms",
           "offset text: +150 ms, −250 ms and 0 ms",
@@ -5244,9 +5663,9 @@ do {
               && moved.shown(key: CastID.key("nest-1"), system: "Nest") == "Den",
           "speaker names: Cast names move from lc:cast: once", "moved: \(moved.custom)")
 
-    let deskTarget = SpeakerRename.Target(id: "usb-uid", key: usb, system: "USB Audio")
-    let kitchenTarget = SpeakerRename.Target(id: "hp-1", key: homePod, system: "HomePod")
-    var rename = SpeakerRename()
+    let deskTarget = InlineRename.Target(id: "usb-uid", key: usb, system: "USB Audio")
+    let kitchenTarget = InlineRename.Target(id: "hp-1", key: homePod, system: "HomePod")
+    var rename = InlineRename()
     let opened = rename.start(deskTarget, name: "USB Audio")
     rename.text = "Desk"
     let again = rename.start(deskTarget, name: "USB Audio")
@@ -5254,7 +5673,7 @@ do {
           "speaker rename: starting a rename shows the name; starting it again keeps the typing")
 
     let handed = rename.start(kitchenTarget, name: "HomePod")
-    check(handed == SpeakerRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
+    check(handed == InlineRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
               && rename.target == kitchenTarget && rename.text == "HomePod",
           "speaker rename: renaming another speaker applies the open rename first",
           "handed: \(String(describing: handed))")
@@ -5262,7 +5681,7 @@ do {
     rename.text = "Kitchen"
     let otherCommit = rename.commit(id: "usb-uid")
     let commit = rename.commit(id: "hp-1")
-    check(otherCommit == nil && commit == SpeakerRename.Apply(key: homePod, system: "HomePod", typed: "Kitchen")
+    check(otherCommit == nil && commit == InlineRename.Apply(key: homePod, system: "HomePod", typed: "Kitchen")
               && rename.target == nil,
           "speaker rename: Return applies the speaker's own rename once, never another's")
 
@@ -5276,9 +5695,56 @@ do {
     let stillListed = rename.listed(["usb-uid", "hp-1"])
     let gone = rename.listed(["hp-1"])
     let back = rename.listed(["usb-uid", "hp-1"])
-    check(stillListed == nil && gone == SpeakerRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
+    check(stillListed == nil && gone == InlineRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
               && back == nil && rename.target == nil,
           "speaker rename: a speaker gone mid-rename applies its typing, and its rename doesn't open again when it returns")
+
+    var zoned = InlineRename()
+    _ = zoned.start(deskTarget, name: "USB Audio", in: .inZones)
+    check(zoned.isOpen("usb-uid", in: .inZones) && !zoned.isOpen("usb-uid", in: .row) && !zoned.isOpen("hp-1", in: .inZones),
+          "speaker rename: a rename started in the In zones row shows its field there only, not under the zone too")
+    zoned.text = "Desk"
+    let fromRow = zoned.start(deskTarget, name: "USB Audio")
+    check(fromRow == nil && zoned.isOpen("usb-uid", in: .row) && !zoned.isOpen("usb-uid", in: .inZones) && zoned.text == "Desk",
+          "speaker rename: starting it again from the row under the zone moves the field there and keeps the typing")
+
+    let livingTarget = InlineRename.Target(id: "zone-1", key: "zone-1", system: "Living", kind: .zone)
+    var mixed = InlineRename()
+    _ = mixed.start(livingTarget, name: "Living")
+    mixed.text = "Lounge"
+    let speakersChanged = mixed.listed(["usb-uid"])
+    check(speakersChanged == nil && mixed.isOpen("zone-1", in: .row),
+          "zone rename: a change in the listed speakers leaves an open zone rename alone")
+    let zoneHanded = mixed.start(deskTarget, name: "USB Audio")
+    check(zoneHanded == InlineRename.Apply(key: "zone-1", system: "Living", typed: "Lounge", kind: .zone)
+              && mixed.isOpen("usb-uid", in: .row) && !mixed.isOpen("zone-1", in: .row),
+          "zone rename: renaming a speaker applies the open zone rename first, as a zone's",
+          "handed: \(String(describing: zoneHanded))")
+    _ = mixed.commit(id: "usb-uid")
+    _ = mixed.start(livingTarget, name: "Living")
+    mixed.drop()
+    _ = mixed.start(livingTarget, name: "Living")
+    let zoneGone = mixed.listed([], kind: .zone)
+    check(mixed.target == nil && zoneGone == InlineRename.Apply(key: "zone-1", system: "Living", typed: "Living", kind: .zone),
+          "zone rename: Escape drops it, and a zone deleted mid-rename ends its rename")
+
+    let zonesBefore = [SpeakerZone(id: "zone-1", name: "Living", members: [usb], volume: 100),
+                       SpeakerZone(id: "zone-2", name: "Kitchen", members: [], volume: 80)]
+    let renamedZones = ZoneEdit.renaming("zone-1", to: "  Lounge \n", in: zonesBefore)
+    check(renamedZones.map(\.name) == ["Lounge", "Kitchen"] && renamedZones[0].members == [usb]
+              && ZoneEdit.renaming("zone-1", to: "   ", in: zonesBefore) == zonesBefore
+              && ZoneEdit.renaming("gone", to: "Den", in: zonesBefore) == zonesBefore
+              && ZoneEdit.renaming("zone-2", to: "Living", in: zonesBefore).map(\.name) == ["Living", "Living"],
+          "zone rename: the typed name is trimmed, a blank one keeps the name, and a name another zone uses is allowed",
+          "\(renamedZones.map(\.name))")
+    check(ZoneEdit.renaming("zone-1", to: " " + String(repeating: "a", count: 65) + "\n", in: zonesBefore)[0].name
+              == String(repeating: "a", count: SpeakerNames.maxLength)
+              && ZoneEdit.renaming("zone-1", to: "Den\nStudy", in: zonesBefore)[0].name == "Den Study",
+          "zone rename: a long name is cut to 60 characters and line breaks become spaces, as a speaker's",
+          "\(ZoneEdit.renaming("zone-1", to: String(repeating: "a", count: 65), in: zonesBefore)[0].name.count)")
+    check(UIStrings().renameZone == "Rename…" && UIStrings().renameZone == UIStrings().renameSpeaker,
+          "zone rename: the zone menu item reads like the speaker's",
+          UIStrings().renameZone)
 }
 
 // MARK: Delay field — typed text applies on Return or focus loss, once (DelayFieldDraft)
@@ -5544,12 +6010,12 @@ MainActor.assumeIsolated {
     let editor = NSTextView(frame: .zero)
     editor.isFieldEditor = true
     // AppKit sets the delegate this way when the field starts editing.
-    editor.perform(Selector(("setDelegate:")), with: field)
+    editor.perform(#selector(setter: NSText.delegate), with: field)
     check(FieldEditor.field(EditedDelayField.self, editedBy: editor)?.rowID == "dock",
           "delay panels: the click monitor finds the delay field the field editor types for, so a click on its own step keeps the typing")
     let otherField = NSTextField(frame: .zero)
     let other = NSTextView(frame: .zero)
-    other.perform(Selector(("setDelegate:")), with: otherField)
+    other.perform(#selector(setter: NSText.delegate), with: otherField)
     check(FieldEditor.field(EditedDelayField.self, editedBy: NSTextView(frame: .zero)) == nil
             && FieldEditor.field(EditedDelayField.self, editedBy: other) == nil,
           "delay panels: an editor typing for no field, or for another kind of field, has no delay field")
@@ -5741,7 +6207,61 @@ do {
           "observer: Wi-Fi switched off says so")
 }
 
+// MARK: Status line: what capture and each output counted since the previous 5 s line (SessionTally, S229)
+do {
+    typealias Out = SessionTally.Output
+    var numbers: [String: Int] = [:]
+    SessionTally.number(["Built-in", "BT-AA:BB"], in: &numbers)
+    check(numbers == ["BT-AA:BB": 1, "Built-in": 2], "status line: outputs are numbered in UID order at first", "\(numbers)")
+    SessionTally.number(["Built-in", "USB"], in: &numbers)
+    check(numbers == ["BT-AA:BB": 1, "Built-in": 2, "USB": 3],
+          "status line: an output leaving or joining never renumbers the others", "\(numbers)")
+    var tokens = AttachTokens()
+    tokens.attached("BT-AA:BB")
+    tokens.attached("Built-in")
+    let bt = tokens.byUID["BT-AA:BB"] ?? 0
+    let builtInBefore = tokens.byUID["Built-in"] ?? 0
+    let old = SessionTally(capture: CaptureCounts(callbacks: 1_000, frames: 512_000, silentCallbacks: 4),
+                           outputs: ["BT-AA:BB": Out(number: 1, attach: bt, starvedRenders: 2, starvedFrames: 900, driftSkips: 1,
+                                                     driftSilences: 4, lateCallbacks: 7, overloads: 1),
+                                     "Built-in": Out(number: 2, attach: builtInBefore, starvedRenders: 5, starvedFrames: 2_000,
+                                                     lateCallbacks: 3, overloads: 0)])
+    // Built-in is detached and attached again within one tick (a replug), and its new renderer counts
+    // past the old totals; USB joins.
+    tokens.attached("Built-in")
+    tokens.attached("USB")
+    let builtInAfter = tokens.byUID["Built-in"] ?? 0
+    check(builtInAfter != builtInBefore && tokens.byUID["BT-AA:BB"] == bt,
+          "status line: a re-attach gets a new token, the other outputs keep theirs", "\(tokens.byUID)")
+    let new = SessionTally(capture: CaptureCounts(callbacks: 1_500, frames: 752_000, silentCallbacks: 4),
+                           outputs: ["BT-AA:BB": Out(number: 1, attach: bt, starvedRenders: 3, starvedFrames: 1_412, driftSkips: 3,
+                                                     driftSilences: 4, lateCallbacks: 7, overloads: 2),
+                                     "Built-in": Out(number: 2, attach: builtInAfter, starvedRenders: 7, starvedFrames: 3_360,
+                                                     driftSkips: 1, driftSilences: 2, lateCallbacks: 0, overloads: 0),
+                                     "USB": Out(number: 3, attach: tokens.byUID["USB"] ?? 0, starvedRenders: 0, starvedFrames: 0,
+                                                lateCallbacks: 1, overloads: 0)])
+    let line = SessionTally.statusText(since: old, now: new, seconds: 5.0)
+    check(line == "status over 5.0 s: capture 240000 frames (48000 frames/s), 500 callbacks, 0 without usable channels"
+              + "; output 1: starved 1 (512 frames), drift skips 2, drift silences 0, late callbacks 0, IO overloads 1"
+              + "; output 2: starved 7 (3360 frames), drift skips 1, drift silences 2, late callbacks 0, IO overloads 0"
+              + "; output 3: starved 0 (0 frames), drift skips 0, drift silences 0, late callbacks 1, IO overloads 0",
+          "status line: deltas since the last line; a re-attached output's counts are all new, a new output counts from 0",
+          line)
+    check(!line.contains("BT-AA") && !line.contains("Built-in") && !line.contains("USB"),
+          "status line: outputs are numbered, never named", line)
+    // BT-AA:BB left: the others keep their numbers in the line.
+    let later = SessionTally(capture: new.capture, outputs: ["Built-in": new.outputs["Built-in"]!, "USB": new.outputs["USB"]!])
+    let next = SessionTally.statusText(since: new, now: later, seconds: 5.0)
+    check(next.contains("; output 2: starved 0") && next.contains("; output 3: starved 0") && !next.contains("output 1"),
+          "status line: an output leaving keeps the others' numbers", next)
+    let idle = SessionTally.statusText(since: new, now: SessionTally(capture: new.capture), seconds: 0)
+    check(idle == "status over 0.0 s: capture 0 frames (0 frames/s), 0 callbacks, 0 without usable channels"
+              + "; no local outputs",
+          "status line: no time passed gives a rate of 0, and no outputs say so", idle)
+}
+
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
+// covers: S186 (the Mac's stop order)
 
 /// A host clock that the checks move on by hand and that `finishAll`'s pauses
 /// move on too, and the events the fakes below note, in order.
@@ -6146,6 +6666,7 @@ do {
           "S36 start failure: one alert gives the rate only when every failure it names was refused for it",
           "\(String(describing: LocalOutputSync.sharedRefusedRate(mixedFailures)))")
 
+    // covers: S72
     // S72: a master change gives each running local speaker its gain again;
     // one switched on but not running (here "tv") gets no call.
     let playing = RefusingEngine(active: ["usb", "bt"], refusing: [])
@@ -6154,7 +6675,7 @@ do {
           "S72 master: every running local speaker gets its gain again, and only those",
           "regained \(playing.regained), gains \(playing.gains)")
 
-    // S186: speakers switched off in one sync leave in one call, so they fade out at once.
+    // covers: S186 (speakers switched off in one sync leave in one call, so they fade out at once)
     final class BatchingEngine: LocalOutputEngine {
         var activeOutputUIDs: [String] = ["a", "b", "c"]
         var calls: [[String]] = []
@@ -6199,6 +6720,80 @@ do {
           "removed \(refused.removed), applied \(failedRestart), report \(String(describing: afterRestart))")
 }
 
+// MARK: The engine's control interface (S112) and the thread it is used on (S113)
+// covers: S112
+do {
+    // Pinned by type, so a renamed or reshaped call stops this suite from building.
+    let start: (StreamEngine) -> (AudioSource, Int, Bool) throws -> Void = StreamEngine.start(source:inputPair:rebuild:)
+    let stop: (StreamEngine) -> ((() -> Void)?) -> Void = StreamEngine.stop(then:)
+    let running: KeyPath<StreamEngine, Bool> = \.isRunning
+    let attach: (StreamEngine) -> (String, AudioObjectID, Double, Double) throws -> Void =
+        StreamEngine.attachOutput(uid:device:delayMs:gain:)
+    let detach: (StreamEngine) -> (String) -> Void = StreamEngine.detachOutput(uid:)
+    let detachTogether: (StreamEngine) -> ([String]) -> Void = StreamEngine.detachOutputs(uids:)
+    let active: KeyPath<StreamEngine, [String]> = \.activeOutputUIDs
+    let setGain: (StreamEngine) -> (String, Double) -> Void = StreamEngine.setGain(uid:g:)
+    let setDelay: (StreamEngine) -> (String, Double) -> Void = StreamEngine.setDelay(uid:ms:)
+    let equalizer: (StreamEngine) -> (Equalizer.Settings) -> Void = StreamEngine.updateEqualizer(_:)
+    let gone: ReferenceWritableKeyPath<StreamEngine, ((String) -> Void)?> = \.onOutputGone
+    let interrupted: ReferenceWritableKeyPath<StreamEngine, ((SourceCapture.Interruption) -> Void)?> = \.onInterrupted
+    _ = (start, stop, running, attach, detach, detachTogether, active, setGain, setDelay, equalizer, gone, interrupted)
+
+    // No default case: a third interruption kind stops this suite from building.
+    func kind(_ reason: SourceCapture.Interruption) -> String {
+        switch reason {
+        case .formatChanged: return "formatChanged"
+        case .sourceLost: return "sourceLost"
+        }
+    }
+    check(kind(.formatChanged) == "formatChanged" && kind(.sourceLost(.appNotRunning("Music"))) == "sourceLost",
+          "S112 interface: an interruption is a format change or a lost source with its error")
+
+    let idle = StreamEngine()
+    var threw = false
+    do { try idle.attachOutput(uid: "usb", device: 52, delayMs: 40, gain: 0.5) } catch { threw = true }
+    idle.setGain(uid: "usb", g: 0.25)
+    idle.setDelay(uid: "usb", ms: 10)
+    idle.detachOutput(uid: "usb")
+    idle.detachOutputs(uids: ["usb", "bt"])
+    check(!idle.isRunning && !threw && idle.activeOutputUIDs.isEmpty,
+          "S112 interface: with no session an attach adds nothing; gain, delay and detach of unknown outputs do nothing",
+          "running \(idle.isRunning), threw \(threw), active \(idle.activeOutputUIDs)")
+
+    /// Records each call with whether it came on the main thread.
+    final class ThreadNotingEngine: LocalOutputEngine {
+        var activeOutputUIDs: [String] = ["old"]
+        var calls: [String] = []
+        var offMain: [String] = []
+        private func note(_ call: String) {
+            calls.append(call)
+            if !Thread.isMainThread { offMain.append(call) }
+        }
+        func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {
+            note("attach \(uid) on \(device) at \(delayMs) ms, gain \(gain)")
+            activeOutputUIDs.append(uid)
+        }
+        func detachOutput(uid: String) { detachOutputs(uids: [uid]) }
+        func detachOutputs(uids: [String]) {
+            note("detach \(uids)")
+            activeOutputUIDs.removeAll { uids.contains($0) }
+        }
+        func setGain(uid: String, g: Double) { note("gain \(uid) \(g)") }
+    }
+    let usb = AudioDevices.Device(id: 52, name: "USB DAC", uid: "usb", transport: kAudioDeviceTransportTypeUSB)
+    let noting = ThreadNotingEngine()
+    _ = LocalOutputSync.apply(enabled: ["usb"], listing: [usb], to: noting, holdBacks: ["usb": 40], gain: { _ in 0.5 })
+    LocalOutputSync.reapplyGains(on: noting, gain: { _ in 0.25 })
+    check(noting.calls == ["attach usb on 52 at 40.0 ms, gain 0.5", "detach [\"old\"]", "gain usb 0.25"],
+          "S112 interface: the host's attach, detach and gain reach the engine with the device, hold-back and gain",
+          "\(noting.calls)")
+
+    // covers: S113 (the host's control calls; the callbacks' main queue is checked in Tests/run-tests.sh)
+    check(Thread.isMainThread && noting.offMain.isEmpty && noting.calls.count == 3,
+          "S113 main thread: the host's sync makes every engine call on the main thread, before it returns",
+          "off the main thread: \(noting.offMain)")
+}
+
 // MARK: Launch, second launch and session events (AppLifecycle.swift)
 // covers: S215
 do {
@@ -6212,6 +6807,7 @@ do {
           "launch: any other launch is not a login-item launch")
     check(AppLifecycle.opensMainWindow(loginItemLaunch: false) && !AppLifecycle.opensMainWindow(loginItemLaunch: true),
           "launch: the main window opens at launch, but not at login")
+    // covers: S101 (the safety net and the next due reconcile)
     check(AppLifecycle.safetyNetInterval == 30,
           "reconcile: with no event, the host reconciles by itself only every 30 s, the safety net (S101)")
     do {
@@ -6347,6 +6943,15 @@ do {
     let actedFirst = systemSwitch([.started], userActsAfter: 0, firstWait: settleWait)
     check(actedFirst.streaming == nil && actedFirst.lasts.isEmpty,
           "source quit: a stop or source change before the first attempt makes none (S227 g)", "\(actedFirst)")
+    // S223: the stop before a waiting first attempt marks a rebuild, so the
+    // final startFailed stop, with nothing streaming, still ends the stream.
+    var switchedOn = EveryTimeGuard()
+    switchedOn.turnedOnByHand(["native:S1"])
+    let allFailed = switchedOn.streamEnded(.stopped(.startFailed), streaming: false, midRebuild: true,
+                                           asking: ["native:S1"], enabled: ["native:S1"])
+    check(allFailed == [.init(id: "native:S1", reason: .needsCode)] && switchedOn.byHand.isEmpty,
+          "source quit: a switch to the whole system whose every attempt fails ends the stream: the by-hand mark is gone (S223)",
+          "\(allFailed), \(switchedOn.byHand)")
     func afterWait(system: Bool = true, stopped: Bool = false, running: Bool = false, userStarted: Bool = false)
         -> QuitSwitch.AfterWait {
         QuitSwitch.afterWait(sourceIsSystem: system, userStopped: stopped, running: running, userStarted: userStarted)
@@ -6595,10 +7200,11 @@ do {
     check(quit(musicQuit, .system, .system) == "keep"
             && quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep",
           "source quit: the same quit reported again (the capture, then macOS) acts once (S227 f)")
-    check(WhenSourceQuits(defaultsValue: nil) == .stop && WhenSourceQuits(defaultsValue: "stop") == .stop
-            && WhenSourceQuits(defaultsValue: "System") == .stop && WhenSourceQuits(defaultsValue: "switch") == .stop
-            && WhenSourceQuits(defaultsValue: "system") == .system,
-          "source quit: the setting reads stop unless it says system (S227)")
+    check(WhenSourceQuits(defaultsValue: nil) == .system && WhenSourceQuits(defaultsValue: "system") == .system,
+          "source quit: nothing stored reads as system, the Mac's default (S227)")
+    check(WhenSourceQuits(defaultsValue: "stop") == .stop && WhenSourceQuits(defaultsValue: "System") == .stop
+            && WhenSourceQuits(defaultsValue: "switch") == .stop,
+          "source quit: a stored stop, or a value this copy doesn't know, reads as stop (S227)")
     let t = UIStrings()
     let switched = t.sourceSwitchedToSystem(name: "Music", started: true)
     let notStarted = t.sourceSwitchedToSystem(name: "Music", started: false)
@@ -6729,7 +7335,7 @@ do {
 
     // Refusals the host makes before the estimate say why and that nothing changed.
     let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .handsFreeMicrophone, .sourceSilent,
-                                              .interrupted, .notPlaying, .noReference, .unsupportedRate]
+                                              .interrupted, .notPlaying(.streaming), .noReference, .unsupportedRate]
     for failure in hostRefusals {
         let message = t.calibrationMessage(.failed(failure)) ?? ""
         check(message.hasSuffix(" The delay wasn't changed.") && message.count > " The delay wasn't changed.".count + 10,
@@ -6790,9 +7396,9 @@ do {
 
     // When one may start: both the speaker and the reference play (S232).
     check(CalibrationFlow.blocker(streaming: true, reference: nil, chosen: "usb", playing: ["usb"]) == .noReference
-            && CalibrationFlow.blocker(streaming: false, reference: "mac", chosen: "usb", playing: []) == .notPlaying
-            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["usb"]) == .notPlaying
-            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "mac", playing: ["mac"]) == .notPlaying
+            && CalibrationFlow.blocker(streaming: false, reference: "mac", chosen: "usb", playing: []) == .notPlaying(.streaming)
+            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["usb"]) == .notPlaying(.reference)
+            && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "mac", playing: ["mac"]) == .notPlaying(.all)
             && CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["mac", "usb"]) == nil,
           "calibration: starts only while streaming with the chosen speaker and the reference playing")
     check(CalibrationFlow.blocker(streaming: true, reference: "mac", chosen: "usb", playing: ["mac", "usb"],
@@ -6887,8 +7493,8 @@ do {
             && CalibrationStatus.offsetDiffers(stored: 19_990, clamped: stepped(20_000)),
           "calibration: a delay step at the maximum leaves the offset, and its line, as they were")
 
-    check(CalibrationFlow.unavailable(streaming: false, hasReference: true, speakerOn: true) == .notPlaying
-            && CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: false) == .notPlaying
+    check(CalibrationFlow.unavailable(streaming: false, hasReference: true, speakerOn: true) == .notPlaying(.streaming)
+            && CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: false) == .notPlaying(.speaker)
             && CalibrationFlow.unavailable(streaming: true, hasReference: false, speakerOn: true) == .noReference
             && CalibrationFlow.unavailable(streaming: true, hasReference: true, speakerOn: true) == nil,
           "calibration: the button is off while streaming or the speaker is off, or without a reference")
@@ -6902,7 +7508,7 @@ do {
 do {
     let t = UIStrings()
 
-    var inputs = CalibrateAllFlow.Inputs(
+    let inputs = CalibrateAllFlow.Inputs(
         streaming: true, reference: "mac",
         localOutputs: [(id: "usb", name: "Desk"), (id: "mac", name: "MacBook Speakers")],
         localOffsets: ["usb": 150], holdBacks: ["mac": 1750, "usb": 1900],
@@ -6970,9 +7576,9 @@ do {
     var referenceOff = inputs
     referenceOff.localOutputs = [(id: "usb", name: "Desk")]
     check(CalibrateAllFlow.plan(alone) == .failure(.noOtherSpeaker)
-            && CalibrateAllFlow.plan(stopped) == .failure(.notPlaying)
+            && CalibrateAllFlow.plan(stopped) == .failure(.notPlaying(.streaming))
             && CalibrateAllFlow.plan(noReference) == .failure(.noReference)
-            && CalibrateAllFlow.plan(referenceOff) == .failure(.notPlaying),
+            && CalibrateAllFlow.plan(referenceOff) == .failure(.notPlaying(.reference)),
           "calibrate all: starts only while streaming with the built-in speakers and another speaker playing")
 
     // Mic calibration is for external speakers only (decision 2026-10-23): headphones and virtual outputs sit out.
@@ -7102,8 +7708,8 @@ do {
           "calibrate all: a speaker still connecting at the start that begins playing stops the run, unmuted (S240)")
     check(t.calibrateAllLine(.ended(.rateChanged))
                 == "The audio's sample rate changed during the measurement. No delay was changed."
-            && t.calibrateAllLine(.cannotMeasureAgain(name: "Desk"))
-                == "Turn on streaming, the built-in speakers and Desk to measure it again.",
+            && t.calibrateAllLine(.cannotMeasureAgain(name: "Desk", missing: .all))
+                == "Turn on streaming, Desk and the built-in speakers to measure it again.",
           "calibrate all: a changed sample rate and a Measure Again that can't start say so in their own words")
     check(CalibrateAllEnd.delaysChanged.core == UInt32(ASC_CALIBRATION_END_CANCELLED)
             && CalibrateAllEnd.speakerOff.core == UInt32(ASC_CALIBRATION_END_SPEAKER_OFF)
@@ -7351,6 +7957,69 @@ do {
           "calibrate all: the progress line names the speaker and the sweep, and says when a Cast speaker is searched")
 }
 
+// MARK: A calibration that can't start names only what is off, in the order streaming, the speaker, the reference
+do {
+    let t = UIStrings()
+    func press(streaming: Bool, playing: [String]) -> String {
+        CalibrationFlow.blocker(streaming: streaming, reference: "mac", chosen: "usb", playing: playing)
+            .map(t.calibrationFailure) ?? ""
+    }
+    func tip(streaming: Bool, speakerOn: Bool) -> String {
+        CalibrationFlow.unavailable(streaming: streaming, hasReference: true, speakerOn: speakerOn)
+            .map(t.calibrationUnavailable) ?? ""
+    }
+    let pressed = [press(streaming: false, playing: ["mac", "usb"]), press(streaming: true, playing: ["mac"]),
+                   press(streaming: true, playing: ["usb"]), press(streaming: true, playing: [])]
+    check(pressed == ["Turn on streaming to calibrate.", "Turn on this speaker to calibrate it.",
+                      "Turn on the built-in speakers to calibrate.",
+                      "Turn on this speaker and the built-in speakers to calibrate it."],
+          "calibration refusal: the press names only streaming, the speaker or the built-in speakers that are off",
+          "\(pressed)")
+    let tips = [tip(streaming: false, speakerOn: true), tip(streaming: true, speakerOn: false),
+                tip(streaming: false, speakerOn: false)]
+    check(tips == ["Turn on streaming to calibrate.", "Turn on this speaker to calibrate it.",
+                   "Turn on streaming and this speaker to calibrate it."],
+          "calibration refusal: the tooltip names only streaming or the speaker that is off", "\(tips)")
+
+    let everyone = CalibrateAllFlow.Inputs(
+        streaming: true, reference: "mac",
+        localOutputs: [(id: "mac", name: "MacBook Speakers"), (id: "usb", name: "Desk")],
+        localOffsets: ["usb": 150], holdBacks: [:], cast: nil, airPlay: [],
+        airPlayDelayMs: 1750, airPlayHoldBackMs: 0, airPlaySenderMs: nil)
+    func all(_ inputs: CalibrateAllFlow.Inputs) -> String {
+        if case .failure(let blocker) = CalibrateAllFlow.plan(inputs) { return t.calibrateAllUnavailable(blocker) }
+        return ""
+    }
+    var stopped = everyone
+    stopped.streaming = false
+    var referenceSilent = everyone
+    referenceSilent.localOutputs = [(id: "usb", name: "Desk")]
+    let allTexts = [all(stopped), all(referenceSilent)]
+    check(allTexts == ["Turn on streaming to calibrate.", "Turn on the built-in speakers to calibrate."],
+          "calibrate all refusal: names only streaming or the built-in speakers, whichever is off", "\(allTexts)")
+
+    var stoppedSilent = stopped
+    stoppedSilent.referenceOn = false
+    check(all(stoppedSilent) == "Turn on streaming and the built-in speakers to calibrate.",
+          "calibrate all refusal: with streaming off, names the built-in speakers too when their switch is off",
+          all(stoppedSilent))
+
+    let again: [CalibrationMissing] = [.streaming, .speaker, .reference, [.streaming, .reference], [.speaker, .reference]]
+    let againTexts = again.map { t.calibrateAllLine(.cannotMeasureAgain(name: "Desk", missing: $0)) }
+    check(againTexts == ["Turn on streaming to measure it again.", "Turn on Desk to measure it again.",
+                         "Turn on the built-in speakers to measure it again.",
+                         "Turn on streaming and the built-in speakers to measure it again.",
+                         "Turn on Desk and the built-in speakers to measure it again."],
+          "measure again refusal: names only what is off, the row's speaker by its name", "\(againTexts)")
+    let missingNow = [
+        CalibrationMissing.of(streaming: true, speaker: "usb", reference: "mac", playing: ["mac"], switchedOn: []),
+        CalibrationMissing.of(streaming: false, speaker: "usb", reference: "mac", playing: [], switchedOn: ["usb"]),
+        CalibrationMissing.of(streaming: false, speaker: "usb", reference: "mac", playing: [], switchedOn: ["mac", "usb"]),
+    ]
+    check(missingNow == [.speaker, [.streaming, .reference], .streaming],
+          "measure again refusal: while streaming is off, the switches say which speaker is off", "\(missingNow)")
+}
+
 // MARK: Calibrate Zone: the zone's plan, the speakers silenced outside it and the AirPlay line (S255)
 do {
     let inputs = CalibrateAllFlow.Inputs(
@@ -7470,8 +8139,10 @@ do {
     let nothing = CalibrateAllFlow.startFailure(.noOtherSpeaker, zone: "Upstairs")
     // covers: S255
     check(nothing == .nothingToMeasure(zone: "Upstairs")
-            && CalibrateAllFlow.startFailure(.noOtherSpeaker, zone: nil) == .notPlaying
-            && CalibrateAllFlow.startFailure(.notPlaying, zone: "Upstairs") == .notPlaying
+            && CalibrateAllFlow.startFailure(.noOtherSpeaker, zone: nil) == .notPlaying(.speaker)
+            && zoneText.calibrateAllLine(.ended(.failed(.notPlaying(.speaker))))
+                == "Turn on another speaker to calibrate. No delay was changed."
+            && CalibrateAllFlow.startFailure(.notPlaying(.streaming), zone: "Upstairs") == .notPlaying(.streaming)
             && CalibrateAllFlow.startFailure(.onlyLeftOut, zone: "Upstairs") == nil
             && nothing.map(zoneText.calibrationFailure)
                 == "Nothing to measure in “Upstairs”. Turn on a speaker in this zone first.",
@@ -7549,6 +8220,13 @@ do {
     check(takenOver.apply(.ended(attempt: 3, .takenOver)) == .turnedOff(kitchen, problem: .takenOver)
             && takenOver.enabled == nil && takenOver.attempt == nil && takenOver.anchorMs == nil,
           "cast: another app casting turns the speaker off with a notice")
+    check(takenOver.cantStartNow(kitchen) && !m.cantStartNow(kitchen) && !takenOver.cantStartNow(den),
+          "cast: one another app took over can't start from a zone click or Only This Speaker (S246)")
+    check(takenOver.turnOn(kitchen) == nil && !takenOver.cantStartNow(kitchen),
+          "cast: turning it on with its own switch tries it again")
+    var offline = CastModel()
+    offline.apply(.appeared(CastDevice(id: den, name: "Den", offline: true), offsetMs: nil))
+    check(offline.cantStartNow(den), "cast: an offline speaker can't start now either")
     var stopped = m
     check(stopped.turnOff(kitchen) && stopped.plan(streaming: true) == .stop, "cast: turning it off stops its session")
     stopped.stopSent()
@@ -7623,6 +8301,47 @@ do {
           "cast: a format fallback event copies the format")
     raw.kind = 999
     check(CastEvent(raw) == nil, "cast: an unknown event kind is skipped")
+    do {
+        // The core's underrun count runs from the stream's LOAD; the line shows what changed since the last one.
+        var underruns = CastUnderruns()
+        func diagnostics(_ attempt: UInt64, _ total: UInt64) -> String {
+            var event = AscCastEvent()
+            event.kind = ASC_CAST_EVENT_DIAGNOSTICS
+            event.attempt = attempt
+            event.drift_ms = 40
+            event.queued_ms = 250
+            event.underrun_frames = total
+            guard case .note(_, let line)? = CastEvent(event, members: { [] }, underruns: &underruns) else { return "" }
+            return line
+        }
+        func lifecycle(_ kind: Int32, _ attempt: UInt64) {
+            var event = AscCastEvent()
+            event.kind = kind
+            event.attempt = attempt
+            _ = CastEvent(event, members: { [] }, underruns: &underruns)
+        }
+        let first = diagnostics(7, 960)
+        check(first == "drift 40 ms, queued 250 ms, underrun silence 960 frames since the previous line",
+              "cast diagnostics: the first line shows the underrun silence counted so far", first)
+        let quiet = diagnostics(7, 960)
+        let more = diagnostics(7, 2_880)
+        check(quiet.hasSuffix("silence 0 frames since the previous line")
+                && more.hasSuffix("silence 1920 frames since the previous line"),
+              "cast diagnostics: later lines show only the new underrun silence", quiet + " | " + more)
+        check(diagnostics(8, 480).hasSuffix("silence 480 frames since the previous line"),
+              "cast diagnostics: each attempt keeps its own count")
+        lifecycle(ASC_CAST_EVENT_PLAYING, 7)
+        let reloaded = diagnostics(7, 3_000)
+        check(reloaded.hasSuffix("silence 3000 frames since the previous line"),
+              "cast diagnostics: a new LOAD (playing again) counts from 0", reloaded)
+        let restarted = diagnostics(7, 100)
+        check(restarted.hasSuffix("silence 100 frames since the previous line"),
+              "cast diagnostics: a count that went down was restarted, so all of it is new", restarted)
+        lifecycle(ASC_CAST_EVENT_ENDED, 8)
+        let after = diagnostics(8, 480)
+        check(after.hasSuffix("silence 480 frames since the previous line"),
+              "cast diagnostics: an ended attempt's count is dropped", after)
+    }
     let change: CastDeviceChange? = kitchen.withCString { id in
         "Kitchen".withCString { name in
             "Nest Audio".withCString { model in
@@ -8143,6 +8862,10 @@ do {
 do {
     let t = UIStrings()
     let pieces = GuideLayout.pieces(of: t.helpText, anchor: t.guideArtAnchor)
+    let guideWords = t.helpText.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    check(guideWords.contains("the button with its zone's name goes to the zone")
+            && !guideWords.contains("after its own goes to the zone"),
+          "guide, zones: a zoned speaker's short row names the button that goes to its zone")
     check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
             && pieces.map(\.text).joined() == t.helpText,
           "guide: every illustration has its anchor line, in order, and the text is kept whole",
@@ -8467,6 +9190,7 @@ do {
             && debugStart["local_name"] == nil && normalStart["log_pairing_codes"] == nil
             && normalStart["local_name"] as? String == "den" && normalStart["devices_path"] as? String == "/devices.json",
           "web remote: only the debug log asks the core for the pairing codes")
+    // covers: S288 (the Mac host)
     let switchOn = ["AUDIOSYNC_WEB_REMOTE": "1"]
     check(RemoteDebugSwitch.port(environment: switchOn, debugLog: true, savedPort: 8080) == 8080
             && RemoteDebugSwitch.port(environment: switchOn.merging(["AUDIOSYNC_WEB_REMOTE_PORT": "9000"]) { $1 },
@@ -9048,6 +9772,12 @@ do {
           "permissions: after an update, a permission macOS can't report is not explained again")
     check(upgraded.step(.microphone, state: .notAsked, userAction: true) == .explain,
           "permissions: after an update, a permission macOS reports as unasked is still explained")
+    // An update from 0.6.0 held Spotify's reading with no card shown, so Now Playing vanished.
+    check(upgraded.mayRaiseAutomationPrompt,
+          "permissions: after an update, Now Playing reads the players an earlier version read, with no explanation first")
+    check(!PermissionAsks(explained: [], usedBefore: false).mayRaiseAutomationPrompt
+            && PermissionAsks(explained: ["automation"], usedBefore: false).mayRaiseAutomationPrompt,
+          "permissions: on a fresh install Now Playing waits for Continue on the Automation explanation")
 
     var asks = PermissionAsks(explained: [], usedBefore: false)
     check(asks.offer == nil, "permissions: nothing is offered before a feature needs it")
@@ -9199,6 +9929,16 @@ do {
     check(t.airPlayNoneFound(localNetworkRefused: true).contains("Local Network")
             && t.airPlayNoneFound(hint: .denied, localNetworkRefused: true) == "No AirPlay speakers found yet.",
           "local network: once refused, the advice names it, unless the hint on screen already does")
+    // The soft hint comes from an empty list alone, before macOS has asked for Local Network.
+    let hidden = LocalNetworkHint.possible.shown(airPlayProblem: true)
+    check(t.networkSpeakersNote(airPlayNone: true, cast: .noneFound, hint: hidden,
+                                localNetworkRefused: LocalNetworkHint.possible.accessRefused)?
+            .contains("Local Network") == false
+            && !t.airPlayNoneFound(hint: hidden, localNetworkRefused: LocalNetworkHint.possible.accessRefused)
+            .contains("Local Network"),
+          "local network: a maybe-denied hint never puts Local Network in the advice")
+    check(LocalNetworkHint.denied.accessRefused && !LocalNetworkHint.none.accessRefused,
+          "local network: only denied access counts as refused")
 }
 
 // MARK: Permission setup window (PermissionFlow.swift, PermissionSetup)
@@ -9270,7 +10010,7 @@ do {
           "setup: the Local Network row gives the full System Settings path")
 }
 
-// MARK: Zone header routing table in the main window (ZoneHeaderHit)
+// MARK: Zone header routing table in the main window and the menu bar panel (ZoneHeaderHit)
 do {
     let expected: [(ZoneHeaderHit.Area, ZoneHeaderHit.Action, String)] = [
         (.name, .fold, "a click on the zone name folds or unfolds the members"),
@@ -9285,6 +10025,179 @@ do {
     }
     check(ZoneHeaderHit.Area.allCases.filter { ZoneHeaderHit.action(for: $0) == .toggleZone } == [.zoneIcon],
           "zone header routing table: only the round zone icon switches the zone, so folding leaves it on")
+    check(ZoneHeaderHit.action(for: .zoneIcon, nonePresent: true) == .fold,
+          "zone header routing table: with none of its speakers present, the greyed icon folds the zone")
+    check(ZoneHeaderHit.Area.allCases.allSatisfy { ZoneHeaderHit.action(for: $0, nonePresent: true) != .toggleZone },
+          "zone header routing table: with none of its speakers present, no click switches the zone")
+
+    // The panel's header routes every click through the table above.
+    let header = (try? String(contentsOfFile: "Sources/AudioSync/PanelZoneHeader.swift", encoding: .utf8)) ?? ""
+    func occurrences(_ needle: String) -> Int { header.components(separatedBy: needle).count - 1 }
+    check(occurrences("ZoneHeaderHit.action(for: area, nonePresent: nonePresent)") == 1
+          && occurrences("hit(.chevron)") == 1 && occurrences("hit(.zoneIcon)") == 1 && occurrences("hit(.name)") == 1,
+          "panel zone header: the arrow, the icon and the name each route through ZoneHeaderHit")
+    check(occurrences("model.actions.toggleZone") == 1 && occurrences("disclosure.toggle") == 1
+          && occurrences(".disabled(") == 0,
+          "panel zone header: nothing switches or folds the zone outside the table, and no part is disabled")
+
+    // The main window's zone card routes the same way, so its greyed icon folds too.
+    let window = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let card = window.components(separatedBy: "private struct ZoneCard").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    func inCard(_ needle: String) -> Int { card.components(separatedBy: needle).count - 1 }
+    check(!card.isEmpty && inCard("ZoneHeaderHit.action(for: area, nonePresent: nonePresent)") == 1
+          && inCard(".disabled(zone.present") == 0,
+          "main window zone header: the greyed icon folds through ZoneHeaderHit instead of being disabled")
+    check(inCard(".accessibilityHidden(nonePresent)") == 1
+          && inCard(".accessibilityValue(nonePresent ? model.countText(of: zone) : \"\")") == 1,
+          "main window zone header: VoiceOver skips the greyed icon and the fold button carries the count")
+    check(inCard(".focusable(!nonePresent)") == 1 && occurrences(".focusable(!nonePresent)") == 1,
+          "zone header: the keyboard skips the greyed icon VoiceOver skips, in the main window as in the panel")
+    // Go to Zone lands on a part VoiceOver can reach: the greyed icon is hidden from it.
+    check(ZoneHeaderHit.goToZoneFocus(nonePresent: false) == .zoneIcon,
+          "Go to Zone: with a speaker of the zone present, the focus lands on the zone's round icon")
+    check(ZoneHeaderHit.goToZoneFocus(nonePresent: true) == .chevron,
+          "Go to Zone: with none of the zone's speakers present, the focus lands on the arrow, not the hidden icon")
+    check(inCard("focused = ZoneHeaderHit.goToZoneFocus(nonePresent: nonePresent)") == 1
+          && inCard(".focused($focused, equals: .chevron)") == 1 && inCard(".focused($focused, equals: .zoneIcon)") == 1,
+          "main window zone header: Go to Zone focuses the part ZoneHeaderHit.goToZoneFocus names")
+}
+
+// MARK: Menu bar panel rows for zones, folded and unfolded (ZoneLayout.panelRows, shownMembers)
+do {
+    let zones: [(id: String, members: [String])] = [("living", ["tv", "sonos"]), ("kitchen", ["pod"]), ("empty", [])]
+    func rows(_ collapsed: Set<String>) -> Int {
+        ZoneLayout.panelRows(zones, id: { $0.id }, members: { $0.members.count }, collapsed: collapsed)
+    }
+    check(rows([]) == 6, "panel zone rows: unfolded, each zone shows its header and every member", "\(rows([]))")
+    check(rows(["living"]) == 4, "panel zone rows: a folded zone keeps its header and drops its members",
+          "\(rows(["living"]))")
+    check(rows(["living", "kitchen", "empty"]) == 3, "panel zone rows: all folded, only the headers stay",
+          "\(rows(["living", "kitchen", "empty"]))")
+    check(rows(["gone"]) == 6, "panel zone rows: a folded zone that no longer exists changes nothing")
+    check(ZoneLayout.shownMembers(zones[0].members, folded: false) == ["tv", "sonos"],
+          "panel zone members: an unfolded zone lists its members in order")
+    check(ZoneLayout.shownMembers(zones[0].members, folded: true).isEmpty,
+          "panel zone members: a folded zone lists none")
+}
+
+// MARK: Zone folding is per view; double-clicks rename zones and zoned speakers
+do {
+    func read(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+    func count(_ text: String, _ needle: String) -> Int { text.components(separatedBy: needle).count - 1 }
+    let window = read("Sources/AudioSync/MainWindow.swift")
+    let menuBar = read("Sources/AudioSync/MenuBar.swift")
+    let render = read("scripts/screenshots/render.swift")
+    let ownFold = "@StateObject private var zoneDisclosure = ZoneDisclosure()"
+    check(!window.isEmpty && !menuBar.isEmpty && count(window, ownFold) == 1 && count(menuBar, ownFold) == 1,
+          "zone folding: the main window and the menu bar panel each keep their own fold state")
+    check(count(menuBar, "let zoneDisclosure") == 0 && count(window, "model.zoneDisclosure") == 0
+            && count(menuBar, "model.zoneDisclosure") == 0 && count(render, "zoneDisclosure") == 0,
+          "zone folding: nothing hands one view's fold state to the other")
+
+    let card = window.components(separatedBy: "private struct ZoneCard").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(count(card, "TapGesture(count: 2).onEnded { model.startRename(zone) }") == 1
+            && count(card, ".exclusively(before: TapGesture().onEnded { hit(.name) })") == 1,
+          "main window zone header: a double-click on the name renames the zone, a single click still folds it")
+    let zonesCode = read("Sources/AudioSync/AppDelegate+Zones.swift")
+    check(count(card, "InlineNameField(") == 1 && count(card, "Button(t.renameZone) { model.startRename(zone) }") == 1
+            && count(card, ".accessibilityAction(named: t.renameZone) { model.startRename(zone) }") == 2
+            && !zonesCode.isEmpty && count(zonesCode, "promptRenameZone") == 0 && count(zonesCode, "renameZoneTitle") == 0,
+          "main window zone header: Rename… edits the name in place like a speaker's, with no alert, and VoiceOver has the action")
+
+    let compact = window.components(separatedBy: "private struct ZoneMemberCompactRow").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(count(compact, "TapGesture(count: 2).onEnded { model.startRename(speaker, in: .inZones) }") == 1
+            && count(compact, "InlineNameField(") == 1
+            && count(compact, ".accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker, in: .inZones) }") == 1,
+          "In zones row: a double-click on the name renames the speaker in place, VoiceOver has the Rename action")
+    let row = window.components(separatedBy: "struct SpeakerRow: View").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(count(row, "InlineNameField(") == 1 && count(row, "TapGesture(count: 2).onEnded { model.startRename(speaker) }") == 1,
+          "speaker row: a zone's member rows and every other row rename through the same field")
+}
+
+// MARK: Zone members in the main window: one box per zone, label and separators on the name column
+do {
+    func read(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+    func count(_ text: String, _ needle: String) -> Int { text.components(separatedBy: needle).count - 1 }
+    func part(_ text: String, after marker: String) -> String {
+        text.components(separatedBy: marker).dropFirst().first?.components(separatedBy: "\n}\n").first ?? ""
+    }
+    let window = read("Sources/AudioSync/MainWindow.swift")
+
+    check(ZoneLook.nameColumn == 54, "zone look: names start 54 pt into a card's rows", "\(ZoneLook.nameColumn)")
+    check(ZoneLook.compactRowHeight == 36 && ZoneLook.compactPaddingY == 6 && ZoneLook.compactBadge == 24,
+          "zone look: an In zones row is 36 pt, a 24 pt badge with 6 pt above and below", "\(ZoneLook.compactRowHeight)")
+    check(ZoneLook.groupRadius == 9 && ZoneLook.groupFill == 0.05 && ZoneLook.groupBorderWidth == 0.5,
+          "zone look: the member box is teal 5% with a 0.5 pt teal edge and corner 9")
+    check(ZoneLook.chipHeight == 18 && ZoneLook.chipPaddingX == 7 && ZoneLook.chipFill == 0.12,
+          "zone look: the zone chip is an 18 pt teal 12% capsule with 7 pt sides")
+
+    let groups = ZoneLayout.byZone(["a", "b", "c", "d", "gone"]) { ["a": "z2", "b": "z1", "c": "z2", "d": "z1"][$0] }
+    check(groups.map(\.zone) == ["z2", "z1"] && groups.map(\.rows) == [["a", "c"], ["b", "d"]],
+          "zone look: In zones rows box by zone, zones in first-row order, a row without a zone left out",
+          "\(groups.map { ($0.zone, $0.rows) })")
+
+    let zoned = part(window, after: "private func zonedRows(")
+    check(count(zoned, "model.text.inZones.uppercased()") == 1 && count(zoned, ".accessibilityLabel(model.text.inZones)") == 1
+            && count(zoned, ".padding(.leading, ZoneLook.nameColumn)\n            .padding(.trailing") == 1
+            && count(zoned, "if divided { Divider() }") == 0
+            && count(zoned, "ZoneMemberGroup {") == 1,
+          "In zones label: in capitals on the name column with its line as the separator, rows in a zone box")
+    check(count(window, "padding(.leading, 52)") == 0 && count(window, "Divider().padding(.leading, ZoneLook.nameColumn)") == 4,
+          "zone look: every row separator starts at the name column")
+    let compact = part(window, after: "private struct ZoneMemberCompactRow")
+    check(count(compact, "opacity(0.08)") == 0 && count(compact, ".padding(.vertical, ZoneLook.compactPaddingY)") == 1
+            && count(compact, "Capsule().fill(accent.opacity(ZoneLook.chipFill))") == 1
+            && count(compact, ".accessibilityLabel(t.goToZoneLabel(zone.name))") == 1,
+          "In zones row: no box of its own, and its Go to Zone chip keeps its VoiceOver label")
+    let card = part(window, after: "private struct ZoneCard")
+    check(count(card, "ZoneMemberGroup {") == 1 && count(card, "grouped: true") == 1,
+          "zone card: its member rows sit in one zone box instead of a box each")
+
+    // The chip's teal text sits on the chip, on the member box, on the card.
+    typealias RGBA = (r: Double, g: Double, b: Double, a: Double)
+    func over(_ top: RGBA, _ bottom: RGBA) -> RGBA {
+        (top.r * top.a + bottom.r * (1 - top.a), top.g * top.a + bottom.g * (1 - top.a),
+         top.b * top.a + bottom.b * (1 - top.a), 1)
+    }
+    func luminance(_ c: RGBA) -> Double {
+        func channel(_ v: Double) -> Double { v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+    }
+    func ratio(_ a: RGBA, _ b: RGBA) -> Double {
+        let (x, y) = (luminance(a), luminance(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+    func rgb(_ c: BrandRGB, _ a: Double = 1) -> RGBA { (c.red, c.green, c.blue, a) }
+    var worstChip = Double.infinity, worstSecondary = Double.infinity
+    for (dark, cards) in [(false, [BrandTokens.Light.surface]), (true, [BrandTokens.Dark.background, BrandTokens.Dark.surface])] {
+        let teal = dark ? BrandTokens.Dark.teal : BrandTokens.Light.teal
+        let ink: RGBA = dark ? (1, 1, 1, 1) : (0, 0, 0, 1)
+        for card in cards {
+            let box = over(rgb(teal, ZoneLook.groupFill), rgb(card))
+            let chip = over(rgb(teal, ZoneLook.chipFill), box)
+            worstChip = min(worstChip, ratio(rgb(dark ? BrandTokens.Dark.tealText : BrandTokens.Light.tealText), chip))
+            let secondary = over((ink.r, ink.g, ink.b, BrandTokens.Opacity.secondaryText * 0.85), box)
+            worstSecondary = min(worstSecondary, ratio(secondary, box))
+        }
+    }
+    check(worstChip >= 4.5 && worstSecondary >= 4.5,
+          "zone look: the chip's text and a member's secondary text keep 4.5:1 in the zone box, both themes",
+          String(format: "chip %.2f, secondary %.2f", worstChip, worstSecondary))
+}
+
+// MARK: About panel shows the version without the build number (AboutPanel.options)
+do {
+    let options = AboutPanel.options(credits: NSAttributedString(string: "credits"), copyright: "copyright",
+                                     info: ["CFBundleShortVersionString": "0.7.1", "CFBundleVersion": "11"])
+    check(options[.applicationVersion] as? String == "0.7.1", "about: the version line is the short version",
+          String(describing: options[.applicationVersion]))
+    check(options[.version] as? String == "", "about: no build number in parentheses",
+          String(describing: options[.version]))
+    check(options[.credits] is NSAttributedString, "about: the license credits stay")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

@@ -124,6 +124,9 @@ pub struct Diagnostics {
     /// The drift is over [`RESYNC_DRIFT`]; the host may offer Resync. The
     /// sender never restarts on its own (C79).
     pub resync_offered: bool,
+    /// Silent frames sent since the `LOAD` because the sender's input ran
+    /// dry (C52, C78).
+    pub underrun_frames: u64,
 }
 
 /// What the session reports to the host.
@@ -264,6 +267,7 @@ pub struct CastSession {
     playing: bool,
     load_sent_frames: u64,
     load_dropped_frames: u64,
+    load_underrun_frames: u64,
     rebuffers: u32,
     stalled: Duration,
     stall_since: Option<Instant>,
@@ -424,6 +428,7 @@ impl CastSession {
             playing: false,
             load_sent_frames: 0,
             load_dropped_frames: 0,
+            load_underrun_frames: 0,
             rebuffers: 0,
             stalled: Duration::ZERO,
             stall_since: None,
@@ -538,6 +543,9 @@ impl CastSession {
             rebuffers: self.rebuffers,
             drift,
             resync_offered: drift > RESYNC_DRIFT,
+            underrun_frames: stats
+                .underrun_frames
+                .saturating_sub(self.load_underrun_frames),
         }
     }
 
@@ -752,6 +760,7 @@ impl CastSession {
         self.playing = true;
         self.load_sent_frames = stats.frames_sent;
         self.load_dropped_frames = stats.frames_dropped;
+        self.load_underrun_frames = stats.underrun_frames;
         self.rebuffers = 0;
         self.stalled = Duration::ZERO;
         self.stall_since = None;

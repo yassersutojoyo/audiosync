@@ -183,8 +183,9 @@ export struct SpeakerItem {
     // A stereo pair or home theater group: what it is and its members, or
     // which member is missing (Strings.group-note); empty for any other row.
     group-note: string,
-    // The zone that holds it, by ID; empty when it is in none.
+    // The zone that holds it, by ID and name; empty when it is in none.
     zone-id: string,
+    zone-name: string,
     // Its menu offers Move to Zone and Remove from Zone: every row but one
     // that plays as part of a stereo pair or home theater.
     zone-movable: bool,
@@ -223,6 +224,9 @@ export struct ZoneItem {
     // Calibrate Zone… can be chosen: a member is here and no calibration
     // holds the outputs.
     can-calibrate: bool,
+    // Its name is being edited in the header, with `name-text` typed so far.
+    renaming: bool,
+    name-text: string,
 }
 
 // What a notice is about, for its short name (Strings.notice-title).

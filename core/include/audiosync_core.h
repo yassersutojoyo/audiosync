@@ -236,7 +236,7 @@ extern "C" {
 #define ASC_CAST_EVENT_REBUFFERING 8       /* the receiver ran dry */
 #define ASC_CAST_EVENT_FORMAT_FALLBACK 9   /* the device refused WAV; .format is loaded instead */
 #define ASC_CAST_EVENT_VOLUME 10           /* the device's volume: .level, .muted, .volume_fixed, .step */
-#define ASC_CAST_EVENT_DIAGNOSTICS 11      /* once a second while playing: .drift_ms, .queued_ms, .resync_offered */
+#define ASC_CAST_EVENT_DIAGNOSTICS 11      /* once a second while playing: .drift_ms, .queued_ms, .underrun_frames, .resync_offered */
 #define ASC_CAST_EVENT_STREAM 12           /* the stream server's log line in .detail */
 #define ASC_CAST_EVENT_COMMAND_FAILED 13   /* a volume, artwork or Resync request failed: .error */
 #define ASC_CAST_EVENT_MEMORY_CHANGED 14   /* store asc_cast_memory_json */
@@ -1257,6 +1257,24 @@ typedef struct AscCalibration {
  */
 bool asc_calibration_estimate(const float *signal, size_t signal_frames, const float *reference, size_t reference_frames, const float *chosen, size_t chosen_frames, uint32_t rate, double old_offset_ms, AscCalibration *result);
 
+/* Where the signal arrived in one recording and how the peak stands out,
+ * before the thresholds that would refuse it: for the debug log. */
+typedef struct AscCalibrationArrival {
+    uint32_t status;        /* ASC_CALIBRATION_ACCEPTED when measured, else the refusal */
+    size_t frame;           /* the arrival: the earliest strong lag, else the peak */
+    size_t peak_frame;      /* the strongest lag */
+    size_t echo_frame;      /* the strongest lag more than 3 ms from the peak */
+    double peak_over_floor; /* the peak over the median magnitude */
+    double echo_share;      /* that echo as a share of the peak */
+} AscCalibrationArrival;
+
+/*
+ * Measures one recording as the estimate does, into *result. False, writing
+ * nothing, for a NULL array with a nonzero count or a NULL result. Takes
+ * tens of ms or more: never on an audio thread.
+ */
+bool asc_calibration_measure(const float *signal, size_t signal_frames, const float *recording, size_t recording_frames, uint32_t rate, AscCalibrationArrival *result);
+
 /*
  * Calibrate All Speakers: the reference's sweep, then every other speaker's
  * two, one speaker at a time, each estimated against the reference as
@@ -2034,6 +2052,7 @@ typedef struct AscCastEvent {
     double step;         /* the device's volume step; 0 when it reports none */
     double drift_ms;     /* dropped audio plus rebuffering since the stream was loaded */
     double queued_ms;    /* audio waiting in the sender's queue */
+    uint64_t underrun_frames; /* silent frames sent since the stream was loaded because the input ran dry */
     bool resync_offered; /* the drift is over 250 ms: the host may offer Resync */
     bool relaunched;     /* the app had to be launched and loaded again */
     const char *detail;  /* an error's text, a log line, a panic location; for a debug log */

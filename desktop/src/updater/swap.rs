@@ -354,6 +354,7 @@ mod tests {
         names
     }
 
+    // covers: S301
     #[test]
     fn a_swap_keeps_the_old_exe_as_bak() {
         let (dir, exe, notices) = install("swap-ok");
@@ -367,6 +368,7 @@ mod tests {
         assert!(log.iter().all(|(_, code)| *code == 0), "{log:?}");
     }
 
+    // covers: S301
     #[test]
     fn a_leftover_new_is_deleted_before_the_exclusive_create() {
         let (dir, exe, _) = install("leftover-new");
@@ -390,6 +392,7 @@ mod tests {
         assert_eq!(read(dir.join(EXE_NAME)), "old exe");
     }
 
+    // covers: S301, S302
     #[test]
     fn a_failed_second_rename_restores_the_bak() {
         let (dir, exe, notices) = install("second-rename");
@@ -430,6 +433,7 @@ mod tests {
         assert_eq!(names(&dir), [NOTICES_NAME, EXE_NAME]);
     }
 
+    // covers: S302
     #[test]
     fn a_read_only_install_folder_offers_the_release_page() {
         let (dir, exe, _) = install("read-only");
@@ -445,6 +449,7 @@ mod tests {
         assert_eq!(names(&dir), [NOTICES_NAME, EXE_NAME]);
     }
 
+    // covers: S302
     #[test]
     fn a_locked_exe_reports_another_copy_and_changes_nothing() {
         use std::os::windows::fs::OpenOptionsExt;
@@ -504,6 +509,7 @@ mod tests {
         assert_eq!(names(&dir), [NOTICES_NAME, EXE_NAME]);
     }
 
+    // covers: S301
     #[test]
     fn the_running_test_binary_can_be_renamed_aside_and_back() {
         let running = std::env::current_exe().unwrap();

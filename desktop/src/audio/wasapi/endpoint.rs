@@ -41,7 +41,7 @@ use crate::audio::controller::RendererHandle;
 use crate::audio::outputs::{
     RenderFormat, StreamSetup, period_frames, render_buffer_hns, render_format,
 };
-use crate::audio::render::{EndpointQueue, RenderPipeline};
+use crate::audio::render::{EndpointQueue, RenderPipeline, WakeCounters, WakeCounts};
 
 /// The flags of every render stream: event-driven, and without volume
 /// settings that Windows would remember for AudioSync's session.
@@ -71,6 +71,8 @@ pub struct EndpointRenderer {
     setup: StreamSetup,
     /// The clock-queue probe, only with the debug log on.
     probe: Option<Arc<ClockProbe>>,
+    /// The render thread's late and empty wakes.
+    wakes: Arc<WakeCounters>,
 }
 
 impl RendererHandle for EndpointRenderer {
@@ -93,6 +95,10 @@ impl RendererHandle for EndpointRenderer {
 
     fn clock_queue(&self) -> Option<ClockQueue> {
         self.probe.as_ref()?.take()
+    }
+
+    fn wakes(&self) -> WakeCounts {
+        self.wakes.counts()
     }
 }
 
@@ -119,17 +125,20 @@ pub(super) fn start(
     let abort = Arc::new(AtomicBool::new(false));
     let ended = Arc::new(AtomicBool::new(false));
     let probe = ClockProbe::from_env();
+    let wakes = Arc::new(WakeCounters::default());
     let (thread, setup) = {
         let stop = Arc::clone(&stop);
         let abort = Arc::clone(&abort);
         let ended = Arc::clone(&ended);
         let control = control.clone();
         let probe = probe.clone();
+        let wakes = Arc::clone(&wakes);
         spawn_worker("audiosync-output", move |ready| {
             let signals = Signals {
                 stop: &stop,
                 abort: &abort,
                 ended: &ended,
+                wakes: &wakes,
             };
             run(&id, reader, &control, gain, probe, &signals, ready);
         })?
@@ -142,6 +151,7 @@ pub(super) fn start(
         thread,
         setup,
         probe,
+        wakes,
     })
 }
 
@@ -153,6 +163,8 @@ struct Signals<'a> {
     abort: &'a AtomicBool,
     /// Set by the thread when the stream failed.
     ended: &'a AtomicBool,
+    /// Counted by the thread at each wake that isn't part of a stop.
+    wakes: &'a WakeCounters,
 }
 
 /// The render thread.
@@ -386,6 +398,11 @@ fn render_loop(
         let Ok(padding) = (unsafe { stream.client.GetCurrentPadding() }) else {
             return true;
         };
+        if stopping.is_none() {
+            signals
+                .wakes
+                .count_wake(padding, stream.buffer_frames, stream.period_frames);
+        }
         if stopping.is_some()
             && pipeline.has_played_its_fade(EndpointQueue {
                 padding,
@@ -509,6 +526,7 @@ mod tests {
                 buffer_frames: 480,
             },
             probe: None,
+            wakes: Arc::default(),
         };
         let answers = thread::spawn(move || {
             thread::sleep(HANG);

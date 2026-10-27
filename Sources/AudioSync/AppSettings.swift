@@ -131,7 +131,7 @@ struct AppSettings: Equatable {
     var hiddenSpeakers = HiddenSpeakers()
     var showVirtualDevices = false
     var appearance = AppAppearance.system
-    var whenSourceQuits = WhenSourceQuits.stop
+    var whenSourceQuits = WhenSourceQuits.system
     var inputPairs: [String: Int] = [:]
     var webRemote = false
     var webRemotePort = RemotePort.default

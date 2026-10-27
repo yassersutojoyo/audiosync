@@ -3,11 +3,11 @@
 
 The core, cast and airplay crates check their own markers in their
 spec_coverage tests. This covers the rest: tracked Rust and Swift files
-outside those crates (desktop/, remote/, Tests/, Sources/), and shell scripts,
-whose marker is `# covers:`. The letter picks
+outside those crates (desktop/, remote/, Tests/, Sources/), and shell and Python
+files, whose marker is `# covers:`. The letter picks
 the spec: S is docs/ENGINE_SPEC.md, P is docs/AIRPLAY_SPEC.md, C is
-docs/CAST_SPEC.md. A withdrawn or retired clause counts as missing (one
-retired in part does not). Each ID may carry a note in parentheses, and a
+docs/CAST_SPEC.md. A withdrawn, retired or superseded clause counts as
+missing (one retired or superseded in part does not). Each ID may carry a note in parentheses, and a
 note may run on to the next lines:
 
     // covers: S290, S291 (a level set on the speaker is kept)
@@ -24,21 +24,21 @@ import subprocess
 import sys
 
 MARKER = "// covers:"
-SHELL_MARKER = "# covers:"
+HASH_MARKER = "# covers:"
 SPECS = {"S": "ENGINE_SPEC.md", "P": "AIRPLAY_SPEC.md", "C": "CAST_SPEC.md"}
 CRATES_WITH_OWN_CHECK = ("core/", "cast/", "airplay/")
 _ID = re.compile(r"[SPC][1-9][0-9]*[a-z]?")
 _CLAUSE = re.compile(r"\s*- \*\*([SPC][1-9][0-9]*[a-z]?)\*\*(.*)")
 # Only the opening words: a live clause may mention withdrawn things later on.
-_WITHDRAWN = re.compile(r"\s*[*(]*(withdrawn|retired(?! in part))", re.IGNORECASE)
+_WITHDRAWN = re.compile(r"\s*[*(]*(withdrawn|(retired|superseded)(?! in part))", re.IGNORECASE)
 
 
 def in_scope(path):
-    return path.endswith((".rs", ".swift", ".sh")) and not path.startswith(CRATES_WITH_OWN_CHECK)
+    return path.endswith((".rs", ".swift", ".sh", ".py")) and not path.startswith(CRATES_WITH_OWN_CHECK)
 
 
 def marker_for(path):
-    return SHELL_MARKER if path.endswith(".sh") else MARKER
+    return HASH_MARKER if path.endswith((".sh", ".py")) else MARKER
 
 
 def marker_ids(body):
@@ -65,9 +65,24 @@ def spec_ids(text):
     found = set()
     for line in text.splitlines():
         match = _CLAUSE.match(line)
-        if match and not _WITHDRAWN.match(match.group(2)):
+        if match and not _withdrawn(match.group(2)):
             found.add(match.group(1))
     return found
+
+
+def _withdrawn(after_id):
+    """Same rule as core/tests/spec_coverage.rs: the opening may follow a title."""
+    body = after_id.lstrip()
+    return bool(_WITHDRAWN.match(body) or _WITHDRAWN.match(_after_title(body)))
+
+
+def _after_title(text):
+    """The text after a leading italic title that ends with a period, or all of it."""
+    if text.startswith("*"):
+        title, closed, after = text[1:].partition("*")
+        if closed and len(title) > 1 and title.endswith("."):
+            return after.lstrip()
+    return text
 
 
 def problems_in(path, text, known):
@@ -118,9 +133,18 @@ def self_test():
         "- **S4** *Required.* Replaces the withdrawn S3.\n"
         "- **S5** *Retired with the bundled engine; kept as a record.*\n"
         "- **S6** *Retired in part with the bundled engine*: the rest holds.\n"
+        "- **S7** *Superseded by S4.* *Observed* (the old rule).\n"
+        "- **S8** *Superseded in part by S4*: the rest holds.\n"
     )
-    if spec_ids(spec) != {"S1", "S2", "S4", "S6"}:
+    if spec_ids(spec) != {"S1", "S2", "S4", "S6", "S8"}:
         failures.append(f"spec_ids: got {sorted(spec_ids(spec))}")
+    titled = {
+        "- **S9** *Engine restart.* *Retired with the bundled engine.*": set(),
+        "- **S9** *Network loss, as tested.* *Retired in part*: the hint stands.": {"S9"},
+    }
+    for line, want in titled.items():
+        if spec_ids(line) != want:
+            failures.append(f"spec_ids({line!r}): expected {want}, got {spec_ids(line)}")
     text = "// covers: S1\n    // covers: S2, S3\n/// What it covers: x\n//covers:S1\n"
     got = problems_in("a.rs", text, {"S1", "S2"})
     want = ["a.rs:2: S3 is not a clause of ENGINE_SPEC.md"]
@@ -130,6 +154,10 @@ def self_test():
     want = ["t.sh:1: S3 is not a clause of ENGINE_SPEC.md"]
     if got != want:
         failures.append(f"problems_in (shell): expected {want}, got {got}")
+    got = problems_in("b.py", "    # covers: S1\n# covers: S9\n// covers: S9\n", {"S1"})
+    want = ["b.py:2: S9 is not a clause of ENGINE_SPEC.md"]
+    if got != want:
+        failures.append(f"problems_in (Python): expected {want}, got {got}")
     scope = {
         "desktop/src/view.rs": True,
         "Tests/logictest.swift": True,
@@ -140,13 +168,14 @@ def self_test():
         "desktop/README.md": False,
         "Tests/shellchecktest.sh": True,
         "core/ffi/build.sh": False,
+        "scripts/check_appcast.py": True,
     }
     for path, want in scope.items():
         if in_scope(path) != want:
             failures.append(f"scope of {path}: expected {want}")
     for failure in failures:
         print(f"self-test: {failure}", file=sys.stderr)
-    cases = len(ids) + 3 + len(scope)
+    cases = len(ids) + 4 + len(titled) + len(scope)
     print(f"self-test: {cases} cases, {len(failures)} failure(s)")
     return 1 if failures else 0
 

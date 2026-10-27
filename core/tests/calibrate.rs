@@ -289,6 +289,110 @@ fn an_echo_nearly_as_strong_as_the_first_arrival_is_ambiguous() {
     assert_eq!(close.frame, 80 * RATE as usize / 1000);
 }
 
+// A speaker facing away from the microphone, or hidden behind a laptop lid,
+// can reach it more strongly by a wall than directly; the sound still
+// arrived first by the direct path, so that is the arrival to time.
+// covers: S234
+#[test]
+fn a_reflection_stronger_than_the_direct_path_still_times_the_direct_path() {
+    let recording = room(
+        RATE,
+        2.0,
+        &[
+            Path {
+                at_ms: 80.0,
+                gain: 0.3,
+            },
+            Path {
+                at_ms: 102.0,
+                gain: 0.5,
+            },
+        ],
+        1e-4,
+        5,
+    );
+    let found = arrival(&recording, RATE).expect("accepted");
+    assert_eq!(found.frame, 80 * RATE as usize / 1000, "{found:?}");
+}
+
+// A knock or a burst of hiss before a faint sweep correlates with it more
+// than half as strongly as the sweep's peak, so "earliest strong lag" alone
+// would time the noise.
+// covers: S234
+#[test]
+fn loud_noise_before_a_faint_direct_path_is_not_timed() {
+    let mut recording = room(
+        RATE,
+        2.0,
+        &[
+            Path {
+                at_ms: 300.0,
+                gain: 0.006,
+            },
+            Path {
+                at_ms: 322.0,
+                gain: 0.01,
+            },
+        ],
+        1e-4,
+        8,
+    );
+    let mut noise = Noise(108);
+    let burst = RATE as usize / 10;
+    for sample in &mut recording[burst..burst + RATE as usize / 20] {
+        *sample += noise.sample(0.14);
+    }
+    let signal = calibrate::signal(RATE).expect("48 kHz");
+    let measured = calibrate::measure(&signal, &recording, RATE).expect("measured");
+    // The strongest lag besides the peak is the burst's, past the first
+    // 20 ms, so the local floor and not the recording's start passes it over.
+    assert!(measured.echo_share > 0.5, "the burst matters: {measured:?}");
+    let burst_lags = 20 * RATE as usize / 1000..150 * RATE as usize / 1000;
+    assert!(
+        burst_lags.contains(&measured.echo_frame),
+        "the burst matters: {measured:?}"
+    );
+    let found = arrival(&recording, RATE).expect("accepted");
+    assert_eq!(found.frame, 300 * RATE as usize / 1000, "{found:?}");
+}
+
+// covers: S234
+#[test]
+fn a_single_clean_arrival_lands_on_its_frame() {
+    for at_ms in [25.0, 80.0, 412.0] {
+        let recording = room(RATE, 2.0, &[Path { at_ms, gain: 0.4 }], 1e-4, 9);
+        let found = arrival(&recording, RATE).expect("accepted");
+        let frame = (at_ms * f64::from(RATE) / 1000.0) as usize;
+        assert_eq!((found.frame, found.peak_frame), (frame, frame), "{found:?}");
+    }
+}
+
+// A path under half the peak before it is not strong: the peak is timed.
+// covers: S234
+#[test]
+fn an_earlier_path_under_half_the_peak_is_passed_over() {
+    let recording = room(
+        RATE,
+        2.0,
+        &[
+            Path {
+                at_ms: 80.0,
+                gain: 0.2,
+            },
+            Path {
+                at_ms: 102.0,
+                gain: 0.5,
+            },
+        ],
+        1e-4,
+        5,
+    );
+    let found = arrival(&recording, RATE).expect("accepted");
+    assert_eq!(found.frame, 102 * RATE as usize / 1000, "{found:?}");
+    assert_eq!(found.echo_frame, 80 * RATE as usize / 1000, "{found:?}");
+    assert!(found.echo_share < calibrate::MIN_ARRIVAL_SHARE, "{found:?}");
+}
+
 /// Why the thresholds sit where they do: noise alone stays well under the
 /// floor threshold, a signal 20 dB under the noise stays well above it, and
 /// the signal's own sidelobes outside the guard window stay far under the
