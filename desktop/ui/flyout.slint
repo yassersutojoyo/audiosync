@@ -8,7 +8,7 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { DeviceVolumeHint, NoticeItem, PresetItem, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark } from "widgets.slint";
+import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark, ZoneArrowFocus } from "widgets.slint";
 
 // A compact row: the toggle and the name, with the note of a speaker or
 // zone that is on but can't play right now under it (a zone's count first) ("Waiting for device",
@@ -181,13 +181,17 @@ component FlyoutRow inherits HorizontalLayout {
 // A zone's row, routed like its header in the main window: only the round
 // toggle switches the zone, and a click anywhere else on the row, the name
 // and the arrow included, shows or hides its speakers. Left and Right on the
-// toggle do that from the keyboard, so the arrow stays out of the Tab order.
+// toggle do that from the keyboard, so the arrow stays out of the Tab order
+// until no member is found and the toggle is off.
 component FlyoutZoneHeader inherits Rectangle {
     in property <ZoneItem> item;
     callback toggled();
     callback expanded-changed(bool);
-    // The toggle gained (true) or lost (false) keyboard focus.
+    // The toggle, or the arrow in its place, gained (true) or lost (false)
+    // keyboard focus.
     callback focus-changed(bool);
+    property <bool> live: root.item.present > 0;
+    property <string> count: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state));
 
     border-radius: Fluent.radius-control;
     background: hover.has-hover ? Fluent.hover : transparent;
@@ -208,7 +212,8 @@ component FlyoutZoneHeader inherits Rectangle {
                 size: 28px;
                 glyph: Glyphs.zone;
                 state: root.item.state;
-                enabled: root.item.present > 0;
+                enabled: root.live;
+                narrated: root.live;
                 label: Strings.zone-label(root.item.name);
                 value-text: Strings.zone-value(root.item.on, root.item.total, root.item.waiting);
                 description: Strings.row-note(root.item.state);
@@ -239,7 +244,7 @@ component FlyoutZoneHeader inherits Rectangle {
                 }
 
                 QuietText {
-                    text: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state));
+                    text: root.count;
                     wrap: no-wrap;
                     overflow: elide;
                 }
@@ -253,10 +258,22 @@ component FlyoutZoneHeader inherits Rectangle {
                     height: 16px;
                     accessible-role: button;
                     accessible-label: root.item.expanded ? Strings.hide-zone-speakers(root.item.name) : Strings.show-zone-speakers(root.item.name);
+                    accessible-value: root.live ? "" : root.count;
                     accessible-expandable: true;
                     accessible-expanded: root.item.expanded;
                     accessible-action-default => {
                         root.expanded-changed(!root.item.expanded);
+                    }
+
+                    ZoneArrowFocus {
+                        enabled: !root.live;
+                        expanded: root.item.expanded;
+                        expanded-changed(open) => {
+                            root.expanded-changed(open);
+                        }
+                        focus-changed(focused) => {
+                            root.focus-changed(focused);
+                        }
                     }
 
                     Glyph {

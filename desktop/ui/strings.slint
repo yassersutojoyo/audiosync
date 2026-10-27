@@ -1705,6 +1705,12 @@ export global Strings {
     }
 
     public pure function zone-value(on: int, total: int, waiting: int) -> string {
+        if total == 1 && waiting > 0 {
+            return @tr("{} of {} speaker on, {} waiting", on, total, waiting);
+        }
+        if total == 1 {
+            return @tr("{} of {} speaker on", on, total);
+        }
         if waiting > 0 {
             return @tr("{} of {} speakers on, {} waiting", on, total, waiting);
         }

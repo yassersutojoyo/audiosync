@@ -615,6 +615,10 @@ export component SpeakerBadge inherits Rectangle {
     in property <string> value-text;
     // A zone header's toggle: Left hides the zone's speakers, Right shows them.
     in property <bool> expandable;
+    // False: no value or description for Narrator, as for a zone's toggle
+    // with no member found, whose arrow speaks for the header (Slint takes
+    // no bound accessible-role, so it can't leave the tree).
+    in property <bool> narrated: true;
     in property <bool> expanded;
     callback toggled();
     // The toggle gained (true) or lost (false) keyboard focus.
@@ -639,8 +643,8 @@ export component SpeakerBadge inherits Rectangle {
     accessible-label: root.label;
     accessible-checkable: true;
     accessible-checked: root.state != RowState.off;
-    accessible-value: root.value-text != "" ? root.value-text : Strings.value(root.state);
-    accessible-description: root.description;
+    accessible-value: !root.narrated ? "" : root.value-text != "" ? root.value-text : Strings.value(root.state);
+    accessible-description: root.narrated ? root.description : "";
     accessible-enabled: root.enabled;
     accessible-expandable: root.expandable;
     accessible-expanded: root.expanded;
@@ -695,6 +699,53 @@ export component SpeakerBadge inherits Rectangle {
         height: parent.height + 6px;
         border-radius: self.width / 2;
         visible-focus: focus.has-focus;
+    }
+}
+
+// A zone arrow's keyboard focus, taken only while `enabled`: with no member
+// found the toggle has nothing to switch, so the arrow joins the Tab order
+// in its place. Space and Enter fold or unfold the zone, Left and Right as
+// on the toggle.
+export component ZoneArrowFocus inherits Rectangle {
+    in property <bool> enabled;
+    in property <bool> expanded;
+    callback expanded-changed(bool);
+    callback focus-changed(bool);
+
+    public function take-focus() {
+        scope.focus();
+    }
+
+    scope := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.expanded-changed(!root.expanded);
+                return accept;
+            }
+            if event.text == Key.LeftArrow && root.expanded {
+                root.expanded-changed(false);
+                return accept;
+            }
+            if event.text == Key.RightArrow && !root.expanded {
+                root.expanded-changed(true);
+                return accept;
+            }
+            return reject;
+        }
+        focus-changed-event => {
+            root.focus-changed(self.has-focus);
+        }
+    }
+
+    FocusRing {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: Fluent.radius-control + 3px;
+        visible-focus: scope.has-focus;
     }
 }
 
@@ -2284,7 +2335,7 @@ export component ZoneMemberRow inherits Rectangle {
 // speakers. Like a speaker row's box opening its delay panel, a click
 // anywhere but the toggle, the volume and the options shows or hides the
 // speakers; the arrow is left out of the Tab order, as Left and Right on the
-// toggle do its work.
+// toggle do its work, until no member is found and the toggle is off.
 export component ZoneHeader inherits Rectangle {
     in property <ZoneItem> item;
     callback toggled();
@@ -2299,13 +2350,15 @@ export component ZoneHeader inherits Rectangle {
     // volume or options); none: the header lost it.
     callback focus-changed(RowPart);
 
-    // Gives the header the keyboard focus on `part`, or its options when
-    // that part is off for want of members.
+    // Gives the header the keyboard focus on `part`. With no member found
+    // the arrow takes the toggle's, and the options the volume's.
     public function take-focus(part: RowPart) {
         if part == RowPart.volume && root.live {
             volume-slider.focus-slider();
         } else if part == RowPart.toggle && root.live {
             badge.focus();
+        } else if part == RowPart.toggle {
+            arrow-focus.take-focus();
         } else {
             options.focus();
         }
@@ -2314,8 +2367,9 @@ export component ZoneHeader inherits Rectangle {
     // A member is listed: the toggle and the volume work.
     property <bool> live: root.item.present > 0;
     property <bool> badge-focused;
+    property <bool> arrow-focused;
     property <bool> options-focused;
-    property <RowPart> focused-part: self.options-focused ? RowPart.options : volume-slider.slider-focused ? RowPart.volume : self.badge-focused ? RowPart.toggle : RowPart.none;
+    property <RowPart> focused-part: self.options-focused ? RowPart.options : volume-slider.slider-focused ? RowPart.volume : self.badge-focused || self.arrow-focused ? RowPart.toggle : RowPart.none;
     changed focused-part => {
         root.focus-changed(self.focused-part);
     }
@@ -2389,6 +2443,7 @@ export component ZoneHeader inherits Rectangle {
                             glyph: Glyphs.zone;
                             state: root.item.state;
                             enabled: root.live;
+                            narrated: root.live;
                             label: Strings.zone-label(root.item.name);
                             value-text: Strings.zone-value(root.item.on, root.item.total, root.item.waiting);
                             description: Strings.row-note(root.item.state);
@@ -2481,10 +2536,22 @@ export component ZoneHeader inherits Rectangle {
                         background: arrow.pressed ? Fluent.pressed : arrow.has-hover ? Fluent.hover : transparent;
                         accessible-role: button;
                         accessible-label: root.item.expanded ? Strings.hide-zone-speakers(root.item.name) : Strings.show-zone-speakers(root.item.name);
+                        accessible-value: root.live ? "" : count-text.text;
                         accessible-expandable: true;
                         accessible-expanded: root.item.expanded;
                         accessible-action-default => {
                             root.expanded-changed(!root.item.expanded);
+                        }
+
+                        arrow-focus := ZoneArrowFocus {
+                            enabled: !root.live;
+                            expanded: root.item.expanded;
+                            expanded-changed(open) => {
+                                root.expanded-changed(open);
+                            }
+                            focus-changed(focused) => {
+                                root.arrow-focused = focused;
+                            }
                         }
 
                         arrow := TouchArea {
