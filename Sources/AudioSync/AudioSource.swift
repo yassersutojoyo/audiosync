@@ -434,14 +434,20 @@ enum SourceApps {
     static func running() -> [Entry] {
         // macOS can still list an app whose process is gone (S227), so the
         // process is checked too, as the capture's own look does.
-        let apps = NSWorkspace.shared.runningApplications.map { app in
+        let apps = regularApps(NSWorkspace.shared.runningApplications,
+                               isRegular: { $0.activationPolicy == .regular && !$0.isTerminated }) { app in
             RunningApp(pid: app.processIdentifier, bundleID: app.bundleIdentifier, name: app.localizedName,
-                       isRegular: app.activationPolicy == .regular && !app.isTerminated
-                           && AppTapFollow.processExists(app.processIdentifier),
-                       icon: app.icon)
+                       isRegular: AppTapFollow.processExists(app.processIdentifier), icon: app.icon)
         }
         return offered(apps, ownPID: ProcessInfo.processInfo.processIdentifier,
                        ownBundleID: Bundle.main.bundleIdentifier)
+    }
+
+    /// `read` runs only for the regular apps among `listed`: reading every
+    /// background process's name and icon is what made `running()` slow.
+    static func regularApps<App>(_ listed: [App], isRegular: (App) -> Bool,
+                                 read: (App) -> RunningApp) -> [RunningApp] {
+        listed.filter(isRegular).map(read)
     }
 
     /// The picker's rule: regular apps with a bundle ID only (a background

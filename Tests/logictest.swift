@@ -290,6 +290,18 @@ do {
           "\(offered.map(\.name))")
     let twins = SourceApps.offered([app(20, "com.b", "Same"), app(21, "com.a", "same")], ownPID: ownPID, ownBundleID: nil)
     check(twins.map(\.bundleID) == ["com.a", "com.b"], "source apps: names that sort alike are ordered by bundle ID")
+
+    // Hundreds of background processes are listed; reading each one's name
+    // and icon held the main thread about 25 ms on every panel open.
+    final class Reads { var pids: [pid_t] = [] }
+    let reads = Reads()
+    let listed: [(pid: pid_t, regular: Bool)] = [(1, false), (2, true), (3, false), (4, true)]
+    let read = SourceApps.regularApps(listed, isRegular: { $0.regular }) { entry in
+        reads.pids.append(entry.pid)
+        return app(entry.pid, "com.example.\(entry.pid)", "App \(entry.pid)")
+    }
+    check(read.map(\.pid) == [2, 4] && reads.pids == [2, 4],
+          "source apps: only regular apps have their name and icon read, in the listed order", "\(reads.pids)")
 }
 
 // MARK: Audio processes — which Core Audio process objects make up an app
@@ -4829,6 +4841,119 @@ do {
     check(!pressed(CGPoint(x: 1154, y: 876), icon, 0.05), "menu bar icon: the line below the icon is not on it")
     check(!pressed(CGPoint(x: 700, y: 500), icon, 0.05), "menu bar icon: a press elsewhere is not a press on the icon")
     check(!pressed(CGPoint(x: 1154, y: 888), icon, 3), "menu bar icon: Escape with the pointer resting on the icon is no press")
+    let addRow = CastAddRow.state
+    check(addRow(true, .searching) == .reserved && addRow(true, .noneFound) == .shown,
+          "menu bar panel: the Add by Address row keeps its room while the Cast search runs, so the panel never grows when it ends")
+    check(addRow(true, .failed) == .shown && addRow(true, .quiet) == .none && addRow(false, .searching) == .none
+            && addRow(false, .noneFound) == .none,
+          "menu bar panel: no Add by Address row once speakers are listed or when adding isn't possible")
+    let duringClose = StatusItemClick.pressDuringClose
+    check(duringClose(30.1, 30.25) && !duringClose(30.25, 30.25) && !duringClose(31, 30.25) && !duringClose(30.1, nil),
+          "menu bar icon: only a press while the panel still fades out is ignored, as Outlook does")
+    func near(_ a: TimeInterval, _ b: TimeInterval) -> Bool { abs(a - b) < 1e-9 }
+    let shrink = PanelQuiet.duration(.close, system: false)
+    check(duringClose(30 + shrink / 2, 30 + shrink) && !duringClose(30 + shrink + 0.01, 30 + shrink),
+          "menu bar icon: a press is ignored only while the panel shrinks away; right after, it opens it")
+
+    let window = CGRect(x: 1000, y: 543, width: 306, height: 386)
+let grown = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 280, height: 428))
+check(grown == CGRect(x: 1000, y: 474, width: 306, height: 455),
+      "menu bar panel: a taller panel grows its window downward, its top edge under the icon where it was")
+let wider = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 300, height: 300))
+check(wider.maxY == window.maxY && wider.midX == window.midX && wider.size == CGSize(width: 326, height: 327),
+      "menu bar panel: a resize keeps the window's top edge and middle, so the arrow stays on the icon")
+let closeAsked = PopoverCloseRequest.answer
+    check(closeAsked(false, true, 30, nil) == .closeOurWay && closeAsked(true, true, 30, nil) == .allow,
+          "menu bar panel: an open panel the popover wants closed shrinks away its own way")
+    // A press on the icon mid-grow starts the close, and the popover asks
+    // again about 40 ms later as its window loses key.
+    check(closeAsked(false, false, 30.04, 30 + shrink) == .wait,
+          "menu bar panel: the popover asking again while the panel fades out waits for the fade, so it doesn't vanish at once")
+    check(closeAsked(false, false, 30 + shrink + 0.01, 30 + shrink) == .allow && closeAsked(false, false, 30, nil) == .allow
+            && closeAsked(true, false, 30.04, 30 + shrink) == .allow,
+          "menu bar panel: once the fade is over, or with the popover's own animation, the popover may close")
+
+    let grow = PanelMotion.open(reduceMotion: false), shrinkBack = PanelMotion.close(reduceMotion: false)
+    check(grow.scale >= 0.9 && grow.scale < 1 && grow.settles >= 0.25 && grow.settles <= 0.3,
+          "menu bar panel: it grows out of the icon and settles in about a quarter second")
+    check(grow.dampingRatio >= 0.85 && grow.dampingRatio <= 1 && grow.overshoot * (1 - grow.scale) * 400 < 0.5,
+          "menu bar panel: the growth never bounces by half a point, even on a tall panel")
+    check(shrinkBack.scale > grow.scale && shrinkBack.scale < 1 && shrinkBack.duration >= 0.12 && shrinkBack.duration <= 0.15,
+          "menu bar panel: the close is a quick, small shrink")
+    check(!PanelMotion.open(reduceMotion: true).grows && !PanelMotion.close(reduceMotion: true).grows
+            && PanelMotion.open(reduceMotion: true).duration > 0,
+          "menu bar panel: with Reduce Motion it only fades")
+    let pinned = PanelMotion.pin(CGPoint(x: 140, y: 420), scale: grow.scale)
+    check(abs(140 * grow.scale + Double(pinned.x) - 140) < 1e-9 && abs(420 * grow.scale + Double(pinned.y) - 420) < 1e-9,
+          "menu bar panel: the point under the icon stays put while the panel grows")
+    check(PanelQuiet.duration(.open, system: false) == grow.settles && shrink == shrinkBack.duration,
+          "menu bar panel: deferred work waits exactly for the panel's own motion")
+    check(PanelMotion.tail * (1 - grow.scale) * 600 < 0.5,
+          "menu bar panel: ending the spring at its settle time moves even a 600 pt panel's far edge under half a point")
+
+    var resize = PanelResize()
+    let tall = CGSize(width: 306, height: 455), taller = CGSize(width: 306, height: 478)
+    check(near(resize.changed(to: CGSize(width: 306, height: 420), at: 50, settled: 40), 50.1)
+            && near(resize.changed(to: tall, at: 50.05, settled: 40), 50.1) && resize.take(at: 50.08) == nil,
+          "menu bar panel: size changes within a tenth of a second wait for one step")
+    check(resize.take(at: 50.1) == tall && resize.take(at: 50.2) == nil,
+          "menu bar panel: the step goes to the latest size, once")
+    check(near(resize.changed(to: taller, at: 60, settled: 60.28), 60.28),
+          "menu bar panel: a size change while the panel grows in waits until it has settled")
+
+    func sizing(_ events: [PanelSizing.Event]) -> PanelSizing {
+        events.reduce(PanelSizing.closed) { $0.after($1) }
+    }
+    check(!sizing([]).followsContent && !sizing([.show]).followsContent,
+          "menu bar panel: the size holds while the popover opens")
+    check(sizing([.show, .didShow]).followsContent, "menu bar panel: the size follows the content once fully shown")
+    check(!sizing([.show, .didShow, .willClose]).followsContent
+            && !sizing([.show, .didShow, .willClose, .didClose]).followsContent,
+          "menu bar panel: the size holds from the moment the popover starts to close")
+    check(!sizing([.show, .willClose, .didShow]).followsContent,
+          "menu bar panel: a show notice arriving after the close began keeps the size held")
+    check(sizing([.show, .didShow, .willClose, .show]) == .opening
+            && !sizing([.show, .didShow, .willClose, .show, .didClose]).followsContent
+            && sizing([.show, .didShow, .willClose, .show, .didClose, .didShow]).followsContent,
+          "menu bar panel: reopened mid-close, the old close's notice doesn't end the new open")
+
+    var own = PanelQuiet()
+    own.began(.open, at: 40)
+    check(near(own.wait(at: 40.1), grow.settles - 0.1) && own.wait(at: 40 + grow.settles) == 0 && grow.settles < 0.6,
+          "menu bar panel: with the panel's own grow, work after an open waits less than for the system's bounce")
+    own.began(.close, at: 41)
+    check(near(own.wait(at: 41), shrinkBack.duration) && own.wait(at: 41 + shrinkBack.duration) == 0,
+          "menu bar panel: work after the panel's own close waits only for its shrink")
+
+    var quiet = PanelQuiet(system: true)
+    check(quiet.wait(at: 5) == 0, "menu bar panel: with no animation, deferred work runs at once")
+    quiet.began(.open, at: 10)
+    check(near(quiet.wait(at: 10.2), 0.4) && quiet.wait(at: 10.6) == 0,
+          "menu bar panel: work after an open waits until its bounce has settled")
+    quiet.began(.close, at: 10.1)
+    check(near(quiet.wait(at: 10.3), 0.3), "menu bar panel: a close during the open's bounce never shortens the wait")
+    quiet.began(.close, at: 11)
+    check(near(quiet.wait(at: 11.1), 0.15) && quiet.wait(at: 11.25) == 0,
+          "menu bar panel: work after a close waits until it has faded out")
+    quiet.began(.open, at: 11.2)
+    check(near(quiet.wait(at: 11.3), 0.5), "menu bar panel: a quick reopen pushes waiting work past its own bounce")
+
+    var queue = QuietQueue()
+    queue.quiet = PanelQuiet(system: true)
+    queue.quiet.began(.open, at: 20)
+    check(queue.enqueue("refresh") && !queue.enqueue("refresh") && queue.enqueue("rebuild"),
+          "menu bar panel: a second request under a label already waiting is dropped")
+    var firstWait: TimeInterval = 0
+    if case .wait(let wait) = queue.step("refresh", at: 20.2) { firstWait = wait }
+    check(near(firstWait, 0.4), "menu bar panel: waiting work waits out the open's bounce", "\(firstWait)")
+    queue.quiet.began(.close, at: 20.5)
+    var secondWait: TimeInterval = 0
+    if case .wait(let wait) = queue.step("refresh", at: 20.6) { secondWait = wait }
+    check(near(secondWait, 0.15), "menu bar panel: a close begun meanwhile makes waiting work wait again", "\(secondWait)")
+    check(queue.step("refresh", at: 20.75) == .run && queue.waiting == ["rebuild"],
+          "menu bar panel: once quiet, the waiting work runs and leaves the queue")
+    check(queue.enqueue("refresh") && !queue.enqueue("rebuild"),
+          "menu bar panel: a label can wait again once its work ran; one still waiting stays deduplicated")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)
@@ -9009,6 +9134,12 @@ do {
           "permissions: after an update, a permission macOS can't report is not explained again")
     check(upgraded.step(.microphone, state: .notAsked, userAction: true) == .explain,
           "permissions: after an update, a permission macOS reports as unasked is still explained")
+    // An update from 0.6.0 held Spotify's reading with no card shown, so Now Playing vanished.
+    check(upgraded.mayRaiseAutomationPrompt,
+          "permissions: after an update, Now Playing reads the players an earlier version read, with no explanation first")
+    check(!PermissionAsks(explained: [], usedBefore: false).mayRaiseAutomationPrompt
+            && PermissionAsks(explained: ["automation"], usedBefore: false).mayRaiseAutomationPrompt,
+          "permissions: on a fresh install Now Playing waits for Continue on the Automation explanation")
 
     var asks = PermissionAsks(explained: [], usedBefore: false)
     check(asks.offer == nil, "permissions: nothing is offered before a feature needs it")

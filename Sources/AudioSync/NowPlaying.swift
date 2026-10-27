@@ -240,6 +240,7 @@ final class NowPlayingMonitor {
     /// `track` keeps the position of the last change.
     private(set) var reading: Track?
     private var refreshing = false
+    private var holding = false
     private var emptyReadings = EmptyReadings()
     private var played = LastPlayed()
     /// The player seen playing last since the source was chosen (`LastPlayed`).
@@ -331,6 +332,11 @@ final class NowPlayingMonitor {
             }
             DispatchQueue.main.async {
                 self.refreshing = false
+                if held != self.holding {
+                    self.holding = held
+                    DebugTrace.log("Now Playing: \(held ? "holding" : "no longer holding") a player's reading "
+                                   + "for the Automation explanation")
+                }
                 if held { self.onPromptHeld?() }
                 if self.isRunning { self.reading = next }
                 let last = self.track

@@ -52,10 +52,221 @@ enum StatusItemClick: Equatable {
     /// `closingPress` is when the press on the icon that last closed the
     /// panel came, if one did; `latestPress` is when the latest press came,
     /// on the same clock (system uptime).
+    /// Whether a press came while the panel still fades out (`closeEndsAt`,
+    /// system uptime): it is ignored, as Outlook ignores one, rather than
+    /// reopening the panel once the close is over.
+    static func pressDuringClose(_ press: TimeInterval, _ closeEndsAt: TimeInterval?) -> Bool {
+        closeEndsAt.map { press < $0 } ?? false
+    }
+
     static func action(panelVisible: Bool, closingPress: TimeInterval?, latestPress: TimeInterval) -> StatusItemClick {
         if panelVisible { return .close }
         if let closingPress, abs(latestPress - closingPress) < samePress { return .stayClosed }
         return .open
+    }
+}
+
+/// What the menu bar panel does when its popover asks to close, as a
+/// transient popover does on a click outside or when its window loses key.
+/// With the panel's own motion the popover never closes itself: an open
+/// panel starts its own close instead, and one that already fades out
+/// (until `closeEndsAt`, system uptime) stays until that fade closes it.
+enum PopoverCloseRequest: Equatable {
+    case allow
+    case closeOurWay
+    case wait
+
+    static func answer(systemAnimation: Bool, presented: Bool, now: TimeInterval,
+                       closeEndsAt: TimeInterval?) -> PopoverCloseRequest {
+        if systemAnimation { return .allow }
+        if presented { return .closeOurWay }
+        return StatusItemClick.pressDuringClose(now, closeEndsAt) ? .wait : .allow
+    }
+}
+
+/// When the menu bar panel's popover follows its content's size. NSPopover
+/// animates a size change on top of its own open or close animation, which
+/// stutters, so a change waits until the popover is fully shown and is
+/// dropped once it starts to close.
+enum PanelSizing: Equatable {
+    case closed, opening, shown, closing
+
+    enum Event { case show, didShow, willClose, didClose }
+
+    var followsContent: Bool { self == .shown }
+
+    func after(_ event: Event) -> PanelSizing {
+        switch (self, event) {
+        case (_, .show): return .opening
+        case (.opening, .didShow): return .shown
+        case (.opening, .willClose), (.shown, .willClose): return .closing
+        case (.closing, .didClose): return .closed
+        default: return self   // a late notice from an earlier open or close
+        }
+    }
+}
+
+/// The panel's Add by Address row. It is offered once the Cast search found
+/// nothing, and its room is kept while the search still runs: the search
+/// ends on a timer, often with the panel open, which must not grow then.
+enum CastAddRow: Equatable {
+    case none, reserved, shown
+
+    /// How long the row takes to fade into the room kept for it.
+    static let fadeIn: TimeInterval = 0.15
+
+    static func state(canAdd: Bool, list: CastListState) -> CastAddRow {
+        guard canAdd else { return .none }
+        switch list {
+        case .noneFound, .failed: return .shown
+        case .searching: return .reserved
+        case .quiet: return .none
+        }
+    }
+}
+
+/// How the menu bar panel opens and closes: it grows out of the menu bar icon
+/// on a spring too damped to bounce, and shrinks back quickly as it fades.
+/// With Reduce Motion it only fades. Only the panel's layer scales; the
+/// window keeps its final size, so nothing is laid out again per frame.
+struct PanelMotion: Equatable {
+    /// Where an open starts, or where a close ends; 1 is a plain fade.
+    var scale: Double
+    /// The fade, and for a close the shrink too.
+    var duration: TimeInterval
+    /// A spring for the open's growth; none when 0.
+    var stiffness = 0.0
+    var damping = 0.0
+
+    static let mass = 1.0
+
+    static func open(reduceMotion: Bool) -> PanelMotion {
+        PanelMotion(scale: reduceMotion ? 1 : 0.92, duration: 0.18, stiffness: 441, damping: 38.64)
+    }
+
+    /// What is left of the growth when the spring animation ends: the tail
+    /// cut there moves the panel's far edge by under half a point.
+    static let tail = 0.01
+
+    static func close(reduceMotion: Bool) -> PanelMotion {
+        PanelMotion(scale: reduceMotion ? 1 : 0.96, duration: 0.14)
+    }
+
+    var grows: Bool { scale != 1 }
+
+    /// 1 is critical damping; just under it the overshoot stays far below a point.
+    var dampingRatio: Double { stiffness > 0 ? damping / (2 * (stiffness * Self.mass).squareRoot()) : 1 }
+
+    /// The fraction of the growth the spring overshoots by.
+    var overshoot: Double {
+        let ratio = dampingRatio
+        return ratio < 1 ? exp(-Double.pi * ratio / (1 - ratio * ratio).squareRoot()) : 0
+    }
+
+    /// When the growth stays within `tail` of its end; the fade alone without a spring.
+    var settles: TimeInterval {
+        guard stiffness > 0, grows else { return duration }
+        let ratio = min(dampingRatio, 0.999)
+        let decay = ratio * (stiffness / Self.mass).squareRoot()
+        return max(duration, (-log(Self.tail) - log((1 - ratio * ratio).squareRoot())) / decay)
+    }
+
+    /// The shift that keeps `anchor` (measured from the layer's anchor point)
+    /// in place while the layer scales by `scale`.
+    static func pin(_ anchor: CGPoint, scale: Double) -> CGPoint {
+        let rest = CGFloat(1 - scale)
+        return CGPoint(x: anchor.x * rest, y: anchor.y * rest)
+    }
+}
+
+/// When the open panel takes a new size from its content. Changes that come
+/// within `gather` of the first go in one animated step, which waits for the
+/// panel to finish growing in. The latest size wins.
+struct PanelResize: Equatable {
+    static let gather: TimeInterval = 0.1
+    static let duration: TimeInterval = 0.2
+
+    private(set) var pending: CGSize?
+    private(set) var due: TimeInterval?
+
+    /// When to apply the step this change joins. `settled` is when the
+    /// panel's open animation ends.
+    mutating func changed(to size: CGSize, at now: TimeInterval, settled: TimeInterval) -> TimeInterval {
+        pending = size
+        let when = due ?? max(now + Self.gather, settled)
+        due = when
+        return when
+    }
+
+    /// The size to animate to, once its step is due.
+    mutating func take(at now: TimeInterval) -> CGSize? {
+        guard let due, now >= due - 0.001, let size = pending else { return nil }
+        pending = nil
+        self.due = nil
+        return size
+    }
+
+    /// The popover's window frame for content of `size`, its top edge (under
+    /// the icon) and its middle where they are. The popover itself would set
+    /// it in one frame.
+    static func windowFrame(_ frame: CGRect, content: CGSize, to size: CGSize) -> CGRect {
+        let dw = size.width - content.width, dh = size.height - content.height
+        return CGRect(x: frame.minX - dw / 2, y: frame.minY - dh, width: frame.width + dw, height: frame.height + dh)
+    }
+}
+
+/// When work that follows a menu bar panel open or close may run: once its
+/// animation is over. Main-thread work that lands inside it drops frames.
+struct PanelQuiet: Equatable {
+    enum Animation { case open, close }
+
+    /// The popover's own grow and fade (`system`), from the click to the end
+    /// of its bounce and of its fade as measured on the Mac; else the
+    /// panel's own motion (`PanelMotion`).
+    static func duration(_ animation: Animation, system: Bool) -> TimeInterval {
+        switch (animation, system) {
+        case (.open, true): return 0.6
+        case (.close, true): return 0.25
+        case (.open, false): return PanelMotion.open(reduceMotion: false).settles
+        case (.close, false): return PanelMotion.close(reduceMotion: false).duration
+        }
+    }
+
+    var system = false
+
+    /// System uptime when the last animation ends.
+    private(set) var busyUntil: TimeInterval = 0
+
+    init(system: Bool = false) { self.system = system }
+
+    mutating func began(_ animation: Animation, at now: TimeInterval) {
+        busyUntil = max(busyUntil, now + Self.duration(animation, system: system))
+    }
+
+    func wait(at now: TimeInterval) -> TimeInterval { max(0, busyUntil - now) }
+}
+
+/// Work waiting for `PanelQuiet`, at most one per label.
+struct QuietQueue: Equatable {
+    var quiet = PanelQuiet()
+    private(set) var waiting = Set<String>()
+
+    enum Step: Equatable {
+        case wait(TimeInterval)
+        case run
+    }
+
+    /// False when work under `label` already waits: the new request is dropped.
+    mutating func enqueue(_ label: String) -> Bool { waiting.insert(label).inserted }
+
+    /// Waiting work under `label`, checked at `now`: it waits on while an
+    /// open or close animates (one may have begun since it last checked),
+    /// else it runs and leaves the queue.
+    mutating func step(_ label: String, at now: TimeInterval) -> Step {
+        let wait = quiet.wait(at: now)
+        if wait > 0 { return .wait(wait) }
+        waiting.remove(label)
+        return .run
     }
 }
 
