@@ -2292,7 +2292,7 @@ mod tests {
         destroy(handle);
     }
 
-    // covers: C21
+    // CAST_SPEC: C21
     #[test]
     fn a_changed_certificate_reaches_the_app_as_a_log_line() {
         let before = Fingerprint([0xAB; 32]);
