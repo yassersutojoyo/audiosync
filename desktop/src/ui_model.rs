@@ -493,6 +493,96 @@ pub enum SwitchName {
     },
 }
 
+/// What the updater's notice says (spec S297 to S305); the UI words it
+/// from `strings.slint`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub enum UpdaterNotice {
+    Available {
+        new: String,
+        running: String,
+        /// Why this version didn't install last time (spec S316).
+        last: Option<UpdateRecordReason>,
+    },
+    /// A manual check waits for the server (spec S305).
+    Checking,
+    Downloading {
+        percent: Option<u8>,
+    },
+    Installed {
+        version: String,
+    },
+    UpToDate {
+        running: String,
+    },
+    Unreachable,
+    DownloadFailed,
+    BadSignature,
+    BrokenDownload,
+    DiskFull,
+    ReadOnly,
+    InUse,
+    Failed,
+    /// Each pair is a `.bak` file and the name it goes back to, the exe
+    /// first.
+    RestoreFailed {
+        renames: Vec<(String, String)>,
+    },
+    RelaunchFailed,
+    /// Windows security removed or blocked an update file (spec S315).
+    Blocked,
+}
+
+/// A version the updater stopped offering at launch (spec S316), saved in
+/// the settings.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UpdateRecord {
+    pub version: String,
+    pub reason: UpdateRecordReason,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateRecordReason {
+    /// The new version gave no start signal (spec S314).
+    FailedStart,
+    /// Windows security blocked an update file (spec S315).
+    Blocked,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub enum UpdaterButton {
+    Download,
+    NotNow,
+    Cancel,
+    TryAgain,
+    OpenReleasePage,
+    RestartNow,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl UpdaterNotice {
+    pub fn buttons(&self) -> &'static [UpdaterButton] {
+        use UpdaterButton::*;
+        match self {
+            UpdaterNotice::Available { .. } => &[Download, NotNow],
+            UpdaterNotice::Downloading { .. } => &[Cancel],
+            UpdaterNotice::Installed { .. } => &[RestartNow],
+            UpdaterNotice::ReadOnly
+            | UpdaterNotice::RelaunchFailed
+            | UpdaterNotice::Blocked
+            | UpdaterNotice::BadSignature
+            | UpdaterNotice::Failed => &[OpenReleasePage],
+            UpdaterNotice::Unreachable
+            | UpdaterNotice::DownloadFailed
+            | UpdaterNotice::DiskFull
+            | UpdaterNotice::InUse => &[TryAgain],
+            _ => &[],
+        }
+    }
+}
+
 /// What a notice says. The UI words it (the notice texts in
 /// `ui/strings.slint`), so no backend builds user-facing text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -624,6 +714,9 @@ pub enum NoticeMessage {
     AirPlayAheadOfCast { speaker: String, tenths: u32 },
     /// The saved groups became zones at this launch (spec S248); posted once.
     GroupsBecameZones,
+    /// The Windows updater's notice.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Update(UpdaterNotice),
     /// A preset recall left stored members off (spec S265), each by its
     /// shown name with why; `nothing_changed`: none could go on, so the
     /// recall changed nothing.
@@ -640,7 +733,16 @@ impl NoticeMessage {
     pub fn reports_a_change(&self) -> bool {
         matches!(
             self,
-            Self::SourceSwitched { .. } | Self::AirPlay2NextLaunch { .. } | Self::GroupsBecameZones
+            Self::SourceSwitched { .. }
+                | Self::AirPlay2NextLaunch { .. }
+                | Self::GroupsBecameZones
+                | Self::Update(
+                    UpdaterNotice::Available { .. }
+                        | UpdaterNotice::Checking
+                        | UpdaterNotice::Downloading { .. }
+                        | UpdaterNotice::Installed { .. }
+                        | UpdaterNotice::UpToDate { .. }
+                )
         )
     }
 }
@@ -1484,7 +1586,7 @@ pub fn frame_to_keep(shows: MainWindowShows, saved: Option<WindowFrame>) -> Opti
 }
 
 /// What the windows themselves keep across restarts.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ViewSettings {
     /// View > Show Virtual Devices.
     pub show_virtual_devices: bool,
@@ -1497,6 +1599,11 @@ pub struct ViewSettings {
     /// File > AirPlay 2 (Experimental), as saved; the sender reads it at
     /// launch only.
     pub airplay2_experimental: bool,
+    /// File > Check for Updates Automatically.
+    pub check_updates_automatically: bool,
+    /// The last update check that read the appcast, Unix seconds.
+    pub last_update_check: Option<u64>,
+    pub update_record: Option<UpdateRecord>,
 }
 
 /// Clamps a typed or stepped offset to what the sync controls accept, in
@@ -2064,7 +2171,7 @@ impl Backend for MockBackend {
     }
 
     fn view_settings(&self) -> ViewSettings {
-        self.view
+        self.view.clone()
     }
 
     fn set_view_settings(&mut self, settings: ViewSettings) {

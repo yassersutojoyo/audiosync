@@ -825,6 +825,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             window: saved.window,
             remote: saved.remote,
             airplay2_experimental: saved.airplay2_experimental,
+            check_updates_automatically: saved.check_updates_automatically,
+            last_update_check: saved.last_update_check,
+            update_record: saved.update_record.clone(),
         };
         self.saved = saved;
     }
@@ -943,6 +946,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             remote: self.view.remote,
             cast_addresses: self.cast_addresses.clone(),
             airplay2_experimental: self.view.airplay2_experimental,
+            check_updates_automatically: self.view.check_updates_automatically,
+            last_update_check: self.view.last_update_check,
+            update_record: self.view.update_record.clone(),
         }
         .clamped()
     }
@@ -4907,7 +4913,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn view_settings(&self) -> ViewSettings {
-        self.view
+        self.view.clone()
     }
 
     fn airplay2_auto(&self) -> bool {
@@ -9367,6 +9373,9 @@ mod tests {
                 port: 8123,
             },
             airplay2_experimental: true,
+            check_updates_automatically: false,
+            last_update_check: Some(1_800_000_000),
+            update_record: None,
         });
         assert!(adapter.snapshot().running);
         adapter.poll();
