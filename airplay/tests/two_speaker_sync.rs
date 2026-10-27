@@ -11,7 +11,7 @@ use std::time::Duration;
 use audiosync_airplay::discovery::ProtocolPath;
 use sync_check::{
     CLICK_FIRST_FRAME, CLICK_FRAMES, CLICK_PERIOD_FRAMES, DEFAULT_THRESHOLD, Detector, Onset, RATE,
-    click_sample, fit_timeline, parse_rx_spec, verdict,
+    click_sample, fit_timeline, parse_rx_spec, stated_play, verdict,
 };
 
 const PACKET: usize = 352;
@@ -374,4 +374,42 @@ fn onsets_are_timed_from_the_receivers_start_when_its_pipe_writes_wander() {
     );
     assert!(judged.pass, "{judged:?}");
     assert_eq!(judged.pairs.len(), 6);
+}
+
+/// Syncs a sender states for one speaker: k_s, delay and when frame 0
+/// plays, one sync a second for frames 44 100 j - 11 025.
+fn syncs(k: u32, delay: f64, zero: f64) -> Vec<(u32, f64)> {
+    (1..30i64)
+        .map(|j| {
+            let frame = 44_100 * j - 11_025;
+            (
+                k.wrapping_add(frame as u32),
+                zero + delay + frame as f64 / RATE,
+            )
+        })
+        .collect()
+}
+
+// covers: P102
+#[test]
+fn the_stated_play_time_of_a_frame_follows_the_speakers_own_rtp_numbering() {
+    let frame = CLICK_FIRST_FRAME as i64;
+    // b joined at packet 65 with a timestamp just short of wrapping.
+    let k_b = (u32::MAX - 100).wrapping_sub(65 * PACKET as u32);
+    let (rtp_a, play_a) = stated_play((0, 1_000), &syncs(1_000, 0.0, 2.0), frame).unwrap();
+    let (rtp_b, play_b) = stated_play((65, u32::MAX - 100), &syncs(k_b, 0.5, 2.0), frame).unwrap();
+    assert_eq!(rtp_a, 1_000 + frame as u32);
+    assert_eq!(rtp_b, k_b.wrapping_add(frame as u32));
+    assert!(((play_b - play_a) - 0.5).abs() * RATE < 0.01);
+
+    // A sender that states b a packet late shows as 352 frames.
+    let late = syncs(k_b, 0.5 + PACKET as f64 / RATE, 2.0);
+    let (_, play_late) = stated_play((65, u32::MAX - 100), &late, frame).unwrap();
+    assert!(((play_late - play_a - 0.5) * RATE - PACKET as f64).abs() < 0.01);
+
+    // A frame before the first sync has no stated time.
+    assert_eq!(
+        stated_play((0, 1_000), &syncs(1_000, 0.0, 2.0), 1_000),
+        None
+    );
 }

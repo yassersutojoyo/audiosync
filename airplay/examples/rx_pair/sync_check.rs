@@ -237,6 +237,22 @@ pub struct Verdict {
     pub reason: String,
 }
 
+/// Timeline frame `frame`'s RTP timestamp on one speaker and the play time
+/// the sender stated for it: k_s from the speaker's first (packet, RTP
+/// timestamp) (P81), then the latest sync (RTP timestamp, play time) at or
+/// before it, at 44.1 kHz from there as a receiver places frames (P95, P97).
+pub fn stated_play(first: (u64, u32), syncs: &[(u32, f64)], frame: i64) -> Option<(u32, f64)> {
+    let (packet, rtptime) = first;
+    let k = rtptime.wrapping_sub((packet * PACKET_FRAMES) as u32);
+    let rtp = k.wrapping_add(frame as u32);
+    let (since, at) = syncs
+        .iter()
+        .map(|&(heard, at)| (rtp.wrapping_sub(heard) as i32, at))
+        .filter(|&(since, _)| since >= 0)
+        .min_by_key(|&(since, _)| since)?;
+    Some((rtp, at + f64::from(since) / RATE))
+}
+
 /// P102 on the two streams: the k-th onset of each is the k-th click; their
 /// time difference must equal the delay difference within one packet, and
 /// their frame offset must stay the same within one packet. The last click

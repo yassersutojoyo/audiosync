@@ -55,7 +55,7 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::stream::SpeakerCounters;
 use audiosync_airplay::volume::Volume;
 use sync_check::{
-    CLICK_FIRST_FRAME, CLICK_PERIOD_FRAMES, RATE, RxSpec, click_sample, parse_rx_spec,
+    CLICK_FIRST_FRAME, CLICK_PERIOD_FRAMES, RATE, RxSpec, click_sample, parse_rx_spec, stated_play,
 };
 
 const BLOCK_FRAMES: usize = 441;
@@ -120,19 +120,8 @@ impl Outcome {
         }
     }
 
-    /// The click's RTP timestamp and the play time the latest sync packet at
-    /// or before it states, at 44.1 kHz from there as a receiver places it.
     fn stated(&self, frame: i64) -> Option<(u32, f64)> {
-        let (packet, rtptime) = self.first_packet?;
-        let k = rtptime.wrapping_sub((packet * PACKET_FRAMES) as u32);
-        let rtp = k.wrapping_add(frame as u32);
-        let (since, at) = self
-            .syncs
-            .iter()
-            .map(|&(heard, at)| (rtp.wrapping_sub(heard) as i32, at))
-            .filter(|&(since, _)| since >= 0)
-            .min_by_key(|&(since, _)| since)?;
-        Some((rtp, at + f64::from(since) / RATE))
+        stated_play(self.first_packet?, &self.syncs, frame)
     }
 }
 
