@@ -7,7 +7,8 @@
 //!
 //! ```text
 //! cargo run --release -p audiosync-airplay --example rx_onset -- \
-//!     --pcm <path>[,delay=<ms>] --pcm <path>[,delay=<ms>] [--seconds <n>] [--threshold <n>]
+//!     --pcm <path>[,delay=<ms>] --pcm <path>[,delay=<ms>] [--seconds <n>] [--threshold <n>] \
+//!     [--reads <dir>]
 //! ```
 //!
 //! Stops when every stream ends or after `--seconds` (60 by default), then
@@ -47,10 +48,11 @@ struct Args {
     streams: Vec<(String, Duration)>,
     seconds: u64,
     threshold: i32,
+    reads: Option<String>,
 }
 
 fn usage() -> &'static str {
-    "usage: rx_onset --pcm <path>[,delay=<ms>] --pcm <path>[,delay=<ms>] [--seconds <n>] [--threshold <n>]"
+    "usage: rx_onset --pcm <path>[,delay=<ms>] --pcm <path>[,delay=<ms>] [--seconds <n>] [--threshold <n>] [--reads <dir>]"
 }
 
 fn parse_pcm(text: &str) -> Result<(String, Duration), String> {
@@ -71,6 +73,7 @@ fn parse_args() -> Result<Args, String> {
         streams: Vec::new(),
         seconds: 60,
         threshold: DEFAULT_THRESHOLD,
+        reads: None,
     };
     let mut items = std::env::args().skip(1);
     while let Some(item) = items.next() {
@@ -83,6 +86,7 @@ fn parse_args() -> Result<Args, String> {
                     .parse()
                     .map_err(|_| format!("--seconds {text}: not a whole number"))?;
             }
+            "--reads" => args.reads = Some(value("--reads")?),
             "--threshold" => {
                 let text = value("--threshold")?;
                 args.threshold = text
@@ -133,6 +137,19 @@ fn read_stream(stream: &Stream, start: Instant, done: mpsc::Sender<()>) {
     });
 }
 
+/// One line per read, frames read so far and arrival minus those frames at
+/// RATE, to plot what the timeline was fitted to.
+fn write_reads(dir: &str, stream: usize, reads: &[(u64, f64)]) {
+    let text: String = reads
+        .iter()
+        .map(|(frames, offset)| format!("{frames} {offset:.6}\n"))
+        .collect();
+    let path = format!("{dir}/reads-{stream}.txt");
+    if let Err(error) = std::fs::write(&path, text) {
+        eprintln!("{path}: {error}");
+    }
+}
+
 fn main() -> ExitCode {
     let args = match parse_args() {
         Ok(args) => args,
@@ -169,6 +186,9 @@ fn main() -> ExitCode {
     for stream in &streams {
         let mut detector = stream.detector.lock().unwrap();
         detector.finish();
+        if let Some(dir) = &args.reads {
+            write_reads(dir, results.len() + 1, detector.reads());
+        }
         let first = *stream.first_read.lock().unwrap();
         let last = *stream.last_read.lock().unwrap();
         let rate = match (first, last) {

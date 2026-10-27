@@ -183,6 +183,11 @@ impl Detector {
         self.timeline
     }
 
+    /// (frames read so far, arrival minus those frames at RATE) per read.
+    pub fn reads(&self) -> &[(u64, f64)] {
+        &self.reads
+    }
+
     /// One read's bytes, which may split a frame, and when the read returned.
     pub fn push(&mut self, bytes: &[u8], arrival: f64) {
         self.carry.extend_from_slice(bytes);

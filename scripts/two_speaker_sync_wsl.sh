@@ -104,7 +104,7 @@ max_delay=$((delay_a > delay_b ? delay_a : delay_b))
 drain=$((3 + (max_delay + 999) / 1000))
 
 mkfifo "$run/a.pcm" "$run/b.pcm"
-"$examples/rx_onset" --seconds $((seconds + drain + 30)) \
+"$examples/rx_onset" --seconds $((seconds + drain + 30)) --reads "$run" \
     --pcm "$run/a.pcm,delay=$delay_a" --pcm "$run/b.pcm,delay=$delay_b" >"$run/onsets.txt" &
 reader=$!
 
