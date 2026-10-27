@@ -16,7 +16,7 @@ use audiosync_airplay::volume::Volume;
 use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
 use sync_check::{
     CLICK_FIRST_FRAME, CLICK_FRAMES, CLICK_PERIOD_FRAMES, DEFAULT_THRESHOLD, Detector, Onset, RATE,
-    click_sample, fit_timeline, parse_rx_spec, stated_play, verdict,
+    WireLog, click_sample, fit_timeline, parse_rx_spec, stated_play, trace_field, verdict,
 };
 
 const PACKET: usize = 352;
@@ -381,50 +381,60 @@ fn onsets_are_timed_from_the_receivers_start_when_its_pipe_writes_wander() {
     assert_eq!(judged.pairs.len(), 6);
 }
 
-/// Syncs a sender states for one speaker: k_s, delay and when frame 0
-/// plays, one sync a second for frames 44 100 j - 11 025.
-fn syncs(k: u32, delay: f64, zero: f64) -> Vec<(u32, f64)> {
-    (1..30i64)
-        .map(|j| {
-            let frame = 44_100 * j - 11_025;
-            (
-                k.wrapping_add(frame as u32),
-                zero + delay + frame as f64 / RATE,
-            )
-        })
-        .collect()
+/// The timing traces of one speaker whose frame n has RTP timestamp k + n
+/// and plays at `zero + delay + n / RATE`: its first packet, a sync a second
+/// for frames 44 100 j - 11 025, and a 64-frame click from frame 264 650 on,
+/// which starts 50 frames into one packet and ends in the next.
+fn traced(k: u32, delay: f64, zero: f64) -> Vec<String> {
+    let mut lines = vec![format!("first_sound packet=0 rtptime={k} at_s={zero:.6}")];
+    for j in 1..30i64 {
+        let frame = 44_100 * j - 11_025;
+        let rtp = k.wrapping_add(frame as u32);
+        let at = zero + delay + frame as f64 / RATE;
+        lines.push(format!("sync rtp_heard={rtp} at_s={at:.9} next_rtp=0"));
+    }
+    let packet = k.wrapping_add(264_600);
+    lines.push(format!("audio seq=1 rtp={packet} sound_at=200"));
+    let next = packet.wrapping_add(PACKET as u32);
+    lines.push(format!("audio seq=2 rtp={next} sound_at=0"));
+    lines
 }
 
-// covers: P102
+fn wire(lines: &[String]) -> WireLog {
+    let mut log = WireLog::default();
+    for line in lines {
+        log.trace(line);
+    }
+    log
+}
+
+// Part of P97: the play time a sync check reads off the syncs that went out,
+// on each speaker's own RTP numbering.
 #[test]
-fn the_stated_play_time_of_a_frame_follows_the_speakers_own_rtp_numbering() {
-    let frame = CLICK_FIRST_FRAME as i64;
-    // b joined at packet 65 with a timestamp just short of wrapping.
-    let k_b = (u32::MAX - 100).wrapping_sub(65 * PACKET as u32);
-    let (rtp_a, play_a) = stated_play((0, 1_000), &syncs(1_000, 0.0, 2.0), frame).unwrap();
-    let (rtp_b, play_b) = stated_play((65, u32::MAX - 100), &syncs(k_b, 0.5, 2.0), frame).unwrap();
-    assert_eq!(rtp_a, 1_000 + frame as u32);
-    assert_eq!(rtp_b, k_b.wrapping_add(frame as u32));
-    assert!(((play_b - play_a) - 0.5).abs() * RATE < 0.01);
+fn a_click_is_timed_by_the_syncs_its_speaker_was_sent() {
+    let a = wire(&traced(1_000, 0.0, 2.0)).clicks();
+    // b with a timestamp that wraps, 500 ms later.
+    let k_b = u32::MAX - 100_000;
+    let b = wire(&traced(k_b, 0.5, 2.0)).clicks();
+    assert_eq!(a.len(), 1, "one click over two packets: {a:?}");
+    assert_eq!(a[0].0, 1_000 + 264_650);
+    assert_eq!(b[0].0, k_b.wrapping_add(264_650));
+    let diff = b[0].1.unwrap() - a[0].1.unwrap();
+    assert!((diff - 0.5).abs() * RATE < 0.01, "{diff}");
 
-    // A sender that states b a packet late shows as 352 frames.
-    let late = syncs(k_b, 0.5 + PACKET as f64 / RATE, 2.0);
-    let (_, play_late) = stated_play((65, u32::MAX - 100), &late, frame).unwrap();
-    assert!(((play_late - play_a - 0.5) * RATE - PACKET as f64).abs() < 0.01);
+    // Syncs stated a packet late show as 352 frames.
+    let late = wire(&traced(k_b, 0.5 + PACKET as f64 / RATE, 2.0)).clicks();
+    let error = (late[0].1.unwrap() - a[0].1.unwrap() - 0.5) * RATE;
+    assert!((error - PACKET as f64).abs() < 0.01, "{error}");
 
-    // A frame before the first sync has no stated time.
-    assert_eq!(
-        stated_play((0, 1_000), &syncs(1_000, 0.0, 2.0), 1_000),
-        None
-    );
-}
-
-/// The value of `name=` in a trace line.
-fn trace_field<T: std::str::FromStr>(line: &str, name: &str) -> Option<T> {
-    line.split(' ')
-        .find_map(|part| part.strip_prefix(name)?.strip_prefix('='))?
-        .parse()
-        .ok()
+    // A flush starts a new numbering: the old syncs no longer time a click.
+    let mut flushed = traced(1_000, 0.0, 2.0);
+    flushed.push("first_sound packet=900 rtptime=7 at_s=30.0".to_owned());
+    flushed.push(format!("audio seq=9 rtp={} sound_at=0", 7 + 400_000));
+    let clicks = wire(&flushed).clicks();
+    assert_eq!(clicks.len(), 2);
+    assert_eq!(clicks[1], (400_007, None));
+    assert_eq!(stated_play(&[(10, 1.0)], 9), None);
 }
 
 /// A receiver that takes PCM only.

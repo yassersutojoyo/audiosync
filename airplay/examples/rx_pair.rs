@@ -6,11 +6,13 @@
 //! receiver. Exits 1 when a receiver never started playing or reported an
 //! error, 2 on bad arguments.
 //!
-//! With `--click` it also prints, per receiver and click, the click's RTP
-//! timestamp and the play time the sender's sync packets state for it, and a
-//! `SENDER` line per receiver after the first: PASS when those stated times
-//! differ by the delay difference within one frame on every click (P102).
-//! Exits 3 when that line fails and every receiver played.
+//! With `--click` it sends PCM and also prints, per receiver and click, the
+//! click's RTP timestamp and the play time the sender's sync packets state
+//! for it, both read back from the datagrams that left, and a `SENDER` line
+//! per receiver after the first: PASS when every click sent with 3 s of the
+//! run left has a stated time on each receiver, and those times differ by
+//! the delay difference within one frame (P102). Exits 3 when that line
+//! fails and every receiver played.
 //!
 //! ```text
 //! cargo run --release -p audiosync-airplay --example rx_pair -- \
@@ -39,7 +41,7 @@ use std::f64::consts::TAU;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -55,7 +57,7 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::stream::SpeakerCounters;
 use audiosync_airplay::volume::Volume;
 use sync_check::{
-    CLICK_FIRST_FRAME, CLICK_PERIOD_FRAMES, RATE, RxSpec, click_sample, parse_rx_spec, stated_play,
+    CLICK_FIRST_FRAME, CLICK_PERIOD_FRAMES, RATE, RxSpec, WireLog, click_sample, parse_rx_spec,
 };
 
 const BLOCK_FRAMES: usize = 441;
@@ -93,36 +95,7 @@ struct Outcome {
     warnings: usize,
     /// Sender clock seconds when it first reached Playing.
     joined: Option<f64>,
-    /// The first packet after RECORD or the last flush, and its timestamp.
-    first_packet: Option<(u64, u32)>,
-    /// What each sync packet stated: RTP timestamp and its play time.
-    syncs: Vec<(u32, f64)>,
-}
-
-/// The value of `name=` in a trace line.
-fn field<T: std::str::FromStr>(line: &str, name: &str) -> Option<T> {
-    line.split(' ')
-        .find_map(|part| part.strip_prefix(name)?.strip_prefix('='))?
-        .parse()
-        .ok()
-}
-
-impl Outcome {
-    fn trace(&mut self, line: &str) {
-        if line.starts_with("first_sound ") {
-            if let (Some(packet), Some(rtptime)) = (field(line, "packet"), field(line, "rtptime")) {
-                self.first_packet = Some((packet, rtptime));
-            }
-        } else if line.starts_with("sync ")
-            && let (Some(rtp), Some(at)) = (field(line, "rtp_heard"), field(line, "at_s"))
-        {
-            self.syncs.push((rtp, at));
-        }
-    }
-
-    fn stated(&self, frame: i64) -> Option<(u32, f64)> {
-        stated_play(self.first_packet?, &self.syncs, frame)
-    }
+    wire: WireLog,
 }
 
 fn usage() -> &'static str {
@@ -229,16 +202,13 @@ fn device(rx: &Rx, n: u8) -> Device {
     Device::from_records(DeviceKey::Id(device_id), raop, airplay).expect("a device from a record")
 }
 
-/// A capture thread at real-time pace, as a host's would be. `input_start`
-/// gets the ring position of its first frame.
+/// A capture thread at real-time pace, as a host's would be.
 fn capture(
     mut writer: InputWriter,
     source: Source,
     stop: Arc<AtomicBool>,
-    input_start: Arc<AtomicU64>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        input_start.store(writer.position(), Ordering::Relaxed);
         let start = Instant::now();
         let mut written: u64 = 0;
         let mut block = vec![0f32; BLOCK_FRAMES * 2];
@@ -303,18 +273,13 @@ fn summary(rx: &Rx, outcome: &Outcome, counters: &SpeakerCounters, ok: bool) -> 
 }
 
 /// Prints each receiver's stated play time per click and a SENDER line per
-/// receiver after the first; true when every SENDER line passes. Capture
-/// frame f is timeline frame f + `shift`.
-fn sender_check(
-    args: &Args,
-    order: &[DeviceKey],
-    outcomes: &BTreeMap<DeviceKey, Outcome>,
-    shift: i64,
-) -> bool {
-    let clicks: Vec<i64> = (0..)
-        .map(|k| (CLICK_FIRST_FRAME + k * CLICK_PERIOD_FRAMES) as i64)
-        .take_while(|&frame| frame < args.seconds as i64 * RATE as i64)
-        .collect();
+/// receiver after the first; true when every SENDER line passes.
+fn sender_check(args: &Args, order: &[DeviceKey], outcomes: &BTreeMap<DeviceKey, Outcome>) -> bool {
+    // A click captured less than 3 s before the end may not have gone out.
+    let expected = (0..)
+        .map(|k| CLICK_FIRST_FRAME + k * CLICK_PERIOD_FRAMES)
+        .take_while(|&frame| frame as f64 / RATE + 3.0 < args.seconds as f64)
+        .count();
     let mut stated = Vec::new();
     for (rx, key) in args.receivers.iter().zip(order) {
         let outcome = &outcomes[key];
@@ -322,59 +287,53 @@ fn sender_check(
             .joined
             .map_or("none".to_owned(), |s| format!("{s:.6}"));
         let first = outcome
+            .wire
             .first_packet
             .map_or("none".to_owned(), |(packet, rtp)| format!("{packet}/{rtp}"));
-        let times: Vec<Option<f64>> = clicks
-            .iter()
-            .enumerate()
-            .map(|(index, &capture)| {
-                let frame = capture + shift;
-                let found = outcome.stated(frame);
-                if let Some((rtp, play)) = found {
-                    println!(
-                        "stated {} delay_ms={} joined_s={joined} first_packet/rtp={first} syncs={} click={} frame={frame} rtp={rtp} play_s={play:.9}",
-                        rx.address,
-                        rx.delay.as_millis(),
-                        outcome.syncs.len(),
-                        index + 1,
-                    );
-                }
-                found.map(|(_, play)| play)
-            })
-            .collect();
-        stated.push(times);
+        let clicks = outcome.wire.clicks();
+        for (index, (rtp, play)) in clicks.iter().enumerate() {
+            let play = play.map_or("none".to_owned(), |s| format!("{s:.9}"));
+            println!(
+                "stated {} delay_ms={} joined_s={joined} first_packet/rtp={first} syncs={} click={} rtp={rtp} play_s={play}",
+                rx.address,
+                rx.delay.as_millis(),
+                outcome.wire.syncs(),
+                index + 1,
+            );
+        }
+        stated.push(clicks);
     }
     let mut pass = true;
     let reference = &args.receivers[0];
-    for (rx, times) in args.receivers.iter().zip(&stated).skip(1) {
-        let expected = rx.delay.as_secs_f64() - reference.delay.as_secs_f64();
+    for (rx, clicks) in args.receivers.iter().zip(&stated).skip(1) {
+        let wanted = rx.delay.as_secs_f64() - reference.delay.as_secs_f64();
         let diffs: Vec<f64> = stated[0]
             .iter()
-            .zip(times)
-            .filter_map(|(a, b)| Some(b.as_ref()? - a.as_ref()?))
+            .zip(clicks)
+            .take(expected)
+            .map_while(|((_, a), (_, b))| Some((*b)? - (*a)?))
             .collect();
-        let worst =
-            diffs
-                .iter()
-                .map(|diff| (diff - expected) * RATE)
-                .fold(0.0f64, |worst, error| {
-                    if error.abs() > worst.abs() {
-                        error
-                    } else {
-                        worst
-                    }
-                });
-        let ok = !diffs.is_empty() && worst.abs() <= 1.0;
+        let worst = diffs
+            .iter()
+            .map(|diff| (diff - wanted) * RATE)
+            .fold(0.0f64, |worst, error| {
+                if error.abs() > worst.abs() {
+                    error
+                } else {
+                    worst
+                }
+            });
+        let ok = diffs.len() == expected && expected > 0 && worst.abs() <= 1.0;
         pass &= ok;
         let first = diffs
             .first()
             .map_or("none".to_owned(), |diff| format!("{:.3}", diff * 1000.0));
         println!(
-            "SENDER {} {} vs {}: stated play times differ by {first} ms on the first click, expected {:.0} ms; worst error {worst:.2} frames over {} clicks (limit 1 frame)",
+            "SENDER {} {} vs {}: stated play times differ by {first} ms on the first click, expected {:.0} ms; worst error {worst:.2} frames over {} of {expected} clicks (limit 1 frame)",
             if ok { "PASS" } else { "FAIL" },
             reference.address,
             rx.address,
-            expected * 1000.0,
+            wanted * 1000.0,
             diffs.len(),
         );
     }
@@ -403,9 +362,7 @@ fn main() -> ExitCode {
     };
     let clock = sender.clock();
     let stop = Arc::new(AtomicBool::new(false));
-    let input_start = Arc::new(AtomicU64::new(0));
-    let audio = capture(writer, args.source, stop.clone(), input_start.clone());
-    let mut origin: Option<i64> = None;
+    let audio = capture(writer, args.source, stop.clone());
 
     let mut order = Vec::new();
     let mut keys = BTreeMap::new();
@@ -418,6 +375,8 @@ fn main() -> ExitCode {
         options.delay = rx.delay;
         options.trace = args.verbose;
         options.trace_timing = args.source == Source::Click;
+        // The traces find a click by its first non-zero payload byte.
+        options.pcm = args.source == Source::Click;
         counters.push(sender.add_speaker(device, options));
         keys.insert(key.clone(), rx.address);
         outcomes.insert(key.clone(), Outcome::default());
@@ -466,7 +425,7 @@ fn main() -> ExitCode {
                         outcome.warnings += 1;
                     }
                     SpeakerEvent::Trace(line) => {
-                        outcome.trace(&line);
+                        outcome.wire.trace(&line);
                         if args.verbose {
                             eprintln!("{address}: {line}");
                         }
@@ -476,12 +435,9 @@ fn main() -> ExitCode {
             }
             SenderEvent::Timeline {
                 latency,
-                origin: at,
+                origin,
                 restarted,
-            } => {
-                eprintln!("timeline: latency {latency:?}, origin {at}, restarted {restarted}");
-                origin = Some(at);
-            }
+            } => eprintln!("timeline: latency {latency:?}, origin {origin}, restarted {restarted}"),
             _ => {}
         }
     }
@@ -493,17 +449,7 @@ fn main() -> ExitCode {
         failed |= !ok;
         println!("{}", summary(rx, outcome, counters, ok));
     }
-    let sender_failed = match (args.source, origin) {
-        (Source::Click, Some(origin)) => {
-            let input_start = input_start.load(Ordering::Relaxed) as i64;
-            !sender_check(&args, &order, &outcomes, input_start - origin)
-        }
-        (Source::Click, None) => {
-            println!("SENDER FAIL: the sender never stated a timeline");
-            true
-        }
-        _ => false,
-    };
+    let sender_failed = args.source == Source::Click && !sender_check(&args, &order, &outcomes);
     stop.store(true, Ordering::Relaxed);
     let _ = audio.join();
     sender.shutdown();

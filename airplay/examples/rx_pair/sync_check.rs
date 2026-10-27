@@ -237,20 +237,98 @@ pub struct Verdict {
     pub reason: String,
 }
 
-/// Timeline frame `frame`'s RTP timestamp on one speaker and the play time
-/// the sender stated for it: k_s from the speaker's first (packet, RTP
-/// timestamp) (P81), then the latest sync (RTP timestamp, play time) at or
-/// before it, at 44.1 kHz from there as a receiver places frames (P95, P97).
-pub fn stated_play(first: (u64, u32), syncs: &[(u32, f64)], frame: i64) -> Option<(u32, f64)> {
-    let (packet, rtptime) = first;
-    let k = rtptime.wrapping_sub((packet * PACKET_FRAMES) as u32);
-    let rtp = k.wrapping_add(frame as u32);
+/// The play time a speaker's sync packets state for RTP timestamp `rtp`:
+/// the latest sync (RTP timestamp, play time) at or before it, at 44.1 kHz
+/// from there as a receiver places frames (P95, P97).
+pub fn stated_play(syncs: &[(u32, f64)], rtp: u32) -> Option<f64> {
     let (since, at) = syncs
         .iter()
         .map(|&(heard, at)| (rtp.wrapping_sub(heard) as i32, at))
         .filter(|&(since, _)| since >= 0)
         .min_by_key(|&(since, _)| since)?;
-    Some((rtp, at + f64::from(since) / RATE))
+    Some(at + f64::from(since) / RATE)
+}
+
+/// The value of `name=` in a trace line.
+pub fn trace_field<T: std::str::FromStr>(line: &str, name: &str) -> Option<T> {
+    line.split(' ')
+        .find_map(|part| part.strip_prefix(name)?.strip_prefix('='))?
+        .parse()
+        .ok()
+}
+
+/// One RTP numbering of a speaker, from its first packet after RECORD or a
+/// flush: the syncs that went out and the clicks' onsets, as RTP timestamps.
+#[derive(Debug, Default)]
+struct Numbering {
+    syncs: Vec<(u32, f64)>,
+    clicks: Vec<u32>,
+    /// The frame after the last sounding packet.
+    sound_end: Option<u32>,
+}
+
+/// What a speaker's timing traces say went on the wire (PCM payloads, so a
+/// click's first non-zero byte names its frame).
+#[derive(Debug, Default)]
+pub struct WireLog {
+    numberings: Vec<Numbering>,
+    /// The latest first packet and its RTP timestamp.
+    pub first_packet: Option<(u64, u32)>,
+}
+
+impl WireLog {
+    pub fn trace(&mut self, line: &str) {
+        let kind = line.split(' ').next().unwrap_or_default();
+        if kind == "first_sound" {
+            self.first_packet = trace_field(line, "packet").zip(trace_field(line, "rtptime"));
+            self.numberings.push(Numbering::default());
+            return;
+        }
+        let Some(numbering) = self.numberings.last_mut() else {
+            return;
+        };
+        match kind {
+            "sync" => {
+                if let Some(sync) = trace_field(line, "rtp_heard").zip(trace_field(line, "at_s")) {
+                    numbering.syncs.push(sync);
+                }
+            }
+            "audio" => {
+                let (Some(rtp), Some(sound_at)) = (
+                    trace_field::<u32>(line, "rtp"),
+                    trace_field::<u32>(line, "sound_at"),
+                ) else {
+                    return;
+                };
+                let onset = rtp.wrapping_add(sound_at / 4);
+                let same_click = numbering
+                    .sound_end
+                    .is_some_and(|end| (onset.wrapping_sub(end) as i32) < REARM_FRAMES as i32);
+                if !same_click {
+                    numbering.clicks.push(onset);
+                }
+                numbering.sound_end = Some(rtp.wrapping_add(PACKET_FRAMES as u32));
+            }
+            _ => {}
+        }
+    }
+
+    pub fn syncs(&self) -> usize {
+        self.numberings.iter().map(|n| n.syncs.len()).sum()
+    }
+
+    /// Each click's onset RTP timestamp and the play time the syncs of its
+    /// numbering state for it.
+    pub fn clicks(&self) -> Vec<(u32, Option<f64>)> {
+        self.numberings
+            .iter()
+            .flat_map(|n| {
+                n.clicks
+                    .iter()
+                    .map(|&rtp| (rtp, stated_play(&n.syncs, rtp)))
+            })
+            .collect()
+    }
 }
 
 /// P102 on the two streams: the k-th onset of each is the k-th click; their

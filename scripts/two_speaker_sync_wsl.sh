@@ -5,9 +5,13 @@
 # airplay example rx_pair with a delay per speaker, and lets the example
 # rx_onset time each click on each receiver's play timeline, on one clock.
 # Prints rx_onset's pair, drift and PIPE lines, then rx_pair's stated lines
-# and its SENDER line: PASS when the play times the sender's sync packets
-# state for each click differ by the delay difference within one frame. The
-# check passes on SENDER PASS and drift PASS; PIPE is information only.
+# and its SENDER line: PASS when, read back from the datagrams that left,
+# each click's RTP timestamp on each receiver and the time the syncs sent to
+# that receiver state for it differ between the receivers by the delay
+# difference within one frame. SENDER proves what the sender put on the
+# wire; it does not prove the receivers play on time. That is the PIPE line
+# (to a few packets on a stdout receiver) and the real-device row. The check
+# passes on SENDER PASS and drift PASS; PIPE is information only.
 #
 #   scripts/two_speaker_sync_wsl.sh --receiver <binary> [--seconds <n>]
 #       [--delays <ms>,<ms>] [--host <address>] [--ports <port>,<port>]
