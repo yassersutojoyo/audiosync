@@ -4783,10 +4783,17 @@ let closeAsked = PopoverCloseRequest.answer
             && !sizing([.show, .didShow, .willClose, .show, .didClose]).followsContent
             && sizing([.show, .didShow, .willClose, .show, .didClose, .didShow]).followsContent,
           "menu bar panel: reopened mid-close, the old close's notice doesn't end the new open")
-    check(sizing([.show, .didShow, .willClose] + PanelSizing.showEvents(onScreen: true)) == .shown,
-          "menu bar panel: reopened while its close fade still shows it, the size follows the content though AppKit sends no new didShow")
-    check(sizing([.show, .didShow, .willClose] + PanelSizing.showEvents(onScreen: false)) == .opening,
-          "menu bar panel: reopened once the popover left the screen, the size waits for AppKit's didShow")
+    var fading = sizing([.show, .didShow, .willClose])
+    check(fading.show(onScreen: true) && fading.finishOpen() && fading == .shown,
+          "menu bar panel: reopened while its close fade still shows it, the open finishes now though AppKit sends no new didShow")
+    check(!fading.finishOpen() && fading == .shown,
+          "menu bar panel: a late didShow after the reopen finished brings no second refresh")
+    var first = PanelSizing.closed
+    check(!first.show(onScreen: false) && first == .opening && first.finishOpen() && first == .shown,
+          "menu bar panel: a first open waits for AppKit's didShow to finish")
+    var closingAgain = sizing([.show, .didShow, .willClose])
+    check(!closingAgain.finishOpen() && closingAgain == .closing,
+          "menu bar panel: a didShow left from an earlier open doesn't end a close")
 
     var own = PanelQuiet()
     own.began(.open, at: 40)
