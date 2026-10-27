@@ -470,6 +470,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The file was checked before its first save this run, and a copy of
     /// it kept aside if it didn't read ([`keep_unread_cast_file_aside`]).
     cast_file_checked: bool,
+    /// The file was there at launch but couldn't be read, so the Cast
+    /// memory started without it.
+    cast_unread_at_launch: bool,
     /// The Cast speakers the user added by address, as the settings keep
     /// them (spec C18).
     cast_addresses: Vec<String>,
@@ -649,6 +652,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             cast_file: None,
             cast_saved: None,
             cast_file_checked: false,
+            cast_unread_at_launch: false,
             cast_addresses: Vec::new(),
             cast_probe: cast_address::answers,
             auto_connect: BTreeSet::new(),
@@ -1813,15 +1817,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Keeps the Cast speakers' offsets and formats in `path` from now on.
     /// `unread_at_launch` says the file was there but couldn't be read into
-    /// the Cast memory at launch.
+    /// the Cast memory at launch, so its first save keeps a copy aside.
     #[cfg_attr(
         all(not(os_backend), not(test)),
         expect(dead_code, reason = "only the Windows app keeps a file")
     )]
-    pub fn set_cast_file(&mut self, path: Option<PathBuf>, _unread_at_launch: bool) {
+    pub fn set_cast_file(&mut self, path: Option<PathBuf>, unread_at_launch: bool) {
         self.cast_file = path;
         self.cast_saved = self.audio.cast_memory_json();
         self.cast_file_checked = false;
+        self.cast_unread_at_launch = unread_at_launch;
     }
 
     /// Writes the Cast speakers' offsets and formats to their file when they
@@ -1839,7 +1844,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             return;
         }
         if !self.cast_file_checked {
-            match keep_unread_cast_file_aside(path) {
+            match keep_unread_cast_file_aside(path, self.cast_unread_at_launch) {
                 Ok(kept) => {
                     self.cast_file_checked = true;
                     if let Some(copy) = kept {
@@ -5211,21 +5216,25 @@ mod device_volume_tests;
 /// with the time added (`cast-speakers.ignored-<time>.json`).
 const CAST_IGNORED_FILE_NAME: &str = "cast-speakers.ignored.json";
 
-/// Copies the Cast speakers' file at `path` aside when it isn't one this
-/// build reads, and returns the copy's path; `None` when there is no file
-/// or it reads. A file that can't be read is an error, and must not be
-/// replaced.
-fn keep_unread_cast_file_aside(path: &std::path::Path) -> std::io::Result<Option<PathBuf>> {
+/// Copies the Cast speakers' file at `path` aside when this run's Cast
+/// memory didn't come from it: it was `unread_at_launch`, or it isn't a
+/// JSON object ([`DeviceMemory::read_json`](audiosync_cast::host::DeviceMemory::read_json),
+/// read as the launch reads it). An object whose entries are all damaged
+/// reads as an empty memory and is not kept. Returns the copy's path;
+/// `None` when there is no file or nothing to keep. A file that can't be
+/// read is an error, and must not be replaced.
+fn keep_unread_cast_file_aside(
+    path: &std::path::Path,
+    unread_at_launch: bool,
+) -> std::io::Result<Option<PathBuf>> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
-    let reads = std::str::from_utf8(&bytes)
-        .ok()
-        .and_then(audiosync_cast::host::DeviceMemory::read_json)
-        .is_some();
-    if reads {
+    let reads =
+        audiosync_cast::host::DeviceMemory::read_json(&String::from_utf8_lossy(&bytes)).is_some();
+    if reads && !unread_at_launch {
         return Ok(None);
     }
     data_folder::keep_bytes_aside(path, CAST_IGNORED_FILE_NAME, &bytes).map(Some)

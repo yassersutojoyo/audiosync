@@ -29,7 +29,7 @@ pub fn backend<D: Driver + 'static>(
     // Read at launch only, like the Mac: a change applies at the next launch.
     let airplay2 = settings_file.load().0.airplay2_experimental;
     start_airplay(&mut audio, airplay2, log);
-    let cast_file = start_cast(&mut audio, log);
+    let (cast_file, cast_unread) = start_cast(&mut audio, log);
     audio.set_track_reader(track_reader);
     audio.set_receiver_labels(labels.clone());
     let mut adapter = adapter::AudioAdapter::launched(
@@ -39,7 +39,7 @@ pub fn backend<D: Driver + 'static>(
         settings_file,
         debug_log::env_skips_auto_connect(),
     );
-    adapter.set_cast_file(cast_file, false);
+    adapter.set_cast_file(cast_file, cast_unread);
     Box::new(adapter)
 }
 
@@ -66,18 +66,24 @@ impl Media {
 const CAST_FILE_NAME: &str = "cast-speakers.json";
 
 /// Starts the Google Cast host with the speakers' offsets and formats from
-/// their file, and returns that file for the changes; `None` when the system
-/// names no data folder, so they last until AudioSync quits. Without a host
-/// no Cast speaker is listed.
-fn start_cast<D: Driver>(audio: &mut Controller<D>, log: &DebugLog) -> Option<std::path::PathBuf> {
+/// their file, and returns that file for the changes, `None` when the system
+/// names no data folder, so they last until AudioSync quits; with whether the
+/// file was there but couldn't be read. Without a host no Cast speaker is
+/// listed.
+fn start_cast<D: Driver>(
+    audio: &mut Controller<D>,
+    log: &DebugLog,
+) -> (Option<std::path::PathBuf>, bool) {
     use audiosync_cast::host::DeviceMemory;
     let path = data_folder::folder().map(|folder| folder.join(CAST_FILE_NAME));
+    let mut unread = false;
     let memory = match path.as_deref().map(data_folder::read_at_launch) {
         None => DeviceMemory::default(),
         Some(Ok(bytes)) => DeviceMemory::from_json(&String::from_utf8_lossy(&bytes)),
         Some(Err(error)) => {
             if error.kind() != std::io::ErrorKind::NotFound {
                 log.log(|| format!("Cast: the speakers' file couldn't be read: {error}"));
+                unread = true;
             }
             DeviceMemory::default()
         }
@@ -92,7 +98,7 @@ fn start_cast<D: Driver>(audio: &mut Controller<D>, log: &DebugLog) -> Option<st
         }
         Err(error) => log.log(|| format!("Cast: the host couldn't start: {error}")),
     }
-    path
+    (path, unread)
 }
 
 /// What AirPlay receivers show while no track counts, from the strings.
