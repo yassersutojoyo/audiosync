@@ -4717,6 +4717,7 @@ do {
     let duringClose = StatusItemClick.pressDuringClose
     check(duringClose(30.1, 30.25) && !duringClose(30.25, 30.25) && !duringClose(31, 30.25) && !duringClose(30.1, nil),
           "menu bar icon: only a press while the panel still fades out is ignored, as Outlook does")
+    func near(_ a: TimeInterval, _ b: TimeInterval) -> Bool { abs(a - b) < 1e-9 }
     let shrink = PanelQuiet.duration(.close, system: false)
     check(duringClose(30 + shrink / 2, 30 + shrink) && !duringClose(30 + shrink + 0.01, 30 + shrink),
           "menu bar icon: a press is ignored only while the panel shrinks away; right after, it opens it")
@@ -4736,6 +4737,26 @@ do {
           "menu bar panel: the point under the icon stays put while the panel grows")
     check(PanelQuiet.duration(.open, system: false) == grow.settles && shrink == shrinkBack.duration,
           "menu bar panel: deferred work waits exactly for the panel's own motion")
+    check(PanelMotion.tail * (1 - grow.scale) * 600 < 0.5,
+          "menu bar panel: ending the spring at its settle time moves even a 600 pt panel's far edge under half a point")
+
+    let midFade = PanelMotion.easedOut(grow.duration / 2, over: grow.duration)
+    check(PanelMotion.easedOut(0, over: grow.duration) < 1e-6 && PanelMotion.easedOut(grow.duration, over: grow.duration) == 1
+            && midFade > 0.5 && midFade < 1,
+          "menu bar panel: a close during the fade-in fades out from how far the fade had come, not from full")
+    check(PanelMotion.easedOut(0.04, over: 0.18) < PanelMotion.easedOut(0.08, over: 0.18)
+            && PanelMotion.easedOut(0.08, over: 0.18) < PanelMotion.easedOut(0.12, over: 0.18),
+          "menu bar panel: the fade level only rises")
+
+    var resize = PanelResize()
+    let tall = CGSize(width: 306, height: 455), taller = CGSize(width: 306, height: 478)
+    check(near(resize.changed(to: CGSize(width: 306, height: 420), at: 50, settled: 40), 50.1)
+            && near(resize.changed(to: tall, at: 50.05, settled: 40), 50.1) && resize.take(at: 50.08) == nil,
+          "menu bar panel: size changes within a tenth of a second wait for one step")
+    check(resize.take(at: 50.1) == tall && resize.take(at: 50.2) == nil,
+          "menu bar panel: the step goes to the latest size, once")
+    check(near(resize.changed(to: taller, at: 60, settled: 60.28), 60.28),
+          "menu bar panel: a size change while the panel grows in waits until it has settled")
 
     func sizing(_ events: [PanelSizing.Event]) -> PanelSizing {
         events.reduce(PanelSizing.closed) { $0.after($1) }
@@ -4753,7 +4774,6 @@ do {
             && sizing([.show, .didShow, .willClose, .show, .didClose, .didShow]).followsContent,
           "menu bar panel: reopened mid-close, the old close's notice doesn't end the new open")
 
-    func near(_ a: TimeInterval, _ b: TimeInterval) -> Bool { abs(a - b) < 1e-9 }
     var own = PanelQuiet()
     own.began(.open, at: 40)
     check(near(own.wait(at: 40.1), grow.settles - 0.1) && own.wait(at: 40 + grow.settles) == 0 && grow.settles < 0.6,

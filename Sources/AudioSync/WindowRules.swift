@@ -120,8 +120,12 @@ struct PanelMotion: Equatable {
     static let mass = 1.0
 
     static func open(reduceMotion: Bool) -> PanelMotion {
-        PanelMotion(scale: reduceMotion ? 1 : 0.92, duration: 0.18, stiffness: 400, damping: 36.8)
+        PanelMotion(scale: reduceMotion ? 1 : 0.92, duration: 0.18, stiffness: 441, damping: 38.64)
     }
+
+    /// What is left of the growth when the spring animation ends: the tail
+    /// cut there moves the panel's far edge by under half a point.
+    static let tail = 0.01
 
     static func close(reduceMotion: Bool) -> PanelMotion {
         PanelMotion(scale: reduceMotion ? 1 : 0.96, duration: 0.14)
@@ -138,12 +142,27 @@ struct PanelMotion: Equatable {
         return ratio < 1 ? exp(-Double.pi * ratio / (1 - ratio * ratio).squareRoot()) : 0
     }
 
-    /// When the growth stays within 2% of its end; the fade alone without a spring.
+    /// When the growth stays within `tail` of its end; the fade alone without a spring.
     var settles: TimeInterval {
         guard stiffness > 0, grows else { return duration }
         let ratio = min(dampingRatio, 0.999)
         let decay = ratio * (stiffness / Self.mass).squareRoot()
-        return max(duration, (log(50) - log((1 - ratio * ratio).squareRoot())) / decay)
+        return max(duration, (-log(Self.tail) - log((1 - ratio * ratio).squareRoot())) / decay)
+    }
+
+    /// How far a fade has come `elapsed` seconds into it, on the ease-out
+    /// curve Core Animation uses (control points 0, 0 and 0.58, 1).
+    static func easedOut(_ elapsed: TimeInterval, over duration: TimeInterval) -> Double {
+        guard duration > 0, elapsed < duration else { return 1 }
+        let target = max(0, elapsed / duration)
+        var low = 0.0, high = 1.0
+        for _ in 0..<30 {
+            let t = (low + high) / 2
+            let x = 3 * (1 - t) * t * t * 0.58 + t * t * t
+            if x < target { low = t } else { high = t }
+        }
+        let t = (low + high) / 2
+        return 3 * (1 - t) * t * t + t * t * t
     }
 
     /// The shift that keeps `anchor` (measured from the layer's anchor point)
@@ -151,6 +170,34 @@ struct PanelMotion: Equatable {
     static func pin(_ anchor: CGPoint, scale: Double) -> CGPoint {
         let rest = CGFloat(1 - scale)
         return CGPoint(x: anchor.x * rest, y: anchor.y * rest)
+    }
+}
+
+/// When the open panel takes a new size from its content. Changes that come
+/// within `gather` of the first go in one animated step, which waits for the
+/// panel to finish growing in. The latest size wins.
+struct PanelResize: Equatable {
+    static let gather: TimeInterval = 0.1
+    static let duration: TimeInterval = 0.2
+
+    private(set) var pending: CGSize?
+    private(set) var due: TimeInterval?
+
+    /// When to apply the step this change joins. `settled` is when the
+    /// panel's open animation ends.
+    mutating func changed(to size: CGSize, at now: TimeInterval, settled: TimeInterval) -> TimeInterval {
+        pending = size
+        let when = due ?? max(now + Self.gather, settled)
+        due = when
+        return when
+    }
+
+    /// The size to animate to, once its step is due.
+    mutating func take(at now: TimeInterval) -> CGSize? {
+        guard let due, now >= due - 0.001, let size = pending else { return nil }
+        pending = nil
+        self.due = nil
+        return size
     }
 }
 
