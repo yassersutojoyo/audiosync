@@ -58,6 +58,7 @@
 mod driver;
 mod remote;
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
@@ -118,6 +119,10 @@ pub struct SenderConfig {
     /// How long the connection of a PIN pairing that paired waits for the
     /// host to start its speaker, 30 s (P153); a test picks a shorter one.
     pub pairing_hold: Duration,
+    /// Runs first on the driver thread, which keeps what it returns until it
+    /// ends. A host raises the thread's priority here: at normal priority a
+    /// busy Windows PC wakes it past a packet's time (P84).
+    pub on_driver_thread: Option<fn() -> Box<dyn Any>>,
 }
 
 /// [`SenderConfig::pairing_hold`]'s default (P153).
@@ -198,6 +203,7 @@ impl Default for SenderConfig {
             ptp_ports: PtpPorts::default(),
             ptp_receiver_ports: PtpPorts::default(),
             pairing_hold: PAIRING_HOLD,
+            on_driver_thread: None,
         }
     }
 }
@@ -524,9 +530,13 @@ impl Sender {
         .with_pairing_hold(config.pairing_hold)
         .with_sounding(sounding.clone());
         let dacp_counters = driver.dacp_counters();
+        let setup = config.on_driver_thread;
         let handle = thread::Builder::new()
             .name("airplay-driver".to_owned())
-            .spawn(move || driver.run())?;
+            .spawn(move || {
+                let _held = setup.map(|setup| setup());
+                driver.run();
+            })?;
         let sender = Sender {
             inputs,
             events,

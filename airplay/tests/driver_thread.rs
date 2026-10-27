@@ -42,7 +42,10 @@ fn the_hook_runs_on_the_driver_thread_and_holds_its_value_until_the_driver_ends(
         RAN_ON.lock().expect("lock").as_deref(),
         Some("airplay-driver")
     );
-    assert!(!RELEASED.load(Ordering::SeqCst), "held while the driver runs");
+    assert!(
+        !RELEASED.load(Ordering::SeqCst),
+        "held while the driver runs"
+    );
     drop(sender);
     assert!(RELEASED.load(Ordering::SeqCst), "released when it ends");
 }

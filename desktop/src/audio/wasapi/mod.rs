@@ -152,3 +152,10 @@ pub type WasapiBackend = Controller<WasapiDriver>;
 pub fn open() -> Result<WasapiBackend, BackendError> {
     Ok(Controller::with_driver(WasapiDriver::new()?))
 }
+
+/// Registers the calling thread as a Pro Audio task for as long as the
+/// returned value lives: the AirPlay sender's driver thread, which at normal
+/// priority woke more than 5 ms late on about 0.1% of packets on a busy PC.
+pub fn pro_audio_thread() -> Box<dyn std::any::Any> {
+    Box::new(com::ProAudioTask::join())
+}

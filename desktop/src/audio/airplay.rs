@@ -273,6 +273,8 @@ impl SenderLink {
                 saved_airplay2,
                 std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
             ),
+            #[cfg(windows)]
+            on_driver_thread: Some(super::wasapi::pro_audio_thread),
             ..SenderConfig::default()
         };
         let airplay2 = config.airplay2;
