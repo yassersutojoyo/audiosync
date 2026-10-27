@@ -9,9 +9,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - With AirPlay 2 on, several AirPlay 2 speakers play at once, up to 16. A speaker past that limit stays on, and its row says "Waiting: too many AirPlay 2 speakers" until another one stops. On the Mac and on Windows.
 - With AirPlay 2 on, a speaker that needs PTP timing while AudioSync plays to AirPlay 2 speakers on another network stays on, its row says "Waiting: AirPlay 2 speakers on another network", and it starts once those speakers are off. On the Mac and on Windows.
 - An AirPlay speaker that's on but has left the network waits for it to come back instead of retrying, and its row says "Not on the network right now, plays once it's back". A stereo pair keeps a member that left and names it as missing. On the Mac and on Windows.
-- On Windows, AudioSync updates itself in release builds. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, checks at launch. Download and Install fetches the update, checks its signature and installs it, and Restart Now opens the new version. If the new version doesn't start within 15 seconds, or Windows security blocks the file, AudioSync puts the old version back and offers the release page, and that version isn't offered again at launch.
+- On Windows, AudioSync updates itself. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, checks at launch. Download and Install fetches the update, checks that it was signed with AudioSync's release key and installs it, and Restart Now opens the new version. If the new version doesn't start within 15 seconds, or Windows security blocks the file, AudioSync puts the old version back and offers the release page, and that version isn't offered again at launch. Builds you make yourself never check.
 - With AirPlay 2 on, AudioSync remembers per speaker whether it plays with PTP or NTP timing, so the next launch starts with the timing that worked. It's forgotten when the speaker's software changes, when the speaker turns that timing down, and with Forget Pairing. On the Mac and on Windows.
-- For testing, `AUDIOSYNC_AIRPLAY2_AUTO=1` plays AirPlay 2 speakers over AirPlay 2 without the switch, which then reads Prefer AirPlay 2 and only decides the path of a speaker that offers both AirPlay 1 and AirPlay 2. While 16 AirPlay 2 speakers already play, or AirPlay 2 waits for PTP on another network, such a speaker plays over AirPlay 1 and its row says AirPlay. On the Mac and on Windows.
 
 ### Changed
 
@@ -20,7 +19,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - The notice for an AirPlay speaker turned off because it asks for a code now says whether it needs a PIN or a password. On the Mac and on Windows.
 - A zone is renamed in place, like a speaker, instead of in a dialog. On the Mac, double-click its name in the main window or choose Rename… from its menu: Return keeps the new name, Escape the old one. On Windows, double-click its name, press F2 or choose Rename…, type, then press Enter; a speaker in its row under In zones renames the same way.
 - A zone's menu item now says Rename…, as a speaker's does, and a zone name is cut to 60 characters with line breaks turned into spaces, as a speaker name is. On the Mac and on Windows.
-- On Windows, AirPlay audio keeps its timing better while the PC is busy, since AudioSync asks Windows to treat its AirPlay sending as audio work.
+- On Windows, AudioSync registers its AirPlay sending with Windows as audio work (the Pro Audio task), as it already did for its local outputs.
 
 ### Fixed
 
