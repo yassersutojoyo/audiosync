@@ -40,7 +40,7 @@ extension AppDelegate {
             let found = castModel.devices[id] != nil && castModel.rows.contains(id)
             return ZoneMemberState(key: key, kind: kind, appID: CastID.app(id),
                                    facts: ZoneMemberFacts(kind: .cast, listed: !hidden && found, on: castModel.enabled == id,
-                                                          busy: castModel.devices[id]?.offline == true),
+                                                          busy: castModel.cantStartNow(id)),
                                    found: found)
         case .airplay:
             let on = enabledAirPlay.contains(id)
@@ -354,11 +354,11 @@ extension AppDelegate {
             ZoneLayout.Member(key: $0.key, listed: $0.facts.listed, on: $0.facts.on, cast: $0.kind == .cast)
         })
         guard !steps.isEmpty else { return }
-        // An offline Cast speaker can't come on: the others would go off for
-        // nothing, and its row already says why.
+        // A Cast speaker offline or taken over by another app can't come on:
+        // the others would go off for nothing, and its row or notice says why.
         if let this = members.first(where: { $0.key == key }), this.kind == .cast, this.facts.busy,
            steps.contains(where: { $0.key == key && $0.on }) {
-            DebugTrace.log("[AudioSync] only \(key): the Cast speaker is offline, nothing switches")
+            DebugTrace.log("[AudioSync] only \(key): the Cast speaker can't start now, nothing switches")
             return
         }
         DebugTrace.log("[AudioSync] only \(key) plays in zone \"\(zone.name)\"")
