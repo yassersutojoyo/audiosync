@@ -270,7 +270,7 @@ extension LocalOutputSync {
 
 /// A Bluetooth speaker's first stream on a link that has just come up can
 /// play later than its reported latency for the whole stream, while the same
-/// output started again a moment later plays in time (S330). This watch tells
+/// output started again a moment later plays in time (S325). This watch tells
 /// which starts are on such a link and restarts each of those once. Main
 /// thread only.
 final class FreshLinkWatch {

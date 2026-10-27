@@ -46,9 +46,9 @@ Expected: the same as EC1. A headset that drops out (out of range, powered off, 
 
 Code path: the same as EC1 (`OutputRenderer` alive listener, `StreamEngine.handleOutputLost`, `reconcileLocal()`, `syncLocalOutputs()`, `LocalOutputSync.plan`). A Bluetooth headset used as the input-device source follows the input path in EC1. Auto-connect (`AppDelegate+Groups.swift`, `autoConnect`) turns a reappearing speaker on when it's marked for auto-connect.
 
-Automated: "EC2 Bluetooth: a disconnected headset waits; the other speaker keeps playing", "EC2 Bluetooth: a reconnected headset is attached again"; plus the EC1 checks.
+Automated: "EC2 Bluetooth: a disconnected headset waits; the other speaker keeps playing", "EC2 Bluetooth: a reconnected headset is attached again"; the "EC2 Bluetooth fresh link: …" checks (S325); plus the EC1 checks.
 
-Manual: stream to Bluetooth headphones and one other speaker. Turn the headphones off: the other speaker keeps playing, the headphones' row disappears. Turn them on again: the row comes back switched on and plays in sync within a few seconds. Repeat with the headphones marked for auto-connect and switched off in AudioSync before the disconnect: on reconnect they switch on by themselves.
+Manual: stream to Bluetooth headphones and one other speaker. Turn the headphones off: the other speaker keeps playing, the headphones' row disappears. Turn them on again: the row comes back switched on and plays in sync within a few seconds. A Bluetooth speaker that starts playing right after its link came up goes quiet once, about 2 s in, for about a second, then plays in sync (S325). Repeat with the headphones marked for auto-connect and switched off in AudioSync before the disconnect: on reconnect they switch on by themselves.
 
 ## EC3: Sleep and wake
 

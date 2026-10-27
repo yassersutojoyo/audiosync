@@ -364,7 +364,7 @@ extension AppDelegate {
     }
 
     /// A Bluetooth output that started on a link that just came up gets one
-    /// quiet restart (S330); every Bluetooth start logs the decision.
+    /// quiet restart (S325); every Bluetooth start logs the decision.
     private func noteFreshLinkStart(_ uid: String, _ device: AudioDevices.Device) {
         let bluetooth = BluetoothIOBuffer.isBluetooth(transport: device.transport)
         switch freshLinks.decide(uid: uid, bluetooth: bluetooth, now: ProcessInfo.processInfo.systemUptime,

@@ -3408,7 +3408,7 @@ do {
     check(LocalOutputSync.plan(enabled: ["bt", "usb"], active: ["usb"], available: ["bt", "usb"]) == P(attach: ["bt"], detach: []),
           "EC2 Bluetooth: a reconnected headset is attached again")
 
-    // covers: S330 (a Bluetooth speaker that starts on a link that just came up restarts once)
+    // covers: S325 (a Bluetooth speaker that starts on a link that just came up restarts once)
     do {
         let links = FreshLinkWatch()
         links.noteListing(["builtin", "bt-old"], now: 100)
