@@ -678,7 +678,8 @@ fn env_or<T: std::str::FromStr>(name: &str, default: T) -> T {
 #[ignore = "a measurement of minutes"]
 fn measure_a_joiners_first_sync_against_the_shared_timeline() {
     let _serial = serial();
-    let runs: u8 = env_or("P97_RUNS", 20);
+    // Joiner ids are 31 + run in a u8.
+    let runs: u8 = env_or("P97_RUNS", 20).min(224);
     let warmup: f64 = env_or("P97_WARMUP_S", 15.0);
     let skews: Vec<f64> = env_or("P97_PPM", "0,1000".to_owned())
         .split(',')
