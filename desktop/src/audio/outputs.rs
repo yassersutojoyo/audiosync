@@ -881,6 +881,7 @@ mod tests {
         }
     }
 
+    // covers: S174
     #[test]
     fn the_bus_tells_bluetooth_usb_and_software_devices() {
         let headphones = Some(form_factor::HEADPHONES);

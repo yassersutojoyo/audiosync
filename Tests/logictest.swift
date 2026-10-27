@@ -2027,6 +2027,7 @@ check(RetiredEngineChoice.launchNote(environment: "rust", stored: "swift")
          + "every session runs on the Rust core",
       "retired engine choice: both are noted in one line")
 
+// covers: S213
 // MARK: Retired AirPlay sender choice — noted once, no effect
 check(RetiredAirPlayChoice.defaultsKey == "airplayImpl" && RetiredAirPlayChoice.environmentKey == "AUDIOSYNC_AIRPLAY",
       "retired airplay choice: the setting and the variable older builds read")
@@ -2042,6 +2043,7 @@ check(RetiredAirPlayChoice.launchNote(environment: "native", stored: "owntone")
          + "the AirPlay sender: AudioSync's own sender is the only one",
       "retired airplay choice: both are noted in one line")
 
+// covers: S213
 // MARK: Retired choices at launch — noted once, then removed from the settings
 do {
     final class Stored { var values: [String: Any] = [:] }
@@ -5009,6 +5011,7 @@ do {
           "settings: offsets are kept in −2000…20 000 ms and the AirPlay delay in its range (S175, S178)",
           "\(damaged.localOffsets), \(damaged.airPlayDelay), \(unreadable.airPlayDelay)")
 
+    // covers: S215
     // A start that fails in the audio core says so, not that capture failed.
     let t = UIStrings()
     let coreMessage = t.streamingStartMessage(for: StreamEngine.StartError.coreUnavailable)
