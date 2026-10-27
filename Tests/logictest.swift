@@ -6537,6 +6537,80 @@ do {
           "removed \(refused.removed), applied \(failedRestart), report \(String(describing: afterRestart))")
 }
 
+// MARK: The engine's control interface (S112) and the thread it is used on (S113)
+// covers: S112
+do {
+    // Pinned by type, so a renamed or reshaped call stops this suite from building.
+    let start: (StreamEngine) -> (AudioSource, Int, Bool) throws -> Void = StreamEngine.start(source:inputPair:rebuild:)
+    let stop: (StreamEngine) -> ((() -> Void)?) -> Void = StreamEngine.stop(then:)
+    let running: KeyPath<StreamEngine, Bool> = \.isRunning
+    let attach: (StreamEngine) -> (String, AudioObjectID, Double, Double) throws -> Void =
+        StreamEngine.attachOutput(uid:device:delayMs:gain:)
+    let detach: (StreamEngine) -> (String) -> Void = StreamEngine.detachOutput(uid:)
+    let detachTogether: (StreamEngine) -> ([String]) -> Void = StreamEngine.detachOutputs(uids:)
+    let active: KeyPath<StreamEngine, [String]> = \.activeOutputUIDs
+    let setGain: (StreamEngine) -> (String, Double) -> Void = StreamEngine.setGain(uid:g:)
+    let setDelay: (StreamEngine) -> (String, Double) -> Void = StreamEngine.setDelay(uid:ms:)
+    let equalizer: (StreamEngine) -> (Equalizer.Settings) -> Void = StreamEngine.updateEqualizer(_:)
+    let gone: ReferenceWritableKeyPath<StreamEngine, ((String) -> Void)?> = \.onOutputGone
+    let interrupted: ReferenceWritableKeyPath<StreamEngine, ((SourceCapture.Interruption) -> Void)?> = \.onInterrupted
+    _ = (start, stop, running, attach, detach, detachTogether, active, setGain, setDelay, equalizer, gone, interrupted)
+
+    // No default case: a third interruption kind stops this suite from building.
+    func kind(_ reason: SourceCapture.Interruption) -> String {
+        switch reason {
+        case .formatChanged: return "formatChanged"
+        case .sourceLost: return "sourceLost"
+        }
+    }
+    check(kind(.formatChanged) == "formatChanged" && kind(.sourceLost(.appNotRunning("Music"))) == "sourceLost",
+          "S112 interface: an interruption is a format change or a lost source with its error")
+
+    let idle = StreamEngine()
+    var threw = false
+    do { try idle.attachOutput(uid: "usb", device: 52, delayMs: 40, gain: 0.5) } catch { threw = true }
+    idle.setGain(uid: "usb", g: 0.25)
+    idle.setDelay(uid: "usb", ms: 10)
+    idle.detachOutput(uid: "usb")
+    idle.detachOutputs(uids: ["usb", "bt"])
+    check(!idle.isRunning && !threw && idle.activeOutputUIDs.isEmpty,
+          "S112 interface: with no session an attach adds nothing; gain, delay and detach of unknown outputs do nothing",
+          "running \(idle.isRunning), threw \(threw), active \(idle.activeOutputUIDs)")
+
+    /// Records each call with whether it came on the main thread.
+    final class ThreadNotingEngine: LocalOutputEngine {
+        var activeOutputUIDs: [String] = ["old"]
+        var calls: [String] = []
+        var offMain: [String] = []
+        private func note(_ call: String) {
+            calls.append(call)
+            if !Thread.isMainThread { offMain.append(call) }
+        }
+        func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {
+            note("attach \(uid) on \(device) at \(delayMs) ms, gain \(gain)")
+            activeOutputUIDs.append(uid)
+        }
+        func detachOutput(uid: String) { detachOutputs(uids: [uid]) }
+        func detachOutputs(uids: [String]) {
+            note("detach \(uids)")
+            activeOutputUIDs.removeAll { uids.contains($0) }
+        }
+        func setGain(uid: String, g: Double) { note("gain \(uid) \(g)") }
+    }
+    let usb = AudioDevices.Device(id: 52, name: "USB DAC", uid: "usb", transport: kAudioDeviceTransportTypeUSB)
+    let noting = ThreadNotingEngine()
+    _ = LocalOutputSync.apply(enabled: ["usb"], listing: [usb], to: noting, holdBacks: ["usb": 40], gain: { _ in 0.5 })
+    LocalOutputSync.reapplyGains(on: noting, gain: { _ in 0.25 })
+    check(noting.calls == ["attach usb on 52 at 40.0 ms, gain 0.5", "detach [\"old\"]", "gain usb 0.25"],
+          "S112 interface: the host's attach, detach and gain reach the engine with the device, hold-back and gain",
+          "\(noting.calls)")
+
+    // covers: S113 (the host's control calls; the callbacks' main queue is checked in Tests/run-tests.sh)
+    check(Thread.isMainThread && noting.offMain.isEmpty && noting.calls.count == 3,
+          "S113 main thread: the host's sync makes every engine call on the main thread, before it returns",
+          "off the main thread: \(noting.offMain)")
+}
+
 // MARK: Launch, second launch and session events (AppLifecycle.swift)
 // covers: S215
 do {

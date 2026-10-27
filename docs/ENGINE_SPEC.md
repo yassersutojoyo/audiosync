@@ -1361,6 +1361,10 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | EC1 new ID: a sync stops the renderer bound to the old ID and starts it on the new one | S161 |
 | EC1 new ID: the next sync leaves the restarted speaker alone | S161 |
 | EC1 new ID: a restart that won't start is reported and switched off, with no device left bound | S69, S161 |
+| S112 interface: an interruption is a format change or a lost source with its error | S112 |
+| S112 interface: with no session an attach adds nothing; gain, delay and detach of unknown outputs do nothing | S112, S117 |
+| S112 interface: the host's attach, detach and gain reach the engine with the device, hold-back and gain | S112 |
+| S113 main thread: the host's sync makes every engine call on the main thread, before it returns | S113 |
 | launch: macOS opening AudioSync at login is a login-item launch | S215 |
 | launch: any other launch is not a login-item launch | S215 |
 | launch: the main window opens at launch, but not at login | S120, S215 |
@@ -2033,6 +2037,16 @@ The Mac (logic suite):
 | explicit pause: sound before the stale-reading time, or under 200 ms after it, keeps the pause | S292 |
 | explicit pause: 200 ms of sound after the stale-reading time resumes, whatever the reading says | S292 |
 | explicit pause: sound never pauses | S292 |
+
+### Engine control interface: Windows and the test script (`cargo test` in `desktop/`, `Tests/run-tests.sh`)
+
+S112 and S113 describe the hosts, so they stay listed in `core/tests/spec_exempt.txt`. The Mac logic suite's checks are under "logic"; the interface itself is pinned by type there, so a changed call stops the suite from building.
+
+| Check | Clauses |
+|---|---|
+| every_engine_control_and_both_reports_go_through_the_backend (`desktop/src/adapter.rs`) | S112 |
+| what_the_audio_side_reports_waits_for_the_ui_threads_poll (`desktop/src/adapter.rs`) | S113 |
+| the engine's callbacks start on the main queue (`Tests/run-tests.sh`) | S113 |
 
 ### Windows updater: Windows (`cargo test` in `desktop/`)
 

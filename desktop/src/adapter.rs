@@ -5880,6 +5880,97 @@ mod tests {
         );
     }
 
+    // covers: S112 (the controller's equivalents: start, stop, the running source, frames captured,
+    // attach and detach, gain, delay, the equalizer, a lost output and both interruption kinds)
+    #[test]
+    fn every_engine_control_and_both_reports_go_through_the_backend() {
+        let mut adapter = adapter();
+        assert!(adapter.audio.running_source().is_none());
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.audio.running_source().is_some(), "started");
+        assert_eq!(adapter.audio.frames_captured(), 0);
+        adapter.audio_mut().feed_capture(480);
+        assert_eq!(adapter.audio.frames_captured(), 480);
+
+        turn_on(&mut adapter, HEADPHONES);
+        assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS], "attached");
+        adapter.set_master_volume(50.0);
+        adapter.set_speaker_volume(&key(SPEAKERS), 30.0);
+        adapter.set_speaker_delay(&key(SPEAKERS), 120.0);
+        let params = adapter.audio.playing_params(SPEAKERS).unwrap();
+        assert_eq!(params.gain, output_gain(30.0, 50.0) as f32);
+        assert_eq!(params.delay_frames, 5_760, "120 ms at 48 kHz");
+        adapter.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: 6.0,
+            ..EqSettings::default()
+        });
+        let raised = 0.25 * 10f32.powf(6.0 / 20.0);
+        let fed = adapter.audio_mut().feed_capture_level(4, 0.25);
+        assert!(fed.iter().all(|s| (s - raised).abs() < 1e-4), "{fed:?}");
+
+        adapter.set_speaker_enabled(&key(HEADPHONES), false);
+        assert_eq!(playing(&adapter), [SPEAKERS], "detached");
+        adapter.set_running(false);
+        assert!(adapter.audio.running_source().is_none(), "stopped");
+        assert!(playing(&adapter).is_empty());
+        adapter.set_running(true);
+        turn_on(&mut adapter, HEADPHONES);
+        assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
+
+        adapter.audio_mut().disconnect_output(HEADPHONES);
+        adapter.poll();
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "Headphones".into(),
+        };
+        assert!(messages(&adapter).contains(&lost), "output gone");
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+
+        // A capture Windows rebuilds, as a format change does on the Mac.
+        let built = adapter.audio.driver().captures_started().len();
+        adapter.audio_mut().fail_capture(BackendError::DeviceGone);
+        for _ in 0..3 {
+            adapter.poll();
+        }
+        assert!(adapter.snapshot().running, "streaming stays on");
+        assert_eq!(adapter.audio.driver().captures_started().len(), built + 1);
+        // A source lost for good.
+        adapter.audio_mut().fail_capture(BackendError::System {
+            call: "IAudioCaptureClient::GetBuffer",
+            code: 1,
+        });
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        assert!(messages(&adapter).contains(&NoticeMessage::CaptureLost));
+    }
+
+    // covers: S113 (on Windows the UI thread owns the adapter and polls it: what the audio side
+    // reports reaches the UI only through that poll)
+    #[test]
+    fn what_the_audio_side_reports_waits_for_the_ui_threads_poll() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.audio_mut().disconnect_output(HEADPHONES);
+        assert!(messages(&adapter).is_empty());
+        assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS], "no poll yet");
+        assert!(adapter.poll());
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "Headphones".into(),
+        };
+        assert_eq!(messages(&adapter), [lost]);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+
+        adapter.audio_mut().fail_capture(BackendError::System {
+            call: "IAudioCaptureClient::GetBuffer",
+            code: 1,
+        });
+        assert!(adapter.snapshot().running, "no poll yet");
+        assert!(adapter.poll());
+        assert!(!adapter.snapshot().running);
+        assert!(messages(&adapter).contains(&NoticeMessage::CaptureLost));
+    }
+
     #[test]
     fn a_zone_switches_its_present_members_together() {
         let mut adapter = adapter();

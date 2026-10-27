@@ -44,8 +44,8 @@ S108 Retired with the bundled engine: its prompt queue; the core's policy::pairi
 S109 Retired with the bundled engine: its drop reaction; the drop reasons and their reaction live on in session::DropReason and S136.
 S110 Retired with the bundled engine: its quit sequence, the API write drain and the engine's process signals.
 S111 Mac host only: the app's SIGTERM and SIGINT handlers and the exit path; its logic suite checks the quit steps.
-S112 No automated test: the interface of the Mac host's engine wrapper (Core Audio device IDs, callbacks).
-S113 No automated test: the Mac host makes its control calls and gets its callbacks on the main thread.
+S112 Host only: the interface of the Mac host's engine wrapper (Core Audio device IDs, callbacks); the Mac logic suite and the Windows adapter tests check it.
+S113 Host only: the Mac host makes its control calls and gets its callbacks on the main thread; the Mac logic suite and Tests/run-tests.sh check it, and the Windows adapter tests check that reports wait for the UI thread's poll.
 S114 Session start orchestration, which starts the host's capture after the core's ring and equalizer; the Windows controller's a_failed_start_leaves_nothing_running_and_every_feed_free tests its failure path.
 S115 Session stop orchestration, which stops the host's capture and renderers; the Windows controller's a_second_stop_is_safe_and_no_capture_runs_once_a_stop_finished tests it.
 S129 Retired with the FIFO feed: its writer thread.
