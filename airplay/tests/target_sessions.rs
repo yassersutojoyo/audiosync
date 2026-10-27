@@ -1,6 +1,6 @@
 //! Playing a stereo pair or home theater group over loopback sockets: a
 //! session per member on one path and none to the control device, the same
-//! audio for every member, one delay, one volume and one AirPlay 2 place,
+//! audio for every member, one delay, one volume, an AirPlay 2 place each,
 //! SETPEERS under PTP, and members that are missing, lost or settling after
 //! a TEARDOWN (P171, P177 to P181).
 
