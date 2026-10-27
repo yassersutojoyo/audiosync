@@ -1,3 +1,4 @@
+import CAudioSyncCore
 import Foundation
 
 // What AudioSync's own AirPlay sender lists and plays, and the decisions the
