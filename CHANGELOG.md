@@ -30,6 +30,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a stereo pair or home theater group in a zone that needs AirPlay 2 says Needs AirPlay 2 (Experimental) and is dimmed, as on the Mac.
 - On the Mac, while macOS asks for microphone access for a new input, picking the source that's already playing cancels the switch.
 - On Windows, pasting something that isn't a whole number, such as "1,5", into a delay box no longer leaves just its digits behind ("15"), which Enter then applied. The paste is ignored and the box keeps what it showed, as on the Mac.
+- On the Mac, the "no speakers found" note asks you to check Local Network access only once macOS has refused it, not while AudioSync merely can't tell yet.
 
 ## [0.7.0] - 2026-10-27
 
