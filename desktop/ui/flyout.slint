@@ -366,6 +366,10 @@ export component TrayFlyout inherits Window {
     out property <bool> more-notices-focused;
     out property <bool> zone-focused;
     out property <bool> speaker-focused;
+    // For the layout tests (src/view.rs): where the buttons end, and the
+    // height Windows makes the window at.
+    out property <length> footer-bottom: footer.absolute-position.y + footer.height;
+    out property <length> made-height: root.preferred-height;
 
     // Called each time the flyout opens (the last focused control may be
     // gone, and Escape must work before anything inside is clicked), and
@@ -616,7 +620,7 @@ export component TrayFlyout inherits Window {
 
             Divider { }
 
-            HorizontalLayout {
+            footer := HorizontalLayout {
                 spacing: 8px;
 
                 Button {
