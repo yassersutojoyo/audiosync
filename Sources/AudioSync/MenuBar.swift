@@ -277,6 +277,8 @@ final class AppModel: ObservableObject {
     /// Calibrate All Speakers: its run, sheet and status (S235 to S240).
     @Published var calibrateAll = CalibrateAllStatus()
     @Published var zones: [Zone] = []
+    /// Shared by the main window and the panel, so a zone folds in both.
+    let zoneDisclosure = ZoneDisclosure()
     /// The presets in list order, the current one marked (S259, S264).
     @Published var presets: [PresetRow] = []
     @Published var hidden = HiddenState()
@@ -600,7 +602,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     init(model: AppModel) {
         self.model = model
-        host = NSHostingController(rootView: MenuBarView(model: model))
+        host = NSHostingController(rootView: MenuBarView(model: model, zoneDisclosure: model.zoneDisclosure))
         super.init()
         // The popover follows the content's size, animating as it changes.
         host.sizingOptions = [.preferredContentSize]
@@ -787,7 +789,7 @@ private let accent = Brand.teal
 /// on/off for each speaker. Everything else lives in the main window.
 struct MenuBarView: View {
     @ObservedObject var model: AppModel
-    @StateObject private var zoneDisclosure = ZoneDisclosure()
+    @ObservedObject var zoneDisclosure: ZoneDisclosure
     private let rowHeight: CGFloat = 28
     /// Everything but the speaker list (header, source, volume, footer,
     /// margins), plus room for what may show around it: the list grows until
@@ -914,8 +916,8 @@ struct MenuBarView: View {
     private func speakerList(_ t: UIStrings) -> some View {
         let layout = model.zonelessLayout
         // This Mac is above the divider.
-        let count = model.zones.reduce(0) { $0 + 1 + (zoneDisclosure.isExpanded($1.id) ? $1.members.count : 0) }
-            + layout.connected.count
+        let count = ZoneLayout.panelRows(model.zones, id: { $0.id }, members: { $0.members.count },
+                                         collapsed: zoneDisclosure.collapsed) + layout.connected.count
         if count == 0 && model.airPlayProblem != nil {
             EmptyView()   // the problem below says why
         } else if count == 0 {
@@ -987,7 +989,7 @@ struct MenuBarView: View {
             // divider, with the volume.
             ForEach(model.zones) { zone in
                 PanelZoneHeader(model: model, disclosure: zoneDisclosure, zone: zone, height: rowHeight)
-                ForEach(zoneDisclosure.isExpanded(zone.id) ? zone.members : []) { member in
+                ForEach(ZoneLayout.shownMembers(zone.members, folded: !zoneDisclosure.isExpanded(zone.id))) { member in
                     Group {
                         if let speaker = model.speaker(of: member) {
                             speakerRow(speaker, note: member.note)

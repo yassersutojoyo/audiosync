@@ -268,12 +268,25 @@ enum ZoneLayout {
         if present == 0 { return text.zoneNoneHere(total) }
         return text.zoneCount(on: on, of: total) + (waiting > 0 ? text.zoneWaiting(waiting) : "")
     }
+
+    /// The menu bar panel's rows for `zones`: a header each, plus the members
+    /// of every zone not in `collapsed`.
+    static func panelRows<Z>(_ zones: [Z], id: (Z) -> String, members: (Z) -> Int,
+                             collapsed: Set<String>) -> Int {
+        zones.reduce(0) { $0 + 1 + (collapsed.contains(id($1)) ? 0 : members($1)) }
+    }
+
+    /// The member rows a zone shows: none while it is folded.
+    static func shownMembers<M>(_ members: [M], folded: Bool) -> [M] {
+        folded ? [] : members
+    }
 }
 
 /// What a click on each part of a zone's header does, in the main window and
 /// in the menu bar panel (which has no count line, slider or menu).
 /// Folding never switches the zone: only its round icon does, and the slider
-/// and the options menu keep their clicks to themselves.
+/// and the options menu keep their clicks to themselves. In the panel, while
+/// none of the zone's speakers is present, the greyed icon folds, as on Windows.
 enum ZoneHeaderHit {
     enum Area: CaseIterable {
         case chevron, name, count, blank, zoneIcon, slider, menu
@@ -283,10 +296,10 @@ enum ZoneHeaderHit {
         case fold, toggleZone, none
     }
 
-    static func action(for area: Area) -> Action {
+    static func action(for area: Area, nonePresent: Bool = false) -> Action {
         switch area {
         case .chevron, .name, .count, .blank: return .fold
-        case .zoneIcon: return .toggleZone
+        case .zoneIcon: return nonePresent ? .fold : .toggleZone
         case .slider, .menu: return .none
         }
     }
