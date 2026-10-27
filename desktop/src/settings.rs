@@ -2233,6 +2233,36 @@ mod tests {
         );
     }
 
+    // covers: S212 (a value that isn't a number costs only that value)
+    #[test]
+    fn a_master_or_speaker_value_that_isnt_a_number_is_dropped_and_the_rest_reads() {
+        for master in [r#""x""#, "null", "[]"] {
+            let text = format!(
+                r#"{{
+                    "version": 2,
+                    "master_volume": {master},
+                    "outputs": {{"desk": {{"enabled": true, "volume": "x", "delay_ms": null}}}},
+                    "airplay": {{"far": {{"volume": "loud", "delay_ms": "slow"}}}},
+                    "auto_connect": ["lc:desk"]
+                }}"#
+            );
+            let (settings, _) = Settings::from_json(&text).expect("one odd value spoils nothing");
+            assert_eq!(settings.master_volume, 100.0, "master {master}");
+            assert_eq!(
+                settings.outputs.get("desk"),
+                Some(&SavedSpeaker {
+                    enabled: true,
+                    ..SavedSpeaker::default()
+                })
+            );
+            assert_eq!(settings.airplay["far"], SavedSpeaker::default());
+            assert_eq!(
+                settings.auto_connect,
+                BTreeSet::from(["lc:desk".to_owned()])
+            );
+        }
+    }
+
     #[test]
     fn offsets_and_the_airplay_adjustment_are_kept_in_their_ranges() {
         let text = r#"{
