@@ -1437,6 +1437,7 @@ do {
               "\(String(describing: [before, after, collapsed, reread])), updates \(updates), turns \(turns), released \(released)")
     }
 
+    // covers: S200 (the Mac's labels)
     do {
         let low = DeviceVolumePresentation(.low(percent: 13), name: speakers, text: text)
         let muted = DeviceVolumePresentation(.muted, name: speakers, text: text)
@@ -4969,7 +4970,7 @@ do {
           "local delay: a Bluetooth speaker at −250 ms makes the built-in speakers wait 250 ms",
           "\(holds([r, bt])), \(holds([r, usb, bt]))")
 
-    // S173: which listed output is the reference.
+    // covers: S173 (which listed output is the reference)
     let builtIn = kAudioDeviceTransportTypeBuiltIn
     let speakerTerminal = UInt32(kAudioStreamTerminalTypeSpeaker)
     let headphoneTerminal = UInt32(kAudioStreamTerminalTypeHeadphones)

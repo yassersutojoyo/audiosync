@@ -1063,6 +1063,7 @@ fn spec_device_volume_wording() -> Vec<(String, String, String)> {
 /// names the output; the fix a link-style button whose label starts with its
 /// visible text and then names the output; both right after the slider in
 /// reading order; the glyph decorative.
+// covers: S198, S200
 #[test]
 fn the_hint_and_the_fix_name_the_output_for_narrator() {
     let wording = spec_device_volume_wording();
@@ -1174,6 +1175,7 @@ fn the_hint_and_the_fix_name_the_output_for_narrator() {
 /// fix pressed from the keyboard first hands the focus to the row's volume
 /// slider, right before it in reading order; the focus stays in the row
 /// rather than being lost (S198). A mouse click leaves the focus alone.
+// covers: S198
 #[test]
 fn the_fix_keeps_the_keyboard_focus_in_the_row() {
     let widgets = include_str!("../ui/widgets.slint");
@@ -1211,6 +1213,7 @@ fn the_fix_keeps_the_keyboard_focus_in_the_row() {
 /// The tray flyout's row of a switched-on local output shows the state as a
 /// small glyph in the secondary text color, with no button, and Narrator
 /// hears the hint in the row's description (S198, S199).
+// covers: S198
 #[test]
 fn the_flyout_row_shows_the_glyph_and_the_hint_in_its_description() {
     let flyout = include_str!("../ui/flyout.slint");
@@ -1295,6 +1298,7 @@ fn selected_text_in_a_text_box_reaches_4_5_to_1() {
 /// The preset controls (spec S267, S268): token colors only, a focus ring,
 /// Narrator's label, value and hint on each row, F2 for Rename, and the
 /// Menu key and Shift+F10 through the row's context menu area.
+// covers: S268
 #[test]
 fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
     let main = include_str!("../ui/main.slint");

@@ -10279,6 +10279,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S180
     #[test]
     fn auto_connect_at_the_first_launch_after_the_upgrade_starts_at_the_migrated_delays() {
         let dir = test_dir("adapter-settings-delay-migration-auto-connect");
@@ -10315,6 +10316,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S180
     #[test]
     fn an_older_file_waits_for_an_output_list_before_it_is_migrated() {
         let dir = test_dir("adapter-settings-delay-migration-wait");
