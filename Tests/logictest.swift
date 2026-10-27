@@ -5319,6 +5319,15 @@ do {
     check(stillListed == nil && gone == SpeakerRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
               && back == nil && rename.target == nil,
           "speaker rename: a speaker gone mid-rename applies its typing, and its rename doesn't open again when it returns")
+
+    var zoned = SpeakerRename()
+    _ = zoned.start(deskTarget, name: "USB Audio", in: .inZones)
+    check(zoned.isOpen("usb-uid", in: .inZones) && !zoned.isOpen("usb-uid", in: .row) && !zoned.isOpen("hp-1", in: .inZones),
+          "speaker rename: a rename started in the In zones row shows its field there only, not under the zone too")
+    zoned.text = "Desk"
+    let fromRow = zoned.start(deskTarget, name: "USB Audio")
+    check(fromRow == nil && zoned.isOpen("usb-uid", in: .row) && !zoned.isOpen("usb-uid", in: .inZones) && zoned.text == "Desk",
+          "speaker rename: starting it again from the row under the zone moves the field there and keeps the typing")
 }
 
 // MARK: Delay field — typed text applies on Return or focus loss, once (DelayFieldDraft)

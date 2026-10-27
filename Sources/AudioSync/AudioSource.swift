@@ -340,12 +340,14 @@ enum CaptureSwitch {
 // MARK: - When the source app quits
 
 /// What a session does when the app it captures quits (S227), kept as
-/// "stop" or "system"; anything else, nothing stored included, reads as stop.
+/// "stop" or "system". Nothing stored reads as system, the Mac's default;
+/// a value this copy doesn't know reads as stop, so it never switches by surprise.
 enum WhenSourceQuits: String {
     case stop
     case system
 
     init(defaultsValue stored: String?) {
+        guard let stored else { self = .system; return }
         self = stored == Self.system.rawValue ? .system : .stop
     }
 

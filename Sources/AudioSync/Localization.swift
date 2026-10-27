@@ -1547,9 +1547,10 @@ struct UIStrings {
           doesn't open at login; click the Dock icon to bring it back.
         - Appearance: in the gear menu, or in the AudioSync menu. Match System
           follows macOS; Light or Dark keeps AudioSync's windows that way.
-        - When the source app quits, streaming stops. To keep playing all system
-          audio instead, turn on 'Switch to All System Audio When the Source App
-          Quits' in the gear menu or the AudioSync menu.
+        - When the source app quits, AudioSync switches to all system audio and
+          keeps playing. To stop streaming instead, turn off 'Switch to All
+          System Audio When the Source App Quits' in the gear menu or the
+          AudioSync menu.
 
         Calibration
         A microphone can measure the delays for you. Put it where you listen

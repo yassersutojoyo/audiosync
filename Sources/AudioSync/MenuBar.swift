@@ -276,8 +276,6 @@ final class AppModel: ObservableObject {
     /// Calibrate All Speakers: its run, sheet and status (S235 to S240).
     @Published var calibrateAll = CalibrateAllStatus()
     @Published var zones: [Zone] = []
-    /// Shared by the main window and the panel, so a zone folds in both.
-    let zoneDisclosure = ZoneDisclosure()
     /// The presets in list order, the current one marked (S259, S264).
     @Published var presets: [PresetRow] = []
     @Published var hidden = HiddenState()
@@ -309,14 +307,14 @@ final class AppModel: ObservableObject {
     /// there. Like a delay field: Return or the focus leaving applies it,
     /// Escape drops it.
     @Published private(set) var rename = SpeakerRename()
-    var renaming: String? { rename.target?.id }
+    func isRenaming(_ speaker: Speaker, in place: SpeakerRename.Place) -> Bool { rename.isOpen(speaker.id, in: place) }
     var renameText: String {
         get { rename.text }
         set { rename.text = newValue }
     }
-    func startRename(_ speaker: Speaker) {
+    func startRename(_ speaker: Speaker, in place: SpeakerRename.Place = .row) {
         let target = SpeakerRename.Target(id: speaker.id, key: speaker.key, system: speaker.systemName)
-        apply(rename.start(target, name: speaker.name))
+        apply(rename.start(target, name: speaker.name, in: place))
     }
     func commitRename(_ speaker: Speaker) { apply(rename.commit(id: speaker.id)) }
     func dropRename() { rename.drop() }
@@ -627,7 +625,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     init(model: AppModel) {
         self.model = model
-        host = PanelHost(rootView: MenuBarView(model: model, zoneDisclosure: model.zoneDisclosure))
+        host = PanelHost(rootView: MenuBarView(model: model))
         super.init()
         // The popover follows the content's size only once the open is over (`PanelHost`).
         host.sizingOptions = []
@@ -1144,7 +1142,7 @@ private let accent = Brand.teal
 /// on/off for each speaker. Everything else lives in the main window.
 struct MenuBarView: View {
     @ObservedObject var model: AppModel
-    @ObservedObject var zoneDisclosure: ZoneDisclosure
+    @StateObject private var zoneDisclosure = ZoneDisclosure()
     private let rowHeight: CGFloat = 28
     /// Everything but the speaker list (header, source, volume, footer,
     /// margins), plus room for what may show around it: the list grows until

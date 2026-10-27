@@ -14,7 +14,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
     init(model: AppModel) {
         self.model = model
-        let host = NSHostingController(rootView: MainView(model: model, zoneDisclosure: model.zoneDisclosure))
+        let host = NSHostingController(rootView: MainView(model: model))
         host.sizingOptions = [.minSize]   // SwiftUI sets the minimum; the user picks the size
         let chrome: NSWindow.StyleMask = [.titled, .resizable, .closable, .miniaturizable]
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 600),
@@ -108,9 +108,9 @@ private let accent = Brand.teal
 
 struct MainView: View {
     @ObservedObject var model: AppModel
-    @ObservedObject var zoneDisclosure: ZoneDisclosure
     @StateObject private var gearAnchor = MenuAnchor.Box()
     @StateObject private var sheetRoom = SheetRoom()
+    @StateObject private var zoneDisclosure = ZoneDisclosure()
 
     var body: some View {
         let t = model.text
@@ -618,9 +618,10 @@ private struct PresetsCard: View {
     }
 }
 
-/// The zones collapsed in the main window and the panel; every zone opens
-/// expanded, and nothing is saved. An object rather than @State: the Command
-/// Line Tools toolchain ships without SwiftUI's macro plugins.
+/// The zones collapsed in one view: the main window and the menu bar panel
+/// each keep their own. Every zone opens expanded, and nothing is saved. An
+/// object rather than @State: the Command Line Tools toolchain ships without
+/// SwiftUI's macro plugins.
 final class ZoneDisclosure: ObservableObject {
     @Published private(set) var collapsed: Set<String> = []
 
@@ -722,9 +723,12 @@ private struct ZoneCard: View {
                 Text(zone.name)
                     .font(.body.weight(state == .playing ? .semibold : .regular))
                     .lineLimit(1)
-                    // Read through the switch's label.
+                    // Read through the switch's label; Rename Zone is in the menu.
                     .accessibilityHidden(true)
-                    .onTapGesture { hit(.name) }
+                    // As on a speaker's name: a double-click renames, a single
+                    // click folds once it can't be a double-click.
+                    .gesture(TapGesture(count: 2).onEnded { model.actions.renameZone(zone.id) }
+                        .exclusively(before: TapGesture().onEnded { hit(.name) }))
                 countLine(t)
                     .onTapGesture { hit(.count) }
             }
@@ -844,14 +848,22 @@ private struct ZoneMemberCompactRow: View {
             .accessibilityLabel(t.inZoneLabel(speaker.name, zone: zone.name))
             .accessibilityValue(t.value(state))
             .accessibilityHint(t.rowHint(state, note: note))
+            .accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker, in: .inZones) }
             .help(t.help(state))
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(speaker.name)
-                        .font(.body.weight(state == .playing ? .semibold : .regular))
-                        .lineLimit(1)
-                        .accessibilityHidden(true)
+                    if model.isRenaming(speaker, in: .inZones) {
+                        SpeakerNameField(model: model, speaker: speaker)
+                    } else {
+                        Text(speaker.name)
+                            .font(.body.weight(state == .playing ? .semibold : .regular))
+                            .lineLimit(1)
+                            // The switch's Rename action replaces the double-click.
+                            .accessibilityHidden(true)
+                            // As on its row under the zone; a single click does nothing here.
+                            .gesture(TapGesture(count: 2).onEnded { model.startRename(speaker, in: .inZones) })
+                    }
                     Button(action: goToZone) {
                         Text(t.inZone(zone.name))
                             .font(.caption.weight(.semibold))
@@ -894,6 +906,31 @@ private struct ZoneMemberCompactRow: View {
     private func menuItems(_ t: UIStrings) -> some View {
         Button(t.goToZone, action: goToZone)
         Button(t.removeFromZone) { model.actions.removeFromZone(speaker.key) }
+    }
+}
+
+/// A speaker's name, editable in place in its row. Like a delay field, Return
+/// or the focus leaving applies it and Escape drops it; an empty name brings
+/// back the system name, which the field shows as its placeholder.
+private struct SpeakerNameField: View {
+    @ObservedObject var model: AppModel
+    let speaker: AppModel.Speaker
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(speaker.systemName, text: $model.renameText)
+            .textFieldStyle(.roundedBorder)
+            .frame(maxWidth: 220)
+            .accessibilityLabel(model.text.speakerNameField(system: speaker.systemName))
+            .focused($focused)
+            .onSubmit { model.commitRename(speaker) }
+            .onExitCommand { model.dropRename() }
+            // A menu item starts the rename: the field takes the focus once
+            // the menu has closed.
+            .onAppear { DispatchQueue.main.async { focused = true } }
+            .onChange(of: focused) { _, now in
+                if !now { model.commitRename(speaker) }
+            }
     }
 }
 
@@ -944,8 +981,6 @@ struct SpeakerRow: View {
     @FocusState private var deviceVolumeFixFocused: Bool
     /// The delay value, which takes the focus back when its panel closes.
     @FocusState private var delayFocused: Bool
-    /// The name field while the speaker is being renamed.
-    @FocusState private var nameFocused: Bool
     /// The switch, which takes the focus when a neighbouring row is hidden.
     @FocusState private var switchFocused: Bool
     /// The volume slider is held; a row closed mid-drag never sees the release.
@@ -969,8 +1004,8 @@ struct SpeakerRow: View {
 
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 6) {
-                        if model.renaming == speaker.id {
-                            nameField(t)
+                        if model.isRenaming(speaker, in: .row) {
+                            SpeakerNameField(model: model, speaker: speaker)
                         } else {
                             Text(speaker.name)
                                 .font(.body.weight(state == .playing ? .semibold : .regular))
@@ -1104,25 +1139,6 @@ struct SpeakerRow: View {
 
     private func rowTapped() {
         if speaker.offsetMs != nil { model.toggleDelayPanel(speaker.id) } else { model.closeDelayPanels() }
-    }
-
-    /// The name, editable in place. Like a delay field, Return or the focus
-    /// leaving applies it and Escape drops it; an empty name brings back the
-    /// system name, which the field shows as its placeholder.
-    private func nameField(_ t: UIStrings) -> some View {
-        TextField(speaker.systemName, text: $model.renameText)
-            .textFieldStyle(.roundedBorder)
-            .frame(maxWidth: 220)
-            .accessibilityLabel(t.speakerNameField(system: speaker.systemName))
-            .focused($nameFocused)
-            .onSubmit { model.commitRename(speaker) }
-            .onExitCommand { model.dropRename() }
-            // A menu item starts the rename: the field takes the focus once
-            // the menu has closed.
-            .onAppear { DispatchQueue.main.async { nameFocused = true } }
-            .onChange(of: nameFocused) { _, focused in
-                if !focused { model.commitRename(speaker) }
-            }
     }
 
     @ViewBuilder
