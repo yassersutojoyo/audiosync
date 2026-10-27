@@ -4919,8 +4919,10 @@ do {
     let fresh = store.load()
     check(fresh == AppSettings() && fresh.source == .system && fresh.master == 100 && fresh.defaultDelayMs == 2000
             && fresh.enabledAirPlay.isEmpty && fresh.enabledLocal.isEmpty && fresh.groups.isEmpty
-            && !fresh.showVirtualDevices && fresh.appearance == .system && fresh.whenSourceQuits == .stop,
+            && !fresh.showVirtualDevices && fresh.appearance == .system,
           "settings: nothing stored gives the defaults (whole system, master 100, delays 2000 ms)")
+    check(fresh.whenSourceQuits == .system,
+          "settings: Switch to All System Audio When the Source App Quits is on when nothing is stored (S227)")
     check(!fresh.airPlay2, "settings: AirPlay 2 is off when nothing is stored (P2)")
 
     var wanted = AppSettings()
@@ -4935,7 +4937,7 @@ do {
     wanted.autoConnect = ["ap:airplay-2"]
     wanted.showVirtualDevices = true
     wanted.appearance = .dark
-    wanted.whenSourceQuits = .system
+    wanted.whenSourceQuits = .stop
     wanted.airPlay2 = true
     store.save(source: wanted.source)
     store.save(ids: wanted.enabledAirPlay, forKey: Keys.enabledAirPlay)
@@ -4951,6 +4953,8 @@ do {
     store.save(whenSourceQuits: wanted.whenSourceQuits)
     store.save(airPlay2: wanted.airPlay2)
     check(store.load() == wanted, "settings: every saved setting comes back unchanged")
+    check(stored.values[Keys.whenSourceQuits] as? String == "stop" && store.load().whenSourceQuits == .stop,
+          "settings: Switch to All System Audio When the Source App Quits turned off stays off (S227)")
     check(stored.values[Keys.airPlay2] as? Bool == true, "settings: the AirPlay 2 switch is stored as a Bool")
     store.save(airPlay2: false)
     check(!store.load().airPlay2, "settings: AirPlay 2 switched off again reads back off")
@@ -6628,10 +6632,11 @@ do {
     check(quit(musicQuit, .system, .system) == "keep"
             && quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep",
           "source quit: the same quit reported again (the capture, then macOS) acts once (S227 f)")
-    check(WhenSourceQuits(defaultsValue: nil) == .stop && WhenSourceQuits(defaultsValue: "stop") == .stop
-            && WhenSourceQuits(defaultsValue: "System") == .stop && WhenSourceQuits(defaultsValue: "switch") == .stop
-            && WhenSourceQuits(defaultsValue: "system") == .system,
-          "source quit: the setting reads stop unless it says system (S227)")
+    check(WhenSourceQuits(defaultsValue: nil) == .system && WhenSourceQuits(defaultsValue: "system") == .system,
+          "source quit: nothing stored reads as system, the Mac's default (S227)")
+    check(WhenSourceQuits(defaultsValue: "stop") == .stop && WhenSourceQuits(defaultsValue: "System") == .stop
+            && WhenSourceQuits(defaultsValue: "switch") == .stop,
+          "source quit: a stored stop, or a value this copy doesn't know, reads as stop (S227)")
     let t = UIStrings()
     let switched = t.sourceSwitchedToSystem(name: "Music", started: true)
     let notStarted = t.sourceSwitchedToSystem(name: "Music", started: false)
@@ -9361,6 +9366,38 @@ do {
           "panel zone members: an unfolded zone lists its members in order")
     check(ZoneLayout.shownMembers(zones[0].members, folded: true).isEmpty,
           "panel zone members: a folded zone lists none")
+}
+
+// MARK: Zone folding is per view; double-clicks rename zones and zoned speakers
+do {
+    func read(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+    func count(_ text: String, _ needle: String) -> Int { text.components(separatedBy: needle).count - 1 }
+    let window = read("Sources/AudioSync/MainWindow.swift")
+    let menuBar = read("Sources/AudioSync/MenuBar.swift")
+    let render = read("scripts/screenshots/render.swift")
+    let ownFold = "@StateObject private var zoneDisclosure = ZoneDisclosure()"
+    check(!window.isEmpty && !menuBar.isEmpty && count(window, ownFold) == 1 && count(menuBar, ownFold) == 1,
+          "zone folding: the main window and the menu bar panel each keep their own fold state")
+    check(count(menuBar, "let zoneDisclosure") == 0 && count(window, "model.zoneDisclosure") == 0
+            && count(menuBar, "model.zoneDisclosure") == 0 && count(render, "zoneDisclosure") == 0,
+          "zone folding: nothing hands one view's fold state to the other")
+
+    let card = window.components(separatedBy: "private struct ZoneCard").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(count(card, "TapGesture(count: 2).onEnded { model.actions.renameZone(zone.id) }") == 1
+            && count(card, ".exclusively(before: TapGesture().onEnded { hit(.name) })") == 1,
+          "main window zone header: a double-click on the name renames the zone, a single click still folds it")
+
+    let compact = window.components(separatedBy: "private struct ZoneMemberCompactRow").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(count(compact, "TapGesture(count: 2).onEnded { model.startRename(speaker, in: .inZones) }") == 1
+            && count(compact, "SpeakerNameField(") == 1
+            && count(compact, ".accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker, in: .inZones) }") == 1,
+          "In zones row: a double-click on the name renames the speaker in place, VoiceOver has the Rename action")
+    let row = window.components(separatedBy: "struct SpeakerRow: View").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(count(row, "SpeakerNameField(") == 1 && count(row, "TapGesture(count: 2).onEnded { model.startRename(speaker) }") == 1,
+          "speaker row: a zone's member rows and every other row rename through the same field")
 }
 
 // MARK: About panel shows the version without the build number (AboutPanel.options)
