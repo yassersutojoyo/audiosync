@@ -50,7 +50,7 @@ use television::{Pin, television};
 
 const NAME: &str = "AudioSync Test TV";
 const CODE: &str = "4821";
-const PASSWORD: &str = "kamar tamu";
+const PASSWORD: &str = "guest room";
 const LONG: Duration = Duration::from_secs(15);
 /// The host asks a playing speaker for its level once a second (S291).
 const ASK_EVERY: Duration = Duration::from_secs(1);

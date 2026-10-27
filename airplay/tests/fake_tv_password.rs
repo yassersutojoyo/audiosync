@@ -25,7 +25,7 @@ use common::net::{Events, HostAudio, serial};
 use television::{Pin, television};
 
 const LONG: Duration = Duration::from_secs(15);
-const PASSWORD: &str = "kamar tamu";
+const PASSWORD: &str = "guest room";
 
 fn start_tv() -> Ap2Server {
     Ap2Server::start(television(
