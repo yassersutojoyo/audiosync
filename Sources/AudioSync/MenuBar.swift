@@ -992,9 +992,19 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard standIn == nil else { return true }
         var root: NSView = frame
         while let up = root.superview { root = up }
-        let found = Self.backgrounds(in: root, skipping: host.view)
         let holders = Self.backgroundsHolding(host.view)
-        let material = holders.flatMap { Self.material(of: $0) }
+        var found = Self.backgrounds(in: root, skipping: host.view)
+        var material = holders.flatMap { Self.material(of: $0) }
+        let drewOnce = found.isEmpty && material.isEmpty
+        if drewOnce {
+            // The popover's frame builds its material layer only when it first
+            // draws, which on the first open after launch hasn't happened yet.
+            // The window is still transparent here, so the pass shows nothing.
+            window.layoutIfNeeded()
+            window.displayIfNeeded()
+            found = Self.backgrounds(in: root, skipping: host.view)
+            material = holders.flatMap { Self.material(of: $0) }
+        }
         guard !found.isEmpty || !material.isEmpty else {
             DebugTrace.log("[AudioSync] panel background: no part of it can be hidden apart from the content; "
                            + "the panel fades in at full size")
@@ -1024,7 +1034,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         standIn = view
         DebugTrace.log("[AudioSync] panel background: stand-in \(view.blendingMode == .behindWindow ? "behind" : "within") "
                        + "window, hid \(found.count) system view(s) \(found.map { String(describing: type(of: $0)) }) "
-                       + "and \(material.count) material layer(s) of \(holders.map { String(describing: type(of: $0)) })")
+                       + "and \(material.count) material layer(s) of \(holders.map { String(describing: type(of: $0)) })"
+                       + (drewOnce ? ", after a display pass" : ""))
         if DebugTrace.enabled {
             for holder in holders {
                 let layers = (holder.layer?.sublayers ?? []).map { layer in
@@ -1056,7 +1067,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let owned = view.subviews.compactMap { sub in
             sub.layer.flatMap { start in sequence(first: start, next: { $0.superlayer }).first { $0.superlayer === layer } }
         }
-        return PanelBackdrop.material(in: layer.sublayers ?? [], keeping: owned).filter { !$0.isHidden }
+        return PanelBackdrop.material(in: layer.sublayers ?? [], keeping: owned, name: { $0.name })
+            .filter { !$0.isHidden }
     }
 
     private static func unanimated(_ change: () -> Void) {

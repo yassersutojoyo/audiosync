@@ -335,10 +335,14 @@ enum PanelBackdrop {
         walk(node, children: children, isContent: isContent, isStandIn: isStandIn, isBackground: isBackground).hidden
     }
 
-    /// The sublayers of a view's layer that no subview owns.
+    /// The sublayers of a view's layer that no subview owns, apart from
+    /// AppKit's focus ring: it belongs to the focused control, and AppKit
+    /// hides and shows it on its own.
     static func material<Layer: AnyObject>(in sublayers: [Layer], keeping owned: [Layer],
                                            name: (Layer) -> String? = { _ in nil }) -> [Layer] {
-        sublayers.filter { layer in !owned.contains { $0 === layer } }
+        sublayers.filter { layer in
+            !owned.contains { $0 === layer } && !(name(layer)?.contains("FocusRing") ?? false)
+        }
     }
 
     private static func walk<Node>(_ node: Node, children: (Node) -> [Node], isContent: (Node) -> Bool,
