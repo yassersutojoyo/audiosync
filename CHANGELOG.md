@@ -12,7 +12,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Go to Zone puts the keyboard focus on the zone's round icon, or on its arrow while none of the zone's speakers is found, so VoiceOver always reads where the focus lands. On the Mac.
 - Only This Speaker, in a speaker's menu under its zone, plays this speaker and turns off the zone's other speakers that are on; speakers you hid stay as they are. When this one is a Google Cast speaker that's offline or that another app took over, nothing switches. Nobody leaves the zone. On the Mac and on Windows.
 - On the Mac, double-click a zone's name in the main window to rename it, as you already could with a speaker's name. A single click on the name still shows or hides the zone's speakers.
-- On the Mac, double-click the name of a speaker in a zone to rename it, in its short row under "In zones" and in its row under the zone.
+- On the Mac, double-click the name of a speaker in a zone to rename it in its short row under "In zones", as you already could in its row under the zone.
 - On the Mac, Switch to All System Audio When the Source App Quits is now on unless you turned it off. When the app you capture quits, AudioSync keeps playing all system audio instead of stopping.
 - About AudioSync shows just the version number, on the Mac and on Windows. The Mac no longer adds the build number in parentheses, and Windows no longer lists the audio core's version under it.
 

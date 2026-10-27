@@ -1090,7 +1090,10 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | source quit: an app gone when the format-change rebuild starts stops it, or rebuilds with the whole system (S227 e) | S20, S227 |
 | source quit: a rebuild that fails for another cause is no app quit | S227 |
 | source quit: the same quit reported again (the capture, then macOS) acts once (S227 f) | S227 |
-| source quit: the setting reads stop unless it says system (S227) | S227 |
+| source quit: nothing stored reads as system, the Mac's default (S227) | S227 |
+| source quit: a stored stop, or a value this copy doesn't know, reads as stop (S227) | S227 |
+| settings: Switch to All System Audio When the Source App Quits is on when nothing is stored (S227) | S227 |
+| settings: Switch to All System Audio When the Source App Quits turned off stays off (S227) | S227 |
 | source quit: the notice names the app and All System Audio, also when the whole system couldn't start (S227) | S227 |
 | source quit: a whole system whose first tap fails right after the app's tap went starts on the next try (S227 g) | S227 |
 | source quit: the whole system is tried 3 times, 0.5 s apart, then the last failure stops streaming (S227 g) | S227 |
@@ -1218,6 +1221,8 @@ The bundled engine's checks were removed with it on 2026-10-20: its config file 
 | speaker rename: Return applies the speaker's own rename once, never another's | S228 |
 | speaker rename: Escape drops the typing, and the focus leaving after it applies nothing | S228 |
 | speaker rename: a speaker gone mid-rename applies its typing, and its rename doesn't open again when it returns | S228 |
+| speaker rename: a rename started in the In zones row shows its field there only, not under the zone too | S228 |
+| speaker rename: starting it again from the row under the zone moves the field there and keeps the typing | S228 |
 | local delay: with only local outputs, a speaker's delay is applied | S176 |
 | local delay: a Bluetooth speaker at −250 ms makes the built-in speakers wait 250 ms | S176 |
 | local delay: the built-in speakers are the reference | S173 |
