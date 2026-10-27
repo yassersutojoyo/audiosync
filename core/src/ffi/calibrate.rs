@@ -157,6 +157,72 @@ pub unsafe extern "C" fn asc_calibration_estimate(
     true
 }
 
+/// What [`asc_calibration_measure`] found in one recording, for the debug
+/// log: S234's arrival and how the peak stands out, before the thresholds
+/// that would refuse it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct AscCalibrationArrival {
+    /// [`CALIBRATION_ACCEPTED`] when measured, else the refusal's code.
+    pub status: u32,
+    pub frame: usize,
+    pub peak_frame: usize,
+    pub echo_frame: usize,
+    pub peak_over_floor: f64,
+    pub echo_share: f64,
+}
+
+/// [`calibrate::measure`] (S234) of one recording into `result`. False,
+/// writing nothing, for a null array with a nonzero count or a null `result`.
+///
+/// # Safety
+///
+/// Each array is null or holds its count of aligned floats that stay
+/// unchanged during the call; `result` is null or points to an aligned,
+/// writable [`AscCalibrationArrival`] that nothing else touches during the
+/// call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_calibration_measure(
+    signal: *const f32,
+    signal_frames: usize,
+    recording: *const f32,
+    recording_frames: usize,
+    rate: u32,
+    result: *mut AscCalibrationArrival,
+) -> bool {
+    // SAFETY: by the caller's contract each array is null or holds its count
+    // of floats that nothing writes during the call.
+    let (Some(signal), Some(recording)) = (unsafe {
+        (
+            host_slice(signal, signal_frames),
+            host_slice(recording, recording_frames),
+        )
+    }) else {
+        return false;
+    };
+    if result.is_null() {
+        return false;
+    }
+    let found = match calibrate::measure(signal, recording, rate) {
+        Ok(found) => AscCalibrationArrival {
+            status: CALIBRATION_ACCEPTED,
+            frame: found.frame,
+            peak_frame: found.peak_frame,
+            echo_frame: found.echo_frame,
+            peak_over_floor: found.peak_over_floor,
+            echo_share: found.echo_share,
+        },
+        Err(reason) => AscCalibrationArrival {
+            status: refusal_code(reason),
+            ..AscCalibrationArrival::default()
+        },
+    };
+    // SAFETY: non-null, and by the caller's contract aligned, writable and
+    // not touched by anyone else.
+    unsafe { result.write(found) };
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,6 +257,41 @@ mod tests {
         };
         assert!(ok);
         result
+    }
+
+    fn measure(signal: &[f32], recording: &[f32], result: *mut AscCalibrationArrival) -> bool {
+        // SAFETY: live slices, and a local result or null.
+        unsafe {
+            asc_calibration_measure(
+                signal.as_ptr(),
+                signal.len(),
+                recording.as_ptr(),
+                recording.len(),
+                48_000,
+                result,
+            )
+        }
+    }
+
+    // covers: S234
+    #[test]
+    fn a_recording_is_measured_across_the_boundary() {
+        let signal = calibrate::signal(48_000).expect("48 kHz");
+        let recording = heard_at(48_000, 4800, 0.5);
+        let mut result = AscCalibrationArrival {
+            status: 99,
+            ..AscCalibrationArrival::default()
+        };
+        assert!(measure(&signal, &recording, &mut result));
+        assert_eq!(result.status, CALIBRATION_ACCEPTED);
+        assert_eq!((result.frame, result.peak_frame), (4800, 4800));
+        assert!(
+            result.peak_over_floor > 12.0 && result.echo_share < 0.1,
+            "{result:?}"
+        );
+        assert!(measure(&signal, &recording[..100], &mut result));
+        assert_eq!(result.status, CALIBRATION_TOO_SHORT);
+        assert!(!measure(&signal, &recording, std::ptr::null_mut()));
     }
 
     // covers: S232, S233

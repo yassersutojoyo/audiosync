@@ -1257,6 +1257,24 @@ typedef struct AscCalibration {
  */
 bool asc_calibration_estimate(const float *signal, size_t signal_frames, const float *reference, size_t reference_frames, const float *chosen, size_t chosen_frames, uint32_t rate, double old_offset_ms, AscCalibration *result);
 
+/* Where the signal arrived in one recording and how the peak stands out,
+ * before the thresholds that would refuse it: for the debug log. */
+typedef struct AscCalibrationArrival {
+    uint32_t status;        /* ASC_CALIBRATION_ACCEPTED when measured, else the refusal */
+    size_t frame;           /* the arrival: the earliest strong lag, else the peak */
+    size_t peak_frame;      /* the strongest lag */
+    size_t echo_frame;      /* the strongest lag more than 3 ms from the peak */
+    double peak_over_floor; /* the peak over the median magnitude */
+    double echo_share;      /* that echo as a share of the peak */
+} AscCalibrationArrival;
+
+/*
+ * Measures one recording as the estimate does, into *result. False, writing
+ * nothing, for a NULL array with a nonzero count or a NULL result. Takes
+ * tens of ms or more: never on an audio thread.
+ */
+bool asc_calibration_measure(const float *signal, size_t signal_frames, const float *recording, size_t recording_frames, uint32_t rate, AscCalibrationArrival *result);
+
 /*
  * Calibrate All Speakers: the reference's sweep, then every other speaker's
  * two, one speaker at a time, each estimated against the reference as

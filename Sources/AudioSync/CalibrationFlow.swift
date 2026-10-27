@@ -262,6 +262,27 @@ enum CalibrationFlow {
         return made ? samples : nil
     }
 
+    /// The core's measurement of one recording (S234) in the debug log, off
+    /// the main thread; nothing while the log is off.
+    static func logArrival(_ label: String, recording: [Float], rate: UInt32) {
+        guard DebugTrace.enabled else { return }
+        DispatchQueue.global(qos: .utility).async {
+            guard let signal = CalibrationFlow.signal(rate: rate) else { return }
+            var found = AscCalibrationArrival()
+            let ok = signal.withUnsafeBufferPointer { s in
+                recording.withUnsafeBufferPointer { r in
+                    asc_calibration_measure(s.baseAddress, s.count, r.baseAddress, r.count, rate, &found)
+                }
+            }
+            guard ok else { return }
+            let ms = 1000 / Double(rate)
+            DebugTrace.log("[AudioSync] \(label) measured: status \(found.status), frame \(found.frame) "
+                + "(\(Double(found.frame) * ms) ms), peak frame \(found.peak_frame), "
+                + "peak_over_floor \(found.peak_over_floor), echo_share \(found.echo_share) "
+                + "at frame \(found.echo_frame) (\(Double(found.echo_frame) * ms) ms)")
+        }
+    }
+
     /// The core's estimate (S232, S234). Allocates and takes tens of ms:
     /// off the main thread. Nil when the core rejects the call itself.
     static func estimate(signal: [Float], reference: [Float], chosen: [Float], rate: UInt32,
