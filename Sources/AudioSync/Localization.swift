@@ -573,10 +573,11 @@ struct UIStrings {
         case .unreachable:
             return "\(name) couldn't be reached, so it's off. "
                 + "Check that the speaker is on and on the same network, then turn it on again."
-        case .needsCode:
-            return "\(name) asks for a PIN or password, so it's off. "
-                + "To pair it, turn it on again and enter the code when AudioSync asks. "
-                + "To use it without a code, set Allow Speaker & TV Access on the speaker (or in the Home app) "
+        case .needsPin:
+            return "\(name) needs pairing with a PIN, so it's off. Turn it on again to pair."
+        case .needsPassword:
+            return "\(name) asks for a password, so it's off. Turn it on again to enter it. "
+                + "To use it without a password, set Allow Speaker & TV Access on the speaker (or in the Home app) "
                 + "to “Anyone on the Same Network” and turn off Require Password."
         case .cancelled:
             return "Pairing with \(name) was cancelled, so it's off. "
@@ -592,6 +593,20 @@ struct UIStrings {
     /// before any pairing step, so the cause stays unnamed.
     func nativeAirPlayNotAccepted(name: String) -> String {
         "\(name) didn't accept the connection, so it's off. Turn it on again to try once more."
+    }
+
+    /// A native speaker turned off because it asks for a PIN or password;
+    /// nil for every other reason. `unasked`: it turned the session down
+    /// before asking for either.
+    func nativeAirPlayAsksForCode(name: String, reason: NativeTurnOff, unasked: Bool) -> String? {
+        switch reason {
+        case .needsCode where unasked: return nativeAirPlayNotAccepted(name: name)
+        case .needsCode: return airPlayTurnedOff(name: name, reason: .needsPin)
+        case .needsPassword: return airPlayTurnedOff(name: name, reason: .needsPassword)
+        case .unreachable, .cantPlay, .needsAirPlay2, .timingUnavailable, .playsThroughSpeakers,
+             .receiverUnverified, .memberNeedsPassword, .cancelled, .pairingFailed, .stillNeedsCode:
+            return nil
+        }
     }
 
     /// A PIN pairing ended without pairing, for another reason than a wrong
@@ -634,15 +649,25 @@ struct UIStrings {
     let nativeAirPlayPtpPortsTaken = "Another app is using port 319 or 320, so AirPlay speakers that need "
         + "PTP timing can't play. Close that app, then turn the speaker on again."
 
-    /// Another AirPlay 2 speaker plays, and only one can at a time: this one
-    /// stays on and starts once the other stops (P169).
-    func nativeAirPlayOneAirPlay2(name: String) -> String {
-        "AudioSync plays one AirPlay 2 speaker at a time, so \(name) waits. It starts once the other one stops."
+    /// Every AirPlay 2 place is taken: this one stays on and starts once
+    /// one of them stops (P169, S285).
+    func nativeAirPlayTooManyAirPlay2(name: String) -> String {
+        "AudioSync plays up to \(ASC_AIRPLAY2_SESSIONS) AirPlay 2 speakers at once, so \(name) waits. It starts once one of them stops."
+    }
+    /// A speaker that takes only PTP while AudioSync runs PTP for speakers
+    /// on another network: it stays on and starts once those stop (S285).
+    func nativeAirPlayPtpOtherNetwork(name: String) -> String {
+        "\(name) waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off and \(name) starts."
     }
     /// That notice's title.
     func nativeAirPlayWaitingTitle(name: String) -> String { "\(name) waiting" }
-    /// Under the name of a speaker waiting for the AirPlay 2 slot.
-    let waitingForAirPlay2 = "Waiting for the other AirPlay 2 speaker"
+    /// Under the name of a speaker waiting for an AirPlay 2 place.
+    let waitingForAirPlay2 = "Waiting: too many AirPlay 2 speakers"
+    /// Under the name of a speaker waiting for PTP (S285).
+    let waitingForPtp = "Waiting: AirPlay 2 speakers on another network"
+    /// Under the name of an AirPlay speaker that is not announced on the
+    /// network right now; it starts by itself once it is again (P215).
+    let notOnNetwork = "Not on the network right now, plays once it's back"
     /// An Apple TV whose home theater group AudioSync plays to (P177).
     func nativeAirPlayPlaysThroughSpeakers(name: String) -> String {
         "\(name) plays through its home theater speakers, and AudioSync already plays to them, so it's off. "
@@ -1184,11 +1209,15 @@ struct UIStrings {
     // MARK: Google Cast speakers
 
     /// The note under a speaker's name, also read in its VoiceOver hint:
-    /// what a Cast speaker does, that an AirPlay 2 speaker waits, or what a
-    /// stereo pair or home theater group is made of.
-    func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, target: AirPlayTargetRow?) -> String? {
+    /// what a Cast speaker does, that an AirPlay 2 speaker waits, that an
+    /// AirPlay speaker is off the network, or what a stereo pair or home
+    /// theater group is made of.
+    func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, waitingForPtp: Bool = false,
+                 unannounced: Bool, target: AirPlayTargetRow?) -> String? {
         if let cast { return castNote(cast) }
+        if waitingForPtp { return self.waitingForPtp }
         if waitingForAirPlay2 { return self.waitingForAirPlay2 }
+        if unannounced { return notOnNetwork }
         return target.map(airPlayTargetNote)
     }
     /// A stereo pair or home theater group: its kind and members, or the

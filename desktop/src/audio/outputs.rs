@@ -881,6 +881,7 @@ mod tests {
         }
     }
 
+    // covers: S174
     #[test]
     fn the_bus_tells_bluetooth_usb_and_software_devices() {
         let headphones = Some(form_factor::HEADPHONES);
@@ -1088,6 +1089,7 @@ mod tests {
         }
     }
 
+    // covers: S174
     #[test]
     fn the_built_in_output_with_the_smallest_endpoint_id_is_the_reference() {
         let mut listed = vec![

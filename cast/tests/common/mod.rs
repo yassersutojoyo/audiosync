@@ -11,7 +11,7 @@ pub mod http;
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use audiosync_cast::framing::{FrameReader, encode_frame};
 use audiosync_cast::message::{
     CastMessage, DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_HEARTBEAT, NS_MEDIA, NS_MULTIZONE,
-    NS_RECEIVER, PLATFORM, PayloadType, ProtocolVersion,
+    NS_RECEIVER, PLATFORM, PayloadType, ProtocolVersion, SENDER,
 };
 use rsa::pkcs8::EncodePrivateKey;
 use rustls::crypto::CryptoProvider;
@@ -107,6 +107,16 @@ pub struct Behavior {
     /// A group's `status.devices`, sent as `MULTIZONE_STATUS` to a
     /// multizone `GET_STATUS`; `None` leaves it unanswered.
     pub members: Option<Value>,
+    /// The level the device keeps and reports for a `SET_VOLUME` level, for
+    /// a device that rounds (CAST_SPEC G11) or a group that answers with a
+    /// level of its own (G1 e); `None` keeps the level sent.
+    pub volume_answer: Option<fn(f64) -> f64>,
+    /// The device sends `PING` every `.0` and drops the connection, without
+    /// a TLS close, once `.1` passes without a `PONG` (C35, G12).
+    pub device_ping: Option<(Duration, Duration)>,
+    /// A new self-signed certificate for every connection, as a device
+    /// that made one at a reboot (G4).
+    pub new_certificate_each_connection: bool,
 }
 
 impl Default for Behavior {
@@ -128,6 +138,9 @@ impl Default for Behavior {
             suite: None,
             names: vec!["not-this-device.example".to_owned()],
             members: None,
+            volume_answer: None,
+            device_ping: None,
+            new_certificate_each_connection: false,
         }
     }
 }
@@ -211,44 +224,56 @@ pub struct FakeDevice {
     pub certificate_der: Vec<u8>,
     /// The cipher suite each finished handshake negotiated, in order.
     suites: Arc<Mutex<Vec<CipherSuite>>>,
+    /// The certificate each connection was served with, in order.
+    pub certificates: Arc<Mutex<Vec<Vec<u8>>>>,
     commands: mpsc::Sender<Command>,
     stop_fetching: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
+/// A TLS server configuration with a fresh self-signed certificate, and
+/// that certificate.
+fn server_config(behavior: &Behavior) -> (Arc<ServerConfig>, Vec<u8>) {
+    // The RSA key is fixed, so only a distinct serial keeps each certificate new.
+    static SERIAL: AtomicU64 = AtomicU64::new(1);
+    let key_pair = match behavior.key {
+        ServerKey::Ecdsa => rcgen::KeyPair::generate().expect("ECDSA key"),
+        ServerKey::Rsa => rcgen::KeyPair::from_pkcs8_der_and_sign_algo(
+            &PrivatePkcs8KeyDer::from(rsa_pkcs8().to_vec()),
+            &rcgen::PKCS_RSA_SHA256,
+        )
+        .expect("RSA key"),
+    };
+    let mut params = rcgen::CertificateParams::new(behavior.names.clone()).expect("names");
+    params.serial_number = Some(SERIAL.fetch_add(1, Ordering::Relaxed).into());
+    let certificate = params
+        .self_signed(&key_pair)
+        .expect("certificate")
+        .der()
+        .clone();
+    let private = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
+    let mut provider = rustls::crypto::ring::default_provider();
+    if let Some(suite) = behavior.suite {
+        provider.cipher_suites = vec![suite];
+    }
+    let provider: Arc<CryptoProvider> = Arc::new(provider);
+    let versions: &[&rustls::SupportedProtocolVersion] = if behavior.tls12_only {
+        &[&rustls::version::TLS12]
+    } else {
+        rustls::ALL_VERSIONS
+    };
+    let config = ServerConfig::builder_with_provider(provider)
+        .with_protocol_versions(versions)
+        .expect("versions")
+        .with_no_client_auth()
+        .with_single_cert(vec![certificate.clone()], private)
+        .expect("server config");
+    (Arc::new(config), certificate.to_vec())
+}
+
 impl FakeDevice {
     pub fn start(behavior: Behavior) -> FakeDevice {
-        let key_pair = match behavior.key {
-            ServerKey::Ecdsa => rcgen::KeyPair::generate().expect("ECDSA key"),
-            ServerKey::Rsa => rcgen::KeyPair::from_pkcs8_der_and_sign_algo(
-                &PrivatePkcs8KeyDer::from(rsa_pkcs8().to_vec()),
-                &rcgen::PKCS_RSA_SHA256,
-            )
-            .expect("RSA key"),
-        };
-        let certificate = rcgen::CertificateParams::new(behavior.names.clone())
-            .expect("names")
-            .self_signed(&key_pair)
-            .expect("certificate")
-            .der()
-            .clone();
-        let private = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
-        let mut provider = rustls::crypto::ring::default_provider();
-        if let Some(suite) = behavior.suite {
-            provider.cipher_suites = vec![suite];
-        }
-        let provider: Arc<CryptoProvider> = Arc::new(provider);
-        let versions: &[&rustls::SupportedProtocolVersion] = if behavior.tls12_only {
-            &[&rustls::version::TLS12]
-        } else {
-            rustls::ALL_VERSIONS
-        };
-        let config = ServerConfig::builder_with_provider(provider)
-            .with_protocol_versions(versions)
-            .expect("versions")
-            .with_no_client_auth()
-            .with_single_cert(vec![certificate.clone()], private)
-            .expect("server config");
+        let (config, certificate) = server_config(&behavior);
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         listener.set_nonblocking(true).expect("nonblocking");
         let address = listener.local_addr().expect("address");
@@ -272,7 +297,8 @@ impl FakeDevice {
         let thread_connections = Arc::clone(&connections);
         let thread_hangups = Arc::clone(&hangups);
         let thread_suites = Arc::clone(&suites);
-        let config = Arc::new(config);
+        let certificates = Arc::new(Mutex::new(vec![certificate.clone()]));
+        let thread_certificates = Arc::clone(&certificates);
         let thread = thread::spawn(move || {
             loop {
                 match receiver.try_recv() {
@@ -283,6 +309,18 @@ impl FakeDevice {
                     Ok((tcp, _)) => {
                         *thread_connections.lock().expect("count") += 1;
                         let _ = tcp.set_nonblocking(false);
+                        let config = if device.behavior.new_certificate_each_connection
+                            && *thread_connections.lock().expect("count") > 1
+                        {
+                            let (config, certificate) = server_config(&device.behavior);
+                            thread_certificates
+                                .lock()
+                                .expect("certificates")
+                                .push(certificate);
+                            config
+                        } else {
+                            Arc::clone(&config)
+                        };
                         let shut_down = serve(
                             tcp,
                             &config,
@@ -306,7 +344,8 @@ impl FakeDevice {
             fetches,
             connections,
             hangups,
-            certificate_der: certificate.to_vec(),
+            certificate_der: certificate,
+            certificates,
             suites,
             commands,
             stop_fetching,
@@ -510,6 +549,12 @@ impl Device {
                         self.behavior.volume[key] = value.clone();
                     }
                 }
+                if let (Some(answer), Some(level)) = (
+                    self.behavior.volume_answer,
+                    payload["volume"]["level"].as_f64(),
+                ) {
+                    self.behavior.volume["level"] = json!(answer(level));
+                }
                 vec![self.status(id)]
             }
             (NS_MEDIA, "LOAD") => self.load(message, &payload, id),
@@ -704,6 +749,8 @@ fn serve(
     let mut buffer = vec![0u8; 16 * 1024];
     let mut stalled = false;
     let mut suite_recorded = false;
+    let mut last_ping = Instant::now();
+    let mut last_pong = Instant::now();
     loop {
         if !suite_recorded
             && !stream.conn.is_handshaking()
@@ -711,6 +758,17 @@ fn serve(
         {
             suites.lock().expect("suites").push(suite.suite());
             suite_recorded = true;
+        }
+        if let Some((every, close_after)) = device.behavior.device_ping {
+            if last_pong.elapsed() > close_after {
+                let _ = stream.sock.0.shutdown(std::net::Shutdown::Both);
+                return false;
+            }
+            if last_ping.elapsed() >= every {
+                last_ping = Instant::now();
+                let ping = json_message(PLATFORM, SENDER, NS_HEARTBEAT, json!({"type": "PING"}));
+                write(&mut stream, &ping);
+            }
         }
         loop {
             match commands.try_recv() {
@@ -747,6 +805,14 @@ fn serve(
             Ok(count) => {
                 reader.push(&buffer[..count]);
                 while let Ok(Some(message)) = reader.next_message() {
+                    if message.namespace == NS_HEARTBEAT
+                        && message
+                            .payload_utf8
+                            .as_deref()
+                            .is_some_and(|text| text.contains("\"PONG\""))
+                    {
+                        last_pong = Instant::now();
+                    }
                     log.lock().expect("log").push(message.clone());
                     for reply in device.answer(&message) {
                         write(&mut stream, &reply);

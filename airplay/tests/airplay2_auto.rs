@@ -194,7 +194,11 @@ fn with_the_flag_on_a_dual_device_stays_on_airplay1_with_the_switch_off() {
 #[test]
 fn a_second_dual_device_falls_back_to_airplay1_while_the_airplay2_place_is_taken() {
     let _serial = serial();
-    let (sender, _host) = start(switch(true, true));
+    // A limit of one stands in for the 16 places of P204.
+    let (sender, _host) = start(SenderConfig {
+        airplay2_sessions: 1,
+        ..switch(true, true)
+    });
     let first_ap1 = NetReceiver::start(Behavior::default());
     let first_ap2 = Ap2Server::start(FakeAp2::new());
     let (events, first) = play(&sender, dual(&first_ap1, &first_ap2, 68));

@@ -1,6 +1,7 @@
 // Checks the soak harness's memory rule (Tests/soakrules.swift) on recorded
 // footprint series, so it needs no audio hardware. Run all tests with:
 // Tests/run-tests.sh
+// covers: S225
 import Foundation
 
 var failedChecks = 0

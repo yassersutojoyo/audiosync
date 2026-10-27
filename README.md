@@ -33,9 +33,9 @@ AirPlay speakers play about two seconds late. Local speakers don't. Play the sam
 
 AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. Mac app, menu bar panel, free, alpha.
 
-## Coming in 0.7
+## New in 0.7
 
-On `main` now or on the way, in the Mac app and the Windows build that's still in preview:
+The Windows parts are in the preview build, which isn't out yet.
 
 - Web Remote: turn it on and a phone on your home network can switch speakers on and off and set volumes and delays. It's plain HTTP, so keep it at home.
 - Calibrate All Speakers measures the speakers that are on, one after the other, and lets you apply or undo the new delays in one go. It leaves out headphones and virtual outputs, since the microphone can't hear them.
@@ -72,18 +72,18 @@ The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 - Source: all system audio, one app, or an input device (mic, audio interface).
 - Outputs: AirPlay speakers, Apple TVs, Google Cast speakers, and anything macOS can play to (built-in, headphone jack, HDMI, USB, Bluetooth).
 - A delay per local speaker (−2 to +20 s), plus one AirPlay delay.
-- Volume per speaker and master, a 10-band EQ, speaker groups that switch on and off together (zones with a volume of their own from 0.7), auto-connect, launch at login, Now Playing for Spotify and Music.
+- Volume per speaker and master, a 10-band EQ, zones that switch on and off together, each with its own volume, auto-connect, launch at login, Now Playing for Spotify and Music.
 
 Like Airfoil, but less. Not made by Rogue Amoeba, no shared code.
 
-Google Cast speakers work in both the Mac and the Windows app, one at a time. Cast has no shared clock, so AudioSync can't sync them by itself: you set an offset by ear for each Cast speaker and it's remembered. If one drifts, hit Resync under its volume. That restarts the stream with a short gap, and it never happens on its own. In 0.6, speaker groups made in the Google Home app can't play. From 0.7 a group plays as one speaker, with one volume and one offset, and its row names the members once the group reports them. A speaker in the group keeps its own row and is busy while the group plays. When a Cast speaker and AirPlay speakers are on together, the faster side waits for the slower one, but AirPlay can only wait so long: 3 s in 0.6, 20 s from 0.7. Past that a notice tells you how far ahead AirPlay plays.
+Google Cast speakers work in both the Mac and the Windows app, one at a time. Cast has no shared clock, so AudioSync can't sync them by itself: you set an offset by ear for each Cast speaker and it's remembered. If one drifts, hit Resync under its volume. That restarts the stream with a short gap, and it never happens on its own. A speaker group made in the Google Home app plays as one speaker, with one volume and one offset, and its row names the members once the group reports them. A speaker in the group keeps its own row and is busy while the group plays. When a Cast speaker and AirPlay speakers are on together, the faster side waits for the slower one, but AirPlay can only wait up to 20 s. Past that a notice tells you how far ahead AirPlay plays.
 
 ## Install
 
 - Get `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest), open it and drag AudioSync to Applications. Needs macOS 15 or later.
 - The first launch takes one extra step, because AudioSync isn't notarized. When macOS says it can't verify the app, click Done, then go to System Settings → Privacy & Security, click Open Anyway and confirm with your password. After that it opens like any other app. Only Apple's paid Developer Program would remove that step, and I'm not in it.
 - Or, from Terminal: `curl -fsSL https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.sh | bash`. It downloads the latest release's zip, checks it against the release's SHA-256 checksums, puts AudioSync in Applications and opens it. A copy downloaded by curl isn't flagged as downloaded, so macOS doesn't ask for the extra step. Run it again to update.
-- Each release lists SHA-256 checksums. Up to 0.6 you update by replacing the app; from 0.7 on, the app finds new versions itself (Check for Updates… in the AudioSync menu).
+- Each release lists SHA-256 checksums. The app finds new versions itself (Check for Updates… in the AudioSync menu). Coming from 0.6 or older, replace the app by hand once.
 - macOS asks for Screen & System Audio Recording (choose System Audio Recording Only) and Local Network. Microphone only for an input source or Calibrate with Microphone, Automation only for Now Playing.
 - HomePods: in the Home app, set Allow Speaker & TV Access to "Anyone on the Same Network", on a network you trust. Not "Everyone".
 - Build it yourself: Xcode 16 command line tools, [rustup](https://rustup.rs), then `./setup.sh`. See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
@@ -101,7 +101,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 ## What doesn't work (yet)
 
 - Everything is about two seconds late. Fine for music, bad for video and games.
-- AirPlay 1 only by default. AirPlay 2 is experimental and off: in 0.6, start AudioSync with `AUDIOSYNC_AIRPLAY2=1` to try it. From 0.7 there's a switch instead: turn on AirPlay 2 (Experimental) in the app menu or the gear menu, then quit and reopen AudioSync. It plays one AirPlay 2 speaker at a time, and so far I've only tried it on one AirPlay 2 TV. From 0.7, with the switch on, a stereo pair, or an Apple TV with the HomePods it plays through, shows up as one speaker with one volume and one delay. Both apps show that row. No real pair has been tried yet.
+- AirPlay 1 only by default. AirPlay 2 is experimental and off. To try it, turn on AirPlay 2 (Experimental) in the app menu or the gear menu, then quit and reopen AudioSync. It plays up to 16 AirPlay 2 speakers at once, but so far I've only tried it on one AirPlay 2 TV, never on several at once. With the switch on, a stereo pair, or an Apple TV with the HomePods it plays through, shows up as one speaker with one volume and one delay. Both apps show that row. No real pair has been tried yet.
 - Not tried on a HomePod yet. If yours fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`.
 - Several Bluetooth outputs at once may stutter. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync handles clock drift, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
 - On the Mac, Now Playing only works with Spotify and Music.

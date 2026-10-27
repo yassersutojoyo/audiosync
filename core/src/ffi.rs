@@ -953,6 +953,10 @@ mod tests {
             ("ASC_EQ_BANDS", BAND_COUNT.to_string()),
             ("ASC_EQ_PRESETS", PRESET_COUNT.to_string()),
             (
+                "ASC_AIRPLAY2_SESSIONS",
+                audiosync_airplay::sender::AIRPLAY2_SESSIONS.to_string(),
+            ),
+            (
                 "ASC_RING_MARGIN_FRAMES",
                 crate::ring::MIN_MARGIN_FRAMES.to_string(),
             ),
@@ -1017,12 +1021,16 @@ mod tests {
                 AIRPLAY_REASON_TIMING.to_string(),
             ),
             (
-                "ASC_AIRPLAY_REASON_ONE_AIRPLAY2",
-                AIRPLAY_REASON_ONE_AIRPLAY2.to_string(),
+                "ASC_AIRPLAY_REASON_TOO_MANY_AIRPLAY2",
+                AIRPLAY_REASON_TOO_MANY_AIRPLAY2.to_string(),
             ),
             (
                 "ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS",
                 AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_REASON_PTP_OTHER_NETWORK",
+                AIRPLAY_REASON_PTP_OTHER_NETWORK.to_string(),
             ),
             ("ASC_AIRPLAY_FLAG_TARGET", AIRPLAY_FLAG_TARGET.to_string()),
             (
@@ -1089,6 +1097,10 @@ mod tests {
             (
                 "ASC_AIRPLAY_STATE_STOPPED",
                 AIRPLAY_STATE_STOPPED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_STATE_UNANNOUNCED",
+                AIRPLAY_STATE_UNANNOUNCED.to_string(),
             ),
             (
                 "ASC_AIRPLAY_ERROR_NOT_RESPONDING",
@@ -1215,6 +1227,14 @@ mod tests {
             (
                 "ASC_AIRPLAY_WARNING_PTP_FREE",
                 AIRPLAY_WARNING_PTP_FREE.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_PEERS_UPDATE_REFUSED",
+                AIRPLAY_WARNING_PEERS_UPDATE_REFUSED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_GRANDMASTER_OUTRANKED",
+                AIRPLAY_WARNING_GRANDMASTER_OUTRANKED.to_string(),
             ),
             (
                 "ASC_AIRPLAY_EVENT_LATENCY_HELD",

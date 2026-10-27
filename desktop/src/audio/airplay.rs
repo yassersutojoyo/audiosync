@@ -263,6 +263,11 @@ pub fn airplay2_on(saved: bool, env: Option<&str>) -> bool {
     saved || airplay2_switch(env)
 }
 
+/// `AUDIOSYNC_AIRPLAY2` as this launch reads it, for [`airplay2_on`].
+pub fn airplay2_switch_env() -> Option<String> {
+    std::env::var(AIRPLAY2_SWITCH_ENV).ok()
+}
+
 /// Whether AirPlay 2 is automatic per receiver for this launch (S312): the
 /// build's flag, or `AUDIOSYNC_AIRPLAY2_AUTO`.
 pub fn airplay2_auto_on() -> bool {
@@ -271,8 +276,14 @@ pub fn airplay2_auto_on() -> bool {
 
 /// The sender's AirPlay 2 path and preference (S312): the switch is the
 /// saved setting or `switch_env`, and the flag `auto` decides what it means.
+/// On Windows the driver thread runs as a Pro Audio task (S323).
 pub fn airplay2_config(saved: bool, switch_env: Option<&str>, auto: bool) -> SenderConfig {
-    SenderConfig::default().with_airplay2_switch(auto, airplay2_on(saved, switch_env))
+    SenderConfig {
+        #[cfg(windows)]
+        on_driver_thread: Some(super::wasapi::pro_audio_thread),
+        ..SenderConfig::default()
+    }
+    .with_airplay2_switch(auto, airplay2_on(saved, switch_env))
 }
 
 /// The real sender.
@@ -730,8 +741,11 @@ pub fn problem(reason: UserReason) -> AirPlayProblem {
         UserReason::ReceiverUnverified => AirPlayProblem::ReceiverUnverified,
         UserReason::Unsupported(UnsupportedReason::AirPlay2Only) => AirPlayProblem::AirPlay2NotYet,
         UserReason::Unsupported(UnsupportedReason::Timing) => AirPlayProblem::TimingUnavailable,
-        UserReason::Unsupported(UnsupportedReason::OneAirPlay2Session) => {
-            AirPlayProblem::OneAirPlay2Speaker
+        UserReason::Unsupported(UnsupportedReason::TooManyAirPlay2Sessions) => {
+            AirPlayProblem::TooManyAirPlay2Speakers
+        }
+        UserReason::Unsupported(UnsupportedReason::PtpOtherNetwork) => {
+            AirPlayProblem::PtpOtherNetwork
         }
         UserReason::Unsupported(UnsupportedReason::PlaysThroughSpeakers) => {
             AirPlayProblem::PlaysThroughSpeakers
@@ -1044,14 +1058,15 @@ impl Added {
 }
 
 /// How a member's state ranks for its target's: playing first, then
-/// connecting, retrying, failed, stopped.
+/// connecting, retrying, unannounced, failed, stopped.
 fn state_rank(state: &SpeakerState) -> u8 {
     match state {
         SpeakerState::Playing => 0,
         SpeakerState::Connecting => 1,
         SpeakerState::Retrying { .. } => 2,
-        SpeakerState::Failed => 3,
-        SpeakerState::Stopped => 4,
+        SpeakerState::Unannounced => 3,
+        SpeakerState::Failed => 4,
+        SpeakerState::Stopped => 5,
     }
 }
 
@@ -1156,6 +1171,10 @@ pub struct AirPlaySpeakers {
     estimate_ms: f64,
     /// A new E held while a speaker sounds, once logged.
     estimate_held_ms: Option<f64>,
+    /// The e_s each row's d′_s uses, in ms: fixed while a speaker sounds,
+    /// so a target member joining or leaving moves no delay until E may
+    /// change (S284).
+    row_estimates: BTreeMap<String, f64>,
     /// The sender holds an Lf until the stream is empty or restarts.
     latency_held: bool,
     /// The speakers warned this session that their R_s needs more than the
@@ -1246,6 +1265,7 @@ impl AirPlaySpeakers {
             latency_frames: DEFAULT_LATENCY_FRAMES,
             estimate_ms: 0.0,
             estimate_held_ms: None,
+            row_estimates: BTreeMap::new(),
             latency_held: false,
             latency_warned: BTreeSet::new(),
             hold_back_ms: 0.0,
@@ -1333,6 +1353,7 @@ impl AirPlaySpeakers {
         self.latency_frames = DEFAULT_LATENCY_FRAMES;
         self.estimate_ms = 0.0;
         self.estimate_held_ms = None;
+        self.row_estimates.clear();
         self.latency_held = false;
         self.latency_warned.clear();
         self.stopped = false;
@@ -1458,6 +1479,27 @@ impl AirPlaySpeakers {
             .fold(0.0, f64::max)
     }
 
+    /// Whether a row plays several members at one delay.
+    fn is_target(&self, row: &str) -> bool {
+        self.members_of(row) != [row]
+    }
+
+    /// e_s as a row's d′_s uses it: a target's stays as it was while a
+    /// speaker sounds, so a member joining or leaving moves no delay (S284).
+    fn row_estimate(&self, row: &str) -> f64 {
+        self.row_estimates
+            .get(row)
+            .copied()
+            .unwrap_or_else(|| self.estimate_of(row))
+    }
+
+    /// Whether a target's e_s moved since its d′_s was last allowed to change.
+    fn row_estimates_stale(&self) -> bool {
+        self.row_estimates
+            .iter()
+            .any(|(row, &held)| held != self.estimate_of(row))
+    }
+
     /// The rows in the stream and the ones about to join it.
     fn stream_rows(&self, joining: &[String]) -> Vec<String> {
         let mut rows: Vec<String> = self.added.keys().cloned().collect();
@@ -1498,6 +1540,23 @@ impl AirPlaySpeakers {
     /// Applies E for `rows` while no speaker sounds, or `now` (the stream
     /// emptied); otherwise holds it (S283, P201).
     fn sync_estimate(&mut self, rows: &[String], now: bool) {
+        let free = now || rows.is_empty() || !self.link.sounding();
+        if free {
+            self.row_estimates = rows
+                .iter()
+                .map(|row| (row.clone(), self.estimate_of(row)))
+                .collect();
+        } else {
+            // A speaker's own report moves its d′_s (S283); a target's members
+            // joining or leaving do not until E may change (S284).
+            self.row_estimates.retain(|row, _| rows.contains(row));
+            for row in rows {
+                if !self.is_target(row) || !self.row_estimates.contains_key(row) {
+                    let estimate = self.estimate_of(row);
+                    self.row_estimates.insert(row.clone(), estimate);
+                }
+            }
+        }
         let wanted = rows
             .iter()
             .map(|row| self.estimate_of(row))
@@ -1653,7 +1712,7 @@ impl AirPlaySpeakers {
         if !self.reached_over_airplay2(id, info) {
             return availability(info, self.legacy_paired(id));
         }
-        let paired = self.homekit_paired(id, info) || self.paired_for_session.contains(id);
+        let paired = self.homekit_paired(id) || self.paired_for_session.contains(id);
         match airplay2_availability(info, paired) {
             AirPlayAvailability::Open if !paired && self.pin_seen.contains(id) => {
                 AirPlayAvailability::NeedsPin
@@ -1662,12 +1721,12 @@ impl AirPlaySpeakers {
         }
     }
 
-    /// Whether stored AirPlay 2 credentials pair the speaker: never with
-    /// one that asks for a code every time, which refuses them (P61).
-    fn homekit_paired(&self, id: &str, info: &ReceiverInfo) -> bool {
-        self.store.homekit(id).is_some()
-            && !info.device.verdict.code_every_time
-            && !self.credentials_turned_down.contains(id)
+    /// Whether stored AirPlay 2 credentials pair the speaker. A flag asking
+    /// for a code every time doesn't count against them: it arrives
+    /// unauthenticated, and only a rejected verify turns them down (P154,
+    /// P182).
+    fn homekit_paired(&self, id: &str) -> bool {
+        self.store.homekit(id).is_some() && !self.credentials_turned_down.contains(id)
     }
 
     /// Whether stored legacy credentials pair the speaker.
@@ -1676,22 +1735,15 @@ impl AirPlaySpeakers {
     }
 
     /// Whether the listed speaker `id`, reached over AirPlay 2, asks for a
-    /// code every time it connects. Over AirPlay 1 the same flag marks the
-    /// legacy pairing, which asks once.
+    /// code every time it connects: by its flags, unless it holds stored
+    /// credentials no answer turned down (P182). Over AirPlay 1 the same
+    /// flag marks the legacy pairing, which asks once.
     fn asks_every_time(&self, id: &str) -> bool {
         self.listed.get(id).is_some_and(|listed| {
             listed.info.device.verdict.code_every_time
                 && self.reached_over_airplay2(id, &listed.info)
+                && !self.homekit_paired(id)
         })
-    }
-
-    /// Whether the row of `id` shows its AirPlay 2 credentials as a
-    /// pairing; one not listed now keeps showing them.
-    fn shows_homekit_paired(&self, id: &str) -> bool {
-        match self.listed.get(id) {
-            Some(listed) => self.homekit_paired(id, &listed.info),
-            None => self.store.homekit(id).is_some() && !self.credentials_turned_down.contains(id),
-        }
     }
 
     /// Whether a session of `id` that plays proved the receiver holds the
@@ -1940,7 +1992,7 @@ impl AirPlaySpeakers {
                     delay_ms: settings.delay_ms,
                     reported_latency_ms: self.estimate_of(id),
                     playing: self.is_playing(id),
-                    paired: self.legacy_paired(id) || self.shows_homekit_paired(id),
+                    paired: self.legacy_paired(id) || self.homekit_paired(id),
                     holds_password: self.passwords.contains_key(id),
                     holds_credentials: self.store.contains(id) || self.store.homekit(id).is_some(),
                     pairing: self.pairings.contains_key(id),
@@ -2199,10 +2251,12 @@ impl AirPlaySpeakers {
         }
     }
 
-    /// Forgets the speaker's AirPlay 2 credentials, if AudioSync keeps any.
-    /// Returns whether it did.
+    /// Forgets the speaker's AirPlay 2 credentials and timing entry (P217),
+    /// here and in the sender, if AudioSync keeps any. Returns whether it
+    /// had credentials.
     fn forget_homekit(&mut self, id: &str) -> bool {
-        if self.store.homekit(id).is_none() {
+        let homekit = self.store.homekit(id).is_some();
+        if !homekit && self.store.timing(id).is_none() {
             return false;
         }
         let key = self
@@ -2214,6 +2268,12 @@ impl AirPlaySpeakers {
         self.homekit_keys.remove(id);
         if let Some(key) = key {
             self.link.forget_homekit(&key);
+        }
+        if !homekit {
+            let _ = self.store.forget_timing(id);
+            self.log
+                .log(|| format!("AirPlay speaker {}: timing entry forgotten", self.label(id)));
+            return false;
         }
         let saved = self.store.remove_homekit(id);
         self.store_written(saved.is_ok());
@@ -2921,7 +2981,7 @@ impl AirPlaySpeakers {
     /// sender's limits. While E is held, a speaker reporting more than E
     /// gets no offset and plays the difference late, as S283 says.
     fn wanted_delay_ms(&self, id: &str) -> f64 {
-        let offset_ms = (self.estimate_ms - self.estimate_of(id)).max(0.0);
+        let offset_ms = (self.estimate_ms - self.row_estimate(id)).max(0.0);
         self.settings(id).delay_ms + offset_ms + self.hold_back_ms
     }
 
@@ -2983,6 +3043,7 @@ impl AirPlaySpeakers {
         options.delay = self.sent_delay(id);
         options.credentials = self.store.get(id).cloned();
         options.homekit_credentials = self.store.homekit(id).cloned();
+        options.timing = self.store.timing(id).cloned();
         options.password = self.password(id);
         options.pcm = self.pcm_devices.contains(id);
         options.trace = self.log.enabled();
@@ -3094,6 +3155,7 @@ impl AirPlaySpeakers {
                 let mut own = options.clone();
                 own.credentials = self.store.get(&id).cloned();
                 own.homekit_credentials = self.store.homekit(&id).cloned();
+                own.timing = self.store.timing(&id).cloned();
                 own.password = self.password(&id);
                 (member.key.clone(), own)
             })
@@ -3258,6 +3320,11 @@ impl AirPlaySpeakers {
                     command,
                 } => changed |= self.remote_command(&key, target.as_ref(), command, Instant::now()),
                 SenderEvent::RemoteLog(line) => self.log.log(|| line),
+                SenderEvent::PathLog { key, line } => {
+                    let id = speaker_id(&key);
+                    self.log
+                        .log(|| format!("AirPlay {}: {line}", self.label(&id)));
+                }
                 SenderEvent::TargetMissing { id, missing } => {
                     let id = id.to_string();
                     let missing: Vec<String> = missing.iter().map(speaker_id).collect();
@@ -3284,7 +3351,7 @@ impl AirPlaySpeakers {
             }
         }
         // A new E held while a speaker sounded applies once none does.
-        if self.estimate_held_ms.is_some() {
+        if self.estimate_held_ms.is_some() || self.row_estimates_stale() {
             let before = self.sent_delays();
             let rows = self.stream_rows(&[]);
             self.sync_estimate(&rows, false);
@@ -3758,6 +3825,7 @@ impl AirPlaySpeakers {
                     "trying again in {:.1} s",
                     at.saturating_duration_since(Instant::now()).as_secs_f64()
                 ),
+                SpeakerState::Unannounced => "waiting until it is announced again".to_owned(),
                 SpeakerState::Failed => "failed".to_owned(),
                 SpeakerState::Stopped => "stopped".to_owned(),
             };
@@ -3777,6 +3845,7 @@ impl AirPlaySpeakers {
             return false;
         };
         let was_playing = added.state == SpeakerState::Playing;
+        let was_unannounced = added.state == SpeakerState::Unannounced;
         added.state = state;
         let mut relisted = false;
         if state == SpeakerState::Playing {
@@ -3788,6 +3857,11 @@ impl AirPlaySpeakers {
         }
         if state == SpeakerState::Playing && !was_playing {
             events.push(BackendEvent::AirPlayPlaying { id: id.to_owned() });
+        } else if was_unannounced != (state == SpeakerState::Unannounced) {
+            events.push(BackendEvent::AirPlayUnannounced {
+                id: id.to_owned(),
+                unannounced: !was_unannounced,
+            });
         }
         // A session the sender restarts by itself (an ALAC retry, a path
         // switch) says so with a state alone, no error.
@@ -3864,7 +3938,7 @@ impl AirPlaySpeakers {
                         id: target.to_owned(),
                         problem,
                     });
-                } else if problem == AirPlayProblem::OneAirPlay2Speaker {
+                } else if problem.waits() {
                     events.push(BackendEvent::AirPlayTrouble {
                         id: target.to_owned(),
                         problem,
@@ -4019,6 +4093,11 @@ impl AirPlaySpeakers {
                 retry_at,
             }) => {
                 let mut problem = problem(reason);
+                // Errors 1 and 3 to 6 to a verify with stored credentials
+                // describe the receiver, not them: a refusal (P154).
+                if error.kind == ErrorKind::PairingFailed && self.store.homekit(id).is_some() {
+                    problem = AirPlayProblem::Refused;
+                }
                 self.paired_for_session.remove(id);
                 self.note_path_switch(id, error.kind, retry_at.is_some());
                 // Outside the user's attempt its row keeps no code request:
@@ -4103,8 +4182,8 @@ impl AirPlaySpeakers {
                         id: id.to_owned(),
                         problem,
                     });
-                } else if problem == AirPlayProblem::OneAirPlay2Speaker {
-                    // The sender starts it once the other session ends.
+                } else if problem.waits() {
+                    // The sender starts it once it has a place or PTP is free.
                     events.push(BackendEvent::AirPlayTrouble {
                         id: id.to_owned(),
                         problem,
@@ -4171,6 +4250,27 @@ impl AirPlaySpeakers {
             }
             SpeakerEvent::HomeKitPaired(credentials) => {
                 self.keep_homekit(id, credentials);
+                false
+            }
+            SpeakerEvent::TimingRemembered(memory) => {
+                let timing = memory.timing;
+                let saved = self.store.keep_timing(id, memory);
+                self.log.log(|| {
+                    let saved = match &saved {
+                        Ok(()) => String::new(),
+                        Err(error) => format!(" for this run only ({error})"),
+                    };
+                    format!(
+                        "AirPlay speaker {}: {timing:?} timing kept{saved}",
+                        self.label(id)
+                    )
+                });
+                false
+            }
+            SpeakerEvent::TimingForgotten => {
+                let _ = self.store.forget_timing(id);
+                self.log
+                    .log(|| format!("AirPlay speaker {}: timing entry forgotten", self.label(id)));
                 false
             }
             SpeakerEvent::Trace(line) => {
@@ -4446,6 +4546,9 @@ pub mod tests {
         Password(String, String),
         /// The speaker added just before may use PCM.
         Pcm(String),
+        /// The speaker added just before came with this stored timing entry
+        /// (P217).
+        Timing(String, audiosync_airplay::ap2::Timing),
         StartPairing(String),
         SubmitPin(String, String),
         CancelPairing(String),
@@ -4656,6 +4759,9 @@ pub mod tests {
             }
             if options.pcm {
                 state.calls.push(Call::Pcm(id_of(device)));
+            }
+            if let Some(memory) = &options.timing {
+                state.calls.push(Call::Timing(id_of(device), memory.timing));
             }
             None
         }
@@ -5158,8 +5264,8 @@ pub mod tests {
     }
 
     /// Asking for a code every time, by its own flags or by a forged RAOP
-    /// `sf`, hides the pairing but never Forget Pairing, the one way out of
-    /// the AirPlay 2 pin (P2).
+    /// `sf`, hides neither the pairing (P182) nor Forget Pairing, the one
+    /// way out of the AirPlay 2 pin (P2).
     #[test]
     fn a_pinned_speaker_asking_for_a_code_every_time_keeps_forget_pairing() {
         use crate::audio::pairings::tests::homekit;
@@ -5177,7 +5283,7 @@ pub mod tests {
             fake.appear(&den);
             airplay.poll();
             let row = &airplay.speakers()[0];
-            assert!(!row.paired, "{flags}: it asks for a code every time");
+            assert!(row.paired, "{flags}: the flag alone turns nothing down");
             assert!(row.holds_credentials, "{flags}: Forget Pairing is on offer");
             assert!(!row.airplay2, "{flags}: the switch is off");
             assert_eq!(row.availability, AirPlayAvailability::AirPlay2NotYet);
@@ -5302,12 +5408,13 @@ pub mod tests {
         fake.set_airplay2(true);
         let mut airplay = speakers(&fake);
         airplay.set_streaming(true);
-        // Keys kept from before the TV was set to ask every time pair
-        // nothing: it refuses them.
+        // Keys kept from before the TV was set to ask every time, which a
+        // verify with them already had refused.
         airplay
             .store
             .insert_homekit(&id, homekit(0x5A))
             .expect("saved");
+        airplay.credentials_turned_down.insert(id.clone());
         pin_shown(&fake, &mut airplay, &tv);
         let row = &airplay.speakers()[0];
         assert!(!row.paired);
@@ -5495,6 +5602,90 @@ pub mod tests {
             "{events:?}"
         );
         assert_eq!(airplay.store.homekit(&id), None, "forgotten all the same");
+    }
+
+    // covers: P217
+    #[test]
+    fn a_timing_entry_reaches_the_next_launch_and_leaves_the_identity_file_alone() {
+        use crate::audio::pairings::tests::sealer;
+        use crate::audio::pairings::{AIRPLAY2_FILE_NAME, FILE_NAME};
+        use audiosync_airplay::ap2::Timing;
+        use audiosync_airplay::sender::TimingMemory;
+
+        let folder = crate::debug_log::test_dir("airplay2-timing-relaunch");
+        let speaker = airplay2_device(12, "Study", false);
+        let id = id_of(&speaker);
+        let launch = |fake: &FakeAirPlay| {
+            fake.set_airplay2(true);
+            let (store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+            AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store)
+        };
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = launch(&fake);
+        let identity = folder.join(AIRPLAY2_FILE_NAME);
+        let before = std::fs::read(&identity).expect("the identity file");
+        fake.push(SenderEvent::Speaker {
+            key: speaker.key.clone(),
+            event: SpeakerEvent::TimingRemembered(TimingMemory::of(&speaker, Timing::Ptp)),
+        });
+        airplay.poll();
+        // An older AudioSync reads only identity format 1, and a newer one
+        // would cost it every AirPlay 2 pairing.
+        let after = std::fs::read(&identity).expect("the identity file");
+        assert_eq!(after, before, "the identity file is left as it was");
+        let plain = sealer().open(&after).expect("sealed by the test sealer");
+        assert_eq!(
+            plain[audiosync_core::airplay2_identity::MAGIC.len()],
+            1,
+            "identity format 1"
+        );
+        drop(airplay);
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = launch(&fake);
+        fake.appear(&speaker);
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.set_streaming(true);
+        airplay.poll();
+        let calls = fake.take_calls();
+        assert!(
+            calls.contains(&Call::Timing(id.clone(), Timing::Ptp)),
+            "{calls:?}"
+        );
+    }
+
+    // covers: P217
+    #[test]
+    fn forget_pairing_drops_the_timing_entry_of_a_speaker_without_airplay2_credentials() {
+        use audiosync_airplay::ap2::Timing;
+        use audiosync_airplay::sender::TimingMemory;
+
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        let speaker = airplay2_device(13, "Porch", false);
+        let id = id_of(&speaker);
+        fake.appear(&speaker);
+        fake.push(SenderEvent::Speaker {
+            key: speaker.key.clone(),
+            event: SpeakerEvent::TimingRemembered(TimingMemory::of(&speaker, Timing::Ptp)),
+        });
+        airplay.poll();
+        airplay
+            .passwords
+            .insert(id.clone(), Secret::from("hunter2"));
+        assert!(airplay.store.timing(&id).is_some());
+        assert!(airplay.store.homekit(&id).is_none(), "a password only");
+        fake.take_calls();
+
+        airplay.forget_pairing(&id);
+        assert!(airplay.store.timing(&id).is_none(), "the entry goes too");
+        assert!(
+            fake.take_calls().contains(&Call::ForgetHomeKit(id.clone())),
+            "the sender drops its copy too"
+        );
     }
 
     #[test]
@@ -6931,7 +7122,7 @@ pub mod tests {
         airplay.poll();
         fake.fail(
             &kitchen,
-            ErrorKind::Unsupported(UnsupportedReason::OneAirPlay2Session),
+            ErrorKind::Unsupported(UnsupportedReason::TooManyAirPlay2Sessions),
         );
         assert_eq!(
             airplay.poll(),
@@ -6939,7 +7130,7 @@ pub mod tests {
                 BackendEvent::AirPlayChanged,
                 BackendEvent::AirPlayTrouble {
                     id: id.clone(),
-                    problem: AirPlayProblem::OneAirPlay2Speaker
+                    problem: AirPlayProblem::TooManyAirPlay2Speakers
                 }
             ]
         );
@@ -6967,6 +7158,13 @@ pub mod tests {
         assert!(!airplay2_on(false, Some("0")));
         assert!(airplay2_on(true, None));
         assert!(airplay2_on(false, Some("1")));
+    }
+
+    // covers: S323
+    #[test]
+    fn the_app_raises_the_airplay_driver_thread_on_windows() {
+        let config = airplay2_config(false, None, false);
+        assert_eq!(config.on_driver_thread.is_some(), cfg!(windows));
     }
 
     #[test]
@@ -9683,6 +9881,24 @@ pub mod tests {
             .collect()
     }
 
+    /// The stereo pair and a lone AirPlay 2 speaker, Den, on and streaming,
+    /// with Left at 220 ms, Right at 50 ms and Den at 100 ms reported.
+    fn pair_and_den(fake: &FakeAirPlay) -> (AirPlaySpeakers, Target, Device, Device) {
+        let (pair, left, right) = stereo_pair();
+        let den = airplay2_device(23, "Den", false);
+        let mut airplay = with_target(fake, &pair, &[&left, &right]);
+        fake.appear(&den);
+        airplay.poll();
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        airplay.set_enabled(&id_of(&den), true).unwrap();
+        fake.report_latency(&left, 220_000, LatencySources::AUDIO_LATENCY);
+        fake.report_latency(&right, 50_000, LatencySources::AUDIO_LATENCY);
+        fake.report_latency(&den, 100_000, LatencySources::AUDIO_LATENCY);
+        airplay.poll();
+        (airplay, pair, right, den)
+    }
+
     /// AirPlay 2 receivers listed, on and streaming, each with d_s 0.
     fn airplay2_streaming(fake: &FakeAirPlay, names: &[&str]) -> (AirPlaySpeakers, Vec<Device>) {
         fake.set_airplay2(true);
@@ -9743,6 +9959,60 @@ pub mod tests {
 
     // covers: S284
     #[test]
+    fn several_airplay_2_receivers_share_lf_and_e_and_a_target_uses_its_largest_member() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, _pair, right, den) = pair_and_den(&fake);
+        assert_eq!(ms(airplay.latency()), 1750 + 220, "one E over all three");
+        assert_eq!(
+            ms(airplay.sent_delay(PAIR)),
+            0,
+            "the pair's e_s is Left's 220"
+        );
+        assert_eq!(ms(airplay.sent_delay(&id_of(&den))), 120);
+        let calls = fake.take_calls();
+        assert!(
+            !delays(&calls).iter().any(|(id, _)| *id == id_of(&right)),
+            "the members share the pair's one delay: {calls:?}"
+        );
+        fake.report_latency(&right, 1_300_000, LatencySources::AUDIO_LATENCY);
+        airplay.poll();
+        assert_eq!(
+            latencies(&fake.take_calls()),
+            [79_380],
+            "a member's report moves the one Lf"
+        );
+    }
+
+    // covers: S284
+    #[test]
+    fn a_target_member_leaving_while_others_sound_changes_no_delay() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, pair, right, den) = pair_and_den(&fake);
+        fake.take_calls();
+        fake.set_sounding(true);
+        let mut right_only = pair.clone();
+        right_only.members = vec![member_of(&right)];
+        fake.target(&right_only);
+        airplay.poll();
+        let calls = fake.take_calls();
+        assert_eq!(delays(&calls), [], "{calls:?}");
+        assert_eq!(target_delays(&calls), [], "{calls:?}");
+        assert_eq!(ms(airplay.latency()), 1970, "E stays at Left's 220 ms");
+        assert_eq!(ms(airplay.sent_delay(PAIR)), 0);
+        airplay.set_enabled(&id_of(&den), false).unwrap();
+        airplay.poll();
+        let calls = fake.take_calls();
+        assert_eq!(target_delays(&calls), [], "{calls:?}");
+        assert_eq!(ms(airplay.latency()), 1970);
+        // Once the stream is empty the next values come: only Right's 50 ms is left.
+        fake.set_sounding(false);
+        airplay.poll();
+        assert_eq!(ms(airplay.latency()), 1800);
+        assert_eq!(ms(airplay.sent_delay(PAIR)), 0);
+    }
+
+    // covers: S284
+    #[test]
     fn an_airplay2_receiver_leaving_while_others_sound_changes_no_delay() {
         let fake = FakeAirPlay::new();
         let (mut airplay, devices) = airplay2_streaming(&fake, &["A1", "B2", "C3"]);
@@ -9795,11 +10065,9 @@ pub mod tests {
         for device in playing {
             fake.state(device, SpeakerState::Playing);
         }
-        // The sender has no code yet for the reasons of P204 and P205; P169's
-        // is the one wait it reports today, so it stands in for both.
         fake.fail(
             last,
-            ErrorKind::Unsupported(UnsupportedReason::OneAirPlay2Session),
+            ErrorKind::Unsupported(UnsupportedReason::TooManyAirPlay2Sessions),
         );
         let events = airplay.poll();
         let troubles: Vec<&BackendEvent> = events
@@ -9815,7 +10083,7 @@ pub mod tests {
             troubles,
             [&BackendEvent::AirPlayTrouble {
                 id: id_of(last),
-                problem: AirPlayProblem::OneAirPlay2Speaker
+                problem: AirPlayProblem::TooManyAirPlay2Speakers
             }],
             "{events:?}"
         );
