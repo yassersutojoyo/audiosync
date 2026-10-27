@@ -529,6 +529,7 @@ pub mod tests {
         install(env, update, &|_| {}, &AtomicBool::new(false))
     }
 
+    // covers: S296, S298, S301
     #[test]
     fn the_fake_appcast_end_to_end_through_a_memory_fetch() {
         let f = fixture(
@@ -614,6 +615,7 @@ pub mod tests {
         port
     }
 
+    // covers: S294 (redirects followed), S299
     #[test]
     fn the_fake_appcast_on_loopback() {
         if std::env::var_os("CI").is_none() {
@@ -704,6 +706,7 @@ pub mod tests {
         );
     }
 
+    // covers: S299
     #[test]
     fn a_bad_signature_deletes_the_download_and_changes_nothing() {
         let f = fixture(
@@ -722,6 +725,7 @@ pub mod tests {
         assert!(temp_folders(&f.env).is_empty());
     }
 
+    // covers: S297, S306
     #[test]
     fn nothing_downloads_before_the_click() {
         let f = fixture(
@@ -735,6 +739,7 @@ pub mod tests {
         assert!(temp_folders(&f.env).is_empty());
     }
 
+    // covers: S298
     #[test]
     fn a_download_over_its_length_or_the_cap_stops_and_is_deleted() {
         let f = fixture(
@@ -765,6 +770,7 @@ pub mod tests {
         );
     }
 
+    // covers: S298, S302
     #[test]
     fn a_disk_full_write_deletes_every_partial_file() {
         struct Full;
@@ -822,6 +828,7 @@ pub mod tests {
         }
     }
 
+    // covers: S304
     #[test]
     fn leftover_new_files_and_temp_folders_go_at_launch_and_the_bak_stays() {
         let f = fixture("leftovers", false, Arc::new(RealFiles), DebugLog::default());
@@ -838,6 +845,7 @@ pub mod tests {
         assert_eq!(temp_folders(&f.env), ["Other-folder"]);
     }
 
+    // covers: S305
     #[test]
     fn the_launch_check_runs_once_a_day_and_a_failed_check_stores_no_time() {
         let now = 1_800_000_000;
@@ -862,6 +870,7 @@ pub mod tests {
         assert_eq!(check(&offline.env), Checked::Failed);
     }
 
+    // covers: S309
     #[test]
     fn the_updater_writes_its_debug_log_lines() {
         let dir = crate::debug_log::test_dir("updater-log");

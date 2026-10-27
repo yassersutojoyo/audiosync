@@ -1,15 +1,16 @@
 # Clauses of docs/ENGINE_SPEC.md that only the host application can implement,
 # so no test in core/ can cover them. One per line: the clause ID, a space, the
 # reason. tests/spec_coverage.rs fails if a clause listed here gains a
-# `// covers:` test, so keep this list honest and short.
+# `// covers:` test in core/, so keep this list honest and short. Host tests
+# mark the clauses they check too; scripts/spec_markers.py checks those markers.
 S6 Architecture overview only; each component it names has its own clauses.
 S10 Core Audio process tap that leaves AudioSync's own process out of the system source.
-S11 Core Audio process objects and responsible PIDs that make up an app source.
+S11 Core Audio process objects and responsible PIDs that make up an app source; the Mac logic suite checks the matching.
 S13 Core Audio process tap that mutes the tapped processes' own output.
 S60 Core Audio output device enumeration and device object IDs.
-S61 The renderer object wraps a Core Audio output unit; its pure parts are S56, S62, S64 and S65.
-S66 A renderer's delay call measured on real hardware; its pure parts are S3 and S46.
-S67 Frames a real output device renders per second.
+S61 The renderer object wraps a Core Audio output unit; its pure parts are S56, S62, S64 and S65; the Mac engine test checks it on hardware.
+S66 A renderer's delay call, measured on real hardware by the Mac engine test; its pure parts are S3 and S46.
+S67 Frames a real output device renders per second; the Mac engine test checks it.
 S72 Retired in part with the bundled engine: what stands, re-applying every active local output's gain on a master change, is the host's; the gain itself is S71's.
 S73 Retired with the bundled engine: an AirPlay speaker's own volume as the engine reported it; the core's engine_volume and adopt_reported_volume went too.
 S74 Retired with the bundled engine: its coalesced volume writes; the core's LatestValues went too.
@@ -48,15 +49,15 @@ S115 Session stop orchestration, which stops the host's capture and renderers; t
 S129 Retired with the FIFO feed: its writer thread.
 S143 Retired with the bundled engine and the FIFO feed: the engine's restart and the pipe's reopen.
 S148 Retired with the bundled engine and the FIFO feed: a network loss as the engine's reconcile saw it.
-S154 macOS Local Network privacy permission and its Bonjour browser states.
-S155 AppKit appearance setting.
+S154 macOS Local Network privacy permission and its Bonjour browser states; the Mac logic suite checks it.
+S155 AppKit appearance setting; the Mac logic suite checks it.
 S156 Repository shell tooling (shellcheck), checked by CI and Tests/run-tests.sh.
 S160 Retired with the FIFO feed: its diagnostic counters.
 S167 Retired in part with the bundled engine: its list and reconcile; what stands, the Local Network hint for an empty list, is the host's (S154).
 S168 Retired with the bundled engine: track info after each start of the pipe; the core's policy::track_info went too.
 S169 Retired with the FIFO feed: the live edge on every open of the pipe.
 S170 The Mac app's debug log file; the Windows app keeps its own log outside the core.
-S171 Core Audio device lists: alive state, channel counts and private aggregate devices.
+S171 Core Audio device lists: alive state, channel counts and private aggregate devices; the Mac logic suite checks it.
 S173 The Mac's reference output, from Core Audio transport types and stream terminal types.
 S174 The Windows app's reference output, from its endpoint kinds and endpoint IDs.
 S180 One-time migration of the Windows app's settings file.

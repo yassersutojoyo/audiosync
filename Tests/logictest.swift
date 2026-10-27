@@ -293,6 +293,7 @@ do {
 }
 
 // MARK: Audio processes — which Core Audio process objects make up an app
+// covers: S11 (an app source's process objects)
 do {
     typealias Listed = AudioProcesses.Listed
     let appPID: pid_t = 100, ownPID: pid_t = 900
@@ -320,6 +321,7 @@ do {
 }
 
 // MARK: Appearance — stored choice
+// covers: S155
 for a in AppAppearance.allCases {
     check(AppAppearance(defaultsValue: a.defaultsValue) == a, "appearance: round-trip \(a)")
 }
@@ -370,6 +372,7 @@ do {
 }
 
 // MARK: Speaker IDs — the bundled engine's output IDs move to the native sender's receiver IDs (S204)
+// covers: S204
 do {
     typealias Migration = SpeakerIDMigration
     // Device ID AA:BB:CC:DD:EE:01: the bundled engine's output 187723572702721
@@ -644,6 +647,7 @@ do {
           "devices: macOS's own AirPlay output stays listed, in order, once chosen")
     check(uids(AudioDevices.listed(all, showVirtual: false, keep: ["gone"])) == ["builtin", "usb"],
           "devices: a chosen device that isn't present adds nothing")
+    // covers: S171 (from here to the end of the block)
     check(AudioDevices.isPrivateAggregate(composition: [kAudioAggregateDeviceIsPrivateKey: NSNumber(value: 1)])
           && !AudioDevices.isPrivateAggregate(composition: [kAudioAggregateDeviceIsPrivateKey: NSNumber(value: 0)])
           && !AudioDevices.isPrivateAggregate(composition: [kAudioAggregateDeviceNameKey: "Multi-Output Device"]),
@@ -1022,6 +1026,7 @@ do {
 }
 
 // MARK: Local Network hint — denied access at once; a guess only when unknown
+// covers: S154, S167 (allowed access never hints on an empty list)
 do {
     let t0 = Date(timeIntervalSince1970: 2_000_000)
     let wait = LocalNetworkHint.emptyBeforeHint
@@ -1114,6 +1119,7 @@ check(SpeakerState(enabled: false, streaming: false) == .off, "speaker: off whil
 check(!SpeakerState.playing.clickTurnsOn, "speaker: click on a playing speaker turns it off")
 check(SpeakerState.willPlay.clickTurnsOn, "speaker: click on a waiting speaker turns it on (and starts streaming)")
 check(SpeakerState.off.clickTurnsOn, "speaker: click on an off speaker turns it on")
+// covers: S106 (the access kinds open and code)
 check(SpeakerAvailability(.open) == .open, "availability: open")
 check(SpeakerAvailability(.code(password: false)) == .needsCode, "availability: PIN asks for a code")
 check(SpeakerAvailability(.code(password: true)) == .needsCode, "availability: password asks for a code")
@@ -6107,6 +6113,7 @@ do {
           "S36 start failure: one alert gives the rate only when every failure it names was refused for it",
           "\(String(describing: LocalOutputSync.sharedRefusedRate(mixedFailures)))")
 
+    // covers: S72
     // S72: a master change gives each running local speaker its gain again;
     // one switched on but not running (here "tv") gets no call.
     let playing = RefusingEngine(active: ["usb", "bt"], refusing: [])
