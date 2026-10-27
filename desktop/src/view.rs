@@ -8164,6 +8164,53 @@ mod tests {
         assert_eq!(app.fit_flyout(1000.0), full, "the list gets its room back");
     }
 
+    /// A flyout with two notices, presets and an input's channel pairs, on a
+    /// screen as short as 1366x768 at 150%: the list stops shrinking at
+    /// three rows, or there is none, and the buttons still show.
+    fn crowded_flyout_keeps_its_buttons(mut backend: MockBackend, case: &str) {
+        backend.post("source", NoticeMessage::CaptureLost, "09.40");
+        backend.add_preset("evening", "Evening", &["local:desk"]);
+        backend.add_preset("party", "Party", &["local:desk"]);
+        let app = app_over(backend);
+        let line_in = app
+            .snapshot()
+            .sources
+            .iter()
+            .position(|source| source.id == "input:line")
+            .expect("listed");
+        app.flyout.invoke_source_selected(line_in as i32);
+        app.refresh();
+        draw_frames();
+        let flyout = &app.flyout;
+        assert!(
+            flyout.get_input_pairs().row_count() > 0,
+            "{case}: pairs show"
+        );
+        assert!(flyout.get_presets().row_count() > 0, "{case}: presets show");
+        flyout
+            .window()
+            .set_size(slint::LogicalSize::new(340.0, 400.0));
+        let full = app.fit_flyout(1000.0);
+        let room = 300.0;
+        assert!(full > room + 100.0, "{case}: {full} fits {room} anyway");
+        let height = app.fit_flyout(room);
+        assert_eq!(height, room, "{case}");
+        let bottom = flyout.get_footer_bottom();
+        assert!(
+            bottom + 16.0 <= room + 0.5,
+            "{case}: buttons end at {bottom} in {room}"
+        );
+        assert_eq!(app.fit_flyout(1000.0), full, "{case}: the room comes back");
+    }
+
+    #[test]
+    fn a_crowded_flyout_on_a_short_screen_keeps_its_buttons() {
+        crowded_flyout_keeps_its_buttons(MockBackend::zones_preview(), "zones");
+        let mut bare = MockBackend::new();
+        bare.retain_speakers(|s| s.kind.is_this_pc());
+        crowded_flyout_keeps_its_buttons(bare, "no list");
+    }
+
     #[test]
     fn a_zone_lists_its_members_and_the_other_lists_only_the_rest() {
         let app = app_over(MockBackend::zones_preview());
