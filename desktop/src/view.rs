@@ -8095,6 +8095,27 @@ mod tests {
         );
     }
 
+    /// Windows made the flyout at Slint's preferred height, which counts the
+    /// zones notice's wrapped text as one line: the Open and Exit buttons
+    /// were cut off at its bottom edge.
+    #[test]
+    fn the_flyout_shows_its_buttons_under_a_wrapped_notice() {
+        let app = app_over(MockBackend::zones_preview());
+        app.refresh();
+        draw_frames();
+        let flyout = &app.flyout;
+        let window = flyout.window();
+        let preferred = flyout.get_made_height();
+        window.set_size(slint::LogicalSize::new(340.0, preferred));
+        let height = window.size().to_logical(window.scale_factor()).height;
+        let bottom = flyout.get_footer_bottom();
+        assert!(
+            bottom + 16.0 <= height,
+            "buttons end at {bottom}, window {height} high (Slint asked for {preferred})"
+        );
+        assert!(height <= bottom + 16.5, "no room left under the buttons");
+    }
+
     #[test]
     fn a_zone_lists_its_members_and_the_other_lists_only_the_rest() {
         let app = app_over(MockBackend::zones_preview());
