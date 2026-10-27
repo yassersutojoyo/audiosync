@@ -11,9 +11,8 @@
 # the EdDSA private key in this Mac's login keychain (made once with Sparkle's
 # generate_keys); the key never leaves the keychain.
 #
-# It runs generate_appcast as a copy named "AudioSync Release Signing", so
-# the keychain prompt for the private key names AudioSync instead of Sparkle's
-# tool. The copy keeps Sparkle's signature; docs/DEVELOPMENT.md ("Signing")
+# It runs generate_appcast as a copy named "AudioSync Release Signing", so the
+# keychain prompt should name AudioSync (not yet confirmed on a Mac). The copy keeps Sparkle's signature; docs/DEVELOPMENT.md ("Signing")
 # says why, and why to click Allow rather than Always Allow.
 #
 # Environment:
