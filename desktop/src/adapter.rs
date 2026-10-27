@@ -11648,6 +11648,38 @@ mod tests {
         );
     }
 
+    /// As on the Mac, the Cast note reads the Cast speaker that is on, not
+    /// the listed rows: one that left the network while streaming is off
+    /// still refuses the zone's Cast member, so the member keeps its note.
+    // covers: S246
+    #[test]
+    fn a_cast_member_kept_off_by_an_unlisted_cast_speaker_keeps_its_note() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.add_zone("Lounge", &[key(SPEAKERS), cc(CAST_LIVING)]);
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.set_running(false);
+        fake.withdraw(CAST_KITCHEN, "Kitchen");
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(!state.running);
+        assert!(state.speaker(&cc(CAST_KITCHEN)).is_none());
+        let zone = state.zones[0].clone();
+        adapter.toggle_zone(&zone.id);
+        let state = adapter.snapshot();
+        let living = state
+            .speaker(&cc(CAST_LIVING))
+            .expect("Living Room is listed");
+        assert!(
+            !living.enabled,
+            "Kitchen is still on, so Living Room is refused"
+        );
+        assert_eq!(
+            state.zone_note(&zone, ui_model::ZoneRow::Listed(living)),
+            Some(ui_model::ZoneNote::CastStayedOff)
+        );
+    }
+
     // covers: S265, S266
     #[test]
     fn a_member_that_fails_to_start_after_a_recall_goes_into_the_preset_notice() {
