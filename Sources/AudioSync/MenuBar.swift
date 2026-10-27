@@ -682,6 +682,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     func show() {
         guard !presented, let button = statusItem.button, let item = button.window else { return }
+        // Reopened before the close ended, so `prepareNextOpen` never ran.
+        if host.sizing == .closing { model.panelSession += 1 }
         host.sizing = host.sizing.after(.show)
         let screen = (item.screen ?? NSScreen.main)?.visibleFrame ?? item.frame
         // The status item's own screen, not the one with keyboard focus.
@@ -719,6 +721,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     func popoverDidShow(_ notification: Notification) {
         host.sizing = host.sizing.after(.didShow)
         guard host.sizing.followsContent else { return }
+        let size = host.preferredContentSize
+        if size.width > 0, size.height > 0, size != popover.contentSize { popover.contentSize = size }
         takeKey()
         model.actions.refreshExternalState()
     }
@@ -800,7 +804,7 @@ final class PanelHost: NSHostingController<MenuBarView> {
         didSet {
             guard sizing.followsContent, let waiting else { return }
             self.waiting = nil
-            super.preferredContentSize = waiting
+            preferredContentSize = waiting   // through self, so the popover's observer hears it
         }
     }
     private var waiting: NSSize?
