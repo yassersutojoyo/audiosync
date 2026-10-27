@@ -267,3 +267,73 @@ extension LocalOutputSync {
         for uid in engine.activeOutputUIDs { engine.setGain(uid: uid, g: gain(uid)) }
     }
 }
+
+/// A Bluetooth speaker's first stream on a link that has just come up can
+/// play later than its reported latency for the whole stream, while the same
+/// output started again a moment later plays in time (S330). This watch tells
+/// which starts are on such a link and restarts each of those once. Main
+/// thread only.
+final class FreshLinkWatch {
+    /// A start this long after its device appeared, or longer, is on a settled link.
+    static let windowS = 3.0
+    /// How long after its fresh-link start an output restarts.
+    static let restartAfterS = 2.0
+    /// The rest between the old output's fade and the new start; the sitting's
+    /// switch-off and on that played in time had 1.4 s between them.
+    static let rejoinPauseS = 1.0
+
+    enum Decision: Equatable {
+        case notBluetooth
+        /// `linkAgeS` is nil when the device was listed at launch or its
+        /// appearance was used up by a restart.
+        case settled(linkAgeS: Double?)
+        case restart(linkAgeS: Double)
+    }
+
+    private var listed: Set<String>?
+    private var appearedAt: [String: Double] = [:]
+    private var pending: [String: Int] = [:]
+    private var nextTicket = 0
+    /// Outputs between their restart's fade-out and their new start: the
+    /// sync leaves them off.
+    private(set) var held: Set<String> = []
+
+    /// A device list read at `now` (seconds on a monotonic clock).
+    func noteListing(_ uids: [String], now: Double) {
+        let current = Set(uids)
+        if let before = listed {
+            for uid in current.subtracting(before) { appearedAt[uid] = now }
+        }
+        appearedAt = appearedAt.filter { current.contains($0.key) }
+        listed = current
+    }
+
+    /// What to do with output `uid` that has just started at `now`. A restart
+    /// uses up the appearance and arms a ticket (`pendingTicket`).
+    func decide(uid: String, bluetooth: Bool, now: Double) -> Decision {
+        guard bluetooth else { return .notBluetooth }
+        guard let appeared = appearedAt[uid] else { return .settled(linkAgeS: nil) }
+        let age = now - appeared
+        guard age < Self.windowS else { return .settled(linkAgeS: age) }
+        appearedAt[uid] = nil
+        nextTicket += 1
+        pending[uid] = nextTicket
+        return .restart(linkAgeS: age)
+    }
+
+    func pendingTicket(uid: String) -> Int? { pending[uid] }
+
+    /// The restart's time came: true when `ticket` is still the armed one,
+    /// and then `uid` is held off the sync until `release`.
+    func begin(uid: String, ticket: Int) -> Bool {
+        guard pending[uid] == ticket else { return false }
+        pending[uid] = nil
+        held.insert(uid)
+        return true
+    }
+
+    func release(uid: String) { held.remove(uid) }
+
+    /// The output stopped another way (switched off, lost): no restart.
+    func cancel(uid: String) { pending[uid] = nil }
+}
