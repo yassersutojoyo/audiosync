@@ -3401,33 +3401,41 @@ do {
     do {
         let links = FreshLinkWatch()
         links.noteListing(["builtin", "bt-old"], now: 100)
-        check(links.decide(uid: "bt-old", bluetooth: true, now: 100.5) == .settled(linkAgeS: nil),
+        check(links.decide(uid: "bt-old", bluetooth: true, now: 100.5, session: 1) == .settled(linkAgeS: nil),
               "EC2 Bluetooth fresh link: a device listed at launch starts as is")
         links.noteListing(["builtin", "bt-old", "bt", "usb"], now: 200)
-        check(links.decide(uid: "usb", bluetooth: false, now: 200.5) == .notBluetooth,
+        check(links.decide(uid: "usb", bluetooth: false, now: 200.5, session: 1) == .notBluetooth,
               "EC2 Bluetooth fresh link: a wired device that just appeared starts as is")
-        check(links.decide(uid: "bt", bluetooth: true, now: 200.5) == .restart(linkAgeS: 0.5),
+        check(links.decide(uid: "bt", bluetooth: true, now: 200.5, session: 1) == .restart(linkAgeS: 0.5),
               "EC2 Bluetooth fresh link: one that starts 0.5 s after it appeared restarts once")
         let ticket = links.pendingTicket(uid: "bt")
-        check(ticket != nil && links.begin(uid: "bt", ticket: ticket ?? -1) && links.held == ["bt"],
+        check(ticket != nil && links.begin(uid: "bt", ticket: ticket ?? -1, session: 1) && links.held == ["bt"],
               "EC2 Bluetooth fresh link: the restart holds it off until its old output has faded")
-        check(!links.begin(uid: "bt", ticket: ticket ?? -1),
+        check(!links.begin(uid: "bt", ticket: ticket ?? -1, session: 1),
               "EC2 Bluetooth fresh link: a ticket restarts it only once")
         links.release(uid: "bt")
-        check(links.held.isEmpty && links.decide(uid: "bt", bluetooth: true, now: 203) == .settled(linkAgeS: nil),
+        check(links.held.isEmpty && links.decide(uid: "bt", bluetooth: true, now: 203, session: 1) == .settled(linkAgeS: nil),
               "EC2 Bluetooth fresh link: its start after the restart plays as is")
         links.noteListing(["builtin", "bt-old", "usb"], now: 300)
         links.noteListing(["builtin", "bt-old", "usb", "bt"], now: 400)
-        check(links.decide(uid: "bt", bluetooth: true, now: 404) == .settled(linkAgeS: 4),
+        check(links.decide(uid: "bt", bluetooth: true, now: 404, session: 1) == .settled(linkAgeS: 4),
               "EC2 Bluetooth fresh link: one that starts 4 s after it came back has a settled link")
         links.noteListing(["builtin", "bt-old", "usb"], now: 500)
         links.noteListing(["builtin", "bt-old", "usb", "bt"], now: 600)
-        check(links.decide(uid: "bt", bluetooth: true, now: 601) == .restart(linkAgeS: 1),
+        check(links.decide(uid: "bt", bluetooth: true, now: 601, session: 1) == .restart(linkAgeS: 1),
               "EC2 Bluetooth fresh link: every reconnect counts as a fresh link again")
         let dropped = links.pendingTicket(uid: "bt")
         links.cancel(uid: "bt")
-        check(dropped != nil && !links.begin(uid: "bt", ticket: dropped ?? -1) && links.held.isEmpty,
+        check(dropped != nil && !links.begin(uid: "bt", ticket: dropped ?? -1, session: 1) && links.held.isEmpty,
               "EC2 Bluetooth fresh link: switched off before its restart, it is not restarted")
+        links.noteListing(["builtin", "bt-old", "usb"], now: 700)
+        links.noteListing(["builtin", "bt-old", "usb", "bt"], now: 800)
+        check(links.decide(uid: "bt", bluetooth: true, now: 800.5, session: 1) == .restart(linkAgeS: 0.5),
+              "EC2 Bluetooth fresh link: a start in one session arms a restart")
+        let stale = links.pendingTicket(uid: "bt")
+        check(stale != nil && !links.begin(uid: "bt", ticket: stale ?? -1, session: 2) && links.held.isEmpty
+                && links.pendingTicket(uid: "bt") == nil,
+              "EC2 Bluetooth fresh link: a restart armed in a session that has ended is dropped")
     }
 
     // EC4 / EC9: the capture rate changes under a running session.
