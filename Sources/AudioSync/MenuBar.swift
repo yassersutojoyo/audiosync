@@ -1006,7 +1006,7 @@ struct MenuBarView: View {
         var height: CGFloat = 220
         height += CGFloat(min(model.notices.items.count, 2)) * 90
         if model.airPlayProblem != nil || model.localNetworkHint != .none { height += 70 }
-        if offersCastAdd { height += 20 }
+        if castAddRow != .none { height += 20 }
         if PresetPanel.showsRow(model.presets) { height += 38 }
         if model.liveInputAirPlayHint != nil { height += 48 }
         if model.noSpeakerOn { height += 32 }
@@ -1015,8 +1015,8 @@ struct MenuBarView: View {
 
     /// While the Google Cast search finds nothing, the panel offers adding
     /// a speaker by address.
-    private var offersCastAdd: Bool {
-        model.castCanAdd && (model.castList == .noneFound || model.castList == .failed)
+    private var castAddRow: CastAddRow {
+        CastAddRow.state(canAdd: model.castCanAdd, list: model.castList)
     }
 
     private var maxListHeight: CGFloat {
@@ -1043,7 +1043,8 @@ struct MenuBarView: View {
             if model.noSpeakerOn { noSpeakerOnLine(t) }
             speakerList(t)
                 .id(model.panelSession)
-            if offersCastAdd {
+            if castAddRow != .none {
+                let shown = castAddRow == .shown
                 // The sheet belongs to the main window, which has room for it.
                 NoticeLink(title: t.castAddByAddress) {
                     model.actions.openMainWindow()
@@ -1051,6 +1052,9 @@ struct MenuBarView: View {
                 }
                 .help(t.castAddBody)
                 .accessibilityHint(t.castAddBody)
+                .opacity(shown ? 1 : 0)
+                .disabled(!shown)
+                .accessibilityHidden(!shown)
             }
             // AirPlay comes last in the list, so what's wrong with AirPlay goes
             // right after it.

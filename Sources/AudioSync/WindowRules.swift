@@ -88,6 +88,22 @@ enum PanelSizing: Equatable {
     }
 }
 
+/// The panel's Add by Address row. It is offered once the Cast search found
+/// nothing, and its room is kept while the search still runs: the search
+/// ends on a timer, often with the panel open, which must not grow then.
+enum CastAddRow: Equatable {
+    case none, reserved, shown
+
+    static func state(canAdd: Bool, list: CastListState) -> CastAddRow {
+        guard canAdd else { return .none }
+        switch list {
+        case .noneFound, .failed: return .shown
+        case .searching: return .reserved
+        case .quiet: return .none
+        }
+    }
+}
+
 /// When work that follows a menu bar panel open or close may run: once the
 /// popover's animation, its bounce included, is over. Main-thread work that
 /// lands inside it drops the animation's frames.
