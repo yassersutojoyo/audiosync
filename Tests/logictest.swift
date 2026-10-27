@@ -4850,6 +4850,19 @@ do {
         .components(separatedBy: "\n    }\n").first ?? ""
     check(rowsSource.contains(".transition(.opacity)") && !bar.contains(".opacity.animation("),
           "menu bar panel source: a zone's rows fade only inside the fold's animation, so a speaker joining or leaving a zone, or a Reduce Motion fold, shows at once")
+    let zoneArea = CGRect(x: 0, y: 0, width: 294, height: 84)
+    check(PanelFold.clip(zoneArea, moving: true) == zoneArea
+            && PanelFold.clip(zoneArea, moving: false).contains(zoneArea.insetBy(dx: -6, dy: -6)),
+          "menu bar panel: while a fold moves, a zone's rows stay inside its own edge; at rest nothing is cut, focus rings included")
+    let mainSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    check(rowsSource.contains(".clipShape(FoldClip(moving: zoneDisclosure.moving))") && mainSource.contains("moving = true"),
+          "menu bar panel source: a fold clips each zone to its own moving edge, so the rows and the footer below never slide over its fading rows")
+    let ownShadowBody = bar.components(separatedBy: "private func ownShadow(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    let dropBody = bar.components(separatedBy: "private func dropOwnShadow(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(ownShadowBody.contains("standInBackground(") && dropBody.contains("restoreBackground("),
+          "menu bar panel source: while the panel scales, its background is a stand-in that scales with it, handed back to the system's with the shadow")
 
     // The open panel moved by AppKit (another display, a status item shifting).
     let moved = window.offsetBy(dx: -40, dy: -24)
