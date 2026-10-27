@@ -5091,7 +5091,9 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::PairFirst { speaker } => (NoticeKind::PairFirst, speaker.as_str()),
         NoticeMessage::AirPlayRetrying {
             speaker,
-            problem: ui_model::AirPlayProblem::TooManyAirPlay2Speakers,
+            problem:
+                ui_model::AirPlayProblem::TooManyAirPlay2Speakers
+                | ui_model::AirPlayProblem::PtpOtherNetwork,
         } => (NoticeKind::AirplayWaiting, speaker.as_str()),
         NoticeMessage::AirPlayRetrying { speaker, .. } => {
             (NoticeKind::AirplayRetrying, speaker.as_str())
