@@ -9440,6 +9440,77 @@ do {
           "speaker row: a zone's member rows and every other row rename through the same field")
 }
 
+// MARK: Zone members in the main window: one box per zone, label and separators on the name column
+do {
+    func read(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+    func count(_ text: String, _ needle: String) -> Int { text.components(separatedBy: needle).count - 1 }
+    func part(_ text: String, after marker: String) -> String {
+        text.components(separatedBy: marker).dropFirst().first?.components(separatedBy: "\n}\n").first ?? ""
+    }
+    let window = read("Sources/AudioSync/MainWindow.swift")
+
+    check(ZoneLook.nameColumn == 54, "zone look: names start 54 pt into a card's rows", "\(ZoneLook.nameColumn)")
+    check(ZoneLook.compactRowHeight == 36 && ZoneLook.compactPaddingY == 6 && ZoneLook.compactBadge == 24,
+          "zone look: an In zones row is 36 pt, a 24 pt badge with 6 pt above and below", "\(ZoneLook.compactRowHeight)")
+    check(ZoneLook.groupRadius == 9 && ZoneLook.groupFill == 0.05 && ZoneLook.groupBorderWidth == 0.5,
+          "zone look: the member box is teal 5% with a 0.5 pt teal edge and corner 9")
+    check(ZoneLook.chipHeight == 18 && ZoneLook.chipPaddingX == 7 && ZoneLook.chipFill == 0.12,
+          "zone look: the zone chip is an 18 pt teal 12% capsule with 7 pt sides")
+
+    let groups = ZoneLayout.byZone(["a", "b", "c", "d", "gone"]) { ["a": "z2", "b": "z1", "c": "z2", "d": "z1"][$0] }
+    check(groups.map(\.zone) == ["z2", "z1"] && groups.map(\.rows) == [["a", "c"], ["b", "d"]],
+          "zone look: In zones rows box by zone, zones in first-row order, a row without a zone left out",
+          "\(groups.map { ($0.zone, $0.rows) })")
+
+    let zoned = part(window, after: "private func zonedRows(")
+    check(count(zoned, "model.text.inZones.uppercased()") == 1 && count(zoned, ".accessibilityLabel(model.text.inZones)") == 1
+            && count(zoned, ".padding(.leading, ZoneLook.nameColumn)\n            .padding(.trailing") == 1
+            && count(zoned, "if divided { Divider() }") == 0
+            && count(zoned, "ZoneMemberGroup {") == 1,
+          "In zones label: in capitals on the name column with its line as the separator, rows in a zone box")
+    check(count(window, "padding(.leading, 52)") == 0 && count(window, "Divider().padding(.leading, ZoneLook.nameColumn)") == 4,
+          "zone look: every row separator starts at the name column")
+    let compact = part(window, after: "private struct ZoneMemberCompactRow")
+    check(count(compact, "opacity(0.08)") == 0 && count(compact, ".padding(.vertical, ZoneLook.compactPaddingY)") == 1
+            && count(compact, "Capsule().fill(accent.opacity(ZoneLook.chipFill))") == 1
+            && count(compact, ".accessibilityLabel(t.goToZoneLabel(zone.name))") == 1,
+          "In zones row: no box of its own, and its Go to Zone chip keeps its VoiceOver label")
+    let card = part(window, after: "private struct ZoneCard")
+    check(count(card, "ZoneMemberGroup {") == 1 && count(card, "grouped: true") == 1,
+          "zone card: its member rows sit in one zone box instead of a box each")
+
+    // The chip's teal text sits on the chip, on the member box, on the card.
+    typealias RGBA = (r: Double, g: Double, b: Double, a: Double)
+    func over(_ top: RGBA, _ bottom: RGBA) -> RGBA {
+        (top.r * top.a + bottom.r * (1 - top.a), top.g * top.a + bottom.g * (1 - top.a),
+         top.b * top.a + bottom.b * (1 - top.a), 1)
+    }
+    func luminance(_ c: RGBA) -> Double {
+        func channel(_ v: Double) -> Double { v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+    }
+    func ratio(_ a: RGBA, _ b: RGBA) -> Double {
+        let (x, y) = (luminance(a), luminance(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+    func rgb(_ c: BrandRGB, _ a: Double = 1) -> RGBA { (c.red, c.green, c.blue, a) }
+    var worstChip = Double.infinity, worstSecondary = Double.infinity
+    for (dark, cards) in [(false, [BrandTokens.Light.surface]), (true, [BrandTokens.Dark.background, BrandTokens.Dark.surface])] {
+        let teal = dark ? BrandTokens.Dark.teal : BrandTokens.Light.teal
+        let ink: RGBA = dark ? (1, 1, 1, 1) : (0, 0, 0, 1)
+        for card in cards {
+            let box = over(rgb(teal, ZoneLook.groupFill), rgb(card))
+            let chip = over(rgb(teal, ZoneLook.chipFill), box)
+            worstChip = min(worstChip, ratio(rgb(dark ? BrandTokens.Dark.tealText : BrandTokens.Light.tealText), chip))
+            let secondary = over((ink.r, ink.g, ink.b, BrandTokens.Opacity.secondaryText * 0.85), box)
+            worstSecondary = min(worstSecondary, ratio(secondary, box))
+        }
+    }
+    check(worstChip >= 4.5 && worstSecondary >= 4.5,
+          "zone look: the chip's text and a member's secondary text keep 4.5:1 in the zone box, both themes",
+          String(format: "chip %.2f, secondary %.2f", worstChip, worstSecondary))
+}
+
 // MARK: About panel shows the version without the build number (AboutPanel.options)
 do {
     let options = AboutPanel.options(credits: NSAttributedString(string: "credits"), copyright: "copyright",

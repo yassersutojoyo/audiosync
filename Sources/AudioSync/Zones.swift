@@ -266,6 +266,26 @@ enum ZoneLayout {
         speakers.filter { zoned.contains(key($0)) }
     }
 
+    struct ZoneGroup<T>: Identifiable {
+        let zone: String
+        let rows: [T]
+        var id: String { zone }
+    }
+
+    /// The compact rows split into one group box per zone, zones in the order
+    /// of their first row, rows in their own order. A row whose zone is gone
+    /// is left out.
+    static func byZone<T>(_ speakers: [T], zone: (T) -> String?) -> [ZoneGroup<T>] {
+        var order: [String] = []
+        var rows: [String: [T]] = [:]
+        for speaker in speakers {
+            guard let id = zone(speaker) else { continue }
+            if rows[id] == nil { order.append(id) }
+            rows[id, default: []].append(speaker)
+        }
+        return order.map { ZoneGroup(zone: $0, rows: rows[$0] ?? []) }
+    }
+
     /// A zone member as Only This Speaker sees it.
     struct Member {
         let key: String
@@ -341,4 +361,34 @@ enum ZoneHeaderHit {
     static func goToZoneFocus(nonePresent: Bool) -> Area {
         nonePresent ? .chevron : .zoneIcon
     }
+}
+
+/// How the main window draws zone members: one tinted box around a zone's
+/// rows, and the In zones label and the separators on the name column.
+enum ZoneLook {
+    /// A full row's switch; a compact row's smaller badge sits in a column
+    /// this wide, so every name starts at `nameColumn`.
+    static let badgeColumn: CGFloat = 32
+    static let badgeGap: CGFloat = 12
+    static let nameColumn = BrandTokens.Spacing.rowPaddingX + badgeColumn + badgeGap
+
+    static let compactBadge: CGFloat = 24
+    static let compactPaddingY: CGFloat = 6
+    static var compactRowHeight: CGFloat { compactBadge + 2 * compactPaddingY }
+
+    static let groupFill = 0.05
+    static let groupBorder = 0.35
+    static let groupBorderWidth: CGFloat = 0.5
+    static let groupRadius = BrandTokens.Radius.row
+    /// Between two zones' boxes in one section.
+    static let groupGap: CGFloat = 4
+
+    static let labelTop: CGFloat = 9
+    static let labelBottom: CGFloat = 5
+    static let labelLineGap: CGFloat = 8
+
+    /// The Go to Zone chip after a compact row's name.
+    static let chipHeight: CGFloat = 18
+    static let chipPaddingX: CGFloat = 7
+    static let chipFill = 0.12
 }

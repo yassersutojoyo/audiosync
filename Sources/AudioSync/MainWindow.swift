@@ -370,7 +370,7 @@ struct MainView: View {
     /// `airPlayListed`: an AirPlay speaker is listed, in a zone or not, so
     /// the AirPlay delay stays here.
     /// `zoned`: its speakers that are in a zone, as compact rows after the
-    /// others; `scroll` brings a zone into view for their links.
+    /// others; `scroll` brings a zone into view for their zone chips.
     private func speakerSection(_ title: String, speakers: [AppModel.Speaker], zoned: [AppModel.Speaker],
                                 empty: String, scroll: ScrollViewProxy,
                                 connected: Bool = false, airPlayListed: Bool = false, problem: String? = nil,
@@ -394,15 +394,15 @@ struct MainView: View {
                         Divider()
                     }
                     ForEach(Array(speakers.enumerated()), id: \.element.id) { index, speaker in
-                        if index > 0 { Divider().padding(.leading, 52) }
+                        if index > 0 { Divider().padding(.leading, ZoneLook.nameColumn) }
                         SpeakerRow(model: model, speaker: speaker, showTag: connected)
                     }
                     if connected && problem == nil && hasAirPlay {
                         // One AirPlay delay for every local speaker, not on any row (S181).
-                        if !speakers.isEmpty { Divider().padding(.leading, 52) }
+                        if !speakers.isEmpty { Divider().padding(.leading, ZoneLook.nameColumn) }
                         AirPlayDelayRow(model: model)
                     }
-                    if !zoned.isEmpty { zonedRows(zoned, divided: !speakers.isEmpty || (connected && hasAirPlay), scroll: scroll) }
+                    if !zoned.isEmpty { zonedRows(zoned, scroll: scroll) }
                     if connected && problem == nil && !listsNone, let note = model.networkNote {
                         // Say where AirPlay or the Google Cast search stands, under the rows.
                         Divider()
@@ -425,25 +425,41 @@ struct MainView: View {
     }
 
     /// The compact rows of a section's speakers that are in a zone, under a
-    /// thin label. Their link scrolls to the zone and focuses its switch.
-    private func zonedRows(_ speakers: [AppModel.Speaker], divided: Bool, scroll: ScrollViewProxy) -> some View {
+    /// label whose line is the separator above them, one box per zone. Their
+    /// chip scrolls to the zone and focuses its switch.
+    private func zonedRows(_ speakers: [AppModel.Speaker], scroll: ScrollViewProxy) -> some View {
         VStack(spacing: 0) {
-            if divided { Divider() }
-            Text(model.text.inZones)
-                .font(.caption)
-                .foregroundStyle(Brand.secondaryText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 52)
-                .padding(.top, 6)
-                .padding(.bottom, 2)
-                .accessibilityAddTraits(.isHeader)
-            ForEach(speakers) { speaker in
-                if let zone = model.zone(holding: speaker.key) {
-                    ZoneMemberCompactRow(model: model, speaker: speaker, zone: zone) {
-                        withAnimation(AppModel.delayPanelAnimation) {
-                            scroll.scrollTo(ZoneAnchor(id: zone.id), anchor: .top)
+            HStack(spacing: ZoneLook.labelLineGap) {
+                Text(model.text.inZones.uppercased())
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(Brand.secondaryText)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .accessibilityLabel(model.text.inZones)
+                    .accessibilityAddTraits(.isHeader)
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(height: 1)
+                    .accessibilityHidden(true)
+            }
+            .padding(.leading, ZoneLook.nameColumn)
+            .padding(.trailing, BrandTokens.Spacing.rowPaddingX)
+            .padding(.top, ZoneLook.labelTop)
+            .padding(.bottom, ZoneLook.labelBottom)
+            VStack(spacing: ZoneLook.groupGap) {
+                ForEach(ZoneLayout.byZone(speakers) { model.zone(holding: $0.key)?.id }) { group in
+                    if let zone = model.zones.first(where: { $0.id == group.zone }) {
+                        ZoneMemberGroup {
+                            ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, speaker in
+                                if index > 0 { Divider().padding(.leading, ZoneLook.nameColumn) }
+                                ZoneMemberCompactRow(model: model, speaker: speaker, zone: zone) {
+                                    withAnimation(AppModel.delayPanelAnimation) {
+                                        scroll.scrollTo(ZoneAnchor(id: zone.id), anchor: .top)
+                                    }
+                                    model.focusZone = zone.id
+                                }
+                            }
                         }
-                        model.focusZone = zone.id
                     }
                 }
             }
@@ -507,6 +523,20 @@ private struct Card<Content: View>: View {
                 .fill(Color(nsColor: .controlBackgroundColor)))
             .overlay(RoundedRectangle(cornerRadius: BrandTokens.Radius.card)
                 .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+    }
+}
+
+/// One tinted box around a zone's member rows; whether a member plays shows
+/// in its badge and bold name, not in a box of its own.
+private struct ZoneMemberGroup<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(spacing: 0) { content }
+            .background(RoundedRectangle(cornerRadius: ZoneLook.groupRadius)
+                .fill(accent.opacity(ZoneLook.groupFill)))
+            .overlay(RoundedRectangle(cornerRadius: ZoneLook.groupRadius)
+                .strokeBorder(accent.opacity(ZoneLook.groupBorder), lineWidth: ZoneLook.groupBorderWidth))
     }
 }
 
@@ -663,13 +693,16 @@ private struct ZoneCard: View {
                             model.focusZone = nil
                         }
                     }
-                if expanded {
-                    ForEach(zone.members) { member in
-                        Divider().padding(.leading, 52)
-                        if let speaker = model.speaker(of: member) {
-                            SpeakerRow(model: model, speaker: speaker, showTag: true, zoneNote: member.note)
-                        } else {
-                            ZoneMemberPlaceholder(member: member, text: t)
+                if expanded && !zone.members.isEmpty {
+                    ZoneMemberGroup {
+                        ForEach(Array(zone.members.enumerated()), id: \.element.id) { index, member in
+                            if index > 0 { Divider().padding(.leading, ZoneLook.nameColumn) }
+                            if let speaker = model.speaker(of: member) {
+                                SpeakerRow(model: model, speaker: speaker, showTag: true, zoneNote: member.note,
+                                           grouped: true)
+                            } else {
+                                ZoneMemberPlaceholder(member: member, text: t)
+                            }
                         }
                     }
                 }
@@ -817,7 +850,7 @@ private struct ZoneAnchor: Hashable {
 }
 
 /// A zone member's compact row in its own section: the switch, which works
-/// as the one on its row under the zone, its name and a link to the zone.
+/// as the one on its row under the zone, its name and a chip to the zone.
 /// No volume, delay or equalizer; its menu holds Go to Zone and Remove from
 /// Zone.
 private struct ZoneMemberCompactRow: View {
@@ -841,8 +874,8 @@ private struct ZoneMemberCompactRow: View {
         HStack(spacing: 12) {
             Button { model.setEnabled(speaker, state.clickTurnsOn) } label: {
                 // As wide as a full row's switch, so the names line up.
-                SpeakerBadge(symbol: speaker.symbol, state: state, size: 24)
-                    .frame(width: 32)
+                SpeakerBadge(symbol: speaker.symbol, state: state, size: ZoneLook.compactBadge)
+                    .frame(width: ZoneLook.badgeColumn)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(t.inZoneLabel(speaker.name, zone: zone.name))
@@ -865,12 +898,22 @@ private struct ZoneMemberCompactRow: View {
                             .gesture(TapGesture(count: 2).onEnded { model.startRename(speaker, in: .inZones) })
                     }
                     Button(action: goToZone) {
-                        Text(t.inZone(zone.name))
-                            .font(.caption.weight(.semibold))
-                            // The readable teal: the brand teal falls under 4.5:1 for small text.
-                            .foregroundStyle(Brand.tealText)
+                        HStack(spacing: 4) {
+                            Image(systemName: MenuBarView.zoneSymbol)
+                                .font(.system(size: 9))
+                            Text(zone.name)
+                                .font(.subheadline.weight(.medium))
+                                .lineLimit(1)
+                        }
+                        // The readable teal: the brand teal falls under 4.5:1 for small text.
+                        .foregroundStyle(Brand.tealText)
+                        .padding(.horizontal, ZoneLook.chipPaddingX)
+                        .frame(height: ZoneLook.chipHeight)
+                        .background(Capsule().fill(accent.opacity(ZoneLook.chipFill)))
+                        .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                    // The name truncates first.
                     .fixedSize()
                     .accessibilityLabel(t.goToZoneLabel(zone.name))
                     .help(t.goToZoneLabel(zone.name))
@@ -894,10 +937,8 @@ private struct ZoneMemberCompactRow: View {
             .accessibilityLabel(t.speakerOptions(name: speaker.name))
             .help(t.speakerOptions(name: speaker.name))
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, ZoneLook.compactPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
-        .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.row)
-            .fill(state == .playing ? accent.opacity(0.08) : Color.clear))
         .contentShape(Rectangle())
         .contextMenu { menuItems(t) }
     }
@@ -968,6 +1009,8 @@ struct SpeakerRow: View {
     var showTag = false
     /// What the speaker's zone says about it, shown when its own note is empty.
     var zoneNote: String? = nil
+    /// In its zone's box, which takes the place of the row's own playing box.
+    var grouped = false
 
     private var tag: String? { showTag ? model.text.speakerTag(speaker.tag, airPlay2: speaker.airPlay2) : nil }
 
@@ -1127,7 +1170,7 @@ struct SpeakerRow: View {
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
         .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.row)
-            .fill(state == .playing ? accent.opacity(0.08) : Color.clear))
+            .fill(state == .playing && !grouped ? accent.opacity(0.08) : Color.clear))
         // A click on the row's box, between its dividers and its open
         // panel's blank space included, works like its delay value; a row
         // without one (AirPlay, the reference) is outside every panel. The

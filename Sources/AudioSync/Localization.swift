@@ -965,10 +965,9 @@ struct UIStrings {
     /// A new zone's name when none was typed.
     func numberedZone(_ n: Int) -> String { "Zone \(n)" }
     /// A zone member's compact row under its own section, after the full
-    /// rows: the label above them, the link to its zone, what VoiceOver reads
-    /// for its switch and for the link, and its menu.
+    /// rows: the label above them (shown in capitals), what VoiceOver reads
+    /// for its switch and for the chip that goes to its zone, and its menu.
     let inZones = "In zones"
-    func inZone(_ zone: String) -> String { "in \(zone)" }
     func inZoneLabel(_ speaker: String, zone: String) -> String { "\(speaker), in \(zone)" }
     func goToZoneLabel(_ zone: String) -> String { "Go to \(zone)" }
     let goToZone = "Go to Zone"
@@ -1507,7 +1506,7 @@ struct UIStrings {
           Speakers' in the gear menu. A speaker is in one zone at a time. It
           shows under its zone and keeps a short row under This Mac or
           Connected Speakers: its round button there turns only that speaker
-          on or off, and the link after its name goes to its zone. Click the
+          on or off, and the zone's name after its own goes to the zone. Click the
           zone's round icon to switch its speakers at once; a click elsewhere
           on its header shows or hides them. To play one speaker of a zone
           alone, choose Only This Speaker from its ⋯ button under the zone;
