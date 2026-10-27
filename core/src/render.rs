@@ -1269,6 +1269,10 @@ impl Renderer {
                 && self.timed_frames >= self.floor_form_frames;
             if self.floor_formed {
                 self.start_floor_ns = self.late_floor();
+                if let (Some(floor), Some(anchor)) = (self.start_floor_ns, self.anchor_floor) {
+                    self.anchor_floor = Some(anchor.max(floor));
+                    self.anchored_floor = self.anchor_floor;
+                }
             }
         }
         self.warming = !self.floor_formed;
@@ -1365,6 +1369,12 @@ impl Renderer {
     /// up, 0 for none. Restarts the tracking when the newest stamp is
     /// stale; a callback without a usable stamp changes nothing.
     fn follow(&mut self, now: u64, frames: usize, need: usize, next: &NextRead) -> i64 {
+        // Before the floor forms Jt is 0, so a late callback's fill would
+        // hold its whole lateness and raise the reference (S207, S209).
+        if self.warming {
+            self.tracking = RESTART;
+            return 0;
+        }
         let ring = self.reader.ring();
         let Some(stamp) = ring.stamp() else {
             return 0;
@@ -1388,10 +1398,13 @@ impl Renderer {
                 shift,
             } => {
                 // Against the anchor floor as it stood at the first fill, so a
-                // fall during the measuring isn't averaged into the reference.
-                let jf = self.reader.floor_shift_frames() as f64;
-                let shift = if count == 0 { jf } else { shift };
-                let fill = fill + jf - shift;
+                // fall during the measuring isn't averaged into the reference;
+                // Jf would add each callback's jitter below the anchor floor.
+                let minus_anchor = self
+                    .anchor_floor
+                    .map_or(0.0, |anchor| -(anchor as f64) * rate as f64 / 1e9);
+                let shift = if count == 0 { minus_anchor } else { shift };
+                let fill = fill + minus_anchor - shift;
                 let (sum, count, span) = (sum + fill, count + 1, span + frames as u64);
                 self.tracking = if span as f64 >= track {
                     let reference = sum / f64::from(count);
@@ -1764,6 +1777,11 @@ impl Renderer {
             // What this callback's Jt counted from, so Jf is 0 from here; a
             // start step already set it (S318).
             if std::mem::take(&mut self.step_floor_set) {
+                // A callback below the step's value has a Jt of 0 and lands
+                // at its own value, so the anchor floor goes there (S318).
+                if let (Some(floor), Some(anchor)) = (self.late_floor(), self.anchor_floor) {
+                    self.anchor_floor = Some(floor.max(anchor.min(self.callback_late_ns)));
+                }
                 let ahead = self.reader.anchor_ahead_frames();
                 let moved = report.error.saturating_neg().saturating_sub(ahead);
                 let moved = u64::try_from(moved).unwrap_or(0);
@@ -1774,7 +1792,10 @@ impl Renderer {
                 self.start_set.clear();
                 self.anchor_floor = match (self.late_floor(), self.anchor_floor) {
                     (Some(floor), Some(anchor)) => Some(floor.max(anchor.min(self.anchor_late_ns))),
-                    (floor, _) => floor,
+                    (Some(floor), None) => Some(floor),
+                    // Its Jt is 0, so it lands as if its own value were on
+                    // time; the floor raises it once formed (S209).
+                    (None, _) => self.earliest.map(|_| self.callback_late_ns),
                 };
             }
             self.anchored_floor = self.anchor_floor;
@@ -2653,7 +2674,7 @@ mod tests {
         );
     }
 
-    // covers: S321, S322
+    // covers: S207, S209, S318, S321, S322
     #[test]
     fn a_jittery_late_start_steps_once_and_lands_on_its_twin() {
         let draws = jitter_draws();

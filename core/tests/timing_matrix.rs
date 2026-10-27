@@ -1256,7 +1256,7 @@ fn the_capture_rate_output_that_sets_the_lead_never_runs_dry_through_its_wander(
     }
 }
 
-// covers: S208, S209
+// covers: S207, S208, S209
 #[test]
 fn a_late_second_callback_neither_corrects_drift_nor_moves_the_output_in_a_mac_case() {
     // The start re-anchor used to land on the late second callback before
@@ -1362,10 +1362,6 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
         .map(|(case, _)| {
             let mut twin = (*case).clone();
             twin.devices[0].first_late = twin.devices[0].first_late.map(|(_, until)| (0.0, until));
-            // Its late second callback falls in the late output's late
-            // stretch and moves nothing there, but it plays an on-time
-            // output 2.3 to 2.5 ms later (cases f2, f6, f20).
-            twin.devices[0].second_late_ms = 0.0;
             twin
         })
         .collect();
