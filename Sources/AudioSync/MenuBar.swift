@@ -585,6 +585,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var closingPress: TimeInterval?
     private var running = false
     private var noticeCount = 0
+    /// Counts opens, so the work after one open never lands in a later one.
+    private var openCount = 0
     private var noticeWatch: AnyCancellable?
     let model: AppModel
 
@@ -685,6 +687,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // Reopened before the close ended, so `prepareNextOpen` never ran.
         if host.sizing == .closing { model.panelSession += 1 }
         host.sizing = host.sizing.after(.show)
+        openCount += 1
         let screen = (item.screen ?? NSScreen.main)?.visibleFrame ?? item.frame
         // The status item's own screen, not the one with keyboard focus.
         model.panelRoom = item.frame.minY - Self.arrowRoom - screen.minY
@@ -716,15 +719,36 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     func popoverWillClose(_ notification: Notification) { finishClose() }
 
-    /// After the open animation: work here can't hold up the first frame or
-    /// stall the animation. The refresh may resize the panel, animated.
+    /// The popover still bounces into place for about 0.25 s after this
+    /// notice, so the work waits until it settles: on the main thread
+    /// mid-bounce it dropped frames. The refresh may resize the panel, animated.
     func popoverDidShow(_ notification: Notification) {
+        let open = openCount
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.settleDelay) { [weak self] in
+            guard let self, open == self.openCount, self.presented else { return }
+            self.finishOpen()
+        }
+    }
+
+    private static let settleDelay: TimeInterval = 0.3
+
+    private func finishOpen() {
+        let start = ProcessInfo.processInfo.systemUptime
+        func ms(since time: TimeInterval) -> String {
+            String(format: "%.1f ms", (ProcessInfo.processInfo.systemUptime - time) * 1000)
+        }
         host.sizing = host.sizing.after(.didShow)
         guard host.sizing.followsContent else { return }
         let size = host.preferredContentSize
         if size.width > 0, size.height > 0, size != popover.contentSize { popover.contentSize = size }
+        let sized = ProcessInfo.processInfo.systemUptime
         takeKey()
+        let keyed = ProcessInfo.processInfo.systemUptime
         model.actions.refreshExternalState()
+        let refreshed = ProcessInfo.processInfo.systemUptime
+        DebugTrace.log("[AudioSync] panel open: size \(ms(since: start)), takeKey \(ms(since: sized)), "
+                       + "refresh \(ms(since: keyed))")
+        DispatchQueue.main.async { DebugTrace.log("[AudioSync] panel open: SwiftUI pass \(ms(since: refreshed))") }
     }
 
     func popoverDidClose(_ notification: Notification) {
