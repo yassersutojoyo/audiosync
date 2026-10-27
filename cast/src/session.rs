@@ -6,14 +6,15 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::audio::{AudioReader, Codec, StreamFormat};
 use crate::channel::{Event, PlaybackEnd};
-use crate::client::{CastClient, QUIT_BUDGET};
+use crate::client::{CastClient, Fingerprint, FingerprintBook, FingerprintChange, QUIT_BUDGET};
+use crate::discovery::DeviceId;
 use crate::error::{Backoff, ConnectError, EndReason, LaunchError};
 use crate::group::{GroupMember, GroupRecords, MemberList, MultizoneMessage};
 use crate::ids::RequestIds;
@@ -171,6 +172,12 @@ pub enum SessionEvent {
     /// A multizone message type the session doesn't act on, once per type
     /// and session, for the log (C96).
     GroupMessage(String),
+    /// The device's certificate differs from the one recorded at its last
+    /// connect, for the log only; the connection goes on (C21).
+    CertificateChanged {
+        before: Fingerprint,
+        after: Fingerprint,
+    },
     Ended(SessionEnd),
 }
 
@@ -190,6 +197,32 @@ pub struct SessionConfig {
     /// latest records instead of `addresses` (C90, C93), and the stream
     /// server answers its members too (C103).
     pub group: Option<GroupRecords>,
+    /// Where every connect records the device's certificate fingerprint
+    /// (C21); `None` records nothing.
+    pub fingerprints: Option<Fingerprints>,
+}
+
+/// The fingerprint book a session records its device in, kept by the host
+/// across sessions (C21).
+#[derive(Clone, Debug)]
+pub struct Fingerprints {
+    pub id: DeviceId,
+    pub book: Arc<Mutex<FingerprintBook>>,
+}
+
+impl Fingerprints {
+    /// Records the fingerprint `client` connected with; the event to log
+    /// when it changed.
+    fn record(&self, client: &CastClient) -> Option<SessionEvent> {
+        let after = client.fingerprint()?;
+        let mut book = self.book.lock().unwrap_or_else(PoisonError::into_inner);
+        match book.record(self.id, after) {
+            FingerprintChange::Changed { before } => {
+                Some(SessionEvent::CertificateChanged { before, after })
+            }
+            FingerprintChange::First | FingerprintChange::Same => None,
+        }
+    }
 }
 
 /// Whether a failed first `LOAD` in `codec` is retried in FLAC (C84):
@@ -283,6 +316,7 @@ pub struct CastSession {
     group: Option<GroupRecords>,
     members: MemberList,
     group_types_logged: LoggedTypes,
+    fingerprints: Option<Fingerprints>,
 }
 
 /// The most multizone types logged in one session, and the longest a
@@ -359,6 +393,10 @@ impl CastSession {
                 ));
             }
         };
+        let certificate = config
+            .fingerprints
+            .as_ref()
+            .and_then(|fingerprints| fingerprints.record(&client));
         if group.is_some() {
             client.request_members();
         }
@@ -419,7 +457,7 @@ impl CastSession {
             load,
             media_session_id: None,
             selected,
-            events: VecDeque::new(),
+            events: certificate.into_iter().collect(),
             recovery_sink: None,
             recovering: false,
             ended: false,
@@ -441,6 +479,7 @@ impl CastSession {
             group,
             members: MemberList::new(),
             group_types_logged: LoggedTypes::default(),
+            fingerprints: config.fingerprints,
         };
         if let Err(error) = session.load_with_fallback() {
             session.teardown(teardown_budget(&session.quitting));
@@ -879,6 +918,13 @@ impl CastSession {
             Err(None) => return self.end(SessionEnd::Deselected),
             Err(Some(error)) => return self.end(SessionEnd::Failed(error.into())),
         };
+        if let Some(event) = self
+            .fingerprints
+            .as_ref()
+            .and_then(|fingerprints| fingerprints.record(&self.client))
+        {
+            self.report(event);
+        }
         let resumed = if reload {
             self.client.resume(&self.app, None, &self.load.url)
         } else {

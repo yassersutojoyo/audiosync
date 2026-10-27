@@ -108,6 +108,7 @@ fn start_group(leader: &FakeDevice) -> (CastSession, GroupRecords, Feed) {
         metadata: Metadata::default(),
         artwork: None,
         group: Some(records.clone()),
+        fingerprints: None,
     };
     let (writer, reader) = audio_ring(48_000);
     let feed = feed(writer);

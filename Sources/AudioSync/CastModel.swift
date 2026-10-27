@@ -260,6 +260,7 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_STREAM: self = .note(attempt: a, "stream: " + detail)
         case ASC_CAST_EVENT_MEMBERS: self = .members(attempt: a, members())
         case ASC_CAST_EVENT_GROUP_LOG: self = .groupLog(detail)
+        case ASC_CAST_EVENT_CERTIFICATE_CHANGED: self = .note(attempt: a, "the device's certificate changed from " + detail)
         case ASC_CAST_EVENT_MEMORY_CHANGED: self = .memoryChanged
         case ASC_CAST_EVENT_DISCOVERY_STOPPED: self = .discoveryStopped
         case ASC_CAST_EVENT_FAILED: self = .failed(detail: detail)

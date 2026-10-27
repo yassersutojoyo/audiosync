@@ -71,6 +71,7 @@ fn config(device: &FakeDevice) -> SessionConfig {
         },
         artwork: None,
         group: None,
+        fingerprints: None,
     }
 }
 

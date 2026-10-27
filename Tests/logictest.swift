@@ -8458,6 +8458,15 @@ do {
     }
     check(logged == .groupLog("group Home announced") && logged?.attempt == nil,
           "cast group: a group log event carries its line for the debug log")
+    raw = AscCastEvent()
+    raw.kind = ASC_CAST_EVENT_CERTIFICATE_CHANGED
+    raw.attempt = 6
+    let changed: CastEvent? = "AB to CD".withCString { line in
+        raw.detail = line
+        return CastEvent(raw)
+    }
+    check(changed == .note(attempt: 6, "the device's certificate changed from AB to CD"),
+          "cast: a changed certificate becomes a debug log line of its attempt")
     check(CastRefusal.problem(ASC_CAST_REFUSED_GROUP) == .notResponding
             && CastEnd.failed(CastError(ASC_CAST_ERROR_GROUP)).problem == .notResponding,
           "cast group: the retired group refusal and error map to nothing group-specific")

@@ -37,12 +37,12 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value, json};
 
 use crate::audio::{AudioReader, Codec, StreamFormat};
-use crate::client::QUIT_BUDGET;
+use crate::client::{FingerprintBook, QUIT_BUDGET};
 use crate::discovery::DeviceId;
 use crate::group::GroupRecords;
 use crate::media::{IdleReason, MediaError, Metadata};
 use crate::session::{
-    CastSession, EventSink, SessionConfig, SessionEnd, SessionError, SessionEvent,
+    CastSession, EventSink, Fingerprints, SessionConfig, SessionEnd, SessionError, SessionEvent,
 };
 
 /// How long the worker drives a session between two looks at the command
@@ -574,6 +574,9 @@ struct Worker {
     held: Arc<Mutex<VecDeque<HostEvent>>>,
     shared: Arc<Shared>,
     running: Option<Running>,
+    /// Lives as long as the worker, so a device's next session sees the
+    /// certificate of its last one (C21).
+    fingerprints: Arc<Mutex<FingerprintBook>>,
 }
 
 impl Worker {
@@ -584,6 +587,7 @@ impl Worker {
             held: Arc::new(Mutex::new(VecDeque::new())),
             shared,
             running: None,
+            fingerprints: Arc::new(Mutex::new(FingerprintBook::new())),
         }
     }
 
@@ -756,6 +760,10 @@ impl Worker {
             metadata,
             artwork,
             group: target.group,
+            fingerprints: Some(Fingerprints {
+                id: device,
+                book: Arc::clone(&self.fingerprints),
+            }),
         };
         // Connect retries go out live, while the start still runs; one that
         // finds the outbox full, or held events still in the way, is dropped

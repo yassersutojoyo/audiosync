@@ -81,6 +81,7 @@ fn start_as(device: &FakeDevice, group: Option<GroupRecords>) -> (CastSession, F
         metadata: Metadata::default(),
         artwork: None,
         group,
+        fingerprints: None,
     };
     let selected = Arc::new(AtomicBool::new(true));
     let session = CastSession::start(config, reader, selected, |_, _| {}).expect("plays");
