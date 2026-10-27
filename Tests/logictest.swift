@@ -2009,8 +2009,8 @@ do {
           "capture close: an input device's capture has no tap, so nothing is left for later")
 }
 
-// MARK: Retired engine choice — noted once, no effect
 // covers: S213
+// MARK: Retired engine choice — noted once, no effect
 check(RetiredEngineChoice.defaultsKey == "engineImpl" && RetiredEngineChoice.environmentKey == "AUDIOSYNC_ENGINE",
       "retired engine choice: the setting and the variable older builds read")
 check(RetiredEngineChoice.launchNote(environment: nil, stored: nil) == nil
