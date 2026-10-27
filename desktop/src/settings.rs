@@ -2796,14 +2796,36 @@ mod tests {
             assert_eq!(read.equalizer, SavedEqualizer::default(), "{equalizer}");
         }
 
-        for groups in [
-            r#"[{"id": "g", "name": "G", "members": ["lc:a", 5]}]"#,
-            r#""none""#,
-            "null",
-        ] {
+        for groups in [r#""none""#, "null"] {
             let read = read_beside_a_kept_master(&format!(r#""groups": {groups}"#));
             assert!(read.groups.is_empty(), "{groups}");
         }
+        let groups = read_beside_a_kept_master(
+            r#""groups": [{"id": "g", "name": "G", "members": ["lc:a", 5]}, 7, {"id": 8}]"#,
+        );
+        assert_eq!(
+            groups.groups,
+            [SavedGroup {
+                id: "g".to_owned(),
+                name: "G".to_owned(),
+                members: vec!["lc:a".to_owned()],
+            }]
+        );
+        // A format 2 file's groups become its zones once: one bad member
+        // must not cost the group before the mark is set.
+        let (older, _) = Settings::from_json(
+            r#"{"version": 2, "groups": [{"id": "g", "name": "G", "members": ["lc:a", null]}]}"#,
+        )
+        .expect("read");
+        assert!(older.speaker_zones_migrated);
+        assert_eq!(
+            older
+                .speaker_zones
+                .iter()
+                .map(|zone| zone.members.clone())
+                .collect::<Vec<_>>(),
+            [vec!["lc:a".to_owned()]]
+        );
 
         for window in [
             r#"{"x": 100.5, "y": 0, "width": 800, "height": 600}"#,
