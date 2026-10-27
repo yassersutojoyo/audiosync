@@ -4796,6 +4796,26 @@ do {
     let wider = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 300, height: 300))
     check(wider.maxY == window.maxY && wider.midX == window.midX && wider.size == CGSize(width: 326, height: 327),
           "menu bar panel: a resize keeps the window's top edge and middle, so the arrow stays on the icon")
+    var rest = PanelRest(frame: window, content: CGSize(width: 280, height: 359))
+    let unfolded = rest.move(to: CGSize(width: 280, height: 428))
+    let folded = rest.move(to: CGSize(width: 280, height: 359))
+    check(unfolded == grown && folded == window && rest.frame == window,
+          "menu bar panel: a fold that starts while the unfold still runs aims from the rest frame, back to the exact frame")
+    var many = PanelRest(frame: window, content: CGSize(width: 280, height: 359))
+    let tops = (0..<50).map { many.move(to: CGSize(width: 280, height: 359 + CGFloat($0 % 7) * 28.5)).maxY }
+    check(tops.allSatisfy { $0 == window.maxY },
+          "menu bar panel: no run of folds and unfolds moves the top edge under the icon")
+    let fold = PanelFold(reduceMotion: false), stillFold = PanelFold(reduceMotion: true)
+    check(fold.moves && fold.duration == 0.2 && !stillFold.moves && stillFold.duration == 0,
+          "menu bar panel: a zone folds in one 0.2 s motion; with Reduce Motion the panel changes at once")
+    let bar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let foldBody = bar.components(separatedBy: "private func fold(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(foldBody.contains("animateResize(") && !foldBody.contains("resizeLater(")
+            && foldBody.contains(".easeInOut(duration: motion.duration)") && foldBody.contains("name: .easeInEaseOut"),
+          "menu bar panel: a fold resizes the panel in the click's turn, on the rows' ease-in-out curve")
+    check(bar.contains(".transition(.opacity.animation(.easeInOut(duration: PanelFold.duration)))"),
+          "menu bar panel: a zone's rows fade in and out with the fold, Reduce Motion included")
     let closeAsked = PopoverCloseRequest.answer
     check(closeAsked(false, true, 30, nil) == .closeOurWay && closeAsked(true, true, 30, nil) == .allow,
           "menu bar panel: an open panel the popover wants closed shrinks away its own way")
