@@ -573,7 +573,7 @@ final class SyncDraft: ObservableObject {
 final class MenuBarController: NSObject, NSPopoverDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let popover = MenuBarPopover()
-    private let host: NSHostingController<MenuBarView>
+    private let host: PanelHost
     private var monitors: [Any] = []
     private var resignWatch: NSObjectProtocol?
     /// Open as far as clicks on the icon go. It turns false as the close
@@ -594,9 +594,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     init(model: AppModel) {
         self.model = model
-        host = NSHostingController(rootView: MenuBarView(model: model))
+        host = PanelHost(rootView: MenuBarView(model: model))
         super.init()
-        // The popover follows the content's size, animating as it changes.
+        // The popover follows the content's size, animating as it changes,
+        // except while it animates in or out (`PanelHost`).
         host.sizingOptions = [.preferredContentSize]
         popover.contentViewController = host
         popover.behavior = .transient
@@ -613,6 +614,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             self.noticeCount = list.count
             self.refreshIcon()
         }
+        // The first build of the rows is the slowest; it happens now, not on the first click.
+        DispatchQueue.main.async { [weak self] in self?.host.view.layoutSubtreeIfNeeded() }
         DebugTrace.log("[AudioSync] status item visible=\(statusItem.isVisible) button=\(statusItem.button != nil)")
         DebugTrace.log("[AudioSync] brand font \(Brand.fontName) loaded=\(NSFont(name: Brand.fontName, size: 13) != nil)")
     }
@@ -679,26 +682,23 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     func show() {
         guard !presented, let button = statusItem.button, let item = button.window else { return }
+        host.sizing = host.sizing.after(.show)
         let screen = (item.screen ?? NSScreen.main)?.visibleFrame ?? item.frame
         // The status item's own screen, not the one with keyboard focus.
         model.panelRoom = item.frame.minY - Self.arrowRoom - screen.minY
-        model.actions.refreshExternalState()
-        model.panelSession += 1
         // The app's appearance, not the menu bar's, which follows the wallpaper.
         popover.appearance = NSApp.effectiveAppearance
-        // Open at the final size. SwiftUI applies the state set just now (the
-        // refresh can bring in the Cast "Add by Address…" row) on its next
-        // pass, which would come after the popover is shown: it would open at
-        // last time's size and then grow. A layout pass now applies that state
-        // and the size is set before showing, so even the first open after
-        // launch, before the view has been in a window, opens at it.
+        // Open at once, at the final size. The rows were rebuilt and laid out
+        // when the panel last closed (`prepareNextOpen`), so this pass only
+        // applies what changed since; the refresh waits for `popoverDidShow`.
         host.view.needsLayout = true
         host.view.layoutSubtreeIfNeeded()
-        popover.contentSize = host.sizeThatFits(in: CGSize(width: 10_000, height: 10_000))
+        let size = host.sizeThatFits(in: CGSize(width: 10_000, height: 10_000))
+        host.setSize(size)
+        popover.contentSize = size
         presented = true
         popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        takeKey()
         DispatchQueue.main.async { button.highlight(true) }
         watchForOutsideClicks()
     }
@@ -714,10 +714,34 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     func popoverWillClose(_ notification: Notification) { finishClose() }
 
+    /// After the open animation: work here can't hold up the first frame or
+    /// stall the animation. The refresh may resize the panel, animated.
+    func popoverDidShow(_ notification: Notification) {
+        host.sizing = host.sizing.after(.didShow)
+        guard host.sizing.followsContent else { return }
+        takeKey()
+        model.actions.refreshExternalState()
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        host.sizing = host.sizing.after(.didClose)
+        if host.sizing == .closed { prepareNextOpen() }
+    }
+
+    /// Rebuilds the rows while the panel is hidden (a row the pointer was
+    /// over when it closed never got a hover exit) and lays them out, so the
+    /// next click shows the panel without doing that work first.
+    private func prepareNextOpen() {
+        model.panelSession += 1
+        host.view.needsLayout = true
+        host.view.layoutSubtreeIfNeeded()
+    }
+
     /// What every close does once, however it began.
     private func finishClose() {
         guard presented else { return }
         presented = false
+        host.sizing = host.sizing.after(.willClose)
         let press = Self.latestPress
         if let item = statusItem.button?.window,
            StatusItemClick.pressClosed(pointer: NSEvent.mouseLocation, itemFrame: item.frame,
@@ -765,6 +789,33 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             }
             return event
         }) { monitors.append(local) }
+    }
+}
+
+/// The panel's hosting controller. While `sizing` holds, the content's new
+/// size waits and is applied once the popover is fully shown; one that comes
+/// while it closes is dropped, and the next open measures afresh.
+final class PanelHost: NSHostingController<MenuBarView> {
+    var sizing = PanelSizing.closed {
+        didSet {
+            guard sizing.followsContent, let waiting else { return }
+            self.waiting = nil
+            super.preferredContentSize = waiting
+        }
+    }
+    private var waiting: NSSize?
+
+    override var preferredContentSize: NSSize {
+        get { super.preferredContentSize }
+        set {
+            if sizing.followsContent { super.preferredContentSize = newValue } else { waiting = newValue }
+        }
+    }
+
+    /// The size measured just before the popover shows.
+    func setSize(_ size: NSSize) {
+        waiting = nil
+        super.preferredContentSize = size
     }
 }
 

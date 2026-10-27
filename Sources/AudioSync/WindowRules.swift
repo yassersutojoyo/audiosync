@@ -59,6 +59,28 @@ enum StatusItemClick: Equatable {
     }
 }
 
+/// When the menu bar panel's popover follows its content's size. NSPopover
+/// animates a size change on top of its own open or close animation, which
+/// stutters, so a change waits until the popover is fully shown and is
+/// dropped once it starts to close.
+enum PanelSizing: Equatable {
+    case closed, opening, shown, closing
+
+    enum Event { case show, didShow, willClose, didClose }
+
+    var followsContent: Bool { self == .shown }
+
+    func after(_ event: Event) -> PanelSizing {
+        switch (self, event) {
+        case (_, .show): return .opening
+        case (.opening, .didShow): return .shown
+        case (.opening, .willClose), (.shown, .willClose): return .closing
+        case (.closing, .didClose): return .closed
+        default: return self   // a late notice from an earlier open or close
+        }
+    }
+}
+
 /// How strongly a scrolling column fades at its top and bottom edges, from 0
 /// (nothing hidden past that edge) to 1 (at least the fade's height hidden).
 struct ScrollEdgeFades: Equatable {
