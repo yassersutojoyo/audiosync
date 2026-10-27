@@ -242,6 +242,8 @@ impl PtpService {
             return;
         };
         let schedule = &mut self.schedules[index];
+        // A session opened at this address later gets a warning of its own.
+        schedule.claim = None;
         schedule.sessions = schedule.sessions.saturating_sub(1);
         if schedule.sessions > 0 {
             return;
