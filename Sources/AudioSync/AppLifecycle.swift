@@ -166,6 +166,12 @@ enum AppLifecycle {
             return settle - elapsed
         }
 
+        /// `midRebuild` once the switch stopped (`stopped`) the capture that
+        /// still waited for the app, before its first attempt.
+        static func midRebuild(stopped: Bool, before: Bool) -> Bool {
+            before
+        }
+
         /// What a wait between attempts ends in.
         enum AfterWait: Equatable {
             case attempt

@@ -306,6 +306,7 @@ extension AppDelegate {
         if firstWait > 0, engine.isRunning {
             // Ends the capture still waiting for the app, whose own looks would report the quit again.
             DebugTrace.log(SessionStop.sourceSwitchedToSystem.logLine(detail: bundleID))
+            midRebuild = AppLifecycle.SystemSwitch.midRebuild(stopped: true, before: midRebuild)
             engine.stop()
         }
         if firstWait > 0 {
