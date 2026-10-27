@@ -335,6 +335,6 @@ enum ZoneHeaderHit {
     /// Where Go to Zone puts the keyboard focus: the round icon, or the arrow
     /// while none of the zone's speakers is present and VoiceOver skips the icon.
     static func goToZoneFocus(nonePresent: Bool) -> Area {
-        .zoneIcon
+        nonePresent ? .chevron : .zoneIcon
     }
 }

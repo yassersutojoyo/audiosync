@@ -648,8 +648,8 @@ private struct ZoneCard: View {
     private var expanded: Bool { disclosure.isExpanded(zone.id) }
     // The icon greys out and folds then: unfolding still lists the missing speakers.
     private var nonePresent: Bool { zone.present == 0 }
-    /// The zone's switch, which takes the focus from a member's Go to Zone.
-    @FocusState private var switchFocused: Bool
+    /// The header part that takes the focus from a member's Go to Zone.
+    @FocusState private var focused: ZoneHeaderHit.Area?
 
     var body: some View {
         let t = model.text
@@ -658,7 +658,7 @@ private struct ZoneCard: View {
                 header(t)
                     .onChange(of: model.focusZone, initial: true) { _, id in
                         if id == zone.id {
-                            switchFocused = true
+                            focused = ZoneHeaderHit.goToZoneFocus(nonePresent: nonePresent)
                             model.focusZone = nil
                         }
                     }
@@ -700,6 +700,7 @@ private struct ZoneCard: View {
             .accessibilityLabel(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
             .accessibilityValue(nonePresent ? model.countText(of: zone) : "")
             .help(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
+            .focused($focused, equals: .chevron)
 
             Button { hit(.zoneIcon) } label: {
                 SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: state, size: 32)
@@ -713,7 +714,7 @@ private struct ZoneCard: View {
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
             .accessibilityHint(t.rowHint(state, note: nil))
             .help(t.help(state))
-            .focused($switchFocused)
+            .focused($focused, equals: .zoneIcon)
             // The badge's gap to the name, as in a speaker row.
             .padding(.trailing, 4)
 
