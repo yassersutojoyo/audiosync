@@ -1125,6 +1125,14 @@ check(SpeakerAvailability(.code(password: false), everyTime: true, on: true) == 
         && SpeakerAvailability(.code(password: false), everyTime: false, on: false) == .needsCode
         && SpeakerAvailability(.open, everyTime: false, on: false) == .open,
       "availability: asks for a code every time while it asks or is off; paired for this run and on, it is open")
+do {
+    let pinOff = UIStrings().airPlayTurnedOff(name: "Den", reason: .needsPin)
+    let passwordOff = UIStrings().airPlayTurnedOff(name: "Den", reason: .needsPassword)
+    check(pinOff.contains("PIN") && !pinOff.lowercased().contains("password"),
+          "airplay off: a speaker that needs a PIN says PIN, not password")
+    check(passwordOff.contains("password") && !passwordOff.contains("PIN"),
+          "airplay off: a speaker that asks for a password says password, not PIN")
+}
 
 // MARK: Device volume — a turned-down or muted output shows a hint and a one-click fix (S192 to S202)
 do {
