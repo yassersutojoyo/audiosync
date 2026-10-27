@@ -17,7 +17,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use audiosync_core::channels::{InputPair, pair_to_stereo};
@@ -705,6 +705,17 @@ impl CaptureConverter {
     /// with the time it closes on the core's clock (S207), so the outputs
     /// can follow the capture's clock.
     pub fn push(&mut self, data: &[u8], frames: usize, silent: bool) {
+        self.push_marked(data, frames, silent, None);
+    }
+
+    /// Converts a chunk of a mix as [`CaptureConverter::push`] converts a
+    /// packet of data; `filled` tells per frame whether every lane's share
+    /// was flagged or filled silence, for the zero holes.
+    pub fn push_mixed(&mut self, data: &[u8], frames: usize, filled: &[bool]) {
+        self.push_marked(data, frames, false, Some(filled));
+    }
+
+    fn push_marked(&mut self, data: &[u8], frames: usize, silent: bool, filled: Option<&[bool]>) {
         let arrived = Instant::now();
         let block = self.format.block_align();
         let frames = if silent {
@@ -733,13 +744,19 @@ impl CaptureConverter {
                 );
                 // A pair beyond the format's channels converts nothing: silence, not stale samples.
                 self.stereo[converted * 2..n * 2].fill(0.0);
-                self.zero_runs.observe(&self.stereo[..n * 2]);
+                let stereo = &self.stereo[..n * 2];
+                match filled {
+                    Some(filled) => self
+                        .zero_runs
+                        .observe_mixed(stereo, filled.get(done..done + n).unwrap_or(&[])),
+                    None => self.zero_runs.observe(stereo),
+                }
             }
             written += self.write_stereo(n, arrived, &mut signal);
             done += n;
         }
         if let Some(counters) = &self.counters {
-            counters.publish_zero_holes(self.zero_runs.holes());
+            counters.publish_zero_holes(self.zero_runs.holes(), self.format.rate);
         }
         let closed = clock::now_ns();
         self.writer.end_block_at(closed);
@@ -998,7 +1015,10 @@ pub struct CaptureCounters {
     silent_packets: AtomicU64,
     zero_holes: AtomicU64,
     zero_hole_frames: AtomicU64,
+    longest_zero_hole: AtomicU64,
     flagged_zero_holes: AtomicU64,
+    /// The rate of the frames the holes count, for their length in ms.
+    zero_hole_rate: AtomicU32,
 }
 
 #[cfg_attr(
@@ -1028,10 +1048,15 @@ impl CaptureCounters {
         self.silent_packets.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Publishes the holes found so far. Never allocates, locks or blocks.
-    pub fn publish_zero_holes(&self, holes: ZeroHoles) {
+    /// Publishes the holes found so far in frames at `rate`. Never
+    /// allocates, locks or blocks. Separate relaxed stores: a status read can
+    /// mix two pushes, which the next status line corrects (debug only).
+    pub fn publish_zero_holes(&self, holes: ZeroHoles, rate: u32) {
         self.zero_holes.store(holes.holes, Ordering::Relaxed);
         self.zero_hole_frames.store(holes.frames, Ordering::Relaxed);
+        self.longest_zero_hole
+            .store(holes.longest, Ordering::Relaxed);
+        self.zero_hole_rate.store(rate, Ordering::Relaxed);
         self.flagged_zero_holes
             .store(holes.flagged, Ordering::Relaxed);
     }
@@ -1051,8 +1076,10 @@ impl CaptureCounters {
             zero_holes: ZeroHoles {
                 holes: self.zero_holes.load(Ordering::Relaxed),
                 frames: self.zero_hole_frames.load(Ordering::Relaxed),
+                longest: self.longest_zero_hole.load(Ordering::Relaxed),
                 flagged: self.flagged_zero_holes.load(Ordering::Relaxed),
             },
+            zero_hole_rate: self.zero_hole_rate.load(Ordering::Relaxed),
         }
     }
 }
@@ -1069,6 +1096,18 @@ pub struct CaptureGlitches {
     /// endpoint plays nothing.
     pub silent_packets: u64,
     pub zero_holes: ZeroHoles,
+    /// The rate of `zero_holes`' frames; 0 before any was published.
+    pub zero_hole_rate: u32,
+}
+
+impl CaptureGlitches {
+    /// The longest zero hole in ms, 0 without a rate.
+    pub fn longest_zero_hole_ms(&self) -> f64 {
+        if self.zero_hole_rate == 0 {
+            return 0.0;
+        }
+        self.zero_holes.longest as f64 * 1000.0 / f64::from(self.zero_hole_rate)
+    }
 }
 
 /// The holes of exact digital silence a capture's stereo frames had inside
@@ -1078,6 +1117,8 @@ pub struct CaptureGlitches {
 pub struct ZeroHoles {
     pub holes: u64,
     pub frames: u64,
+    /// The longest hole's frames.
+    pub longest: u64,
     /// The holes that had frames of flagged or filled silence in them.
     pub flagged: u64,
 }
@@ -1121,6 +1162,18 @@ impl ZeroRuns {
         for frame in stereo.as_chunks::<2>().0 {
             if frame[0] == 0.0 && frame[1] == 0.0 {
                 self.zeros(1, false);
+            } else {
+                self.sound();
+            }
+        }
+    }
+
+    /// Looks at interleaved stereo frames of a mix, `filled` telling per
+    /// frame whether every lane's share was flagged or filled silence.
+    pub fn observe_mixed(&mut self, stereo: &[f32], filled: &[bool]) {
+        for (frame, &filled) in stereo.as_chunks::<2>().0.iter().zip(filled) {
+            if frame[0] == 0.0 && frame[1] == 0.0 {
+                self.zeros(1, filled);
             } else {
                 self.sound();
             }
@@ -2319,14 +2372,18 @@ mod tests {
     #[test]
     fn a_10_ms_zero_hole_inside_a_tone_is_one_hole() {
         let mut runs = ZeroRuns::new(48_000);
+        // A 6 ms hole first: the 10 ms one is the longest.
+        runs.observe(&tone(480));
+        runs.observe(&[0.0; 288 * 2]);
         runs.observe(&tone(4_800));
         runs.observe(&[0.0; 480 * 2]);
         runs.observe(&tone(4_800));
         assert_eq!(
             runs.holes(),
             ZeroHoles {
-                holes: 1,
-                frames: 480,
+                holes: 2,
+                frames: 768,
+                longest: 480,
                 flagged: 0,
             }
         );
@@ -2370,6 +2427,7 @@ mod tests {
             ZeroHoles {
                 holes: 1,
                 frames: 960,
+                longest: 960,
                 flagged: 1,
             }
         );
@@ -2400,6 +2458,7 @@ mod tests {
             ZeroHoles {
                 holes: 2,
                 frames: 960,
+                longest: 480,
                 flagged: 1,
             }
         );

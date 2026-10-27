@@ -1068,7 +1068,9 @@ fn mix_loop(
     let mut planned = [0_u32; MAX_MIX_APPS];
     let mut wanted = lanes.held(&mut planned);
     let (mut before, mut after) = ([0_u32; MAX_MIX_APPS], [0_u32; MAX_MIX_APPS]);
-    let mut sink = |stereo: &[f32], frames: usize| converter.push(as_bytes(stereo), frames, false);
+    let mut sink = |stereo: &[f32], frames: usize, filled: &[bool]| {
+        converter.push_mixed(as_bytes(stereo), frames, filled);
+    };
     let mut handed = |lane| {
         // A full mailbox means the opener is stuck; this one is freed here.
         if let Err(lane) = MixShare::post(&share.retired, lane) {
