@@ -2083,11 +2083,11 @@ The Mac (pending, [MAC]):
 |---|---|
 | updates: an appcast holding the Mac item and both Windows items offers the Mac item only (pending, [MAC], run once on the first release appcast that carries Windows items) | S310 |
 
-The release side (pending):
+The release side:
 
 | Check | Clauses |
 |---|---|
-| the release appcast holds one Mac item and one item per Windows arch, each signed and with the same short version (pending; a check in the release script) | S311 |
+| `scripts/check_appcast.py --self-test` (fixture appcasts and zips built in a temp folder: one Mac item and one item per Windows arch with one signed enclosure each, the same short version and build number, URLs and lengths matching the zips, each Windows zip holding only `audiosync.exe` and `THIRD-PARTY-NOTICES.txt`; each break fails with its own line) | S311 |
 
 ## 19. Windows updater
 
