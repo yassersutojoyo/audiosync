@@ -259,8 +259,10 @@ pub fn trace_field<T: std::str::FromStr>(line: &str, name: &str) -> Option<T> {
 
 /// One RTP numbering of a speaker, from its first packet after RECORD or a
 /// flush: the syncs that went out and the clicks' onsets, as RTP timestamps.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Numbering {
+    /// Its first packet on the stream's timeline and that packet's RTP timestamp.
+    start: (u64, u32),
     syncs: Vec<(u32, f64)>,
     clicks: Vec<u32>,
     /// The frame after the last sounding packet.
@@ -281,7 +283,14 @@ impl WireLog {
         let kind = line.split(' ').next().unwrap_or_default();
         if kind == "first_sound" {
             self.first_packet = trace_field(line, "packet").zip(trace_field(line, "rtptime"));
-            self.numberings.push(Numbering::default());
+            if let Some(start) = self.first_packet {
+                self.numberings.push(Numbering {
+                    start,
+                    syncs: Vec::new(),
+                    clicks: Vec::new(),
+                    sound_end: None,
+                });
+            }
             return;
         }
         let Some(numbering) = self.numberings.last_mut() else {
@@ -317,18 +326,60 @@ impl WireLog {
         self.numberings.iter().map(|n| n.syncs.len()).sum()
     }
 
-    /// Each click's onset RTP timestamp and the play time the syncs of its
-    /// numbering state for it.
-    pub fn clicks(&self) -> Vec<(u32, Option<f64>)> {
+    /// Each click's frame, onset RTP timestamp and the play time the syncs
+    /// of its numbering state for it.
+    pub fn clicks(&self) -> Vec<WireClick> {
         self.numberings
             .iter()
             .flat_map(|n| {
-                n.clicks
-                    .iter()
-                    .map(|&rtp| (rtp, stated_play(&n.syncs, rtp)))
+                let (packet, rtptime) = n.start;
+                n.clicks.iter().map(move |&rtp| WireClick {
+                    frame: packet * PACKET_FRAMES + u64::from(rtp.wrapping_sub(rtptime)),
+                    rtp,
+                    play: stated_play(&n.syncs, rtp),
+                })
             })
             .collect()
     }
+}
+
+/// A click one speaker's traces show on the wire.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WireClick {
+    /// Its onset on the stream's timeline: the same frame on every speaker,
+    /// whatever their RTP numberings.
+    pub frame: u64,
+    pub rtp: u32,
+    pub play: Option<f64>,
+}
+
+/// One click position and what each speaker traced there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClickPair {
+    pub frame: u64,
+    pub reference: Option<WireClick>,
+    pub other: Option<WireClick>,
+}
+
+impl ClickPair {
+    /// How much later the other speaker was told to play the click.
+    pub fn diff(&self) -> Option<f64> {
+        Some(self.other?.play? - self.reference?.play?)
+    }
+}
+
+/// Pairs two speakers' clicks in trace order.
+pub fn pair_clicks(reference: &[WireClick], other: &[WireClick]) -> Vec<ClickPair> {
+    (0..reference.len().max(other.len()))
+        .map(|k| {
+            let (a, b) = (reference.get(k).copied(), other.get(k).copied());
+            ClickPair {
+                frame: a.or(b).map_or(0, |click| click.frame),
+                reference: a,
+                other: b,
+            }
+        })
+        .collect()
 }
 
 /// P102 on the two streams: the k-th onset of each is the k-th click; their

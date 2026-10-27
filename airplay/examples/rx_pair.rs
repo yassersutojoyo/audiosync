@@ -58,7 +58,8 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::stream::SpeakerCounters;
 use audiosync_airplay::volume::Volume;
 use sync_check::{
-    CLICK_FIRST_FRAME, CLICK_PERIOD_FRAMES, RATE, RxSpec, WireLog, click_sample, parse_rx_spec,
+    CLICK_FIRST_FRAME, CLICK_PERIOD_FRAMES, ClickPair, RATE, RxSpec, WireLog, click_sample,
+    pair_clicks, parse_rx_spec,
 };
 
 const BLOCK_FRAMES: usize = 441;
@@ -292,14 +293,16 @@ fn sender_check(args: &Args, order: &[DeviceKey], outcomes: &BTreeMap<DeviceKey,
             .first_packet
             .map_or("none".to_owned(), |(packet, rtp)| format!("{packet}/{rtp}"));
         let clicks = outcome.wire.clicks();
-        for (index, (rtp, play)) in clicks.iter().enumerate() {
-            let play = play.map_or("none".to_owned(), |s| format!("{s:.9}"));
+        for (index, click) in clicks.iter().enumerate() {
+            let play = click.play.map_or("none".to_owned(), |s| format!("{s:.9}"));
             println!(
-                "stated {} delay_ms={} joined_s={joined} first_packet/rtp={first} syncs={} click={} rtp={rtp} play_s={play}",
+                "stated {} delay_ms={} joined_s={joined} first_packet/rtp={first} syncs={} click={} frame={} rtp={} play_s={play}",
                 rx.address,
                 rx.delay.as_millis(),
                 outcome.wire.syncs(),
                 index + 1,
+                click.frame,
+                click.rtp,
             );
         }
         stated.push(clicks);
@@ -308,11 +311,14 @@ fn sender_check(args: &Args, order: &[DeviceKey], outcomes: &BTreeMap<DeviceKey,
     let reference = &args.receivers[0];
     for (rx, clicks) in args.receivers.iter().zip(&stated).skip(1) {
         let wanted = rx.delay.as_secs_f64() - reference.delay.as_secs_f64();
-        let diffs: Vec<f64> = stated[0]
+        let pairs = pair_clicks(&stated[0], clicks);
+        let positions = &pairs[..pairs.len().min(expected)];
+        let diffs: Vec<f64> = positions.iter().filter_map(ClickPair::diff).collect();
+        let unjudged: Vec<String> = positions
             .iter()
-            .zip(clicks)
-            .take(expected)
-            .map_while(|((_, a), (_, b))| Some((*b)? - (*a)?))
+            .enumerate()
+            .filter(|(_, pair)| pair.diff().is_none())
+            .map(|(index, pair)| format!("{} (frame {})", index + 1, pair.frame))
             .collect();
         let worst = diffs
             .iter()
@@ -330,12 +336,17 @@ fn sender_check(args: &Args, order: &[DeviceKey], outcomes: &BTreeMap<DeviceKey,
             .first()
             .map_or("none".to_owned(), |diff| format!("{:.3}", diff * 1000.0));
         println!(
-            "SENDER {} {} vs {}: stated play times differ by {first} ms on the first click, expected {:.0} ms; worst error {worst:.2} frames over {} of {expected} clicks (limit 1 frame)",
+            "SENDER {} {} vs {}: stated play times differ by {first} ms on the first click, expected {:.0} ms; worst error {worst:.2} frames over {} of {expected} clicks (limit 1 frame); not judged: {}",
             if ok { "PASS" } else { "FAIL" },
             reference.address,
             rx.address,
             wanted * 1000.0,
             diffs.len(),
+            if unjudged.is_empty() {
+                "none".to_owned()
+            } else {
+                unjudged.join(", ")
+            },
         );
     }
     pass
