@@ -34,6 +34,8 @@ const LANE_FRAMES: usize = MAX_LAG_FRAMES + CONVERT_CHUNK;
 /// One stream's frames waiting to be mixed, stereo, in a ring buffer.
 struct Lane {
     samples: Box<[f32]>,
+    /// Per waiting frame, whether it is flagged or filled silence.
+    filled: Box<[bool]>,
     /// The first waiting frame.
     start: usize,
     /// Waiting frames.
@@ -51,6 +53,7 @@ impl Lane {
     fn new() -> Lane {
         Lane {
             samples: vec![0.0; LANE_FRAMES * 2].into_boxed_slice(),
+            filled: vec![false; LANE_FRAMES].into_boxed_slice(),
             start: 0,
             len: 0,
             owed: 0,
@@ -69,8 +72,9 @@ impl Lane {
     fn append_silence(&mut self, frames: usize) {
         let frames = frames - self.pay(frames);
         for _ in 0..frames {
-            let at = (self.start + self.len) % LANE_FRAMES * 2;
-            self.samples[at..at + 2].fill(0.0);
+            let frame = (self.start + self.len) % LANE_FRAMES;
+            self.samples[frame * 2..frame * 2 + 2].fill(0.0);
+            self.filled[frame] = true;
             self.len += 1;
         }
     }
@@ -78,22 +82,25 @@ impl Lane {
     /// Appends whole frames from `stereo`, fill when `filled`; the caller
     /// keeps them within room.
     fn append(&mut self, stereo: &[f32], filled: bool) {
-        let _ = filled;
         let frames = stereo.as_chunks::<2>().0;
         let paid = self.pay(frames.len());
         for frame in &frames[paid..] {
-            let at = (self.start + self.len) % LANE_FRAMES * 2;
-            self.samples[at..at + 2].copy_from_slice(frame);
+            let at = (self.start + self.len) % LANE_FRAMES;
+            self.samples[at * 2..at * 2 + 2].copy_from_slice(frame);
+            self.filled[at] = filled;
             self.len += 1;
         }
     }
 
-    /// Adds the first `frames` waiting frames into `out` and drops them.
-    fn take_into(&mut self, out: &mut [f32], frames: usize) {
-        for frame in out.as_chunks_mut::<2>().0.iter_mut().take(frames) {
+    /// Adds the first `frames` waiting frames into `out` and drops them,
+    /// clearing `filled` for each frame of data.
+    fn take_into(&mut self, out: &mut [f32], filled: &mut [bool], frames: usize) {
+        let pairs = out.as_chunks_mut::<2>().0.iter_mut().zip(filled.iter_mut());
+        for (frame, filled) in pairs.take(frames) {
             let at = self.start * 2;
             frame[0] += self.samples[at];
             frame[1] += self.samples[at + 1];
+            *filled &= self.filled[self.start];
             self.start = (self.start + 1) % LANE_FRAMES;
             self.len -= 1;
         }
@@ -232,9 +239,11 @@ impl StreamMixer {
             let n = (frames - done).min(CONVERT_CHUNK);
             let out = &mut self.out[..n * 2];
             out.fill(0.0);
+            let filled = &mut self.filled[..n];
+            filled.fill(true);
             for lane in self.lanes.iter_mut() {
                 let take = lane.len.min(n);
-                lane.take_into(out, take);
+                lane.take_into(out, filled, take);
                 if lane.open {
                     lane.owed += n - take;
                 }

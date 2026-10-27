@@ -1202,6 +1202,7 @@ impl ZeroRuns {
         if self.run >= self.min {
             self.holes.holes += 1;
             self.holes.frames += self.run as u64;
+            self.holes.longest = self.holes.longest.max(self.run as u64);
             if self.flagged {
                 self.holes.flagged += 1;
             }

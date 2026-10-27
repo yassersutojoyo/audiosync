@@ -3326,7 +3326,7 @@ fn describe_status(
     let mut text = format!(
         "status: capturing {}; {} frames captured, {:.0} frames/s over {seconds:.1} s; \
          discontinuities {}, gap fill {} frames, silent packets {}, \
-         zero holes {} ({} frames, {} with flagged or filled silence)",
+         zero holes {} ({} frames, longest {:.1} ms, {} with flagged or filled silence)",
         describe_source(source),
         span.frames,
         span.frames.saturating_sub(span.frames_then) as f64 / seconds,
@@ -3335,6 +3335,7 @@ fn describe_status(
         glitches.silent_packets,
         glitches.zero_holes.holes,
         glitches.zero_holes.frames,
+        glitches.longest_zero_hole_ms(),
         glitches.zero_holes.flagged,
     );
     for output in outputs {

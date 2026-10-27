@@ -328,7 +328,7 @@ fn the_status_clock_gives_a_line_every_five_seconds_at_the_poll_cadence() {
         ),
         "status: capturing the whole system; 240000 frames captured, \
          48000 frames/s over 5.0 s; discontinuities 0, gap fill 0 frames, silent packets 0, \
-             zero holes 0 (0 frames, 0 with flagged or filled silence)\n  no output plays"
+             zero holes 0 (0 frames, longest 0.0 ms, 0 with flagged or filled silence)\n  no output plays"
     );
     assert_eq!(
         describe_status(
@@ -340,7 +340,7 @@ fn the_status_clock_gives_a_line_every_five_seconds_at_the_poll_cadence() {
         ),
         "status: capturing the whole system; 1440000 frames captured, \
          48000 frames/s over 5.0 s; discontinuities 0, gap fill 0 frames, silent packets 0, \
-             zero holes 0 (0 frames, 0 with flagged or filled silence)\n  no output plays"
+             zero holes 0 (0 frames, longest 0.0 ms, 0 with flagged or filled silence)\n  no output plays"
     );
 }
 
@@ -405,7 +405,7 @@ fn a_poll_gap_gives_one_line_over_the_whole_gap() {
         ),
         "status: capturing the app of process 2000; 590400 frames captured, \
          48000 frames/s over 12.3 s; discontinuities 0, gap fill 0 frames, silent packets 0, \
-             zero holes 0 (0 frames, 0 with flagged or filled silence)\n  no output plays"
+             zero holes 0 (0 frames, longest 0.0 ms, 0 with flagged or filled silence)\n  no output plays"
     );
 }
 
@@ -484,7 +484,7 @@ fn a_status_line_shows_what_a_real_reader_and_render_pipeline_count() {
         format!(
             "status: capturing the app of process 2000; 240000 frames captured, \
              48000 frames/s over 5.0 s; discontinuities 0, gap fill 0 frames, silent packets 0, \
-             zero holes 0 (0 frames, 0 with flagged or filled silence)\n  \
+             zero holes 0 (0 frames, longest 0.0 ms, 0 with flagged or filled silence)\n  \
              output \"HDMI\" ({HDMI_ID}): delay 10 ms (480 frames), volume 50 (gain 0.250), \
              lag 1205 frames; primes 1, resyncs 0, starved reads 0 (0 frames), \
              drift skips 0 (0 frames), drift silences 0 (0 frames), rejected copies 0, \
@@ -525,7 +525,7 @@ fn a_status_line_shows_what_a_real_reader_and_render_pipeline_count() {
         text.starts_with(
             "status: capturing the app of process 2000; 477600 frames captured, \
              47520 frames/s over 5.0 s; discontinuities 1, gap fill 2400 frames, silent packets 0, \
-             zero holes 0 (0 frames, 0 with flagged or filled silence)\n  \
+             zero holes 0 (0 frames, longest 0.0 ms, 0 with flagged or filled silence)\n  \
              output \"HDMI\" ("
         ),
         "{text}"
