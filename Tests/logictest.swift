@@ -4708,6 +4708,9 @@ do {
     check(!pressed(CGPoint(x: 1154, y: 876), icon, 0.05), "menu bar icon: the line below the icon is not on it")
     check(!pressed(CGPoint(x: 700, y: 500), icon, 0.05), "menu bar icon: a press elsewhere is not a press on the icon")
     check(!pressed(CGPoint(x: 1154, y: 888), icon, 3), "menu bar icon: Escape with the pointer resting on the icon is no press")
+    let duringClose = StatusItemClick.pressDuringClose
+    check(duringClose(30.1, 30.25) && !duringClose(30.25, 30.25) && !duringClose(31, 30.25) && !duringClose(30.1, nil),
+          "menu bar icon: only a press while the panel still fades out is ignored, as Outlook does")
 
     func sizing(_ events: [PanelSizing.Event]) -> PanelSizing {
         events.reduce(PanelSizing.closed) { $0.after($1) }
