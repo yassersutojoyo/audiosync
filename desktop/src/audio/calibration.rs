@@ -281,6 +281,7 @@ impl Missing {
         speaker: false,
         reference: false,
     };
+    #[cfg(test)]
     pub const SPEAKER: Missing = Missing {
         streaming: false,
         speaker: true,
