@@ -207,7 +207,8 @@ struct PanelResize: Equatable {
 
     /// When to apply the step this change joins. `settled` is when the
     /// panel's open animation ends.
-    mutating func changed(to size: CGSize, at now: TimeInterval, settled: TimeInterval) -> TimeInterval {
+    mutating func changed(to size: CGSize, at now: TimeInterval, settled: TimeInterval,
+                          from current: CGSize? = nil) -> TimeInterval {
         pending = size
         let when = due ?? max(now + Self.gather, settled)
         due = when
@@ -238,21 +239,26 @@ struct PanelResize: Equatable {
 struct PanelRest: Equatable {
     private(set) var frame: CGRect
     private(set) var content: CGSize
+    /// The menu bar icon's middle (screen x) when `frame` was set; nil if unknown.
+    private(set) var icon: CGFloat?
 
-    init(frame: CGRect, content: CGSize) {
+    init(frame: CGRect, content: CGSize, icon: CGFloat? = nil) {
         self.frame = frame
         self.content = content
+        self.icon = icon
     }
 
     /// Where the next resize aims from: the window as it is when no step
     /// runs, as AppKit may have moved the open panel since; else the rest.
-    static func next(_ rest: PanelRest?, stepRunning: Bool, window: CGRect, content: CGSize) -> PanelRest {
-        guard stepRunning, let rest else { return PanelRest(frame: window, content: content) }
+    static func next(_ rest: PanelRest?, stepRunning: Bool, window: CGRect, content: CGSize,
+                     icon: CGFloat? = nil) -> PanelRest {
+        guard stepRunning, let rest else { return PanelRest(frame: window, content: content, icon: icon) }
         return rest
     }
 
-    /// The frame for content of `size`, which becomes the new rest.
-    mutating func move(to size: CGSize) -> CGRect {
+    /// The frame for content of `size`, with the icon's middle now at `now`,
+    /// which becomes the new rest.
+    mutating func move(to size: CGSize, icon now: CGFloat? = nil) -> CGRect {
         frame = PanelResize.windowFrame(frame, content: content, to: size)
         content = size
         return frame

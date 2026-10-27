@@ -5084,6 +5084,21 @@ do {
     let midStep = PanelRest.next(rest, stepRunning: true, window: shifted, content: CGSize(width: 280, height: 428))
     check(midStep == rest && PanelRest.next(nil, stepRunning: true, window: shifted, content: CGSize(width: 280, height: 359)) == afresh,
           "menu bar panel: while a resize runs, a fold aims from the rest frame, not the half-grown window")
+    // The icon moved since the open (its badge widened it, or an item beside it changed width).
+    let unfoldedSize = CGSize(width: 280, height: 428), restSize = CGSize(width: 280, height: 359)
+    var centered = PanelRest(frame: window, content: restSize, icon: window.midX)
+    let reanchored = centered.move(to: unfoldedSize, icon: window.midX - 2)
+    check(reanchored.midX == window.midX - 2 && reanchored.maxY == window.maxY && reanchored.size == grown.size,
+          "menu bar panel: a resize ends where the popover re-anchors on the icon, so learning the size never shifts it sideways",
+          "\(reanchored)")
+    check(centered.move(to: restSize, icon: window.midX - 2) == window.offsetBy(dx: -2, dy: 0),
+          "menu bar panel: the next resize aims from the re-anchored frame")
+    var edgeHeld = PanelRest(frame: window, content: restSize, icon: window.midX + 60)
+    check(edgeHeld.move(to: unfoldedSize, icon: window.midX + 58).minX == window.minX,
+          "menu bar panel: a panel the screen edge holds off the icon's middle stays where it is")
+    check(PanelRest.next(nil, stepRunning: false, window: shifted, content: restSize, icon: 900)
+            == PanelRest(frame: shifted, content: restSize, icon: 900),
+          "menu bar panel: a resize with no step running aims from the icon where it is now")
     let closeAsked = PopoverCloseRequest.answer
     check(closeAsked(false, true, 30, nil) == .closeOurWay && closeAsked(true, true, 30, nil) == .allow,
           "menu bar panel: an open panel the popover wants closed shrinks away its own way")
@@ -5122,6 +5137,13 @@ do {
           "menu bar panel: the step goes to the latest size, once")
     check(near(resize.changed(to: taller, at: 60, settled: 60.28), 60.28),
           "menu bar panel: a size change while the panel grows in waits until it has settled")
+    var growing = PanelResize()
+    let short = CGSize(width: 306, height: 420)
+    check(near(growing.changed(to: tall, at: 80, settled: 60, from: short), 80) && growing.take(at: 80) == tall,
+          "menu bar panel: content that grew starts its step at once, so its bottom is never cut off while a step gathers")
+    check(near(growing.changed(to: short, at: 90, settled: 60, from: tall), 90.1)
+            && near(growing.changed(to: taller, at: 90.02, settled: 60, from: tall), 90.02) && growing.take(at: 90.02) == taller,
+          "menu bar panel: a shrink waits for the gather, but content that grows meanwhile brings the step forward")
 
     func sizing(_ events: [PanelSizing.Event]) -> PanelSizing {
         events.reduce(PanelSizing.closed) { $0.after($1) }
