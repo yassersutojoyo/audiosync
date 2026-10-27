@@ -516,6 +516,10 @@ fn device_memory_keeps_formats_and_offsets_and_skips_damaged_entries() {
     assert_eq!(memory.format(&B), Codec::Wav);
     assert_eq!(memory.offset(&B), None);
     assert_eq!(DeviceMemory::from_json("not json"), DeviceMemory::default());
+    assert_eq!(DeviceMemory::read_json("not json"), None);
+    assert_eq!(DeviceMemory::read_json("[]"), None);
+    assert_eq!(DeviceMemory::read_json("{}"), Some(DeviceMemory::default()));
+    assert_eq!(DeviceMemory::read_json(&text), Some(memory.clone()));
     let damaged = DeviceMemory::from_json(&format!(r#"{{"{A}": {{"offsetMs": 60000}}}}"#));
     assert_eq!(damaged.offset(&A), Some(MAX_OFFSET), "clamped on load");
     assert_eq!(MAX_OFFSET, Duration::from_secs(20));

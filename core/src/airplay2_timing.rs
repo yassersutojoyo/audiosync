@@ -6,7 +6,7 @@
 //! The entries are a cache that holds no secret. A missing, unreadable or
 //! foreign file means no entries, and each receiver's next session asks for
 //! NTP first, as P157 does without an entry; it never keeps a pairing from
-//! working. The byte form holds a magic line, a format version byte, then
+//! working. An entry that doesn't read costs only that receiver's entry. The byte form holds a magic line, a format version byte, then
 //! per receiver its ID and its entry ([`TimingMemory::to_bytes`]), each with
 //! a 16-bit little-endian length. Both hosts write it through
 //! [`write_atomically`]: owner-only on the Mac, unsealed with the folder's
@@ -143,17 +143,15 @@ fn decode(bytes: &[u8]) -> Decoded {
         return Decoded::Format;
     }
     let mut entries = BTreeMap::new();
-    while !rest.is_empty() {
-        let id = take_field(&mut rest)
-            .and_then(|id| std::str::from_utf8(id).ok())
-            .filter(|id| !id.is_empty());
-        let memory = take_field(&mut rest).and_then(TimingMemory::from_bytes);
-        let (Some(id), Some(memory)) = (id, memory) else {
-            return Decoded::Format;
+    // A field cut short ends what can be read; one that doesn't read costs
+    // only its own entry.
+    while let (Some(id), Some(memory)) = (take_field(&mut rest), take_field(&mut rest)) {
+        let id = std::str::from_utf8(id).ok().filter(|id| !id.is_empty());
+        let (Some(id), Some(memory)) = (id, TimingMemory::from_bytes(memory)) else {
+            continue;
         };
-        if entries.insert(id.to_owned(), memory).is_some() {
-            return Decoded::Format;
-        }
+        // A repeated ID keeps the first entry; later ones are dropped.
+        entries.entry(id.to_owned()).or_insert(memory);
     }
     Decoded::Entries(entries)
 }
