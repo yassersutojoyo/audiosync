@@ -2107,7 +2107,7 @@ The release side:
 
 | Check | Clauses |
 |---|---|
-| `scripts/check_appcast.py --self-test` (fixture appcasts and zips built in a temp folder: one Mac item and one item per Windows arch with one enclosure each carrying a `sparkle:edSignature`, the same short version and build number, URLs and lengths matching the zips, each Windows zip holding only `audiosync.exe` and `THIRD-PARTY-NOTICES.txt`; each break fails with its own line) | S311 |
+| `scripts/check_appcast.py --self-test` (fixture appcasts and zips built in a temp folder: one Mac item and one item per Windows arch with one enclosure each carrying a well-formed `sparkle:edSignature`, the same short version and build number, URLs and lengths matching the zips, each Windows zip holding only `audiosync.exe` and `THIRD-PARTY-NOTICES.txt`; each break fails with its own line; the Windows items its writer adds pass; a Windows zip under another name is reported as a stray). `scripts/sign_appcast.sh` adds the Windows items through it and runs the same check on each release appcast, on the release Mac | S311 |
 
 ## 19. Windows updater
 
