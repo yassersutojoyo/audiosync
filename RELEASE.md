@@ -67,7 +67,7 @@ Say plainly in the release notes that it's an unsigned preview (SmartScreen will
 
 ## Linux AppImage
 
-A release with a Linux build attaches, from the Linux CI run of the release commit, the `AudioSync-$VERSION-x86_64.AppImage` and its `.sha256` from `audiosync-linux-x86_64`, and both files from `appimage-runtime-sources`: `type2-runtime-20251108.tar.gz` (the runtime's source with its libfuse patch) and `fuse-3.15.0.tar.xz` (libfuse, LGPL-2.1). The runtime inside the AppImage links libfuse statically, so its source goes with every copy. Add all of them to the `shasum` and `gh release create` commands above.
+A release with a Linux build attaches, from the Linux CI run of the release commit, the `AudioSync-$VERSION-x86_64.AppImage` and its `.sha256` from `audiosync-linux-x86_64`, and both files from `appimage-runtime-sources`: `type2-runtime-20251108.tar.gz` (the runtime's source with its libfuse patch) and `fuse-3.15.0.tar.xz` (libfuse, LGPL-2.1). The runtime inside the AppImage links libfuse statically, so its source goes with every copy. Add all of them to `ASSETS` above.
 
 ## Sources and license obligations
 
