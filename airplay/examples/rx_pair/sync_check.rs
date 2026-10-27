@@ -28,8 +28,9 @@ pub const CLICK_LEVEL: f32 = 0.5;
 pub const DEFAULT_THRESHOLD: i32 = 400;
 /// Quiet frames after a click before the detector takes a new onset.
 pub const REARM_FRAMES: u64 = 44_100;
-/// Reads this far either side of the first and last onset feed the timeline.
-pub const FIT_MARGIN_FRAMES: u64 = 44_100;
+/// Reads in this stretch before the first onset, inside the click source's
+/// leading silence and after a receiver's start-up flush, set the anchor.
+pub const ANCHOR_WINDOW_FRAMES: u64 = 3 * 44_100;
 
 /// One `--rx` value: `host:port[,ap1|ap2][,delay=<ms>]`.
 #[derive(Debug, PartialEq)]
@@ -89,56 +90,39 @@ pub struct Onset {
 }
 
 /// A receiver's play timeline on the reader's clock: frame f plays at
-/// `anchor + f * (1 / RATE + slope)`.
+/// `anchor + f / RATE`, the rate every receiver plays at (P95).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Timeline {
     pub anchor: f64,
-    pub slope: f64,
     pub reads: usize,
 }
 
 impl Timeline {
     pub fn seconds(&self, frame: u64) -> f64 {
-        self.anchor + frame as f64 * (1.0 / RATE + self.slope)
-    }
-
-    pub fn frames_per_s(&self) -> f64 {
-        1.0 / (1.0 / RATE + self.slope)
+        self.anchor + frame as f64 / RATE
     }
 }
 
-/// Fits the timeline to reads given as (frames read so far, arrival minus
-/// those frames at RATE), in frame order.
-// A read arrives when its last frame plays or later, never earlier, so the
-// line under every read that is highest at their mean frame fits best.
-pub fn fit_timeline(reads: &[(u64, f64)]) -> Option<Timeline> {
-    let mut hull: Vec<(f64, f64)> = Vec::new();
-    for &(end, offset) in reads {
-        let point = (end as f64, offset);
-        while let [.., o, a] = hull[..] {
-            let turn = (a.0 - o.0) * (point.1 - o.1) - (a.1 - o.1) * (point.0 - o.0);
-            if turn > 0.0 {
-                break;
-            }
-            hull.pop();
-        }
-        hull.push(point);
+/// The timeline from reads given as (frames read so far, arrival minus those
+/// frames at RATE), taken in the window before frame `first_onset`.
+// A pipe receiver's writes slip by whole packets later in a run and catch up
+// in bursts (WSL read logs), so only the stretch before the first click marks
+// when it lined its output up; a low percentile there skips packet-late reads.
+pub fn fit_timeline(reads: &[(u64, f64)], first_onset: u64) -> Option<Timeline> {
+    let window = first_onset.saturating_sub(ANCHOR_WINDOW_FRAMES)..first_onset;
+    let mut offsets: Vec<f64> = reads
+        .iter()
+        .filter(|(end, _)| window.contains(end))
+        .map(|&(_, offset)| offset)
+        .collect();
+    if offsets.is_empty() {
+        offsets = reads.iter().map(|&(_, offset)| offset).collect();
     }
-    let first = *hull.first()?;
-    let mean = reads.iter().map(|&(end, _)| end as f64).sum::<f64>() / reads.len() as f64;
-    let (left, right) = hull
-        .windows(2)
-        .find(|edge| edge[1].0 >= mean)
-        .map_or((first, first), |edge| (edge[0], edge[1]));
-    let slope = if right.0 > left.0 {
-        (right.1 - left.1) / (right.0 - left.0)
-    } else {
-        0.0
-    };
+    offsets.sort_by(f64::total_cmp);
+    let anchor = *offsets.get((offsets.len().max(1) - 1) * 5 / 100)?;
     Some(Timeline {
-        anchor: left.1 - slope * left.0,
-        slope,
-        reads: reads.len(),
+        anchor,
+        reads: offsets.len(),
     })
 }
 
@@ -213,23 +197,11 @@ impl Detector {
         }
     }
 
-    /// At the end of input: fits the timeline to the reads around the onsets,
-    /// which leaves out the receiver's start-up flush and its stop, and times
-    /// every onset on it.
+    /// At the end of input: anchors the timeline before the first onset and
+    /// times every onset on it.
     pub fn finish(&mut self) {
-        let span = match (self.onset_frames.first(), self.onset_frames.last()) {
-            (Some(&first), Some(&last)) => {
-                first.saturating_sub(FIT_MARGIN_FRAMES)..=last + FIT_MARGIN_FRAMES
-            }
-            _ => 0..=u64::MAX,
-        };
-        let near: Vec<(u64, f64)> = self
-            .reads
-            .iter()
-            .copied()
-            .filter(|(end, _)| span.contains(end))
-            .collect();
-        self.timeline = fit_timeline(if near.len() >= 2 { &near } else { &self.reads });
+        let first = self.onset_frames.first().copied().unwrap_or(u64::MAX);
+        self.timeline = fit_timeline(&self.reads, first);
         let timeline = self.timeline;
         self.onsets = self
             .onset_frames

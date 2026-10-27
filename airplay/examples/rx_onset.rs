@@ -18,10 +18,11 @@
 //! only.
 //!
 //! A receiver writing to a pipe isn't paced exactly in real time and the
-//! reads come back late by varying amounts, so each onset is timed on a line
-//! fitted under all of its stream's reads (the receiver's play timeline), not
-//! by the read that carried it. A `drift` line per stream pair checks the
-//! onsets' frame offset holds within one packet across the clicks.
+//! reads come back late by varying amounts, so each onset is timed on the
+//! receiver's play timeline, frame f at `anchor + f / 44 100`, anchored on
+//! the reads before the first click, not by the read that carried it. A
+//! `drift` line per stream pair checks the onsets' frame offset holds within
+//! one packet across the clicks.
 
 #[path = "rx_pair/sync_check.rs"]
 mod sync_check;
@@ -199,14 +200,7 @@ fn main() -> ExitCode {
         };
         let timeline = detector.timeline().map_or_else(
             || "none".to_owned(),
-            |line| {
-                format!(
-                    "anchor_s={:.6} play_frames_per_s={:.1} fit_reads={}",
-                    line.anchor,
-                    line.frames_per_s(),
-                    line.reads
-                )
-            },
+            |line| format!("anchor_s={:.6} anchor_reads={}", line.anchor, line.reads),
         );
         println!(
             "stream {} delay_ms={} frames={} frames_per_s={rate} nominal={RATE} onsets={} timeline {timeline}",

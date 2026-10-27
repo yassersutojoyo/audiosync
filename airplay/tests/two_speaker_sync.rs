@@ -274,27 +274,29 @@ fn the_verdict_fails_streams_that_drift_apart_by_more_than_a_packet() {
 }
 
 #[test]
-fn the_timeline_follows_a_receiver_that_plays_off_rate() {
-    // 200 ppm fast, reads every 1024 frames up to 30 ms late.
-    let rate = RATE * 1.000_2;
-    let reads: Vec<(u64, f64)> = (1..=1_300u64)
+fn the_anchor_is_a_low_percentile_of_the_reads_before_the_first_onset() {
+    // Packet reads before frame 300 000: one stray read 0.7 s early, the
+    // rest on time or a packet late; after it, everything 50 ms late.
+    let packet_s = PACKET as f64 / RATE;
+    let reads: Vec<(u64, f64)> = (1..=2_000u64)
         .map(|i| {
-            let end = i * 1_024;
-            let late = ((i * 13) % 7) as f64 * 0.005;
-            (end, 3.0 + end as f64 / rate + late - end as f64 / RATE)
+            let end = i * PACKET as u64;
+            let offset = match end {
+                _ if end >= 300_000 => 3.05,
+                _ if i == 700 => 2.3,
+                _ if i % 2 == 0 => 3.0 + packet_s,
+                _ => 3.0,
+            };
+            (end, offset)
         })
         .collect();
-    let line = fit_timeline(&reads).unwrap();
-    assert!((line.frames_per_s() - rate).abs() < 0.05, "{line:?}");
-    for frame in [0u64, 600_000, 1_300_000] {
-        let truth = 3.0 + frame as f64 / rate;
-        assert!((line.seconds(frame) - truth).abs() < 0.000_1, "{frame}");
-    }
-    assert_eq!(fit_timeline(&[]), None);
-    assert_eq!(
-        fit_timeline(&[(500, 2.0)]).unwrap().seconds(500),
-        2.0 + 500.0 / RATE
-    );
+    let line = fit_timeline(&reads, 300_000).unwrap();
+    assert_eq!(line.anchor, 3.0, "{line:?}");
+    assert_eq!(line.reads, 376);
+    assert_eq!(line.seconds(441_000), 13.0);
+    assert_eq!(fit_timeline(&[], 300_000), None);
+    // No read before the onset: all reads count.
+    assert_eq!(fit_timeline(&[(500, 2.0)], 100).unwrap().anchor, 2.0);
 }
 
 /// Feeds `bytes` in packet reads as a receiver writing to a pipe did in WSL:
