@@ -812,6 +812,47 @@ pub mod tests {
         );
     }
 
+    /// `id` and `blob` as the file frames an entry.
+    fn entry(id: &[u8], blob: &[u8]) -> Vec<u8> {
+        let mut framed = (id.len() as u16).to_le_bytes().to_vec();
+        framed.extend_from_slice(id);
+        framed.extend_from_slice(&(blob.len() as u16).to_le_bytes());
+        framed.extend_from_slice(blob);
+        framed
+    }
+
+    #[test]
+    fn an_unreadable_entry_costs_only_its_own_pairing_and_the_file_is_kept_aside_first() {
+        let dir = test_dir("pairings-one-bad-entry");
+        let path = dir.join(FILE_NAME);
+        let first = credentials("0123456789ABCDEF", 1);
+        let second = credentials("0123456789ABCDEE", 2);
+        let mut plain = MAGIC.to_vec();
+        plain.extend(entry(b"02005E005301", &first.to_bytes()));
+        plain.extend(entry(b"02005E005309", b"\xEEa blob a later build wrote"));
+        plain.extend(entry(b"", &first.to_bytes()));
+        plain.extend(entry(b"\xFF\xFE", &first.to_bytes()));
+        plain.extend(entry(b"02005E005301", &second.to_bytes()));
+        plain.extend(entry(b"02005E005302", &second.to_bytes()));
+        let original = sealer().seal(&plain).unwrap();
+        fs::write(&path, &original).unwrap();
+
+        let (store, loaded) = PairingStore::open(path.clone(), sealer());
+        assert!(!matches!(loaded, Loaded::Ignored(_)), "{loaded}");
+        assert_eq!(store.get("02005E005301"), Some(&first));
+        assert_eq!(store.get("02005E005302"), Some(&second));
+        assert!(!store.contains("02005E005309"));
+        assert_eq!(
+            copies_kept_aside(&dir, "airplay-pairings.ignored"),
+            [original],
+            "the file is copied before anything replaces it"
+        );
+        assert_eq!(
+            PairingStore::open(path.clone(), sealer()).1,
+            Loaded::Speakers(2)
+        );
+    }
+
     /// The bytes of a store file holding one pairing.
     fn good_file(name: &str) -> Vec<u8> {
         let path = test_dir(name).join(FILE_NAME);
