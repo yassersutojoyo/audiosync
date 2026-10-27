@@ -242,6 +242,12 @@ fn ap2_a_brief_mastership_claim_is_no_other_grandmaster() {
     service.handle_message(&receiver_announce(rx, 127, 6, 3), from, at(7005));
     assert_eq!(service.poll_outranked(), None, "a burst is one claim");
 
+    // A withdrawn claim starts over: the next better Announce is a first.
+    service.handle_message(&receiver_announce(rx, 127, 6, 10), from, at(12_000));
+    service.handle_message(&receiver_announce(rx, 255, 255, 11), from, at(12_010));
+    service.handle_message(&receiver_announce(rx, 127, 6, 12), from, at(13_000));
+    assert_eq!(service.poll_outranked(), None, "a claim after a withdrawal");
+
     // A receiver that keeps announcing a better clock once a second leads
     // its own timeline: named once.
     for (n, ms) in [(4u16, 20_000u64), (5, 21_000), (6, 22_000)] {
@@ -249,6 +255,30 @@ fn ap2_a_brief_mastership_claim_is_no_other_grandmaster() {
     }
     assert_eq!(service.poll_outranked(), Some(FIRST));
     assert_eq!(service.poll_outranked(), None);
+}
+
+// A new session at an address whose earlier session was warned while a
+// second one stayed open is warned of its own claim.
+// covers: P206
+#[test]
+fn ap2_a_new_session_at_a_warned_address_is_warned_again() {
+    let rx = [0x02, 0x15, 0x5D, 0xFF, 0xFE, 0xED, 0x01, 0x72];
+    let origin = Instant::now();
+    let mut service = PtpService::new(SenderClock::new(origin), IDENTITY, PtpPorts::default());
+    service.start(SocketAddr::new(FIRST, 7000), origin);
+    service.start(SocketAddr::new(FIRST, 7001), origin);
+    drain(&mut service);
+    let from = SocketAddr::new(FIRST, 320);
+    let at = |ms: u64| origin + Duration::from_millis(ms);
+    service.handle_message(&receiver_announce(rx, 127, 6, 0), from, at(1000));
+    service.handle_message(&receiver_announce(rx, 127, 6, 1), from, at(2000));
+    assert_eq!(service.poll_outranked(), Some(FIRST));
+
+    service.stop_peer(FIRST);
+    service.start(SocketAddr::new(FIRST, 7002), at(2500));
+    service.handle_message(&receiver_announce(rx, 127, 6, 2), from, at(3000));
+    service.handle_message(&receiver_announce(rx, 127, 6, 3), from, at(4000));
+    assert_eq!(service.poll_outranked(), Some(FIRST));
 }
 
 fn ptp_config(peers: Vec<IpAddr>) -> Ap2Config {
