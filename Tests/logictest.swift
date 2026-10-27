@@ -9669,6 +9669,8 @@ do {
     check(inCard(".accessibilityHidden(nonePresent)") == 1
           && inCard(".accessibilityValue(nonePresent ? model.countText(of: zone) : \"\")") == 1,
           "main window zone header: VoiceOver skips the greyed icon and the fold button carries the count")
+    check(inCard(".focusable(!nonePresent)") == 1 && occurrences(".focusable(!nonePresent)") == 1,
+          "zone header: the keyboard skips the greyed icon VoiceOver skips, in the main window as in the panel")
     // Go to Zone lands on a part VoiceOver can reach: the greyed icon is hidden from it.
     check(ZoneHeaderHit.goToZoneFocus(nonePresent: false) == .zoneIcon,
           "Go to Zone: with a speaker of the zone present, the focus lands on the zone's round icon")
