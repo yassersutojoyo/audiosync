@@ -93,9 +93,6 @@ final class OutputRenderer: FadingOutput {
     /// What the render callback of the latest start reads; kept after `halt`
     /// so the counters stay readable.
     private var target: RenderTarget?
-    /// Bumped with each new target, whose counters start again from 0, so
-    /// the 5 s status line knows when to drop its baseline.
-    private(set) var starts: UInt64 = 0
     private var gain: Double = 1
     /// The device's and its output stream's latency plus the unit's own,
     /// added to a fade's last output time (S185), a Bluetooth device's
@@ -360,7 +357,6 @@ final class OutputRenderer: FadingOutput {
         // The previous start's unit is gone (`halt` ran first), so nothing
         // renders through the old target any more.
         self.target = target
-        starts &+= 1
         return (channels, rate)
     }
 

@@ -6086,25 +6086,36 @@ do {
     SessionTally.number(["Built-in", "USB"], in: &numbers)
     check(numbers == ["BT-AA:BB": 1, "Built-in": 2, "USB": 3],
           "status line: an output leaving or joining never renumbers the others", "\(numbers)")
+    var tokens = AttachTokens()
+    tokens.attached("BT-AA:BB")
+    tokens.attached("Built-in")
+    let bt = tokens.byUID["BT-AA:BB"] ?? 0
+    let builtInBefore = tokens.byUID["Built-in"] ?? 0
     let old = SessionTally(capture: CaptureCounts(callbacks: 1_000, frames: 512_000, silentCallbacks: 4),
-                           outputs: ["BT-AA:BB": Out(number: 1, start: 1, starvedRenders: 2, starvedFrames: 900, driftSkips: 1,
+                           outputs: ["BT-AA:BB": Out(number: 1, attach: bt, starvedRenders: 2, starvedFrames: 900, driftSkips: 1,
                                                      driftSilences: 4, lateCallbacks: 7, overloads: 1),
-                                     "Built-in": Out(number: 2, start: 1, starvedRenders: 5, starvedFrames: 2_000,
+                                     "Built-in": Out(number: 2, attach: builtInBefore, starvedRenders: 5, starvedFrames: 2_000,
                                                      lateCallbacks: 3, overloads: 0)])
-    // Built-in restarted (a replug) and counted past its old totals: all of it is new.
+    // Built-in is detached and attached again within one tick (a replug), and its new renderer counts
+    // past the old totals; USB joins.
+    tokens.attached("Built-in")
+    tokens.attached("USB")
+    let builtInAfter = tokens.byUID["Built-in"] ?? 0
+    check(builtInAfter != builtInBefore && tokens.byUID["BT-AA:BB"] == bt,
+          "status line: a re-attach gets a new token, the other outputs keep theirs", "\(tokens.byUID)")
     let new = SessionTally(capture: CaptureCounts(callbacks: 1_500, frames: 752_000, silentCallbacks: 4),
-                           outputs: ["BT-AA:BB": Out(number: 1, start: 1, starvedRenders: 3, starvedFrames: 1_412, driftSkips: 3,
+                           outputs: ["BT-AA:BB": Out(number: 1, attach: bt, starvedRenders: 3, starvedFrames: 1_412, driftSkips: 3,
                                                      driftSilences: 4, lateCallbacks: 7, overloads: 2),
-                                     "Built-in": Out(number: 2, start: 2, starvedRenders: 7, starvedFrames: 3_360,
+                                     "Built-in": Out(number: 2, attach: builtInAfter, starvedRenders: 7, starvedFrames: 3_360,
                                                      driftSkips: 1, driftSilences: 2, lateCallbacks: 0, overloads: 0),
-                                     "USB": Out(number: 3, start: 1, starvedRenders: 0, starvedFrames: 0, lateCallbacks: 1,
-                                                overloads: 0)])
+                                     "USB": Out(number: 3, attach: tokens.byUID["USB"] ?? 0, starvedRenders: 0, starvedFrames: 0,
+                                                lateCallbacks: 1, overloads: 0)])
     let line = SessionTally.statusText(since: old, now: new, seconds: 5.0)
     check(line == "status over 5.0 s: capture 240000 frames (48000 frames/s), 500 callbacks, 0 without usable channels"
               + "; output 1: starved 1 (512 frames), drift skips 2, drift silences 0, late callbacks 0, IO overloads 1"
               + "; output 2: starved 7 (3360 frames), drift skips 1, drift silences 2, late callbacks 0, IO overloads 0"
               + "; output 3: starved 0 (0 frames), drift skips 0, drift silences 0, late callbacks 1, IO overloads 0",
-          "status line: deltas since the last line; a restarted renderer's counts are all new, a new output counts from 0",
+          "status line: deltas since the last line; a re-attached output's counts are all new, a new output counts from 0",
           line)
     check(!line.contains("BT-AA") && !line.contains("Built-in") && !line.contains("USB"),
           "status line: outputs are numbered, never named", line)

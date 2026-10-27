@@ -80,6 +80,9 @@ final class StreamEngine {
     /// Each output's number in the status line, kept for the whole session so
     /// an output that joins or leaves never renumbers the others.
     private var statusNumbers: [String: Int] = [:]
+    /// Each attached output's token; a re-attach under the same UID is a new
+    /// renderer whose counters start at 0.
+    private var attachTokens = AttachTokens()
 
     init() {
         capture.onInterrupted = { [weak self] reason in self?.handleInterruption(reason) }
@@ -195,7 +198,7 @@ final class StreamEngine {
         for (uid, renderer) in renderers {
             let counted = renderer.counters
             outputs[uid] = SessionTally.Output(
-                number: statusNumbers[uid] ?? 0, start: renderer.starts,
+                number: statusNumbers[uid] ?? 0, attach: attachTokens.byUID[uid] ?? 0,
                 starvedRenders: counted.starvedRenders, starvedFrames: counted.starvedFrames,
                 driftSkips: counted.driftSkips, driftSilences: counted.driftSilences,
                 lateCallbacks: renderer.lateCallbacks, overloads: renderer.ioOverloads)
@@ -335,7 +338,8 @@ final class StreamEngine {
         }
         try renderer.start(on: device, captureRate: capture.sampleRate, delayMs: delayMs)
         renderers[uid] = renderer
-        DebugTrace.log("[AudioSync] output added: \(uid) on device \(device), delay \(delayMs) ms, gain \(gain)")
+        attachTokens.attached(uid)
+        DebugTrace.log("[AudioSync] output added:\(uid) on device \(device), delay \(delayMs) ms, gain \(gain)")
         if DebugTrace.enabled {
             DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self, weak renderer] in
                 guard let self, let renderer, self.renderers[uid] === renderer else { return }
@@ -455,14 +459,27 @@ struct CaptureCounts: Equatable {
     var silentCallbacks: UInt64 = 0
 }
 
+/// Hands each attach of a local output a token no earlier attach had, so the
+/// status line tells a re-attached output (replug, lost device, fresh link)
+/// from the renderer it replaced under the same UID.
+struct AttachTokens {
+    private var last: UInt64 = 0
+    private(set) var byUID: [String: UInt64] = [:]
+
+    mutating func attached(_ uid: String) {
+        last &+= 1
+        byUID[uid] = last
+    }
+}
+
 /// What the periodic debug line reads: capture's counts and each local
 /// output's, keyed by device UID only to match outputs between two lines.
 struct SessionTally: Equatable {
     struct Output: Equatable {
         /// The output's number in the line, kept for the session.
         var number = 0
-        /// The renderer's start count: a new start's counters begin at 0.
-        var start: UInt64 = 0
+        /// The output's attach token (`AttachTokens`).
+        var attach: UInt64 = 0
         var starvedRenders: Int64 = 0
         var starvedFrames: Int64 = 0
         var driftSkips: Int64 = 0
@@ -496,8 +513,8 @@ struct SessionTally: Equatable {
         let outputs = new.outputs.sorted { ($0.value.number, $0.key) < ($1.value.number, $1.key) }
         if outputs.isEmpty { return text + "; no local outputs" }
         for (uid, now) in outputs {
-            // A restarted renderer counts from 0 again, so its old totals are no baseline.
-            let before = old.outputs[uid].flatMap { $0.start == now.start ? $0 : nil } ?? Output()
+            // A re-attached output is a new renderer counting from 0, so its old totals are no baseline.
+            let before = old.outputs[uid].flatMap { $0.attach == now.attach ? $0 : nil } ?? Output()
             let starved = change(now.starvedRenders, since: before.starvedRenders)
             let starvedFrames = change(now.starvedFrames, since: before.starvedFrames)
             let skips = change(now.driftSkips, since: before.driftSkips)
