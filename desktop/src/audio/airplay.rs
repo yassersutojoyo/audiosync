@@ -8171,6 +8171,37 @@ pub mod tests {
         assert_eq!(airplay.speakers()[0].volume, 20.0);
     }
 
+    // covers: S271
+    #[test]
+    fn a_slider_that_keeps_moving_past_the_idle_time_keeps_holding_the_row() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_volume_dragging(&id, true);
+        settle(&mut airplay, &id);
+        airplay.move_row(&id, 30.0);
+        fake.take_calls();
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -9.0);
+        assert!(airplay.poll().is_empty());
+        assert_eq!(airplay.speakers()[0].volume, 30.0);
+    }
+
+    // covers: S271, S290
+    #[test]
+    fn a_slider_moved_at_master_0_keeps_holding_the_row() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_master(0.0);
+        airplay.set_volume_dragging(&id, true);
+        settle(&mut airplay, &id);
+        // With k at 0 the move sends nothing, but the slider still moved.
+        airplay.move_row(&id, 40.0);
+        fake.take_calls();
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -9.0);
+        assert!(airplay.poll().is_empty());
+    }
+
     // covers: S250, S290, S291
     #[test]
     fn a_read_back_near_the_level_sent_or_at_master_0_keeps_the_own_volume() {
