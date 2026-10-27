@@ -968,7 +968,6 @@ struct UIStrings {
     /// rows: the label above them, the link to its zone, what VoiceOver reads
     /// for its switch and for the link, and its menu.
     let inZones = "In zones"
-    func inZone(_ zone: String) -> String { "in \(zone)" }
     func inZoneLabel(_ speaker: String, zone: String) -> String { "\(speaker), in \(zone)" }
     func goToZoneLabel(_ zone: String) -> String { "Go to \(zone)" }
     let goToZone = "Go to Zone"

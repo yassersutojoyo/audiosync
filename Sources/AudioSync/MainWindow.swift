@@ -424,21 +424,23 @@ struct MainView: View {
         }
     }
 
-    /// The compact rows of a section's speakers that are in a zone, under a
-    /// thin label. Their link scrolls to the zone and focuses its switch.
+    /// The compact rows of a section's speakers that are in a zone, in one
+    /// box under a section-style label. Their chip scrolls to the zone and
+    /// focuses its switch.
     private func zonedRows(_ speakers: [AppModel.Speaker], divided: Bool, scroll: ScrollViewProxy) -> some View {
-        VStack(spacing: 0) {
-            if divided { Divider() }
-            Text(model.text.inZones)
-                .font(.caption)
-                .foregroundStyle(Brand.secondaryText)
+        let members = speakers.compactMap { speaker in model.zone(holding: speaker.key).map { (speaker, $0) } }
+        return VStack(spacing: 0) {
+            if divided { Divider().padding(.leading, 52) }
+            SectionTitle(model.text.inZones)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 52)
-                .padding(.top, 6)
-                .padding(.bottom, 2)
-                .accessibilityAddTraits(.isHeader)
-            ForEach(speakers) { speaker in
-                if let zone = model.zone(holding: speaker.key) {
+                // In line with the row badges below.
+                .padding(.leading, BrandTokens.Spacing.rowPaddingX + 4)
+                .padding(.top, 10)
+                .padding(.bottom, 4)
+            VStack(spacing: 0) {
+                ForEach(Array(members.enumerated()), id: \.element.0.id) { index, member in
+                    let (speaker, zone) = member
+                    if index > 0 { Divider().padding(.leading, ZoneMemberCompactRow.nameInset) }
                     ZoneMemberCompactRow(model: model, speaker: speaker, zone: zone) {
                         withAnimation(AppModel.delayPanelAnimation) {
                             scroll.scrollTo(ZoneAnchor(id: zone.id), anchor: .top)
@@ -447,6 +449,10 @@ struct MainView: View {
                     }
                 }
             }
+            .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.row).fill(accent.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: BrandTokens.Radius.row)
+                .strokeBorder(accent.opacity(0.35), lineWidth: 0.5))
+            .clipShape(RoundedRectangle(cornerRadius: BrandTokens.Radius.row))
         }
     }
 
@@ -826,6 +832,9 @@ private struct ZoneMemberCompactRow: View {
     let zone: AppModel.Zone
     let goToZone: () -> Void
 
+    /// Where the name starts: the padding, the badge column and the gap.
+    static let nameInset = BrandTokens.Spacing.rowPaddingX + 32 + 12
+
     private var state: SpeakerState { model.state(of: speaker) }
 
     /// What its row under the zone says: a Cast speaker's state, the wait
@@ -865,10 +874,19 @@ private struct ZoneMemberCompactRow: View {
                             .gesture(TapGesture(count: 2).onEnded { model.startRename(speaker, in: .inZones) })
                     }
                     Button(action: goToZone) {
-                        Text(t.inZone(zone.name))
-                            .font(.caption.weight(.semibold))
-                            // The readable teal: the brand teal falls under 4.5:1 for small text.
-                            .foregroundStyle(Brand.tealText)
+                        HStack(spacing: 4) {
+                            Image(systemName: MenuBarView.zoneSymbol)
+                                .imageScale(.small)
+                            Text(zone.name)
+                                .lineLimit(1)
+                        }
+                        .font(.subheadline.weight(.medium))
+                        // The readable teal: the brand teal falls under 4.5:1 for small text.
+                        .foregroundStyle(Brand.tealText)
+                        .padding(.horizontal, 7)
+                        .frame(height: 18)
+                        .background(Capsule().fill(accent.opacity(0.12)))
+                        .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
                     .fixedSize()
@@ -894,10 +912,8 @@ private struct ZoneMemberCompactRow: View {
             .accessibilityLabel(t.speakerOptions(name: speaker.name))
             .help(t.speakerOptions(name: speaker.name))
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
-        .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.row)
-            .fill(state == .playing ? accent.opacity(0.08) : Color.clear))
         .contentShape(Rectangle())
         .contextMenu { menuItems(t) }
     }
