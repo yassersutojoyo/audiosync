@@ -301,6 +301,22 @@ final class StreamEngine {
         detachOutputs(uids: [uid])
     }
 
+    /// Switches output `uid` off like `detachOutputs`; `completion` runs on
+    /// the main thread once it stopped, at once when `uid` isn't attached.
+    func detachOutput(uid: String, then completion: @escaping () -> Void) {
+        guard let renderer = renderers.removeValue(forKey: uid) else {
+            completion()
+            return
+        }
+        let bluetooth = bluetoothOutputs + (renderer.isBluetooth ? 1 : 0)
+        DebugTrace.log("[AudioSync] output(s) fading out: \(uid)")
+        retirement.remove([renderer]) {
+            StreamEngine.logStopped(uid, renderer, why: "removed", bluetoothOutputs: bluetooth)
+            completion()
+        }
+        watchFades()
+    }
+
     /// Switches outputs off (S185, S186): all of them fade out at once and
     /// stop together once their devices have played the fades, at most
     /// 500 ms later, without holding up the main thread. Unknown UIDs are
