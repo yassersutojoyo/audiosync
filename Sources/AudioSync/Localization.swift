@@ -600,7 +600,9 @@ struct UIStrings {
         case .needsCode where unasked: return nativeAirPlayNotAccepted(name: name)
         case .needsCode: return airPlayTurnedOff(name: name, reason: .needsPin)
         case .needsPassword: return airPlayTurnedOff(name: name, reason: .needsPassword)
-        default: return nil
+        case .unreachable, .cantPlay, .needsAirPlay2, .timingUnavailable, .playsThroughSpeakers,
+             .receiverUnverified, .memberNeedsPassword, .cancelled, .pairingFailed, .stillNeedsCode:
+            return nil
         }
     }
 

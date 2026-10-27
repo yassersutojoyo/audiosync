@@ -544,8 +544,10 @@ extension AppDelegate {
         let unasked = NativeAirPlayID.receiver(id).map { nativeAirPlay?.model.refusedUnasked($0) == true } ?? false
         switch reason {
         case .needsCode, .needsPassword:
-            return text.nativeAirPlayAsksForCode(name: name, reason: reason, unasked: unasked)
-                ?? text.nativeAirPlayNotAccepted(name: name)
+            guard let words = text.nativeAirPlayAsksForCode(name: name, reason: reason, unasked: unasked) else {
+                preconditionFailure("no PIN or password notice for \(reason)")
+            }
+            return words
         case .unreachable: return text.airPlayTurnedOff(name: name, reason: .unreachable)
         case .cantPlay: return text.nativeAirPlayCantPlay(name: name)
         case .needsAirPlay2: return text.nativeAirPlayNeedsAirPlay2(name: name)
