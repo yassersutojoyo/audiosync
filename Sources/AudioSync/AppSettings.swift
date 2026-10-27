@@ -260,11 +260,10 @@ struct AppSettings: Equatable {
         return list
     }
 
-    /// The stored zones as S245 keeps them; none when the data is missing or
-    /// can't be read.
+    /// The stored zones as S245 keeps them, without a zone that can't be
+    /// read; none when the data is missing or isn't a list.
     static func decodeZones(_ data: Data?) -> [SpeakerZone] {
-        guard let data, let list = try? JSONDecoder().decode([SpeakerZone].self, from: data) else { return [] }
-        return SpeakerZone.normalized(list)
+        SpeakerZone.normalized(decodeList(SpeakerZone.self, data))
     }
 
     /// The stored presets as S251 keeps them, without a preset that can't be

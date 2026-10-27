@@ -98,6 +98,19 @@ struct SpeakerZone: Codable, Equatable {
     }
 }
 
+// Read value by value, so one that can't be read is dropped or falls back on its own (S245, S286).
+extension SpeakerZone {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        members = try container.decodeLossyList(String.self, forKey: .members)
+        volume = container.decodeNumberOrNaN(forKey: .volume)
+        memberNames = (try? container.decodeIfPresent([String: LossyDecoded<String>].self, forKey: .memberNames))?
+            .compactMapValues(\.value)
+    }
+}
+
 /// The one-time move of the saved groups to zones (S248).
 enum ZoneMigration {
     /// The zones `groups` become: one per group in saved order, with its ID,
