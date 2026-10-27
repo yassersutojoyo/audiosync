@@ -2831,8 +2831,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     id: key.clone(),
                     name: self.custom_names.shown(key, last),
                     kind,
-                    needs_airplay2: SpeakerKey::parse(key)
-                        .is_some_and(|key| self.needs_airplay2(&key)),
+                    needs_airplay2: !self.view.airplay2_experimental
+                        && matches!(SpeakerKey::parse(key),
+                            Some(SpeakerKey::AirPlay(id)) if is_airplay_target(&id)),
                 }
             })
             .collect()
