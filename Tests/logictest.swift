@@ -3288,6 +3288,21 @@ do {
                                              enabled: ["native:E1"], awaitingUser: ["native:E1"])
     check(senderOff == [.init(id: "native:E1", reason: .needsCode)] && failedSender.byHand.isEmpty,
           "every time: a sender failure during the pairing ends the mark", "\(senderOff)")
+    // The sender fails after the stream ended, its pairing with it: the
+    // speaker goes off, or the new sender's listing keeps it on with nothing pairing.
+    var (_, failedAfterEnd, _) = outlivingStream(promptOpen: true)
+    let lateSenderOff = failedAfterEnd.streamEnded(.senderFailed, streaming: false, asking: ["native:E1"],
+                                                   enabled: ["native:E1"])
+    let relistedAfterFailure = failedAfterEnd.turnsOff(["native:E1"], enabled: ["native:E1"])
+    check(lateSenderOff == [.init(id: "native:E1", reason: .needsCode)] && failedAfterEnd.byHand.isEmpty
+            && relistedAfterFailure == ["native:E1"],
+          "every time: a sender failure after the stream ended, with the pairing still open, turns it off with the needs-a-PIN notice",
+          "\(lateSenderOff), \(failedAfterEnd.byHand), \(relistedAfterFailure)")
+    // A new stream starts while that pairing runs: its failure is the new stream's, as before.
+    var (_, restarted, _) = outlivingStream(promptOpen: false)
+    restarted.streamStarted()
+    check(restarted.turnedOff("native:E1", reason: .pairingFailed) == .pairingFailed,
+          "every time: a pairing that outlived one stream and fails in the next says it failed")
 }
 
 // MARK: Every time at launch: on from the last run and discovered, it stays off with no pairing for 15 s

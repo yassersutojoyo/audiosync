@@ -92,6 +92,8 @@ struct EveryTimeGuard: Equatable {
         return turnsOff(asking, enabled: enabled).map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
     }
 
+    mutating func streamStarted() {}
+
     /// The speaker `id` paired: a later failure is its own again.
     mutating func paired(_ id: String) {
         outlived.remove(id)
