@@ -9227,7 +9227,7 @@ do {
         RemoteDevicesFile.count(devicesJSON("not json")),
         RemoteDevicesFile.count(devicesJSON("{\"version\":2,\"devices\":[\"\(hashA)\"]}")),
         RemoteDevicesFile.count(devicesJSON("{\"version\":true,\"devices\":[\"\(hashA)\"]}")),
-        RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"short\"]}")),
+        RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":\"\(hashA)\"}")),
     ]
     check(twoDevices == 2 && tenDevices == RemoteDevicesFile.maxDevices && unreadable.allSatisfy { $0 == 0 },
           "web remote: the paired count comes from the devices file, capped at 8; a file the core can't read counts as none")
@@ -9244,11 +9244,23 @@ do {
     let eightIdle = Array(repeating: String(idle), count: 8).joined(separator: ",")
     let newestEight = RemoteDevicesFile.count(
         devicesJSON("{\"version\":1,\"devices\":[\(nineHashes)],\"seen\":[\(recent),\(eightIdle)]}"), now: seenNow)
-    let mismatched: [Int] = [seenFile("[\(recent)]"), seenFile("[\(recent),-1]"), seenFile("[\(recent),1.5]"),
-                             seenFile("[\(recent),true]"), seenFile("{}")]
-    check(seenFile("[\(recent),\(idle)]") == 1 && seenFile("[\(ahead),\(recent)]") == 2 && newestEight == 0
-            && mismatched.allSatisfy { $0 == 0 },
-          "web remote: a device idle for 90 days isn't counted, only the newest 8 are; a seen list that doesn't match the devices counts as none")
+    check(seenFile("[\(recent),\(idle)]") == 1 && seenFile("[\(ahead),\(recent)]") == 2 && newestEight == 0,
+          "web remote: a device idle for 90 days isn't counted, only the newest 8 are")
+    let seenAsNow: [Int] = [seenFile("[\(idle)]"), seenFile("[\(idle),\(idle),\(idle)]"), seenFile("{}"),
+                            seenFile("\"x\""), seenFile("[\(recent),-1]"), seenFile("[\(recent),1.5]"),
+                            seenFile("[\(recent),true]")]
+    check(seenAsNow.allSatisfy { $0 == 2 } && seenFile("[\(idle),\"x\"]") == 1,
+          "web remote: a seen list of another length counts every device as seen now, an unreadable time only its own device")
+
+    let sixIdle = Array(repeating: String(idle), count: 6).joined(separator: ",")
+    let sixHashes = Array(repeating: "\"\(hashA)\"", count: 6).joined(separator: ",")
+    let oneBad = RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"zz\",5,\"\(hashB)\",\"\(hashA)\"],"
+        + "\"seen\":[\(recent),\(recent),\(recent),\"yesterday\",\(idle)]}"), now: seenNow)
+    let badNewest = RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"\(hashA)\",\(sixHashes),"
+        + "\"\(hashB)\",\"short\"],\"seen\":[\(recent),\(recent),\(sixIdle),\(recent),\(recent)]}"), now: seenNow)
+    let noSeen = RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"short\",null]}"))
+    check(oneBad == 2 && badNewest == 2 && noSeen == 1,
+          "web remote: a device whose hash doesn't read costs only that device, and the newest 8 are those that read")
 
     let devicesFolder = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-remote-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: devicesFolder, withIntermediateDirectories: true)
