@@ -629,6 +629,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let settings_file_has_path = settings_file.path().is_some();
         if settings_file_has_path {
             log.log(|| format!("settings: {loaded}"));
+            if let settings::Loaded::Read { unreadable, .. } = &loaded {
+                for field in unreadable {
+                    log.log(|| format!("settings: field {field} unreadable, using default"));
+                }
+            }
         } else {
             log.log(|| "settings: no app data folder; kept until AudioSync quits".to_owned());
         }
@@ -11130,7 +11135,7 @@ mod tests {
         assert_in_order(
             &messages,
             &[
-                "settings: read (format version 3)",
+                "settings: read (format version 3",
                 "settings: field master_volume unreadable, using default",
             ],
         );

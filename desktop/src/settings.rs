@@ -1271,10 +1271,62 @@ impl Settings {
             Loaded::Read {
                 version,
                 adjusted,
-                unreadable: Vec::new(),
+                unreadable: unreadable_fields(text),
             },
         ))
     }
+}
+
+/// The fields of `text` whose value the lenient reader replaced with the
+/// default, in [`Settings`] order. Entries skipped inside a list or map
+/// that reads count toward `adjusted` instead.
+fn unreadable_fields(text: &str) -> Vec<&'static str> {
+    use serde_json::Value;
+    fn reads<T: serde::de::DeserializeOwned>(value: &Value) -> bool {
+        T::deserialize(value).is_ok()
+    }
+    fn is_appearance(value: &Value) -> bool {
+        matches!(value.as_str(), Some("system" | "light" | "dark"))
+    }
+    // The two migration marks are left out: one that isn't a bool reads as
+    // set on purpose (spec S248, S254), so nothing falls back.
+    type Reads = fn(&Value) -> bool;
+    const FIELDS: &[(&str, Reads)] = &[
+        ("source", reads::<SavedSource>),
+        ("input_device", reads::<Option<SavedInput>>),
+        ("input_pairs", Value::is_object),
+        ("source_mix", reads::<Option<SavedMix>>),
+        ("master_volume", Value::is_number),
+        ("outputs", Value::is_object),
+        ("airplay", Value::is_object),
+        ("auto_connect", Value::is_array),
+        ("speaker_names", Value::is_object),
+        ("hidden_speakers", Value::is_array),
+        ("groups", Value::is_array),
+        ("speaker_zones", Value::is_array),
+        ("speaker_presets", Value::is_array),
+        ("equalizer", reads::<SavedEqualizer>),
+        ("equalizer_curves", Value::is_array),
+        ("show_virtual_devices", Value::is_boolean),
+        ("appearance", is_appearance),
+        ("window", reads::<Option<WindowFrame>>),
+        ("airplay_adjustment_ms", Value::is_number),
+        ("when_source_quits", Value::is_string),
+        ("remote", reads::<RemoteSettings>),
+        ("cast_addresses", Value::is_array),
+        ("airplay2_experimental", Value::is_boolean),
+        ("check_updates_automatically", Value::is_boolean),
+        ("last_update_check", reads::<Option<u64>>),
+        ("update_record", reads::<Option<UpdateRecord>>),
+    ];
+    let Ok(Value::Object(stored)) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    FIELDS
+        .iter()
+        .filter(|(name, reads)| stored.get(*name).is_some_and(|value| !reads(value)))
+        .map(|(name, _)| *name)
+        .collect()
 }
 
 /// What reading the file found, for the debug log.
@@ -2008,6 +2060,27 @@ mod tests {
             matches!(&clean, Loaded::Read { unreadable, .. } if unreadable.is_empty()),
             "{clean:?}"
         );
+    }
+
+    #[test]
+    fn every_stored_field_is_named_when_it_does_not_read() {
+        let serde_json::Value::Object(stored) =
+            serde_json::from_str(&sample().to_json()).expect("an object")
+        else {
+            panic!("the settings are an object");
+        };
+        let marks = [
+            "version",
+            "speaker_zones_migrated",
+            "speaker_presets_migrated",
+        ];
+        for name in stored.keys().filter(|name| !marks.contains(&name.as_str())) {
+            let named = ["\"x\"", "7.5"].iter().any(|wrong| {
+                let text = format!(r#"{{"version": 3, "{name}": {wrong}}}"#);
+                unreadable_fields(&text) == [name.as_str()]
+            });
+            assert!(named, "{name} is never named as unreadable");
+        }
     }
 
     #[test]
