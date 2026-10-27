@@ -22,10 +22,11 @@ a Windows zip and the signature Sparkle's sign_update made over it, adds its
 item next to the Mac item in APPCAST, then checks the result. --strays fails
 on Windows-looking zips in a folder that aren't named as the script expects.
 
---assets checks an uploaded release: every zip among the release's asset
-names needs an appcast item, and every item's zip must be attached. The
-names come as arguments or, with --assets-file, from a file holding the
-output of `gh release view TAG --json assets` or one name per line.
+--assets checks a release's asset names, before upload and after: every zip
+among them needs an appcast item whose sparkle:os matches the zip, and every
+item's zip must be among them. The names come as arguments (paths count by
+file name) or, with --assets-file, from a file holding the output of
+`gh release view TAG --json assets` or one name per line.
 
 Usage:
     scripts/check_appcast.py APPCAST VERSION [ZIP...]
@@ -228,6 +229,12 @@ def asset_problems(appcast, version, assets):
                                 f"to the v{version} release")
             elif not url.endswith(url_prefix + name):
                 problems.append(f"item {number}: url {url!r} does not end in {url_prefix}{name}")
+            # The Windows updater picks an enclosure by sparkle:os alone, never by its url.
+            os_name = enclosure.get(sparkle("os"), "")
+            os_name = "macos" if os_name in MAC_OS else os_name
+            if os_name != zip_os(name):
+                problems.append(f"item {number}: {name} with sparkle:os {os_name!r}; "
+                                f"expected {zip_os(name)!r}")
     for name in sorted(assets):
         if name.endswith(".zip") and name not in item_zips:
             problems.append(f"{name} is attached but has no appcast item, so "
@@ -556,8 +563,8 @@ def main(argv):
         parser.error("--assets-file needs --assets")
     if args.assets:
         if args.add:
-            parser.error("--assets checks an uploaded release; it takes no --add")
-        names = list(args.zips)
+            parser.error("--assets checks a finished appcast; it takes no --add")
+        names = [os.path.basename(name) for name in args.zips]
         if args.assets_file:
             try:
                 names += read_asset_names(args.assets_file)
