@@ -43,6 +43,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, a saved Google Cast speakers file that AudioSync can't read is kept as a copy next to it before AudioSync first saves over it, so the delays and formats in it aren't lost. A file AudioSync can't open at all is left as it is.
 - On Windows, when another program resizes the main window past the screen, it now stops at the largest size Windows gives any window, instead of growing taller than the screen.
 - On Windows, an AirPlay speaker that was on at launch and asks for a PIN or password goes off with a notice, instead of reading On while nothing plays.
+- On Windows, an AirPlay speaker set to ask for a code every time that you turned on yourself goes off with a notice when streaming stops, and the next click asks for a new code, as on the Mac. Before, it stayed On after a stop and a start while nothing played.
 
 ## [0.7.1] - 2026-10-27
 

@@ -448,9 +448,12 @@ pub struct AudioAdapter<A: AudioBackend> {
     left_behind: BTreeSet<String>,
     /// The AirPlay speaker IDs of the last listing, to tell which appeared.
     airplay_listed: BTreeSet<String>,
-    /// The AirPlay speakers the user switched on this run: one that asks for
-    /// a code every time stays on while listed.
+    /// The AirPlay speakers the user switched on in this stream: one that
+    /// asks for a code every time stays on while listed. The marks go when
+    /// a stream that ran stops (S223).
     airplay_on_by_hand: BTreeSet<String>,
+    /// Whether streaming ran at the last look, to tell when it stopped.
+    streamed: bool,
     /// The last name of every AirPlay speaker listed.
     airplay_names: BTreeMap<String, String>,
     /// Polls in a row with AirPlay discovery running and no AirPlay speaker
@@ -645,6 +648,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             left_behind: BTreeSet::new(),
             airplay_listed: BTreeSet::new(),
             airplay_on_by_hand: BTreeSet::new(),
+            streamed: false,
             airplay_quiet_polls: 0,
             airplay_names: BTreeMap::new(),
             cast_names: BTreeMap::new(),
@@ -2772,7 +2776,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// and switches on the auto-connect speakers that appeared. One that
     /// asks for a code every time and doesn't play goes off instead, when
     /// it appears (also on from the last run) and when a listed one starts
-    /// asking, unless the user turned it on this run.
+    /// asking, unless the user turned it on in this stream.
     fn airplay_listed(&mut self) {
         let mut listed = BTreeSet::new();
         let mut appeared = Vec::new();
@@ -3449,7 +3453,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// streaming stopped, its next start is a new attempt that hasn't waited
     /// yet.
     fn forget_stale_waits(&mut self) {
-        if !self.running() {
+        let running = self.running();
+        if std::mem::replace(&mut self.streamed, running) && !running {
+            self.end_hand_marks();
+        }
+        if !running {
             self.busy.clear();
             self.reconnecting.clear();
             return;
@@ -3458,6 +3466,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.busy.retain(|id| outputs.contains(id));
         let airplay = self.audio.enabled_airplay();
         self.reconnecting.retain(|id, _| airplay.contains(id));
+    }
+
+    /// The stream ended, and with it the PIN session each click bought
+    /// (S223). A speaker whose pairing or prompt is still open, shown or
+    /// queued, keeps its mark, as the backend keeps it, so the pairing turns
+    /// it on.
+    fn end_hand_marks(&mut self) {
+        let waiting = self.audio.airplay_waiting_for_user();
+        self.airplay_on_by_hand.retain(|id| waiting.contains(id));
     }
 
     fn handle(&mut self, event: BackendEvent) {
@@ -3623,6 +3640,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             // Its Retry starts a new sender (`retry_airplay`).
             BackendEvent::AirPlayStopped => {
                 self.reconnecting.clear();
+                // Retry starts a new stream, though capture runs on.
+                self.end_hand_marks();
                 self.post(NoticeSubject::AirPlay, NoticeMessage::AirPlayStopped);
             }
             BackendEvent::AirPlayPtpFree => {
@@ -7775,6 +7794,168 @@ mod tests {
         let state = adapter.snapshot();
         assert!(state.speaker(&id).unwrap().enabled, "the user turned it on");
         assert!(state.running, "the session the user started goes on");
+    }
+
+    // covers: S223, P182
+    #[test]
+    fn an_every_time_speaker_turned_on_by_hand_goes_off_with_a_notice_when_streaming_stops() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&den, PairingEvent::PairedForSession);
+        adapter.poll();
+        fake.state(&den, AirPlayState::Playing);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&id).unwrap().enabled);
+
+        adapter.set_running(false);
+        adapter.poll();
+        adapter.set_running(true);
+        adapter.poll();
+        fake.take_calls();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(state.running, "Speakers still play");
+        let row = state.speaker(&id).unwrap();
+        assert!(
+            !row.enabled,
+            "the PIN session ended with the stream: on, it would stay silent"
+        );
+        assert_eq!(state.pin_prompt, None, "no prompt opens by itself");
+        assert!(
+            !starts_a_pairing(&fake.take_calls()),
+            "never paired by itself"
+        );
+        assert!(
+            messages(&adapter).contains(&NoticeMessage::AirPlayCantPlay {
+                speaker: "Den".to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPin,
+            }),
+            "{:?}",
+            messages(&adapter)
+        );
+
+        adapter.set_speaker_enabled(&id, true);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::StartPairing(id_of(&den))],
+            "the next click asks for a new code"
+        );
+    }
+
+    // covers: S223
+    #[test]
+    fn an_every_time_speaker_whose_pin_prompt_outlives_the_stream_turns_on_once_paired() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+
+        adapter.set_running(false);
+        adapter.poll();
+        assert!(
+            adapter.snapshot().pin_prompt.is_some(),
+            "the prompt waits for its PIN"
+        );
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&den, PairingEvent::PairedForSession);
+        adapter.poll();
+        assert!(
+            adapter.snapshot().speaker(&id).unwrap().enabled,
+            "the user's pairing turns it on"
+        );
+    }
+
+    // covers: S223
+    #[test]
+    fn an_every_time_speaker_whose_password_prompt_waits_in_line_turns_on_once_paired() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let study = airplay2_every_time_tv(11, "Study");
+        fake.appear(&study);
+        adapter.poll();
+        turn_on(&mut adapter, SPEAKERS);
+        for tv in [&study, &den] {
+            adapter.set_speaker_enabled(&ap(tv), true);
+            fake.pairing(
+                tv,
+                PairingEvent::Failed {
+                    error: SessionError::new(ErrorKind::PasswordRequired),
+                    wrong_pin: false,
+                },
+            );
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().password_prompt.unwrap().name, "Study");
+
+        adapter.set_running(false);
+        adapter.poll();
+        let id = ap(&den);
+        adapter.submit_password(&id, "hunter2");
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&den, PairingEvent::PairedForSession);
+        adapter.poll();
+        assert!(
+            adapter.snapshot().speaker(&id).unwrap().enabled,
+            "the prompt waiting behind another one still counts"
+        );
+    }
+
+    // covers: S223, P182
+    #[test]
+    fn an_every_time_speaker_turned_on_by_hand_goes_off_with_a_notice_when_the_sender_fails() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&den, PairingEvent::PairedForSession);
+        adapter.poll();
+        fake.state(&den, AirPlayState::Playing);
+        adapter.poll();
+
+        fake.stop_running();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(
+            !state.speaker(&id).is_some_and(|row| row.enabled),
+            "Retry starts a new stream, which needs a new PIN"
+        );
+        assert!(
+            messages(&adapter).contains(&NoticeMessage::AirPlayCantPlay {
+                speaker: "Den".to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPin,
+            }),
+            "{:?}",
+            messages(&adapter)
+        );
+
+        let next = FakeAirPlay::new();
+        next.set_airplay2(true);
+        let started = next.clone();
+        adapter.audio.set_airplay_starter(Box::new(move || {
+            Some(StartedSender::browsing(started.link(), None))
+        }));
+        adapter.retry_airplay();
+        next.appear(&den);
+        adapter.poll();
+        assert!(!adapter.snapshot().speaker(&id).unwrap().enabled);
+        next.take_calls();
+        adapter.set_speaker_enabled(&id, true);
+        assert_eq!(
+            next.take_calls(),
+            [Call::StartPairing(id_of(&den))],
+            "after Retry the next click asks for a new code"
+        );
     }
 
     #[test]
