@@ -1327,6 +1327,7 @@ fn the_updater_notice_uses_strings_and_tokens() {
     ] {
         assert!(stack.contains(needle), "NoticeStack has {needle}");
     }
+    // The buttons' own fill and label use Slint's Fluent palette, which no token reaches.
     for pair in [
         ("text", "notice"),
         ("text@secondaryText", "notice"),
