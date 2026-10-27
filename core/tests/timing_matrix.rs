@@ -1400,9 +1400,10 @@ fn a_windows_wake_that_comes_after_the_buffer_ran_dry_moves_no_output_and_correc
     {
         let late_ms = outcome.norms[0] - twin.norms[0];
         let corrected = outcome.fails[1];
-        shown += usize::from(corrected || late_ms.abs() > ALIGN_SLACK_MS);
+        let steps = outcome.start_steps[0];
+        shown += usize::from(corrected || late_ms.abs() > ALIGN_SLACK_MS || steps != 1);
         lines.push(format!(
-            "case {} second wake {:.0} ms late: {late_ms:.2} ms later than on time, drift corrected {corrected}",
+            "case {} second wake {:.0} ms late: {late_ms:.2} ms later than on time, drift corrected {corrected}, start steps {steps}",
             case.k, case.devices[0].second_late_ms
         ));
     }
