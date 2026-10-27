@@ -367,7 +367,8 @@ extension AppDelegate {
     /// quiet restart (S330); every Bluetooth start logs the decision.
     private func noteFreshLinkStart(_ uid: String, _ device: AudioDevices.Device) {
         let bluetooth = BluetoothIOBuffer.isBluetooth(transport: device.transport)
-        switch freshLinks.decide(uid: uid, bluetooth: bluetooth, now: ProcessInfo.processInfo.systemUptime) {
+        switch freshLinks.decide(uid: uid, bluetooth: bluetooth, now: ProcessInfo.processInfo.systemUptime,
+                                 session: session) {
         case .notBluetooth:
             return
         case .settled(let age):
@@ -389,7 +390,7 @@ extension AppDelegate {
     /// playing untouched.
     private func restartOnSettledLink(_ uid: String, ticket: Int) {
         guard engine.isRunning, engine.activeOutputUIDs.contains(uid),
-              freshLinks.begin(uid: uid, ticket: ticket) else { return }
+              freshLinks.begin(uid: uid, ticket: ticket, session: session) else { return }
         DebugTrace.log("[AudioSync] fresh link: restarting Bluetooth output \(uid) once")
         localHoldBacks[uid] = nil
         localBoundDevices[uid] = nil

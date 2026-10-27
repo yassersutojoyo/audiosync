@@ -292,7 +292,7 @@ final class FreshLinkWatch {
 
     private var listed: Set<String>?
     private var appearedAt: [String: Double] = [:]
-    private var pending: [String: Int] = [:]
+    private var pending: [String: (ticket: Int, session: Int)] = [:]
     private var nextTicket = 0
     /// Outputs between their restart's fade-out and their new start: the
     /// sync leaves them off.
@@ -308,26 +308,30 @@ final class FreshLinkWatch {
         listed = current
     }
 
-    /// What to do with output `uid` that has just started at `now`. A restart
-    /// uses up the appearance and arms a ticket (`pendingTicket`).
-    func decide(uid: String, bluetooth: Bool, now: Double) -> Decision {
+    /// What to do with output `uid` that has just started at `now` in
+    /// `session`. A restart uses up the appearance and arms a ticket
+    /// (`pendingTicket`) that only that session can use.
+    func decide(uid: String, bluetooth: Bool, now: Double, session: Int) -> Decision {
         guard bluetooth else { return .notBluetooth }
         guard let appeared = appearedAt[uid] else { return .settled(linkAgeS: nil) }
         let age = now - appeared
         guard age < Self.windowS else { return .settled(linkAgeS: age) }
         appearedAt[uid] = nil
         nextTicket += 1
-        pending[uid] = nextTicket
+        pending[uid] = (nextTicket, session)
         return .restart(linkAgeS: age)
     }
 
-    func pendingTicket(uid: String) -> Int? { pending[uid] }
+    func pendingTicket(uid: String) -> Int? { pending[uid]?.ticket }
 
-    /// The restart's time came: true when `ticket` is still the armed one,
-    /// and then `uid` is held off the sync until `release`.
-    func begin(uid: String, ticket: Int) -> Bool {
-        guard pending[uid] == ticket else { return false }
+    /// The restart's time came in `session`: true when `ticket` is still the
+    /// armed one and its session still runs, and then `uid` is held off the
+    /// sync until `release`. A ticket from an ended session is dropped: the
+    /// new session started the output again already.
+    func begin(uid: String, ticket: Int, session: Int) -> Bool {
+        guard let armed = pending[uid], armed.ticket == ticket else { return false }
         pending[uid] = nil
+        guard armed.session == session else { return false }
         held.insert(uid)
         return true
     }
