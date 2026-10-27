@@ -81,7 +81,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 ## Install
 
 - Get `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest), open it and drag AudioSync to Applications. Needs macOS 15 or later.
-- The disk image is about 5.8 MB, and the installed app takes about 18 MB.
+- The disk image is about 5.9 MB, and the installed app takes about 18 MB.
 - Besides its settings, AudioSync keeps a few small files: your AirPlay pairings, its AirPlay 2 identity, a timing cache per AirPlay 2 speaker, and the remote and Cast devices it knows. Your audio is never written to disk.
 - The first launch takes one extra step, because AudioSync isn't notarized. When macOS says it can't verify the app, click Done, then go to System Settings → Privacy & Security, click Open Anyway and confirm with your password. After that it opens like any other app. Only Apple's paid Developer Program would remove that step, and I'm not in it.
 - Or, from Terminal: `curl -fsSL https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.sh | bash`. It downloads the latest release's zip, checks it against the release's SHA-256 checksums, puts AudioSync in Applications and opens it. A copy downloaded by curl isn't flagged as downloaded, so macOS doesn't ask for the extra step. Run it again to update.
