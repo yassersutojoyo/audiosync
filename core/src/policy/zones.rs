@@ -326,8 +326,8 @@ pub enum Step {
     InTarget,
     /// Switched on, or stays on.
     On,
-    /// Switched on, but held back by P169 until the other AirPlay 2 speaker
-    /// stops: "Waiting for the other AirPlay 2 speaker".
+    /// Switched on, but held back until the sender lets it play (P169,
+    /// S285): "Waiting: too many AirPlay 2 speakers" or a PTP wait.
     Waiting,
     /// Switched off, or stays off.
     Off,

@@ -407,6 +407,9 @@ final class NativeAirPlay {
             }
             DebugTrace.log("[AudioSync] native AirPlay: " + latencyLine("Lf set to \(frames) frames", rows: rows))
         }
+        let targets = rows.filter { NativeTarget.kind($0) != nil }
+        model.receiverLatency.holdTargets(Dictionary(uniqueKeysWithValues: targets.map { ($0, model.sessions(of: $0)) }),
+                                          canChange: canChange || !model.sounding || rows.isEmpty)
         switch model.receiverLatency.updateEstimate(rows: members, canChange: canChange || !model.sounding) {
         case .applied:
             // L = L_s + E + A moves: the local outputs follow (S281).
@@ -431,7 +434,7 @@ final class NativeAirPlay {
     private func latencyLine(_ what: String, rows: [String]) -> String {
         let latency = model.receiverLatency
         let each = rows.map {
-            "\(model.names[$0] ?? $0) offset \(Int(latency.offsetMs(of: model.sessions(of: $0)).rounded())) ms"
+            "\(model.names[$0] ?? $0) offset \(Int(latency.offsetMs(row: $0, of: model.sessions(of: $0)).rounded())) ms"
         }
         return "\(what): Lf \(latency.frames) frames, E \(Int(latency.estimateMs.rounded())) ms, over "
             + (each.isEmpty ? "no speaker" : each.joined(separator: "; "))
@@ -441,7 +444,7 @@ final class NativeAirPlay {
     /// (S283). Main queue, after the row's add on the queue.
     private func sendOffsets() {
         for row in model.states.keys.sorted() {
-            let offset = model.receiverLatency.offsetMs(of: model.sessions(of: row))
+            let offset = model.receiverLatency.offsetMs(row: row, of: model.sessions(of: row))
             guard offset != (sentOffsets[row] ?? 0) else { continue }
             sentOffsets[row] = offset
             queue.async { [weak self] in
@@ -750,7 +753,8 @@ final class NativeAirPlay {
         guard code == ASC_AIRPLAY_ERROR_UNSUPPORTED else { return Self.problem(code) }
         switch reason {
         case ASC_AIRPLAY_REASON_TIMING: return .timingUnavailable
-        case ASC_AIRPLAY_REASON_ONE_AIRPLAY2: return .oneAirPlay2
+        case ASC_AIRPLAY_REASON_TOO_MANY_AIRPLAY2: return .tooManyAirPlay2
+        case ASC_AIRPLAY_REASON_PTP_OTHER_NETWORK: return .ptpOtherNetwork
         case ASC_AIRPLAY_REASON_AIRPLAY2_ONLY: return .airPlay2Only
         case ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS: return .playsThroughSpeakers
         default: return .unsupported
@@ -792,7 +796,8 @@ final class NativeAirPlay {
         case ASC_AIRPLAY_REASON_FORMAT: return "format"
         case ASC_AIRPLAY_REASON_AIRPLAY2_ONLY: return "AirPlay 2 only"
         case ASC_AIRPLAY_REASON_TIMING: return "timing"
-        case ASC_AIRPLAY_REASON_ONE_AIRPLAY2: return "one AirPlay 2 speaker at a time"
+        case ASC_AIRPLAY_REASON_TOO_MANY_AIRPLAY2: return "too many AirPlay 2 speakers"
+        case ASC_AIRPLAY_REASON_PTP_OTHER_NETWORK: return "PTP in use on another network"
         case ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS: return "plays through its speakers"
         default: return nil
         }

@@ -218,6 +218,9 @@ pub struct FakeAp2 {
     /// key followed by a content type ("SET_PARAMETER image/jpeg") matches
     /// only requests carrying that type.
     pub status_once: HashMap<String, u16>,
+    /// Session SETUPs asking for one of these `timingProtocol` values get
+    /// 501, as from a receiver that handles only the other timing.
+    pub refuse_timing: Vec<String>,
     /// A digest challenge (`WWW-Authenticate` value) for every request with
     /// the key that carries no `Authorization`.
     pub challenge: Option<(String, String)>,
@@ -268,6 +271,8 @@ pub struct FakeAp2 {
     /// Frame sizes of everything the sender wrote framed.
     pub frame_sizes: Vec<usize>,
     pub connections: usize,
+    /// When each RTSP connection was taken up.
+    pub connected_at: Vec<Instant>,
     /// The pair-setup on this connection is transient (P63).
     transient: bool,
     parser: Parser,
@@ -287,6 +292,7 @@ impl FakeAp2 {
             answered: Vec::new(),
             status: HashMap::new(),
             status_once: HashMap::new(),
+            refuse_timing: Vec::new(),
             challenge: None,
             event_port: EVENT_PORT,
             silent: Vec::new(),
@@ -310,6 +316,7 @@ impl FakeAp2 {
             secret: None,
             frame_sizes: Vec::new(),
             connections: 0,
+            connected_at: Vec::new(),
             transient: false,
             parser: Parser::new(),
         }
@@ -380,6 +387,7 @@ impl FakeAp2 {
     /// A new RTSP connection: plain text again.
     pub fn connect(&mut self) {
         self.connections += 1;
+        self.connected_at.push(Instant::now());
         if self.connections > 1 {
             self.hap.new_connection();
         }
@@ -388,6 +396,13 @@ impl FakeAp2 {
         self.transient = false;
         self.hap.transient_key = None;
         self.hap.verify_shared = None;
+    }
+
+    fn refuses_timing(&self, request: &Request) -> bool {
+        read_dict(&request.body)
+            .and_then(|body| body.get("timingProtocol").cloned())
+            .and_then(Value::into_string)
+            .is_some_and(|timing| self.refuse_timing.contains(&timing))
     }
 
     pub fn keys(&self) -> Vec<String> {
@@ -470,6 +485,8 @@ impl FakeAp2 {
                 response
             } else if let Some(code) = once {
                 Response::new(code, "Refused")
+            } else if key == "SETUP session" && self.refuses_timing(&request) {
+                Response::new(501, "Not Implemented")
             } else if let Some(code) = self.volume_status.filter(|_| volume_set) {
                 Response::new(code, "Internal Server Error")
             } else if pairing && !self.status.contains_key(&key) {

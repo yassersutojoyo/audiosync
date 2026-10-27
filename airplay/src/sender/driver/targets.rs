@@ -50,7 +50,7 @@ impl Driver {
                     .map(|speaker| speaker.device.clone())
                     .or_else(|| self.directory.device(&key).cloned());
                 if let Some(device) = device {
-                    self.insert_member(&id, device, options, counters, now);
+                    self.insert_member(&id, device, options, counters, StartKind::Host, now);
                 }
             }
             return;
@@ -114,7 +114,7 @@ impl Driver {
                     self.refuse(&key, SessionError::new(error), now);
                 }
             } else {
-                self.insert_member(&id, device, options, counters, now);
+                self.insert_member(&id, device, options, counters, StartKind::Host, now);
             }
         }
     }
@@ -138,31 +138,20 @@ impl Driver {
         }
         self.speakers.insert(
             key,
-            Speaker {
-                device,
-                options,
-                counters,
-                backoff: Backoff::new(),
-                phase: Phase::Idle,
-                removing: false,
-                airplay1_outcome: None,
-                ap2_waiting: false,
-                ap2_refusal: 0,
-                ap2_retry: false,
-                reads_volume: false,
-                target: Some(id.clone()),
-            },
+            Speaker::new(device, options, counters, Some(id.clone())),
         );
         true
     }
 
-    /// Adds one member as a speaker of the target and starts its session.
+    /// Adds one member as a speaker of the target and starts its session
+    /// as `kind` (P222).
     fn insert_member(
         &mut self,
         id: &TargetId,
         device: Device,
         options: SpeakerOptions,
         counters: Arc<SpeakerCounters>,
+        kind: StartKind,
         now: Instant,
     ) {
         let key = device.key.clone();
@@ -173,7 +162,7 @@ impl Driver {
             return;
         }
         self.insert_speaker(id, device, options, counters);
-        self.start_session(&key, now);
+        self.start_session(&key, kind, now);
     }
 
     pub(super) fn remove_target(&mut self, id: &TargetId, now: Instant) {
@@ -264,13 +253,6 @@ impl Driver {
             .is_some_and(|run| run.airplay2)
     }
 
-    /// Two speakers are members of one target, so they share one AirPlay 2
-    /// place (P177).
-    pub(super) fn same_target(&self, a: &DeviceKey, b: &DeviceKey) -> bool {
-        let target = |key: &DeviceKey| self.speakers.get(key).and_then(|s| s.target.clone());
-        target(a).is_some_and(|id| target(b) == Some(id))
-    }
-
     /// A member's AirPlay 1 attempt ended in Unsupported or Refused: the
     /// whole target moves to AirPlay 2 for the rest of this start, and the
     /// members already on AirPlay 1 start over (P177).
@@ -307,7 +289,7 @@ impl Driver {
                     active.session.teardown(now);
                     self.note_teardown(key, now);
                 }
-                Phase::Waiting(_) => speaker.phase = Phase::Waiting(now),
+                Phase::Waiting(_) => speaker.wait_until(now, StartKind::Host),
                 _ => {}
             }
         }
@@ -331,32 +313,6 @@ impl Driver {
         self.driven
             .values()
             .any(|run| !run.refused && run.target.control.as_ref() == Some(key))
-    }
-
-    /// The members of a target waiting for the AirPlay 2 place start with
-    /// the one that got it (P169, P177).
-    pub(super) fn wake_target_waiters(&mut self, id: &TargetId, now: Instant) {
-        let keys: Vec<DeviceKey> = self
-            .speakers
-            .iter_mut()
-            .filter(|(_, speaker)| {
-                speaker.target.as_ref() == Some(id)
-                    && speaker.ap2_waiting
-                    && !speaker.removing
-                    && matches!(speaker.phase, Phase::Failed)
-            })
-            .map(|(key, speaker)| {
-                speaker.ap2_waiting = false;
-                speaker.phase = Phase::Waiting(now);
-                key.clone()
-            })
-            .collect();
-        for key in keys {
-            self.emit_speaker(
-                &key,
-                SpeakerEvent::State(SpeakerState::Retrying { at: now }),
-            );
-        }
     }
 
     /// The target of every device that is a member of one (P176).
@@ -386,7 +342,7 @@ impl Driver {
         let Some(device) = self.directory.device(key).cloned() else {
             return;
         };
-        self.insert_member(&id, device, options, counters, now);
+        self.insert_member(&id, device, options, counters, StartKind::Retry, now);
     }
 
     /// Whether the speaker plays as a member of a target the host added.
@@ -411,21 +367,6 @@ impl Driver {
             .members
             .iter()
             .filter_map(|member| member.device.as_deref())
-            .collect()
-    }
-
-    /// Addresses of the other members in view, for a member's SETPEERS
-    /// (P179).
-    pub(super) fn other_member_addresses(&self, key: &DeviceKey) -> Vec<std::net::IpAddr> {
-        self.members_in_view(key)
-            .into_iter()
-            .filter(|device| device.key != *key)
-            .filter_map(|device| {
-                device
-                    .airplay_socket_addrs()
-                    .first()
-                    .map(|address| address.ip())
-            })
             .collect()
     }
 

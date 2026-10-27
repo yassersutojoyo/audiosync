@@ -383,8 +383,8 @@ pub enum LeftOff {
 pub enum RecallStep {
     /// Switched on, or stays on.
     On,
-    /// Switched on, but held back by P169 until the other AirPlay 2 speaker
-    /// stops.
+    /// Switched on, but held back until the sender lets it play (P169,
+    /// S285).
     Waiting,
     LeftOff(LeftOff),
     /// A Cast key after the first, which a sanitized preset never holds:

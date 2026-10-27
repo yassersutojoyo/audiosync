@@ -1125,6 +1125,25 @@ check(SpeakerAvailability(.code(password: false), everyTime: true, on: true) == 
         && SpeakerAvailability(.code(password: false), everyTime: false, on: false) == .needsCode
         && SpeakerAvailability(.open, everyTime: false, on: false) == .open,
       "availability: asks for a code every time while it asks or is off; paired for this run and on, it is open")
+do {
+    let pinOff = UIStrings().airPlayTurnedOff(name: "Den", reason: .needsPin)
+    let passwordOff = UIStrings().airPlayTurnedOff(name: "Den", reason: .needsPassword)
+    check(pinOff.contains("PIN") && !pinOff.lowercased().contains("password"),
+          "airplay off: a speaker that needs a PIN says PIN, not password")
+    check(passwordOff.contains("password") && !passwordOff.contains("PIN"),
+          "airplay off: a speaker that asks for a password says password, not PIN")
+    let text = UIStrings()
+    check(text.nativeAirPlayAsksForCode(name: "Den", reason: .needsCode, unasked: false) == pinOff,
+          "native off: a speaker that needs a PIN gets the PIN notice")
+    check(text.nativeAirPlayAsksForCode(name: "Den", reason: .needsPassword, unasked: false) == passwordOff
+            && text.nativeAirPlayAsksForCode(name: "Den", reason: .needsPassword, unasked: true) == passwordOff,
+          "native off: a speaker that asks for a password gets the password notice")
+    check(text.nativeAirPlayAsksForCode(name: "Den", reason: .needsCode, unasked: true)
+            == text.nativeAirPlayNotAccepted(name: "Den"),
+          "native off: a speaker that turned the session down unasked says it didn't accept")
+    check(text.nativeAirPlayAsksForCode(name: "Den", reason: .unreachable, unasked: false) == nil,
+          "native off: other reasons keep their own notice")
+}
 
 // MARK: Device volume — a turned-down or muted output shows a hint and a one-click fix (S192 to S202)
 do {
@@ -2267,29 +2286,34 @@ do {
           "native airplay: a speaker playing on after its announcement lapsed leaves the sender once it is lost",
           "playing \(playingOn), lost \(lost)")
 
-    // P169: a second AirPlay 2 speaker waits for the one slot, switched on,
-    // and the sender starts it once the other one stops.
+    // P169, S285: a 17th AirPlay 2 speaker waits for a place, switched on,
+    // and the sender starts it once one of the others stops.
     model.apply(.appeared(receiver("G7", "Loft", .available)))
     model.added("G7")
-    let refused = model.apply(.error(id: "G7", .oneAirPlay2, retryMs: nil, detail: "one AirPlay 2 speaker at a time"))
-    check(refused == .waiting("native:G7", true) && model.apply(.state(id: "G7", .failed, retryMs: nil)) == nil
+    let refused = model.apply(.error(id: "G7", .tooManyAirPlay2, retryMs: nil, detail: "too many AirPlay 2 speakers"))
+    check(refused == .waiting("native:G7", .tooManyAirPlay2) && model.apply(.state(id: "G7", .failed, retryMs: nil)) == nil
             && model.isWaiting("G7") && model.plan(streaming: true, enabled: ["native:G7"]).isEmpty,
-          "P169 native airplay: a speaker refused the AirPlay 2 slot stays on and in the sender", "\(String(describing: refused))")
-    check(model.apply(.error(id: "G7", .oneAirPlay2, retryMs: nil, detail: "")) == nil && model.isWaiting("G7"),
-          "P169 native airplay: refused again while it waits, it posts no second notice")
-    check(model.apply(.state(id: "G7", .connecting, retryMs: nil)) == .waiting("native:G7", false) && !model.isWaiting("G7")
+          "S285 native airplay: a speaker refused an AirPlay 2 place stays on and in the sender", "\(String(describing: refused))")
+    check(model.apply(.error(id: "G7", .tooManyAirPlay2, retryMs: nil, detail: "")) == nil && model.isWaiting("G7"),
+          "S285 native airplay: refused again while it waits, it posts no second notice")
+    check(model.apply(.error(id: "G7", .ptpOtherNetwork, retryMs: nil, detail: "")) == .waiting("native:G7", .ptpOtherNetwork)
+            && model.waitReason("G7") == .ptpOtherNetwork,
+          "S285 native airplay: a speaker that needs PTP on another network waits and says why")
+    check(model.apply(.state(id: "G7", .connecting, retryMs: nil)) == .waiting("native:G7", nil) && !model.isWaiting("G7")
             && model.apply(.state(id: "G7", .playing, retryMs: nil)) == .playingChanged("native:G7", playing: true),
-          "P169 native airplay: once the slot frees, the sender starts it and the row stops saying it waits")
-    _ = model.apply(.error(id: "G7", .oneAirPlay2, retryMs: nil, detail: ""))
+          "S285 native airplay: once the sender lets it, it starts and the row stops saying it waits")
+    _ = model.apply(.error(id: "G7", .tooManyAirPlay2, retryMs: nil, detail: ""))
     check(model.apply(.error(id: "G7", .timingUnavailable, retryMs: nil, detail: "")) == .turnOff("native:G7", .timingUnavailable)
             && !model.isWaiting("G7"),
           "P169 native airplay: a waiting speaker that then can't get PTP timing goes off and no longer waits")
-    _ = model.apply(.error(id: "G7", .oneAirPlay2, retryMs: nil, detail: ""))
+    _ = model.apply(.error(id: "G7", .tooManyAirPlay2, retryMs: nil, detail: ""))
     model.removed("G7")
     check(!model.isWaiting("G7"), "P169 native airplay: switched off or streaming stopped, it no longer waits")
-    check(UIStrings().nativeAirPlayOneAirPlay2(name: "Loft")
-            == "AudioSync plays one AirPlay 2 speaker at a time, so Loft waits. It starts once the other one stops.",
-          "P169 native airplay: the waiting notice reads as on Windows")
+    check(UIStrings().nativeAirPlayTooManyAirPlay2(name: "Loft")
+            == "AudioSync plays up to \(ASC_AIRPLAY2_SESSIONS) AirPlay 2 speakers at once, so Loft waits. It starts once one of them stops."
+            && UIStrings().nativeAirPlayPtpOtherNetwork(name: "Loft")
+            == "Loft waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off and Loft starts.",
+          "S285 native airplay: both waiting notices read as on Windows")
     let lets = "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
     let stops = "AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
     check(UIStrings(airPlay2Auto: false).airPlay2Note(on: false, onAtLaunch: true) == stops
@@ -2353,9 +2377,11 @@ do {
         check(firstTarget == nil, "Gear menu: the next menu that opens releases the one before it")
     }
     check(UIStrings().nativeAirPlayWaitingTitle(name: "Loft") == "Loft waiting"
-            && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true, unannounced: false, target: nil) == "Waiting for the other AirPlay 2 speaker"
+            && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true, unannounced: false, target: nil) == "Waiting: too many AirPlay 2 speakers"
+            && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, waitingForPtp: true, unannounced: false, target: nil)
+            == "Waiting: AirPlay 2 speakers on another network"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, unannounced: false, target: nil) == nil,
-          "P169 native airplay: the notice's title and the row's note, as on Windows")
+          "S285 native airplay: the notice's title and the row's note for each reason, as on Windows")
     var impostor = NativeAirPlayModel()
     impostor.added("A9")
     check(impostor.apply(.error(id: "A9", .receiverUnverified, retryMs: nil, detail: ""))
@@ -2795,6 +2821,24 @@ do {
                 && waits.estimateMs == 300 && waits.offsetMs(of: ["A1"]) == 80 && waits.heldMs == nil,
               "airplay latency: the estimate waits while an airplay speaker sounds (a joiner at 300 ms with E = 220 "
                 + "plays 80 ms late until the stream is empty)")
+
+        var several = NativeReceiverLatency()
+        several.report("L", us: 220_000)
+        several.report("R", us: 50_000)
+        several.report("D", us: 100_000)
+        several.holdTargets(["pair:1": ["L", "R"]], canChange: true)
+        _ = several.updateEstimate(rows: [["L", "R"], ["D"]], canChange: true)
+        check(several.estimateMs == 220 && several.offsetMs(row: "pair:1", of: ["L", "R"]) == 0
+                && several.offsetMs(row: "D", of: ["D"]) == 120,
+              "S284 airplay latency: several AirPlay 2 receivers share E, and a target uses its largest member")
+        several.holdTargets(["pair:1": ["R"]], canChange: false)
+        let oneLeft = several.updateEstimate(rows: [["R"]], canChange: false)
+        check(oneLeft == .held && several.estimateMs == 220 && several.offsetMs(row: "pair:1", of: ["R"]) == 0,
+              "S284 airplay latency: a receiver leaving while others sound changes no offset")
+        several.holdTargets(["pair:1": ["R"]], canChange: true)
+        _ = several.updateEstimate(rows: [["R"]], canChange: true)
+        check(several.estimateMs == 50 && several.offsetMs(row: "pair:1", of: ["R"]) == 0,
+              "S284 airplay latency: the next values come once E may change")
     }
 
     // covers: S284, S285
@@ -2843,8 +2887,7 @@ do {
                 + "(E and every d′_s held until the stream is empty; the sender holds Lf)",
               "\(before) \(during) \(estimateDuring)")
 
-        // The host holds no AirPlay 2 speaker back itself. The sender's only wait reason so far is
-        // P169's; the two of P204 and P205 have no code in the header yet, so a 17th stands in for them.
+        // The host holds no AirPlay 2 speaker back itself; the sender refuses the 17th (P204).
         var many = NativeAirPlayModel()
         let ids = (1...17).map { "M\($0)" }
         for id in ids { many.apply(.appeared(receiver(id, id, .available))) }
@@ -2854,10 +2897,10 @@ do {
             many.added(id)
             if id != "M17" { started.append(many.apply(.state(id: id, .playing, retryMs: nil))) }
         }
-        let refused = many.apply(.error(id: "M17", .oneAirPlay2, retryMs: nil, detail: ""))
+        let refused = many.apply(.error(id: "M17", .tooManyAirPlay2, retryMs: nil, detail: ""))
         let allPlay = added.count == 17 && started.count == 16 && started.allSatisfy { $0 != nil }
             && ids.dropLast().allSatisfy { many.isPlaying($0) && !many.isWaiting($0) }
-        let oneWaits = refused == .waiting("native:M17", true) && many.isWaiting("M17") && many.states["M17"] != nil
+        let oneWaits = refused == .waiting("native:M17", .tooManyAirPlay2) && many.isWaiting("M17") && many.states["M17"] != nil
             && many.plan(streaming: true, enabled: Set(ids.map(NativeAirPlayID.app))).isEmpty
         check(allPlay && oneWaits,
               "airplay latency: every AirPlay 2 speaker switched on goes to the sender, and only one it refuses "
@@ -8760,6 +8803,27 @@ do {
     _ = plainStart.begin(origin: .user)
     plainStart.supersedeSwitch()
     check(plainStart.answer() == .user, "microphone: a later pick leaves a plain start's answer alone")
+    // covers: S141 (a pick that goes back to the old source answers the switch waiting on the prompt)
+    var repick = MicrophoneRequestGate()
+    _ = repick.begin(origin: .user, switching: toInput)
+    repick.repicked(source: .system, pair: 0)
+    let repickedSwitch = repick.switching
+    check(repickedSwitch == nil && repick.answer() == nil,
+          "microphone: picking the source that plays again drops the switch waiting on the prompt (S141)",
+          "\(String(describing: repickedSwitch))")
+    var repickPair = MicrophoneRequestGate()
+    _ = repickPair.begin(origin: .user, switching: .inputPair(uid: "a", from: 0, to: 1))
+    repickPair.repicked(source: .input(uid: "a"), pair: 0)
+    check(repickPair.switching == nil && repickPair.answer() == nil,
+          "microphone: picking the channel pair that plays again drops the pair switch waiting on the prompt (S141)")
+    var otherPick = MicrophoneRequestGate()
+    _ = otherPick.begin(origin: .user, switching: toInput)
+    otherPick.repicked(source: .input(uid: "b"), pair: 0)
+    var plainRepick = MicrophoneRequestGate()
+    _ = plainRepick.begin(origin: .user)
+    plainRepick.repicked(source: .system, pair: 0)
+    check(otherPick.switching == toInput && plainRepick.answer() == .user,
+          "microphone: a pick of a capture the switch doesn't leave, or with no switch waiting, changes nothing")
 }
 
 // MARK: Late output callbacks in the debug log (LateCallbackLog, LogRateLimiter in OutputRenderer.swift)

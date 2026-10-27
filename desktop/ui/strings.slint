@@ -6,9 +6,11 @@
 // English only for now. @tr marks each string for Slint's gettext translation
 // when a second language is added.
 
-import { SpeakerKind, Availability, AirPlayProblem, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, NoticeKind, PinPhase, RowState, SpeakerGroup } from "types.slint";
+import { SpeakerKind, Availability, AirPlayProblem, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, NoticeKind, PinPhase, RowState, SpeakerGroup, UpdateButton } from "types.slint";
 
 export global Strings {
+    // The sender's AirPlay 2 session limit, set from Rust (AIRPLAY2_SESSIONS).
+    in property <int> airplay2-sessions;
     // Main window
     out property <string> app-name: "AudioSync";
     out property <string> main-window-title: "AudioSync";
@@ -25,7 +27,8 @@ export global Strings {
     // row says so instead of showing it as playing.
     out property <string> waiting-for-device: @tr("Waiting for device");
     out property <string> reconnecting: @tr("Reconnecting…");
-    out property <string> waiting-for-airplay2: @tr("Waiting for the other AirPlay 2 speaker");
+    out property <string> waiting-for-airplay2: @tr("Waiting: too many AirPlay 2 speakers");
+    out property <string> waiting-for-ptp: @tr("Waiting: AirPlay 2 speakers on another network");
     out property <string> not-on-network: @tr("Not on the network right now, plays once it's back");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
@@ -358,6 +361,9 @@ export global Strings {
     // The same item under the AirPlay 2 flag (spec S313): AirPlay 2 only
     // speakers play anyway, and the item prefers AirPlay 2 for the rest.
     out property <string> airplay2-prefer: @tr("Prefer AirPlay 2");
+    // The updater's menu items (Windows release builds only).
+    out property <string> check-updates-automatically: @tr("Check for Updates Automatically");
+    out property <string> menu-check-for-updates: @tr("Check for Updates…");
 
     // File > Web Remote… and its window: a page on the home network that a
     // paired phone uses to switch speakers and set their volume and delay.
@@ -476,6 +482,70 @@ export global Strings {
     public pure function window-failed(detail: string) -> string {
         return @tr("AudioSync couldn't open a window: {}", detail);
     }
+
+    // The buttons of the updater's notice.
+    public pure function update-button(button: UpdateButton) -> string {
+        if button == UpdateButton.download {
+            return @tr("Download and Install");
+        }
+        if button == UpdateButton.not-now {
+            return @tr("Not Now");
+        }
+        if button == UpdateButton.cancel {
+            return @tr("Cancel");
+        }
+        if button == UpdateButton.try-again {
+            return @tr("Try Again");
+        }
+        if button == UpdateButton.open-release-page {
+            return @tr("Open Release Page");
+        }
+        return @tr("Restart Now");
+    }
+
+    // The updater's notices. `new` and `running` are version numbers such
+    // as 0.8.0; `percent` is how much is downloaded, a whole number.
+    public pure function notice-update-available(new: string, running: string) -> string {
+        return @tr("AudioSync {} is available. You have {}.", new, running);
+    }
+    // The same notice for a version that Windows security blocked, or that
+    // didn't start, the last time it was installed.
+    public pure function notice-update-available-blocked-before(new: string, running: string) -> string {
+        return @tr("AudioSync {} is available. You have {}. Windows security blocked this version last time.", new, running);
+    }
+    public pure function notice-update-available-failed-before(new: string, running: string) -> string {
+        return @tr("AudioSync {} is available. You have {}. This version didn't start last time.", new, running);
+    }
+    public pure function notice-update-downloading(percent: string) -> string {
+        return @tr("Downloading the update: {}%", percent);
+    }
+    out property <string> notice-update-checking: @tr("Checking for updates…");
+    out property <string> notice-update-downloading-started: @tr("Downloading the update.");
+    public pure function notice-update-installed(version: string) -> string {
+        return @tr("AudioSync {} is installed. It takes effect after AudioSync restarts.", version);
+    }
+    public pure function notice-update-up-to-date(running: string) -> string {
+        return @tr("AudioSync {} is the latest version.", running);
+    }
+    out property <string> notice-update-unreachable: @tr("AudioSync couldn't reach the update server. Check your connection, then try again.");
+    out property <string> notice-update-download-failed: @tr("The update didn't download completely, so nothing was installed. The running version stays.");
+    out property <string> notice-update-bad-signature: @tr("The download didn't pass its check, so nothing was installed. The running version stays. Try again later, or download the new version from the release page.");
+    out property <string> notice-update-broken: @tr("The download is broken, so nothing was installed. The running version stays.");
+    out property <string> notice-update-disk-full: @tr("There isn't enough disk space for the update, so nothing was installed. The running version stays.");
+    out property <string> notice-update-read-only: @tr("AudioSync can't write to its own folder, so it can't install the update. The running version stays. You can download the new version from the release page.");
+    out property <string> notice-update-in-use: @tr("Another copy of AudioSync is using its files, for example in another user's session. Close the other copies, then try again. The running version stays.");
+    out property <string> notice-update-failed: @tr("The update couldn't be installed. The running version stays. Try again later, or download the new version from the release page.");
+    // `renames` is one or more of notice-update-rename joined by list-and,
+    // the exe first.
+    public pure function notice-update-restore-failed(renames: string) -> string {
+        return @tr("The update failed and AudioSync couldn't put its old version back. In the AudioSync folder, rename {}.", renames);
+    }
+    // A file left under its .bak name and the name it goes back to.
+    public pure function notice-update-rename(bak: string, live: string) -> string {
+        return @tr("{} to {}", bak, live);
+    }
+    out property <string> notice-update-relaunch-failed: @tr("The new version couldn't start, so AudioSync put the old version back. The running version stays. You can download the new version from the release page.");
+    out property <string> notice-update-blocked: @tr("Windows security blocked the update file, so nothing was installed. The running version stays. You can download the new version from the release page.");
 
     // Windows audio couldn't be reached at startup, so AudioSync exits;
     // `detail` is the system's reason.
@@ -673,8 +743,11 @@ export global Strings {
         if problem == AirPlayProblem.timing-unavailable {
             return @tr("{} needs PTP timing, which isn't available, so it's off. Another app may be using ports 319 and 320.", speaker);
         }
-        if problem == AirPlayProblem.one-airplay2-speaker {
-            return @tr("AudioSync plays one AirPlay 2 speaker at a time, so {} waits. It starts once the other one stops.", speaker);
+        if problem == AirPlayProblem.too-many-airplay2-speakers {
+            return @tr("AudioSync plays up to {0} AirPlay 2 speakers at once, so {1} waits. It starts once one of them stops.", root.airplay2-sessions, speaker);
+        }
+        if problem == AirPlayProblem.ptp-other-network {
+            return @tr("{0} waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off and {0} starts.", speaker);
         }
         // An Apple TV and its home theater group never play at once.
         if problem == AirPlayProblem.plays-through-speakers {
@@ -1022,6 +1095,9 @@ export global Strings {
         if kind == NoticeKind.airplay2-next-launch {
             return @tr("AirPlay 2 after restart");
         }
+        if kind == NoticeKind.update {
+            return @tr("update");
+        }
         if kind == NoticeKind.remote-public-network {
             return @tr("web remote on Public network");
         }
@@ -1070,7 +1146,8 @@ export global Strings {
             return root.will-play;
         }
         if state == RowState.waiting-for-device || state == RowState.reconnecting
-                || state == RowState.waiting-for-airplay2 || state == RowState.not-on-network {
+                || state == RowState.waiting-for-airplay2 || state == RowState.waiting-for-ptp
+                || state == RowState.not-on-network {
             return root.row-note(state);
         }
         return root.on;
@@ -1087,6 +1164,9 @@ export global Strings {
         }
         if state == RowState.waiting-for-airplay2 {
             return root.waiting-for-airplay2;
+        }
+        if state == RowState.waiting-for-ptp {
+            return root.waiting-for-ptp;
         }
         if state == RowState.not-on-network {
             return root.not-on-network;

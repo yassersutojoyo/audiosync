@@ -152,9 +152,11 @@ extension AppDelegate {
             clearNotices([SpeakerKey.make(id: id, airplay: true)])
             syncNativeSpeakers()   // it joins with its new credentials
             pushModel()
-        case .waiting(let id, let waits):
-            if waits {
-                postNotice(text.nativeAirPlayOneAirPlay2(name: shownName(airPlay: id)),
+        case .waiting(let id, let reason):
+            if let reason {
+                let name = shownName(airPlay: id)
+                postNotice(reason == .ptpOtherNetwork ? text.nativeAirPlayPtpOtherNetwork(name: name)
+                                                      : text.nativeAirPlayTooManyAirPlay2(name: name),
                            subject: SpeakerKey.make(id: id, airplay: true),
                            title: text.nativeAirPlayWaitingTitle(name: shownName(airPlay: id)))
             } else {
@@ -312,7 +314,7 @@ extension AppDelegate {
         nativeAirPlay = nil
         nativeStarts.senderFailed()
         // Nothing starts a waiting speaker once its sender is gone.
-        clearNotices(native.model.waiting.map { SpeakerKey.make(id: NativeAirPlayID.app($0), airplay: true) })
+        clearNotices(native.model.waiting.keys.map { SpeakerKey.make(id: NativeAirPlayID.app($0), airplay: true) })
         native.discard()
         if codePromptBusy { closeCodePrompt() }   // its prompt went with it
         airplayOrder = []
@@ -550,8 +552,12 @@ extension AppDelegate {
         let name = shownName(airPlay: id)
         let unasked = NativeAirPlayID.receiver(id).map { nativeAirPlay?.model.refusedUnasked($0) == true } ?? false
         switch reason {
-        case .needsCode where unasked: return text.nativeAirPlayNotAccepted(name: name)
-        case .needsCode, .needsPassword: return text.airPlayTurnedOff(name: name, reason: .needsCode)
+        case .needsCode, .needsPassword:
+            guard let words = text.nativeAirPlayAsksForCode(name: name, reason: reason, unasked: unasked) else {
+                assertionFailure("no PIN or password notice for \(reason)")
+                return text.nativeAirPlayNotAccepted(name: name)
+            }
+            return words
         case .unreachable: return text.airPlayTurnedOff(name: name, reason: .unreachable)
         case .cantPlay: return text.nativeAirPlayCantPlay(name: name)
         case .needsAirPlay2: return text.nativeAirPlayNeedsAirPlay2(name: name)

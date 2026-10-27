@@ -58,6 +58,7 @@
 mod driver;
 mod remote;
 
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
@@ -68,6 +69,7 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::ap2::Timing;
 use crate::clock::SenderClock;
 use crate::dacp::{DacpAdvertiser, RemoteCommand};
 use crate::discovery::mdns::{DiscoveryError, MdnsBrowser};
@@ -122,7 +124,18 @@ pub struct SenderConfig {
     /// How long the connection of a PIN pairing that paired waits for the
     /// host to start its speaker, 30 s (P153); a test picks a shorter one.
     pub pairing_hold: Duration,
+    /// AirPlay 2 sessions at once, [`AIRPLAY2_SESSIONS`] (P204); a test
+    /// picks fewer so it needs fewer receivers.
+    pub airplay2_sessions: usize,
+    /// Runs first on the driver thread, which keeps what it returns until it
+    /// ends. A host raises the thread's priority here: at normal priority a
+    /// busy Windows PC wakes it past a packet's time (P226).
+    pub on_driver_thread: Option<fn() -> Box<dyn Any>>,
 }
+
+/// The most AirPlay 2 sessions a sender runs at once, each member of a
+/// target counting as one (P204).
+pub const AIRPLAY2_SESSIONS: usize = 16;
 
 /// [`SenderConfig::pairing_hold`]'s default (P153).
 const PAIRING_HOLD: Duration = Duration::from_secs(30);
@@ -234,6 +247,8 @@ impl Default for SenderConfig {
             ptp_ports: PtpPorts::default(),
             ptp_receiver_ports: PtpPorts::default(),
             pairing_hold: PAIRING_HOLD,
+            airplay2_sessions: AIRPLAY2_SESSIONS,
+            on_driver_thread: None,
         }
     }
 }
@@ -256,6 +271,9 @@ pub struct SpeakerOptions {
     /// HomeKit credentials of an earlier pairing on the AirPlay 2 path
     /// (P152): its sessions pair-verify with them (P61). Never logged.
     pub homekit_credentials: Option<HomeKitCredentials>,
+    /// The timing entry the host keeps for this receiver from an earlier
+    /// launch (P217).
+    pub timing: Option<TimingMemory>,
     /// The host keeps a debug log: an AirPlay 2 session reports
     /// [`SpeakerEvent::Trace`] lines and reads the receiver's volume once.
     pub trace: bool,
@@ -271,9 +289,84 @@ impl SpeakerOptions {
             pcm: false,
             credentials: None,
             homekit_credentials: None,
+            timing: None,
             trace: false,
         }
     }
+}
+
+/// The AirPlay 2 timing a receiver's session SETUP took, as the host keeps
+/// it across launches by `deviceid` (P217), with the TXT `features` and
+/// `srcvers` of that SETUP: a change of either makes the sender forget it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimingMemory {
+    pub timing: Timing,
+    pub features: u64,
+    pub srcvers: Option<String>,
+}
+
+impl TimingMemory {
+    /// The byte form a host stores: the timing (0 NTP, 1 PTP), the features
+    /// as 8 little-endian bytes, then 1 and the `srcvers` text, or 0.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(10 + self.srcvers.as_ref().map_or(0, String::len));
+        bytes.push(match self.timing {
+            Timing::Ntp => 0,
+            Timing::Ptp => 1,
+        });
+        bytes.extend_from_slice(&self.features.to_le_bytes());
+        match &self.srcvers {
+            Some(srcvers) => {
+                bytes.push(1);
+                bytes.extend_from_slice(srcvers.as_bytes());
+            }
+            None => bytes.push(0),
+        }
+        bytes
+    }
+
+    /// Reads [`TimingMemory::to_bytes`]; `None` for anything else.
+    pub fn from_bytes(bytes: &[u8]) -> Option<TimingMemory> {
+        let (&timing, rest) = bytes.split_first()?;
+        let timing = match timing {
+            0 => Timing::Ntp,
+            1 => Timing::Ptp,
+            _ => return None,
+        };
+        let (features, rest) = rest.split_first_chunk::<8>()?;
+        let srcvers = match rest.split_first()? {
+            (0, []) => None,
+            (1, text) => Some(std::str::from_utf8(text).ok()?.to_owned()),
+            _ => return None,
+        };
+        Some(TimingMemory {
+            timing,
+            features: u64::from_le_bytes(*features),
+            srcvers,
+        })
+    }
+
+    /// Whether `device`'s TXT record still shows the stored values.
+    pub fn matches(&self, device: &Device) -> bool {
+        self.features == device.features().0 && self.srcvers.as_deref() == srcvers(device)
+    }
+
+    /// The entry for a session SETUP that `device` answered 200 with
+    /// `timing`.
+    pub fn of(device: &Device, timing: Timing) -> TimingMemory {
+        TimingMemory {
+            timing,
+            features: device.features().0,
+            srcvers: srcvers(device).map(str::to_owned),
+        }
+    }
+}
+
+fn srcvers(device: &Device) -> Option<&str> {
+    device
+        .airplay_txt
+        .as_ref()
+        .and_then(|txt| txt.source_version.as_deref())
 }
 
 impl fmt::Debug for SpeakerOptions {
@@ -291,6 +384,7 @@ impl fmt::Debug for SpeakerOptions {
                 "homekit_credentials",
                 &self.homekit_credentials.as_ref().map(|_| "<hidden>"),
             )
+            .field("timing", &self.timing)
             .finish()
     }
 }
@@ -456,6 +550,13 @@ pub enum SpeakerEvent {
     /// them back in [`SpeakerOptions::homekit_credentials`]. The sender
     /// keeps them too, until it stops. `Debug` shows the identifiers only.
     HomeKitPaired(HomeKitCredentials),
+    /// A session SETUP was answered 200 with a timing other than the entry
+    /// the sender held for the receiver: the host keeps this one by
+    /// `deviceid` and hands it back in [`SpeakerOptions::timing`] (P217).
+    TimingRemembered(TimingMemory),
+    /// The receiver's timing entry no longer holds: its TXT record changed,
+    /// or it refused the remembered PTP. The host drops its copy (P217).
+    TimingForgotten,
     /// A line for the host's debug log, only with [`SpeakerOptions::trace`].
     Trace(String),
 }
@@ -515,6 +616,14 @@ pub enum SenderEvent {
     /// sender didn't hand on (P195). It never holds the DACP ID or an
     /// Active-Remote value.
     RemoteLog(String),
+    /// A line for the host's debug log: the sender remembered or forgot
+    /// the AirPlay 1 outcome that moves a device to the AirPlay 2 path,
+    /// with the outcome and the reason (P218). Sent whether or not the
+    /// host holds the speaker.
+    PathLog {
+        key: DeviceKey,
+        line: String,
+    },
 }
 
 /// The sender: one stream, any number of speakers, optional discovery.
@@ -571,11 +680,16 @@ impl Sender {
         )
         .with_ptp_ports(config.ptp_ports, config.ptp_receiver_ports)
         .with_pairing_hold(config.pairing_hold)
+        .with_airplay2_sessions(config.airplay2_sessions)
         .with_sounding(sounding.clone());
         let dacp_counters = driver.dacp_counters();
+        let setup = config.on_driver_thread;
         let handle = thread::Builder::new()
             .name("airplay-driver".to_owned())
-            .spawn(move || driver.run())?;
+            .spawn(move || {
+                let _held = setup.map(|setup| setup());
+                driver.run();
+            })?;
         let sender = Sender {
             inputs,
             events,

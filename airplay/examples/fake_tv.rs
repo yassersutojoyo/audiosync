@@ -8,8 +8,14 @@
 //!
 //! ```text
 //! cargo run -p audiosync-airplay --example fake_tv -- [--lan] [--name <text>]
-//!     [--port <n>] [--pin every|once] [--code <digits>] [--summary]
+//!     [--deviceid <XX:XX:XX:XX:XX:XX>] [--port <n>] [--pin every|once]
+//!     [--code <digits>] [--summary]
 //! ```
+//!
+//! Two copies run side by side when each has its own `--deviceid`, since a
+//! sender keys a speaker by it; a copy with another id also gets its own
+//! default name and mDNS host, and the port is free (0, printed at start)
+//! unless `--port` names one.
 //!
 //! Every request line and its answer status goes to stdout; with `--summary`
 //! only one plain line per event a dry-run sheet judges, with its running
@@ -36,12 +42,13 @@ use audiosync_airplay::rtsp::Request;
 use common::ap2::{Ap2Server, FakeAp2, request_key};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use summary::Summary;
-use television::{HOST_LABEL, Pin, television};
+use television::{DEVICE_ID, Pin, television};
 
 const SERVICE_TYPE: &str = "_airplay._tcp.local.";
 
 struct Options {
     name: String,
+    device_id: [u8; 6],
     port: u16,
     pin: Pin,
     code: String,
@@ -50,8 +57,10 @@ struct Options {
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
+    let mut name = None;
     let mut options = Options {
-        name: "AudioSync Test TV".to_owned(),
+        name: String::new(),
+        device_id: DEVICE_ID,
         port: 0,
         pin: Pin::None,
         code: "4821".to_owned(),
@@ -63,7 +72,8 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
         match arg.as_str() {
             "--lan" => options.on_network = true,
             "--summary" => options.summary = true,
-            "--name" => options.name = value()?,
+            "--name" => name = Some(value()?),
+            "--deviceid" => options.device_id = television::parse_device_id(&value()?)?,
             "--port" => options.port = value()?.parse().map_err(|_| "bad --port")?,
             "--pin" => {
                 options.pin = match value()?.as_str() {
@@ -82,18 +92,19 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
             other => return Err(format!("unknown argument {other}")),
         }
     }
+    options.name = name.unwrap_or_else(|| television::default_name(options.device_id));
     Ok(options)
 }
 
 fn advertise(options: &Options, port: u16) -> Result<(ServiceDaemon, String), String> {
-    let entries = television::txt(options.pin, 0);
+    let entries = television::txt(options.pin, 0, options.device_id);
     let txt: Vec<(&str, &str)> = entries
         .iter()
         .map(|(key, value)| (*key, value.as_str()))
         .collect();
     let failed = |error: mdns_sd::Error| format!("mDNS: {error}");
     let daemon = ServiceDaemon::new().map_err(failed)?;
-    let host = format!("{HOST_LABEL}.local.");
+    let host = format!("{}.local.", television::host_label(options.device_id));
     let info = ServiceInfo::new(SERVICE_TYPE, &options.name, &host, (), port, &txt[..])
         .map_err(failed)?
         .enable_addr_auto();
@@ -240,7 +251,13 @@ fn main() -> ExitCode {
     };
     let server = Ap2Server::start_at(
         SocketAddr::new(IpAddr::V4(ip), options.port),
-        television(&options.name, options.pin, &options.code, 0),
+        television(
+            &options.name,
+            options.pin,
+            &options.code,
+            0,
+            options.device_id,
+        ),
     );
     let port = server.address.port();
     let advertised = if options.on_network {
@@ -266,6 +283,12 @@ fn main() -> ExitCode {
             options.name
         ),
     }
+    println!(
+        "{} identity: deviceid {}, mDNS host {}.local",
+        stamp(start),
+        television::device_id_text(options.device_id),
+        television::host_label(options.device_id)
+    );
     match options.pin {
         Pin::None => println!("{} pairing: transient, no PIN", stamp(start)),
         Pin::EveryTime => println!("{} pairing: PIN {} every time", stamp(start), options.code),

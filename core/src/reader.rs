@@ -322,6 +322,11 @@ pub struct Reader {
     /// Jf: how far the floor Jr is measured from moved since the reader
     /// anchored, in capture frames (S209); drift is judged at `De + Jf`.
     floor_shift: i64,
+    /// `Ws + S`: where the renderer estimates the capture is at its
+    /// callback's read time (S322); `None` for a reader without one.
+    capture: Option<i64>,
+    /// Js of the latest anchor: how far past W it landed.
+    anchor_ahead: i64,
     /// Test hook run between the copy and the post-copy check.
     #[cfg(test)]
     before_check: Option<Box<dyn FnMut() + Send>>,
@@ -358,6 +363,8 @@ impl Reader {
             lead: 0,
             late: 0,
             floor_shift: 0,
+            capture: None,
+            anchor_ahead: 0,
             #[cfg(test)]
             before_check: None,
         }
@@ -393,7 +400,7 @@ impl Reader {
     /// Sets Jf, how far the floor of the renderer's lateness moved since
     /// the reader's latest anchor, in capture frames (S209). Only the drift
     /// judgement uses it: a read judges its error `e = (W - P) - (De + Jf)`
-    /// against the dead band, and anchors at `W - De` as before. Called by
+    /// against the dead band, and anchors at `W + Js - De` (S322). Called by
     /// the renderer that owns the reader, on its thread.
     pub fn set_floor_shift_frames(&mut self, frames: i64) {
         self.floor_shift = frames;
@@ -402,6 +409,21 @@ impl Reader {
     /// Jf, as last set.
     pub fn floor_shift_frames(&self) -> i64 {
         self.floor_shift
+    }
+
+    /// Sets `Ws + S`, where the capture is estimated to be at the time the
+    /// renderer's callback reads at (S322), or `None` without a usable
+    /// stamp. Each read anchors at `W + Js - De` with
+    /// `Js = max(0, Ws + S - W)` against its own W, so a block written
+    /// between two reads of one callback is counted once. Called by the
+    /// renderer that owns the reader, on its thread.
+    pub fn set_capture_frames(&mut self, frames: Option<i64>) {
+        self.capture = frames;
+    }
+
+    /// Js of the latest anchor, in capture frames.
+    pub fn anchor_ahead_frames(&self) -> i64 {
+        self.anchor_ahead
     }
 
     /// The frames the next read can go on with (S206): `W - P`, with W
@@ -624,7 +646,9 @@ impl Reader {
             (w - p) - de
         };
         if correction != Correction::None {
-            self.next = w - de;
+            let ahead = self.capture.map_or(0, |capture| (capture - w).max(0));
+            self.anchor_ahead = ahead;
+            self.next = w + ahead - de;
             self.anchored = true;
             self.reanchor = false;
         }
@@ -2070,6 +2094,35 @@ mod tests {
         assert_eq!(counters.drift_skip_frames, block.report.error as u64);
         // Settled readers sit one block ahead until the writer's next block.
         assert_eq!(block.report.error, (3 << 16) - N as i64);
+    }
+
+    // covers: S44, S322
+    #[test]
+    fn an_anchor_lands_at_the_estimated_capture_and_counts_a_block_once() {
+        let ring = ring(1 << 16);
+        let mut cap = Capture::new(&ring);
+        cap.write(10_240);
+        let mut out = Output::new(&ring);
+        // Primes 300 frames past W: where the capture is by now.
+        out.reader.set_capture_frames(Some(10_540));
+        let b = out.read(N, 4096);
+        assert_eq!(b.report.correction, Correction::Prime);
+        assert_eq!(b.report.start, 10_540 - 4096);
+        assert_eq!(out.reader.anchor_ahead_frames(), 300);
+        // A block written after the estimate, before a read of the same
+        // callback that anchors: W is past the estimate, so Js is 0.
+        cap.write(N);
+        out.reader.control().request_resync();
+        let b = out.read(N, 4096);
+        assert_eq!(b.report.correction, Correction::Resync);
+        assert_eq!(b.report.start, 10_240 + N as i64 - 4096);
+        assert_eq!(out.reader.anchor_ahead_frames(), 0);
+        // Without an estimate, at W - De as before.
+        out.reader.set_capture_frames(None);
+        cap.write(N);
+        out.reader.control().request_resync();
+        let b = out.read(N, 4096);
+        assert_eq!(b.report.start, 10_240 + 2 * N as i64 - 4096);
     }
 
     // covers: S44, S55, S158
