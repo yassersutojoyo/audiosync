@@ -2479,6 +2479,111 @@ mod tests {
         true
     }
 
+    // A plays on a PTP service bound over IPv6. B speaks both, has no IPv6
+    // address and remembers PTP, and only the preference sends it to
+    // AirPlay 2: AirPlay 1 plays it instead of a wait for PTP (P214).
+    #[test]
+    fn a_dual_speaker_only_the_preference_sends_to_airplay2_plays_airplay1_rather_than_wait_for_ptp()
+     {
+        for _ in 0..5 {
+            if dual_speaker_beside_a_ptp_service_elsewhere() {
+                return;
+            }
+        }
+        panic!("another socket took a picked PTP port on every pick");
+    }
+
+    fn dual_speaker_beside_a_ptp_service_elsewhere() -> bool {
+        use crate::discovery::{DeviceId, ScopedAddr, ServiceKind, ServiceRecord};
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, UdpSocket};
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let v6 = IpAddr::V6(Ipv6Addr::LOCALHOST);
+        let bind_ip = crate::ptp::service_bind_ip(v6);
+        let free = || {
+            let [event, general] = [(); 2].map(|()| {
+                UdpSocket::bind((bind_ip, 0))
+                    .and_then(|socket| Ok((socket.local_addr()?.port(), socket)))
+                    .expect("a free port")
+            });
+            crate::ptp::PtpPorts {
+                event: event.0,
+                general: general.0,
+            }
+        };
+        let (local, remote) = (free(), free());
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency)
+            .with_airplay2(true, true, Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]))
+            .with_ptp_ports(local, remote);
+        let listener_v6 = TcpListener::bind((v6, 0)).expect("a listener");
+        let listener_v4 = TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let record = |kind: ServiceKind, n: u8, address: IpAddr, port: u16, txt: Vec<String>| {
+            ServiceRecord {
+                kind,
+                instance: format!("Speaker {n}"),
+                host: format!("speaker-{n}.local"),
+                port,
+                txt: txt.into_iter().map(String::into_bytes).collect(),
+                addresses: vec![ScopedAddr::new(address)],
+            }
+        };
+        // Features bits 38, 41 (PTP) and 48 (P16, P157).
+        let airplay_txt = |id: DeviceId| {
+            vec![
+                "features=0x0,0x10240".to_owned(),
+                "flags=0x4".to_owned(),
+                "model=Speaker1,1".to_owned(),
+                format!("deviceid={id}"),
+            ]
+        };
+        let a_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 1]);
+        let a_port = listener_v6.local_addr().expect("an address").port();
+        let a_record = record(ServiceKind::AirPlay, 1, v6, a_port, airplay_txt(a_id));
+        let a = Device::from_records(DeviceKey::Id(a_id), None, Some(&a_record)).expect("A");
+        let b_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 2]);
+        let v4 = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let b_port = listener_v4.local_addr().expect("an address").port();
+        let raop_txt = [
+            "txtvers=1",
+            "ch=2",
+            "cn=0",
+            "et=0",
+            "sr=44100",
+            "ss=16",
+            "tp=UDP",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let b_raop = record(ServiceKind::Raop, 2, v4, b_port, raop_txt);
+        let b_airplay = record(ServiceKind::AirPlay, 2, v4, b_port, airplay_txt(b_id));
+        let b =
+            Device::from_records(DeviceKey::Id(b_id), Some(&b_raop), Some(&b_airplay)).expect("B");
+        assert_eq!(b.choose_path(true, None), Ok(ProtocolPath::AirPlay1));
+        let (a_key, b_key) = (a.key.clone(), b.key.clone());
+        let counters = || Arc::new(SpeakerCounters::default());
+        driver.add_speaker(a, SpeakerOptions::new(Volume::Db(-20.0)), counters(), now);
+        if driver.ptp_unavailable_told {
+            return false;
+        }
+        assert!(driver.ptp.is_some(), "the service is bound over IPv6");
+        assert!(
+            matches!(&driver.speakers[&a_key].phase, Phase::Ap2(active) if active.may_take_ptp())
+        );
+        let mut options = SpeakerOptions::new(Volume::Db(-20.0));
+        options.timing = Some(super::super::TimingMemory::of(&b, crate::ap2::Timing::Ptp));
+        driver.add_speaker(b, options, counters(), now);
+        let b = &driver.speakers[&b_key];
+        assert!(!b.ptp_waiting, "B waits for PTP");
+        assert!(matches!(b.phase, Phase::Active(_)), "B is not on AirPlay 1");
+        drop((listener_v6, listener_v4));
+        true
+    }
+
     /// A verifier without keys, for driving a session by hand.
     struct OpenVerifier;
 
