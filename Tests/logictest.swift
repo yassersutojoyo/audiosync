@@ -8954,7 +8954,7 @@ do {
     let copy = copies().first.map { folder.appendingPathComponent($0) }
     let mode = copy.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.posixPermissions] as? Int }
     check(copies().count == 1 && copy.flatMap { try? Data(contentsOf: $0) } == damaged
-            && kept??.lastPathComponent == copy?.lastPathComponent && mode == 0o600
+            && kept?.lastPathComponent == copy?.lastPathComponent && mode == 0o600
             && CastMemoryStore(url: url).json == "{}",
           "cast memory: a file that doesn't read is kept aside, whole and owner-only, before it is saved over",
           "\(copies()) mode \(mode.map { String($0, radix: 8) } ?? "nil")")
