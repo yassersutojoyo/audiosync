@@ -651,6 +651,24 @@ impl Device {
         }
     }
 
+    /// The protocol path with the sender's AirPlay 2 preference (P214):
+    /// while the path is on and the preference holds, an AirPlay 2 capable
+    /// device with its `_airplay._tcp` service in view goes to AirPlay 2.
+    /// Otherwise it is [`Device::choose_path_paired`].
+    pub fn choose_path_preferring(
+        &self,
+        airplay2_enabled: bool,
+        airplay2_preferred: bool,
+        airplay1_outcome: Option<ErrorKind>,
+        homekit_paired: bool,
+    ) -> Result<ProtocolPath, UnsupportedReason> {
+        if airplay2_enabled && airplay2_preferred && self.verdict.airplay2 && self.airplay.is_some()
+        {
+            return Ok(ProtocolPath::AirPlay2);
+        }
+        self.choose_path_paired(airplay2_enabled, airplay1_outcome, homekit_paired)
+    }
+
     /// Whether an AirPlay 1 session may start (P46, P139): an unsupported
     /// device is reported without connecting. For an Apple TV that needs
     /// the legacy pairing and has no stored credentials it answers
@@ -741,6 +759,10 @@ pub struct Directory {
     services: BTreeMap<(ServiceKind, String), (DeviceKey, ServiceRecord)>,
     devices: BTreeMap<DeviceKey, Device>,
     pcm_refused: BTreeSet<DeviceKey>,
+    /// Every device a record was resolved for in this run, and those with a
+    /// RAOP record among them (P215).
+    seen: BTreeSet<DeviceKey>,
+    raop_seen: BTreeSet<DeviceKey>,
 }
 
 impl Directory {
@@ -756,6 +778,10 @@ impl Directory {
         match event {
             BrowseEvent::Resolved(record) => {
                 let key = record.device_key();
+                if record.kind == ServiceKind::Raop {
+                    self.raop_seen.insert(key.clone());
+                }
+                self.seen.insert(key.clone());
                 let id = (record.kind, record.instance.clone());
                 let mut affected = vec![key.clone()];
                 if let Some((old_key, _)) = self.services.remove(&id)
@@ -808,6 +834,17 @@ impl Directory {
 
     pub fn devices(&self) -> impl Iterator<Item = &Device> {
         self.devices.values()
+    }
+
+    /// Whether a record of the device was resolved in this run (P215).
+    pub fn seen(&self, key: &DeviceKey) -> bool {
+        self.seen.contains(key)
+    }
+
+    /// Whether a RAOP record of the device was resolved in this run, so a
+    /// missing one has lapsed rather than never existed (P215).
+    pub fn raop_seen(&self, key: &DeviceKey) -> bool {
+        self.raop_seen.contains(key)
     }
 
     /// Remembers that the device refused a PCM ANNOUNCE, so later sessions

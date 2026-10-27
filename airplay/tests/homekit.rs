@@ -160,11 +160,11 @@ fn the_pairing_is_chosen_from_credentials_then_status_flags() {
     assert_eq!(status_flags(Some(0x80), Some(0x8)), 0x80);
     assert_eq!(status_flags(None, Some(0x8)), 0x8);
     assert_eq!(status_flags(None, None), 0);
-    // Bit 3 asks for a code every time, stored credentials or not; they
-    // win over every other flag. The two values come from one TV set to
-    // ask every time (0x4c) and only the first time (0x244).
-    assert_eq!(choose_mode(0x8 | 0x80 | 0x200, Stored::Kept), Mode::Pin);
-    assert_eq!(choose_mode(0x4c, Stored::Kept), Mode::Pin);
+    // Bit 3 asks for a code every time, but arrives unproven: stored
+    // credentials not turned down verify first. The two values come from
+    // one TV set to ask every time (0x4c) and only the first time (0x244).
+    assert_eq!(choose_mode(0x8 | 0x80 | 0x200, Stored::Kept), Mode::Verify);
+    assert_eq!(choose_mode(0x4c, Stored::Kept), Mode::Verify);
     assert_eq!(choose_mode(0x80 | 0x200, Stored::Kept), Mode::Verify);
     assert_eq!(choose_mode(0x244, Stored::Kept), Mode::Verify);
     assert!(homekit::asks_code_every_time(0x4c));
@@ -180,6 +180,7 @@ fn the_pairing_is_chosen_from_credentials_then_status_flags() {
     assert_eq!(choose_mode(0x244, Stored::TurnedDown), Mode::Verify);
     assert_eq!(choose_mode(0x4, Stored::TurnedDown), Mode::Verify);
     assert_eq!(choose_mode(0x4c, Stored::TurnedDown), Mode::Pin);
+    assert_eq!(choose_mode(0x8 | 0x80, Stored::TurnedDown), Mode::Pin);
     // A PIN pairing waits for the host; a password pairing for the password.
     assert_eq!(
         check_mode(Mode::Pin, false, true),

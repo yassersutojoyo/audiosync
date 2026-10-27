@@ -706,6 +706,29 @@ mod tests {
             .expect("the call returns within the time it is given")
     }
 
+    /// Reads this PC's default output through its volume control and checks
+    /// the result against the double-audio snapshot, which reads the same
+    /// two values. CI runners have no audio endpoint, so it is opt-in; on a
+    /// PC run `cargo test -- --ignored --exact
+    /// audio::wasapi::volume::tests::reads_the_default_outputs_volume_and_mute`.
+    // covers: S194
+    #[test]
+    #[ignore = "reads this PC's default output; CI runners have none"]
+    fn reads_the_default_outputs_volume_and_mute() {
+        let _apartment = Apartment::enter().expect("COM initializes");
+        let snapshot = super::super::routing::endpoint_audio().expect("the outputs are listed");
+        let default = snapshot
+            .iter()
+            .find(|endpoint| endpoint.is_default)
+            .expect("this PC has a default output");
+        let enumerator = super::super::devices::enumerator().expect("an enumerator");
+        let read = Windows(enumerator)
+            .read(&default.id)
+            .expect("the default output's volume control can be read");
+        assert!((0.0..=1.0).contains(&read.level), "{read:?}");
+        assert_eq!(Some(read), default.volume);
+    }
+
     #[test]
     fn a_volume_listener_that_doesnt_answer_in_time_is_given_up_and_its_late_registration_undone() {
         static STUCK: StuckThreads = StuckThreads::new();

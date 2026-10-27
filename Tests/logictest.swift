@@ -2292,15 +2292,25 @@ do {
           "P169 native airplay: the waiting notice reads as on Windows")
     let lets = "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
     let stops = "AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
-    check(UIStrings().airPlay2Note(on: false, onAtLaunch: true) == stops
-            && UIStrings().airPlay2Note(on: true, onAtLaunch: true) == lets
-            && UIStrings().airPlay2Note(on: true, onAtLaunch: false) == lets
-            && UIStrings().airPlay2Note(on: false, onAtLaunch: false) == lets,
+    check(UIStrings(airPlay2Auto: false).airPlay2Note(on: false, onAtLaunch: true) == stops
+            && UIStrings(airPlay2Auto: false).airPlay2Note(on: true, onAtLaunch: true) == lets
+            && UIStrings(airPlay2Auto: false).airPlay2Note(on: true, onAtLaunch: false) == lets
+            && UIStrings(airPlay2Auto: false).airPlay2Note(on: false, onAtLaunch: false) == lets,
           "AirPlay 2 switch: its note says AirPlay 2 stops only once turned off from a launch that runs it, as on Windows")
+    let preferring = UIStrings(airPlay2Auto: true)
+    check(preferring.airPlay2Toggle == "Prefer AirPlay 2"
+            && UIStrings(airPlay2Auto: false).airPlay2Toggle == "AirPlay 2 (Experimental)"
+            && preferring.airPlay2Note(on: true, onAtLaunch: false)
+                == "Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync."
+            && preferring.airPlay2Note(on: false, onAtLaunch: true)
+                == "Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
+            && preferring.helpText.contains("unless 'Prefer AirPlay 2'")
+            && !preferring.helpText.contains("(Experimental)"),
+          "S313 AirPlay 2 switch: under the AirPlay 2 flag it reads Prefer AirPlay 2, in its note and the Guide too")
     // The menu classes are main-actor bound; top-level code runs on the main thread.
     MainActor.assumeIsolated {
         let noteMenu = NSMenu()
-        MenuNoteItem.airPlay2Items(text: UIStrings(), on: true, onAtLaunch: true,
+        MenuNoteItem.airPlay2Items(text: UIStrings(airPlay2Auto: false), on: true, onAtLaunch: true,
                                    action: #selector(NSApplication.terminate(_:))).forEach(noteMenu.addItem)
         let noteRow = noteMenu.items.last as? MenuNoteItem
         check(noteMenu.items.count == 2 && noteMenu.items[0].title == "AirPlay 2 (Experimental)"
@@ -2343,8 +2353,8 @@ do {
         check(firstTarget == nil, "Gear menu: the next menu that opens releases the one before it")
     }
     check(UIStrings().nativeAirPlayWaitingTitle(name: "Loft") == "Loft waiting"
-            && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true, target: nil) == "Waiting for the other AirPlay 2 speaker"
-            && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, target: nil) == nil,
+            && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true, unannounced: false, target: nil) == "Waiting for the other AirPlay 2 speaker"
+            && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, unannounced: false, target: nil) == nil,
           "P169 native airplay: the notice's title and the row's note, as on Windows")
     var impostor = NativeAirPlayModel()
     impostor.added("A9")
@@ -2706,6 +2716,9 @@ do {
     check(NativeSpeakerEvent.state(id: "A1", .retrying, retryMs: 2500).logLine(name: names)
             == "[AudioSync] native AirPlay: Kitchen (A1): retrying, trying again in 2.5 s",
           "native airplay: a retrying state's log line")
+    check(NativeSpeakerEvent.state(id: "A1", .unannounced, retryMs: nil).logLine(name: names)
+            == "[AudioSync] native AirPlay: Kitchen (A1): unannounced, waiting until it is announced again",
+          "P215 native airplay: an unannounced state's log line, as on Windows")
     check(NativeSpeakerEvent.error(id: "Z9", .notResponding, retryMs: nil, detail: "Unreachable").logLine(name: names)
             == "[AudioSync] native AirPlay: Z9 error: not responding (Unreachable); it needs the user",
           "native airplay: an error's log line")
@@ -3007,6 +3020,7 @@ do {
     // without beginNativeAttempts, and the sender starts no PIN pairing by
     // itself (the every-time tests in airplay/tests/ap2_driver.rs), so a
     // session is the only way to one.
+    // Copied from AppDelegate: when that order changes, change it here too.
     struct App {
         var model = NativeAirPlayModel()
         var everyTime = EveryTimeGuard()
@@ -3144,16 +3158,16 @@ do {
     check(row == AirPlayTargetRow(kind: .stereoPair, members: ["Left", "Right"], missing: [], incomplete: false)
             && model.targetRow("K3") == nil,
           "P176 native airplay: the pair's row knows its kind and members; a speaker's row has none")
-    check(t.rowNote(cast: nil, waitingForAirPlay2: false, target: row) == "Stereo pair: Left and Right"
+    check(t.rowNote(cast: nil, waitingForAirPlay2: false, unannounced: false, target: row) == "Stereo pair: Left and Right"
             && t.airPlayTargetNote(AirPlayTargetRow(kind: .homeTheater, members: ["Left", "Right", "Sub"], missing: [],
                                                     incomplete: false)) == "Home theater group: Left, Right and Sub"
             && t.airPlayTargetNote(AirPlayTargetRow(kind: .stereoPair, members: [], missing: [], incomplete: false))
                 == "Stereo pair",
           "P176 native airplay: the row names the kind and its members, as a Cast group's row does")
-    let note = t.rowNote(cast: nil, waitingForAirPlay2: false, target: row) ?? ""
+    let note = t.rowNote(cast: nil, waitingForAirPlay2: false, unannounced: false, target: row) ?? ""
     check(t.rowHint(SpeakerState(enabled: false, streaming: false), note: note).hasPrefix(note),
           "P176 native airplay: VoiceOver reads the pair's note in the row's hint")
-    check(t.rowNote(cast: nil, waitingForAirPlay2: true, target: row) == t.waitingForAirPlay2,
+    check(t.rowNote(cast: nil, waitingForAirPlay2: true, unannounced: false, target: row) == t.waitingForAirPlay2,
           "P169 native airplay: a target waiting for the AirPlay 2 slot says so first")
 
     let on: Set<String> = [app(pair), app(left)]
@@ -3210,6 +3224,31 @@ do {
     check(playing.holdingTarget(left, on: false) == nil && playing.rows(enabled: []).contains(app(left))
             && !playing.rows(enabled: []).contains(app(pair)),
           "P176 native airplay: switched off, the gone pair's row goes and its members are speakers again")
+
+    check(NativeSpeakerEvent.State(code: ASC_AIRPLAY_STATE_CONNECTING) == .connecting
+            && NativeSpeakerEvent.State(code: ASC_AIRPLAY_STATE_PLAYING) == .playing
+            && NativeSpeakerEvent.State(code: ASC_AIRPLAY_STATE_RETRYING) == .retrying
+            && NativeSpeakerEvent.State(code: ASC_AIRPLAY_STATE_FAILED) == .failed
+            && NativeSpeakerEvent.State(code: ASC_AIRPLAY_STATE_STOPPED) == .stopped
+            && NativeSpeakerEvent.State(code: ASC_AIRPLAY_STATE_UNANNOUNCED) == .unannounced
+            && NativeSpeakerEvent.State(code: 99) == nil,
+          "P215 native airplay: every sender state code has its state, Unannounced included; an unknown one has none")
+    var lapsed = listedPair()
+    lapsed.added(pair)
+    _ = lapsed.apply(.state(id: pair, .playing, retryMs: nil))
+    check(lapsed.apply(.state(id: pair, .unannounced, retryMs: nil)) == .playingChanged(app(pair), playing: false)
+            && lapsed.isUnannounced(pair) && lapsed.rows(enabled: [app(pair)]).contains(app(pair)),
+          "P215 native airplay: a playing pair whose members lapse stops, keeps its row and reads as off the network")
+    check(lapsed.apply(.state(id: pair, .connecting, retryMs: nil)) == .unannouncedChanged(app(pair))
+            && !lapsed.isUnannounced(pair)
+            && lapsed.apply(.state(id: pair, .unannounced, retryMs: nil)) == .unannouncedChanged(app(pair))
+            && lapsed.apply(.state(id: pair, .unannounced, retryMs: nil)) == nil,
+          "P215 native airplay: going off the network or coming back without playing refreshes the row once")
+    let away = t.rowNote(cast: nil, waitingForAirPlay2: false, unannounced: true, target: row)
+    check(away == "Not on the network right now, plays once it's back" && away == t.notOnNetwork
+            && t.rowHint(SpeakerState(enabled: true, streaming: true), note: away).hasPrefix(t.notOnNetwork)
+            && t.rowNote(cast: nil, waitingForAirPlay2: true, unannounced: true, target: row) == t.waitingForAirPlay2,
+          "P215 native airplay: an unannounced row says it is off the network, also to VoiceOver; the AirPlay 2 wait says so first")
 
     var missing = listedPair()
     missing.apply(.gone(id: right, name: "Right"))
@@ -8721,6 +8760,27 @@ do {
     _ = plainStart.begin(origin: .user)
     plainStart.supersedeSwitch()
     check(plainStart.answer() == .user, "microphone: a later pick leaves a plain start's answer alone")
+    // covers: S141 (a pick that goes back to the old source answers the switch waiting on the prompt)
+    var repick = MicrophoneRequestGate()
+    _ = repick.begin(origin: .user, switching: toInput)
+    repick.repicked(source: .system, pair: 0)
+    let repickedSwitch = repick.switching
+    check(repickedSwitch == nil && repick.answer() == nil,
+          "microphone: picking the source that plays again drops the switch waiting on the prompt (S141)",
+          "\(String(describing: repickedSwitch))")
+    var repickPair = MicrophoneRequestGate()
+    _ = repickPair.begin(origin: .user, switching: .inputPair(uid: "a", from: 0, to: 1))
+    repickPair.repicked(source: .input(uid: "a"), pair: 0)
+    check(repickPair.switching == nil && repickPair.answer() == nil,
+          "microphone: picking the channel pair that plays again drops the pair switch waiting on the prompt (S141)")
+    var otherPick = MicrophoneRequestGate()
+    _ = otherPick.begin(origin: .user, switching: toInput)
+    otherPick.repicked(source: .input(uid: "b"), pair: 0)
+    var plainRepick = MicrophoneRequestGate()
+    _ = plainRepick.begin(origin: .user)
+    plainRepick.repicked(source: .system, pair: 0)
+    check(otherPick.switching == toInput && plainRepick.answer() == .user,
+          "microphone: a pick of a capture the switch doesn't leave, or with no switch waiting, changes nothing")
 }
 
 // MARK: Late output callbacks in the debug log (LateCallbackLog, LogRateLimiter in OutputRenderer.swift)

@@ -579,6 +579,7 @@ mod tests {
     use audiosync_core::policy::zones::Zone;
     use audiosync_remote::{SpeakerChange, ZoneChange};
 
+    // covers: S288
     #[test]
     fn the_debug_switch_starts_the_remote_only_with_the_debug_log() {
         use std::ffi::OsStr;

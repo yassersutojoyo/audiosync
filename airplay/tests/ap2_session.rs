@@ -1124,3 +1124,33 @@ fn a_pair_setup_step_that_never_comes_back_fails_the_session() {
         rig.keys()
     );
 }
+
+// covers: P217
+#[test]
+fn a_refused_remembered_ptp_runs_the_ntp_first_order_once() {
+    let mut fake = ptp_fake();
+    fake.status.insert("SETUP session".to_owned(), 501);
+    let mut config = ap2_config();
+    config.ptp = Some(ptp_peer());
+    config.timing = Timing::Ptp;
+    let rig = Ap2Rig::new(config, fake);
+    assert_eq!(
+        kind(&rig),
+        Some(ErrorKind::Unsupported(UnsupportedReason::Timing))
+    );
+    assert_eq!(rig.connects.len(), 3);
+    assert!(rig.events.contains(&Ap2Event::TimingRefused));
+    let timings: Vec<Option<Value>> = rig
+        .fake
+        .requests
+        .iter()
+        .filter(|(request, _)| request_key(request) == "SETUP session")
+        .map(|(request, _)| {
+            read_dict(&request.body).and_then(|body| body.get("timingProtocol").cloned())
+        })
+        .collect();
+    assert_eq!(
+        timings,
+        [Some(text("PTP")), Some(text("NTP")), Some(text("PTP"))]
+    );
+}
