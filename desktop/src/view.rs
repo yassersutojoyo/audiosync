@@ -168,9 +168,12 @@ struct TypedDelay {
 }
 
 impl TypedDelay {
-    /// Keeps what the field takes of `text` (`ui_model::delay_field_text`).
+    /// Keeps `text` if the field takes it (`ui_model::delay_field_text`);
+    /// otherwise the field goes back to what it showed before.
     fn edit(&mut self, text: &str, shown: Option<f64>) {
-        self.draft = Some((ui_model::delay_field_text(text), shown));
+        if let Some(text) = ui_model::delay_field_text(text) {
+            self.draft = Some((text.to_string(), shown));
+        }
     }
 
     /// The text the field shows instead of `shown`, the applied value.
@@ -5752,7 +5755,7 @@ mod tests {
         assert!(!pending(), "Escape clears it");
 
         app.main
-            .invoke_delay_edited("local:desk".into(), "abc".into());
+            .invoke_delay_edited("local:desk".into(), "+".into());
         assert!(pending(), "unreadable text is a draft");
         app.main.invoke_delay_committed("local:desk".into());
         assert!(!pending(), "Enter on unreadable text restores the value");
@@ -5799,7 +5802,7 @@ mod tests {
 
         // Unreadable text reverts to the saved value.
         app.main
-            .invoke_delay_edited("local:desk".into(), "abc".into());
+            .invoke_delay_edited("local:desk".into(), "+".into());
         app.main.invoke_delay_committed("local:desk".into());
         assert_eq!(applied(), Some(220.0));
         assert_eq!(desk_delay_text(&app), "+220", "unreadable text reverts");
@@ -6496,7 +6499,12 @@ mod tests {
         let app = app_over(MockBackend::new());
         app.main.invoke_sync_toggled("local:desk".into());
         app.main
-            .invoke_delay_edited("local:desk".into(), "1a2".into());
+            .invoke_delay_edited("local:desk".into(), "1".into());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "1a".into());
+        assert_eq!(desk_delay_text(&app), "1", "the letter is refused");
+        app.main
+            .invoke_delay_edited("local:desk".into(), "12".into());
         assert_eq!(desk_delay_text(&app), "12", "the letter was dropped");
         assert_eq!(desk_row(&app).delay_range_hint, "");
 
@@ -7852,6 +7860,31 @@ mod tests {
             assert_eq!(desk_delay_text(&app), "+120", "{typed:?}: the stored value");
             assert!(!desk_row(&app).delay_pending, "{typed:?} leaves no draft");
         }
+    }
+
+    // covers: S181 (other input is ignored and the stored value shows again)
+    #[test]
+    fn a_paste_holding_anything_but_a_signed_whole_number_is_blocked_whole() {
+        let app = app_over(MockBackend::new());
+        app.main.invoke_sync_toggled("local:desk".into());
+        for pasted in ["1,5", "12a", "1.5", "\u{2212}2x"] {
+            app.main
+                .invoke_delay_edited("local:desk".into(), pasted.into());
+            assert_eq!(desk_delay_text(&app), "+120", "{pasted:?}: no digits kept");
+            assert!(!desk_row(&app).delay_pending, "{pasted:?} leaves no draft");
+            app.main.invoke_delay_committed("local:desk".into());
+            assert_eq!(delay_of(&app, "local:desk"), Some(120.0), "{pasted:?}");
+        }
+
+        app.main
+            .invoke_delay_edited("local:desk".into(), "3".into());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "31,5".into());
+        assert_eq!(desk_delay_text(&app), "3", "the typing before it stays");
+
+        let airplay = app.main.get_airplay_delay_text();
+        app.main.invoke_airplay_delay_edited("1,5".into());
+        assert_eq!(app.main.get_airplay_delay_text(), airplay);
     }
 
     // covers: S199 (the Windows app writes "13%" in every locale)

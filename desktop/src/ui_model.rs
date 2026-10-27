@@ -1655,17 +1655,12 @@ pub fn parse_delay_ms(text: &str) -> Option<f64> {
     parse_ms(text).map(clamp_delay_ms)
 }
 
-/// What a delay field keeps of a keystroke or a paste: digits, after one
-/// leading "+" or "−" (or hyphen-minus); anything else can't be typed.
-pub fn delay_field_text(typed: &str) -> String {
-    typed
-        .chars()
-        .enumerate()
-        .filter(|&(index, c)| {
-            c.is_ascii_digit() || (index == 0 && matches!(c, '+' | '-' | '\u{2212}'))
-        })
-        .map(|(_, c)| c)
-        .collect()
+/// The text a delay field takes from a keystroke or a paste: digits after one
+/// leading "+" or "−" (or hyphen-minus). Anything else is blocked whole, so a
+/// paste of "1,5" can't leave "15" behind.
+pub fn delay_field_text(typed: &str) -> Option<&str> {
+    let digits = typed.strip_prefix(['+', '-', '\u{2212}']).unwrap_or(typed);
+    digits.bytes().all(|b| b.is_ascii_digit()).then_some(typed)
 }
 
 /// While a test holds it, the check of a host under `.held` waits.
@@ -2685,20 +2680,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_delay_field_keeps_digits_and_one_leading_sign() {
-        for (typed, kept) in [
-            ("150", "150"),
-            ("+150", "+150"),
-            ("\u{2212}250", "\u{2212}250"),
-            ("-25", "-25"),
-            ("1a2", "12"),
-            ("15x", "15"),
-            ("1-2", "12"),
-            ("--5", "-5"),
-            ("1.5", "15"),
-            (" 7", "7"),
-        ] {
-            assert_eq!(delay_field_text(typed), kept, "{typed:?}");
+    fn a_delay_field_takes_digits_after_one_leading_sign_and_blocks_the_rest() {
+        for typed in ["", "+", "-", "150", "+150", "\u{2212}250", "-25"] {
+            assert_eq!(delay_field_text(typed), Some(typed), "{typed:?}");
+        }
+        for typed in ["1a2", "15x", "1-2", "--5", "1.5", "1,5", " 7", "\u{2212}2x"] {
+            assert_eq!(delay_field_text(typed), None, "{typed:?}");
         }
     }
 
