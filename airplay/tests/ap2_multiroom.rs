@@ -245,7 +245,7 @@ fn ap2_outranked_grandmaster_follows_the_dataset_order() {
     }
     assert!(
         warns(&mut service, &moved(&behind, VARIANCE, -1), origin),
-        "offsetScaledLogVariance read big-endian"
+        "offsetScaledLogVariance lower"
     );
 
     // With every quality field tied, the lower identity ranks first.

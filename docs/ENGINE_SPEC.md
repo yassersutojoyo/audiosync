@@ -1991,6 +1991,8 @@ Windows (`desktop/src/audio/explicit_pause.rs` unless named):
 | sound_never_pauses | S292 |
 | clearing_resumes_only_a_paused_stream | S292 |
 | only_a_session_that_plays_or_pauses_has_a_player_state (`now_playing.rs`) | S292 |
+| the_debug_log_names_what_resumed_a_pause (`airplay.rs`) | S292 |
+| the_debug_log_names_a_button_remote_capture_or_stop_resume (`airplay.rs`) | S292 |
 
 The Mac (logic suite):
 
