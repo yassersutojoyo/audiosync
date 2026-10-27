@@ -122,6 +122,18 @@ pub fn choose_mode(flags: u64, stored: Stored) -> Mode {
     }
 }
 
+/// The pairing the host asked for (P61, P219): the password pairing for
+/// flags bit 7 without bit 3 or 9, otherwise a PIN pairing, also when no
+/// PIN flag is set, as a receiver that turned a transient pairing down
+/// with 470 sets none.
+pub fn requested_mode(flags: u64) -> Mode {
+    if flags & FLAG_PASSWORD != 0 && flags & (FLAG_ONE_TIME | FLAG_PIN) == 0 {
+        Mode::Password
+    } else {
+        Mode::Pin
+    }
+}
+
 /// Whether a connection may run the chosen pairing: a PIN pairing waits
 /// for the host to ask (PairingRequired until then), and a password
 /// pairing needs the password (PasswordRequired, P135).

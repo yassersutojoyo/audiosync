@@ -14,6 +14,7 @@
 
 mod ap2;
 mod dacp;
+mod outcomes;
 mod targets;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -236,6 +237,8 @@ struct PairingRun {
     /// is dropped.
     attempt: u32,
     io: Option<RtspIo>,
+    /// A legacy pairing that may go on to the AirPlay 2 path (P220).
+    switch: Option<Box<outcomes::Switch>>,
 }
 
 /// A speaker the host added.
@@ -248,7 +251,9 @@ struct Speaker {
     /// The host removed it: forget it once its session is closed.
     removing: bool,
     /// The AirPlay 1 attempt ended in Unsupported or Refused, which sends
-    /// the speaker to the AirPlay 2 path while the switch is on (P2).
+    /// the speaker to the AirPlay 2 path while the switch is on (P2). A
+    /// target member reads only this one (P177); the device's outcome lives
+    /// in `Driver::airplay1_outcomes` (P218).
     airplay1_outcome: Option<ErrorKind>,
     /// Refused only because another AirPlay 2 session ran (P169): it starts
     /// once that session ends for good.
@@ -351,6 +356,9 @@ pub(crate) struct Driver {
     ptp_retrying: BTreeSet<DeviceKey>,
     /// The remote-control command server (P186 to P195).
     dacp: super::remote::Server,
+    /// The AirPlay 1 outcome that moved each device to the AirPlay 2 path,
+    /// for this run only (P218).
+    airplay1_outcomes: BTreeMap<DeviceKey, ErrorKind>,
 }
 
 impl Driver {
@@ -406,6 +414,7 @@ impl Driver {
             ptp_moved: BTreeMap::new(),
             ptp_retrying: BTreeSet::new(),
             dacp,
+            airplay1_outcomes: BTreeMap::new(),
         }
     }
 
@@ -785,6 +794,11 @@ impl Driver {
                 }
             }
             pairing::Output::Event(event) => {
+                if let PairingEvent::Failed { error, .. } = &event
+                    && self.switch_pairing(key, error, now)
+                {
+                    return;
+                }
                 if let PairingEvent::HomeKitPaired(credentials) = &event {
                     self.keep_homekit(key, credentials.clone());
                 }
@@ -819,6 +833,7 @@ impl Driver {
             pairing,
             attempt,
             io,
+            switch: _,
         } = run;
         let session = match pairing {
             Job::HomeKit(pairing) => pairing.into_session(),
@@ -838,7 +853,9 @@ impl Driver {
     /// Starts a pairing with a device on a connection of its own (P47), with
     /// the speaker's password when the host gave one (P46); one already
     /// running for it is dropped. With the switch on, a device on the
-    /// AirPlay 2 path gets the PIN pairing of P61 instead (P153).
+    /// AirPlay 2 path, also through an outcome remembered for it (P218),
+    /// gets the PIN pairing of P61 instead (P153, P219); a legacy pairing
+    /// of an AirPlay 2 capable device may go on to it (P220).
     fn start_pairing(&mut self, device: Device, password: Option<Secret>, now: Instant) {
         if self.stopping.is_some() {
             return;
@@ -876,10 +893,7 @@ impl Driver {
         };
         let session_key = SessionKey(self.next_session);
         self.next_session += 1;
-        let airplay1_outcome = self
-            .speakers
-            .get(&key)
-            .and_then(|speaker| speaker.airplay1_outcome);
+        let airplay1_outcome = self.airplay1_outcomes.get(&key).copied();
         let ap2 = self.airplay2
             && device.choose_path_preferring(
                 true,
@@ -887,9 +901,19 @@ impl Driver {
                 airplay1_outcome,
                 homekit_paired,
             ) == Ok(ProtocolPath::AirPlay2);
+        let switchable = self.airplay2
+            && !ap2
+            && device.choose_path(true, Some(ErrorKind::Refused)) == Ok(ProtocolPath::AirPlay2);
+        let mut switch = None;
         let pairing = if ap2 {
             Job::HomeKit(Box::new(self.pin_pairing(&device, password, ids, now)))
         } else {
+            if switchable {
+                switch = Some(Box::new(outcomes::Switch {
+                    device: device.clone(),
+                    password: password.clone(),
+                }));
+            }
             Job::Legacy(Box::new(
                 Pairing::new(
                     device.connect_socket_addrs(),
@@ -908,6 +932,7 @@ impl Driver {
                 pairing,
                 attempt: 0,
                 io: None,
+                switch,
             },
         );
     }
@@ -1086,6 +1111,7 @@ impl Driver {
         self.stream_ids.insert(id, key.clone());
         self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Playing));
         self.send_now_playing(key, now);
+        self.forget_outcome(key, "an AirPlay 1 RECORD was answered with 200");
     }
 
     /// A session failed (P133): a PCM refusal is retried with ALAC at once
@@ -1109,6 +1135,9 @@ impl Driver {
             speaker.airplay1_outcome = Some(error.kind);
         }
         let target = speaker.target.clone();
+        if path_switch {
+            self.remember_outcome(key, error.kind, "an AirPlay 1 attempt");
+        }
         // Soon after the sender's own TEARDOWN, a member that refuses or
         // asks for pairing is still letting go of the old session (P181).
         let settling = !closing
@@ -1661,7 +1690,7 @@ impl Driver {
             }
             let ap2 = self.speakers.get(key).is_some_and(|speaker| {
                 let device = &speaker.device;
-                let outcome = speaker.airplay1_outcome;
+                let outcome = self.airplay1_outcome(key, speaker);
                 let preferred =
                     device.choose_path_preferring(true, self.airplay2_preferred, outcome, false)
                         == Ok(ProtocolPath::AirPlay2);
@@ -1982,6 +2011,11 @@ impl Driver {
                         speaker.device = (*device).clone();
                     }
                     let key = device.key.clone();
+                    // A receiver that restarted or changed its settings may
+                    // answer AirPlay 1 differently when it comes back (P218).
+                    if device.raop.is_none() {
+                        self.forget_outcome(&key, "its _raop._tcp service went away");
+                    }
                     updated.insert(key.clone());
                     let mut info = Box::new(ReceiverInfo::new(*device));
                     info.target = after.get(&key).cloned();
@@ -1995,6 +2029,7 @@ impl Driver {
                     self.announced(&key, Instant::now());
                 }
                 DirectoryEvent::Removed(key) => {
+                    self.forget_outcome(&key, "its services went away");
                     if self.reported.remove(&key) {
                         self.emit(SenderEvent::Receiver(ReceiverEvent::Gone(key)));
                     }

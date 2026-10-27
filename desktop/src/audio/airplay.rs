@@ -3262,6 +3262,11 @@ impl AirPlaySpeakers {
                     command,
                 } => changed |= self.remote_command(&key, target.as_ref(), command, Instant::now()),
                 SenderEvent::RemoteLog(line) => self.log.log(|| line),
+                SenderEvent::PathLog { key, line } => {
+                    let id = speaker_id(&key);
+                    self.log
+                        .log(|| format!("AirPlay {}: {line}", self.label(&id)));
+                }
                 SenderEvent::TargetMissing { id, missing } => {
                     let id = id.to_string();
                     let missing: Vec<String> = missing.iter().map(speaker_id).collect();

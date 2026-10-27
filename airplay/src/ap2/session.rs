@@ -1884,11 +1884,9 @@ impl Ap2Session {
             (Some(_), false) => Stored::Kept,
             (Some(_), true) => Stored::TurnedDown,
         };
-        // A PIN pairing runs only when the host asks for one, and then
-        // whatever the flags say: a receiver that turned a transient pairing
-        // down with 470 sets no PIN flag (P61).
+        // A PIN pairing runs only when the host asks for one.
         let mode = if self.config.pin_pairing {
-            Mode::Pin
+            homekit::requested_mode(flags)
         } else {
             homekit::choose_mode(flags, stored)
         };
