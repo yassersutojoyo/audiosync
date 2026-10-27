@@ -1291,6 +1291,49 @@ fn a_late_second_callback_neither_corrects_drift_nor_moves_the_output_in_a_mac_c
     assert_eq!(shown, 0, "\n{}", lines.join("\n"));
 }
 
+// covers: S207
+#[test]
+fn a_windows_wake_that_comes_after_the_buffer_ran_dry_moves_no_output_and_corrects_no_drift() {
+    // A second wake 27 to 80 ms late finds the 20 ms buffer dry: the device
+    // played silence the core never hears of. Its reference took that silence
+    // in, so the output played up to 50 ms later than its on-time twin all run,
+    // or a drift correction made it up.
+    let windows: Vec<&Case> = matrix()
+        .cases_where(|c| !c.is_stall() && c.k % 4 == 1 && c.platform == Platform::Windows)
+        .into_iter()
+        .map(|(case, _)| case)
+        .collect();
+    assert!(!windows.is_empty());
+    let mut late = Vec::new();
+    let mut on_time = Vec::new();
+    for ms in [27.0, 48.0, 60.0, 80.0] {
+        for case in &windows {
+            let mut case = (*case).clone();
+            case.devices[0].second_late_ms = ms;
+            late.push(case.clone());
+            case.devices[0].second_late_ms = 0.0;
+            on_time.push(case);
+        }
+    }
+    let mut lines = Vec::new();
+    let mut shown = 0;
+    for ((case, outcome), twin) in late
+        .iter()
+        .zip(simulate_all(&late))
+        .zip(simulate_all(&on_time))
+    {
+        let late_ms = outcome.norms[0] - twin.norms[0];
+        let corrected = outcome.fails[1];
+        shown += usize::from(corrected || late_ms.abs() > ALIGN_SLACK_MS);
+        lines.push(format!(
+            "case {} second wake {:.0} ms late: {late_ms:.2} ms later than on time, drift corrected {corrected}",
+            case.k, case.devices[0].second_late_ms
+        ));
+    }
+    println!("{}", lines.join("\n"));
+    assert_eq!(shown, 0, "\n{}", lines.join("\n"));
+}
+
 // covers: S209
 #[test]
 fn two_stray_early_stamps_move_no_output_by_more_than_2_ms() {
