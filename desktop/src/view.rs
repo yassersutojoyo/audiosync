@@ -3926,21 +3926,33 @@ impl App {
     /// `room` logical pixels high, and returns that height. Windows makes it
     /// at Slint's preferred height, which counts a wrapped notice as one line
     /// and cut the buttons off. On a screen too short for it all, the zones
-    /// and speakers list gets less room and scrolls.
+    /// and speakers list gets less room and scrolls; when that is not enough,
+    /// everything between the header and the buttons scrolls.
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn fit_flyout(&self, room: f32) -> f32 {
         let flyout = &self.flyout;
-        let set_cut = |cut: f32| {
+        let set_list_cut = |cut: f32| {
             if flyout.get_list_cut() != cut {
                 flyout.set_list_cut(cut);
             }
         };
-        set_cut(0.0);
+        let set_body_cut = |cut: f32| {
+            if flyout.get_body_cut() != cut {
+                flyout.set_body_cut(cut);
+            }
+        };
+        set_list_cut(0.0);
+        set_body_cut(0.0);
         let mut height = flyout.get_fit_height();
         if height > room {
-            set_cut(height - room);
-            height = flyout.get_fit_height().min(room);
+            set_list_cut(height - room);
+            height = flyout.get_fit_height();
         }
+        if height > room {
+            set_body_cut(height - room);
+            height = flyout.get_fit_height();
+        }
+        let height = height.min(room);
         let window = flyout.window();
         let size = window.size().to_logical(window.scale_factor());
         if (size.height - height).abs() >= 0.5 {
