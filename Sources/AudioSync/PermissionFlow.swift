@@ -100,10 +100,10 @@ struct PermissionAsks: Equatable {
     }
 
     /// Whether Now Playing may script a player macOS would still ask about,
-    /// leaving the prompt to macOS (`NowPlayingMonitor.mayRaisePrompt`).
-    var mayRaiseAutomationPrompt: Bool {
-        step(.automation, state: .notAsked, userAction: false) == .go
-    }
+    /// leaving the prompt to macOS (`NowPlayingMonitor.mayRaisePrompt`). An
+    /// earlier version read the players whenever the window showed, so macOS
+    /// asked back then, as it would again on its own.
+    var mayRaiseAutomationPrompt: Bool { explained.contains(.automation) || usedBefore }
 
     mutating func hold(_ permission: Permission) { waiting.insert(permission) }
 

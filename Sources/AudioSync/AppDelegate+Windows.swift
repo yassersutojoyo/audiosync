@@ -171,7 +171,9 @@ extension AppDelegate {
     private func showPermissionOffer() {
         // The setup window asks for these itself while it is open.
         let offer = setupWindow?.isOpen == true ? nil : permissions.offer
-        if appModel.permissionOffer != offer { appModel.permissionOffer = offer }
+        guard appModel.permissionOffer != offer else { return }
+        DebugTrace.log("Permission card: \(offer?.rawValue ?? "none")")
+        appModel.permissionOffer = offer
     }
 
     // MARK: - Permission setup window
