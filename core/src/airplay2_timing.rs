@@ -6,9 +6,12 @@
 //! The entries are a cache that holds no secret. A missing, unreadable or
 //! foreign file means no entries, and each receiver's next session asks for
 //! NTP first, as P157 does without an entry; it never keeps a pairing from
-//! working. An entry that doesn't read costs only that receiver's entry. The byte form holds a magic line, a format version byte, then
-//! per receiver its ID and its entry ([`TimingMemory::to_bytes`]), each with
-//! a 16-bit little-endian length. Both hosts write it through
+//! working. An entry that doesn't read costs only that receiver's entry, and
+//! an ID read twice keeps its first entry.
+//!
+//! The byte form holds a magic line, a format version byte, then per
+//! receiver its ID and its entry ([`TimingMemory::to_bytes`]), each with a
+//! 16-bit little-endian length. Both hosts write it through
 //! [`write_atomically`]: owner-only on the Mac, unsealed with the folder's
 //! permissions on Windows.
 
@@ -150,7 +153,6 @@ fn decode(bytes: &[u8]) -> Decoded {
         let (Some(id), Some(memory)) = (id, TimingMemory::from_bytes(memory)) else {
             continue;
         };
-        // A repeated ID keeps the first entry; later ones are dropped.
         entries.entry(id.to_owned()).or_insert(memory);
     }
     Decoded::Entries(entries)
