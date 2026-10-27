@@ -176,3 +176,99 @@ fn the_verdict_passes_the_delay_difference_within_one_packet_only() {
     assert!(!verdict((&a, zero), (&onsets(&[12.5, 16.5]), half)).pass);
     assert!(!verdict((&a, zero), (&[], half)).pass);
 }
+
+/// Feeds `bytes` as a receiver whose frame f plays at `anchor + f / RATE`
+/// writes it: the first `burst` reads land at once when the last of them
+/// plays, as a receiver flushing its start buffer, and every later read
+/// `late(read index)` seconds after its last frame plays.
+fn feed_log(
+    detector: &mut Detector,
+    bytes: &[u8],
+    read: usize,
+    anchor: f64,
+    burst: usize,
+    late: impl Fn(usize) -> f64,
+) {
+    let burst_end = (burst * read).min(bytes.len()) / 4;
+    let mut sent = 0usize;
+    for (index, chunk) in bytes.chunks(read).enumerate() {
+        sent += chunk.len();
+        let arrival = if index < burst {
+            anchor + burst_end as f64 / RATE
+        } else {
+            anchor + (sent / 4) as f64 / RATE + late(index)
+        };
+        detector.push(chunk, arrival);
+    }
+    detector.finish();
+}
+
+// covers: P102
+#[test]
+fn onsets_are_timed_on_the_receivers_timeline_not_on_one_late_read() {
+    // Two receivers 500 ms apart in time and 589 frames apart in their
+    // streams; 64 KiB reads arrive 0 to 24 ms late, so a window around an
+    // onset holds one read and its lateness.
+    let shift = 589;
+    let at_a: Vec<usize> = (0..3)
+        .map(|k| 60_000 + k * CLICK_PERIOD_FRAMES as usize)
+        .collect();
+    let at_b: Vec<usize> = at_a.iter().map(|&f| f - shift).collect();
+    let anchor_a = 10.0;
+    let anchor_b = anchor_a + 0.5 + shift as f64 / RATE;
+    let mut seed = 5;
+    let a_bytes = pcm(450_000, &at_a, &the_click(), &mut seed);
+    let b_bytes = pcm(450_000, &at_b, &the_click(), &mut seed);
+    let mut a = Detector::new(DEFAULT_THRESHOLD);
+    feed_log(&mut a, &a_bytes, 64 * 1024, anchor_a, 3, |i| {
+        ((i * 7) % 5) as f64 * 0.006
+    });
+    let mut b = Detector::new(DEFAULT_THRESHOLD);
+    feed_log(&mut b, &b_bytes, 64 * 1024, anchor_b, 3, |i| {
+        ((i * 3 + 2) % 5) as f64 * 0.006
+    });
+
+    let frames: Vec<u64> = b.onsets().iter().map(|o| o.frame).collect();
+    assert_eq!(frames, at_b.iter().map(|&f| f as u64).collect::<Vec<_>>());
+    for (onset, &at) in a.onsets().iter().zip(&at_a) {
+        let truth = anchor_a + at as f64 / RATE;
+        assert!(
+            (onset.seconds - truth).abs() < 0.000_5,
+            "{onset:?} vs {truth}"
+        );
+    }
+    let judged = verdict(
+        (a.onsets(), Duration::ZERO),
+        (b.onsets(), Duration::from_millis(500)),
+    );
+    assert!(judged.pass, "{judged:?}");
+    assert_eq!(judged.pairs.len(), 3);
+    for pair in &judged.pairs {
+        assert!(pair.error_frames.abs() < 10.0, "{pair:?}");
+    }
+}
+
+fn onsets_at(frames: &[u64], times: &[f64]) -> Vec<Onset> {
+    frames
+        .iter()
+        .zip(times)
+        .map(|(&frame, &seconds)| Onset { frame, seconds })
+        .collect()
+}
+
+// covers: P102
+#[test]
+fn the_verdict_fails_streams_that_drift_apart_by_more_than_a_packet() {
+    let half = Duration::from_millis(500);
+    let a = onsets_at(&[100_000, 276_400, 452_800], &[8.0, 12.0, 16.0]);
+    let times = [8.5, 12.5, 16.5];
+
+    // One stream lost 400 frames between clicks: the times still look in step.
+    let drifted = onsets_at(&[99_411, 275_811, 451_811], &times);
+    let judged = verdict((&a, Duration::ZERO), (&drifted, half));
+    assert!(!judged.pass, "{judged:?}");
+
+    // A constant frame offset, however large, is no drift.
+    let steady = onsets_at(&[99_411, 275_811, 452_211], &times);
+    assert!(verdict((&a, Duration::ZERO), (&steady, half)).pass);
+}
