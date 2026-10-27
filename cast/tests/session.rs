@@ -72,8 +72,8 @@ fn a_tls_1_2_only_device_connects() {
     device.join();
 }
 
-// C20's ECDHE-RSA AES-GCM half; its CBC half stays pending (rustls has no CBC
-// suites to serve).
+// C20's ECDHE-RSA AES-GCM half; the fake device's rustls has no CBC suites to
+// serve, so the ClientHello test below shows the sender offers them.
 #[test]
 fn a_tls_1_2_device_with_an_rsa_key_connects_on_each_ecdhe_rsa_aes_gcm_suite() {
     use rustls::crypto::ring::cipher_suite::{
@@ -98,6 +98,60 @@ fn a_tls_1_2_device_with_an_rsa_key_connects_on_each_ecdhe_rsa_aes_gcm_suite() {
         assert_eq!(device.negotiated_suites(), vec![suite.suite()]);
         let _ = client.stop(Duration::from_secs(1));
         device.join();
+    }
+}
+
+/// The legacy version and the cipher suites of the first ClientHello sent to
+/// `listener`, read from its TLS record (RFC 5246, sections 6.2.1 and
+/// 7.4.1.2).
+fn client_hello(listener: TcpListener) -> ([u8; 2], Vec<u16>) {
+    use std::io::Read;
+    let (mut stream, _) = listener.accept().expect("accept");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("read timeout");
+    let mut header = [0u8; 5];
+    stream.read_exact(&mut header).expect("record header");
+    assert_eq!(header[0], 22, "a handshake record");
+    let mut body = vec![0u8; usize::from(u16::from_be_bytes([header[3], header[4]]))];
+    stream.read_exact(&mut body).expect("record body");
+    assert_eq!(body[0], 1, "a ClientHello");
+    // The handshake header (4 bytes), the version (2) and the random (32)
+    // come before the session ID's length byte.
+    let version = [body[4], body[5]];
+    let session_id = 4 + 2 + 32;
+    let suites = session_id + 1 + usize::from(body[session_id]);
+    let length = usize::from(u16::from_be_bytes([body[suites], body[suites + 1]]));
+    let offered = body[suites + 2..suites + 2 + length]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_be_bytes(*pair))
+        .collect();
+    (version, offered)
+}
+
+// covers: C20
+// The test above connects on each ECDHE-RSA AES-GCM suite; this one shows the
+// platform TLS stack also offers the AES-CBC-SHA suite older devices pick.
+#[test]
+fn the_client_hello_offers_tls_1_2_with_ecdhe_rsa_aes_gcm_and_aes_cbc_sha() {
+    const ECDHE_RSA_AES_128_GCM_SHA256: u16 = 0xC02F;
+    const ECDHE_RSA_AES_256_GCM_SHA384: u16 = 0xC030;
+    const ECDHE_RSA_AES_256_CBC_SHA: u16 = 0xC014;
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let address = listener.local_addr().expect("address");
+    let device = thread::spawn(move || client_hello(listener));
+    let error = CastClient::connect(&[address], RequestIds::starting_at(1)).expect_err("no answer");
+    assert!(matches!(error, ConnectError::Tls { .. }), "{error}");
+    let (version, suites) = device.join().expect("a ClientHello");
+    assert_eq!(version, [3, 3], "TLS 1.2, or 1.3 behind it");
+    for suite in [
+        ECDHE_RSA_AES_128_GCM_SHA256,
+        ECDHE_RSA_AES_256_GCM_SHA384,
+        ECDHE_RSA_AES_256_CBC_SHA,
+    ] {
+        assert!(suites.contains(&suite), "{suite:#06x} in {suites:04x?}");
     }
 }
 

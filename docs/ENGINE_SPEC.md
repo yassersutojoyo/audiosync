@@ -2056,7 +2056,7 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 
 | Test | Clauses |
 |---|---|
-| the_fake_appcast_on_loopback (CI only: WinHTTP against a plain-HTTP server on 127.0.0.1 with a redirect; the happy path downloads, verifies, unzips and swaps a stand-in exe and keeps the old one as `.bak`; a bad signature deletes the download and changes nothing; an enclosure for the other arch only offers nothing; the same version offers nothing; plain HTTP is refused outside the test) | S294, S296, S298, S299, S300, S301, S302 |
+| the_fake_appcast_on_loopback (CI only: WinHTTP against a plain-HTTP server on 127.0.0.1 with a redirect; the happy path downloads, verifies, unzips and swaps a stand-in exe that carries no `Zone.Identifier` stream and keeps the old one as `.bak`; a bad signature deletes the download and changes nothing; an enclosure for the other arch only offers nothing; the same version offers nothing; plain HTTP is refused outside the test) | S294, S296, S298, S299, S300, S301, S302, S307 |
 | only_a_release_build_on_windows_checks | S293 |
 | the_feed_is_https_only_with_its_size_and_time_limits | S294 |
 | an_appcast_with_a_doctype_is_refused_and_a_broken_item_is_skipped | S295 |
