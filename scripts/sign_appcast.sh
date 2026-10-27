@@ -11,6 +11,11 @@
 # the EdDSA private key in this Mac's login keychain (made once with Sparkle's
 # generate_keys); the key never leaves the keychain.
 #
+# It runs generate_appcast as a copy named "AudioSync Release Signing", so
+# the keychain prompt for the private key names AudioSync instead of Sparkle's
+# tool. The copy keeps Sparkle's signature; docs/DEVELOPMENT.md ("Signing")
+# says why, and why to click Allow rather than Always Allow.
+#
 # Environment:
 #   SPARKLE_BIN   the folder holding generate_appcast, when it isn't in the
 #                 Sparkle package that swift build fetched into .build/artifacts
@@ -27,7 +32,9 @@ absolute() {
   case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s\n' "$caller_dir/$1" ;; esac
 }
 
-[ $# -ge 1 ] && [ $# -le 2 ] || die "usage: scripts/sign_appcast.sh VERSION [ZIP]"
+usage="usage: scripts/sign_appcast.sh VERSION [ZIP]"
+case "${1:-}" in -h|--help) echo "$usage"; exit 0 ;; esac
+[ $# -ge 1 ] && [ $# -le 2 ] || die "$usage"
 [ "$(uname -s)" = Darwin ] || die "Sparkle's tools run on macOS only"
 version=$1
 if [ $# = 2 ]; then zip=$(absolute "$2"); else zip="$ROOT/AudioSync-$version.zip"; fi
@@ -59,9 +66,11 @@ flag=$(plutil -extract AudioSyncReleaseBuild raw -o - "$plist" 2>/dev/null) || f
 [ "$flag" = true ] \
   || die "the app in $zip isn't a release build, so it would never check for updates: build it with ./build.sh --release"
 
-mkdir "$work/archives"
+mkdir "$work/archives" "$work/bin"
 cp "$zip" "$work/archives/"
-"$tool" --download-url-prefix "$REPO_URL/releases/download/v$version/" "$work/archives"
+signer="$work/bin/AudioSync Release Signing"
+cp -p "$tool" "$signer"
+"$signer" --download-url-prefix "$REPO_URL/releases/download/v$version/" "$work/archives"
 [ -f "$work/archives/appcast.xml" ] || die "generate_appcast wrote no appcast.xml"
 grep -q 'sparkle:edSignature=' "$work/archives/appcast.xml" || die "appcast.xml carries no EdDSA signature"
 cp "$work/archives/appcast.xml" "$ROOT/appcast.xml"
