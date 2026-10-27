@@ -714,6 +714,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     func show() {
         guard !presented, let button = statusItem.button, let item = button.window else { return }
+        let events = PanelSizing.showEvents(onScreen: popover.isShown)
         quietQueue.quiet.began(.open, at: Self.uptime)
         host.sizing = host.sizing.after(.show)
         let screen = (item.screen ?? NSScreen.main)?.visibleFrame ?? item.frame
@@ -743,6 +744,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         host.view.window?.ignoresMouseEvents = false
         if !PanelSwitches.systemAnimation { animateOpen(PanelMotion.open(reduceMotion: reduceMotion)) }
+        if events.contains(.didShow) { finishOpenWhenQuiet() }
         let shown = Self.uptime
         // At once: a control draws in its accent color only in the key window.
         takeKey()
@@ -868,7 +870,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     /// The panel may still be growing in after this notice. The
     /// refresh may resize the panel.
-    func popoverDidShow(_ notification: Notification) {
+    func popoverDidShow(_ notification: Notification) { finishOpenWhenQuiet() }
+
+    private func finishOpenWhenQuiet() {
         whenQuiet("open refresh") { [weak self] in
             guard let self, self.presented else { return }
             self.finishOpen()
@@ -876,8 +880,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     private func finishOpen() {
+        // Once per open: AppKit may still send didShow after `show()` stood in for it.
+        guard host.sizing == .opening else { return }
         host.sizing = host.sizing.after(.didShow)
-        guard host.sizing.followsContent else { return }
         model.actions.refreshExternalState()
         let refreshed = Self.uptime
         DispatchQueue.main.async { [weak self] in
