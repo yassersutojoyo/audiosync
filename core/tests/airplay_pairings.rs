@@ -163,6 +163,7 @@ fn a_bad_entry_loses_only_itself_and_the_file_is_kept_aside_before_the_next_writ
         kept_aside(&base).is_empty(),
         "nothing is copied before a write"
     );
+    fs::write(&path, b"changed after the read").expect("written");
 
     store
         .insert("02005E005303", credentials("00112233445566FF", 3))
@@ -172,7 +173,11 @@ fn a_bad_entry_loses_only_itself_and_the_file_is_kept_aside_before_the_next_writ
         .expect("written");
     let kept = kept_aside(&base);
     assert_eq!(kept.len(), 1, "kept aside once: {kept:?}");
-    assert_eq!(fs::read(&kept[0]).expect("the copy"), bytes);
+    assert_eq!(
+        fs::read(&kept[0]).expect("the copy"),
+        bytes,
+        "the copy holds what was read, not what the file holds at the write"
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -182,7 +187,18 @@ fn a_bad_entry_loses_only_itself_and_the_file_is_kept_aside_before_the_next_writ
             .mode();
         assert_eq!(mode & 0o777, 0o600, "the copy is its owner's only");
     }
-    assert_eq!(PairingStore::open(path).1, Loaded::Receivers(4));
+    assert_eq!(PairingStore::open(path.clone()).1, Loaded::Receivers(4));
+
+    let unrelated = base.join("airplay-pairings.ignored-1.dat");
+    fs::write(&unrelated, b"another receiver's copy").expect("written");
+    assert!(store.remove("02005E005303").expect("written"));
+    assert_eq!(kept_aside(&base).len(), 2, "no copy holds that ID");
+    assert!(store.remove("02005E005301").expect("written"));
+    assert_eq!(
+        kept_aside(&base),
+        vec![unrelated],
+        "forgetting a receiver deletes the copies that hold its ID, and only those"
+    );
 }
 
 #[test]

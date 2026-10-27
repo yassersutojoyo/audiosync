@@ -22,7 +22,9 @@
 //! first copies the file aside, next to it as
 //! `airplay-pairings.ignored-<seconds since 1970>.dat`, owner-only, and no
 //! later copy replaces it, so nothing the file held is lost; a file that
-//! can't be read at all is replaced without a copy. A file of a
+//! can't be read at all is replaced without a copy. Forgetting a receiver
+//! also deletes every copy that holds its ID, so its secret doesn't stay
+//! behind. A file of a
 //! newer format version is ignored too but left as it is, so a newer
 //! AudioSync finds its pairings again; pairings made meanwhile last until
 //! the app quits. Every write goes to a temporary file created new, with
@@ -86,9 +88,9 @@ pub struct PairingStore {
     writable: bool,
     /// How private the file was found.
     access: Access,
-    /// The file held something that couldn't be used: the next write keeps
-    /// a copy of it first ([`keep_aside`]).
-    keep_aside: bool,
+    /// What the file held when part of it couldn't be used: the next write
+    /// keeps a copy of it first ([`keep_aside`]).
+    unusable: Option<Zeroizing<Vec<u8>>>,
     entries: BTreeMap<String, Credentials>,
 }
 
@@ -99,7 +101,7 @@ impl fmt::Debug for PairingStore {
             .field("path", &self.path)
             .field("writable", &self.writable)
             .field("access", &self.access)
-            .field("keep_aside", &self.keep_aside)
+            .field("keep_aside", &self.unusable.is_some())
             .field("receivers", &self.entries.keys().collect::<Vec<_>>())
             .finish()
     }
@@ -118,7 +120,7 @@ impl PairingStore {
             path: None,
             writable: true,
             access: Access::Private,
-            keep_aside: false,
+            unusable: None,
             entries: BTreeMap::new(),
         }
     }
@@ -127,7 +129,7 @@ impl PairingStore {
     /// file other accounts may read or write is made owner-only first; one
     /// another account owns is ignored ([`read_private`]).
     pub fn open(path: PathBuf) -> (PairingStore, Loaded) {
-        let (found, access) = read(&path);
+        let (found, access, bytes) = read(&path);
         let mut keep_aside = false;
         let (entries, writable, loaded) = match found {
             Ok(Some((entries, skipped))) => {
@@ -147,7 +149,7 @@ impl PairingStore {
             path: Some(path),
             writable,
             access,
-            keep_aside,
+            unusable: bytes.filter(|_| keep_aside),
             entries,
         };
         (store, loaded)
@@ -186,14 +188,20 @@ impl PairingStore {
         self.save()
     }
 
-    /// Forgets the receiver's credentials and writes the file. Returns
-    /// whether it was paired; when the file can't be written they are
-    /// forgotten all the same, and the error says why.
+    /// Forgets the receiver's credentials, writes the file and deletes the
+    /// copies kept aside that hold its ID. Returns whether it was paired;
+    /// when the file can't be written they are forgotten all the same, and
+    /// the error says why.
     pub fn remove(&mut self, id: &str) -> io::Result<bool> {
         if self.entries.remove(id).is_none() {
             return Ok(false);
         }
-        self.save().map(|()| true)
+        let saved = self.save();
+        let pruned = match &self.path {
+            Some(path) => prune_copies(path, id),
+            None => Ok(()),
+        };
+        saved.and(pruned).map(|()| true)
     }
 
     /// Writes every entry to the file, through a temporary file renamed over
@@ -208,9 +216,9 @@ impl PairingStore {
                 "a newer AudioSync wrote the pairings file, which is left as it is",
             ));
         }
-        if self.keep_aside {
-            keep_aside(path)?;
-            self.keep_aside = false;
+        if let Some(bytes) = &self.unusable {
+            keep_aside(path, bytes)?;
+            self.unusable = None;
         }
         if self.entries.is_empty() {
             return match fs::remove_file(path) {
@@ -232,16 +240,23 @@ enum Unreadable {
     Ignored(String),
 }
 
+/// What [`read`] found.
+type Read = (
+    Result<Option<Decoded>, Unreadable>,
+    Access,
+    Option<Zeroizing<Vec<u8>>>,
+);
+
 /// The usable entries in the file at `path` and how many were skipped,
-/// `None` without a file, and how private the file was found, also when
-/// its entries can't be used.
-fn read(path: &Path) -> (Result<Option<Decoded>, Unreadable>, Access) {
+/// `None` without a file, how private the file was found, also when its
+/// entries can't be used, and the bytes read.
+fn read(path: &Path) -> Read {
     match read_private(path) {
-        Ok(Contents::Read(bytes, access)) => (parse(&bytes).map(Some), access),
-        Ok(Contents::Missing) => (Ok(None), Access::Private),
-        Ok(Contents::Foreign(reason)) => (Err(Unreadable::Ignored(reason)), Access::Unread),
-        Ok(Contents::Failed(error, access)) => (Err(unreadable(&error)), access),
-        Err(error) => (Err(unreadable(&error)), Access::Unread),
+        Ok(Contents::Read(bytes, access)) => (parse(&bytes).map(Some), access, Some(bytes)),
+        Ok(Contents::Missing) => (Ok(None), Access::Private, None),
+        Ok(Contents::Foreign(reason)) => (Err(Unreadable::Ignored(reason)), Access::Unread, None),
+        Ok(Contents::Failed(error, access)) => (Err(unreadable(&error)), access, None),
+        Err(error) => (Err(unreadable(&error)), Access::Unread, None),
     }
 }
 
@@ -331,22 +346,24 @@ fn decode(mut rest: &[u8]) -> Option<Decoded> {
 /// How many names a copy kept aside tries within one second.
 const MAX_COPIES_PER_SECOND: u32 = 100;
 
-/// Copies the file at `path` next to it as
-/// `<stem>.ignored-<seconds since 1970>.<extension>`, with `-2`, `-3` and so
-/// on after the time when that name is taken, owner-only and flushed to
-/// disk, so the caller may then replace it. No copy is ever replaced. A
-/// missing file needs none.
-fn keep_aside(path: &Path) -> io::Result<()> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => Zeroizing::new(bytes),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
+/// The start and end of the names of the copies kept aside next to the
+/// file at `path`: `<stem>.ignored-` and `.<extension>`.
+fn copy_name_parts(path: &Path) -> (String, String) {
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
     let extension = path
         .extension()
         .map(|extension| format!(".{}", extension.to_string_lossy()))
         .unwrap_or_default();
+    (format!("{stem}.ignored-"), extension)
+}
+
+/// Keeps `bytes`, what the file at `path` held when it was read, in a new
+/// file next to it named `<stem>.ignored-<seconds since 1970>.<extension>`,
+/// with `-2`, `-3` and so on after the time when that name is taken,
+/// owner-only and flushed to disk, so the caller may then replace the file.
+/// No copy is ever replaced.
+fn keep_aside(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let (prefix, extension) = copy_name_parts(path);
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_secs());
@@ -356,12 +373,12 @@ fn keep_aside(path: &Path) -> io::Result<()> {
         } else {
             format!("-{number}")
         };
-        let copy = path.with_file_name(format!("{stem}.ignored-{seconds}{suffix}{extension}"));
+        let copy = path.with_file_name(format!("{prefix}{seconds}{suffix}{extension}"));
         let mut file = match create_private(&copy) {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
             other => other?,
         };
-        let written = file.write_all(&bytes).and_then(|()| file.sync_all());
+        let written = file.write_all(bytes).and_then(|()| file.sync_all());
         drop(file);
         if written.is_err() {
             let _ = fs::remove_file(&copy);
@@ -372,6 +389,45 @@ fn keep_aside(path: &Path) -> io::Result<()> {
         io::ErrorKind::AlreadyExists,
         "no free name for a copy of the pairings file",
     ))
+}
+
+/// Deletes the copies kept aside next to the file at `path` that hold the
+/// receiver ID `id` as the file frames it, so a forgotten receiver's secret
+/// doesn't stay behind. A copy that can't be read as its owner's is left.
+fn prune_copies(path: &Path, id: &str) -> io::Result<()> {
+    let Ok(id_len) = u16::try_from(id.len()) else {
+        return Ok(());
+    };
+    let framed = [&id_len.to_le_bytes()[..], id.as_bytes()].concat();
+    let (prefix, extension) = copy_name_parts(path);
+    let folder = match path.parent() {
+        Some(folder) if !folder.as_os_str().is_empty() => folder,
+        _ => Path::new("."),
+    };
+    let listing = match fs::read_dir(folder) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        other => other?,
+    };
+    let mut result = Ok(());
+    for found in listing {
+        let copy = found?.path();
+        let named = copy
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(&extension));
+        if !named {
+            continue;
+        }
+        let Ok(Contents::Read(bytes, _)) = read_private(&copy) else {
+            continue;
+        };
+        if bytes.windows(framed.len()).any(|window| window == framed)
+            && let Err(error) = fs::remove_file(&copy)
+        {
+            result = Err(error);
+        }
+    }
+    result
 }
 
 /// A new file, readable and writable by its owner only.
