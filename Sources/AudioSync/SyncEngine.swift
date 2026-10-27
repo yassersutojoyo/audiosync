@@ -339,7 +339,7 @@ final class StreamEngine {
         try renderer.start(on: device, captureRate: capture.sampleRate, delayMs: delayMs)
         renderers[uid] = renderer
         attachTokens.attached(uid)
-        DebugTrace.log("[AudioSync] output added:\(uid) on device \(device), delay \(delayMs) ms, gain \(gain)")
+        DebugTrace.log("[AudioSync] output added: \(uid) on device \(device), delay \(delayMs) ms, gain \(gain)")
         if DebugTrace.enabled {
             DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self, weak renderer] in
                 guard let self, let renderer, self.renderers[uid] === renderer else { return }
