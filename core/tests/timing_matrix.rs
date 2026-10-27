@@ -1291,7 +1291,7 @@ fn a_late_second_callback_neither_corrects_drift_nor_moves_the_output_in_a_mac_c
     assert_eq!(shown, 0, "\n{}", lines.join("\n"));
 }
 
-// covers: S207, S323
+// covers: S207, S324
 #[test]
 fn a_windows_wake_that_comes_after_the_buffer_ran_dry_moves_no_output_and_corrects_no_drift() {
     // A second wake 27 to 80 ms late finds the 20 ms buffer dry: the device

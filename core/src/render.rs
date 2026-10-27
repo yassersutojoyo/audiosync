@@ -686,7 +686,7 @@ impl RendererControl {
     }
 }
 
-/// A renderer's start window (S317, S323).
+/// A renderer's start window (S317, S324).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StartWindow {
     /// No timed callback, or pull endpoint's wake, yet.
@@ -890,7 +890,7 @@ pub struct Renderer {
     /// The anchor floor a start step set: the next anchor keeps it instead
     /// of applying S209's rule (S318).
     step_floor_set: bool,
-    /// A pull endpoint in its start window (S323): its first wake's time,
+    /// A pull endpoint in its start window (S324): its first wake's time,
     /// the device frames its later wakes asked for, this wake's time since
     /// the first less those frames, and that value's lowest since the
     /// reader's latest anchor, with S209's leak, in ns.
@@ -899,7 +899,7 @@ pub struct Renderer {
     pull_gap_ns: i64,
     pull_low_ns: i64,
     /// A confirmed pull start step, waiting for the fade-out and a wake
-    /// that asks for at least its period, or the one after (S323).
+    /// that asks for at least its period, or the one after (S324).
     pull_step_due: bool,
     pull_step_waited: bool,
 }
@@ -1144,7 +1144,7 @@ impl Renderer {
             (None, Some(now)) => {
                 self.warming = false;
                 // Counted as Jf, so neither the drift judgement nor S207's fill
-                // takes the silence in before the step (S323).
+                // takes the silence in before the step (S324).
                 pull_silence_ns = self.pull_silence(frames, now);
                 self.judge_pull_start(frames, pull_silence_ns);
                 pull_late = self.land_pull_step(frames);
@@ -1590,7 +1590,7 @@ impl Renderer {
 
     /// The silence a pull endpoint (a period and no output times) played
     /// unheard by the core while its start window is open, in ns, at a wake
-    /// at `now` that asks for `frames` device frames (S323): the time since
+    /// at `now` that asks for `frames` device frames (S324): the time since
     /// its first wake less the frames its later wakes asked for, above that
     /// value's lowest since the reader's latest anchor. 0 otherwise.
     fn pull_silence(&mut self, frames: usize, now: u64) -> i64 {
@@ -1616,7 +1616,7 @@ impl Renderer {
     }
 
     /// The start window at a pull endpoint's wake of `frames` device frames
-    /// that found `silence_ns` of unheard silence (S323): opens it at the
+    /// that found `silence_ns` of unheard silence (S324): opens it at the
     /// first wake, closes it as [`Renderer::judge_start`] does, and while
     /// it is open makes a start step once S321's set of those silences
     /// confirms one.
@@ -1669,7 +1669,7 @@ impl Renderer {
     }
 
     /// Makes a confirmed pull start step at a wake of `frames` device frames
-    /// once the fade-out is over (S323): the reader anchors anew at this
+    /// once the fade-out is over (S324): the reader anchors anew at this
     /// callback's first read, which skips the silence the endpoint played.
     /// Returns the capture frames this wake came late by, its frames beyond
     /// the period, for Jr; a wake that asks for less follows a late one, so
@@ -1910,7 +1910,7 @@ impl Renderer {
         }
         if report.correction != Correction::None {
             self.reader_anchored = true;
-            // A pull endpoint's silence counts from here (S323).
+            // A pull endpoint's silence counts from here (S324).
             self.pull_low_ns = self.pull_gap_ns;
             // What this callback's Jt counted from, so Jf is 0 from here; a
             // start step already set it (S318).
