@@ -122,7 +122,8 @@ def check(appcast, version, zips):
         if not enclosure.get(sparkle("edSignature")):
             problems.append(f"{label}: no sparkle:edSignature")
         url = enclosure.get("url", "")
-        if url_prefix not in url or url.endswith("/"):
+        head, _, tail = url.rpartition("/")
+        if not (head + "/").endswith(url_prefix) or not tail or any(c in tail for c in "?#"):
             problems.append(f"{label}: url {url!r} does not end in {url_prefix}<zip name>")
         length = enclosure.get("length", "")
         if not length.isdigit() or int(length) == 0:
