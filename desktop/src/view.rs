@@ -67,8 +67,6 @@ enum DialogPurpose {
     NewZone,
     /// New Zone… in a speaker's menu, by speaker ID.
     NewZoneWith(String),
-    /// Rename Zone…, by zone ID.
-    Rename(String),
     /// Only a message (no name field), e.g. why a zone can't be made yet.
     Message,
     /// Save as Preset….
@@ -79,6 +77,16 @@ enum DialogPurpose {
     SaveCurve,
     /// Rename in the equalizer, for the saved curve at this index.
     RenameCurve(usize),
+}
+
+/// Where a name is edited: a speaker's full row (in its section or under
+/// its zone), its In zones row, or a zone's header.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum RenamePlace {
+    #[default]
+    Row,
+    InZones,
+    Zone,
 }
 
 /// UI state the backend doesn't keep: which sync controls are open, what is
@@ -92,6 +100,8 @@ struct UiState {
     /// The speaker whose name is being edited in its row, and what is typed
     /// there; one at a time (spec S228).
     rename: Option<(String, String)>,
+    /// Where the open rename's field shows.
+    rename_place: RenamePlace,
     /// The open rename's field has had the focus; only then does the focus
     /// moving to another control apply the name.
     rename_focused: bool,
@@ -438,6 +448,8 @@ struct MainFocus {
     speaker: Option<(SharedString, RowPart)>,
     /// A zone header's control: the zone id and the header's part.
     zone: Option<(SharedString, RowPart)>,
+    /// An In zones row's control: the speaker id and the row's part.
+    in_zones: Option<(SharedString, RowPart)>,
     /// Another main-window control: the streaming switch, the source, the
     /// transport, the master volume, the equalizer or calibration card or
     /// the AirPlay delay.
@@ -512,6 +524,16 @@ fn first_row(new: &MainLists) -> MainFocusTarget {
 }
 
 impl MainFocus {
+    /// Whether the name field of `id` in `place` has the focus.
+    fn holds_name(&self, place: RenamePlace, id: &str) -> bool {
+        let slot = match place {
+            RenamePlace::Row => &self.speaker,
+            RenamePlace::InZones => &self.in_zones,
+            RenamePlace::Zone => &self.zone,
+        };
+        matches!(slot, Some((held, RowPart::Name)) if held.as_str() == id)
+    }
+
     /// Where the focus goes when the lists change from `old` to `new`, if a
     /// rebuilt list (its length changed, [`sync_model`]) had it.
     fn target(&self, old: &MainLists, new: &MainLists) -> Option<MainFocusTarget> {
@@ -744,6 +766,25 @@ fn apply_rename_left(app: &Weak<App>) {
         Timer::single_shot(Duration::ZERO, move || {
             with_app(&app, |app| app.end_rename_in(&id, true));
         });
+    }
+}
+
+/// Asks the row or zone header where a name is edited to take the keyboard
+/// focus on `part`.
+fn focus_row(main: &MainWindow, place: RenamePlace, id: SharedString, part: RowPart) {
+    match place {
+        RenamePlace::Row => {
+            main.set_focus_speaker_part(part);
+            main.set_focus_speaker_id(id);
+        }
+        RenamePlace::InZones => {
+            main.set_focus_in_zones_part(part);
+            main.set_focus_in_zones_id(id);
+        }
+        RenamePlace::Zone => {
+            main.set_focus_zone_part(part);
+            main.set_focus_zone_id(id);
+        }
     }
 }
 
@@ -1481,14 +1522,19 @@ impl App {
     /// Reads a snapshot and shows it in every window.
     pub fn refresh(&self) {
         // A speaker that went mid-rename takes its name along; back, it
-        // shows that name, its field closed.
+        // shows that name, its field closed. A deleted zone's field just
+        // goes.
         let gone = {
             let mut ui = self.ui.borrow_mut();
             let open = ui.rename.as_ref().map(|(id, _)| id.clone());
+            let zone = ui.rename_place == RenamePlace::Zone;
+            let snapshot = self.backend.borrow().snapshot();
             match open {
-                Some(id) if self.backend.borrow().snapshot().speaker(&id).is_none() => {
-                    ui.rename.take()
+                Some(id) if zone && !snapshot.zones.iter().any(|z| z.id == id) => {
+                    ui.rename = None;
+                    None
                 }
+                Some(id) if !zone && snapshot.speaker(&id).is_none() => ui.rename.take(),
                 _ => None,
             }
         };
@@ -1538,7 +1584,11 @@ impl App {
                 ui_model::MAX_DELAY_MS,
                 format_offset_ms,
             );
-            if let Some((_, text)) = ui.rename.as_ref().filter(|(id, _)| *id == speaker.id) {
+            if let Some((_, text)) = ui
+                .rename
+                .as_ref()
+                .filter(|(id, _)| *id == speaker.id && ui.rename_place != RenamePlace::Zone)
+            {
                 row.renaming = true;
                 row.name_text = text.as_str().into();
             }
@@ -1570,10 +1620,21 @@ impl App {
             state.split_zoned(this_pc.into_iter().filter(listed).collect());
         let (connected, connected_zoned) =
             state.split_zoned(connected.into_iter().filter(listed).collect());
-        let this_pc_zoned: Vec<SpeakerItem> =
-            this_pc_zoned.iter().map(|(s, _)| item(s, false)).collect();
-        let connected_zoned: Vec<SpeakerItem> =
-            connected_zoned.iter().map(|(s, _)| item(s, true)).collect();
+        // A zoned speaker's name field shows in the row it was asked from.
+        let in_zones = ui.rename_place == RenamePlace::InZones;
+        let compact = |s: &ui_model::Speaker, show_kind: bool| {
+            let mut row = item(s, show_kind);
+            row.renaming &= in_zones;
+            row
+        };
+        let this_pc_zoned: Vec<SpeakerItem> = this_pc_zoned
+            .iter()
+            .map(|(s, _)| compact(s, false))
+            .collect();
+        let connected_zoned: Vec<SpeakerItem> = connected_zoned
+            .iter()
+            .map(|(s, _)| compact(s, true))
+            .collect();
         let this_pc: Vec<SpeakerItem> = this_pc.into_iter().map(|s| item(s, false)).collect();
         let connected: Vec<SpeakerItem> = connected.into_iter().map(|s| item(s, true)).collect();
         let zones: Vec<ZoneRowsBuilt> = state
@@ -1594,6 +1655,7 @@ impl App {
                             built.zone_note = zone_note(&strings, note);
                             built.zone_dimmed = zone_row_dimmed(row, note);
                         }
+                        built.renaming &= !in_zones;
                         built
                     })
                     .collect();
@@ -1607,6 +1669,10 @@ impl App {
                     })
                     .collect();
                 let counts = state.zone_counts(zone);
+                let renaming = ui
+                    .rename
+                    .as_ref()
+                    .filter(|(id, _)| *id == zone.id && ui.rename_place == RenamePlace::Zone);
                 ZoneRowsBuilt {
                     item: ZoneItem {
                         id: zone.id.as_str().into(),
@@ -1619,6 +1685,10 @@ impl App {
                         volume: zone.volume as f32,
                         expanded: !ui.collapsed.contains(&zone.id),
                         can_calibrate: state.offers_zone_run(zone),
+                        renaming: renaming.is_some(),
+                        name_text: renaming
+                            .map(|(_, text)| text.as_str().into())
+                            .unwrap_or_default(),
                         ..ZoneItem::default()
                     },
                     members,
@@ -2183,7 +2253,13 @@ impl App {
         main.global::<NameField>()
             .set_double_click(crate::platform::double_click_ms());
         let w = weak.clone();
-        main.on_speaker_rename_requested(move |id| with_app(&w, |app| app.start_rename(&id)));
+        main.on_speaker_rename_requested(move |id| {
+            with_app(&w, |app| app.start_rename(&id, RenamePlace::Row))
+        });
+        let w = weak.clone();
+        main.on_speaker_in_zones_rename_requested(move |id| {
+            with_app(&w, |app| app.start_rename(&id, RenamePlace::InZones))
+        });
         let w = weak.clone();
         main.on_speaker_rename_edited(move |id, text| {
             with_app(&w, |app| app.edit_rename(&id, &text))
@@ -2291,7 +2367,15 @@ impl App {
         main.on_zone_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_zone(&id))));
         let w = weak.clone();
         main.on_zone_expanded_changed(move |id, open| {
-            with_app(&w, |app| app.set_zone_expanded(&id, open))
+            with_app(&w, |app| {
+                // A click on the header of the zone being renamed only
+                // applies the name, as on a speaker's row.
+                if app.renaming(&id, RenamePlace::Zone) {
+                    app.blank_click();
+                } else {
+                    app.set_zone_expanded(&id, open);
+                }
+            })
         });
         let w = weak.clone();
         main.on_zone_volume_changed(move |id, volume| {
@@ -2300,7 +2384,15 @@ impl App {
             })
         });
         let w = weak.clone();
-        main.on_zone_rename_requested(move |id| with_app(&w, |app| app.ask_rename_zone(&id)));
+        main.on_zone_rename_requested(move |id| {
+            with_app(&w, |app| app.start_rename(&id, RenamePlace::Zone))
+        });
+        let w = weak.clone();
+        main.on_zone_rename_edited(move |id, text| with_app(&w, |app| app.edit_rename(&id, &text)));
+        let w = weak.clone();
+        main.on_zone_rename_committed(move |id| with_app(&w, |app| app.end_rename_in(&id, true)));
+        let w = weak.clone();
+        main.on_zone_rename_cancelled(move |id| with_app(&w, |app| app.end_rename_in(&id, false)));
         let w = weak.clone();
         main.on_zone_deleted(move |id| with_app(&w, |app| app.delete_zone(&id)));
         let w = weak.clone();
@@ -2405,6 +2497,13 @@ impl App {
         main.on_zone_focus_changed(move |id, part| {
             with_app(&w, |app| {
                 note_row_focus(&mut app.main_focus.borrow_mut().zone, id, part);
+            });
+            apply_rename_left(&w);
+        });
+        let w = weak.clone();
+        main.on_in_zones_focus_changed(move |id, part| {
+            with_app(&w, |app| {
+                note_row_focus(&mut app.main_focus.borrow_mut().in_zones, id, part);
             });
             apply_rename_left(&w);
         });
@@ -3121,24 +3220,31 @@ impl App {
         }
     }
 
-    /// Rename… in a speaker's menu, or a double-click on its name: its row
-    /// shows a name field with the focus. A rename open in another row
-    /// applies first; one open in this row keeps its typing.
-    fn start_rename(&self, id: &str) {
-        let open = self
-            .ui
-            .borrow()
-            .rename
-            .as_ref()
-            .map(|(open, _)| open.clone());
-        if open.as_deref() != Some(id) {
+    /// Rename… in a speaker's menu, Rename Zone…, F2, or a double-click on a
+    /// name: that row or zone header shows a name field with the focus. A
+    /// rename open elsewhere applies first; one open in this place keeps its
+    /// typing.
+    fn start_rename(&self, id: &str, place: RenamePlace) {
+        if !self.renaming(id, place) {
             self.end_rename(true);
-            let Some(name) = self.snapshot().speaker(id).map(|s| s.name.clone()) else {
+            let state = self.snapshot();
+            let name = match place {
+                RenamePlace::Zone => state
+                    .zones
+                    .iter()
+                    .find(|z| z.id == id)
+                    .map(|z| z.name.clone()),
+                RenamePlace::Row | RenamePlace::InZones => {
+                    state.speaker(id).map(|s| s.name.clone())
+                }
+            };
+            let Some(name) = name else {
                 return;
             };
             {
                 let mut ui = self.ui.borrow_mut();
                 ui.rename = Some((id.to_owned(), name));
+                ui.rename_place = place;
                 ui.rename_focused = false;
             }
             // The field takes the focus; a control that went while it had
@@ -3152,10 +3258,15 @@ impl App {
         let id = SharedString::from(id);
         Timer::single_shot(Duration::ZERO, move || {
             if let Some(main) = main.upgrade() {
-                main.set_focus_speaker_part(RowPart::Name);
-                main.set_focus_speaker_id(id);
+                focus_row(&main, place, id, RowPart::Name);
             }
         });
+    }
+
+    /// Whether `id`'s name is being edited in `place`.
+    fn renaming(&self, id: &str, place: RenamePlace) -> bool {
+        let ui = self.ui.borrow();
+        ui.rename_place == place && matches!(&ui.rename, Some((open, _)) if open == id)
     }
 
     fn edit_rename(&self, id: &str, text: &str) {
@@ -3176,44 +3287,45 @@ impl App {
         }
     }
 
-    /// Ends the rename open in a row, if any: Enter, the field losing the
-    /// focus or a click outside it applies the name (`apply`), Escape keeps
-    /// the old one. The
-    /// keyboard focus, when it was in the field, goes to the row's toggle,
-    /// which Narrator reads with the name.
+    /// Ends the rename open in a row or zone header, if any: Enter, the
+    /// field losing the focus or a click outside it applies the name
+    /// (`apply`), Escape keeps the old one. The keyboard focus, when it was
+    /// in the field, goes to the row's or header's toggle, which Narrator
+    /// reads with the name.
     fn end_rename(&self, apply: bool) {
         let Some((id, text)) = self.ui.borrow_mut().rename.take() else {
             return;
         };
-        self.ui.borrow_mut().rename_focused = false;
-        let focused = matches!(
-            &self.main_focus.borrow().speaker,
-            Some((focused, RowPart::Name)) if focused.as_str() == id
-        );
-        if apply {
-            self.update(|b| b.rename_speaker(&id, &text));
-        } else {
-            self.refresh();
+        let place = {
+            let mut ui = self.ui.borrow_mut();
+            ui.rename_focused = false;
+            std::mem::take(&mut ui.rename_place)
+        };
+        let focused = self.main_focus.borrow().holds_name(place, &id);
+        match (apply, place) {
+            (true, RenamePlace::Zone) => self.update(|b| b.rename_zone(&id, &text)),
+            (true, _) => self.update(|b| b.rename_speaker(&id, &text)),
+            (false, _) => self.refresh(),
         }
         if focused {
-            self.main.set_focus_speaker_part(RowPart::Toggle);
-            self.main.set_focus_speaker_id(id.as_str().into());
+            focus_row(&self.main, place, id.as_str().into(), RowPart::Toggle);
         }
     }
 
-    /// The speaker whose rename to apply, once the focus has left its name
-    /// field for another control, as on the Mac. Losing the focus to another
-    /// window or a popup, which give it back, applies nothing.
+    /// The speaker or zone whose rename to apply, once the focus has left
+    /// its name field for another control, as on the Mac. Losing the focus
+    /// to another window or a popup, which give it back, applies nothing.
     fn focus_left_rename(&self) -> Option<String> {
         let mut ui = self.ui.borrow_mut();
         let id = ui.rename.as_ref()?.0.clone();
         let focus = self.main_focus.borrow();
-        if matches!(&focus.speaker, Some((held, RowPart::Name)) if *held == id) {
+        if focus.holds_name(ui.rename_place, &id) {
             ui.rename_focused = true;
             return None;
         }
         let elsewhere = focus.speaker.is_some()
             || focus.zone.is_some()
+            || focus.in_zones.is_some()
             || focus.notice.is_some()
             || focus.dismiss_all
             || focus.control.is_some();
@@ -3346,24 +3458,6 @@ impl App {
         dialog.set_name(SharedString::new());
         dialog.set_show_field(true);
         dialog.set_confirm_label(strings.get_create());
-    }
-
-    fn ask_rename_zone(&self, id: &str) {
-        let state = self.snapshot();
-        let Some(zone) = state.zones.iter().find(|z| z.id == id) else {
-            return;
-        };
-        let strings = self.strings();
-        let dialog = &self.zone_dialog;
-        *self.dialog_purpose.borrow_mut() = DialogPurpose::Rename(id.to_string());
-        dialog.set_heading(strings.get_rename_zone_title());
-        dialog.set_message(strings.invoke_rename_message(zone.name.as_str().into()));
-        dialog.set_placeholder(SharedString::new());
-        dialog.set_field_label(strings.get_new_zone_field_label());
-        dialog.set_name(zone.name.as_str().into());
-        dialog.set_show_field(true);
-        dialog.set_confirm_label(strings.get_rename());
-        self.open_dialog();
     }
 
     fn ask_save_curve(&self) {
@@ -3633,7 +3727,6 @@ impl App {
                 let name = self.new_zone_name(name);
                 self.update(|b| b.new_zone_with(&id, &name));
             }
-            DialogPurpose::Rename(id) => self.update(|b| b.rename_zone(&id, name)),
             DialogPurpose::Message => {}
             DialogPurpose::SavePreset => self.save_preset(name),
             DialogPurpose::RenamePreset(id) => self.update(|b| b.rename_preset(&id, name)),
@@ -7872,12 +7965,51 @@ mod tests {
     }
 
     #[test]
-    fn a_zone_is_renamed_from_its_menu() {
+    fn a_zone_is_renamed_from_its_menu_in_its_header_like_a_speaker() {
         let app = app_over(MockBackend::zones_preview());
+        let office = || app.models.zones.row_data(2).unwrap();
         app.main.invoke_zone_rename_requested("zone:office".into());
-        assert_eq!(app.zone_dialog.get_name(), "Office");
-        app.confirm_dialog("Study");
-        assert_eq!(app.models.zones.row_data(2).unwrap().name, "Study");
+        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        assert!(office().renaming && office().name_text == "Office");
+        slint::platform::update_timers_and_animations();
+        assert_eq!(app.main.get_focus_zone_part(), RowPart::Name);
+
+        app.main
+            .invoke_zone_rename_edited("zone:office".into(), "Study".into());
+        app.main.invoke_zone_rename_committed("zone:office".into());
+        assert_eq!(office().name, "Study");
+        assert!(!office().renaming);
+
+        app.main.invoke_zone_rename_requested("zone:office".into());
+        app.main
+            .invoke_zone_rename_edited("zone:office".into(), "Den".into());
+        app.main.invoke_zone_rename_cancelled("zone:office".into());
+        assert_eq!(office().name, "Study", "Escape keeps the name");
+
+        app.main.invoke_zone_rename_requested("zone:office".into());
+        app.main
+            .invoke_zone_rename_edited("zone:office".into(), "  ".into());
+        app.main.invoke_zone_rename_committed("zone:office".into());
+        assert_eq!(office().name, "Study", "a blank name keeps it too");
+
+        app.main.invoke_zone_rename_requested("zone:office".into());
+        app.main
+            .invoke_speaker_rename_requested("airplay:living".into());
+        assert_eq!(office().name, "Study");
+        assert!(
+            !office().renaming,
+            "a speaker's rename closes the zone's field"
+        );
+        assert!(row_of(&app, "airplay:living").renaming);
+        app.main.invoke_zone_rename_requested("zone:office".into());
+        assert!(!row_of(&app, "airplay:living").renaming, "and back");
+        assert!(office().renaming);
+
+        app.main.invoke_zone_deleted("zone:office".into());
+        assert!(
+            app.ui.borrow().rename.is_none(),
+            "a deleted zone's field goes"
+        );
     }
 
     #[test]
@@ -8572,9 +8704,7 @@ mod tests {
         eq_window.invoke_save_curve();
         app.zone_dialog.invoke_cancelled();
         let speaker = app.snapshot().speakers[0].id.clone();
-        app.update(|b| b.new_zone_with(&speaker, "Living"));
-        let zone = app.snapshot().zones[0].id.clone();
-        app.ask_rename_zone(&zone);
+        app.ask_new_zone_with(&speaker);
         assert_eq!(app.zone_dialog.get_field_label(), "Zone name");
         app.zone_dialog.invoke_cancelled();
 

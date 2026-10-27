@@ -224,6 +224,9 @@ export struct ZoneItem {
     // Calibrate Zone… can be chosen: a member is here and no calibration
     // holds the outputs.
     can-calibrate: bool,
+    // Its name is being edited in the header, with `name-text` typed so far.
+    renaming: bool,
+    name-text: string,
 }
 
 // What a notice is about, for its short name (Strings.notice-title).

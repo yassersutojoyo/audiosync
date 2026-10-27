@@ -1330,7 +1330,8 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
 }
 
 /// A zone header works like a speaker row's box: only its badge switches the
-/// zone, and a click anywhere else on the header shows or hides the speakers.
+/// zone, and a click anywhere else on the header shows or hides the speakers
+/// (on the name, once the double-click time has passed).
 #[test]
 fn only_a_zone_headers_badge_switches_the_zone() {
     let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
@@ -1346,9 +1347,13 @@ fn only_a_zone_headers_badge_switches_the_zone() {
     assert!(header[badge..].find("root.toggled();").unwrap() < 800);
     assert_eq!(
         header.matches("TouchArea {").count(),
-        2,
-        "the box and the arrow"
+        3,
+        "the box, the name and the arrow"
     );
+    let wait = header
+        .find("click-wait := Timer {")
+        .expect("the name waits for a second click");
+    assert!(header[wait..wait + 300].contains("root.expanded-changed(!root.item.expanded);"));
 }
 
 /// The flyout's zone rows follow the main window's header: only the badge
