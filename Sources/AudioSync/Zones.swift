@@ -285,8 +285,8 @@ enum ZoneLayout {
 /// What a click on each part of a zone's header does, in the main window and
 /// in the menu bar panel (which has no count line, slider or menu).
 /// Folding never switches the zone: only its round icon does, and the slider
-/// and the options menu keep their clicks to themselves. In the panel, while
-/// none of the zone's speakers is present, the greyed icon folds, as on Windows.
+/// and the options menu keep their clicks to themselves. While none of the
+/// zone's speakers is present, the greyed icon folds, as on Windows.
 enum ZoneHeaderHit {
     enum Area: CaseIterable {
         case chevron, name, count, blank, zoneIcon, slider, menu

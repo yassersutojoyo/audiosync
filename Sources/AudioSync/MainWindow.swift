@@ -610,6 +610,8 @@ private struct ZoneCard: View {
 
     private var state: SpeakerState { model.state(of: zone) }
     private var expanded: Bool { disclosure.isExpanded(zone.id) }
+    // The icon greys out and folds then: unfolding still lists the missing speakers.
+    private var nonePresent: Bool { zone.present == 0 }
 
     var body: some View {
         let t = model.text
@@ -633,7 +635,7 @@ private struct ZoneCard: View {
     }
 
     private func hit(_ area: ZoneHeaderHit.Area) {
-        switch ZoneHeaderHit.action(for: area) {
+        switch ZoneHeaderHit.action(for: area, nonePresent: nonePresent) {
         case .fold: withAnimation(AppModel.delayPanelAnimation) { disclosure.toggle(zone.id) }
         case .toggleZone: model.actions.toggleZone(zone.id)
         case .none: break
@@ -652,16 +654,18 @@ private struct ZoneCard: View {
             .buttonStyle(.plain)
             .foregroundStyle(Brand.secondaryText)
             .accessibilityLabel(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
+            .accessibilityValue(nonePresent ? model.countText(of: zone) : "")
             .help(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
 
             Button { hit(.zoneIcon) } label: {
                 SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: state, size: 32)
             }
             .buttonStyle(.plain)
-            .disabled(zone.present == 0)   // none of its speakers is here
-            .opacity(zone.present == 0 ? 0.45 : 1)
+            .opacity(nonePresent ? 0.45 : 1)
+            // With nothing to switch, the chevron speaks for the header.
+            .accessibilityHidden(nonePresent)
             .accessibilityLabel(t.zoneLabel(zone.name))
-            .accessibilityValue(zone.present == 0 ? model.countText(of: zone)
+            .accessibilityValue(nonePresent ? model.countText(of: zone)
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
             .accessibilityHint(t.rowHint(state, note: nil))
             .help(t.help(state))
@@ -678,7 +682,7 @@ private struct ZoneCard: View {
                 countLine(t)
                     .onTapGesture { hit(.count) }
             }
-            .opacity(zone.present == 0 ? 0.45 : 1)
+            .opacity(nonePresent ? 0.45 : 1)
 
             Spacer(minLength: 8)
 
@@ -719,7 +723,7 @@ private struct ZoneCard: View {
     /// secondary text; read through the switch's value instead.
     private func countLine(_ t: UIStrings) -> some View {
         HStack(spacing: 0) {
-            if zone.present == 0 {
+            if nonePresent {
                 Text(model.countText(of: zone)).foregroundStyle(Brand.secondaryText)
             } else {
                 Text(t.zoneCount(on: zone.on, of: zone.total))
