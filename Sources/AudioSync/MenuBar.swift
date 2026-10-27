@@ -787,6 +787,7 @@ private let accent = Brand.teal
 /// on/off for each speaker. Everything else lives in the main window.
 struct MenuBarView: View {
     @ObservedObject var model: AppModel
+    @StateObject private var zoneDisclosure = ZoneDisclosure()
     private let rowHeight: CGFloat = 28
     /// Everything but the speaker list (header, source, volume, footer,
     /// margins), plus room for what may show around it: the list grows until
@@ -913,7 +914,8 @@ struct MenuBarView: View {
     private func speakerList(_ t: UIStrings) -> some View {
         let layout = model.zonelessLayout
         // This Mac is above the divider.
-        let count = model.zones.reduce(0) { $0 + 1 + $1.members.count } + layout.connected.count
+        let count = model.zones.reduce(0) { $0 + 1 + (zoneDisclosure.isExpanded($1.id) ? $1.members.count : 0) }
+            + layout.connected.count
         if count == 0 && model.airPlayProblem != nil {
             EmptyView()   // the problem below says why
         } else if count == 0 {
@@ -984,14 +986,8 @@ struct MenuBarView: View {
             // connected speaker in no zone by name. This Mac sits above the
             // divider, with the volume.
             ForEach(model.zones) { zone in
-                CompactRow(name: zone.name, symbol: Self.zoneSymbol, state: model.state(of: zone),
-                           text: t, height: rowHeight, label: t.zoneLabel(zone.name),
-                           value: zone.present == 0 ? model.countText(of: zone)
-                               : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting)) {
-                    model.actions.toggleZone(zone.id)
-                }
-                    .disabled(zone.present == 0)   // none of its speakers is here
-                ForEach(zone.members) { member in
+                PanelZoneHeader(model: model, disclosure: zoneDisclosure, zone: zone, height: rowHeight)
+                ForEach(zoneDisclosure.isExpanded(zone.id) ? zone.members : []) { member in
                     Group {
                         if let speaker = model.speaker(of: member) {
                             speakerRow(speaker, note: member.note)
