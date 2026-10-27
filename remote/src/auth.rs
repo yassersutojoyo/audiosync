@@ -1107,6 +1107,23 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_file_with_an_unreadable_device_without_saving_leaves_no_copy() {
+        let path = scratch("auth-bad-device-only-counted");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let token = random_token().unwrap();
+        let text = json!({ "version": 1, "devices": [hex(&token_hash(&token)), "zz"] }).to_string();
+        fs::write(&path, &text).unwrap();
+        // The Web Remote window opens the store only to count, while the
+        // remote is off, every time it shows.
+        for _ in 0..2 {
+            let (store, _) = TokenStore::open_at(Some(path.clone()), day_zero());
+            assert_eq!(store.len(), 1);
+        }
+        assert!(copies_kept_aside(&path).is_empty());
+        assert_eq!(fs::read(&path).unwrap(), text.into_bytes());
+    }
+
+    #[test]
     fn an_unreadable_device_costs_only_that_device_and_the_file_is_kept_aside_first() {
         let path = scratch("auth-one-bad-device");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
