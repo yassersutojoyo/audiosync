@@ -467,6 +467,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     cast_file: Option<PathBuf>,
     /// What that file holds as last written or read.
     cast_saved: Option<String>,
+    /// The file was checked before its first save this run, and a copy of
+    /// it kept aside if it didn't read ([`keep_unread_cast_file_aside`]).
+    cast_file_checked: bool,
     /// The Cast speakers the user added by address, as the settings keep
     /// them (spec C18).
     cast_addresses: Vec<String>,
@@ -645,6 +648,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             cast_quiet_polls: 0,
             cast_file: None,
             cast_saved: None,
+            cast_file_checked: false,
             cast_addresses: Vec::new(),
             cast_probe: cast_address::answers,
             auto_connect: BTreeSet::new(),
@@ -1815,6 +1819,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     pub fn set_cast_file(&mut self, path: Option<PathBuf>) {
         self.cast_file = path;
         self.cast_saved = self.audio.cast_memory_json();
+        self.cast_file_checked = false;
     }
 
     /// Writes the Cast speakers' offsets and formats to their file when they
@@ -1830,6 +1835,28 @@ impl<A: AudioBackend> AudioAdapter<A> {
         };
         if self.cast_saved.as_ref() == Some(&json) {
             return;
+        }
+        if !self.cast_file_checked {
+            match keep_unread_cast_file_aside(path) {
+                Ok(kept) => {
+                    self.cast_file_checked = true;
+                    if let Some(copy) = kept {
+                        self.log.log(|| {
+                            format!(
+                                "Cast: the speakers' file didn't read; kept aside as {}",
+                                copy.display()
+                            )
+                        });
+                    }
+                }
+                // It is left alone until it can be read and kept.
+                Err(error) => {
+                    self.log
+                        .log(|| format!("Cast: the speakers' file couldn't be kept: {error}"));
+                    self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
+                    return;
+                }
+            }
         }
         match data_folder::write_atomically(path, json.as_bytes()) {
             Ok(()) => self.cast_saved = Some(json),
@@ -5177,6 +5204,30 @@ fn input_key(endpoint_id: &str) -> String {
 
 #[cfg(test)]
 mod device_volume_tests;
+
+/// The name a Cast speakers' file that didn't read is kept aside under,
+/// with the time added (`cast-speakers.ignored-<time>.json`).
+const CAST_IGNORED_FILE_NAME: &str = "cast-speakers.ignored.json";
+
+/// Copies the Cast speakers' file at `path` aside when it isn't one this
+/// build reads, and returns the copy's path; `None` when there is no file
+/// or it reads. A file that can't be read is an error, and must not be
+/// replaced.
+fn keep_unread_cast_file_aside(path: &std::path::Path) -> std::io::Result<Option<PathBuf>> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let reads = std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(audiosync_cast::host::DeviceMemory::read_json)
+        .is_some();
+    if reads {
+        return Ok(None);
+    }
+    data_folder::keep_bytes_aside(path, CAST_IGNORED_FILE_NAME, &bytes).map(Some)
+}
 
 #[cfg(test)]
 mod tests {
@@ -12656,6 +12707,34 @@ mod tests {
             DeviceMemory::from_json(&saved).offset(&cast_device(CAST_KITCHEN)),
             Some(std::time::Duration::from_millis(250))
         );
+    }
+
+    #[test]
+    fn a_cast_speakers_file_that_didnt_read_is_kept_aside_once_before_it_is_saved_over() {
+        let (mut adapter, _fake) = cast_adapter();
+        let folder = test_dir("cast-memory-ignored");
+        let file = folder.join("cast-speakers.json");
+        std::fs::write(&file, b"{ not json").expect("written");
+        adapter.set_cast_file(Some(file.clone()));
+        adapter.poll();
+        adapter.save_settings();
+        let kept = || crate::data_folder::copies_kept_aside(&folder, "cast-speakers.ignored");
+        assert!(kept().is_empty(), "opening it keeps nothing aside");
+        assert_eq!(std::fs::read(&file).expect("the file"), b"{ not json");
+
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.save_settings();
+        assert_eq!(kept(), [b"{ not json".to_vec()]);
+        let saved = std::fs::read_to_string(&file).expect("the file is written");
+        assert_eq!(
+            DeviceMemory::from_json(&saved).offset(&cast_device(CAST_KITCHEN)),
+            Some(std::time::Duration::from_millis(250))
+        );
+
+        std::fs::write(&file, b"not json either").expect("written");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 300.0);
+        adapter.save_settings();
+        assert_eq!(kept().len(), 1, "one copy a run");
     }
 
     #[test]

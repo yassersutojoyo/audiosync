@@ -6,7 +6,7 @@
 //! The entries are a cache that holds no secret. A missing, unreadable or
 //! foreign file means no entries, and each receiver's next session asks for
 //! NTP first, as P157 does without an entry; it never keeps a pairing from
-//! working. The byte form holds a magic line, a format version byte, then
+//! working. An entry that doesn't read costs only that receiver's entry. The byte form holds a magic line, a format version byte, then
 //! per receiver its ID and its entry ([`TimingMemory::to_bytes`]), each with
 //! a 16-bit little-endian length. Both hosts write it through
 //! [`write_atomically`]: owner-only on the Mac, unsealed with the folder's
@@ -143,17 +143,15 @@ fn decode(bytes: &[u8]) -> Decoded {
         return Decoded::Format;
     }
     let mut entries = BTreeMap::new();
-    while !rest.is_empty() {
-        let id = take_field(&mut rest)
-            .and_then(|id| std::str::from_utf8(id).ok())
-            .filter(|id| !id.is_empty());
-        let memory = take_field(&mut rest).and_then(TimingMemory::from_bytes);
-        let (Some(id), Some(memory)) = (id, memory) else {
-            return Decoded::Format;
+    // A field cut short ends what can be read; one that doesn't read costs
+    // only its own entry.
+    while let (Some(id), Some(memory)) = (take_field(&mut rest), take_field(&mut rest)) {
+        let id = std::str::from_utf8(id).ok().filter(|id| !id.is_empty());
+        let (Some(id), Some(memory)) = (id, TimingMemory::from_bytes(memory)) else {
+            continue;
         };
-        if entries.insert(id.to_owned(), memory).is_some() {
-            return Decoded::Format;
-        }
+        // A repeated ID keeps the first entry; later ones are dropped.
+        entries.entry(id.to_owned()).or_insert(memory);
     }
     Decoded::Entries(entries)
 }
@@ -230,6 +228,46 @@ mod tests {
         assert!(store.keep("A1", entry(Timing::Ptp, "366.0")).is_err());
         assert_eq!(store.get("A1"), Some(&entry(Timing::Ptp, "366.0")));
         assert_eq!(fs::read(&path).expect("the file"), newer, "left as it is");
+        let _ = fs::remove_file(&path);
+    }
+
+    fn push_entry(bytes: &mut Vec<u8>, id: &[u8], entry: &[u8]) {
+        for field in [id, entry] {
+            let len = u16::try_from(field.len()).expect("a short field");
+            bytes.extend_from_slice(&len.to_le_bytes());
+            bytes.extend_from_slice(field);
+        }
+    }
+
+    #[test]
+    fn a_bad_or_repeated_entry_costs_only_itself() {
+        let path = scratch("bad-entry.dat");
+        let mut bytes = MAGIC.to_vec();
+        bytes.push(VERSION);
+        push_entry(&mut bytes, b"A1", &entry(Timing::Ptp, "366.0").to_bytes());
+        push_entry(&mut bytes, b"B2", b"not an entry");
+        push_entry(&mut bytes, b"", &entry(Timing::Ptp, "366.0").to_bytes());
+        push_entry(
+            &mut bytes,
+            &[0xff, 0xfe],
+            &entry(Timing::Ptp, "366.0").to_bytes(),
+        );
+        push_entry(&mut bytes, b"A1", &entry(Timing::Ntp, "1.0").to_bytes());
+        push_entry(&mut bytes, b"C3", &entry(Timing::Ntp, "377.1").to_bytes());
+        fs::write(&path, &bytes).expect("written");
+        let store = TimingStore::open(path.clone());
+        assert_eq!(store.get("A1"), Some(&entry(Timing::Ptp, "366.0")));
+        assert_eq!(store.get("B2"), None);
+        assert_eq!(store.get("C3"), Some(&entry(Timing::Ntp, "377.1")));
+
+        bytes.extend_from_slice(&[9, 0, b'D']);
+        fs::write(&path, &bytes).expect("written");
+        let store = TimingStore::open(path.clone());
+        assert_eq!(
+            store.get("C3"),
+            Some(&entry(Timing::Ntp, "377.1")),
+            "a cut tail costs only the tail"
+        );
         let _ = fs::remove_file(&path);
     }
 }

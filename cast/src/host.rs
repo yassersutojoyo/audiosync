@@ -122,9 +122,15 @@ impl DeviceMemory {
     /// so a damaged file costs only those devices, and an offset past
     /// [`MAX_OFFSET`] reads as that.
     pub fn from_json(text: &str) -> DeviceMemory {
+        DeviceMemory::read_json(text).unwrap_or_default()
+    }
+
+    /// [`DeviceMemory::from_json`], or `None` when `text` isn't a JSON
+    /// object at all, so a host can keep that file before it saves over it.
+    pub fn read_json(text: &str) -> Option<DeviceMemory> {
         let mut memory = DeviceMemory::default();
         let Ok(Value::Object(entries)) = serde_json::from_str::<Value>(text) else {
-            return memory;
+            return None;
         };
         for (key, entry) in entries {
             let Some(device) = DeviceId::parse(&key) else {
@@ -141,7 +147,7 @@ impl DeviceMemory {
                     .insert(device, Duration::from_millis(ms).min(MAX_OFFSET));
             }
         }
-        memory
+        Some(memory)
     }
 }
 
