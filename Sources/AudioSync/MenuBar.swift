@@ -956,7 +956,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let shadow = shadowWindow ?? PanelShadowWindow.make()
         shadowWindow = shadow
         if shadow.parent !== window {
-            let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            let dark = window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             let style = PanelSwitches.shadow(dark: dark)
             shadow.place(around: window, outline: PanelShadow.outline(body: body, tip: tip), style: style)
             shadow.alphaValue = window.alphaValue
@@ -1050,6 +1050,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // the window while it grows or shrinks, so the panel's backing fills it.
         let view = host.view
         view.autoresizingMask = [.minYMargin]
+        // The own shadow keeps the size it was laid at; the system's follows the window.
+        if let window = view.window, shadowWindow?.parent === window {
+            setShadow(window, true)
+            dropOwnShadow()
+        }
         guard let window = view.window, duration > 0 else {
             setHeight(size.height)
             popover.contentSize = size
