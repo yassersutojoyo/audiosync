@@ -16,7 +16,7 @@ use crate::discovery::Features;
 use crate::error::{ErrorKind, SessionError, UnsupportedReason, Warning};
 use crate::homekit::{
     self, HomeKitCredentials, Identity, Mode, PairSetup, PairVerify, SetupStep, SharedSecret,
-    Stored, VerifyStep,
+    SrpDone, SrpWork, Stored, VerifyStep,
 };
 use crate::ids::{Entropy, EntropyUnavailable, SessionIds};
 use crate::latency::ReportedLatency;
@@ -100,6 +100,9 @@ pub struct Ap2Config {
     /// after the initial volume is answered (P184); later reads wait for
     /// [`Ap2Session::read_volume`].
     pub read_volume: bool,
+    /// The SRP step of a pair-setup is handed out through
+    /// [`Ap2Session::take_work`] instead of run in place (P223).
+    pub offload_srp: bool,
 }
 
 impl Ap2Config {
@@ -119,6 +122,7 @@ impl Ap2Config {
             pin_pairing: false,
             trace: false,
             read_volume: false,
+            offload_srp: false,
         }
     }
 }
@@ -355,6 +359,10 @@ pub struct Ap2Session {
     group_uuid: String,
     stream_key: zeroize::Zeroizing<[u8; STREAM_KEY_BYTES]>,
     outputs: VecDeque<Output>,
+    work: Option<SrpWork>,
+    /// When the SRP step handed out counts as lost, as an unanswered
+    /// request would.
+    work_due: Option<Instant>,
     /// The session SETUP was answered 200.
     set_up: bool,
     /// The session SETUP answer's `Session` ID, without its timeout (P25).
@@ -479,6 +487,8 @@ impl Ap2Session {
             group_uuid,
             stream_key,
             outputs: VecDeque::new(),
+            work: None,
+            work_due: None,
             set_up: false,
             session_header: None,
             recorded: false,
@@ -672,6 +682,7 @@ impl Ap2Session {
         if let Some(in_flight) = &self.in_flight {
             times.push(in_flight.sent_at + RESPONSE_TIMEOUT);
         }
+        times.extend(self.srp_due());
         times.extend(self.teardown_deadline);
         times.extend(self.last_timing_request.map(|at| at + TIMING_SILENCE));
         times.extend(self.events_retry_at);
@@ -899,6 +910,10 @@ impl Ap2Session {
         }
         if self.teardown_deadline.is_some_and(|at| now >= at) {
             return self.finish();
+        }
+        if self.srp_due().is_some_and(|at| now >= at) {
+            self.work_due = None;
+            return self.fail(ErrorKind::Timeout, Some(Method::Post), None, None);
         }
         if self.pin_held && self.pin_not_before.is_none_or(|at| now >= at) {
             self.pin_held = false;
@@ -1923,6 +1938,7 @@ impl Ap2Session {
         };
         let kind = match &mut pairing {
             Pairing::Setup(setup) => {
+                setup.set_offload(self.config.offload_srp);
                 setup.start();
                 Kind::PairSetup
             }
@@ -1941,6 +1957,38 @@ impl Ap2Session {
         };
         let mut entropy = Draw(self.entropy.as_mut());
         let step = setup.handle_response(response, &mut entropy);
+        self.on_setup_step(step, response.code, now);
+    }
+
+    /// The pair-setup arithmetic waiting to run, once
+    /// [`Ap2Config::offload_srp`] is set; its result goes to
+    /// [`Ap2Session::handle_computed`].
+    pub fn take_work(&mut self) -> Option<SrpWork> {
+        self.work.take()
+    }
+
+    pub fn handle_computed(&mut self, done: SrpDone, now: Instant) {
+        let Some(Pairing::Setup(setup)) = self.pairing.as_mut() else {
+            return;
+        };
+        if let Some(step) = setup.computed(done) {
+            self.work_due = None;
+            self.on_setup_step(step, 200, now);
+        }
+    }
+
+    /// The deadline of the SRP step handed out, while one is out.
+    fn srp_due(&self) -> Option<Instant> {
+        match &self.pairing {
+            Some(Pairing::Setup(setup)) if setup.computing() => self.work_due,
+            _ => None,
+        }
+    }
+
+    fn on_setup_step(&mut self, step: SetupStep, code: u16, now: Instant) {
+        let Some(Pairing::Setup(setup)) = self.pairing.as_mut() else {
+            return;
+        };
         let refusal = setup.take_refusal();
         match step {
             SetupStep::Send(_) => {
@@ -1985,10 +2033,14 @@ impl Ap2Session {
                     refusal.unwrap_or_default()
                 )));
             }
+            SetupStep::Compute(work) => {
+                self.work = Some(work);
+                self.work_due = Some(now + RESPONSE_TIMEOUT);
+            }
             SetupStep::Challenge => self.fail(
                 ErrorKind::ProtocolError,
                 Some(Method::Post),
-                Some(response.code),
+                Some(code),
                 Some("unexpected pair-setup step"),
             ),
         }

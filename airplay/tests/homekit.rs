@@ -10,7 +10,7 @@ use std::time::Duration;
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::homekit::tlv8::{self, Tlv8, Truncated};
 use audiosync_airplay::homekit::{
-    self, HomeKitCredentials, Identity, Mode, PairSetup, PairVerify, SetupStep, VerifyStep,
+    self, HomeKitCredentials, Identity, Mode, PairSetup, PairVerify, SetupStep, SrpWork, VerifyStep,
 };
 use audiosync_airplay::rtsp::{Method, Request, Response};
 use audiosync_airplay::secret::Secret;
@@ -977,4 +977,84 @@ fn no_pairing_answer_makes_the_pairing_panic() {
         let _ = Tlv8::decode(&rng.bytes(len));
         let _ = HomeKitCredentials::from_bytes(&rng.bytes(len * 2));
     }
+}
+
+/// Like `run_setup`, with M2's arithmetic handed out and run apart, as the
+/// sender does on another thread; counts the handed-out steps.
+fn run_offloaded(
+    setup: &mut PairSetup,
+    fake: &mut FakeHomeKit,
+    entropy: &mut TestEntropy,
+    pin: Option<&str>,
+) -> (SetupStep, usize) {
+    setup.set_offload(true);
+    let mut request = setup.start();
+    let mut computed = 0;
+    loop {
+        let response = fake.answer(&request);
+        let mut step = setup.handle_response(&response, entropy);
+        if let SetupStep::Compute(work) = step {
+            computed += 1;
+            step = setup.computed(work.clone().run()).expect("M3 or a failure");
+            assert_eq!(setup.computed(work.run()), None);
+        }
+        match step {
+            SetupStep::Send(next) => request = next,
+            SetupStep::PinRequested => {
+                request = setup.submit_pin(pin.expect("a PIN")).expect("M1");
+            }
+            end => return (end, computed),
+        }
+    }
+}
+
+// covers: P223
+#[test]
+fn the_srp_step_can_run_apart_from_the_session() {
+    let mut entropy = TestEntropy::new();
+    let mut fake = FakeHomeKit::new(homekit::TRANSIENT_CODE);
+    let (end, computed) = run_offloaded(&mut PairSetup::transient(), &mut fake, &mut entropy, None);
+    assert!(matches!(end, SetupStep::Transient(_)), "{end:?}");
+    assert_eq!(computed, 1);
+
+    let mut fake = FakeHomeKit::new(PIN);
+    let mut setup = PairSetup::pin(identity(&mut entropy));
+    let (end, computed) = run_offloaded(&mut setup, &mut fake, &mut entropy, Some(PIN));
+    assert!(matches!(end, SetupStep::Paired(_)), "{end:?}");
+    assert_eq!(computed, 1);
+
+    // A wrong PIN is still turned down at M4, after the step ran apart.
+    let mut fake = FakeHomeKit::new(PIN);
+    let mut setup = PairSetup::pin(identity(&mut entropy));
+    let (end, _) = run_offloaded(&mut setup, &mut fake, &mut entropy, Some("1111"));
+    assert!(matches!(end, SetupStep::WrongPin), "{end:?}");
+}
+
+fn compute(step: SetupStep) -> SrpWork {
+    match step {
+        SetupStep::Compute(work) => work,
+        other => panic!("{other:?}"),
+    }
+}
+
+// covers: P223
+#[test]
+fn a_result_computed_before_a_reconnect_is_dropped() {
+    let mut entropy = TestEntropy::new();
+    let mut fake = FakeHomeKit::new(homekit::TRANSIENT_CODE);
+    let mut setup = PairSetup::transient();
+    setup.set_offload(true);
+    let m1 = setup.start();
+    let old = compute(setup.handle_response(&fake.answer(&m1), &mut entropy));
+    // The connection drops while the old step runs; the new M2 comes first.
+    fake.new_connection();
+    let m1 = setup.restart();
+    let new = compute(setup.handle_response(&fake.answer(&m1), &mut entropy));
+    assert_eq!(setup.computed(old.run()), None);
+    let m3 = match setup.computed(new.run()) {
+        Some(SetupStep::Send(m3)) => m3,
+        other => panic!("{other:?}"),
+    };
+    let end = setup.handle_response(&fake.answer(&m3), &mut entropy);
+    assert!(matches!(end, SetupStep::Transient(_)), "{end:?}");
 }

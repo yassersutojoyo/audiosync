@@ -50,7 +50,7 @@ impl Driver {
                     .map(|speaker| speaker.device.clone())
                     .or_else(|| self.directory.device(&key).cloned());
                 if let Some(device) = device {
-                    self.insert_member(&id, device, options, counters, now);
+                    self.insert_member(&id, device, options, counters, StartKind::Host, now);
                 }
             }
             return;
@@ -114,7 +114,7 @@ impl Driver {
                     self.refuse(&key, SessionError::new(error), now);
                 }
             } else {
-                self.insert_member(&id, device, options, counters, now);
+                self.insert_member(&id, device, options, counters, StartKind::Host, now);
             }
         }
     }
@@ -138,31 +138,20 @@ impl Driver {
         }
         self.speakers.insert(
             key,
-            Speaker {
-                device,
-                options,
-                counters,
-                backoff: Backoff::new(),
-                phase: Phase::Idle,
-                removing: false,
-                airplay1_outcome: None,
-                ap2_waiting: false,
-                ap2_refusal: 0,
-                ap2_retry: false,
-                reads_volume: false,
-                target: Some(id.clone()),
-            },
+            Speaker::new(device, options, counters, Some(id.clone())),
         );
         true
     }
 
-    /// Adds one member as a speaker of the target and starts its session.
+    /// Adds one member as a speaker of the target and starts its session
+    /// as `kind` (P222).
     fn insert_member(
         &mut self,
         id: &TargetId,
         device: Device,
         options: SpeakerOptions,
         counters: Arc<SpeakerCounters>,
+        kind: StartKind,
         now: Instant,
     ) {
         let key = device.key.clone();
@@ -173,7 +162,7 @@ impl Driver {
             return;
         }
         self.insert_speaker(id, device, options, counters);
-        self.start_session(&key, now);
+        self.start_session(&key, kind, now);
     }
 
     pub(super) fn remove_target(&mut self, id: &TargetId, now: Instant) {
@@ -307,7 +296,7 @@ impl Driver {
                     active.session.teardown(now);
                     self.note_teardown(key, now);
                 }
-                Phase::Waiting(_) => speaker.phase = Phase::Waiting(now),
+                Phase::Waiting(_) => speaker.wait_until(now, StartKind::Host),
                 _ => {}
             }
         }
@@ -347,7 +336,7 @@ impl Driver {
             })
             .map(|(key, speaker)| {
                 speaker.ap2_waiting = false;
-                speaker.phase = Phase::Waiting(now);
+                speaker.wait_until(now, StartKind::Host);
                 key.clone()
             })
             .collect();
@@ -386,7 +375,7 @@ impl Driver {
         let Some(device) = self.directory.device(key).cloned() else {
             return;
         };
-        self.insert_member(&id, device, options, counters, now);
+        self.insert_member(&id, device, options, counters, StartKind::Retry, now);
     }
 
     /// Whether the speaker plays as a member of a target the host added.

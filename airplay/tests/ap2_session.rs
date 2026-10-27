@@ -1095,6 +1095,36 @@ fn a_session_setup_retried_on_a_new_connection_uses_only_the_new_answers_session
     assert_session_after_setup(&rig, "5A1B2C3D-2");
 }
 
+// covers: P223
+#[test]
+fn a_pair_setup_step_that_never_comes_back_fails_the_session() {
+    let mut config = ap2_config();
+    config.offload_srp = true;
+    let mut rig = Ap2Rig::new(config, FakeAp2::new());
+    // The thread that took the step is gone and never answers.
+    assert!(rig.session.take_work().is_some(), "{:?}", rig.keys());
+    rig.advance(Duration::from_secs(9));
+    assert_eq!(kind(&rig), None);
+    rig.advance(Duration::from_secs(2));
+    assert_eq!(kind(&rig), Some(ErrorKind::Timeout));
+
+    // One that comes back in time goes on to the session.
+    let mut config = ap2_config();
+    config.offload_srp = true;
+    let mut rig = Ap2Rig::new(config, FakeAp2::new());
+    let work = rig.session.take_work().expect("the SRP step");
+    rig.advance(Duration::from_secs(1));
+    rig.session.handle_computed(work.run(), rig.now);
+    rig.pump();
+    rig.advance(Duration::from_secs(11));
+    assert_eq!(kind(&rig), None);
+    assert!(
+        rig.keys().iter().any(|key| key.starts_with("SETUP")),
+        "{:?}",
+        rig.keys()
+    );
+}
+
 // covers: P217
 #[test]
 fn a_refused_remembered_ptp_runs_the_ntp_first_order_once() {

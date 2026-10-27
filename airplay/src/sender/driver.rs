@@ -26,11 +26,12 @@ use std::time::{Duration, Instant};
 
 use crate::ap2::PinPairing;
 use crate::audio::SAMPLE_RATE;
+use crate::connects::{ConnectQueue, StartKind};
 use crate::discovery::{
     BrowseEvent, Browser, Device, DeviceKey, Directory, DirectoryEvent, ProtocolPath,
 };
 use crate::error::{ErrorKind, SessionError, UnsupportedReason, UserReason, Warning};
-use crate::homekit::HomeKitCredentials;
+use crate::homekit::{HomeKitCredentials, SrpDone, SrpWork};
 use crate::ids::{Entropy, OsEntropy, SessionIds};
 use crate::latency::ReportedLatency;
 use crate::metadata::Metadata;
@@ -119,6 +120,11 @@ pub(crate) enum Input {
     Command(Box<Command>),
     Io(IoEvent),
     Remote(super::remote::RemoteInput),
+    /// A pair-setup's SRP step, run on its own thread (P223).
+    Computed {
+        session: SessionKey,
+        done: Box<SrpDone>,
+    },
 }
 
 /// A session that is starting, playing or closing.
@@ -141,6 +147,11 @@ enum Phase {
     Ap2(Box<ap2::Ap2Active>),
     /// A new session starts at this time (P142).
     Waiting(Instant),
+    /// The start fell due and waits for its connect's turn (P222); `ap2`
+    /// when it goes over AirPlay 2, so it holds that place (P169).
+    Queued {
+        ap2: bool,
+    },
     /// Waits for discovery to list it able to play again (P215).
     Unannounced,
     /// Waits for the user (P142).
@@ -229,6 +240,14 @@ impl Job {
     }
 }
 
+/// What waits in the connect queue (P222).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Turn {
+    Session(DeviceKey),
+    /// A pairing the host asked for outside a session (P47, P153).
+    Pairing(DeviceKey),
+}
+
 /// A pairing in progress, on a connection of its own (P47).
 struct PairingRun {
     key: SessionKey,
@@ -269,16 +288,52 @@ struct Speaker {
     /// The host asked for its volume (P122), so a new AirPlay 2 session
     /// reads once after its initial volume (P184).
     reads_volume: bool,
+    /// How the start queues when `Phase::Waiting` falls due (P222).
+    next_start: StartKind,
+    /// Reported Connecting while it waited for its turn (P224).
+    told_connecting: bool,
 }
 
 impl Speaker {
-    /// Runs the AirPlay 2 session, or waits to retry it (P169).
+    fn new(
+        device: Device,
+        options: SpeakerOptions,
+        counters: Arc<SpeakerCounters>,
+        target: Option<TargetId>,
+    ) -> Speaker {
+        Speaker {
+            device,
+            options,
+            counters,
+            backoff: Backoff::new(),
+            phase: Phase::Idle,
+            removing: false,
+            airplay1_outcome: None,
+            ap2_waiting: false,
+            ap2_refusal: 0,
+            ap2_retry: false,
+            reads_volume: false,
+            target,
+            next_start: StartKind::Host,
+            told_connecting: false,
+        }
+    }
+
+    /// Runs the AirPlay 2 session, waits to retry it, or waits for the
+    /// turn of a session that will (P169, P222).
     fn holds_ap2(&self) -> bool {
         match self.phase {
             Phase::Ap2(_) => true,
             Phase::Waiting(_) => self.ap2_retry,
+            Phase::Queued { ap2 } => ap2 || self.ap2_retry,
             _ => false,
         }
+    }
+
+    /// Waits for its turn, then starts as `kind` (P222).
+    fn wait_until(&mut self, at: Instant, kind: StartKind) {
+        self.phase = Phase::Waiting(at);
+        self.next_start = kind;
     }
 }
 
@@ -359,6 +414,10 @@ pub(crate) struct Driver {
     /// The AirPlay 1 outcome that moved each device to the AirPlay 2 path,
     /// for this run only (P218).
     airplay1_outcomes: BTreeMap<DeviceKey, ErrorKind>,
+    /// Sessions and pairings waiting for their connect's turn (P222).
+    connects: ConnectQueue<Turn>,
+    /// The pairings the host asked for that wait for their turn.
+    queued_pairings: BTreeMap<DeviceKey, (Box<Device>, Option<Secret>)>,
 }
 
 impl Driver {
@@ -415,6 +474,8 @@ impl Driver {
             ptp_retrying: BTreeSet::new(),
             dacp,
             airplay1_outcomes: BTreeMap::new(),
+            connects: ConnectQueue::new(),
+            queued_pairings: BTreeMap::new(),
         }
     }
 
@@ -550,6 +611,38 @@ impl Driver {
             Input::Command(command) => self.command(*command, now),
             Input::Io(event) => self.io_event(event, now),
             Input::Remote(input) => self.remote_input(input),
+            Input::Computed { session, done } => self.computed(session, *done, now),
+        }
+    }
+
+    /// Runs a pair-setup's SRP step off this thread: the key exchange
+    /// takes long enough to hold back a playing speaker's packets (P223).
+    fn compute(&mut self, session: SessionKey, work: SrpWork) {
+        let sink = self.io_sink.clone();
+        self.retired.push(thread::spawn(move || {
+            let done = Box::new(work.run());
+            let _ = sink.send(Input::Computed { session, done });
+        }));
+    }
+
+    fn computed(&mut self, session: SessionKey, done: SrpDone, now: Instant) {
+        if let Some(key) = self.pairing_sessions.get(&session).cloned() {
+            if let Some(PairingRun {
+                pairing: Job::HomeKit(pairing),
+                ..
+            }) = self.pairings.get_mut(&key)
+            {
+                pairing.handle_computed(done, now);
+            }
+            return;
+        }
+        let Some(key) = self.sessions.get(&session).cloned() else {
+            return;
+        };
+        if let Some(active) = self.ap2_active(&key)
+            && active.key == session
+        {
+            active.session.handle_computed(done, now);
         }
     }
 
@@ -574,8 +667,11 @@ impl Driver {
                     }
                 }
                 Phase::Waiting(at) => next = next.min(*at),
-                Phase::Unannounced | Phase::Failed | Phase::Idle => {}
+                Phase::Queued { .. } | Phase::Unannounced | Phase::Failed | Phase::Idle => {}
             }
+        }
+        if let Some(at) = self.connects.poll_timeout() {
+            next = next.min(at);
         }
         for run in self.pairings.values() {
             if let Some(at) = run.pairing.poll_timeout() {
@@ -633,14 +729,13 @@ impl Driver {
                     }
                 }
                 Phase::Waiting(at) if *at <= now && self.stopping.is_none() => {
-                    due.push(key.clone());
+                    due.push((key.clone(), speaker.next_start, *at));
                 }
                 _ => {}
             }
         }
-        for key in due {
-            self.start_session(&key, now);
-        }
+        due.sort_by_key(|(_, _, at)| *at);
+        self.start_sessions(due, now);
         for run in self.pairings.values_mut() {
             if run.pairing.poll_timeout().is_some_and(|at| at <= now) {
                 run.pairing.handle_timeout(now);
@@ -693,6 +788,12 @@ impl Driver {
                     progressed = true;
                     self.apply_ap2_output(&key, output, now);
                 }
+                if let Some((session, work)) = self
+                    .ap2_active(&key)
+                    .and_then(|active| Some((active.key, active.session.take_work()?)))
+                {
+                    self.compute(session, work);
+                }
             }
             let pairings: Vec<DeviceKey> = self.pairings.keys().cloned().collect();
             for key in pairings {
@@ -703,6 +804,16 @@ impl Driver {
                 {
                     progressed = true;
                     self.apply_pairing_output(&key, output, now);
+                }
+                if let Some(PairingRun {
+                    key: session,
+                    pairing: Job::HomeKit(pairing),
+                    ..
+                }) = self.pairings.get_mut(&key)
+                    && let Some(work) = pairing.take_work()
+                {
+                    let session = *session;
+                    self.compute(session, work);
                 }
                 if self
                     .pairings
@@ -813,6 +924,9 @@ impl Driver {
     /// Forgets a pairing, closing its connection if it is still open, and
     /// the connection of one that paired.
     fn end_pairing(&mut self, key: &DeviceKey) {
+        if self.queued_pairings.remove(key).is_some() {
+            self.connects.remove(&Turn::Pairing(key.clone()));
+        }
         if let Some(mut run) = self.pairings.remove(key) {
             self.pairing_sessions.remove(&run.key);
             if let Some(io) = run.io.take() {
@@ -855,7 +969,8 @@ impl Driver {
     /// running for it is dropped. With the switch on, a device on the
     /// AirPlay 2 path, also through an outcome remembered for it (P218),
     /// gets the PIN pairing of P61 instead (P153, P219); a legacy pairing
-    /// of an AirPlay 2 capable device may go on to it (P220).
+    /// of an AirPlay 2 capable device may go on to it (P220). Its connect
+    /// takes a turn in the queue (P222).
     fn start_pairing(&mut self, device: Device, password: Option<Secret>, now: Instant) {
         if self.stopping.is_some() {
             return;
@@ -876,6 +991,21 @@ impl Driver {
             });
             return;
         }
+        self.queued_pairings
+            .insert(key.clone(), (Box::new(device), password));
+        self.connects.push(Turn::Pairing(key), StartKind::Host, now);
+        self.take_turns(now);
+    }
+
+    /// A queued pairing's turn came: it opens its connection. False when
+    /// it ended before connecting.
+    fn begin_pairing(&mut self, key: &DeviceKey, now: Instant) -> bool {
+        let Some((device, password)) = self.queued_pairings.remove(key) else {
+            return false;
+        };
+        let device = *device;
+        let key = key.clone();
+        let homekit_paired = self.homekit_paired(&key);
         let mut entropy = OsEntropy;
         let mut client = [0u8; 8];
         let ids = self.session_ids();
@@ -889,7 +1019,7 @@ impl Driver {
                     wrong_pin: false,
                 },
             });
-            return;
+            return false;
         };
         let session_key = SessionKey(self.next_session);
         self.next_session += 1;
@@ -935,6 +1065,7 @@ impl Driver {
                 switch,
             },
         );
+        true
     }
 
     /// What a pairing's I/O threads report.
@@ -1034,6 +1165,9 @@ impl Driver {
                 if !shared {
                     self.close_ptp();
                 }
+            }
+            Phase::Queued { .. } => {
+                self.connects.remove(&Turn::Session(key.clone()));
             }
             Phase::Waiting(_) | Phase::Unannounced | Phase::Failed | Phase::Idle => {}
         }
@@ -1163,6 +1297,7 @@ impl Driver {
             speaker.backoff.on_failure(error.kind, now)
         };
         speaker.ap2_retry = was_ap2 && retry_at.is_some();
+        speaker.next_start = StartKind::Retry;
         let next = match retry_at {
             _ if closing => Phase::Idle,
             Some(at) => Phase::Waiting(at),
@@ -1188,12 +1323,12 @@ impl Driver {
             self.stopped(key);
         } else if alac_retry {
             self.directory.remember_pcm_refused(key);
-            self.start_session(key, now);
+            self.start_session(key, StartKind::Host, now);
         } else if path_switch {
             if let Some(id) = &target {
                 self.move_target_to_airplay2(id, key, now);
             }
-            self.start_session(key, now);
+            self.start_session(key, StartKind::Host, now);
         } else {
             let state = retry_at.map_or(SpeakerState::Failed, |at| SpeakerState::Retrying { at });
             self.emit_speaker(key, SpeakerEvent::State(state));
@@ -1221,7 +1356,7 @@ impl Driver {
             }
         } else {
             // Added again while it was being removed.
-            self.start_session(key, now);
+            self.start_session(key, StartKind::Host, now);
         }
     }
 
@@ -1242,7 +1377,7 @@ impl Driver {
             return;
         };
         speaker.ap2_waiting = false;
-        speaker.phase = Phase::Waiting(now);
+        speaker.wait_until(now, StartKind::Host);
         let key = key.clone();
         let target = speaker.target.clone();
         self.emit_speaker(
@@ -1508,6 +1643,13 @@ impl Driver {
                 }
             }
             Command::CancelPairing(key) => {
+                if self.queued_pairings.remove(&key).is_some() {
+                    self.connects.remove(&Turn::Pairing(key.clone()));
+                    self.emit(SenderEvent::Pairing {
+                        key: key.clone(),
+                        event: PairingEvent::Stopped,
+                    });
+                }
                 if let Some(run) = self.pairings.get_mut(&key) {
                     run.pairing.cancel(now);
                 }
@@ -1539,28 +1681,13 @@ impl Driver {
         }
         let key = device.key.clone();
         let Some(speaker) = self.speakers.get_mut(&key) else {
-            self.speakers.insert(
-                key.clone(),
-                Speaker {
-                    device,
-                    options,
-                    counters,
-                    backoff: Backoff::new(),
-                    phase: Phase::Idle,
-                    removing: false,
-                    airplay1_outcome: None,
-                    ap2_waiting: false,
-                    ap2_refusal: 0,
-                    ap2_retry: false,
-                    reads_volume: false,
-                    target: None,
-                },
-            );
+            self.speakers
+                .insert(key.clone(), Speaker::new(device, options, counters, None));
             if self.controls_driven_target(&key) {
                 let reason = crate::error::UnsupportedReason::PlaysThroughSpeakers;
                 return self.refuse(&key, SessionError::new(ErrorKind::Unsupported(reason)), now);
             }
-            self.start_session(&key, now);
+            self.start_session(&key, StartKind::Host, now);
             return;
         };
         let (delay, volume) = (options.delay, options.volume);
@@ -1581,10 +1708,16 @@ impl Driver {
                 self.command(Command::SetDelay(key.clone(), delay), now);
                 self.set_volume(&key, volume, now);
             }
+            // Asked again while waiting for its turn: a host start now.
+            Phase::Queued { .. } => {
+                speaker.backoff = Backoff::new();
+                self.connects.push(Turn::Session(key), StartKind::Host, now);
+                self.take_turns(now);
+            }
             Phase::Waiting(_) | Phase::Unannounced | Phase::Failed | Phase::Idle => {
                 speaker.backoff = Backoff::new();
                 speaker.airplay1_outcome = None;
-                self.start_session(&key, now);
+                self.start_session(&key, StartKind::Host, now);
             }
         }
     }
@@ -1608,7 +1741,13 @@ impl Driver {
         match &mut speaker.phase {
             Phase::Active(active) => active.session.teardown(now),
             Phase::Ap2(active) => active.session.teardown(now),
-            Phase::Waiting(_) | Phase::Unannounced | Phase::Failed | Phase::Idle => {
+            Phase::Queued { .. }
+            | Phase::Waiting(_)
+            | Phase::Unannounced
+            | Phase::Failed
+            | Phase::Idle => {
+                // A start still waiting for its turn opens no connection (P224).
+                self.connects.remove(&Turn::Session(key.clone()));
                 self.stopped(key);
                 if held {
                     self.wake_ap2_waiter(now);
@@ -1652,20 +1791,194 @@ impl Driver {
         }
     }
 
+    /// A start of a new session fell due: it waits in the connect queue
+    /// for its turn, reported Connecting meanwhile (P222, P224). Whether it
+    /// takes the one AirPlay 2 place is decided now, so a later AirPlay 2
+    /// start can't take the place ahead of it (P169).
+    fn start_session(&mut self, key: &DeviceKey, kind: StartKind, now: Instant) {
+        self.start_sessions(vec![(key.clone(), kind, now)], now);
+    }
+
+    /// Starts that fell due together, with the times they fell due: all
+    /// are queued before any takes a turn, so the turns go by kind and time.
+    fn start_sessions(&mut self, starts: Vec<(DeviceKey, StartKind, Instant)>, now: Instant) {
+        let mut queued = Vec::new();
+        for (key, kind, due) in starts {
+            if self.queue_start(&key, kind, due, now) {
+                queued.push(key);
+            }
+        }
+        self.take_turns(now);
+        for key in queued {
+            let Some(speaker) = self.speakers.get_mut(&key) else {
+                continue;
+            };
+            if let Phase::Queued { ap2 } = speaker.phase
+                && !speaker.told_connecting
+            {
+                speaker.told_connecting = true;
+                // The planned path goes before Connecting (P214); the turn
+                // reports the path the session actually takes.
+                let path = if ap2 {
+                    ProtocolPath::AirPlay2
+                } else {
+                    ProtocolPath::AirPlay1
+                };
+                self.emit_speaker(&key, SpeakerEvent::Path(path));
+                self.emit_speaker(&key, SpeakerEvent::State(SpeakerState::Connecting));
+            }
+        }
+    }
+
+    /// Puts a start in the connect queue; false when it was refused at
+    /// once instead.
+    fn queue_start(
+        &mut self,
+        key: &DeviceKey,
+        kind: StartKind,
+        due: Instant,
+        now: Instant,
+    ) -> bool {
+        if !self.speakers.contains_key(key) {
+            return false;
+        }
+        // Reported unannounced, never Connecting while it waits (P215, P224).
+        if self.still_unannounced(key) {
+            self.unannounce(key);
+            return false;
+        }
+        let ap2 = self.plans_ap2(key);
+        let kind = if ap2 && self.held.contains_key(key) {
+            StartKind::OpenConnection
+        } else {
+            kind
+        };
+        let taken = self.speakers.iter().any(|(other, speaker)| {
+            other != key && speaker.holds_ap2() && !self.same_target(key, other)
+        });
+        if ap2 && taken {
+            // Refused at once, without a connection.
+            self.begin_session(key, now);
+            return false;
+        }
+        if let Some(speaker) = self.speakers.get_mut(key) {
+            speaker.phase = Phase::Queued { ap2 };
+        }
+        self.connects.push(Turn::Session(key.clone()), kind, due);
+        true
+    }
+
+    /// Starts every queued session and pairing whose turn has come; one
+    /// that ends before connecting leaves the turn to the next (P222).
+    fn take_turns(&mut self, now: Instant) {
+        while let Some((turn, kind)) = self.connects.pop(now) {
+            let connecting = match &turn {
+                Turn::Session(key) => self.begin_session(key, now),
+                Turn::Pairing(key) => self.begin_pairing(key, now),
+            };
+            if connecting && kind != StartKind::OpenConnection {
+                self.connects.connected(now);
+                if let Turn::Session(key) = &turn
+                    && let Some(speaker) = self.speakers.get(key)
+                {
+                    speaker.counters.count_connect_start(now);
+                }
+            }
+        }
+    }
+
     /// Starts a new session for a speaker: fresh identifiers, the device's
     /// current addresses and codec (P17, P74, P142). A speaker that needs
     /// the legacy pairing without credentials still connects: it is asked
     /// OPTIONS before PairingRequired is reported, so a receiver that can't
-    /// take AirPlay 1 audio is Unsupported instead (P46).
-    fn start_session(&mut self, key: &DeviceKey, now: Instant) {
+    /// take AirPlay 1 audio is Unsupported instead (P46). True when a new
+    /// connection opens.
+    fn begin_session(&mut self, key: &DeviceKey, now: Instant) -> bool {
         let held = self.speakers.get_mut(key).is_some_and(|speaker| {
             speaker.ap2_waiting = false;
             std::mem::take(&mut speaker.ap2_retry)
         });
         self.open_session(key, now);
+        if let Some(speaker) = self.speakers.get_mut(key) {
+            speaker.told_connecting = false;
+        }
         // A retry that ends anywhere but a running AirPlay 2 session hands the place on (P169).
         if held {
             self.wake_ap2_waiter(now);
+        }
+        match self.speakers.get(key).map(|speaker| &speaker.phase) {
+            Some(Phase::Active(_)) => true,
+            // One that went on over its pairing's connection opened none.
+            Some(Phase::Ap2(active)) => active.io.is_none(),
+            _ => false,
+        }
+    }
+
+    /// Whether the speaker's next session goes over AirPlay 2 (P2).
+    fn plans_ap2(&mut self, key: &DeviceKey) -> bool {
+        if self.homekit_paired(key) {
+            return self.airplay2;
+        }
+        if !self.airplay2 {
+            return false;
+        }
+        if let Some(device) = self.directory.device(key).cloned()
+            && let Some(speaker) = self.speakers.get_mut(key)
+        {
+            speaker.device = device;
+        }
+        self.speakers.get(key).is_some_and(|speaker| {
+            let device = &speaker.device;
+            let outcome = self.airplay1_outcome(key, speaker);
+            let preferred =
+                device.choose_path_preferring(true, self.airplay2_preferred, outcome, false)
+                    == Ok(ProtocolPath::AirPlay2);
+            // Only the preference sends it there: AirPlay 1 plays it
+            // rather than waiting for a taken AirPlay 2 place (P214).
+            let fallback = device.choose_path(true, outcome) == Ok(ProtocolPath::AirPlay1)
+                && self.ap2_place_taken(key);
+            (preferred && !fallback)
+                || (device.verdict.airplay2 && self.target_on_airplay2(speaker))
+        })
+    }
+
+    /// Whether the speaker's records give it no path, so a start would end
+    /// unannounced at once (P215).
+    fn still_unannounced(&mut self, key: &DeviceKey) -> bool {
+        if self.homekit_paired(key) {
+            return false;
+        }
+        if self.lapsed(key) {
+            return true;
+        }
+        if self.plans_ap2(key) {
+            return false;
+        }
+        let Some(speaker) = self.speakers.get_mut(key) else {
+            return false;
+        };
+        if let Some(device) = self.directory.device(key) {
+            speaker.device = device.clone();
+        }
+        let has_credentials = speaker.options.credentials.is_some();
+        super::plan_with(&speaker.device, has_credentials, self.airplay2)
+            .is_err_and(|kind| self.unannounced(key, kind))
+    }
+
+    /// Discovery saw the speaker and lists none of its records now (P215).
+    fn lapsed(&self, key: &DeviceKey) -> bool {
+        self.browser.is_some() && self.directory.seen(key) && self.directory.device(key).is_none()
+    }
+
+    /// Reports Connecting, unless the speaker was told so while it waited
+    /// for its turn.
+    pub(super) fn report_connecting(&mut self, key: &DeviceKey) {
+        let told = self
+            .speakers
+            .get_mut(key)
+            .is_some_and(|speaker| std::mem::take(&mut speaker.told_connecting));
+        if !told {
+            self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Connecting));
         }
     }
 
@@ -1676,34 +1989,11 @@ impl Driver {
         // The records kept from before its lapse are no path to play on: a
         // pair member left RAOP-only and then gone would retry a dead
         // address every 30 s (P215, P216).
-        if self.browser.is_some()
-            && self.directory.seen(key)
-            && self.directory.device(key).is_none()
-        {
+        if self.lapsed(key) {
             return self.unannounce(key);
         }
-        if self.airplay2 {
-            if let Some(device) = self.directory.device(key).cloned()
-                && let Some(speaker) = self.speakers.get_mut(key)
-            {
-                speaker.device = device;
-            }
-            let ap2 = self.speakers.get(key).is_some_and(|speaker| {
-                let device = &speaker.device;
-                let outcome = self.airplay1_outcome(key, speaker);
-                let preferred =
-                    device.choose_path_preferring(true, self.airplay2_preferred, outcome, false)
-                        == Ok(ProtocolPath::AirPlay2);
-                // Only the preference sends it there: AirPlay 1 plays it
-                // rather than waiting for a taken AirPlay 2 place (P214).
-                let fallback = device.choose_path(true, outcome) == Ok(ProtocolPath::AirPlay1)
-                    && self.ap2_place_taken(key);
-                (preferred && !fallback)
-                    || (device.verdict.airplay2 && self.target_on_airplay2(speaker))
-            });
-            if ap2 {
-                return self.start_ap2(key, now);
-            }
+        if self.plans_ap2(key) {
+            return self.start_ap2(key, now);
         }
         let planned = {
             let Some(speaker) = self.speakers.get_mut(key) else {
@@ -1792,7 +2082,7 @@ impl Driver {
         self.sessions.insert(session_key, key.clone());
         self.remote_open(key, remote, now);
         self.emit_speaker(key, SpeakerEvent::Path(ProtocolPath::AirPlay1));
-        self.emit_speaker(key, SpeakerEvent::State(SpeakerState::Connecting));
+        self.report_connecting(key);
     }
 
     /// Whether the sender holds HomeKit credentials for a device, from the
@@ -1840,6 +2130,7 @@ impl Driver {
         };
         let retry_at = speaker.backoff.on_failure(error.kind, now);
         speaker.phase = retry_at.map_or(Phase::Failed, Phase::Waiting);
+        speaker.next_start = StartKind::Retry;
         let reason = error.kind.user_reason();
         self.emit_speaker(
             key,
@@ -1888,7 +2179,8 @@ impl Driver {
             return;
         }
         speaker.backoff = Backoff::new();
-        self.start_session(key, now);
+        // Its paused retry schedule resumes: a retry for the queue (P142, P222).
+        self.start_session(key, StartKind::Retry, now);
     }
 
     /// Sends what is playing to one playing speaker, on either path, as far
@@ -2096,6 +2388,16 @@ impl Driver {
         }
         self.stopping = Some(now + TEARDOWN_TIMEOUT - SHUTDOWN_RESERVE);
         self.browser = None;
+        // Stopping drops every start still waiting for its turn (P224).
+        for turn in self.connects.clear() {
+            if let Turn::Pairing(key) = turn {
+                self.queued_pairings.remove(&key);
+                self.emit(SenderEvent::Pairing {
+                    key,
+                    event: PairingEvent::Stopped,
+                });
+            }
+        }
         for run in self.pairings.values_mut() {
             run.pairing.cancel(now);
         }
@@ -2463,6 +2765,8 @@ mod tests {
                 ap2_retry: false,
                 reads_volume: false,
                 target: None,
+                next_start: StartKind::Host,
+                told_connecting: false,
             },
         );
 
