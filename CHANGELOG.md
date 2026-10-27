@@ -6,9 +6,11 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
-- In the Mac's menu bar panel and the Windows tray flyout, a zone works like its header in the main window: the round icon switches the zone on or off, and the arrow, the name or the space around them shows or hides the zone's speakers. Before, a click on the name switched the whole zone in the panel and anywhere on the row did in the flyout, and the speakers were always listed. On Windows the main window and the flyout show or hide a zone's speakers together.
+- In the Mac's menu bar panel and the Windows tray flyout, a zone works like its header in the main window: the round icon switches the zone on or off, and the arrow, the name or the space around them shows or hides the zone's speakers. Before, a click on the name switched the whole zone in the panel and anywhere on the row did in the flyout, and the speakers were always listed. On the Mac and on Windows, showing or hiding a zone's speakers in the main window does the same in the panel or the flyout, and the other way round.
+- On the Mac, while none of a zone's speakers is here, its greyed round icon shows or hides the zone's speakers, in the main window and the menu bar panel, as on Windows. Before, it did nothing.
 - A speaker in a zone keeps a short row in its own section, This Mac (This PC on Windows) or Connected Speakers, under "In zones": its switch, its name and a link to its zone. Its switch there turns only that speaker on or off, and the zone's other speakers stay as they are; Go to Zone and Remove from Zone are in its menu. On the Mac and on Windows.
-- Only This Speaker, in a speaker's menu under its zone, turns the zone's other speakers off and plays this one. Nobody leaves the zone.
+- Go to Zone puts the keyboard focus on the zone's round icon, or on its arrow while none of the zone's speakers is here, so VoiceOver always reads where the focus lands. On the Mac.
+- Only This Speaker, in a speaker's menu under its zone, plays this speaker and turns off the zone's other speakers that are on. Speakers you hid stay as they are, and when this one is a Google Cast speaker that's offline or in use by another app, nothing switches. Nobody leaves the zone. On the Mac and on Windows.
 
 ### Fixed
 
