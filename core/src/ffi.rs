@@ -1526,6 +1526,10 @@ mod tests {
             ("ASC_CAST_EVENT_FAILED", CAST_EVENT_FAILED.to_string()),
             ("ASC_CAST_EVENT_MEMBERS", CAST_EVENT_MEMBERS.to_string()),
             ("ASC_CAST_EVENT_GROUP_LOG", CAST_EVENT_GROUP_LOG.to_string()),
+            (
+                "ASC_CAST_EVENT_CERTIFICATE_CHANGED",
+                CAST_EVENT_CERTIFICATE_CHANGED.to_string(),
+            ),
             ("ASC_CAST_END_STOPPED", CAST_END_STOPPED.to_string()),
             ("ASC_CAST_END_TAKEN_OVER", CAST_END_TAKEN_OVER.to_string()),
             ("ASC_CAST_END_DESELECTED", CAST_END_DESELECTED.to_string()),

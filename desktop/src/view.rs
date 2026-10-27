@@ -8260,6 +8260,34 @@ mod tests {
         assert_eq!(row.volume_step, 1.0);
     }
 
+    // covers: C68
+    #[test]
+    fn a_cast_row_with_a_fixed_volume_says_it_cannot_be_changed() {
+        let app = app_over(MockBackend::new());
+        let state = MockBackend::new().snapshot();
+        let mut speaker = state.speaker("local:desk").unwrap().clone();
+        speaker.kind = ui_model::SpeakerKind::Cast;
+        speaker.cast = Some(ui_model::CastRow {
+            state: ui_model::CastState::Playing,
+            muted: false,
+            volume_fixed: true,
+            volume_step: 1.0,
+            group: None,
+            added_by_address: false,
+        });
+        let row = speaker_item(&state, &speaker, true, false, None);
+        // The slider's `enabled` and the hint in widgets.slint key off this flag.
+        assert!(row.cast && row.volume_fixed);
+        assert_eq!(
+            app.strings().get_cast_volume_fixed().as_str(),
+            "This speaker's volume can't be changed from AudioSync."
+        );
+
+        speaker.cast.as_mut().unwrap().volume_fixed = false;
+        let row = speaker_item(&state, &speaker, true, false, None);
+        assert!(row.cast && !row.volume_fixed);
+    }
+
     #[test]
     fn a_cast_group_row_names_its_members_or_says_they_are_unknown() {
         let app = app_over(MockBackend::new());

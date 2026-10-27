@@ -1608,6 +1608,12 @@ impl CastSpeakers {
             SessionEvent::Rebuffering => self.log.log(|| "Cast: the device ran dry".to_owned()),
             SessionEvent::Stream(event) => self.log.log(|| format!("Cast stream: {event:?}")),
             SessionEvent::GroupMessage(kind) => self.log.log(|| format!("Cast group: {kind}")),
+            SessionEvent::CertificateChanged { before, after } => self.log.log(|| {
+                format!(
+                    "Cast: {}'s certificate changed from {before} to {after}",
+                    self.name(device)
+                )
+            }),
             SessionEvent::Members(members) => {
                 self.log.log(|| {
                     let names: Vec<String> = self
@@ -1699,6 +1705,7 @@ pub mod tests {
     use std::collections::VecDeque;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+    use audiosync_cast::client::Fingerprint;
     use audiosync_cast::discovery::{DEVICE_PORT, ServiceRecord};
     use audiosync_cast::error::ConnectError;
 
@@ -2211,6 +2218,34 @@ pub mod tests {
                 "Cast group Attic members: 2 (Garage, unnamed, deviceId porch-7)",
                 "Cast group: CASTING_GROUPS",
             ],
+        );
+    }
+
+    // covers: C21
+    #[test]
+    fn a_changed_certificate_reaches_the_debug_log() {
+        let dir = test_dir("cast-certificate-log");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let fake = FakeCast::default();
+        fake.announce(ATTIC, "Attic", 32_123);
+        let mut cast = CastSpeakers::new(fake.link(), log.clone());
+        cast.poll();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        let before = Fingerprint([0xAB; 32]);
+        let after = Fingerprint([0xCD; 32]);
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(ATTIC),
+            event: SessionEvent::CertificateChanged { before, after },
+        });
+        cast.poll();
+        assert!(log.flush(TEST_FLUSH));
+        assert_in_order(
+            &read_messages(&dir.join(FILE_NAME)),
+            &[&format!(
+                "Cast: Attic's certificate changed from {before} to {after}"
+            )],
         );
     }
 
@@ -2935,5 +2970,39 @@ pub mod tests {
             [0.4, 0.8],
             "a fixed volume sends nothing (C68)"
         );
+    }
+
+    fn volume_fixed(cast: &CastSpeakers, id: &str) -> bool {
+        cast.speakers()
+            .into_iter()
+            .find(|speaker| speaker.id == id)
+            .expect("listed")
+            .volume_fixed
+    }
+
+    // covers: C68
+    #[test]
+    fn a_fixed_volume_report_marks_only_that_speaker_fixed() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        assert!(!volume_fixed(&cast, KITCHEN), "unknown until reported");
+        let report = |control_type| HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.6,
+                control_type,
+                ..DeviceVolume::default()
+            }),
+        };
+        fake.report(report(ControlType::Fixed));
+        cast.poll();
+        assert!(volume_fixed(&cast, KITCHEN));
+        assert!(!volume_fixed(&cast, ATTIC));
+
+        fake.report(report(ControlType::Attenuation));
+        cast.poll();
+        assert!(!volume_fixed(&cast, KITCHEN));
     }
 }

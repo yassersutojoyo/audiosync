@@ -147,12 +147,49 @@ fn the_client_hello_offers_tls_1_2_with_ecdhe_rsa_aes_gcm_and_aes_cbc_sha() {
     let (version, suites) = device.join().expect("a ClientHello");
     assert_eq!(version, [3, 3], "TLS 1.2, or 1.3 behind it");
     let mut wanted = vec![ECDHE_RSA_AES_128_GCM_SHA256, ECDHE_RSA_AES_256_GCM_SHA384];
-    // Schannel's suite list is Windows policy, and Windows Server 2025 leaves the CBC suites out.
-    if !cfg!(windows) {
+    // Schannel's suite list is Windows policy, and Windows Server 2025 leaves the CBC suites out;
+    // a client SKU still has to offer it, so a policy change there fails here.
+    if !cfg!(windows) || windows_installation_type() == "Client" {
         wanted.push(ECDHE_RSA_AES_256_CBC_SHA);
+    } else {
+        eprintln!(
+            "warning: a Windows server SKU, the CBC suite is not required; offered {suites:04x?}"
+        );
     }
     for suite in wanted {
         assert!(suites.contains(&suite), "{suite:#06x} in {suites:04x?}");
+    }
+}
+
+/// "Client", "Server" or "Server Core", from the registry through reg.exe.
+fn windows_installation_type() -> String {
+    let output = std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+            "/v",
+            "InstallationType",
+        ])
+        .output()
+        .expect("reg.exe runs");
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .find_map(|line| {
+            let mut words = line.split_whitespace();
+            (words.next() == Some("InstallationType") && words.next() == Some("REG_SZ"))
+                .then(|| words.collect::<Vec<_>>().join(" "))
+        })
+        .unwrap_or_else(|| panic!("no InstallationType in {text}"))
+}
+
+#[test]
+fn the_windows_installation_type_is_read() {
+    if cfg!(windows) {
+        let kind = windows_installation_type();
+        assert!(
+            ["Client", "Server", "Server Core"].contains(&kind.as_str()),
+            "{kind}"
+        );
     }
 }
 

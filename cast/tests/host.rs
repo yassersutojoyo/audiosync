@@ -11,6 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, audio_ring};
+use audiosync_cast::client::Fingerprint;
 use audiosync_cast::discovery::DeviceId;
 use audiosync_cast::host::{
     AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, MAX_HOST_EVENTS, MAX_OFFSET,
@@ -833,4 +834,91 @@ fn a_stop_or_a_quit_during_a_launch_sends_no_stop_and_only_the_platform_close() 
     assert!(silent.payloads(NS_RECEIVER, "STOP").is_empty());
     assert!(silent.payloads(NS_MEDIA, "STOP").is_empty());
     silent.join();
+}
+
+fn certificate_changes(events: &[HostEvent]) -> Vec<(Fingerprint, Fingerprint)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            HostEvent::Session {
+                event: SessionEvent::CertificateChanged { before, after },
+                ..
+            } => Some((*before, *after)),
+            _ => None,
+        })
+        .collect()
+}
+
+// covers: C21
+#[test]
+fn a_certificate_seen_only_by_a_failed_start_is_not_recorded() {
+    let first = FakeDevice::start(Behavior::default());
+    let refuses = FakeDevice::start(Behavior {
+        on_load: OnLoad::Error("LOAD_FAILED", json!({})),
+        ..Behavior::default()
+    });
+    let last = FakeDevice::start(Behavior::default());
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let mut events = Vec::new();
+    for device in [&first, &refuses, &last] {
+        let (_feed, reader) = ring();
+        host.start(target(A, device), 48_000, Metadata::default(), reader)
+            .expect("starts");
+        if !std::ptr::eq(device, &refuses) {
+            events.extend(wait_for(&host, Duration::from_secs(10), started(A)));
+            host.stop();
+        }
+        events.extend(wait_for(&host, Duration::from_secs(15), ended(A)));
+    }
+    assert_eq!(
+        certificate_changes(&events),
+        [(
+            Fingerprint::of(&first.certificate_der),
+            Fingerprint::of(&last.certificate_der)
+        )],
+        "{events:?}"
+    );
+    assert!(host.shutdown());
+    for device in [first, refuses, last] {
+        device.join();
+    }
+}
+
+// covers: C21
+#[test]
+fn a_device_back_with_a_new_certificate_is_logged_once_and_still_plays() {
+    let device = FakeDevice::start(Behavior {
+        new_certificate_each_connection: true,
+        ..Behavior::default()
+    });
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let mut events = Vec::new();
+    for _ in 0..2 {
+        let (_feed, reader) = ring();
+        host.start(target(A, &device), 48_000, Metadata::default(), reader)
+            .expect("starts");
+        events.extend(wait_for(&host, Duration::from_secs(10), started(A)));
+        host.stop();
+        events.extend(wait_for(&host, Duration::from_secs(15), ended(A)));
+    }
+    let certificates = device.certificates.lock().expect("certificates").clone();
+    assert_eq!(certificates.len(), 2);
+    assert_eq!(
+        certificate_changes(&events),
+        [(
+            Fingerprint::of(&certificates[0]),
+            Fingerprint::of(&certificates[1])
+        )],
+        "the first sight is recorded silently, the change once: {events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, HostEvent::Started { .. }))
+            .count(),
+        2,
+        "the changed certificate never blocks the session"
+    );
+    assert!(host.shutdown());
+    device.join();
 }

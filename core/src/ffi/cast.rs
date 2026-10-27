@@ -136,6 +136,9 @@ pub const CAST_EVENT_MEMBERS: i32 = 17;
 /// A line about a Cast group for the debug log, in `detail`: what a group
 /// announces (C89), or a multizone message the sender doesn't act on (C96).
 pub const CAST_EVENT_GROUP_LOG: i32 = 18;
+/// The device's certificate changed since its last connect, for the debug
+/// log: `detail` is "<before> to <after>" (C21).
+pub const CAST_EVENT_CERTIFICATE_CHANGED: i32 = 19;
 
 /// How an attempt ended ([`AscCastEvent::reason`]): the sender's own
 /// teardown (C87).
@@ -1042,6 +1045,11 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
         SessionEvent::GroupMessage(kind) => {
             let mut pending = Pending::new(CAST_EVENT_GROUP_LOG);
             pending.detail = format!("Cast group message {kind}");
+            pending
+        }
+        SessionEvent::CertificateChanged { before, after } => {
+            let mut pending = Pending::new(CAST_EVENT_CERTIFICATE_CHANGED);
+            pending.detail = format!("{before} to {after}");
             pending
         }
         SessionEvent::Ended(end) => ended_event(end),
@@ -2054,6 +2062,7 @@ mod tests {
     use std::net::{Ipv4Addr, TcpListener};
     use std::time::Instant;
 
+    use audiosync_cast::client::Fingerprint;
     use audiosync_cast::discovery::ServiceRecord;
 
     thread_local! {
@@ -2281,6 +2290,17 @@ mod tests {
         assert_eq!(event.underrun_frames, 4_800);
         assert_eq!((event.drift_ms, event.queued_ms), (40.0, 250.0));
         destroy(handle);
+    }
+
+    // CAST_SPEC: C21
+    #[test]
+    fn a_changed_certificate_reaches_the_app_as_a_log_line() {
+        let before = Fingerprint([0xAB; 32]);
+        let after = Fingerprint([0xCD; 32]);
+        let pending = session_event(SessionEvent::CertificateChanged { before, after }, |_| {});
+        assert_eq!(pending.kind, CAST_EVENT_CERTIFICATE_CHANGED);
+        assert_eq!(pending.detail, format!("{before} to {after}"));
+        assert!(pending.detail.starts_with("AB:AB:") && pending.detail.ends_with(":CD:CD"));
     }
 
     #[test]
