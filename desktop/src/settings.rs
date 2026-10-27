@@ -2064,11 +2064,52 @@ mod tests {
 
     #[test]
     fn every_stored_field_is_named_when_it_does_not_read() {
+        // The fields left out of the file while empty are set too, so each
+        // one is checked.
+        let every_field = Settings {
+            input_device: Some(SavedInput {
+                id: "input".to_owned(),
+                name: "Input".to_owned(),
+            }),
+            input_pairs: BTreeMap::from([("input".to_owned(), 2)]),
+            source_mix: Some(SavedMix {
+                mode: MixMode::AllExcept,
+                apps: vec![SavedMixApp {
+                    executable: "player.exe".to_owned(),
+                    name: "Player".to_owned(),
+                }],
+            }),
+            hidden_speakers: vec![SavedHidden {
+                key: "output:hidden".to_owned(),
+                name: "Hidden".to_owned(),
+                kind: "output".to_owned(),
+            }],
+            equalizer_curves: vec![SavedCurve {
+                name: "Curve".to_owned(),
+                gains_db: vec![1.0; BAND_COUNT],
+            }],
+            update_record: Some(UpdateRecord {
+                version: "9.9.9".to_owned(),
+                reason: crate::ui_model::UpdateRecordReason::Blocked,
+            }),
+            ..sample()
+        };
         let serde_json::Value::Object(stored) =
-            serde_json::from_str(&sample().to_json()).expect("an object")
+            serde_json::from_str(&every_field.to_json()).expect("an object")
         else {
             panic!("the settings are an object");
         };
+        let optional = [
+            "input_device",
+            "input_pairs",
+            "source_mix",
+            "hidden_speakers",
+            "equalizer_curves",
+            "update_record",
+        ];
+        for name in optional {
+            assert!(stored.contains_key(name), "{name} is stored");
+        }
         let marks = [
             "version",
             "speaker_zones_migrated",
