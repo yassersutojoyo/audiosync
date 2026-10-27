@@ -81,6 +81,28 @@ enum PanelSizing: Equatable {
     }
 }
 
+/// When work that follows a menu bar panel open or close may run: once the
+/// popover's animation, its bounce included, is over. Main-thread work that
+/// lands inside it drops the animation's frames.
+struct PanelQuiet: Equatable {
+    enum Animation { case open, close }
+
+    /// From the click to the end of the open's bounce, and the close's fade,
+    /// as measured on the Mac against Outlook's popover.
+    static func duration(_ animation: Animation) -> TimeInterval {
+        animation == .open ? 0.6 : 0.25
+    }
+
+    /// System uptime when the last animation ends.
+    private(set) var busyUntil: TimeInterval = 0
+
+    mutating func began(_ animation: Animation, at now: TimeInterval) {
+        busyUntil = max(busyUntil, now + Self.duration(animation))
+    }
+
+    func wait(at now: TimeInterval) -> TimeInterval { max(0, busyUntil - now) }
+}
+
 /// How strongly a scrolling column fades at its top and bottom edges, from 0
 /// (nothing hidden past that edge) to 1 (at least the fade's height hidden).
 struct ScrollEdgeFades: Equatable {
