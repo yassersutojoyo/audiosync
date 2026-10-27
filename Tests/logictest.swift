@@ -8819,6 +8819,23 @@ do {
     asc_cast_destroy(&second)
 }
 
+// MARK: Google Cast device memory: a file that doesn't read is kept aside before the first save
+do {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-cast-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = CastMemoryFile.file(in: dir)
+    let damaged = Data("{\"0123456789abcdef0123456789abcdef\": {\"offsetMs\": 12".utf8)
+    try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try? damaged.write(to: url)
+    _ = CastMemoryFile.load(from: url)
+    try? CastMemoryFile.save("{}", to: url)
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path)) ?? []
+    let copies = names.filter { $0.hasPrefix("cast-devices.ignored-") && $0.hasSuffix(".json") }
+    let copy = copies.first.map { url.deletingLastPathComponent().appendingPathComponent($0) }
+    check(copies.count == 1 && copy.flatMap { try? Data(contentsOf: $0) } == damaged,
+          "cast memory: a file that doesn't read is kept aside, whole, before it is saved over", "\(names)")
+}
+
 // MARK: Guide illustrations: each finds its place in the text, in order (GuideLayout)
 do {
     let t = UIStrings()
