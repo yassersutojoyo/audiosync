@@ -267,11 +267,41 @@ struct AppSettings: Equatable {
         return SpeakerZone.normalized(list)
     }
 
-    /// The stored presets as S251 keeps them; none when the data is missing
-    /// or can't be read.
+    /// The stored presets as S251 keeps them, without a preset that can't be
+    /// read; none when the data is missing or isn't a list.
     static func decodePresets(_ data: Data?) -> [SpeakerPreset] {
-        guard let data, let list = try? JSONDecoder().decode([SpeakerPreset].self, from: data) else { return [] }
-        return SpeakerPreset.normalized(list)
+        SpeakerPreset.normalized(decodeList(SpeakerPreset.self, data))
+    }
+
+    /// The stored list without the elements that can't be read as `T`; none
+    /// when the data is missing or isn't a list.
+    static func decodeList<T: Decodable>(_ type: T.Type, _ data: Data?) -> [T] {
+        guard let data, let list = try? JSONDecoder().decode([LossyDecoded<T>].self, from: data) else { return [] }
+        return list.compactMap(\.value)
+    }
+}
+
+/// One stored element read as `T`, or nil when it can't be, so a list of
+/// them loses only the elements that can't be read.
+struct LossyDecoded<T: Decodable>: Decodable {
+    let value: T?
+
+    init(from decoder: Decoder) throws {
+        value = try? T(from: decoder)
+    }
+}
+
+extension KeyedDecodingContainer {
+    /// The list under `key` without the elements that can't be read as `T`;
+    /// throws when there is no list there.
+    func decodeLossyList<T: Decodable>(_ type: T.Type, forKey key: Key) throws -> [T] {
+        try decode([LossyDecoded<T>].self, forKey: key).compactMap(\.value)
+    }
+
+    /// The number under `key`, NaN when it is missing or isn't one: the S245
+    /// and S251 clamps turn NaN into the default.
+    func decodeNumberOrNaN(forKey key: Key) -> Double {
+        (try? decodeIfPresent(Double.self, forKey: key)) ?? .nan
     }
 }
 
