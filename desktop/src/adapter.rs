@@ -11842,6 +11842,36 @@ mod tests {
         );
     }
 
+    /// As on the Mac, a stereo pair a zone holds while AirPlay 2 is off says
+    /// it needs AirPlay 2, not that it isn't found.
+    // covers: S246
+    #[test]
+    fn a_zone_stereo_pair_the_sender_cant_list_says_it_needs_airplay2() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(false);
+        let (pair, left, right) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        adapter.poll();
+        adapter.add_zone("Lounge", &["ap:pair:5f0c".to_owned(), key(HEADPHONES)]);
+        let state = adapter.snapshot();
+        let zone = &state.zones[0];
+        let notes: Vec<_> = state
+            .zone_rows(zone)
+            .into_iter()
+            .map(|row| state.zone_note(zone, row))
+            .collect();
+        assert_eq!(
+            notes,
+            [
+                Some(ui_model::ZoneNote::NeedsAirPlay2),
+                Some(ui_model::ZoneNote::NotFound)
+            ]
+        );
+    }
+
     // covers: S265, S266
     #[test]
     fn a_member_that_fails_to_start_after_a_recall_goes_into_the_preset_notice() {
