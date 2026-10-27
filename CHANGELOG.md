@@ -40,6 +40,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the menu bar panel's first open after launch grows in from the menu bar like every open after it. Before, that first one just faded in at full size.
 - On the Mac, while none of a zone's speakers is found, Tab in the main window skips the zone's greyed round icon and stops on its arrow, which shows or hides the zone's speakers, as in the menu bar panel. Before, the focus stopped on the icon, which VoiceOver doesn't read.
 - On the Mac, while an AirPlay problem is showing, the "no speakers found" note asks you to check Local Network access only once macOS has refused it, not while AudioSync merely can't tell yet.
+- On the Mac, a saved Google Cast speakers file that AudioSync can't read is kept as a copy next to it before AudioSync first saves over it, so the delays and formats in it aren't lost. A file AudioSync can't open at all is left as it is.
 
 ## [0.7.1] - 2026-10-27
 
