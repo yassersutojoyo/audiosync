@@ -9908,6 +9908,7 @@ mod tests {
     fn a_zone_menu_says_rename_as_a_speaker_menu_does() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
+        assert_eq!(strings.get_rename_zone(), "Rename…");
         assert_eq!(strings.get_rename_zone(), strings.get_rename_speaker());
     }
 
