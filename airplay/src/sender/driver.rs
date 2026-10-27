@@ -2779,8 +2779,13 @@ mod tests {
             return false;
         }
         assert!(driver.ptp.is_some(), "the service is bound");
-        driver.add_speaker(b, options(), counters(), now);
-        driver.add_speaker(c, options(), counters(), now);
+        // Each start comes at its own connect turn (P222).
+        let (b_turn, c_turn) = (
+            now + crate::connects::CONNECT_SPACING,
+            now + crate::connects::CONNECT_SPACING * 2,
+        );
+        driver.add_speaker(b, options(), counters(), b_turn);
+        driver.add_speaker(c, options(), counters(), c_turn);
         // A is served; C, set up with the PtpPeer, had its SETUP answered
         // with NTP but not yet its RECORD; B was refused with "PTP in use on
         // another network".
@@ -2794,7 +2799,7 @@ mod tests {
         driver.ap2_event(
             &c_key,
             crate::ap2::Ap2Event::TimingChosen(crate::ap2::Timing::Ntp),
-            now,
+            c_turn,
         );
         assert!(driver.ptp.is_some(), "A still uses the service");
         driver.end_session(&b_key, Phase::Failed);
@@ -2805,7 +2810,7 @@ mod tests {
         waiter.ap2_refusal = refusal;
 
         driver.end_session(&a_key, Phase::Failed);
-        driver.flush(now);
+        driver.flush(c_turn);
         assert!(driver.ptp.is_none(), "C on NTP holds no service");
         assert!(
             !driver.speakers[&b_key].ptp_waiting
@@ -2914,7 +2919,13 @@ mod tests {
         );
         let mut options = SpeakerOptions::new(Volume::Db(-20.0));
         options.timing = Some(super::super::TimingMemory::of(&b, crate::ap2::Timing::Ptp));
-        driver.add_speaker(b, options, counters(), now);
+        // B starts at its own connect turn (P222).
+        driver.add_speaker(
+            b,
+            options,
+            counters(),
+            now + crate::connects::CONNECT_SPACING,
+        );
         let b = &driver.speakers[&b_key];
         assert!(!b.ptp_waiting, "B waits for PTP");
         assert!(matches!(b.phase, Phase::Active(_)), "B is not on AirPlay 1");
