@@ -1464,8 +1464,6 @@ export component NameEditor inherits FocusScope {
     in property <string> placeholder;
     in property <string> label;
     in property <string> description;
-    // Cut to the speaker name limit while typed; zone names have none.
-    in property <bool> fit: true;
     // The row asks for the focus here; focus-taken clears its request.
     in property <bool> focus-wanted;
     callback focus-taken();
@@ -1508,8 +1506,9 @@ export component NameEditor inherits FocusScope {
                 self.select-all();
             }
         }
+        // Cut to the name limit while typed, a speaker's or a zone's.
         edited(text) => {
-            if root.fit && NameField.fit(text) != text {
+            if NameField.fit(text) != text {
                 self.text = NameField.fit(text);
                 self.set-selection-offsets(self.text.character-count * 4, self.text.character-count * 4);
             }
@@ -2682,7 +2681,6 @@ export component ZoneHeader inherits Rectangle {
                                 if root.item.renaming: NameEditor {
                                     horizontal-stretch: 1;
                                     text: root.item.name-text;
-                                    fit: false;
                                     label: Strings.new-zone-field-label;
                                     description: Strings.zone-name-field-hint;
                                     focus-wanted: root.pending-focus == RowPart.name;

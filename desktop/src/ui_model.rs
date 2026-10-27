@@ -2473,7 +2473,8 @@ impl Backend for MockBackend {
     }
 
     fn rename_zone(&mut self, id: &str, name: &str) {
-        self.zones_mut(|zones| zones.rename(id, name));
+        let name = speaker_names::normalized(name);
+        self.zones_mut(|zones| zones.rename(id, &name));
     }
 
     fn delete_zone(&mut self, id: &str) {

@@ -9728,7 +9728,7 @@ do {
     check(count(card, "InlineNameField(") == 1 && count(card, "Button(t.renameZone) { model.startRename(zone) }") == 1
             && count(card, ".accessibilityAction(named: t.renameZone) { model.startRename(zone) }") == 2
             && !zonesCode.isEmpty && count(zonesCode, "promptRenameZone") == 0 && count(zonesCode, "renameZoneTitle") == 0,
-          "main window zone header: Rename Zone edits the name in place like a speaker's, with no alert, and VoiceOver has the action")
+          "main window zone header: Rename… edits the name in place like a speaker's, with no alert, and VoiceOver has the action")
 
     let compact = window.components(separatedBy: "private struct ZoneMemberCompactRow").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""

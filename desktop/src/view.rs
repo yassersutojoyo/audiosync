@@ -8671,6 +8671,25 @@ mod tests {
     }
 
     #[test]
+    fn the_zone_name_field_stops_at_sixty_characters_while_typing() {
+        let app = app_over(MockBackend::zones_preview());
+        app.main.show().unwrap();
+        draw_frames();
+        app.main.invoke_zone_rename_requested("zone:office".into());
+        draw_frames();
+        for _ in 0..65 {
+            press(app.main.window(), "a");
+        }
+        let sixty = "a".repeat(60);
+        assert_eq!(
+            app.ui.borrow().rename,
+            Some(("zone:office".to_owned(), sixty.clone()))
+        );
+        press(app.main.window(), Key::Return);
+        assert_eq!(app.models.zones.row_data(2).unwrap().name.as_str(), sixty);
+    }
+
+    #[test]
     fn use_target_instead_swaps_the_member_for_its_pair() {
         let app = app_over(MockBackend::zones_preview());
         app.main
