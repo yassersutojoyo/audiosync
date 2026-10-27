@@ -11,7 +11,7 @@
 //! - [`ring`]: the delay ring, its single writer and its readers (S35-S59).
 //! - [`render`]: the resampler, a local output's output stage (S62-S65) and
 //!   its whole renderer with the fades (S182-S188).
-//! - [`sync`]: the AirPlay sync rule and the delay helpers (S3, S77-S80).
+//! - [`sync`]: the AirPlay sync rule and the delay helpers (S3, S79, S124, S172 to S179).
 //! - [`device_volume`]: what an output device's own volume and mute mean for
 //!   its row, and what the one-click fix writes (S192-S202).
 //! - [`calibrate`]: the microphone calibration's test signal and estimate
@@ -207,7 +207,8 @@ pub extern "C" fn asc_zone_output_gain(
 }
 
 /// [`volume::device_level`]: an AirPlay speaker's device level, 0 to 100,
-/// for its own volume through its zone (100 outside one) and the master (S290).
+/// for its own volume through its zone (100 outside one) and the master:
+/// min(100, own × k), the own volume unrounded and possibly above 100 (S290).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_airplay_device_level(
     own_position: f64,
@@ -225,9 +226,10 @@ pub extern "C" fn asc_airplay_row_level(device_level: f64) -> f64 {
 }
 
 /// [`volume::row_move`]: an AirPlay row moved to `row` writes the own
-/// volume to store and the device level to send through `own_position` and
-/// `device_level` (S290). False, writing nothing, when zone × master is 0,
-/// `row` isn't finite or a pointer is null.
+/// volume to store, row ÷ k unrounded and possibly above 100, and the device
+/// level to send, the row, through `own_position` and `device_level` (S290).
+/// False, writing nothing, when zone × master is 0, `row` isn't finite or a
+/// pointer is null.
 ///
 /// # Safety
 ///
@@ -951,6 +953,10 @@ mod tests {
             ("ASC_EQ_BANDS", BAND_COUNT.to_string()),
             ("ASC_EQ_PRESETS", PRESET_COUNT.to_string()),
             (
+                "ASC_AIRPLAY2_SESSIONS",
+                audiosync_airplay::sender::AIRPLAY2_SESSIONS.to_string(),
+            ),
+            (
                 "ASC_RING_MARGIN_FRAMES",
                 crate::ring::MIN_MARGIN_FRAMES.to_string(),
             ),
@@ -1015,12 +1021,16 @@ mod tests {
                 AIRPLAY_REASON_TIMING.to_string(),
             ),
             (
-                "ASC_AIRPLAY_REASON_ONE_AIRPLAY2",
-                AIRPLAY_REASON_ONE_AIRPLAY2.to_string(),
+                "ASC_AIRPLAY_REASON_TOO_MANY_AIRPLAY2",
+                AIRPLAY_REASON_TOO_MANY_AIRPLAY2.to_string(),
             ),
             (
                 "ASC_AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS",
                 AIRPLAY_REASON_PLAYS_THROUGH_SPEAKERS.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_REASON_PTP_OTHER_NETWORK",
+                AIRPLAY_REASON_PTP_OTHER_NETWORK.to_string(),
             ),
             ("ASC_AIRPLAY_FLAG_TARGET", AIRPLAY_FLAG_TARGET.to_string()),
             (
@@ -1087,6 +1097,10 @@ mod tests {
             (
                 "ASC_AIRPLAY_STATE_STOPPED",
                 AIRPLAY_STATE_STOPPED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_STATE_UNANNOUNCED",
+                AIRPLAY_STATE_UNANNOUNCED.to_string(),
             ),
             (
                 "ASC_AIRPLAY_ERROR_NOT_RESPONDING",
@@ -1213,6 +1227,14 @@ mod tests {
             (
                 "ASC_AIRPLAY_WARNING_PTP_FREE",
                 AIRPLAY_WARNING_PTP_FREE.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_PEERS_UPDATE_REFUSED",
+                AIRPLAY_WARNING_PEERS_UPDATE_REFUSED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_WARNING_GRANDMASTER_OUTRANKED",
+                AIRPLAY_WARNING_GRANDMASTER_OUTRANKED.to_string(),
             ),
             (
                 "ASC_AIRPLAY_EVENT_LATENCY_HELD",

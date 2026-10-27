@@ -1965,3 +1965,32 @@ fn an_unanswered_airplay1_image_is_a_refusal_and_its_late_answer_is_dropped() {
     assert!(link.failure().is_none(), "{:?}", link.events);
     assert_eq!(link.session.state(), State::Playing);
 }
+
+// covers: P120, P122
+#[test]
+fn a_read_waits_behind_a_volume_held_by_the_rate_limit() {
+    let mut link = playing();
+    link.advance(Duration::from_millis(200));
+    let start = link.receiver.requests.len();
+    link.session.set_volume(Volume::Db(-10.0), link.now);
+    link.pump();
+    link.advance(Duration::from_millis(50));
+    link.session.set_volume(Volume::Db(-12.0), link.now);
+    link.session.read_volume(link.now);
+    link.pump();
+    link.advance(Duration::from_millis(100));
+    let sent: Vec<(String, Vec<u8>)> = link.receiver.requests[start..]
+        .iter()
+        .map(|request| (common::key(request), request.body.clone()))
+        .filter(|(key, _)| key.ends_with("_PARAMETER"))
+        .collect();
+    let set = |body: &[u8]| ("SET_PARAMETER".to_owned(), body.to_vec());
+    assert_eq!(
+        sent,
+        [
+            set(b"volume: -10.000000\r\n"),
+            set(b"volume: -12.000000\r\n"),
+            ("GET_PARAMETER".to_owned(), b"volume\r\n".to_vec()),
+        ]
+    );
+}

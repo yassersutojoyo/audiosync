@@ -399,7 +399,7 @@ mod tests {
             .collect()
     }
 
-    // S195, S202
+    // covers: S195, S202
     #[test]
     fn an_endpoint_volume_notification_updates_the_row() {
         let mut backend = backend();
@@ -465,7 +465,7 @@ mod tests {
         assert!(record.watched().is_empty());
     }
 
-    // S194, S196
+    // covers: S194, S196
     #[test]
     fn an_endpoint_whose_volume_cannot_be_read_shows_nothing() {
         let mut backend = MockBackend::empty();
@@ -492,7 +492,7 @@ mod tests {
         assert_eq!(device_volume(&backend, "usb"), None);
     }
 
-    // S197
+    // covers: S197
     #[test]
     fn the_fix_reads_the_device_again_and_never_lowers_a_volume_raised_meanwhile() {
         let mut backend = backend();
@@ -522,7 +522,7 @@ mod tests {
         );
     }
 
-    // S195, S202
+    // covers: S195, S202
     #[test]
     fn an_output_replugged_between_two_listings_is_followed_again() {
         let mut backend = backend();
@@ -541,7 +541,7 @@ mod tests {
         assert_eq!(hint(&backend, SPEAKERS), Some(Hint::Low { percent: 13 }));
     }
 
-    // S195, S202
+    // covers: S195, S202
     #[test]
     fn an_output_whose_volume_listener_doesnt_answer_shows_no_device_volume_until_a_later_try() {
         let dir = test_dir("controller-device-volume-stalled");
@@ -613,7 +613,7 @@ mod tests {
     const STALLED: &str = "output \"Speakers\" (speakers) device volume: Windows audio didn't \
                            answer in time; none shown for now, tried again in about ten seconds";
 
-    // S195, S202
+    // covers: S195, S202
     #[test]
     fn a_device_volume_read_that_doesnt_answer_shows_none_until_a_later_try() {
         let dir = test_dir("controller-device-volume-read-stalled");
@@ -649,7 +649,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    // S197
+    // covers: S197
     #[test]
     fn a_fix_that_windows_audio_doesnt_answer_shows_no_device_volume_until_a_later_try() {
         let dir = test_dir("controller-device-volume-fix-stalled");

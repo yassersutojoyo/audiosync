@@ -61,11 +61,25 @@ extension AppDelegate {
         pushModel()
     }
 
-    /// With every speaker switched off there is nothing to stream to.
+    /// With every speaker switched off there is nothing to stream to, unless
+    /// the session started that way and waits for its first speaker.
     func stopIfIdle() {
-        if StreamingPolicy.isIdle(streaming: engine.isRunning, enabledAirPlay: playableAirPlay.union(castSwitchedOn),
-                                  enabledLocal: enabledLocal) {
+        noteSessionSpeaker()
+        if StreamingPolicy.isIdle(streaming: engine.isRunning, hadSpeaker: sessionHadSpeaker,
+                                  enabledAirPlay: playableAirPlay.union(castSwitchedOn), enabledLocal: enabledLocal) {
             stopEngine(.noSpeakerOn)
+        }
+    }
+
+    /// A session that started with every speaker off has one now that one
+    /// plays: a local output that started, an AirPlay speaker the sender
+    /// plays to, or the Cast speaker in Playing.
+    func noteSessionSpeaker() {
+        guard engine.isRunning, !sessionHadSpeaker else { return }
+        let switchedOn = StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn),
+                                                    enabledLocal: enabledLocal)
+        if StreamingPolicy.countsForSession(switchedOn: switchedOn, playing: !calibratePlayingIDs().isEmpty) {
+            sessionHadSpeaker = true
         }
     }
 
@@ -210,6 +224,7 @@ extension AppDelegate {
     /// follow it (S173, S172).
     func noteLocalDeviceList(_ devices: [AudioDevices.Device]) {
         localListed = devices.map(\.uid).filter { !$0.isEmpty }
+        freshLinks.noteListing(localListed, now: ProcessInfo.processInfo.systemUptime)
         localReference = LocalDelay.reference(in: devices)
         dataSourceWatch.onChange = { [weak self] in self?.pushModel() }
         dataSourceWatch.follow(devices)
@@ -233,7 +248,10 @@ extension AppDelegate {
     func setSource(_ source: AudioSource) {
         let change = SourceSwitch.decide(from: audioSource, to: source, streaming: engine.isRunning)
         clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
-        guard change != .none else { return }
+        guard change != .none else {
+            microphoneRequest.repicked(source: source, pair: currentInputPair)
+            return
+        }
         microphoneRequest.supersedeSwitch()   // a switch still waiting on the prompt is out of date
         let old = audioSource
         audioSource = source
@@ -258,7 +276,10 @@ extension AppDelegate {
         guard case .input(let uid) = audioSource else { return }
         let change = InputChannelPair.change(from: currentInputPair, to: index, streaming: engine.isRunning)
         clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
-        guard change != .none else { return }
+        guard change != .none else {
+            microphoneRequest.repicked(source: audioSource, pair: index)
+            return
+        }
         microphoneRequest.supersedeSwitch()   // a switch still waiting on the prompt is out of date
         let old = currentInputPair
         inputPairs[uid] = index == 0 ? nil : index
@@ -276,6 +297,7 @@ extension AppDelegate {
             !$0.uid.isEmpty && $0.name != SourceCapture.aggregateName   // hide our private aggregate
         }
         migrateLocalDelays(listed: outputs)   // once, before auto-connect below (S179)
+        if let uid = store.speakerOnAtInstall(listed: outputs, firstInstall: freshInstall) { enabledLocal.insert(uid) }
         // Virtual devices are hidden unless asked for, or the user chose them:
         // on, auto-connect, or in a zone.
         var chosen = enabledLocal
@@ -308,14 +330,19 @@ extension AppDelegate {
         noteLocalDeviceList(listing)   // the reference follows the list, streaming or not
         guard engine.isRunning else { return }   // stopped: startEngine syncs them once it runs
 
-        let applied = LocalOutputSync.apply(enabled: enabledLocal, listing: listing, to: engine,
+        let applied = LocalOutputSync.apply(enabled: enabledLocal.subtracting(freshLinks.held), listing: listing,
+                                            to: engine,
                                             bound: localBoundDevices,
                                             holdBacks: localHoldBackTargets(), gain: { effectiveGain($0) })
         for (uid, holdBack) in applied.attached {
             localHoldBacks[uid] = holdBack
             clearNotices([SpeakerKey.make(id: uid, airplay: false)])
+            if let device = listing.first(where: { $0.uid == uid }) { noteFreshLinkStart(uid, device) }
         }
-        for uid in applied.detached { localHoldBacks[uid] = nil }
+        for uid in applied.detached {
+            localHoldBacks[uid] = nil
+            freshLinks.cancel(uid: uid)
+        }
         // Only running outputs keep a bound ID; a lost or stopped one gets a new one when it starts.
         let running = Set(engine.activeOutputUIDs)
         localBoundDevices = localBoundDevices.filter { running.contains($0.key) }.merging(applied.devices) { $1 }
@@ -340,6 +367,46 @@ extension AppDelegate {
         }
         stopIfIdle()   // the failed speaker may have been the only output
         pushModel()
+    }
+
+    /// A Bluetooth output that started on a link that just came up gets one
+    /// quiet restart (S325); every Bluetooth start logs the decision.
+    private func noteFreshLinkStart(_ uid: String, _ device: AudioDevices.Device) {
+        let bluetooth = BluetoothIOBuffer.isBluetooth(transport: device.transport)
+        switch freshLinks.decide(uid: uid, bluetooth: bluetooth, now: ProcessInfo.processInfo.systemUptime,
+                                 session: session) {
+        case .notBluetooth:
+            return
+        case .settled(let age):
+            let link = age.map { "its device appeared \(String(format: "%.1f", $0)) s ago" } ?? "its link is not new"
+            DebugTrace.log("[AudioSync] fresh link: Bluetooth output \(uid) started as is, \(link)")
+        case .restart(let age):
+            DebugTrace.log("[AudioSync] fresh link: Bluetooth output \(uid) started \(String(format: "%.1f", age)) s "
+                + "after its device appeared; one quiet restart in \(FreshLinkWatch.restartAfterS) s")
+            guard let ticket = freshLinks.pendingTicket(uid: uid) else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + FreshLinkWatch.restartAfterS) { [weak self] in
+                self?.restartOnSettledLink(uid, ticket: ticket)
+            }
+        }
+    }
+
+    /// Fades output `uid` out like a switch-off, keeps it off the sync until
+    /// the fade has played and the link has rested, then lets the next sync
+    /// start it again at its current delay and gain. The other outputs keep
+    /// playing untouched.
+    private func restartOnSettledLink(_ uid: String, ticket: Int) {
+        guard engine.isRunning, engine.activeOutputUIDs.contains(uid),
+              freshLinks.begin(uid: uid, ticket: ticket, session: session) else { return }
+        DebugTrace.log("[AudioSync] fresh link: restarting Bluetooth output \(uid) once")
+        localHoldBacks[uid] = nil
+        localBoundDevices[uid] = nil
+        engine.detachOutputs(uids: [uid]) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + FreshLinkWatch.rejoinPauseS) {
+                guard let self else { return }
+                self.freshLinks.release(uid: uid)
+                self.syncLocalOutputs(origin: .automatic)
+            }
+        }
     }
 
     /// AudioSync's own sender's speakers follow the switches, each at its own

@@ -36,3 +36,12 @@ claxon = "0.4.3"
 # each test. Test-only: the sender itself speaks TLS through native-tls.
 rcgen = { version = "0.14.5", default-features = false, features = ["crypto", "ring"] }
 rustls = { version = "0.23.31", default-features = false, features = ["ring", "std", "tls12"] }
+# An RSA key for the fake receiver's ECDHE-RSA suites (C20), made at test
+# time: ring signs with RSA but can't generate a key. Only generation and the
+# PKCS#8 export run here; ring does the signing.
+rand_core = { version = "0.6.4", default-features = false, features = ["getrandom"] }
+rsa = { version = "0.9.8", default-features = false, features = ["std", "u64_digit"] }
+
+# RSA key generation runs for seconds unoptimized; this keeps the tests quick.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3

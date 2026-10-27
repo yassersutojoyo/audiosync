@@ -41,6 +41,9 @@ libc = "0.2.191"
 [dev-dependencies]
 criterion = { version = "0.7.0", default-features = false, features = ["cargo_bench_support"] }
 proptest = "1.11.0"
+# Reads the shared S290 volume vectors (tests/vectors/); already in the tree
+# through the Cast sender.
+serde_json = { version = "1.0.140", default-features = false, features = ["std"] }
 
 [[bench]]
 name = "pipeline"

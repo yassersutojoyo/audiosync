@@ -48,13 +48,15 @@ use audiosync_core::policy::presets::{self, Preset, PresetMember, PresetZone};
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::SpeakerKey;
 use audiosync_core::policy::zones::{self, DEFAULT_ZONE_VOLUME, Zone, Zones};
-use audiosync_core::volume::{DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, sanitize_position};
+use audiosync_core::volume::{
+    DEFAULT_LOCAL_POSITION, DEFAULT_MASTER_POSITION, sanitize_own, sanitize_position,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::audio::cast_address;
 use crate::data_folder;
 use crate::remote::RemoteSettings;
-use crate::ui_model::WindowFrame;
+use crate::ui_model::{UpdateRecord, WindowFrame};
 
 /// The file's name in the app's data folder.
 #[cfg(any(os_backend, test))]
@@ -226,10 +228,19 @@ impl SavedSpeaker {
         *self == SavedSpeaker::default()
     }
 
-    fn clamped(self, (min_delay_ms, max_delay_ms): (f64, f64)) -> SavedSpeaker {
+    /// Delays clamped to `delays`; the volume to 0 to 100, or with `airplay`
+    /// to 0 up, since an AirPlay speaker's own volume may pass 100 (S290).
+    fn clamped(self, (min_delay_ms, max_delay_ms): (f64, f64), airplay: bool) -> SavedSpeaker {
+        let volume = if airplay {
+            Some(self.volume)
+                .filter(|volume| volume.is_finite())
+                .map(sanitize_own)
+        } else {
+            sanitize_position(self.volume)
+        };
         SavedSpeaker {
             enabled: self.enabled,
-            volume: sanitize_position(self.volume).unwrap_or(DEFAULT_LOCAL_POSITION),
+            volume: volume.unwrap_or(DEFAULT_LOCAL_POSITION),
             delay_ms: if self.delay_ms.is_finite() {
                 self.delay_ms.clamp(min_delay_ms, max_delay_ms)
             } else {
@@ -694,6 +705,25 @@ pub struct Settings {
     pub cast_addresses: Vec<String>,
     /// File > AirPlay 2 (Experimental); read at launch only (spec P170).
     pub airplay2_experimental: bool,
+    /// File > Check for Updates Automatically (spec S305), on by default.
+    pub check_updates_automatically: bool,
+    /// The last update check that read the appcast, in seconds since the
+    /// Unix epoch (spec S305).
+    pub last_update_check: Option<u64>,
+    /// The version that failed its first start or was blocked (spec S316);
+    /// one that doesn't read is no record.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "record_that_reads"
+    )]
+    pub update_record: Option<UpdateRecord>,
+}
+
+fn record_that_reads<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<UpdateRecord>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
 }
 
 impl Default for Settings {
@@ -725,21 +755,26 @@ impl Default for Settings {
             remote: RemoteSettings::default(),
             cast_addresses: Vec::new(),
             airplay2_experimental: false,
+            check_updates_automatically: true,
+            last_update_check: None,
+            update_record: None,
         }
     }
 }
 
 /// Keeps the first [`MAX_ENTRIES`] speakers whose ID is usable, with their
-/// delays clamped to `delays` (smallest, largest).
+/// delays clamped to `delays` (smallest, largest) and their volumes as
+/// [`SavedSpeaker::clamped`] keeps them.
 fn clamp_speakers(
     speakers: BTreeMap<String, SavedSpeaker>,
     delays: (f64, f64),
+    airplay: bool,
 ) -> BTreeMap<String, SavedSpeaker> {
     speakers
         .into_iter()
         .filter(|(id, _)| usable_id(id))
         .take(MAX_ENTRIES)
-        .map(|(id, speaker)| (id, speaker.clamped(delays)))
+        .map(|(id, speaker)| (id, speaker.clamped(delays, airplay)))
         .collect()
 }
 
@@ -947,8 +982,8 @@ impl Settings {
                 .collect(),
             source_mix,
             master_volume: sanitize_position(self.master_volume).unwrap_or(DEFAULT_MASTER_POSITION),
-            outputs: clamp_speakers(self.outputs, output_delays),
-            airplay: clamp_speakers(self.airplay, (0.0, MAX_AIRPLAY_DELAY_MS)),
+            outputs: clamp_speakers(self.outputs, output_delays, false),
+            airplay: clamp_speakers(self.airplay, (0.0, MAX_AIRPLAY_DELAY_MS), true),
             auto_connect: self
                 .auto_connect
                 .into_iter()
@@ -986,6 +1021,9 @@ impl Settings {
             remote: self.remote.clamped(),
             cast_addresses: cast_address::clamped(self.cast_addresses),
             airplay2_experimental: self.airplay2_experimental,
+            check_updates_automatically: self.check_updates_automatically,
+            last_update_check: self.last_update_check,
+            update_record: self.update_record,
         }
     }
 
@@ -1847,6 +1885,36 @@ mod tests {
     }
 
     #[test]
+    fn update_checks_are_on_by_default_and_keep_their_time() {
+        let read = |json: &str| Settings::from_json(json).expect("read").0;
+        assert!(Settings::default().check_updates_automatically);
+        assert!(read(r#"{"version": 2}"#).check_updates_automatically);
+        let off = read(
+            r#"{"version": 2, "check_updates_automatically": false, "last_update_check": 1800000000}"#,
+        );
+        assert!(!off.check_updates_automatically);
+        let again = read(&off.to_json());
+        assert_eq!(again.last_update_check, Some(1_800_000_000));
+        assert!(!again.check_updates_automatically);
+        assert_eq!(again.update_record, None);
+
+        // covers: S316
+        let blocked =
+            read(r#"{"version": 2, "update_record": {"version": "0.9.0", "reason": "blocked"}}"#);
+        let record = Some(crate::ui_model::UpdateRecord {
+            version: "0.9.0".to_owned(),
+            reason: crate::ui_model::UpdateRecordReason::Blocked,
+        });
+        assert_eq!(blocked.update_record, record);
+        assert_eq!(read(&blocked.to_json()).update_record, record);
+        let odd = read(r#"{"version": 2, "update_record": {"version": 9}}"#);
+        assert_eq!(
+            odd.update_record, None,
+            "a record that doesn't read is none"
+        );
+    }
+
+    #[test]
     fn an_appearance_this_build_does_not_know_follows_windows() {
         let read = |json: &str| Settings::from_json(json).expect("read").0;
         assert_eq!(read(r#"{"version": 2}"#).appearance, Appearance::System);
@@ -2088,7 +2156,11 @@ mod tests {
                 "": {"enabled": true},
                 "quiet": {"volume": -5, "delay_ms": -20}
             },
-            "airplay": {"far": {"delay_ms": 25000, "volume": 101}, "near": {"delay_ms": 13000}},
+            "airplay": {
+                "far": {"delay_ms": 25000, "volume": 158.73},
+                "near": {"delay_ms": 13000},
+                "low": {"volume": -5}
+            },
             "auto_connect": ["lc:loud", "nonsense", "ap:", "zz:loud"],
             "groups": [
                 {"id": "group:1", "name": "Empty", "members": ["bad"]},
@@ -2130,7 +2202,9 @@ mod tests {
             settings.airplay["near"].delay_ms, 13_000.0,
             "a calibrated delay stays"
         );
-        assert_eq!(settings.airplay["far"].volume, 100.0);
+        // An AirPlay own volume may pass 100 (S290).
+        assert_eq!(settings.airplay["far"].volume, 158.73);
+        assert_eq!(settings.airplay["low"].volume, 0.0);
         assert_eq!(
             settings.auto_connect,
             BTreeSet::from(["lc:loud".to_owned()])
@@ -2222,6 +2296,7 @@ mod tests {
         settings
     }
 
+    // covers: S180
     #[test]
     fn old_trims_become_offsets_relative_to_the_reference() {
         let mut settings = trims();
@@ -2254,6 +2329,7 @@ mod tests {
         assert_eq!(settings.outputs["bluetooth"].delay_ms, -2000.0);
     }
 
+    // covers: S180
     #[test]
     fn the_references_old_trim_becomes_the_airplay_adjustment_and_airplay_delays_stay() {
         let mut settings = trims();
@@ -2267,6 +2343,7 @@ mod tests {
         assert_eq!(settings.outputs["builtin"].delay_ms, 250.0);
     }
 
+    // covers: S180
     #[test]
     fn a_late_airplay_speaker_lined_up_by_the_references_trim_stays_lined_up() {
         use audiosync_core::policy::delay::{Participant, hold_backs, native_airplay_latency_ms};

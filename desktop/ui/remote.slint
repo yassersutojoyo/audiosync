@@ -1,10 +1,10 @@
 // File > Web Remote…: the setting, and while it is on, the address with its QR
 // code, the pairing code and the paired devices. Closing it keeps the remote on.
 
-import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { Button, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Fluent, SecondaryText, SectionTitle, ToggleSwitch } from "widgets.slint";
+import { Fluent, SecondaryText, SectionTitle, TextField, ToggleSwitch } from "widgets.slint";
 
 // A label and its value, read by Narrator as one line.
 component AddressLine inherits VerticalLayout {
@@ -181,7 +181,7 @@ export component RemoteWindow inherits Window {
                             spacing: 8px;
                             alignment: start;
 
-                            port-field := LineEdit {
+                            port-field := TextField {
                                 width: 120px;
                                 input-type: number;
                                 placeholder-text: Strings.remote-port-label;
@@ -194,8 +194,8 @@ export component RemoteWindow inherits Window {
 
                             Button {
                                 text: Strings.remote-use-port;
+                                accessible-label: Strings.remote-use-port;
                                 enabled: root.use-port-enabled(port-field.text, root.port, root.port-problem);
-                                accessible-description: root.port-invalid ? Strings.remote-port-invalid : "";
                                 clicked => {
                                     root.port-submitted(port-field.text);
                                 }
@@ -296,6 +296,7 @@ export component RemoteWindow inherits Window {
                                 // click also flips the clicked one's own state and drops its binding.
                                 iphone-choice := Button {
                                     text: Strings.remote-iphone;
+                                    accessible-label: Strings.remote-iphone;
                                     checkable: true;
                                     checked: root.steps-for-iphone;
                                     clicked => {
@@ -307,6 +308,7 @@ export component RemoteWindow inherits Window {
 
                                 android-choice := Button {
                                     text: Strings.remote-android;
+                                    accessible-label: Strings.remote-android;
                                     checkable: true;
                                     checked: !root.steps-for-iphone;
                                     clicked => {
@@ -373,6 +375,7 @@ export component RemoteWindow inherits Window {
 
                                 Button {
                                     text: Strings.remote-new-code;
+                                    accessible-label: Strings.remote-new-code;
                                     clicked => {
                                         root.new-code-requested();
                                     }
@@ -418,6 +421,7 @@ export component RemoteWindow inherits Window {
 
                             Button {
                                 text: Strings.remote-forget-all;
+                                accessible-label: Strings.remote-forget-all;
                                 enabled: root.devices > 0 || root.forget-failed;
                                 accessible-description: root.forget-failed ? Strings.remote-forget-failed : "";
                                 clicked => {
@@ -437,6 +441,7 @@ export component RemoteWindow inherits Window {
 
                 Button {
                     text: Strings.guide-close;
+                    accessible-label: Strings.guide-close;
                     clicked => {
                         root.close-requested();
                     }

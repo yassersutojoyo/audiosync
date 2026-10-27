@@ -181,9 +181,9 @@ fn the_pair_leader_falls_back_to_the_gid_middle_field_then_the_lowest_identifier
     assert_eq!(find_targets([&a, &b])[0].leader, Some(key(5)));
 }
 
-// covers: P173
+// covers: P173, P216
 #[test]
-fn a_lone_member_is_an_incomplete_pair_only_with_bit_14() {
+fn a_lone_member_is_an_incomplete_pair_with_bit_14_or_a_partner_seen_before() {
     let lone = pair_member(1, "0x4", TSID);
     assert!(find_targets([&lone]).is_empty());
     let unreachable = pair_member(1, "0x4004", TSID);
@@ -204,9 +204,98 @@ fn a_lone_member_is_an_incomplete_pair_only_with_bit_14() {
     assert_eq!(target.missing().collect::<Vec<_>>(), vec![&key(2)]);
     assert_eq!(target.members.len(), 2);
     assert_eq!(tracker.target_of(&key(2)), Some(&target.id));
-    // Without bit 14 the lone member is a single speaker again.
+    // Without bit 14 it stays the pair it was seen in, its partner missing.
     let changes = tracker.update([&lone]);
-    assert_eq!(changes, vec![TargetChange::Gone(target.id.clone())]);
+    let [TargetChange::Updated(still)] = changes.as_slice() else {
+        panic!("{changes:?}");
+    };
+    assert_eq!(still.id, target.id);
+    assert_eq!(still.missing().collect::<Vec<_>>(), vec![&key(2)]);
+    assert_eq!(tracker.target_of(&key(1)), Some(&target.id));
+}
+
+/// A pair member with its `_raop._tcp` record and without its
+/// `_airplay._tcp` record, which carries the group keys.
+fn raop_only(n: u8) -> Device {
+    let record = ServiceRecord {
+        kind: ServiceKind::Raop,
+        instance: format!("02005E0053{n:02X}@HomePod {n}"),
+        host: format!("speaker-{n}.local"),
+        port: 7000,
+        txt: ["et=0", "cn=0,1", "tp=UDP"]
+            .iter()
+            .map(|s| s.as_bytes().to_vec())
+            .collect(),
+        addresses: vec![ScopedAddr::new([192, 0, 2, n].into())],
+    };
+    Device::from_records(key(n), Some(&record), None).expect("device")
+}
+
+// covers: P216, P181, P173
+#[test]
+fn a_pair_member_whose_partner_lapsed_is_named_missing() {
+    let left = pair_member(1, "0x2004", TSID);
+    let right = pair_member(2, "0x4", TSID);
+    let nothing: [&Device; 0] = [];
+    for left_now in [left.clone(), pair_member(1, "0x6004", TSID)] {
+        let mut tracker = Targets::new();
+        tracker.update([&left, &right]);
+        let id = tracker.target_of(&key(1)).cloned().expect("the pair");
+
+        let changes = tracker.update([&left_now]);
+        let [TargetChange::Updated(pair)] = changes.as_slice() else {
+            panic!("{changes:?}");
+        };
+        assert_eq!(pair.id, id);
+        assert!(!pair.complete());
+        assert_eq!(pair.missing().collect::<Vec<_>>(), vec![&key(2)]);
+        assert_eq!(tracker.target_of(&key(1)), Some(&id));
+        assert_eq!(tracker.target_of(&key(2)), Some(&id));
+
+        // The remaining member's records lapse too: both are named missing.
+        let changes = tracker.update(nothing);
+        let [TargetChange::Updated(pair)] = changes.as_slice() else {
+            panic!("{changes:?}");
+        };
+        assert_eq!(pair.id, id);
+        assert_eq!(pair.name, "Kitchen");
+        assert_eq!(pair.missing().collect::<Vec<_>>(), vec![&key(1), &key(2)]);
+        assert!(pair.members.iter().all(|member| !member.in_view()));
+
+        // Each comes back into the same pair.
+        let changes = tracker.update([&left_now]);
+        let [TargetChange::Updated(pair)] = changes.as_slice() else {
+            panic!("{changes:?}");
+        };
+        assert_eq!(pair.missing().collect::<Vec<_>>(), vec![&key(2)]);
+        tracker.update([&left, &right]);
+        assert!(tracker.get(&id).expect("the pair").complete());
+    }
+
+    // The partner's `_airplay._tcp` record lapses before its `_raop._tcp`
+    // record: it is still named missing, not dropped.
+    let mut tracker = Targets::new();
+    tracker.update([&left, &right]);
+    let id = tracker.target_of(&key(1)).cloned().expect("the pair");
+    let changes = tracker.update([&left, &raop_only(2)]);
+    let [TargetChange::Updated(pair)] = changes.as_slice() else {
+        panic!("{changes:?}");
+    };
+    assert_eq!(pair.id, id);
+    assert_eq!(pair.missing().collect::<Vec<_>>(), vec![&key(2)]);
+    tracker.update([&left]);
+    assert_eq!(
+        tracker
+            .get(&id)
+            .expect("the pair")
+            .missing()
+            .collect::<Vec<_>>(),
+        vec![&key(2)]
+    );
+
+    // A device whose partner was never seen is a single speaker.
+    let mut tracker = Targets::new();
+    assert!(tracker.update([&left]).is_empty());
     assert_eq!(tracker.target_of(&key(1)), None);
 }
 

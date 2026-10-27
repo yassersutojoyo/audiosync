@@ -397,6 +397,7 @@ fn set_latency_held_while_sounding() {
     assert_eq!(rig.stream.latency_frames(), 77_175);
     rig.stream.restart(rig.now);
     rig.drain();
+    rig.answer_flushes();
     assert_eq!(rig.stream.latency_frames(), 88_200);
     assert!(rig.events.iter().any(|event| matches!(
         event,

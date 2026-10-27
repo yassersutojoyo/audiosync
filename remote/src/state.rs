@@ -79,7 +79,7 @@ pub struct ZoneCounts {
     /// Members on, a waiting one included.
     pub on: u32,
     pub total: u32,
-    /// Members on that wait for the other AirPlay 2 speaker.
+    /// Members on that wait for an AirPlay 2 place or for PTP.
     pub waiting: u32,
 }
 

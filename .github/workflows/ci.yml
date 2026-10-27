@@ -79,6 +79,8 @@ jobs:
           fi
 
       - name: make-dmg.sh packages a signed bundle into an image that mounts with the app, an Applications link and the README
+        # The Finder window layout scripts Finder; a stuck Apple event must not hold the runner.
+        timeout-minutes: 10
         run: |
           # A stand-in bundle around the release binary, signed ad hoc: the
           # real bundle is build.sh's, which the app-bundle job checks.
@@ -111,7 +113,13 @@ jobs:
           # A lone path is the app; the default output is AudioSync.dmg in the
           # repository root (RELEASE.md).
           rm -f AudioSync.dmg
-          ./make-dmg.sh "$app"
+          # The runner may not allow Finder scripting; the plain image passes too,
+          # and the log shows which one was made.
+          if ! said=$(./make-dmg.sh "$app" 2>&1); then
+            echo "$said"; exit 1
+          fi
+          echo "$said"
+          grep "Finder window:" <<< "$said"
           test -f AudioSync.dmg
           hdiutil imageinfo AudioSync.dmg | grep -E '^ *Format: UDZO$'
 
@@ -135,7 +143,7 @@ jobs:
           rm -f AudioSync.dmg
 
       - name: Python syntax
-        run: python3 -I -m py_compile scripts/brand/compose.py scripts/brand/tidy-svg.py scripts/brand/tokens.py scripts/brand/ico.py scripts/brand/guide_art.py scripts/windows_notices.py scripts/core_notices.py scripts/privacy_check.py scripts/text_check.py
+        run: python3 -I -m py_compile scripts/brand/compose.py scripts/brand/tidy-svg.py scripts/brand/tokens.py scripts/brand/ico.py scripts/brand/guide_art.py scripts/windows_notices.py scripts/core_notices.py scripts/privacy_check.py scripts/text_check.py scripts/spec_markers.py scripts/check_appcast.py
 
       - name: Generated brand files are up to date (SVGs, the SwiftUI mark, the Guide art and the design tokens)
         run: |
@@ -230,6 +238,12 @@ jobs:
         run: |
           python3 -I scripts/text_check.py --self-test
           python3 -I scripts/text_check.py
+      - name: Host spec markers name real clauses
+        run: |
+          python3 -I scripts/spec_markers.py --self-test
+          python3 -I scripts/spec_markers.py
+      - name: Release appcast checker
+        run: python3 -I scripts/check_appcast.py --self-test
       - name: Commit messages of this push or pull request (forbidden names)
         env:
           RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}

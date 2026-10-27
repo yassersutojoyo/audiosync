@@ -206,9 +206,16 @@ final class NowPlayingMonitor {
     /// user said no to the consent prompt, or turned it off in System Settings
     /// → Privacy & Security → Automation.
     var onAutomationDenied: ((_ bundleID: String, _ denied: Bool) -> Void)?
+    /// False until the user read why Now Playing scripts the players: a
+    /// player macOS would still ask about is skipped meanwhile, and
+    /// `onPromptHeld` says so (main thread).
+    var mayRaisePrompt = true
+    var onPromptHeld: (() -> Void)?
 
     /// errAEEventNotPermitted: the user hasn't allowed Automation for the target.
     static let notPermitted = -1743
+    /// errAEEventWouldRequireUserConsent: macOS hasn't asked about the target yet.
+    static let wouldRequireConsent: OSStatus = -1744
 
     /// errAENoSuchObject (a player open with no current track) and
     /// errAETimeout (a player busy or quitting) both mean "no track this time".
@@ -233,6 +240,7 @@ final class NowPlayingMonitor {
     /// `track` keeps the position of the last change.
     private(set) var reading: Track?
     private var refreshing = false
+    private var holding = false
     private var emptyReadings = EmptyReadings()
     private var played = LastPlayed()
     /// The player seen playing last since the source was chosen (`LastPlayed`).
@@ -298,12 +306,18 @@ final class NowPlayingMonitor {
         let candidates = candidates()
         let lastPlayed = played.bundleID
         let startedAt = Date()
+        let mayAsk = mayRaisePrompt
         scripts.async { [weak self] in
             guard let self else { return }
             var found: Track?
             var paused: [Track] = []
             var empties: [String: EmptyReadings.Empty] = [:]
+            var held = false
             for bundleID in candidates where Self.isRunning(bundleID) {
+                if !mayAsk, Self.wouldAsk(bundleID) {
+                    held = true
+                    continue
+                }
                 switch self.query(bundleID) {
                 case .track(let t):
                     if t.isPlaying { found = t } else { paused.append(t) }
@@ -318,6 +332,12 @@ final class NowPlayingMonitor {
             }
             DispatchQueue.main.async {
                 self.refreshing = false
+                if held != self.holding {
+                    self.holding = held
+                    DebugTrace.log("Now Playing: \(held ? "holding" : "no longer holding") a player's reading "
+                                   + "for the Automation explanation")
+                }
+                if held { self.onPromptHeld?() }
                 if self.isRunning { self.reading = next }
                 let last = self.track
                 let lastPlayerRuns = last.map { self.candidates().contains($0.bundleID) && Self.isRunning($0.bundleID) }
@@ -357,6 +377,14 @@ final class NowPlayingMonitor {
 
     private static func isRunning(_ bundleID: String) -> Bool {
         !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
+    }
+
+    /// Whether a script to the running player would raise the Automation
+    /// prompt. Asks macOS without prompting; may block, so scripts queue only.
+    private static func wouldAsk(_ bundleID: String) -> Bool {
+        let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
+        guard let desc = target.aeDesc else { return false }
+        return AEDeterminePermissionToAutomateTarget(desc, typeWildCard, typeWildCard, false) == wouldRequireConsent
     }
 
     private func query(_ bundleID: String) -> Answer {

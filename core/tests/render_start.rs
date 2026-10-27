@@ -9,7 +9,9 @@
 //! their hold-backs apart, also when the earliest joins later (S208); a
 //! Bluetooth output's start lead counts one capture block more, which moves
 //! the others only when it sets the session lead (S230); and a Bluetooth
-//! output's implausible latency report gives way without moving any (S231).
+//! output's implausible latency report gives way without moving any (S231);
+//! and a Windows endpoint whose wakes jitter by up to 3 ms with its buffer
+//! never dry makes no start step (S324).
 //!
 //! The capture writes fixed blocks at 48 kHz on its own clock (512 frames,
 //! the Mac's tap; 480, a Windows loopback period); the device pulls fixed
@@ -899,6 +901,62 @@ fn with_its_period_given_a_late_wake_raises_the_lead_for_its_own_callback() {
     let late = reader_frames_bound(882, RATE, 44_100) as i64 + 480;
     assert_eq!(&seen.leads[48..52], &[lead, lead, late, lead]);
     assert_eq!(seen.counters.starved_renders, 0);
+}
+
+/// Start steps and reader counters of a Windows endpoint at `device_rate`,
+/// period given, in step with a capture that writes one stamped 10 ms block
+/// every 10 ms, at hold-back 0, for five seconds. Every wake asks for
+/// exactly one period, so its buffer never runs dry, but comes 5 ms after
+/// a block plus a jitter of 0 to 3 ms, drawn from `seed`.
+fn jittered_wakes(device_rate: u32, seed: u64) -> (u64, ReaderCounters) {
+    const MS: u64 = 1_000_000;
+    let block = RATE as usize / 100;
+    let period = device_rate as usize / 100;
+    let ring = Ring::for_rate(RATE).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let reader = Reader::new(ring, RATE);
+    let control = RendererControl::new(&reader);
+    control.set_delay_frames(0);
+    let gain = Arc::new(SharedGain::new(1.0));
+    let mut renderer = Renderer::new(reader, &control, gain, RATE, device_rate, 2).unwrap();
+    renderer.set_period_frames(period);
+    let samples = vec![A; block * 2];
+    // A second of capture before the first wake, as a running session has.
+    let start = 1_000 * MS;
+    for k in 0..100 {
+        writer.write_at(&samples, block, start - (100 - k) * 10 * MS);
+    }
+    let mut draw = seed | 1;
+    let mut out = vec![0.0f32; period * 2];
+    for k in 0..500 {
+        let at = start + k * 10 * MS;
+        writer.write_at(&samples, block, at);
+        draw ^= draw << 13;
+        draw ^= draw >> 7;
+        draw ^= draw << 17;
+        let jitter = draw % (3 * MS + 1);
+        renderer.render_at(&mut out, at + 5 * MS + jitter);
+    }
+    (control.start_steps(), control.counters())
+}
+
+// covers: S324
+#[test]
+fn a_windows_endpoint_whose_wakes_jitter_by_up_to_3_ms_makes_no_start_step() {
+    // S324's limits: a wake late by less than a period finds as much padding
+    // as an on-time one and raises the gap for that wake only, which the
+    // lowest gap of the newest PULL_GAP_WAKES wakes leaves out.
+    for device_rate in [48_000, 44_100] {
+        for seed in [1, 0x9E37_79B9_7F4A_7C15, 0xDEAD_BEEF, 42, 7_777_777] {
+            let (steps, counters) = jittered_wakes(device_rate, seed);
+            assert_eq!(steps, 0, "{device_rate} Hz, seed {seed:#x}");
+            assert_eq!(
+                counters.starved_renders, 0,
+                "{device_rate} Hz, seed {seed:#x}"
+            );
+            assert_eq!(counters.resyncs, 0, "{device_rate} Hz, seed {seed:#x}");
+        }
+    }
 }
 
 /// Writes `frames` ramp frames from `first` on: the left sample is the

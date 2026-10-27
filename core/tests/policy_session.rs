@@ -5,8 +5,8 @@
 use audiosync_core::policy::session::{
     AFTER_START, AfterStart, AutoStartGate, Click, DropReason, Incident, OutputSync, Reaction,
     SourcePick, SpeakerEvent, SpeakerKind, SpeakerState, StartOrigin, StreamingAction, TurnOff,
-    TurnOn, click, may_start, reaction, source_pick, source_switch, speaker_state, streaming_after,
-    sync_outputs, turn_off, turn_on,
+    TurnOn, click, reaction, source_pick, source_switch, speaker_state, starts,
+    starts_without_speaker, streaming_after, sync_outputs, turn_off, turn_on,
 };
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::speakers::{NoticeSubject, SpeakerKey};
@@ -92,11 +92,33 @@ fn a_failed_output_is_disabled_with_a_notice_and_an_alert_only_when_the_user_cau
     );
 }
 
-// covers: S116
+// covers: S116, S162
 #[test]
 fn a_session_starts_only_with_a_speaker_enabled_then_runs_its_steps_in_order() {
-    assert!(!may_start(0));
-    assert!(may_start(1));
+    use StartOrigin::{AutoConnect, FormatChange, User};
+    // With a speaker on, every start goes ahead.
+    for origin in [User, AutoConnect, FormatChange] {
+        assert!(starts(true, false, false, origin));
+        assert!(starts(true, true, true, origin));
+    }
+    // The user's start goes ahead with every speaker off; the first one
+    // turned on joins.
+    assert!(starts_without_speaker(User));
+    assert!(starts(false, false, false, User));
+    assert!(
+        starts(false, true, true, User),
+        "a source switch by the user"
+    );
+    // AudioSync on its own still waits for a speaker ...
+    assert!(!starts_without_speaker(AutoConnect));
+    assert!(!starts_without_speaker(FormatChange));
+    assert!(!starts(false, false, false, AutoConnect));
+    // ... except to carry on a session that never had one ...
+    assert!(starts(false, true, false, FormatChange));
+    // ... and once the last speaker of the session went off, a rebuild
+    // stops instead of capturing for nobody.
+    assert!(!starts(false, true, true, FormatChange));
+    assert!(!starts(false, true, true, AutoConnect));
     let refused = reaction(&Incident::NoSpeakerEnabled);
     assert_eq!(refused.notice, Some(NoticeSubject::Start));
     assert!(refused.informational && !refused.stop_session);
@@ -404,26 +426,41 @@ fn eight_local_speakers_are_attached_by_one_sync() {
 #[test]
 fn streaming_follows_the_enabled_sets_alone() {
     use SpeakerEvent::{StartRequested, SwitchedOff, SwitchedOn};
-    use StreamingAction::{AskForSpeaker, Nothing, Start, Stop};
+    use StreamingAction::{Nothing, Start, Stop};
     // Switching the last speaker off stops streaming.
-    assert_eq!(streaming_after(SwitchedOff, true, 0, 0), Stop);
+    assert_eq!(streaming_after(SwitchedOff, true, true, 0, 0), Stop);
     // One speaker still on, an AirPlay one included, keeps it running.
-    assert_eq!(streaming_after(SwitchedOff, true, 0, 1), Nothing);
-    assert_eq!(streaming_after(SwitchedOff, true, 1, 0), Nothing);
+    assert_eq!(streaming_after(SwitchedOff, true, true, 0, 1), Nothing);
+    assert_eq!(streaming_after(SwitchedOff, true, true, 1, 0), Nothing);
     // While stopped there is nothing to stop, and a switch-off starts nothing.
-    assert_eq!(streaming_after(SwitchedOff, false, 0, 0), Nothing);
-    assert_eq!(streaming_after(SwitchedOff, false, 2, 1), Nothing);
+    assert_eq!(streaming_after(SwitchedOff, false, false, 0, 0), Nothing);
+    assert_eq!(streaming_after(SwitchedOff, false, false, 2, 1), Nothing);
     // Turning a speaker on again starts streaming ...
-    assert_eq!(streaming_after(SwitchedOn, false, 1, 0), Start);
-    assert_eq!(streaming_after(SwitchedOn, false, 0, 1), Start);
+    assert_eq!(streaming_after(SwitchedOn, false, false, 1, 0), Start);
+    assert_eq!(streaming_after(SwitchedOn, false, false, 0, 1), Start);
     // ... but only while nothing streams.
-    assert_eq!(streaming_after(SwitchedOn, true, 2, 0), Nothing);
-    // Start with no speaker on asks for one first, with an informational notice.
-    assert_eq!(streaming_after(StartRequested, false, 0, 0), AskForSpeaker);
+    assert_eq!(streaming_after(SwitchedOn, true, true, 2, 0), Nothing);
+    // Start with no speaker on starts anyway: the first speaker turned on joins.
+    assert_eq!(streaming_after(StartRequested, false, false, 0, 0), Start);
+    assert_eq!(streaming_after(StartRequested, false, false, 0, 1), Start);
+    assert_eq!(streaming_after(StartRequested, true, true, 1, 0), Nothing);
+    assert_eq!(streaming_after(StartRequested, true, false, 0, 0), Nothing);
+    // An automatic start refused for want of a speaker posts an
+    // informational notice and stops nothing (S116, S136).
     let notice = reaction(&Incident::NoSpeakerEnabled);
     assert!(notice.informational && !notice.stop_session);
-    assert_eq!(streaming_after(StartRequested, false, 0, 1), Start);
-    assert_eq!(streaming_after(StartRequested, true, 1, 0), Nothing);
+}
+
+// covers: S162
+#[test]
+fn a_session_started_with_every_speaker_off_runs_until_its_last_speaker_goes() {
+    use SpeakerEvent::{ListingChanged, SwitchedOff};
+    use StreamingAction::{Nothing, Stop};
+    // No speaker has been on yet: it waits for the first.
+    assert_eq!(streaming_after(SwitchedOff, true, false, 0, 0), Nothing);
+    assert_eq!(streaming_after(ListingChanged, true, false, 0, 0), Nothing);
+    // One was on and none is left: it stops.
+    assert_eq!(streaming_after(SwitchedOff, true, true, 0, 0), Stop);
 }
 
 // covers: S162, S137
@@ -431,11 +468,11 @@ fn streaming_follows_the_enabled_sets_alone() {
 fn streaming_keeps_running_while_the_only_speaker_is_unplugged() {
     // The only speaker is still enabled; its device just isn't listed now.
     assert_eq!(
-        streaming_after(SpeakerEvent::ListingChanged, true, 1, 0),
+        streaming_after(SpeakerEvent::ListingChanged, true, true, 1, 0),
         StreamingAction::Nothing
     );
     assert_eq!(
-        streaming_after(SpeakerEvent::ListingChanged, false, 1, 0),
+        streaming_after(SpeakerEvent::ListingChanged, false, false, 1, 0),
         StreamingAction::Nothing,
         "a listing change is not a switch"
     );

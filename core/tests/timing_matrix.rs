@@ -18,18 +18,23 @@
 //! - I1: no read runs dry.
 //! - I2: no drift skip or silence at any time, the start included.
 //! - I3: S206's slow-down makes up no shortage. A late-first output's I1
-//!   and I3 count from 1 s after its callbacks came on time.
+//!   and I3 count from 1 s after its callbacks came on time. Neither counts
+//!   the callbacks on the falling half of a wander that brings them earlier
+//!   faster than S207's trim can carry the output later (S209), which runs
+//!   its lead's slack down, nor those after it still below the anchor floor.
 //! - I4: over the last quarter, any two outputs' mean delays, less their
 //!   latencies and hold-backs, lie within a capture block plus 2 ms.
 //! - I5: over the last quarter, each output's delay stays within 2 ms.
 //! - I6: an output without wander whose clock is at least 20 ppm off is
 //!   trimmed with its clock by 9/10 of what it gained, against it by at most
 //!   16 frames, on a slow clock plus what the anchor floor falls toward its
-//!   stray stamps (S209 moves it later by that); a late-first output from
-//!   20 s after its callbacks came on time, or later when its trim's cap
-//!   needs longer to carry it their lateness, plus one ANCHOR_FALL_MS.
+//!   stray stamps (S209 moves it later by that), which may come off what it
+//!   trims with the clock instead, on a fast clock plus what stray stamps on
+//!   late callbacks, which read as on time, move the trim; a late-first
+//!   output from its start window's end plus one ANCHOR_FALL_MS, its late
+//!   start made up by a start step (S320).
 //! - I7: with AirPlay chosen, the session lead stays 0 and no output
-//!   re-times.
+//!   re-times; a start step anchors through a resync and re-times nothing.
 //! - I8 (stall cases only): a device that consumes nothing for 50 to 200 ms
 //!   and then plays on later gets at most one correction for it, runs dry
 //!   none, and every output it doesn't stall gets none.
@@ -50,7 +55,10 @@ use std::time::Instant;
 
 use audiosync_core::fade::FadeState;
 use audiosync_core::reader::{Reader, ReaderCounters};
-use audiosync_core::render::{ANCHOR_FALL_MS, Renderer, RendererControl, TRIM_SHARE};
+use audiosync_core::render::{
+    ANCHOR_FALL_MS, Renderer, RendererControl, TRACK_CALLBACKS, TRACK_MS, TRIM_DEAD_ZONE_FRAMES,
+    TRIM_SHARE,
+};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 use proptest::prelude::*;
@@ -83,10 +91,8 @@ const FIRST_LATE_LARGE_MS: f64 = 45.0;
 /// start is over, a dry read and S206's slow-downs as they come on time
 /// included.
 const CAUGHT_UP: f64 = 1.0;
-/// Late-first: s after the callbacks came on time by which the anchor floor
-/// has fallen (ten ANCHOR_FALL_MS) and a trim of about 3.9 ms a second has
-/// carried the output the 45 ms; see [`fallen_after`] for slower trims.
-const FALLEN_AFTER: f64 = 20.0;
+/// A renderer's start window, in s after its first callback (S317).
+const START_WINDOW_S: f64 = 3.0;
 
 /// I4: how far apart outputs may play beyond a capture block, in ms.
 const ALIGN_SLACK_MS: f64 = 2.0;
@@ -578,6 +584,16 @@ struct Output {
     stalls: Vec<(f64, f64)>,
     rng: u64,
     strays_left: u8,
+    /// How much later than its stamps said its stray-stamped callbacks came,
+    /// up to each stray, in ms.
+    misread_ms: f64,
+    /// Whether its wander outruns S207's trim, whether this callback comes
+    /// on the wander's falling half, and the dry reads and shortage frames
+    /// from `settled_at` on of such callbacks and of those after the trough
+    /// still below the anchor floor, which I1 and I3 don't count.
+    outruns: bool,
+    falling: bool,
+    excused: (u64, u64),
     mac: bool,
     /// Windows: frames written, the prefilled silence included, and how
     /// much later than its wakes the device plays after its stalls and
@@ -600,6 +616,10 @@ struct Output {
     /// up by then.
     trim_judged_from: f64,
     trim_from: Option<(u64, u64)>,
+    /// When its first callback came, and the lowest and highest delay it
+    /// played from its start window's end on, in ms (S320).
+    first_at: Option<f64>,
+    after_window: Option<(f64, f64)>,
 }
 
 impl Output {
@@ -643,6 +663,7 @@ impl Output {
         let nominal = self.nominal(self.pulls);
         let d = &self.d;
         let phase = (nominal / d.wander_s + d.phase).fract();
+        let falling = phase >= 0.5;
         let triangle = if phase < 0.5 {
             2.0 * phase
         } else {
@@ -662,6 +683,7 @@ impl Output {
             late_ms += ms;
         }
         self.next_at = (nominal + late_ms / 1000.0).max(self.last_at);
+        self.falling = falling;
     }
 }
 
@@ -679,6 +701,10 @@ struct Outcome {
     /// the lowest Jf, Jf 2 s after the late callbacks came on time, its
     /// delay before then and its mean delay over the last quarter.
     falls: Vec<Option<Fall>>,
+    /// Per output: its delay's range from its start window's end on, in ms,
+    /// and the start steps it made (S320).
+    after_window: Vec<Option<(f64, f64)>>,
+    start_steps: Vec<u64>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -699,26 +725,10 @@ fn write_block(writer: &mut RingWriter, samples: &mut [f32], first: u64, at: f64
     writer.write_at(samples, samples.len() / 2, ns(at));
 }
 
-/// The most a device's trim moves its output, in capture ms a second: a
-/// 256th of a callback's reads and at least one frame (S207), so one frame
-/// in each 10 ms callback of 480 frames at 48 kHz, 2.1 ms a second.
-fn trim_ms_per_s(d: &Device) -> f64 {
-    let reads = d.callback * CAPTURE_RATE as usize / d.rate as usize;
-    let frames = (reads / TRIM_SHARE).max(1) as f64;
-    frames * 1000.0 / f64::from(CAPTURE_RATE) * f64::from(d.rate) / d.callback as f64
-}
-
-/// Late-first: s after the callbacks came on time from which I6 judges the
-/// trim, [`FALLEN_AFTER`] or, when the trim carries the output its `ms`
-/// slower, that long plus one [`ANCHOR_FALL_MS`].
-fn fallen_after(d: &Device, ms: f64) -> f64 {
-    FALLEN_AFTER.max(ms / trim_ms_per_s(d) + f64::from(ANCHOR_FALL_MS) / 1000.0)
-}
-
 /// Capture frames by which the anchor floor falls toward a device's two
 /// stray stamps, `1 - e^(-t / ANCHOR_FALL_MS)` of the gap at each (S209):
 /// the output is to move later by as much, so on a slow clock the trim
-/// carries it there against the clock.
+/// carries it there against the clock or by trimming that much less with it.
 fn stray_fall_frames(d: &Device) -> u64 {
     let Some((_, ms)) = d.strays else {
         return 0;
@@ -727,6 +737,37 @@ fn stray_fall_frames(d: &Device) -> u64 {
     let kept = (-span_ms / f64::from(ANCHOR_FALL_MS)).exp();
     let fall_ms = ms * (1.0 - kept * kept);
     (fall_ms * f64::from(CAPTURE_RATE) / 1000.0).ceil() as u64
+}
+
+/// Whether a device's wander brings its callbacks earlier faster than S207's
+/// trim, at most a [`TRIM_SHARE`]th of a callback's reads and at least one
+/// frame, can carry it later toward the falling anchor floor (S209), less
+/// what a fast clock takes of that trim: its lead's slack then runs down
+/// and S206's slow-down makes up the rest.
+fn wander_outruns_trim(d: &Device) -> bool {
+    if d.wander_ms == 0.0 {
+        return false;
+    }
+    let need = (d.callback as u64 * u64::from(CAPTURE_RATE)).div_ceil(u64::from(d.rate));
+    let most = (need / TRIM_SHARE as u64).max(1) as f64;
+    let callbacks_per_s = f64::from(d.rate) / d.callback as f64;
+    let trim_ms_per_s =
+        most * callbacks_per_s * 1000.0 / f64::from(CAPTURE_RATE) - d.ppm.max(0.0) * 1e-3;
+    2.0 * d.wander_ms / d.wander_s > trim_ms_per_s
+}
+
+/// Capture frames S207's trim may make against a fast clock for stray
+/// stamps on late callbacks, `misread_ms` of them in all: a stamp early on a
+/// callback that came late reads as that much less late, which the renderer
+/// cannot tell from a callback that was, so its fill counts the lesser of
+/// the two in capture too many. Each fill moves the running average by its
+/// share, and the trim follows what lies beyond the dead zone.
+fn misread_frames(d: &Device, misread_ms: f64) -> u64 {
+    let track = (f64::from(d.rate) * f64::from(TRACK_MS) / 1000.0)
+        .max((TRACK_CALLBACKS * d.callback) as f64);
+    let share = 1.0 - (-(d.callback as f64) / track).exp();
+    let moved = share * misread_ms * f64::from(CAPTURE_RATE) / 1000.0;
+    (moved - TRIM_DEAD_ZONE_FRAMES).max(0.0).ceil() as u64
 }
 
 fn simulate(case: &Case) -> Outcome {
@@ -777,6 +818,10 @@ fn simulate(case: &Case) -> Outcome {
                 stalls,
                 rng: d.seed | 1,
                 strays_left: 2,
+                misread_ms: 0.0,
+                outruns: wander_outruns_trim(d),
+                falling: false,
+                excused: (0, 0),
                 written: if mac { 0 } else { d.callback as u64 * 2 },
                 mac,
                 played_shift: 0.0,
@@ -793,12 +838,15 @@ fn simulate(case: &Case) -> Outcome {
                     .iter()
                     .find_map(|d| d.first_late.map(|(_, until)| until)),
                 delay_before_ms: f64::NAN,
-                // Once the anchor floor has fallen and the trim has carried the
-                // output there, the trim follows the clock alone again.
-                trim_judged_from: d
-                    .first_late
-                    .map_or(SETTLED, |(ms, until)| until + fallen_after(d, ms)),
+                // A late-first output's is set at its first callback (S320).
+                trim_judged_from: if d.first_late.is_some() {
+                    f64::NAN
+                } else {
+                    SETTLED
+                },
                 trim_from: None,
+                first_at: None,
+                after_window: None,
             };
             output.schedule();
             output
@@ -856,6 +904,10 @@ fn simulate(case: &Case) -> Outcome {
         }
         let o = &mut outputs[next];
         let rate = o.rate;
+        let before = (
+            o.control.counters().starved_renders,
+            o.control.shortage_frames(),
+        );
         let (frames, played_at) = if mac {
             let frames = o.d.callback;
             let output_at = o.nominal(o.pulls) + o.d.latency_ms / 1000.0;
@@ -870,6 +922,7 @@ fn simulate(case: &Case) -> Outcome {
             {
                 o.strays_left -= 1;
                 early_ms += ms;
+                o.misread_ms += ms.min((pull_at - o.nominal(o.pulls)) * 1000.0);
             }
             let stamped = output_at + early_ms / 1000.0;
             o.renderer
@@ -913,6 +966,25 @@ fn simulate(case: &Case) -> Outcome {
                 o.tail.add((played_at - captured_at) * 1000.0);
             }
         }
+        let first_at = *o.first_at.get_or_insert(pull_at);
+        if o.trim_judged_from.is_nan() {
+            // The start step made up the late start inside the window; one
+            // ANCHOR_FALL_MS later the trim follows the clock alone again.
+            o.trim_judged_from = first_at + START_WINDOW_S + f64::from(ANCHOR_FALL_MS) / 1000.0;
+        }
+        if frames > 0
+            && pull_at >= first_at + START_WINDOW_S
+            && o.renderer.fade_state() == FadeState::Open
+        {
+            let value = f64::from(out[(frames - 1) * 2]);
+            if value != 0.0 {
+                let captured_at = value * 1e6 / f64::from(CAPTURE_RATE) - capture_origin;
+                let ms = (played_at - captured_at) * 1000.0;
+                let (low, high) = o.after_window.get_or_insert((ms, ms));
+                *low = low.min(ms);
+                *high = high.max(ms);
+            }
+        }
         if let Some(until) = o.observed_until
             && frames > 0
             && pull_at.max(o.nominal(o.pulls)) < until
@@ -923,6 +995,13 @@ fn simulate(case: &Case) -> Outcome {
                 let captured_at = value * 1e6 / f64::from(CAPTURE_RATE) - capture_origin;
                 o.delay_before_ms = (played_at - captured_at) * 1000.0;
             }
+        }
+        // Until the callbacks are back up to the anchor floor, past the
+        // trough, the slack the fall took is still missing.
+        let below_anchor = o.renderer.floor_shift_frames() < 0;
+        if o.outruns && (o.falling || below_anchor) && pull_at >= o.settled_at {
+            o.excused.0 += o.control.counters().starved_renders - before.0;
+            o.excused.1 += o.control.shortage_frames() - before.1;
         }
         if o.trim_from.is_none() && pull_at >= o.trim_judged_from {
             o.trim_from = Some((o.control.slowed_frames(), o.control.sped_frames()));
@@ -973,10 +1052,11 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         slack_ms.push(slack);
         dry_from_start.push(end.starved_renders);
         let mut own = [false; 8];
+        let mut trim = String::new();
         if !case.is_stall() {
-            own[0] = dry > 0;
+            own[0] = dry > o.excused.0;
             own[1] = corrections > 0;
-            own[2] = shortage > 0;
+            own[2] = shortage > o.excused.1;
             own[4] = o.tail.count == 0 || spread > STEADY_MS;
             if d.wander_ms == 0.0 && d.ppm.abs() >= TRIM_JUDGED_PPM {
                 let judged_s = case.seconds - o.trim_judged_from;
@@ -987,11 +1067,20 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
                 } else {
                     (sped, slowed)
                 };
-                let carried = if d.ppm < 0.0 { stray_fall_frames(d) } else { 0 };
-                own[5] = (with as f64) < gained * TRIM_WITH_SHARE
-                    || against > TRIM_AGAINST_FRAMES + carried;
+                let (carried, misread) = if d.ppm < 0.0 {
+                    (stray_fall_frames(d), 0)
+                } else {
+                    (0, misread_frames(d, o.misread_ms))
+                };
+                own[5] = ((with + carried) as f64) < gained * TRIM_WITH_SHARE
+                    || against > TRIM_AGAINST_FRAMES + carried + misread;
+                trim = format!(
+                    " trim with {with} (+{carried}) of {gained:.0} against {against} of {}",
+                    TRIM_AGAINST_FRAMES + carried + misread
+                );
             }
-            own[6] = case.airplay && (lead_moved || end.resyncs > 0);
+            // A start step anchors through a resync, but re-times nothing (S318).
+            own[6] = case.airplay && (lead_moved || end.resyncs > o.control.start_steps());
             norms.push(norm);
         } else {
             for (s, pair) in stall_marks.windows(2).enumerate() {
@@ -1010,7 +1099,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
             .filter_map(|(name, f)| f.then_some(*name))
             .collect();
         lines.push(format!(
-            "  o{i}{} {} Hz hb {:.1} ms {:+.0} ppm cb {} lat {:.0} wander {:.1}/{:.0}s 2nd {:.1} early {:.0} strays {:?} first late {:?} | dry {dry} skips {} silences {} resyncs {} shortage {shortage} slowed {slowed} sped {sped} slack {:.2} | tail {:.2} ms norm {:.2} {failed:?}",
+            "  o{i}{} {} Hz hb {:.1} ms {:+.0} ppm cb {} lat {:.0} wander {:.1}/{:.0}s 2nd {:.1} early {:.0} strays {:?} first late {:?} | dry {dry} skips {} silences {} resyncs {} start steps {} shortage {shortage} slowed {slowed} sped {sped} slack {:.2} | tail {:.2} ms norm {:.2}{trim} {failed:?}",
             if d.bluetooth { " bt" } else { "" },
             d.rate,
             d.hold_back_ms,
@@ -1026,6 +1115,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
             end.drift_skips,
             end.drift_silences,
             end.resyncs,
+            o.control.start_steps(),
             slack.unwrap_or(f64::NAN),
             spread,
             norm,
@@ -1065,6 +1155,8 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         dry_from_start,
         norms,
         falls,
+        after_window: outputs.iter().map(|o| o.after_window).collect(),
+        start_steps: outputs.iter().map(|o| o.control.start_steps()).collect(),
     }
 }
 
@@ -1240,9 +1332,9 @@ fn the_capture_rate_output_that_sets_the_lead_never_runs_dry_through_its_wander(
     }
 }
 
-// covers: S208, S209
+// covers: S207, S208, S209
 #[test]
-fn a_late_second_callback_neither_corrects_drift_nor_plays_early_in_a_mac_case() {
+fn a_late_second_callback_neither_corrects_drift_nor_moves_the_output_in_a_mac_case() {
     // The start re-anchor used to land on the late second callback before
     // the floor had formed, too close to W by its lateness: past T it was
     // corrected (I2), inside T it played that much early all run (on main
@@ -1263,12 +1355,56 @@ fn a_late_second_callback_neither_corrects_drift_nor_plays_early_in_a_mac_case()
     let mut lines = Vec::new();
     let mut shown = 0;
     for ((case, late), on_time) in late.iter().zip(simulate_all(&on_time)) {
-        let early_ms = on_time.norms[0] - late.norms[0];
+        let late_ms = late.norms[0] - on_time.norms[0];
         let corrected = late.fails[1] && !on_time.fails[1];
-        shown += usize::from(corrected || early_ms > ALIGN_SLACK_MS);
+        shown += usize::from(corrected || late_ms.abs() > ALIGN_SLACK_MS);
         lines.push(format!(
-            "case {}: {:.2} ms early, drift corrected {corrected}",
-            case.k, early_ms
+            "case {}: {:.2} ms later than on time, drift corrected {corrected}",
+            case.k, late_ms
+        ));
+    }
+    println!("{}", lines.join("\n"));
+    assert_eq!(shown, 0, "\n{}", lines.join("\n"));
+}
+
+// covers: S207, S324
+#[test]
+fn a_windows_wake_that_comes_after_the_buffer_ran_dry_moves_no_output_and_corrects_no_drift() {
+    // A second wake 27 to 80 ms late finds the 20 ms buffer dry: the device
+    // played silence the core never hears of. S207's reference used to take it
+    // in, so the output played up to 50 ms later than its on-time twin all run,
+    // or a drift correction made it up; a start step now skips it.
+    let windows: Vec<&Case> = matrix()
+        .cases_where(|c| !c.is_stall() && c.k % 4 == 1 && c.platform == Platform::Windows)
+        .into_iter()
+        .map(|(case, _)| case)
+        .collect();
+    assert!(!windows.is_empty());
+    let mut late = Vec::new();
+    let mut on_time = Vec::new();
+    for ms in [27.0, 48.0, 60.0, 80.0] {
+        for case in &windows {
+            let mut case = (*case).clone();
+            case.devices[0].second_late_ms = ms;
+            late.push(case.clone());
+            case.devices[0].second_late_ms = 0.0;
+            on_time.push(case);
+        }
+    }
+    let mut lines = Vec::new();
+    let mut shown = 0;
+    for ((case, outcome), twin) in late
+        .iter()
+        .zip(simulate_all(&late))
+        .zip(simulate_all(&on_time))
+    {
+        let late_ms = outcome.norms[0] - twin.norms[0];
+        let corrected = outcome.fails[1];
+        let steps = outcome.start_steps[0];
+        shown += usize::from(corrected || late_ms.abs() > ALIGN_SLACK_MS || steps != 1);
+        lines.push(format!(
+            "case {} second wake {:.0} ms late: {late_ms:.2} ms later than on time, drift corrected {corrected}, start steps {steps}",
+            case.k, case.devices[0].second_late_ms
         ));
     }
     println!("{}", lines.join("\n"));
@@ -1311,7 +1447,7 @@ fn two_stray_early_stamps_move_no_output_by_more_than_2_ms() {
     assert_eq!(moved, 0, "\n{}", lines.join("\n"));
 }
 
-// covers: S208, S209
+// covers: S208, S209, S318
 #[test]
 fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_output() {
     // Its prime and its floor take the late callbacks as on time, so it
@@ -1319,12 +1455,10 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
     // their lateness and the anchor floor falls after it over
     // ANCHOR_FALL_MS, so from then on the output moves later by the
     // lateness and every other output by nothing, each to within 2 ms of
-    // its move in the twin whose callbacks were on time. Their delays
-    // aren't compared directly: an anchor lands on a capture block, and the
-    // twin's land at other times. At hold-back 0 a lateness past the lead
-    // runs the reader dry once as they come on time; that silence used to
-    // count toward the move twice, and the reference measured after it
-    // took in half of what the anchor floor still fell.
+    // its move in the twin whose callbacks were on time. At hold-back 0 a
+    // lateness past the lead runs the reader dry once as they come on time;
+    // that silence used to count toward the move twice, and the reference
+    // measured after it took in half of what the anchor floor still fell.
     let late: Vec<(&Case, &Outcome)> =
         matrix().cases_where(|c| c.devices.iter().any(|d| d.first_late.is_some()));
     for ms in [FIRST_LATE_BT_MS, FIRST_LATE_LARGE_MS] {
@@ -1368,7 +1502,17 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
                 (seen.end_ms - seen.before_ms - owed) - (on_time.end_ms - on_time.before_ms)
             })
             .collect();
-        let own = moves[0];
+        // A start step makes up the error the late start left, which its
+        // delay while late shows only to about a millisecond, so a stepped
+        // output is judged where it plays from its window's end on against
+        // its twin (S320).
+        let own = if seen.start_steps[0] > 0 {
+            let (low, high) = seen.after_window[0].unwrap();
+            let (twin_low, twin_high) = on_time.after_window[0].unwrap();
+            (high - twin_low).abs().max((twin_high - low).abs())
+        } else {
+            moves[0]
+        };
         let others = moves[1..]
             .iter()
             .fold(0.0f64, |most, by| most.max(by.abs()));
@@ -1380,7 +1524,7 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
             && !seen.fails.iter().any(|&f| f);
         failed += usize::from(!ok);
         lines.push(format!(
-            "case f{}: {ms} ms late for {until:.2} s, floor down {:.2} ms, Jf down to {:.2} ms, {after:.2} ms 2 s later; moved {own:+.2} ms past its lateness, others up to {others:.2} ms{}",
+            "case f{}: {ms} ms late for {until:.2} s, floor down {:.2} ms, Jf down to {:.2} ms, {after:.2} ms 2 s later; {own:+.2} ms off (moved past its lateness, or from its window's end against its twin once stepped), others up to {others:.2} ms{}",
             case.k,
             fall.drop_ms,
             fall.least_ms,
@@ -1393,6 +1537,42 @@ fn a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_ou
     }
     println!("{}", lines.join("\n"));
     assert_eq!(failed, 0, "\n{}", lines.join("\n"));
+}
+
+// covers: S318, S320, S321
+#[test]
+fn only_a_late_start_makes_a_start_step() {
+    // Every late-first case's late output makes one, inside its window, on
+    // the matrix's draws and on their own; no other output of any case
+    // makes one, wander and stalls included.
+    let matrix = matrix();
+    let own = late_first_cases_on_own_draws();
+    let own_outcomes = simulate_all(&own);
+    let mut counts = Vec::new();
+    let mut lines = Vec::new();
+    let all = matrix.cases.iter().zip(&matrix.outcomes);
+    for (draws, (case, outcome)) in all
+        .map(|c| ("matrix", c))
+        .chain(own.iter().zip(&own_outcomes).map(|c| ("own draw", c)))
+    {
+        for (i, &steps) in outcome.start_steps.iter().enumerate() {
+            let late_start = case.devices[i].first_late.is_some();
+            let name = format!(
+                "{draws} case {}{} o{i}: {steps} start steps",
+                if late_start { "f" } else { "" },
+                case.k
+            );
+            if steps != u64::from(late_start) {
+                lines.push(name.clone());
+                lines.extend(outcome.lines.iter().cloned());
+            }
+            if late_start {
+                counts.push(name);
+            }
+        }
+    }
+    println!("{}", counts.join("\n"));
+    assert!(lines.is_empty(), "\n{}", lines.join("\n"));
 }
 
 // covers: S85, S206, S207, S208
@@ -1417,7 +1597,65 @@ fn every_windows_case_holds_every_invariant() {
     }
 }
 
-// covers: S207, S209
+/// The nine late-first cases on the draws after the stall cases'.
+fn late_first_cases_on_own_draws() -> Vec<Case> {
+    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed_bytes(SEED));
+    let mut runner = TestRunner::new_with_rng(Config::default(), rng);
+    let strategy = raw_case();
+    let mut draw = || strategy.new_tree(&mut runner).unwrap().current();
+    for _ in 0..CASES + STALL_CASES {
+        draw();
+    }
+    (0..CASES)
+        .filter(|&k| late_first_strata(k))
+        .map(|k| build_late_first(&draw(), k))
+        .collect()
+}
+
+// covers: S317, S318, S320
+#[test]
+fn a_480_frame_output_that_starts_45_ms_late_plays_on_its_twins_delay_from_3_s() {
+    // Its trim alone carried it one frame a callback, 2.1 ms a second, so
+    // it played up to 45 ms early against the others for 22 s (S320).
+    let late = late_first_cases_on_own_draws().swap_remove(4);
+    let d = &late.devices[0];
+    assert_eq!(
+        (late.k, d.callback, d.rate, d.first_late.map(|(ms, _)| ms)),
+        (20, 480, CAPTURE_RATE, Some(FIRST_LATE_LARGE_MS))
+    );
+    let mut on_time = late.clone();
+    on_time.devices[0].first_late = d.first_late.map(|(_, until)| (0.0, until));
+    let outcomes = simulate_all(&[late.clone(), on_time]);
+    let (seen, twin) = (&outcomes[0], &outcomes[1]);
+    let (low, high) = seen.after_window[0].unwrap();
+    let (twin_low, twin_high) = twin.after_window[0].unwrap();
+    let off = (high - twin_low).abs().max((twin_high - low).abs());
+    let report = format!(
+        "delay from 3 s {low:.2}..{high:.2} ms, twin {twin_low:.2}..{twin_high:.2} ms, start steps {:?}, twin {:?}\n{}\n{}",
+        seen.start_steps,
+        twin.start_steps,
+        seen.lines.join("\n"),
+        twin.lines.join("\n")
+    );
+    println!("{report}");
+    assert!(
+        high - low <= STEADY_MS,
+        "moved {:.2} ms from 3 s on: {report}",
+        high - low
+    );
+    assert!(off <= ALIGN_SLACK_MS, "{off:.2} ms off its twin: {report}");
+    assert_eq!(seen.start_steps[0], 1, "{report}");
+    assert!(!seen.fails[1], "a drift correction: {report}");
+    assert!(
+        seen.start_steps[1..]
+            .iter()
+            .chain(&twin.start_steps)
+            .all(|&n| n == 0),
+        "{report}"
+    );
+}
+
+// covers: S207, S209, S320
 #[test]
 fn late_first_cases_on_draws_of_their_own_hold_every_invariant() {
     // The matrix's late-first cases reuse their strata cases' draws; these
@@ -1426,17 +1664,7 @@ fn late_first_cases_on_draws_of_their_own_hold_every_invariant() {
     // floor moves 1.2 ms later toward its two stray stamps 54 ms early, and
     // f20's 480-frame output at 48 kHz, whose trim of one frame a callback
     // (S207) was still carrying it the 45 ms 20 s after its late start.
-    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed_bytes(SEED));
-    let mut runner = TestRunner::new_with_rng(Config::default(), rng);
-    let strategy = raw_case();
-    let mut draw = || strategy.new_tree(&mut runner).unwrap().current();
-    for _ in 0..CASES + STALL_CASES {
-        draw();
-    }
-    let cases: Vec<Case> = (0..CASES)
-        .filter(|&k| late_first_strata(k))
-        .map(|k| build_late_first(&draw(), k))
-        .collect();
+    let cases = late_first_cases_on_own_draws();
     let f2 = &cases[0].devices[1];
     assert_eq!(
         (cases[0].k, f2.callback, f2.strays.map(|(_, ms)| ms.round())),
@@ -1457,26 +1685,138 @@ fn late_first_cases_on_draws_of_their_own_hold_every_invariant() {
     );
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: 512,
-        max_shrink_iters: 64,
-        rng_seed: proptest::test_runner::RngSeed::Fixed(SEED),
-        ..ProptestConfig::default()
-    })]
+/// Cases in the random run.
+const RANDOM_CASES: usize = 512;
 
-    // covers: S50, S206, S207, S208, S209
-    #[test]
-    #[ignore = "512 cases of up to 180 s take minutes"]
-    fn every_output_of_every_mix_holds_every_invariant(raw in raw_case()) {
-        let case = if !raw.stall && late_first_strata(raw.k) && raw.seed % 2 == 1 {
-            build_late_first(&raw, raw.k)
-        } else {
-            build(&raw, raw.k, raw.stall)
-        };
-        let outcome = simulate(&case);
-        prop_assert!(!outcome.fails.iter().any(|&f| f), "{}", outcome.lines.join("\n"));
-    }
+/// The random run's seed: `TIMING_MATRIX_SEED` (decimal or 0x hex), else
+/// [`SEED`].
+fn random_seed() -> u64 {
+    std::env::var("TIMING_MATRIX_SEED").map_or(SEED, |text| {
+        let text = text.trim();
+        match text.strip_prefix("0x") {
+            Some(hex) => u64::from_str_radix(hex, 16),
+            None => text.parse(),
+        }
+        .expect("TIMING_MATRIX_SEED is a u64")
+    })
+}
+
+/// The first `count` cases of the random run of `seed`. An odd draw seed on
+/// late-first strata makes the draw its late-first case.
+fn random_cases(seed: u64, count: usize) -> Vec<Case> {
+    let rng = TestRng::from_seed(RngAlgorithm::ChaCha, &seed_bytes(seed));
+    let mut runner = TestRunner::new_with_rng(Config::default(), rng);
+    let strategy = raw_case();
+    (0..count)
+        .map(|_| {
+            let raw = strategy.new_tree(&mut runner).unwrap().current();
+            if !raw.stall && late_first_strata(raw.k) && raw.seed % 2 == 1 {
+                build_late_first(&raw, raw.k)
+            } else {
+                build(&raw, raw.k, raw.stall)
+            }
+        })
+        .collect()
+}
+
+/// Case `index` of the random run of `seed`.
+fn random_case(seed: u64, index: usize) -> Case {
+    random_cases(seed, index + 1).swap_remove(index)
+}
+
+// covers: S50, S206, S207, S208, S209
+#[test]
+#[ignore = "512 cases of up to 180 s take minutes"]
+fn every_output_of_every_mix_holds_every_invariant() {
+    let seed = random_seed();
+    let cases = random_cases(seed, RANDOM_CASES);
+    let (outcomes, one_core_seconds) = run_all(&cases);
+    let failing: Vec<String> = outcomes
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| o.fails.iter().any(|&f| f))
+        .map(|(i, o)| format!("random_case({seed:#x}, {i}):\n{}", o.lines.join("\n")))
+        .collect();
+    println!(
+        "seed {seed:#x}: {} of {RANDOM_CASES} cases fail ({one_core_seconds:.1} s on one core)",
+        failing.len()
+    );
+    assert!(failing.is_empty(), "{}", failing.join("\n"));
+}
+
+/// Draws of the random run that failed, as `(seed, index)` for
+/// [`random_case`]. An index names a draw only for the proptest version
+/// locked in Cargo.lock and the strategies of [`raw_case`] as they stand;
+/// a change to either redraws them, and the failing cases are found anew.
+const RANDOM_REGRESSIONS: [(u64, usize); 43] = [
+    (0x5EED, 2),
+    (0x5EED, 24),
+    (0x5EED, 56),
+    (0x5EED, 74),
+    (0x5EED, 137),
+    (0x5EED, 295),
+    (0x5EED, 297),
+    (0x5EED, 300),
+    (0x5EED, 401),
+    (0x5EED, 449),
+    (0x5EED, 489),
+    (0x5EED, 497),
+    (0x5EED, 504),
+    (1, 5),
+    (1, 45),
+    (1, 134),
+    (1, 168),
+    (1, 180),
+    (1, 215),
+    (1, 239),
+    (1, 295),
+    (1, 370),
+    (1, 434),
+    (1, 442),
+    (1, 443),
+    (1, 461),
+    (1, 501),
+    (2, 5),
+    (2, 13),
+    (2, 85),
+    (2, 95),
+    (2, 110),
+    (2, 148),
+    (2, 149),
+    (2, 188),
+    (2, 203),
+    (2, 264),
+    (2, 295),
+    (2, 327),
+    (2, 340),
+    (2, 388),
+    (2, 432),
+    (3, 88),
+];
+
+// covers: S206, S207, S209
+#[test]
+fn the_random_draws_that_failed_hold_every_invariant() {
+    let cases: Vec<Case> = RANDOM_REGRESSIONS
+        .iter()
+        .map(|&(seed, index)| random_case(seed, index))
+        .collect();
+    let (outcomes, _) = run_all(&cases);
+    let failing: Vec<String> = RANDOM_REGRESSIONS
+        .iter()
+        .zip(&outcomes)
+        .filter(|(_, o)| o.fails.iter().any(|&f| f))
+        .map(|((seed, index), o)| {
+            format!("random_case({seed:#x}, {index}):\n{}", o.lines.join("\n"))
+        })
+        .collect();
+    assert!(
+        failing.is_empty(),
+        "{} of {} fail:\n{}",
+        failing.len(),
+        RANDOM_REGRESSIONS.len(),
+        failing.join("\n")
+    );
 }
 
 /// Three outputs on steady clocks with callbacks on time, at the three

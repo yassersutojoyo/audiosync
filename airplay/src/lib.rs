@@ -51,6 +51,7 @@ pub mod alac;
 pub mod ap2;
 pub mod audio;
 pub mod clock;
+pub mod connects;
 pub mod dacp;
 pub mod digest;
 pub mod discovery;

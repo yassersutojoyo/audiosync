@@ -768,6 +768,38 @@ fn a_409_at_a_pairing_step_is_busy_and_other_failures_are_pairing_failed() {
     }
 }
 
+// covers: P138, P220
+#[test]
+fn another_4xx_or_5xx_to_the_pairing_options_is_refused_before_any_pin() {
+    for status in [400, 404, 406, 500, 503] {
+        let atv = FakeAppleTv::new(PIN);
+        let mut receiver = apple_tv_receiver(&atv);
+        receiver.status.insert("OPTIONS".to_owned(), status);
+        let mut link = PairLink::new(receiver);
+        link.connect();
+        let (error, wrong_pin) = link.failure().expect("failed");
+        assert_eq!(error.kind, ErrorKind::Refused, "{status}");
+        assert_eq!(error.method, Some(Method::Options), "{status}");
+        assert_eq!(error.status, Some(status));
+        assert!(!wrong_pin);
+        assert_eq!(link.receiver.keys(), ["OPTIONS"], "{status}");
+    }
+    // A 403 and a 501 are no refusal: the pairing goes on (P46, P27).
+    for status in [403, 501] {
+        let atv = FakeAppleTv::new(PIN);
+        let mut receiver = apple_tv_receiver(&atv);
+        receiver.status.insert("OPTIONS".to_owned(), status);
+        let mut link = PairLink::new(receiver);
+        link.connect();
+        assert!(link.failure().is_none(), "{status} {:?}", link.events);
+        assert_eq!(
+            link.pairing.state(),
+            PairingState::WaitingForPin,
+            "{status}"
+        );
+    }
+}
+
 // The 470 and PIN-wait parts of P58 and P136; a 401 at any step is a
 // password challenge, tested in the 401 tests.
 // covers: P58, P136

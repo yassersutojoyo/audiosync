@@ -11,7 +11,6 @@ import { BrandMark, DialogButton, Fluent, Wordmark } from "widgets.slint";
 
 export component AboutDialog inherits Dialog {
     in property <string> version;
-    in property <string> core-version;
 
     title: Strings.menu-about;
     icon: @image-url("../res/audiosync-256.png");
@@ -71,13 +70,6 @@ export component AboutDialog inherits Dialog {
             Text {
                 text: Strings.version(root.version);
                 color: Tokens.text;
-                horizontal-alignment: center;
-            }
-
-            Text {
-                text: Strings.core-version(root.core-version);
-                font-size: Tokens.font-size-caption;
-                color: Tokens.secondary-text;
                 horizontal-alignment: center;
             }
 

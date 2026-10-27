@@ -881,6 +881,7 @@ mod tests {
         }
     }
 
+    // covers: S174
     #[test]
     fn the_bus_tells_bluetooth_usb_and_software_devices() {
         let headphones = Some(form_factor::HEADPHONES);
@@ -1088,6 +1089,7 @@ mod tests {
         }
     }
 
+    // covers: S174
     #[test]
     fn the_built_in_output_with_the_smallest_endpoint_id_is_the_reference() {
         let mut listed = vec![
@@ -1105,6 +1107,7 @@ mod tests {
         assert_eq!(reference_output(&listed), Some("{0.0.0.00000000}.{B9}"));
     }
 
+    // covers: S174
     #[test]
     fn headphones_on_the_pc_jack_are_not_the_reference() {
         let listed = [
@@ -1118,6 +1121,7 @@ mod tests {
         );
     }
 
+    // covers: S174
     #[test]
     fn no_built_in_output_means_no_reference() {
         let listed: Vec<Endpoint> = [

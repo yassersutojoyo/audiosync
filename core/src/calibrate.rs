@@ -45,6 +45,11 @@ pub const MAX_ECHO_SHARE: f64 = 0.7;
 /// Half the width of the window around the peak that the echo check leaves
 /// out (S234).
 pub const GUARD_MS: f64 = 3.0;
+/// An arrival before the strongest peak counts from this share of it (S234).
+pub const MIN_ARRIVAL_SHARE: f64 = 0.5;
+/// The lags from this far up to [`GUARD_MS`] before an earlier arrival are
+/// its local noise floor (S234).
+pub const LOOKBACK_MS: f64 = 20.0;
 
 /// Why a measurement changes nothing (S234, S232).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,10 +90,16 @@ pub struct Refused {
 pub struct Arrival {
     /// The frame of the recording where the signal's first frame lies.
     pub frame: usize,
+    /// The lag of the strongest peak, `frame` unless an earlier arrival was
+    /// strong enough.
+    pub peak_frame: usize,
     /// The peak over the median of the correlation's magnitude.
     pub peak_over_floor: f64,
-    /// The strongest lag outside the guard window as a share of the peak.
+    /// The strongest lag outside the peak's guard window as a share of the
+    /// peak.
     pub echo_share: f64,
+    /// The lag of that strongest lag outside the guard window.
+    pub echo_frame: usize,
 }
 
 /// An accepted measurement (S232).
@@ -148,7 +159,8 @@ pub fn arrival(signal: &[f32], recording: &[f32], rate: u32) -> Result<Arrival, 
     Ok(found)
 }
 
-/// The strongest lag of `signal` in `recording` and how it stands out,
+/// The earliest strong arrival of `signal` in `recording` and how the peak
+/// stands out,
 /// without the two thresholds [`arrival`] judges it by: refused only for a
 /// recording of the wrong length, a clipped one, or one without any
 /// correlation at all (S234).
@@ -188,17 +200,62 @@ pub fn measure(signal: &[f32], recording: &[f32], rate: u32) -> Result<Arrival, 
         f64::INFINITY
     };
     let guard = (GUARD_MS * f64::from(rate) / 1000.0).ceil() as usize;
-    let echo = magnitude
+    let (echo_frame, echo) = magnitude
         .iter()
+        .copied()
         .enumerate()
         .filter(|(i, _)| i.abs_diff(frame) > guard)
-        .map(|(_, m)| *m)
-        .fold(0.0, f64::max);
+        .fold(
+            (0, 0.0),
+            |best, (i, m)| if m > best.1 { (i, m) } else { best },
+        );
+    let lookback = (LOOKBACK_MS * f64::from(rate) / 1000.0).ceil() as usize;
     Ok(Arrival {
-        frame,
+        frame: first_arrival(&magnitude, frame, floor, guard, lookback),
+        peak_frame: frame,
         peak_over_floor,
         echo_share: echo / peak,
+        echo_frame,
     })
+}
+
+/// The earliest lobe before the peak at `peak_frame` that reaches
+/// [`MIN_ARRIVAL_SHARE`] of it and stands [`MIN_PEAK_OVER_FLOOR`] times above
+/// both the whole floor and the lags `lookback` to `guard` before it, else
+/// the peak (S234). The local floor passes over noise loud enough to
+/// correlate, whose neighbours are nearly as strong; a lobe closer to the
+/// start than `lookback` has no local floor and is passed over too.
+fn first_arrival(
+    magnitude: &[f64],
+    peak_frame: usize,
+    floor: f64,
+    guard: usize,
+    lookback: usize,
+) -> usize {
+    let peak = magnitude[peak_frame];
+    let threshold = (MIN_ARRIVAL_SHARE * peak).max(MIN_PEAK_OVER_FLOOR * floor);
+    let mut i = 0;
+    while i < peak_frame {
+        if magnitude[i] < threshold {
+            i += 1;
+            continue;
+        }
+        let lobe_end = (i + guard).min(magnitude.len() - 1);
+        let lobe = (i..=lobe_end).fold(i, |best, j| {
+            if magnitude[j] > magnitude[best] {
+                j
+            } else {
+                best
+            }
+        });
+        if i >= lookback
+            && magnitude[lobe] >= MIN_PEAK_OVER_FLOOR * median(&magnitude[i - lookback..i - guard])
+        {
+            return lobe;
+        }
+        i = lobe_end + 1;
+    }
+    peak_frame
 }
 
 /// The chosen output's new offset from one recording of the reference and

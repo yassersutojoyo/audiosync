@@ -174,6 +174,42 @@ fn a_preset_stores_on_set_volumes_master_and_gains_never_delays() {
     assert_eq!((stored.master, stored.gains_db), (100.0, [0.0; 10]));
 }
 
+// covers: S251, S290
+#[test]
+fn an_airplay_members_own_volume_may_pass_100() {
+    let own = 100.0 / 0.63;
+    let stored = Preset {
+        id: "p".to_owned(),
+        name: "Loud".to_owned(),
+        members: vec![
+            PresetMember {
+                key: "ap:kitchen".to_owned(),
+                volume: Some(own),
+            },
+            PresetMember {
+                key: "lc:desk".to_owned(),
+                volume: Some(140.0),
+            },
+            PresetMember {
+                key: "ap:den".to_owned(),
+                volume: Some(-3.0),
+            },
+        ],
+        zones: Vec::new(),
+        master: 63.0,
+        gains_db: [0.0; 10],
+    }
+    .sanitized();
+    assert_eq!(
+        stored
+            .members
+            .iter()
+            .map(|member| member.volume)
+            .collect::<Vec<_>>(),
+        [Some(own), Some(100.0), Some(0.0)]
+    );
+}
+
 // covers: S251
 #[test]
 fn a_preset_keeps_at_most_one_cast_key() {

@@ -2,10 +2,10 @@
 
 // How a speaker row or zone header shows: playing only while streaming is
 // on. A speaker that is on while streaming is on but can't play right now
-// waits for its device (another app holds it), is reconnecting (AirPlay) or
-// waits for the one AirPlay 2 slot; a zone waits when every member it
-// switches on does.
-export enum RowState { off, will-play, playing, waiting-for-device, reconnecting, waiting-for-airplay2 }
+// waits for its device (another app holds it), is reconnecting (AirPlay),
+// waits for an AirPlay 2 place or for PTP, or isn't announced on the
+// network; a zone waits when every member it switches on does.
+export enum RowState { off, will-play, playing, waiting-for-device, reconnecting, waiting-for-airplay2, waiting-for-ptp, not-on-network }
 
 // The part of a speaker row or zone header that has, or is to take, the keyboard
 // focus: its toggle, delay button, volume, sync controls, options or name
@@ -37,7 +37,7 @@ export enum CastList { quiet, searching, none-found, failed }
 export enum Availability { open, needs-code, pairing, waiting-to-pair, pairing-not-yet, airplay2-not-yet, airplay2-next-launch, unsupported }
 
 // What went wrong with an AirPlay speaker, for its notice.
-export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, pairing-failed, pairing-not-yet, airplay2-not-yet, timing-unavailable, one-airplay2-speaker, plays-through-speakers, receiver-unverified, apple-tv-plays, plays-in-group, unsupported }
+export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, not-accepted, pairing-failed, pairing-not-yet, airplay2-not-yet, timing-unavailable, too-many-airplay2-speakers, ptp-other-network, plays-through-speakers, receiver-unverified, apple-tv-plays, plays-in-group, unsupported }
 
 // View > Appearance: as Windows is set, or always light or dark.
 export enum Appearance { system, light, dark }
@@ -183,8 +183,9 @@ export struct SpeakerItem {
     // A stereo pair or home theater group: what it is and its members, or
     // which member is missing (Strings.group-note); empty for any other row.
     group-note: string,
-    // The zone that holds it, by ID; empty when it is in none.
+    // The zone that holds it, by ID and name; empty when it is in none.
     zone-id: string,
+    zone-name: string,
     // Its menu offers Move to Zone and Remove from Zone: every row but one
     // that plays as part of a stereo pair or home theater.
     zone-movable: bool,
@@ -226,7 +227,10 @@ export struct ZoneItem {
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
-export enum NoticeKind { no-speaker, source-quit, source-switched, switch-failed, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, pair-first, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, airplay-ptp-ports-taken, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast, airplay2-next-launch, remote-public-network, groups-became-zones, presets-left-off }
+export enum NoticeKind { no-speaker, source-quit, source-switched, switch-failed, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, speaker-failed, speaker-lost, speaker-busy, pair-first, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, airplay-ptp-ports-taken, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast, airplay2-next-launch, remote-public-network, groups-became-zones, presets-left-off, update }
+
+// A button of the updater's notice.
+export enum UpdateButton { download, not-now, cancel, try-again, open-release-page, restart-now }
 
 export struct NoticeItem {
     id: int,
@@ -241,6 +245,8 @@ export struct NoticeItem {
     has-retry: bool,
     // The notice offers Open Privacy Settings, for microphone access.
     has-privacy: bool,
+    // The updater's notice: its buttons, in order.
+    update-buttons: [UpdateButton],
     // The notice reports a change rather than a problem: it shows the info
     // glyph in place of the warning one.
     info: bool,

@@ -56,6 +56,37 @@ fn control(
     }
 }
 
+/// The two reads of an endpoint's volume control: on Windows'
+/// `IAudioEndpointVolume`, or a fake in the tests.
+trait VolumeControl {
+    fn muted(&self) -> Result<bool, BackendError>;
+    fn level(&self) -> Result<f32, BackendError>;
+}
+
+impl VolumeControl for IAudioEndpointVolume {
+    fn muted(&self) -> Result<bool, BackendError> {
+        // SAFETY: a read on a live volume control.
+        unsafe { self.GetMute() }
+            .map(|muted| muted.as_bool())
+            .map_err(|error| device_error("IAudioEndpointVolume::GetMute", &error))
+    }
+
+    fn level(&self) -> Result<f32, BackendError> {
+        // SAFETY: a read on a live volume control.
+        unsafe { self.GetMasterVolumeLevelScalar() }.map_err(|error| {
+            device_error("IAudioEndpointVolume::GetMasterVolumeLevelScalar", &error)
+        })
+    }
+}
+
+/// The control's mute and master volume. Either read failing fails both, so
+/// a mute is never shown beside a volume nobody read (S194).
+fn read_control(control: &impl VolumeControl) -> Result<EndpointVolume, BackendError> {
+    let muted = control.muted()?;
+    let level = control.level()?;
+    Ok(EndpointVolume { muted, level })
+}
+
 /// What the listener thread is asked to do.
 enum Command {
     /// Register a listener for the endpoint that raises `flag`, and answer.
@@ -130,18 +161,7 @@ impl Endpoints for Windows {
     }
 
     fn read(&self, id: &str) -> Result<EndpointVolume, BackendError> {
-        let control = control(&self.0, id)?;
-        // SAFETY: two reads on a live volume control.
-        unsafe {
-            let muted = control
-                .GetMute()
-                .map_err(|error| device_error("IAudioEndpointVolume::GetMute", &error))?
-                .as_bool();
-            let level = control.GetMasterVolumeLevelScalar().map_err(|error| {
-                device_error("IAudioEndpointVolume::GetMasterVolumeLevelScalar", &error)
-            })?;
-            Ok(EndpointVolume { muted, level })
-        }
+        read_control(&control(&self.0, id)?)
     }
 
     fn set_level(&self, id: &str, level: f32) -> Result<(), BackendError> {
@@ -704,6 +724,82 @@ mod tests {
         receiver
             .recv_timeout(LIMIT)
             .expect("the call returns within the time it is given")
+    }
+
+    /// Reads this PC's default output through its volume control and checks
+    /// the result against the double-audio snapshot, which reads the same
+    /// two values. CI runners have no audio endpoint, so it is opt-in; on a
+    /// PC run `cargo test -- --ignored --exact
+    /// audio::wasapi::volume::tests::reads_the_default_outputs_volume_and_mute`.
+    // covers: S194
+    #[test]
+    #[ignore = "reads this PC's default output; CI runners have none"]
+    fn reads_the_default_outputs_volume_and_mute() {
+        let _apartment = Apartment::enter().expect("COM initializes");
+        let snapshot = super::super::routing::endpoint_audio().expect("the outputs are listed");
+        let default = snapshot
+            .iter()
+            .find(|endpoint| endpoint.is_default)
+            .expect("this PC has a default output");
+        let enumerator = super::super::devices::enumerator().expect("an enumerator");
+        let read = Windows(enumerator)
+            .read(&default.id)
+            .expect("the default output's volume control can be read");
+        println!("{:?}: {read:?}", default.name);
+        assert!((0.0..=1.0).contains(&read.level), "{read:?}");
+        assert_eq!(Some(read), default.volume);
+    }
+
+    /// A volume control whose two reads answer as set.
+    struct FakeControl {
+        muted: Result<bool, BackendError>,
+        level: Result<f32, BackendError>,
+    }
+
+    impl VolumeControl for FakeControl {
+        fn muted(&self) -> Result<bool, BackendError> {
+            self.muted.clone()
+        }
+
+        fn level(&self) -> Result<f32, BackendError> {
+            self.level.clone()
+        }
+    }
+
+    // covers: S194
+    #[test]
+    fn a_mute_read_beside_a_failed_volume_read_fails_the_whole_read() {
+        let scalar_failed = BackendError::System {
+            call: "IAudioEndpointVolume::GetMasterVolumeLevelScalar",
+            code: 0x8000_4005_u32 as i32,
+        };
+        let read = read_control(&FakeControl {
+            muted: Ok(true),
+            level: Err(scalar_failed.clone()),
+        });
+        assert_eq!(read, Err(scalar_failed));
+
+        let mute_failed = BackendError::System {
+            call: "IAudioEndpointVolume::GetMute",
+            code: 0x8000_4005_u32 as i32,
+        };
+        let read = read_control(&FakeControl {
+            muted: Err(mute_failed.clone()),
+            level: Ok(0.5),
+        });
+        assert_eq!(read, Err(mute_failed));
+
+        let read = read_control(&FakeControl {
+            muted: Ok(true),
+            level: Ok(0.0),
+        });
+        assert_eq!(
+            read,
+            Ok(EndpointVolume {
+                muted: true,
+                level: 0.0
+            })
+        );
     }
 
     #[test]

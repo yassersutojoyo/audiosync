@@ -131,9 +131,14 @@ fn a_steady_output_keeps_a_positive_slack_and_counts_nothing() {
         let slack = seen.least_slack_ns.expect("measured after the warm-up");
         // At the capture rate, on the capture's clock, the converter reads
         // the newest block whole: what it holds to spare is the start
-        // lead's cap on the capture's block, 25 ms (S208).
+        // lead's cap on the capture's block, 25 ms (S208), less the capture
+        // its anchor counted past W, under a block (S322).
         if device_rate == RATE {
-            assert_eq!(slack, 25_000_000, "{device_rate} Hz");
+            let block_ns = BLOCK as i64 * 1_000_000_000 / i64::from(RATE);
+            assert!(
+                (25_000_000 - block_ns..=25_000_000).contains(&slack),
+                "{device_rate} Hz: least slack {slack} ns"
+            );
         } else {
             assert!(slack > 0, "{device_rate} Hz: least slack {slack} ns");
         }
