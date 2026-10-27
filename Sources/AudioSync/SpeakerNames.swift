@@ -65,21 +65,31 @@ struct SpeakerNames: Equatable {
     }
 }
 
-/// The rename typed in a speaker's row, one speaker at a time. Every way out
-/// of it but Escape hands back what to apply (`SpeakerNames.rename`), so no
-/// typing is lost.
-struct SpeakerRename: Equatable {
-    struct Target: Equatable {
-        let id, key, system: String
+/// The rename typed in place in a speaker's row or a zone's header, one name
+/// at a time. Every way out of it but Escape hands back what to apply
+/// (`SpeakerNames.rename`, `ZoneEdit.renaming`), so no typing is lost.
+struct InlineRename: Equatable {
+    enum Kind: Equatable {
+        case speaker, zone
     }
 
-    /// What a finished rename applies: the typing, for the speaker's key.
+    /// A speaker by its ID and key, or a zone by its ID as both; `system` is
+    /// what a blank name brings back: the system name, or the zone's name.
+    struct Target: Equatable {
+        let id, key, system: String
+        var kind = Kind.speaker
+    }
+
+    /// What a finished rename applies: the typing, for the speaker's key or
+    /// the zone's ID.
     struct Apply: Equatable {
         let key, system, typed: String
+        var kind = Kind.speaker
     }
 
     /// The row that shows the name field. A speaker in a zone has two in the
-    /// main window: its row under the zone and its In zones row.
+    /// main window: its row under the zone and its In zones row. A zone's
+    /// header is its row.
     enum Place: Equatable {
         case row, inZones
     }
@@ -89,8 +99,8 @@ struct SpeakerRename: Equatable {
     var text = ""
 
     /// Starts renaming `next` in its row at `place`, showing `name`. A rename
-    /// open on another speaker ends first and is handed back; the same
-    /// speaker again keeps its typing, in the row it was started from last.
+    /// open on another speaker or zone ends first and is handed back; the same
+    /// one again keeps its typing, in the row it was started from last.
     mutating func start(_ next: Target, name: String, in place: Place = .row) -> Apply? {
         self.place = place
         guard target?.id != next.id else { return nil }
@@ -100,13 +110,13 @@ struct SpeakerRename: Equatable {
         return open
     }
 
-    /// Whether the speaker `id`'s row at `place` shows the name field.
+    /// Whether the row of `id` at `place` shows the name field.
     func isOpen(_ id: String, in place: Place) -> Bool {
         target?.id == id && self.place == place
     }
 
-    /// Return or the focus leaving: the speaker `id`'s rename ends and is
-    /// handed back, nil when `id` isn't the one being renamed.
+    /// Return or the focus leaving: the rename of `id` ends and is handed
+    /// back, nil when `id` isn't the one being renamed.
     mutating func commit(id: String) -> Apply? {
         guard target?.id == id else { return nil }
         return finish()
@@ -115,17 +125,17 @@ struct SpeakerRename: Equatable {
     /// Escape: the typing is dropped.
     mutating func drop() { target = nil }
 
-    /// The listed speakers changed. A speaker that left its list mid-rename
-    /// (unplugged, gone from the network) ends its rename, handed back; it
-    /// doesn't open again when the speaker returns.
-    mutating func listed(_ ids: Set<String>) -> Apply? {
-        guard let target, !ids.contains(target.id) else { return nil }
+    /// The listed speakers or zones (`kind`) changed. One that left its list
+    /// mid-rename (unplugged, gone from the network, deleted) ends its rename,
+    /// handed back; it doesn't open again when it returns.
+    mutating func listed(_ ids: Set<String>, kind: Kind = .speaker) -> Apply? {
+        guard let target, target.kind == kind, !ids.contains(target.id) else { return nil }
         return finish()
     }
 
     private mutating func finish() -> Apply? {
         guard let target else { return nil }
         self.target = nil
-        return Apply(key: target.key, system: target.system, typed: text)
+        return Apply(key: target.key, system: target.system, typed: text, kind: target.kind)
     }
 }

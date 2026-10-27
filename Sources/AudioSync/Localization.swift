@@ -945,7 +945,6 @@ struct UIStrings {
     let newZoneItem = "New Zone…"
     let removeFromZone = "Remove from Zone"
     let renameZone = "Rename Zone…"
-    let renameZoneTitle = "Rename Zone"
     func renameMessage(_ name: String) -> String { "Enter a new name for “\(name)”." }
     let deleteZone = "Delete Zone"
     /// A zone header's count; `zoneWaiting` follows it when a member waits.
@@ -1032,7 +1031,7 @@ struct UIStrings {
     let renameSpeaker = "Rename…"
     /// The name field's VoiceOver label; the field's placeholder is the
     /// system name, which an empty field brings back.
-    func speakerNameField(system: String) -> String { "Name for \(system)" }
+    func nameField(for name: String) -> String { "Name for \(name)" }
     /// The tooltip on a speaker's name: the full name, which the row may
     /// truncate, then how to rename it.
     func speakerNameHelp(name: String, system: String, renamed: Bool) -> String {

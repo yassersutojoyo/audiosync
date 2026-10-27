@@ -368,7 +368,7 @@ extension AppDelegate {
         }
         a.toggleZone = { [weak self] id in self?.toggleZone(id) }
         a.deleteZone = { [weak self] id in self?.deleteZone(id) }
-        a.renameZone = { [weak self] id in self?.promptRenameZone(id) }
+        a.renameZone = { [weak self] id, typed in self?.renameZone(id, to: typed) }
         a.calibrateZone = { [weak self] id in self?.calibrateZone(id) }
         a.setZoneVolume = { [weak self] id, position in self?.setZoneVolume(id, position) }
         a.newZone = { [weak self] in self?.promptNewZone() }
@@ -535,6 +535,7 @@ extension AppDelegate {
         publishEqualizerCurve()
         rememberZoneNames()
         publish(\.zones, zoneSnapshot())
+        appModel.zonesListed(Set(appModel.zones.map(\.id)))
         publishPresets()
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)

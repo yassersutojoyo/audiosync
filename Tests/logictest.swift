@@ -5385,9 +5385,9 @@ do {
               && moved.shown(key: CastID.key("nest-1"), system: "Nest") == "Den",
           "speaker names: Cast names move from lc:cast: once", "moved: \(moved.custom)")
 
-    let deskTarget = SpeakerRename.Target(id: "usb-uid", key: usb, system: "USB Audio")
-    let kitchenTarget = SpeakerRename.Target(id: "hp-1", key: homePod, system: "HomePod")
-    var rename = SpeakerRename()
+    let deskTarget = InlineRename.Target(id: "usb-uid", key: usb, system: "USB Audio")
+    let kitchenTarget = InlineRename.Target(id: "hp-1", key: homePod, system: "HomePod")
+    var rename = InlineRename()
     let opened = rename.start(deskTarget, name: "USB Audio")
     rename.text = "Desk"
     let again = rename.start(deskTarget, name: "USB Audio")
@@ -5395,7 +5395,7 @@ do {
           "speaker rename: starting a rename shows the name; starting it again keeps the typing")
 
     let handed = rename.start(kitchenTarget, name: "HomePod")
-    check(handed == SpeakerRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
+    check(handed == InlineRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
               && rename.target == kitchenTarget && rename.text == "HomePod",
           "speaker rename: renaming another speaker applies the open rename first",
           "handed: \(String(describing: handed))")
@@ -5403,7 +5403,7 @@ do {
     rename.text = "Kitchen"
     let otherCommit = rename.commit(id: "usb-uid")
     let commit = rename.commit(id: "hp-1")
-    check(otherCommit == nil && commit == SpeakerRename.Apply(key: homePod, system: "HomePod", typed: "Kitchen")
+    check(otherCommit == nil && commit == InlineRename.Apply(key: homePod, system: "HomePod", typed: "Kitchen")
               && rename.target == nil,
           "speaker rename: Return applies the speaker's own rename once, never another's")
 
@@ -5417,11 +5417,11 @@ do {
     let stillListed = rename.listed(["usb-uid", "hp-1"])
     let gone = rename.listed(["hp-1"])
     let back = rename.listed(["usb-uid", "hp-1"])
-    check(stillListed == nil && gone == SpeakerRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
+    check(stillListed == nil && gone == InlineRename.Apply(key: usb, system: "USB Audio", typed: "Desk")
               && back == nil && rename.target == nil,
           "speaker rename: a speaker gone mid-rename applies its typing, and its rename doesn't open again when it returns")
 
-    var zoned = SpeakerRename()
+    var zoned = InlineRename()
     _ = zoned.start(deskTarget, name: "USB Audio", in: .inZones)
     check(zoned.isOpen("usb-uid", in: .inZones) && !zoned.isOpen("usb-uid", in: .row) && !zoned.isOpen("hp-1", in: .inZones),
           "speaker rename: a rename started in the In zones row shows its field there only, not under the zone too")
@@ -5429,6 +5429,36 @@ do {
     let fromRow = zoned.start(deskTarget, name: "USB Audio")
     check(fromRow == nil && zoned.isOpen("usb-uid", in: .row) && !zoned.isOpen("usb-uid", in: .inZones) && zoned.text == "Desk",
           "speaker rename: starting it again from the row under the zone moves the field there and keeps the typing")
+
+    let livingTarget = InlineRename.Target(id: "zone-1", key: "zone-1", system: "Living", kind: .zone)
+    var mixed = InlineRename()
+    _ = mixed.start(livingTarget, name: "Living")
+    mixed.text = "Lounge"
+    let speakersChanged = mixed.listed(["usb-uid"])
+    check(speakersChanged == nil && mixed.isOpen("zone-1", in: .row),
+          "zone rename: a change in the listed speakers leaves an open zone rename alone")
+    let zoneHanded = mixed.start(deskTarget, name: "USB Audio")
+    check(zoneHanded == InlineRename.Apply(key: "zone-1", system: "Living", typed: "Lounge", kind: .zone)
+              && mixed.isOpen("usb-uid", in: .row) && !mixed.isOpen("zone-1", in: .row),
+          "zone rename: renaming a speaker applies the open zone rename first, as a zone's",
+          "handed: \(String(describing: zoneHanded))")
+    _ = mixed.commit(id: "usb-uid")
+    _ = mixed.start(livingTarget, name: "Living")
+    mixed.drop()
+    _ = mixed.start(livingTarget, name: "Living")
+    let zoneGone = mixed.listed([], kind: .zone)
+    check(mixed.target == nil && zoneGone == InlineRename.Apply(key: "zone-1", system: "Living", typed: "Living", kind: .zone),
+          "zone rename: Escape drops it, and a zone deleted mid-rename ends its rename")
+
+    let zonesBefore = [SpeakerZone(id: "zone-1", name: "Living", members: [usb], volume: 100),
+                       SpeakerZone(id: "zone-2", name: "Kitchen", members: [], volume: 80)]
+    let renamedZones = ZoneEdit.renaming("zone-1", to: "  Lounge \n", in: zonesBefore)
+    check(renamedZones.map(\.name) == ["Lounge", "Kitchen"] && renamedZones[0].members == [usb]
+              && ZoneEdit.renaming("zone-1", to: "   ", in: zonesBefore) == zonesBefore
+              && ZoneEdit.renaming("gone", to: "Den", in: zonesBefore) == zonesBefore
+              && ZoneEdit.renaming("zone-2", to: "Living", in: zonesBefore).map(\.name) == ["Living", "Living"],
+          "zone rename: the typed name is trimmed, a blank one keeps the name, and a name another zone uses is allowed",
+          "\(renamedZones.map(\.name))")
 }
 
 // MARK: Delay field — typed text applies on Return or focus loss, once (DelayFieldDraft)

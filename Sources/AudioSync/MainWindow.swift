@@ -749,6 +749,8 @@ private struct ZoneCard: View {
             .accessibilityLabel(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
             .accessibilityValue(nonePresent ? model.countText(of: zone) : "")
             .help(expanded ? t.hideZoneSpeakers(zone.name) : t.showZoneSpeakers(zone.name))
+            // With nothing to switch the chevron speaks for the header, so it has the action too.
+            .accessibilityAction(named: t.renameZone) { model.startRename(zone) }
             .focused($focused, equals: .chevron)
 
             Button { hit(.zoneIcon) } label: {
@@ -762,25 +764,32 @@ private struct ZoneCard: View {
             .accessibilityValue(nonePresent ? model.countText(of: zone)
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
             .accessibilityHint(t.rowHint(state, note: nil))
+            .accessibilityAction(named: t.renameZone) { model.startRename(zone) }
             .help(t.help(state))
             .focused($focused, equals: .zoneIcon)
             // The badge's gap to the name, as in a speaker row.
             .padding(.trailing, 4)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(zone.name)
-                    .font(.body.weight(state == .playing ? .semibold : .regular))
-                    .lineLimit(1)
-                    // Read through the switch's label; Rename Zone is in the menu.
-                    .accessibilityHidden(true)
-                    // As on a speaker's name: a double-click renames, a single
-                    // click folds once it can't be a double-click.
-                    .gesture(TapGesture(count: 2).onEnded { model.actions.renameZone(zone.id) }
-                        .exclusively(before: TapGesture().onEnded { hit(.name) }))
+                if model.isRenaming(zone) {
+                    InlineNameField(model: model, id: zone.id, placeholder: zone.name,
+                                    label: model.text.nameField(for: zone.name))
+                } else {
+                    Text(zone.name)
+                        .font(.body.weight(state == .playing ? .semibold : .regular))
+                        .lineLimit(1)
+                        // Read through the switch's label, whose Rename action replaces the double-click.
+                        .accessibilityHidden(true)
+                        // As on a speaker's name: a double-click renames, a single
+                        // click folds once it can't be a double-click.
+                        .gesture(TapGesture(count: 2).onEnded { model.startRename(zone) }
+                            .exclusively(before: TapGesture().onEnded { hit(.name) }))
+                }
                 countLine(t)
                     .onTapGesture { hit(.count) }
             }
-            .opacity(nonePresent ? 0.45 : 1)
+            // The name field keeps full contrast while the user types.
+            .opacity(nonePresent && !model.isRenaming(zone) ? 0.45 : 1)
 
             Spacer(minLength: 8)
 
@@ -844,7 +853,7 @@ private struct ZoneCard: View {
 
     @ViewBuilder
     private func menuItems(_ t: UIStrings) -> some View {
-        Button(t.renameZone) { model.actions.renameZone(zone.id) }
+        Button(t.renameZone) { model.startRename(zone) }
         ForEach(targetChoices) { member in
             if let target = member.target {
                 Button(t.useTargetInstead(target.name)) { model.actions.useTargetInstead(zone.id, member.key) }
@@ -902,7 +911,8 @@ private struct ZoneMemberCompactRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     if model.isRenaming(speaker, in: .inZones) {
-                        SpeakerNameField(model: model, speaker: speaker)
+                        InlineNameField(model: model, id: speaker.id, placeholder: speaker.systemName,
+                                        label: model.text.nameField(for: speaker.systemName))
                     } else {
                         Text(speaker.name)
                             .font(.body.weight(state == .playing ? .semibold : .regular))
@@ -965,27 +975,29 @@ private struct ZoneMemberCompactRow: View {
     }
 }
 
-/// A speaker's name, editable in place in its row. Like a delay field, Return
-/// or the focus leaving applies it and Escape drops it; an empty name brings
-/// back the system name, which the field shows as its placeholder.
-private struct SpeakerNameField: View {
+/// A speaker's or zone's name, editable in place in its row. Like a delay
+/// field, Return or the focus leaving applies it and Escape drops it; an empty
+/// name brings back `placeholder`: a speaker's system name, a zone's name.
+private struct InlineNameField: View {
     @ObservedObject var model: AppModel
-    let speaker: AppModel.Speaker
+    let id: String
+    let placeholder: String
+    let label: String
     @FocusState private var focused: Bool
 
     var body: some View {
-        TextField(speaker.systemName, text: $model.renameText)
+        TextField(placeholder, text: $model.renameText)
             .textFieldStyle(.roundedBorder)
             .frame(maxWidth: 220)
-            .accessibilityLabel(model.text.speakerNameField(system: speaker.systemName))
+            .accessibilityLabel(label)
             .focused($focused)
-            .onSubmit { model.commitRename(speaker) }
+            .onSubmit { model.commitRename(id: id) }
             .onExitCommand { model.dropRename() }
             // A menu item starts the rename: the field takes the focus once
             // the menu has closed.
             .onAppear { DispatchQueue.main.async { focused = true } }
             .onChange(of: focused) { _, now in
-                if !now { model.commitRename(speaker) }
+                if !now { model.commitRename(id: id) }
             }
     }
 }
@@ -1063,7 +1075,8 @@ struct SpeakerRow: View {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 6) {
                         if model.isRenaming(speaker, in: .row) {
-                            SpeakerNameField(model: model, speaker: speaker)
+                            InlineNameField(model: model, id: speaker.id, placeholder: speaker.systemName,
+                                        label: model.text.nameField(for: speaker.systemName))
                         } else {
                             Text(speaker.name)
                                 .font(.body.weight(state == .playing ? .semibold : .regular))
