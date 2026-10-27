@@ -125,7 +125,7 @@ pub struct Diagnostics {
     /// sender never restarts on its own (C79).
     pub resync_offered: bool,
     /// Silent frames sent since the `LOAD` because the sender's input ran
-    /// dry (C64).
+    /// dry (C52, C78).
     pub underrun_frames: u64,
 }
 

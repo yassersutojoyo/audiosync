@@ -279,7 +279,7 @@ pub struct StreamStats {
     /// Whether a stream response is open now.
     pub streaming: bool,
     /// Silent frames the pump sent because the ring ran dry for longer than
-    /// the underrun wait (C64).
+    /// the underrun wait (C52).
     pub underrun_frames: u64,
 }
 

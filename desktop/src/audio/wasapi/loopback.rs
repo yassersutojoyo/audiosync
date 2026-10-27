@@ -717,8 +717,8 @@ fn drain(
             now_hns(frequency).saturating_sub(length)
         };
         let discontinuity = flags & (AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32) != 0;
-        let (fill, skip) = gaps.packet(start, count, discontinuity);
-        counters.count_packet(frames, discontinuity, fill);
+        let (fill, skip, jumped) = gaps.packet(start, count, discontinuity);
+        counters.count_packet(frames, discontinuity, fill, jumped);
         if fill > 0 {
             deliver(&[], fill, true);
         }

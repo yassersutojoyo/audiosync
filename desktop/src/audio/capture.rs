@@ -883,15 +883,22 @@ impl GapFill {
     }
 
     /// A packet of `frames` frames whose first frame was captured at
-    /// `start`. Returns the silent frames to write before it, and how many
-    /// of its first frames to skip. Each packet's own position counts, so
-    /// the device clock's drift never adds up to a gap.
-    pub fn packet(&mut self, start: u64, frames: usize, discontinuity: bool) -> (usize, usize) {
+    /// `start`. Returns the silent frames to write before it, how many of
+    /// its first frames to skip, and whether that silence stands for a jump
+    /// in the packets' positions rather than the rest of a pause the capture
+    /// was already filling. Each packet's own position counts, so the device
+    /// clock's drift never adds up to a gap.
+    pub fn packet(
+        &mut self,
+        start: u64,
+        frames: usize,
+        discontinuity: bool,
+    ) -> (usize, usize, bool) {
         let packet_end = start.saturating_add(self.length(frames as u64));
         let filled = std::mem::take(&mut self.filled);
         let Some(end) = self.end() else {
             self.rebase(start, frames);
-            return (0, 0);
+            return (0, 0, false);
         };
         if start >= end {
             let gap = start - end;
@@ -901,7 +908,7 @@ impl GapFill {
                 0
             };
             self.rebase(start, frames);
-            return (fill as usize, 0);
+            return (fill as usize, 0, fill > 0 && !filled);
         }
         if filled {
             // It starts inside the silence written while nothing came: its
@@ -914,10 +921,10 @@ impl GapFill {
             } else {
                 self.filled = true;
             }
-            return (0, skip);
+            return (0, skip, false);
         }
         self.rebase(start, frames);
-        (0, 0)
+        (0, 0, false)
     }
 
     /// No packet came, and it is `now`. Returns the silent frames to write:
@@ -975,15 +982,16 @@ pub struct CaptureCounters {
 )]
 impl CaptureCounters {
     /// Counts a packet of `frames` frames, flagged as a discontinuity or
-    /// not, that [`GapFill::packet`] put `fill` silent frames before. Never
-    /// allocates, locks or blocks.
-    pub fn count_packet(&self, frames: u32, discontinuity: bool, fill: usize) {
+    /// not, that [`GapFill::packet`] put `fill` silent frames before, from a
+    /// position jump when `jumped`. Never allocates, locks or blocks.
+    pub fn count_packet(&self, frames: u32, discontinuity: bool, fill: usize, jumped: bool) {
         self.captured
             .fetch_add(u64::from(frames), Ordering::Relaxed);
         if discontinuity {
             self.discontinuities.fetch_add(1, Ordering::Relaxed);
         }
-        if fill > 0 {
+        // The rest of a pause's silence is no dropout: the app was quiet.
+        if jumped && fill > 0 {
             self.gap_fill_frames
                 .fetch_add(fill as u64, Ordering::Relaxed);
         }
@@ -2042,7 +2050,7 @@ mod tests {
             };
             match level {
                 Some(level) => {
-                    let (fill, skip) = gaps.packet(start, 480, false);
+                    let (fill, skip, _) = gaps.packet(start, 480, false);
                     if fill > 0 {
                         converter.push(&[], fill, true);
                     }
@@ -2083,7 +2091,7 @@ mod tests {
         let mut start = 0;
         for jitter in [0_i64, 3_000, -2_000, 20_000, -40_000, 0] {
             let at = (start as i64 + jitter) as u64;
-            assert_eq!(gaps.packet(at, 480, false), (0, 0), "{jitter}");
+            assert_eq!(gaps.packet(at, 480, false), (0, 0, false), "{jitter}");
             start += 10 * HNS_PER_MS;
         }
         // A late packet's wake isn't a gap yet.
@@ -2095,13 +2103,13 @@ mod tests {
         let mut gaps = GapFill::new(SESSION_RATE);
         gaps.packet(0, 480, false);
         // 10 ms later than the last packet's end: 480 frames of silence.
-        assert_eq!(gaps.packet(20 * HNS_PER_MS, 480, false), (480, 0));
+        assert_eq!(gaps.packet(20 * HNS_PER_MS, 480, false), (480, 0, true));
         // 2 ms, marked as a discontinuity: 96 frames.
-        assert_eq!(gaps.packet(32 * HNS_PER_MS, 480, true), (96, 0));
+        assert_eq!(gaps.packet(32 * HNS_PER_MS, 480, true), (96, 0, true));
         // A PC that slept: at most 21 s.
         assert_eq!(
             gaps.packet(3_600_000 * HNS_PER_MS, 480, false),
-            (21 * 48_000, 0)
+            (21 * 48_000, 0, true)
         );
     }
 
@@ -2110,8 +2118,8 @@ mod tests {
         let mut gaps = GapFill::new(SESSION_RATE);
         let counters = CaptureCounters::default();
         let mut packet = |start: u64, discontinuity: bool| {
-            let (fill, _) = gaps.packet(start, 480, discontinuity);
-            counters.count_packet(480, discontinuity, fill);
+            let (fill, _, jumped) = gaps.packet(start, 480, discontinuity);
+            counters.count_packet(480, discontinuity, fill, jumped);
         };
         packet(0, false);
         packet(10 * HNS_PER_MS, false);
@@ -2136,15 +2144,29 @@ mod tests {
     }
 
     #[test]
+    fn the_silence_up_to_a_packet_after_a_pause_is_not_counted() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        let counters = CaptureCounters::default();
+        gaps.packet(0, 480, false);
+        // The app pauses: silence up to 40 ms.
+        assert_eq!(gaps.idle(50 * HNS_PER_MS), 1_440);
+        // It resumes at 60 ms: the 20 ms left get silence, but nothing dropped.
+        let (fill, _, jumped) = gaps.packet(60 * HNS_PER_MS, 480, false);
+        assert_eq!(fill, 960);
+        counters.count_packet(480, false, fill, jumped);
+        assert_eq!(counters.glitches(), CaptureGlitches::default());
+    }
+
+    #[test]
     fn a_packet_inside_the_silence_written_skips_the_frames_filled() {
         let mut gaps = GapFill::new(SESSION_RATE);
         gaps.packet(0, 480, false);
         // Nothing for 50 ms: silence up to 40 ms.
         assert_eq!(gaps.idle(50 * HNS_PER_MS), 1_440);
         // The audio comes back with a packet that started at 35 ms.
-        assert_eq!(gaps.packet(35 * HNS_PER_MS, 480, false), (0, 240));
+        assert_eq!(gaps.packet(35 * HNS_PER_MS, 480, false), (0, 240, false));
         // The next one follows on.
-        assert_eq!(gaps.packet(45 * HNS_PER_MS, 480, false), (0, 0));
+        assert_eq!(gaps.packet(45 * HNS_PER_MS, 480, false), (0, 0, false));
     }
 
     #[test]
@@ -2154,11 +2176,11 @@ mod tests {
         // Silence up to 30 ms.
         assert_eq!(gaps.idle(40 * HNS_PER_MS), 960);
         // Two late packets that both lie inside it: neither is written.
-        assert_eq!(gaps.packet(10 * HNS_PER_MS, 480, false), (0, 480));
-        assert_eq!(gaps.packet(20 * HNS_PER_MS, 480, false), (0, 480));
+        assert_eq!(gaps.packet(10 * HNS_PER_MS, 480, false), (0, 480, false));
+        assert_eq!(gaps.packet(20 * HNS_PER_MS, 480, false), (0, 480, false));
         // One that reaches past it is written from its end on.
-        assert_eq!(gaps.packet(25 * HNS_PER_MS, 480, false), (0, 240));
-        assert_eq!(gaps.packet(35 * HNS_PER_MS, 480, false), (0, 0));
+        assert_eq!(gaps.packet(25 * HNS_PER_MS, 480, false), (0, 240, false));
+        assert_eq!(gaps.packet(35 * HNS_PER_MS, 480, false), (0, 0, false));
     }
 
     #[test]

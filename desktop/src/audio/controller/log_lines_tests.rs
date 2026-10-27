@@ -498,8 +498,8 @@ fn a_status_line_shows_what_a_real_reader_and_render_pipeline_count() {
         if !(100..105).contains(&step) {
             writer.write(&packet, packet.len() / 2);
             let at = step * 10 * HNS_PER_MS as u64;
-            let (fill, _) = gaps.packet(at, PACKET_FRAMES as usize, step == 105);
-            captured.count_packet(PACKET_FRAMES as u32, step == 105, fill);
+            let (fill, _, jumped) = gaps.packet(at, PACKET_FRAMES as usize, step == 105);
+            captured.count_packet(PACKET_FRAMES as u32, step == 105, fill, jumped);
         }
         if step == 300 {
             wakes.count_wake(0, 960, 480);
