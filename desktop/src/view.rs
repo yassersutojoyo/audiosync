@@ -7581,6 +7581,26 @@ mod tests {
         );
     }
 
+    /// As on the Mac, the Cast note needs a Cast speaker on: a zone of the
+    /// PC's speakers and a Cast speaker that is off has no note.
+    // covers: S246
+    #[test]
+    fn a_cast_member_off_beside_a_local_speaker_has_no_note() {
+        let mut backend = MockBackend::zones_preview();
+        backend.add_zone("zone:pc", "PC", &["local:speakers", "cc:attic"]);
+        let app = app_over(backend);
+        let state = app.snapshot();
+        let zone = state.zones.iter().find(|z| z.id == "zone:pc").unwrap();
+        assert!(state.speaker("local:speakers").unwrap().enabled);
+        let attic = state.speaker("cc:attic").unwrap();
+        assert!(!attic.enabled);
+        assert_eq!(
+            state.zone_note(zone, ui_model::ZoneRow::Listed(attic)),
+            None,
+            "no Cast speaker is on, so nothing kept this one off"
+        );
+    }
+
     #[test]
     fn a_zone_header_counts_its_speakers() {
         let app = app_over(MockBackend::new());
