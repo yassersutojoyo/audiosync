@@ -400,7 +400,7 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] fresh link: restarting Bluetooth output \(uid) once")
         localHoldBacks[uid] = nil
         localBoundDevices[uid] = nil
-        engine.detachOutput(uid: uid) { [weak self] in
+        engine.detachOutputs(uids: [uid]) { [weak self] in
             DispatchQueue.main.asyncAfter(deadline: .now() + FreshLinkWatch.rejoinPauseS) {
                 guard let self else { return }
                 self.freshLinks.release(uid: uid)
