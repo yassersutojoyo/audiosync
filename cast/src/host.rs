@@ -127,6 +127,8 @@ impl DeviceMemory {
 
     /// [`DeviceMemory::from_json`], or `None` when `text` isn't a JSON
     /// object at all, so a host can keep that file before it saves over it.
+    /// An object whose entries are all damaged reads as an empty memory,
+    /// not `None`: its entries are lost at the next save.
     pub fn read_json(text: &str) -> Option<DeviceMemory> {
         let mut memory = DeviceMemory::default();
         let Ok(Value::Object(entries)) = serde_json::from_str::<Value>(text) else {
