@@ -99,6 +99,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Quitting no longer waits on a Cast device that stopped reading.
 - On the Mac, the menu bar panel keeps its text readable over any window behind it, light or dark.
 - On the Mac, the menu bar panel now opens as a popover from the icon, with a little arrow pointing at it. It grows out of the icon and shrinks back into it, and a second click on the icon closes it again, like other menu bar items. On recent macOS that second click opened the panel right back up.
+- On the Mac, the menu bar panel no longer stutters when it opens or closes, also on a quick second open or when you close it while it's still opening, and the volume sliders show their color right away instead of starting grey. A notice that comes or goes while the panel is open resizes it smoothly, and with Reduce Motion on the panel only fades.
 - On the Mac, the Calibrate All list scrolls when you have many speakers, so Apply and Close stay on screen.
 - On the Mac, a local speaker that can't start because the source's sample rate is higher than AudioSync can hold now says so, instead of blaming another app or the format.
 - On the Mac, a Google Cast offset you set by hand, or with Apply or Undo in Calibrate All, stays put. Before, a late update from the speaker could put the old offset back.
@@ -132,7 +133,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Windows and Linux (preview, not released yet)
 
-- The first release with the Windows 11 version, for x64 and ARM64 PCs, is still to come. It isn't code-signed, so SmartScreen may warn the first time you open it. It has the changes above and in 0.6.0 too, except where an entry says "On the Mac". Google Cast speakers play on Windows as well, "Switch to All System Audio When the Source App Quits" is in the File menu, the Guide's diagrams have descriptions for Narrator, and a click on the empty space of an open delay panel closes it.
+- The first release with the Windows 11 version, for x64 and ARM64 PCs, is still to come. It isn't code-signed, so SmartScreen may warn the first time you open it. It has the changes above and in 0.6.0 too, except the entries about the Mac. Google Cast speakers play on Windows as well, "Switch to All System Audio When the Source App Quits" is in the File menu, the Guide's diagrams have descriptions for Narrator, and a click on the empty space of an open delay panel closes it.
 - You can rename a speaker: double-click its name, or right-click it or use its … button and choose Rename. Press Enter to keep the new name or Escape to cancel; a click outside the field keeps it too. The name stays after a restart and shows in the notification area flyout, in notices and in the AirPlay code and password dialogs. Leave it empty to go back to the device's own name, which the name's tooltip keeps showing while it's renamed.
 - A renamed speaker shows its device's own name under the new one, in the main window and the notification area flyout, and a double-click on the name goes by the double-click speed set in Windows.
 - A Now Playing card in the main window follows what Windows reports as playing, with the track, artist and artwork, and Previous Track, play or pause and Next Track buttons.
