@@ -2,7 +2,8 @@
 # Checks the text half of spec S308 on the Windows app's sources: the updater's
 # buttons, menu items and notices take their words from desktop/ui/strings.slint.
 # Contrast, focus and the screen reader need the running app, so not here.
-# Usage: Tests/updatertexttest.sh (run by Tests/run-tests.sh).
+# Usage: Tests/updatertexttest.sh (run by Tests/run-tests.sh). UPDATER_TEXT_UI
+# points the quoted-title scan at another copy of desktop/ui.
 # covers: S308 (its words: buttons, menu items and notices come from strings.slint)
 set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/.."
@@ -60,6 +61,11 @@ for item in check-updates-automatically menu-check-for-updates; do
 done
 strays=$(grep -n '"Check for Updates' desktop/ui/*.slint | grep -v "^$strings:" || true)
 check "no other .slint file words a menu item itself" none "$strays"
+# Every title in the UI (menu items, windows, sections) names a Strings
+# property or a model field, so a quoted title is a word strings.slint lacks.
+ui=${UPDATER_TEXT_UI:-desktop/ui}
+quoted=$(grep -n '^ *title:.*"' "$ui"/*.slint | grep -v '/strings\.slint:' || true)
+check "no title outside strings.slint is a quoted literal" none "$quoted"
 
 notice=$(block desktop/src/view.rs '^fn update_notice_text\(')
 check "view.rs words the updater's notice in update_notice_text" [ -n "$notice" ]
