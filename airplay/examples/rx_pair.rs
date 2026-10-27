@@ -25,7 +25,8 @@
 //! example `rx_onset` and `scripts/two_speaker_sync_wsl.sh` measure it.
 //! The check is the protocol side only: sessions set up and packets go
 //! out. Whether the receivers share one anchor is read from their logs. It
-//! never says the receivers sound in step. With two AirPlay 2 receivers on the PTP timeline the sender names
+//! never says the receivers sound in step. With two AirPlay 2 receivers
+//! on the PTP timeline the sender names
 //! both in each SETPEERS and updates the first when the second joins (P207,
 //! P209); this driver can't see those requests, the receivers' logs can.
 //! An AirPlay 2 receiver needs an IP address of its own (one PTP peer per
