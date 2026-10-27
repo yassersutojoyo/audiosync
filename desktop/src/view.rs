@@ -251,6 +251,12 @@ fn zone_shape(lengths: impl Iterator<Item = usize>) -> u64 {
     })
 }
 
+/// How many member rows a zone lists under its header: none while its
+/// speakers are hidden, so folding a zone counts as removing them.
+fn listed_members(expanded: bool, members: usize) -> usize {
+    if expanded { members } else { 0 }
+}
+
 /// How many notices the main window lists, newest first.
 const MAIN_NOTICE_LIMIT: usize = 4;
 /// The flyout lists only the newest notice and a button for the rest.
@@ -1752,7 +1758,11 @@ impl App {
             listed_notices: flyout_notices.len(),
             zones: zones.len(),
             speakers: flyout_speakers.len(),
-            zone_members: zone_shape(zones.iter().map(|zone| zone.members.len())),
+            zone_members: zone_shape(
+                zones
+                    .iter()
+                    .map(|zone| listed_members(zone.item.expanded, zone.members.len())),
+            ),
         });
         let main_lists = MainLists {
             notices: newest_notices(&notices, MAIN_NOTICE_LIMIT),
@@ -1960,12 +1970,14 @@ impl App {
         sync_model(&m.zones, items);
     }
 
-    /// The shape of the zones' member lists the windows show now.
+    /// The shape of the zones' member lists the flyout shows now.
     fn zone_shape_shown(&self) -> u64 {
         let kept = self.models.zone_models.borrow();
         zone_shape(self.models.zones.iter().map(|zone| {
-            kept.get(zone.id.as_str())
-                .map_or(0, |models| models.members.row_count())
+            let members = kept
+                .get(zone.id.as_str())
+                .map_or(0, |models| models.members.row_count());
+            listed_members(zone.expanded, members)
         }))
     }
 
@@ -2453,6 +2465,10 @@ impl App {
         flyout.on_speaker_toggled(move |id| with_app(&w, |app| app.toggle_speaker(&id)));
         let w = weak.clone();
         flyout.on_zone_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_zone(&id))));
+        let w = weak.clone();
+        flyout.on_zone_expanded_changed(move |id, open| {
+            with_app(&w, |app| app.set_zone_expanded(&id, open))
+        });
         let w = weak.clone();
         flyout.on_preset_recall_requested(move |id| with_app(&w, |app| app.recall_preset(&id)));
         let w = weak.clone();
@@ -7562,6 +7578,13 @@ mod tests {
         assert!(!app.models.zones.row_data(2).unwrap().expanded);
         main.invoke_zone_expanded_changed("zone:office".into(), true);
         assert!(app.models.zones.row_data(2).unwrap().expanded);
+        // The flyout folds the same zone the main window does, until AudioSync quits.
+        app.flyout
+            .invoke_zone_expanded_changed("zone:office".into(), false);
+        assert!(!app.models.zones.row_data(2).unwrap().expanded);
+        app.flyout
+            .invoke_zone_expanded_changed("zone:office".into(), true);
+        assert!(app.models.zones.row_data(2).unwrap().expanded);
 
         main.invoke_speaker_remove_from_zone_requested("local:speakers".into());
         assert!(app.snapshot().zone_of("local:speakers").is_none());
@@ -7829,6 +7852,37 @@ mod tests {
         assert!(
             FLYOUT.removed_by(member_moved).speakers,
             "a zone's member rows are rebuilt"
+        );
+    }
+
+    #[test]
+    fn folding_a_zone_in_the_flyout_removes_its_member_rows() {
+        assert_eq!(listed_members(true, 3), 3);
+        assert_eq!(listed_members(false, 3), 0);
+        let open = FlyoutCounts {
+            zone_members: zone_shape([listed_members(true, 2)].into_iter()),
+            ..FLYOUT
+        };
+        let folded = FlyoutCounts {
+            zone_members: zone_shape([listed_members(false, 2)].into_iter()),
+            ..FLYOUT
+        };
+        assert!(
+            open.removed_by(folded).speakers,
+            "a member that had the focus gives it back"
+        );
+        let empty_open = FlyoutCounts {
+            zone_members: zone_shape([listed_members(true, 0)].into_iter()),
+            ..FLYOUT
+        };
+        let empty_folded = FlyoutCounts {
+            zone_members: zone_shape([listed_members(false, 0)].into_iter()),
+            ..FLYOUT
+        };
+        assert_eq!(
+            empty_open.removed_by(empty_folded),
+            FlyoutParts::default(),
+            "an empty zone has no rows to remove"
         );
     }
 
