@@ -695,6 +695,44 @@ mod tests {
         assert_eq!(s.control.counters().starved_renders, 0);
     }
 
+    /// The capture frames the converter was sped up by over five seconds of
+    /// 10 ms callbacks against a capture 1000 ppm faster than the device,
+    /// its blocks stamped on the core's clock when `stamped`.
+    fn sped_against_a_slow_device(device_rate: u32, stamped: bool) -> u64 {
+        let mut s = primed(device_rate);
+        let period = device_rate as usize / 100;
+        for _ in 0..500 {
+            s.owed += period as f64 * f64::from(SESSION_RATE) / f64::from(device_rate) * 1.001;
+            let write = s.owed.floor();
+            s.owed -= write;
+            let write = write as usize;
+            let block = vec![0.5f32; write * 2];
+            if stamped {
+                s.writer.write_at(&block, write, clock::now_ns());
+            } else {
+                s.writer.write(&block, write);
+            }
+            play(&mut s, period, period);
+        }
+        s.control.sped_frames()
+    }
+
+    // covers: S207, S226
+    #[test]
+    fn each_callback_reads_on_the_stamps_clock_so_the_trim_follows_the_capture() {
+        for device_rate in [SESSION_RATE, 44_100] {
+            assert!(
+                sped_against_a_slow_device(device_rate, true) > 0,
+                "{device_rate} Hz with stamps"
+            );
+            assert_eq!(
+                sped_against_a_slow_device(device_rate, false),
+                0,
+                "{device_rate} Hz without stamps"
+            );
+        }
+    }
+
     #[test]
     fn a_device_without_channels_or_at_an_unsupported_rate_is_refused() {
         let ring = Ring::for_rate(SESSION_RATE).unwrap();
