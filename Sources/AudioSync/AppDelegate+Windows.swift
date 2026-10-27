@@ -28,7 +28,7 @@ extension AppDelegate {
         nowPlaying.onAutomationDenied = { [weak self] bundleID, denied in
             self?.automationChanged(bundleID, denied: denied)
         }
-        nowPlaying.mayRaisePrompt = permissions.step(.automation, state: .notAsked, userAction: false) == .go
+        nowPlaying.mayRaisePrompt = permissions.mayRaiseAutomationPrompt
         nowPlaying.onPromptHeld = { [weak self] in
             _ = self?.permissionAllows(.automation, state: .notAsked, origin: .automatic)
         }

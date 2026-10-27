@@ -99,6 +99,12 @@ struct PermissionAsks: Equatable {
         }
     }
 
+    /// Whether Now Playing may script a player macOS would still ask about,
+    /// leaving the prompt to macOS (`NowPlayingMonitor.mayRaisePrompt`).
+    var mayRaiseAutomationPrompt: Bool {
+        step(.automation, state: .notAsked, userAction: false) == .go
+    }
+
     mutating func hold(_ permission: Permission) { waiting.insert(permission) }
 
     mutating func accept(_ permission: Permission) {
