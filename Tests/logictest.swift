@@ -290,6 +290,18 @@ do {
           "\(offered.map(\.name))")
     let twins = SourceApps.offered([app(20, "com.b", "Same"), app(21, "com.a", "same")], ownPID: ownPID, ownBundleID: nil)
     check(twins.map(\.bundleID) == ["com.a", "com.b"], "source apps: names that sort alike are ordered by bundle ID")
+
+    // Hundreds of background processes are listed; reading each one's name
+    // and icon held the main thread about 25 ms on every panel open.
+    final class Reads { var pids: [pid_t] = [] }
+    let reads = Reads()
+    let listed: [(pid: pid_t, regular: Bool)] = [(1, false), (2, true), (3, false), (4, true)]
+    let read = SourceApps.regularApps(listed, isRegular: { $0.regular }) { entry in
+        reads.pids.append(entry.pid)
+        return app(entry.pid, "com.example.\(entry.pid)", "App \(entry.pid)")
+    }
+    check(read.map(\.pid) == [2, 4] && reads.pids == [2, 4],
+          "source apps: only regular apps have their name and icon read, in the listed order", "\(reads.pids)")
 }
 
 // MARK: Audio processes — which Core Audio process objects make up an app
