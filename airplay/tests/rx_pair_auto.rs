@@ -7,7 +7,7 @@ mod auto_choice;
 
 use std::net::SocketAddr;
 
-use audiosync_airplay::discovery::ProtocolPath;
+use audiosync_airplay::discovery::{Features, ProtocolPath};
 use audiosync_airplay::sender::AIRPLAY2_AUTO;
 
 use auto_choice::{AutoMode, Services, device};
@@ -53,6 +53,38 @@ fn an_airplay2_only_receiver_plays_only_with_the_flag_or_the_switch() {
         choice(Some("0"), Some("1"), Services::AirPlay2),
         "no AirPlay 1, AirPlay 2 auto off, AirPlay 2 switch on -> AirPlay 2"
     );
+    assert_eq!(
+        choice(Some("1"), Some("1"), Services::AirPlay2),
+        "no AirPlay 1, AirPlay 2 auto on, Prefer AirPlay 2 on -> AirPlay 2"
+    );
+}
+
+#[test]
+fn an_airplay1_only_receiver_stays_on_airplay1_with_the_flag_off() {
+    assert_eq!(
+        choice(Some("0"), None, Services::AirPlay1),
+        "AirPlay 1 only, AirPlay 2 auto off -> AirPlay 1"
+    );
+    assert_eq!(
+        choice(Some("0"), Some("1"), Services::AirPlay1),
+        "AirPlay 1 only, AirPlay 2 auto off, AirPlay 2 switch on -> AirPlay 1"
+    );
+}
+
+#[test]
+fn zero_and_other_values_read_as_the_apps_read_them() {
+    let zero = AutoMode::from_env(Some("0"), Some("0"));
+    assert!(!zero.auto);
+    assert!(!zero.switch);
+    for garbage in ["yes", "true", "", " 1"] {
+        let mode = AutoMode::from_env(Some(garbage), Some(garbage));
+        assert_eq!(mode.auto, AIRPLAY2_AUTO, "{garbage:?}");
+        assert!(!mode.switch, "{garbage:?}");
+    }
+    assert_eq!(
+        choice(Some("yes"), Some("yes"), Services::AirPlay2),
+        choice(None, None, Services::AirPlay2)
+    );
 }
 
 #[test]
@@ -77,6 +109,14 @@ fn a_dual_receiver_stays_on_airplay1_until_the_switch_prefers_airplay2() {
         choice(Some("1"), Some("1"), Services::AirPlay1),
         "AirPlay 1 only, AirPlay 2 auto on, Prefer AirPlay 2 on -> AirPlay 1"
     );
+}
+
+#[test]
+fn an_airplay2_record_offers_ptp_so_a_501_retries_with_it() {
+    let address: SocketAddr = "127.0.0.1:7000".parse().unwrap();
+    for services in [Services::AirPlay2, Services::Both] {
+        assert!(device(address, services, 1).features().has(Features::PTP));
+    }
 }
 
 #[test]

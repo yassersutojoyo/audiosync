@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ProtocolPath, ScopedAddr, ServiceKind, ServiceRecord,
 };
-use audiosync_airplay::sender::{SenderConfig, airplay2_auto, airplay2_switch};
+use audiosync_airplay::sender::{SenderConfig, airplay2_auto, airplay2_switch, planned_path};
 
 /// The services a receiver offers the sender: the `_raop._tcp` record, the
 /// `_airplay._tcp` record, or both on the same address and port.
@@ -56,7 +56,7 @@ impl AutoMode {
         }
     }
 
-    /// The protocol the sender plans for `device` before any connection,
+    /// The protocol the driver plans for `device` before any connection,
     /// e.g. "no AirPlay 1, AirPlay 2 auto off -> not played (AirPlay 2
     /// only)". A refused AirPlay 1 session may still move it to AirPlay 2.
     pub fn choice(self, device: &Device) -> String {
@@ -66,12 +66,7 @@ impl AutoMode {
             (true, false) => "AirPlay 1 only",
             _ => "no AirPlay 1",
         };
-        let outcome = match device.choose_path_preferring(
-            config.airplay2,
-            config.airplay2_preferred,
-            None,
-            false,
-        ) {
+        let outcome = match planned_path(device, config.airplay2, config.airplay2_preferred, None) {
             Ok(ProtocolPath::AirPlay1) => "AirPlay 1".to_owned(),
             Ok(ProtocolPath::AirPlay2) => "AirPlay 2".to_owned(),
             Err(reason) => format!("not played ({reason})"),
@@ -102,7 +97,9 @@ pub fn device(address: SocketAddr, services: Services, n: u8) -> Device {
         ]),
         addresses: addresses.clone(),
     };
-    let mut airplay_txt = text(&["features=0x0,0x10040", "flags=0x4", "model=Receiver1,1"]);
+    // Bit 41 (0x200 in the high word) lets the driver bind PTP and retry
+    // SETUP with it after a 501, as for a receiver that advertises PTP.
+    let mut airplay_txt = text(&["features=0x0,0x10240", "flags=0x4", "model=Receiver1,1"]);
     airplay_txt.push(format!("deviceid={device_id}").into_bytes());
     let airplay = ServiceRecord {
         kind: ServiceKind::AirPlay,
