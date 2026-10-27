@@ -10667,7 +10667,8 @@ mod tests {
             found,
             settings::Loaded::Read {
                 version: settings::VERSION,
-                adjusted: false
+                adjusted: false,
+                unreadable: Vec::new(),
             }
         );
         assert_eq!(settings::VERSION, 3);
@@ -11101,6 +11102,46 @@ mod tests {
             ],
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_settings_field_that_does_not_read_is_logged_by_name_never_by_value() {
+        let launch_with = |name: &str, contents: &str| {
+            let dir = test_dir(name);
+            let path = dir.join(settings::FILE_NAME);
+            std::fs::write(&path, contents).expect("written");
+            let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+            let file = SettingsFile::at(path);
+            let _adapter = AudioAdapter::with_settings(
+                launch_audio(),
+                || "09.41".to_owned(),
+                log.clone(),
+                file,
+            );
+            assert!(log.flush(TEST_FLUSH));
+            let messages = read_messages(&dir.join(FILE_NAME));
+            let _ = std::fs::remove_dir_all(dir);
+            messages
+        };
+        let messages = launch_with(
+            "adapter-settings-unreadable",
+            r#"{"version": 3, "master_volume": "loud-9731"}"#,
+        );
+        assert_in_order(
+            &messages,
+            &[
+                "settings: read (format version 3)",
+                "settings: field master_volume unreadable, using default",
+            ],
+        );
+        assert!(!messages.iter().any(|m| m.contains("loud-9731")));
+
+        let clean = launch_with(
+            "adapter-settings-clean",
+            &settings::Settings::default().to_json(),
+        );
+        assert!(clean.iter().any(|m| m.starts_with("settings: read")));
+        assert!(!clean.iter().any(|m| m.contains("unreadable")), "{clean:?}");
     }
 
     #[test]

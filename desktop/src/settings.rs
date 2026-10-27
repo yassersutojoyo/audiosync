@@ -1268,7 +1268,11 @@ impl Settings {
             };
         Ok((
             clamped.with_zones_migrated().with_presets_migrated(),
-            Loaded::Read { version, adjusted },
+            Loaded::Read {
+                version,
+                adjusted,
+                unreadable: Vec::new(),
+            },
         ))
     }
 }
@@ -1279,8 +1283,13 @@ pub enum Loaded {
     /// There is no file yet.
     NoFile,
     /// The file was read, written in format `version`; `adjusted` when
-    /// values out of range were clamped or unusable entries dropped.
-    Read { version: u32, adjusted: bool },
+    /// values out of range were clamped or unusable entries dropped, and
+    /// `unreadable` names the fields that fell back to their defaults.
+    Read {
+        version: u32,
+        adjusted: bool,
+        unreadable: Vec<&'static str>,
+    },
     /// The file was ignored, and why.
     Ignored(String),
 }
@@ -1289,7 +1298,9 @@ impl fmt::Display for Loaded {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Loaded::NoFile => write!(f, "no file yet, the defaults apply"),
-            Loaded::Read { version, adjusted } => {
+            Loaded::Read {
+                version, adjusted, ..
+            } => {
                 write!(f, "read (format version {version}")?;
                 if *version < VERSION {
                     write!(f, ", older than this build's {VERSION}")?;
@@ -1695,7 +1706,8 @@ mod tests {
             found,
             Loaded::Read {
                 version: 2,
-                adjusted: false
+                adjusted: false,
+                unreadable: Vec::new(),
             }
         );
         assert_eq!(read.version, VERSION);
@@ -1959,7 +1971,8 @@ mod tests {
             found,
             Loaded::Read {
                 version: VERSION,
-                adjusted: false
+                adjusted: false,
+                unreadable: Vec::new(),
             }
         );
     }
@@ -1976,6 +1989,25 @@ mod tests {
             ["speaker.local", "192.0.2.10:8010"]
         );
         assert!(Settings::default().cast_addresses.is_empty());
+    }
+
+    #[test]
+    fn a_field_that_does_not_read_is_named_and_falls_back_alone() {
+        let (read, found) = Settings::from_json(
+            r#"{"version": 3, "master_volume": "loud", "show_virtual_devices": true}"#,
+        )
+        .expect("read");
+        assert_eq!(read.master_volume, Settings::default().master_volume);
+        assert!(read.show_virtual_devices);
+        assert!(
+            matches!(&found, Loaded::Read { unreadable, .. } if unreadable == &["master_volume"]),
+            "{found:?}"
+        );
+        let (_, clean) = Settings::from_json(&sample().to_json()).expect("read");
+        assert!(
+            matches!(&clean, Loaded::Read { unreadable, .. } if unreadable.is_empty()),
+            "{clean:?}"
+        );
     }
 
     #[test]
@@ -2118,7 +2150,8 @@ mod tests {
             found,
             Loaded::Read {
                 version: 0,
-                adjusted: false
+                adjusted: false,
+                unreadable: Vec::new(),
             }
         );
         assert!(found.to_string().contains("older than"), "{found}");
@@ -2233,7 +2266,8 @@ mod tests {
             found,
             Loaded::Read {
                 version: 2,
-                adjusted: true
+                adjusted: true,
+                unreadable: Vec::new(),
             }
         );
         assert!(!Settings::default().to_json().contains("input_device"));
@@ -2267,7 +2301,8 @@ mod tests {
             found,
             Loaded::Read {
                 version: 2,
-                adjusted: true
+                adjusted: true,
+                unreadable: Vec::new(),
             }
         );
         let (read, _) = Settings::from_json(r#"{"version": 2, "input_pairs": [1]}"#).expect("read");
@@ -2306,7 +2341,8 @@ mod tests {
             found,
             Loaded::Read {
                 version: 1,
-                adjusted: true
+                adjusted: true,
+                unreadable: Vec::new(),
             }
         );
         assert_eq!(settings.source, SavedSource::System);
@@ -2412,7 +2448,8 @@ mod tests {
             found,
             Loaded::Read {
                 version: 2,
-                adjusted: true
+                adjusted: true,
+                unreadable: Vec::new(),
             }
         );
         assert_eq!(settings.outputs["late"].delay_ms, -250.0);
