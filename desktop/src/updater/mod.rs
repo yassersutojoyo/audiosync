@@ -123,6 +123,9 @@ pub struct Updater {
     /// waiting for that worker sets it, so no undo starts that the end of
     /// the process could cut in half.
     undo_closed: Arc<Mutex<bool>>,
+    /// Runs on the worker right after it releases `undo_closed`.
+    #[cfg(test)]
+    after_undo: Option<Arc<dyn Fn() + Send + Sync>>,
     /// The version that failed its first start or was blocked (spec S316).
     record: Option<UpdateRecord>,
 }
@@ -142,6 +145,8 @@ impl Updater {
             cancel: Arc::new(AtomicBool::new(false)),
             swapped: None,
             undo_closed: Arc::new(Mutex::new(false)),
+            #[cfg(test)]
+            after_undo: None,
             record: None,
         }
     }
@@ -472,6 +477,8 @@ impl Updater {
         let env = self.env.clone();
         let sender = self.sender.clone();
         let undo_closed = self.undo_closed.clone();
+        #[cfg(test)]
+        let after_undo = self.after_undo.clone();
         self.spawn(move || {
             // An installed exe gone since the swap was removed by Windows
             // security (spec S315).
@@ -490,6 +497,10 @@ impl Updater {
             }
             let undone = undo(&env, &swapped);
             drop(closed);
+            #[cfg(test)]
+            if let Some(after_undo) = after_undo {
+                after_undo();
+            }
             let _ = sender.send(Event::Started(start, Some(undone)));
         });
     }
@@ -1506,5 +1517,33 @@ pub mod tests {
             updater.record(),
             record("0.9.0", UpdateRecordReason::Blocked).as_ref()
         );
+    }
+
+    // covers: S303, S316
+    #[test]
+    fn a_quit_right_after_the_undo_still_finds_its_result() {
+        let (released_sender, released) = mpsc::channel();
+        let (release, gate) = mpsc::channel::<()>();
+        let (released_sender, gate) = (Mutex::new(released_sender), Mutex::new(gate));
+        let mut updater = swapped_with("quit-after-undo", Arc::new(RealFiles), |_| {});
+        updater.after_undo = Some(Arc::new(move || {
+            let _ = released_sender.lock().unwrap().send(());
+            let _ = gate
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(20));
+        }));
+        assert_eq!(updater.press(UpdaterButton::RestartNow), Action::Nothing);
+        released
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("the worker finished its undo");
+        let changed = updater.at_quit();
+        drop(release);
+        assert!(changed, "the undo's result is there once its guard is free");
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::FailedStart).as_ref()
+        );
+        assert_eq!(folder(&updater), old_folder());
     }
 }
