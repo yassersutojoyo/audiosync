@@ -16,9 +16,9 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - A Google Cast speaker that ends the stream on its own gets it again each time, and only a second end within 10 minutes of the one before ends the session. Before, the second end in a session always ended it. On the Mac and on Windows.
 - When several AirPlay speakers start together, they connect one after another, half a second apart, and a pairing's key exchange no longer holds up the sound of a speaker that's already playing. On the Mac and on Windows.
-- On the Mac, the notice for an AirPlay speaker turned off because it asks for a code now says whether it needs a PIN or a password, as on Windows.
 - A zone is renamed in place, like a speaker, instead of in a dialog. On the Mac, double-click its name in the main window or choose Rename… from its menu: Return keeps the new name, Escape the old one. On Windows, double-click its name, press F2 or choose Rename…, type, then press Enter; a speaker in its row under In zones renames the same way.
 - A zone's menu item now says Rename…, as a speaker's does, and a zone name is cut to 60 characters with line breaks turned into spaces, as a speaker name is. On the Mac and on Windows.
+- On the Mac, the notice for an AirPlay speaker turned off because it asks for a code now says whether it needs a PIN or a password, as on Windows.
 - On Windows, AudioSync registers its AirPlay sending with Windows as audio work (the Pro Audio task), as it already did for its local outputs.
 
 ### Fixed
