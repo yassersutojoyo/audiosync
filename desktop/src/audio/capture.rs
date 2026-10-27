@@ -711,6 +711,10 @@ impl CaptureConverter {
     /// Converts a chunk of a mix as [`CaptureConverter::push`] converts a
     /// packet of data; `filled` tells per frame whether every lane's share
     /// was flagged or filled silence, for the zero holes.
+    #[cfg_attr(
+        not(windows),
+        allow(dead_code, reason = "only the WASAPI loopback calls it")
+    )]
     pub fn push_mixed(&mut self, data: &[u8], frames: usize, filled: &[bool]) {
         self.push_marked(data, frames, false, Some(filled));
     }
@@ -1044,6 +1048,10 @@ impl CaptureCounters {
 
     /// Counts a packet Windows flagged as silent. Never allocates, locks or
     /// blocks.
+    #[cfg_attr(
+        not(windows),
+        allow(dead_code, reason = "only the WASAPI loopback calls it")
+    )]
     pub fn count_silent_packet(&self) {
         self.silent_packets.fetch_add(1, Ordering::Relaxed);
     }
