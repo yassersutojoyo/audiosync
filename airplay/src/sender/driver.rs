@@ -143,7 +143,7 @@ struct Active {
 
 enum Phase {
     Active(Box<Active>),
-    /// An AirPlay 2 session (P2), at most one at a time (P169).
+    /// An AirPlay 2 session (P2), up to the limit of P204.
     Ap2(Box<ap2::Ap2Active>),
     /// A new session starts at this time (P142).
     Waiting(Instant),
@@ -1893,11 +1893,8 @@ impl Driver {
         } else {
             kind
         };
-        let taken = self.speakers.iter().any(|(other, speaker)| {
-            other != key && speaker.holds_ap2() && !self.same_target(key, other)
-        });
-        if ap2 && taken {
-            // Refused at once, without a connection.
+        if ap2 && self.ap2_place_taken(key) {
+            // Refused at once, without a connection (P204, P222).
             self.begin_session(key, now);
             return false;
         }

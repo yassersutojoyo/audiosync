@@ -72,9 +72,15 @@ fn airplay2_only(server: &Ap2Server, id: u8) -> Device {
 }
 
 fn start() -> (Sender, HostAudio) {
+    start_limited(SenderConfig::default().airplay2_sessions)
+}
+
+/// A sender that runs at most `sessions` AirPlay 2 sessions at once (P204).
+fn start_limited(sessions: usize) -> (Sender, HostAudio) {
     let config = SenderConfig {
         airplay2: true,
         airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
+        airplay2_sessions: sessions,
         ..SenderConfig::default()
     };
     let (sender, writer) = Sender::start(config).expect("the sender starts");
@@ -353,7 +359,7 @@ fn a_silent_receiver_holds_no_one_and_a_removed_start_opens_no_connection() {
     assert_in_turn(&[first(0), first(1), first(2), first(4)]);
 }
 
-// covers: P169, P222, P224, P225
+// covers: P169, P204, P222, P224, P225
 #[test]
 fn a_queued_airplay2_start_keeps_the_one_place() {
     let _serial = serial();
@@ -362,7 +368,7 @@ fn a_queued_airplay2_start_keeps_the_one_place() {
         .collect();
     let first_ap2 = Ap2Server::start(FakeAp2::new());
     let second_ap2 = Ap2Server::start(FakeAp2::new());
-    let (sender, _host) = start();
+    let (sender, _host) = start_limited(1);
     let mut events = Events::default();
     let mut devices: Vec<Device> = airplay1
         .iter()
@@ -383,7 +389,7 @@ fn a_queued_airplay2_start_keeps_the_one_place() {
         matches!(event, SenderEvent::Speaker { key, event: SpeakerEvent::Error(error) }
             if *key == b_key
                 && error.error.kind
-                    == ErrorKind::Unsupported(UnsupportedReason::OneAirPlay2Session))
+                    == ErrorKind::Unsupported(UnsupportedReason::TooManyAirPlay2Sessions))
     });
     assert!(refused.is_some(), "{:?}", events.of(&b_key));
 
