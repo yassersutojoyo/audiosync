@@ -8845,7 +8845,7 @@ do {
     defer { try? FileManager.default.removeItem(at: dir) }
     let url = CastMemoryFile.file(in: dir)
     check(url.lastPathComponent == "cast-devices.json" && url.deletingLastPathComponent().lastPathComponent == "AudioSync"
-            && CastMemoryFile.load(from: url) == nil, "cast memory: in AudioSync's folder, nothing before a save")
+            && CastMemoryStore(url: url).json == nil, "cast memory: in AudioSync's folder, nothing before a save")
     let id = "0123456789abcdef0123456789abcdef"
     var first = asc_cast_create(nil)
     check(first != nil && asc_cast_offset_ms(first, id) == -1 && asc_cast_set_offset(first, id, 1234.4)
@@ -8854,11 +8854,79 @@ do {
     asc_cast_destroy(&first)
     var saved = false
     if let json { saved = (try? CastMemoryFile.save(json, to: url)) != nil }
-    let loaded = CastMemoryFile.load(from: url)
+    let loaded = CastMemoryStore(url: url).json
     check(saved && loaded == json && first == nil, "cast memory: the JSON is written and read back whole")
     var second = asc_cast_create(loaded)
     check(asc_cast_offset_ms(second, id) == 1234, "cast memory: a new sender starts with the stored offset")
     asc_cast_destroy(&second)
+}
+
+// MARK: Google Cast device memory: a file that doesn't read is kept aside before the first save
+do {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-cast-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = CastMemoryFile.file(in: dir)
+    let folder = url.deletingLastPathComponent()
+    func copies() -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+            .filter { $0.hasPrefix("cast-devices.ignored-") && $0.hasSuffix(".json") }.sorted()
+    }
+    var missing = CastMemoryStore(url: url)
+    let none = try? missing.save("{}")
+    check(missing.json == nil && none == .some(nil) && copies().isEmpty,
+          "cast memory: with no file at launch, the first save keeps nothing aside")
+
+    let damaged = Data("{\"0123456789abcdef0123456789abcdef\": {\"offsetMs\": 12".utf8)
+    try? damaged.write(to: url)
+    var store = CastMemoryStore(url: url)
+    check(copies().isEmpty, "cast memory: reading a file that doesn't read keeps nothing aside yet")
+    let kept = try? store.save("{}")
+    let copy = copies().first.map { folder.appendingPathComponent($0) }
+    let mode = copy.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.posixPermissions] as? Int }
+    check(copies().count == 1 && copy.flatMap { try? Data(contentsOf: $0) } == damaged
+            && kept??.lastPathComponent == copy?.lastPathComponent && mode == 0o600
+            && CastMemoryStore(url: url).json == "{}",
+          "cast memory: a file that doesn't read is kept aside, whole and owner-only, before it is saved over",
+          "\(copies()) mode \(mode.map { String($0, radix: 8) } ?? "nil")")
+    let second = try? store.save("{\"a\":1}")
+    check(second == .some(nil) && copies().count == 1, "cast memory: only the first save of a run keeps a copy")
+
+    if let first = copies().first, let copy {
+        let seconds = first.dropFirst("cast-devices.ignored-".count).prefix { $0.isNumber }
+        let at = Date(timeIntervalSince1970: TimeInterval(Int(seconds) ?? 0))
+        let next = try? CastMemoryFile.keepAside(Data("x".utf8), next: url, now: at)
+        check(next?.lastPathComponent == "cast-devices.ignored-\(seconds)-2.json"
+                && (try? Data(contentsOf: copy)) == damaged,
+              "cast memory: a taken name gets -2 after the time and the copy holding it is left alone",
+              next?.lastPathComponent ?? "nil")
+    }
+
+    let good = "0123456789abcdef0123456789abcdef"
+    let mixed = "{\"\(good)\": {\"offsetMs\": 700}, \"fedcba9876543210fedcba9876543210\": {\"offsetMs\": \"soon\"}, \"not-an-id\": 5}"
+    try? Data(mixed.utf8).write(to: url)
+    let before = copies().count
+    var lossy = CastMemoryStore(url: url)
+    var sender = asc_cast_create(lossy.json)
+    check(asc_cast_offset_ms(sender, good) == 700, "cast memory: one damaged entry costs only itself")
+    asc_cast_destroy(&sender)
+    _ = try? lossy.save("{}")
+    check(copies().count == before, "cast memory: a JSON object with a damaged entry reads, so nothing is kept aside")
+
+    check(!CastMemoryFile.reads(Data("\u{FEFF}{}".utf8)) && !CastMemoryFile.reads(Data("[]".utf8))
+            && !CastMemoryFile.reads(Data([0xFF, 0x7B, 0x7D])) && CastMemoryFile.reads(Data("{}".utf8)),
+          "cast memory: only UTF-8 text holding a JSON object, without a byte order mark, reads")
+
+    try? damaged.write(to: url)
+    try? FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
+    // Skipped when running as root, where the mode doesn't stop the read.
+    if (try? Data(contentsOf: url)) == nil {
+        let count = copies().count
+        var blocked = CastMemoryStore(url: url)
+        let refused = (try? blocked.save("{}")) == nil
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        check(blocked.json == nil && refused && copies().count == count && (try? Data(contentsOf: url)) == damaged,
+              "cast memory: a file that can't be read at all is not replaced")
+    }
 }
 
 // MARK: Guide illustrations: each finds its place in the text, in order (GuideLayout)
