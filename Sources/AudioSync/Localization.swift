@@ -573,10 +573,11 @@ struct UIStrings {
         case .unreachable:
             return "\(name) couldn't be reached, so it's off. "
                 + "Check that the speaker is on and on the same network, then turn it on again."
-        case .needsCode:
-            return "\(name) asks for a PIN or password, so it's off. "
-                + "To pair it, turn it on again and enter the code when AudioSync asks. "
-                + "To use it without a code, set Allow Speaker & TV Access on the speaker (or in the Home app) "
+        case .needsPin:
+            return "\(name) needs pairing with a PIN, so it's off. Turn it on again to pair."
+        case .needsPassword:
+            return "\(name) asks for a password, so it's off. Turn it on again to enter it. "
+                + "To use it without a password, set Allow Speaker & TV Access on the speaker (or in the Home app) "
                 + "to “Anyone on the Same Network” and turn off Require Password."
         case .cancelled:
             return "Pairing with \(name) was cancelled, so it's off. "
@@ -592,6 +593,20 @@ struct UIStrings {
     /// before any pairing step, so the cause stays unnamed.
     func nativeAirPlayNotAccepted(name: String) -> String {
         "\(name) didn't accept the connection, so it's off. Turn it on again to try once more."
+    }
+
+    /// A native speaker turned off because it asks for a PIN or password;
+    /// nil for every other reason. `unasked`: it turned the session down
+    /// before asking for either.
+    func nativeAirPlayAsksForCode(name: String, reason: NativeTurnOff, unasked: Bool) -> String? {
+        switch reason {
+        case .needsCode where unasked: return nativeAirPlayNotAccepted(name: name)
+        case .needsCode: return airPlayTurnedOff(name: name, reason: .needsPin)
+        case .needsPassword: return airPlayTurnedOff(name: name, reason: .needsPassword)
+        case .unreachable, .cantPlay, .needsAirPlay2, .timingUnavailable, .playsThroughSpeakers,
+             .receiverUnverified, .memberNeedsPassword, .cancelled, .pairingFailed, .stillNeedsCode:
+            return nil
+        }
     }
 
     /// A PIN pairing ended without pairing, for another reason than a wrong
