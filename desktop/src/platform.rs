@@ -300,6 +300,14 @@ pub fn min_track_size(min: (f64, f64), dpi: u32, frame: (i32, i32)) -> (i32, i32
     (side(min.0, frame.0), side(min.1, frame.1))
 }
 
+/// The outer size a move or resize that asked for `asked` gets, between the
+/// smallest outer size `min` and the largest `max` (physical pixels); `min`
+/// wins when the screen is too small for it.
+#[cfg(any(windows, test))]
+pub fn held_size(asked: (i32, i32), min: (i32, i32), _max: (i32, i32)) -> (i32, i32) {
+    (asked.0.max(min.0), asked.1.max(min.1))
+}
+
 /// `min` (logical pixels, each below 65 536) in the one number a window
 /// subclass carries, and back.
 #[cfg(any(windows, test))]
@@ -466,7 +474,11 @@ unsafe extern "system" fn min_size_procedure(
     if minimized || maximized || position.flags.contains(SWP_NOSIZE) {
         return result;
     }
-    let clamped = (position.cx.max(width), position.cy.max(height));
+    let clamped = held_size(
+        (position.cx, position.cy),
+        (width, height),
+        (i32::MAX, i32::MAX),
+    );
     if clamped != (position.cx, position.cy) {
         let asked = (position.cx, position.cy);
         log_min_size_once(MinSizeEvent::Clamped, || {
@@ -822,6 +834,19 @@ mod tests {
         assert_eq!(min_track_size((860.0, 440.0), 96, (0, 0)), (860, 440));
         // A fraction of a pixel rounds up, so the inner size never falls short.
         assert_eq!(min_track_size((101.0, 101.0), 120, (0, 0)), (127, 127));
+    }
+
+    #[test]
+    fn a_move_past_the_screen_stops_at_the_largest_size_windows_allows() {
+        let min = (876, 499);
+        let max = (1946, 1106);
+        assert_eq!(held_size((996, 1400), min, max), (996, 1106));
+        assert_eq!(held_size((996, 32767), min, max), (996, 1106));
+        assert_eq!(held_size((4000, 739), min, max), (1946, 739));
+        assert_eq!(held_size((996, 739), min, max), (996, 739));
+        assert_eq!(held_size((286, 193), min, max), (876, 499));
+        // A screen shorter than the minimum: the minimum still holds.
+        assert_eq!(held_size((996, 1400), (876, 1200), max), (996, 1200));
     }
 
     #[test]
