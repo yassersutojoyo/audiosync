@@ -7,13 +7,18 @@ mod common;
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use audiosync_airplay::audio::read_pcm_payload;
+use audiosync_airplay::clock::SenderClock;
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
+use audiosync_airplay::input::InputWriter;
+use audiosync_airplay::rtp::SyncPacket;
 use audiosync_airplay::sender::{
     Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
 };
@@ -22,7 +27,8 @@ use audiosync_airplay::volume::Volume;
 
 use common::ap2::{Ap2Server, FakeAp2};
 use common::net::{
-    Behavior, Events, HostAudio, Log, NetReceiver, play_times, serial, step_error, wait_until,
+    BLOCK_FRAMES, Behavior, Events, HostAudio, Log, NetReceiver, host_frame_of, host_samples,
+    play_times, serial, step_error, wait_until,
 };
 
 const LONG: Duration = Duration::from_secs(15);
@@ -546,4 +552,182 @@ fn stopping_the_stream_drops_every_waiting_start() {
         .collect();
     assert!(connected[0] <= 1);
     assert_eq!(&connected[1..], &[0, 0, 0]);
+}
+
+/// The first host frame of each audible PCM packet, with its RTP timestamp.
+fn packet_frames(log: &Log) -> Vec<(u64, u32)> {
+    log.audio
+        .iter()
+        .filter(|packet| packet.payload.len() == 1408)
+        .filter_map(|packet| {
+            let mut frames = [[0i16; 2]; 352];
+            read_pcm_payload(&packet.payload, &mut frames);
+            Some((host_frame_of(frames[0])?, packet.header.timestamp))
+        })
+        .collect()
+}
+
+/// When `rtp` is heard on the 44 100 Hz line through `sync`, in seconds.
+fn heard_at(sync: &SyncPacket, rtp: u32, clock: &SenderClock) -> f64 {
+    clock.seconds_of(sync.time) + f64::from(rtp.wrapping_sub(sync.rtp_heard) as i32) / 44_100.0
+}
+
+/// A capture like `HostAudio` whose clock runs `ppm` fast against the
+/// sender's, so R̂ moves off 44 100 Hz (P101).
+struct SkewedAudio {
+    stop: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl SkewedAudio {
+    fn start(mut writer: InputWriter, ppm: f64) -> SkewedAudio {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let rate = 44_100.0 * (1.0 + ppm * 1e-6);
+        let thread = thread::spawn(move || {
+            let mut written: u64 = 0;
+            let start = Instant::now();
+            let mut block = vec![0i16; BLOCK_FRAMES * 2];
+            while !flag.load(Ordering::SeqCst) {
+                for (index, pair) in block.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+                    pair.copy_from_slice(&host_samples(written + index as u64));
+                }
+                writer.write_i16(&block, Instant::now());
+                written += BLOCK_FRAMES as u64;
+                let next = start + Duration::from_secs_f64(written as f64 / rate);
+                if let Some(wait) = next.checked_duration_since(Instant::now()) {
+                    thread::sleep(wait);
+                }
+            }
+        });
+        SkewedAudio {
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for SkewedAudio {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// One join beside `playing`, as (before, after): the joiner's first-sync
+/// time for its first audible host frame minus the playing receiver's time
+/// for that frame through the shared sync it got last before the joiner's
+/// first sync and first after it, in frames on the 44 100 Hz line.
+fn join_offsets(
+    sender: &Sender,
+    events: &mut Events,
+    playing: &NetReceiver,
+    id: u8,
+) -> Option<(f64, f64)> {
+    let clock = sender.clock();
+    let joiner = NetReceiver::start(Behavior::default());
+    let j = joiner.device(id, PCM_TXT);
+    let j_key = j.key.clone();
+    sender.add_speaker(j, options());
+    let playing_at = first_state_at(events, sender, &j_key, SpeakerState::Playing, LONG);
+    thread::sleep(Duration::from_millis(1_500));
+    sender.remove_speaker(&j_key);
+    playing_at?;
+
+    let j_log = copy(&joiner);
+    let (first_at, first) = j_log
+        .syncs
+        .iter()
+        .find(|(_, _, s)| s.first)
+        .map(|(at, _, s)| (*at, *s))?;
+    let (frame, j_rtp) = packet_frames(&j_log)
+        .into_iter()
+        .filter(|(_, rtp)| rtp.wrapping_sub(first.next_rtp) < 44_100)
+        .min_by_key(|(_, rtp)| rtp.wrapping_sub(first.next_rtp))?;
+    let joiner_time = heard_at(&first, j_rtp, &clock);
+
+    let p_log = copy(playing);
+    let (f0, ts) = packet_frames(&p_log)
+        .into_iter()
+        .rfind(|(f0, _)| *f0 <= frame && frame < f0 + 352)?;
+    let p_rtp = ts.wrapping_add((frame - f0) as u32);
+    let shared = p_log.syncs.iter().filter(|(_, _, s)| !s.first);
+    let (_, _, before) = shared.clone().rfind(|(at, _, _)| *at <= first_at)?;
+    let (_, _, after) = shared.clone().find(|(at, _, _)| *at > first_at)?;
+    Some((
+        (joiner_time - heard_at(before, p_rtp, &clock)) * 44_100.0,
+        (joiner_time - heard_at(after, p_rtp, &clock)) * 44_100.0,
+    ))
+}
+
+fn env_or<T: std::str::FromStr>(name: &str, default: T) -> T {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+}
+
+/// P97 measurement, asserting nothing: `P97_RUNS` joins (20 by default)
+/// beside one playing receiver, after `P97_WARMUP_S` seconds of play (15 by
+/// default, past the 10 s before R̂'s fitted slope applies), for each capture
+/// skew in `P97_PPM` (comma-separated, "0,1000" by default). Run with
+/// `--ignored --nocapture`.
+#[test]
+#[ignore = "a measurement of minutes"]
+fn measure_a_joiners_first_sync_against_the_shared_timeline() {
+    let _serial = serial();
+    // Joiner ids are 31 + run in a u8.
+    let runs: u8 = env_or("P97_RUNS", 20).min(224);
+    let warmup: f64 = env_or("P97_WARMUP_S", 15.0);
+    let skews: Vec<f64> = env_or("P97_PPM", "0,1000".to_owned())
+        .split(',')
+        .filter_map(|value| value.trim().parse().ok())
+        .collect();
+    for ppm in skews {
+        let playing = NetReceiver::start(Behavior::default());
+        let config = SenderConfig {
+            airplay2: true,
+            airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
+            ..SenderConfig::default()
+        };
+        let (sender, writer) = Sender::start(config).expect("the sender starts");
+        let _host = SkewedAudio::start(writer, ppm);
+        let mut events = Events::default();
+        let p = playing.device(30, PCM_TXT);
+        let p_key = p.key.clone();
+        sender.add_speaker(p, options());
+        assert!(
+            first_state_at(&mut events, &sender, &p_key, SpeakerState::Playing, LONG).is_some()
+        );
+        thread::sleep(Duration::from_secs_f64(warmup));
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        for run in 0..runs {
+            // Joins land at different places between two sync points.
+            thread::sleep(Duration::from_millis(u64::from(run) * 137 % 1_000));
+            let rate = sender.stream_counters().rate();
+            match join_offsets(&sender, &mut events, &playing, 31 + run) {
+                Some((b, a)) => {
+                    println!(
+                        "{ppm} ppm run {run}: R̂ {rate:.3} Hz, {b:+.3} frames off the sync before, {a:+.3} off the one after"
+                    );
+                    before.push(b);
+                    after.push(a);
+                }
+                None => println!("{ppm} ppm run {run}: no measurement"),
+            }
+        }
+        for (name, values) in [("before", &mut before), ("after", &mut after)] {
+            values.sort_by(f64::total_cmp);
+            if let (Some(min), Some(max)) = (values.first(), values.last()) {
+                println!(
+                    "{ppm} ppm {name}: n={} min={min:+.3} median={:+.3} max={max:+.3} frames",
+                    values.len(),
+                    values[values.len() / 2]
+                );
+            }
+        }
+    }
 }
