@@ -542,7 +542,10 @@ fn group_answers(session: &mut CastSession, device: &FakeDevice, level: f64, sho
     // count is only read once the fake has logged this send.
     let until = Instant::now() + Duration::from_secs(3);
     while levels_sent(device).len() <= before {
-        assert!(Instant::now() < until, "SET_VOLUME {level} never reached the fake");
+        assert!(
+            Instant::now() < until,
+            "SET_VOLUME {level} never reached the fake"
+        );
         run(session, Duration::from_millis(20));
     }
     wait_level(session, shown);
