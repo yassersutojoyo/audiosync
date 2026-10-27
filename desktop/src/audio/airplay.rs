@@ -8135,6 +8135,27 @@ pub mod tests {
         assert_eq!(airplay.speakers()[0].volume, 70.0);
     }
 
+    // covers: S271, S291
+    #[test]
+    fn a_slider_set_with_no_release_stops_holding_the_row_once_idle() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        // A screen reader sets the value: the slider starts editing but
+        // never sees a release.
+        airplay.set_volume_dragging(&id, true);
+        airplay.move_row(&id, 30.0);
+        fake.take_calls();
+        settle(&mut airplay, &id);
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -21.0);
+        assert!(airplay.poll().is_empty(), "the echo of the level sent");
+        // The television's remote then moves it to −24 dB: level 20.
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -24.0);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(airplay.speakers()[0].volume, 20.0);
+    }
+
     // covers: S250, S290, S291
     #[test]
     fn a_read_back_near_the_level_sent_or_at_master_0_keeps_the_own_volume() {
