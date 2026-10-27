@@ -322,9 +322,22 @@ fn ap2_one_link_local_address_on_two_interfaces_is_two_peers() {
         );
     }
 
+    let nine = SocketAddr::V6(SocketAddrV6::new(link_local, 0, 0, 9));
+    let at = |ms: u64| origin + Duration::from_millis(ms);
+    service.handle_message(&delay_req(1), on(9), at(1500));
+    let answer = service.poll_transmit().expect("a Delay_Resp");
+    assert_eq!(answer.kind, MessageType::DelayResp);
+    assert_eq!(scope_of(answer.to), 9);
+    assert_eq!(service.poll_transmit(), None);
+
+    let rx = [0x02, 0x15, 0x5D, 0xFF, 0xFE, 0xED, 0x01, 0x73];
+    service.handle_message(&receiver_announce(rx, 127, 6, 0), on(9), at(2000));
+    service.handle_message(&receiver_announce(rx, 127, 6, 1), on(9), at(3000));
+    assert_eq!(service.poll_outranked(), Some(nine));
+    assert_eq!(service.poll_outranked(), None);
+
     service.stop_peer(on(4));
-    let left = SocketAddr::V6(SocketAddrV6::new(link_local, 0, 0, 9));
-    assert_eq!(service.peers(), &[left]);
+    assert_eq!(service.peers(), &[nine]);
 }
 
 fn ptp_config(peers: Vec<IpAddr>) -> Ap2Config {
