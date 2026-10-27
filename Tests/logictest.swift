@@ -9218,6 +9218,18 @@ do {
     check(occurrences("model.actions.toggleZone") == 1 && occurrences("disclosure.toggle") == 1
           && occurrences(".disabled(") == 0,
           "panel zone header: nothing switches or folds the zone outside the table, and no part is disabled")
+
+    // The main window's zone card routes the same way, so its greyed icon folds too.
+    let window = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let card = window.components(separatedBy: "private struct ZoneCard").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    func inCard(_ needle: String) -> Int { card.components(separatedBy: needle).count - 1 }
+    check(!card.isEmpty && inCard("ZoneHeaderHit.action(for: area, nonePresent: nonePresent)") == 1
+          && inCard(".disabled(zone.present") == 0,
+          "main window zone header: the greyed icon folds through ZoneHeaderHit instead of being disabled")
+    check(inCard(".accessibilityHidden(nonePresent)") == 1
+          && inCard(".accessibilityValue(nonePresent ? model.countText(of: zone) : \"\")") == 1,
+          "main window zone header: VoiceOver skips the greyed icon and the fold button carries the count")
 }
 
 // MARK: Menu bar panel rows for zones, folded and unfolded (ZoneLayout.panelRows, shownMembers)
