@@ -20,7 +20,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - The notice for an AirPlay speaker turned off because it asks for a code now says whether it needs a PIN or a password, on the Mac and on Windows.
 - On Windows, AirPlay audio keeps its timing better while the PC is busy, since AudioSync asks Windows to treat its AirPlay sending as audio work.
 - On the Mac, renaming a zone now edits its name in place in the main window, like a speaker's, instead of opening a dialog: Return keeps the new name, Escape the old one.
-- On Windows, a zone is renamed in place like a speaker: double-click its name, press F2 or choose Rename Zone…, type, then press Enter. A speaker in its row under In zones renames the same way. No dialog opens.
+- On Windows, a zone is renamed in place like a speaker: double-click its name, press F2 or choose Rename…, type, then press Enter. A speaker in its row under In zones renames the same way. No dialog opens.
+- A zone's menu item now says Rename…, as a speaker's does, and a zone name is cut to 60 characters with line breaks turned into spaces, as a speaker name is. On the Mac and on Windows.
 
 ### Fixed
 

@@ -3448,7 +3448,7 @@ impl App {
         }
     }
 
-    /// Rename… in a speaker's menu, Rename Zone…, F2, or a double-click on a
+    /// Rename… in a speaker's or zone's menu, F2, or a double-click on a
     /// name: that row or zone header shows a name field with the focus. A
     /// rename open elsewhere applies first; one open in this place keeps its
     /// typing.
@@ -10191,6 +10191,14 @@ mod tests {
             "No presets yet. Turn on the speakers you want, set the volumes and the curve, \
              then save them as a preset."
         );
+    }
+
+    #[test]
+    fn a_zone_menu_says_rename_as_a_speaker_menu_does() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        assert_eq!(strings.get_rename_zone(), "Rename…");
+        assert_eq!(strings.get_rename_zone(), strings.get_rename_speaker());
     }
 
     // covers: S261

@@ -4472,7 +4472,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn rename_zone(&mut self, id: &str, name: &str) {
-        self.zones.rename(id, name);
+        self.zones
+            .rename(id, &crate::speaker_names::normalized(name));
     }
 
     fn delete_zone(&mut self, id: &str) {
@@ -5935,6 +5936,18 @@ mod tests {
         assert_eq!(names, ["Office", "Study"], "a blank name keeps the old one");
         adapter.delete_zone("zone:1");
         assert_eq!(adapter.snapshot().zones.len(), 1);
+    }
+
+    #[test]
+    fn a_zone_name_is_cut_to_sixty_characters_like_a_speakers() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.new_zone("Office").unwrap();
+        adapter.rename_zone("zone:1", &format!(" {}\n", "a".repeat(65)));
+        let name = adapter.snapshot().zones[0].name.clone();
+        assert_eq!(name, "a".repeat(crate::speaker_names::MAX_NAME_CHARS));
+        adapter.rename_zone("zone:1", "Den\nStudy");
+        assert_eq!(adapter.snapshot().zones[0].name, "Den Study");
     }
 
     #[test]
