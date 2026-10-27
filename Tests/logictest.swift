@@ -9236,7 +9236,7 @@ do {
           "setup: the Local Network row gives the full System Settings path")
 }
 
-// MARK: Zone header routing table in the main window (ZoneHeaderHit)
+// MARK: Zone header routing table in the main window and the menu bar panel (ZoneHeaderHit)
 do {
     let expected: [(ZoneHeaderHit.Area, ZoneHeaderHit.Action, String)] = [
         (.name, .fold, "a click on the zone name folds or unfolds the members"),

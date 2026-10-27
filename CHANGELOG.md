@@ -2,6 +2,12 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
+## [0.7.1] - Unreleased
+
+### Changed
+
+- In the menu bar panel on the Mac, a zone works like its header in the main window: only the round icon switches the zone on or off, and the name or the arrow next to it shows or hides the zone's speakers. Before, a click on the name switched the whole zone.
+
 ## [0.7.0] - 2026-10-27
 
 ### Added

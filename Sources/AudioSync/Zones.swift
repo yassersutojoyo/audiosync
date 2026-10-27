@@ -270,7 +270,8 @@ enum ZoneLayout {
     }
 }
 
-/// What a click on each part of a zone's header in the main window does.
+/// What a click on each part of a zone's header does, in the main window and
+/// in the menu bar panel (which has no count line, slider or menu).
 /// Folding never switches the zone: only its round icon does, and the slider
 /// and the options menu keep their clicks to themselves.
 enum ZoneHeaderHit {
