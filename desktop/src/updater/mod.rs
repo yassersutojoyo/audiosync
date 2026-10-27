@@ -57,7 +57,28 @@ enum Event {
     Checked(Trigger, Checked),
     Progress(Option<u8>),
     Installed(String, Installed),
-    Started(Start),
+    /// The new version's start, and the undo of the swap the worker ran
+    /// when it didn't signal.
+    Started(Start, Option<Undone>),
+}
+
+/// The undo of a swap after a failed restart (spec S303).
+struct Undone {
+    result: Result<(), swap::SwapError>,
+    steps: swap::StepLog,
+}
+
+/// Undoes `swapped`, each delete and rename with the lock retries of spec
+/// S315; on the worker thread after a failed restart, since they can wait.
+fn undo(env: &Env, swapped: &swap::Swapped) -> Undone {
+    let files = files::Retrying {
+        inner: env.files.as_ref(),
+        log: &env.log,
+        sleep: env.sleep.as_ref(),
+    };
+    let mut steps = swap::StepLog::new();
+    let result = swap::undo_completed(&env.install_dir, swapped, &files, &mut steps);
+    Undone { result, steps }
 }
 
 /// What [`Updater::poll`] saw.
@@ -321,20 +342,28 @@ impl Updater {
                     self.check(Trigger::Manual);
                 }
             }
-            Event::Started(start) => {
+            Event::Started(start, undone) => {
                 self.work = Work::Idle;
-                match start {
-                    Start::Signalled { pid } => {
+                let Some(undone) = undone else {
+                    if let Start::Signalled { pid } = start {
                         self.env.log.log(|| {
                             format!("updater: process {pid} signalled its start, quitting")
                         });
                         polled.quit = true;
                     }
+                    return;
+                };
+                match start {
                     Start::Failed(error)
                         if files::is_blocked(&error)
                             || error.kind() == std::io::ErrorKind::NotFound =>
                     {
-                        self.start_failed(&error.to_string(), UpdateRecordReason::Blocked, polled);
+                        self.start_failed(
+                            &error.to_string(),
+                            UpdateRecordReason::Blocked,
+                            undone,
+                            polled,
+                        );
                     }
                     other => {
                         let why = match other {
@@ -346,9 +375,11 @@ impl Updater {
                                 self.env.start_wait.as_millis()
                             ),
                             Start::Failed(error) => format!("the exe didn't start ({error})"),
-                            Start::Signalled { .. } => unreachable!("handled above"),
+                            Start::Signalled { pid } => {
+                                format!("process {pid} signalled, yet the swap was undone")
+                            }
                         };
-                        self.start_failed(&why, UpdateRecordReason::FailedStart, polled);
+                        self.start_failed(&why, UpdateRecordReason::FailedStart, undone, polled);
                     }
                 }
             }
@@ -422,7 +453,10 @@ impl Updater {
     /// Starts the installed exe on the worker thread, which waits for its
     /// start signal while streaming goes on (spec S303, S314).
     fn restart(&mut self) {
-        if self.swapped.is_none() || self.work != Work::Idle {
+        let Some((_, swapped)) = self.swapped.clone() else {
+            return;
+        };
+        if self.work != Work::Idle {
             return;
         }
         let exe = self.env.install_dir.join(archive::EXE_NAME);
@@ -437,7 +471,8 @@ impl Updater {
             } else {
                 Start::Failed(std::io::Error::from(std::io::ErrorKind::NotFound))
             };
-            let _ = sender.send(Event::Started(start));
+            let undone = (!matches!(start, Start::Signalled { .. })).then(|| undo(&env, &swapped));
+            let _ = sender.send(Event::Started(start, undone));
         });
     }
 
@@ -463,29 +498,28 @@ impl Updater {
         }
     }
 
-    /// The new exe couldn't be started or gave no start signal: the new
-    /// files go and each `.bak` the swap made is renamed back (spec S303).
-    fn start_failed(&mut self, why: &str, reason: UpdateRecordReason, polled: &mut Polled) {
+    /// The new exe couldn't be started or gave no start signal, and `undone`
+    /// deleted the new files and renamed each `.bak` back (spec S303).
+    fn start_failed(
+        &mut self,
+        why: &str,
+        reason: UpdateRecordReason,
+        undone: Undone,
+        polled: &mut Polled,
+    ) {
         self.env
             .log
             .log(|| format!("updater: restart failed ({why})"));
-        let Some((version, swapped)) = self.swapped.take() else {
+        let Some((version, _)) = self.swapped.take() else {
             return;
         };
         self.keep_record(Some(UpdateRecord { version, reason }), polled);
-        let mut steps = swap::StepLog::new();
-        let undone = swap::undo_completed(
-            &self.env.install_dir,
-            &swapped,
-            self.env.files.as_ref(),
-            &mut steps,
-        );
-        for (step, code) in &steps {
+        for (step, code) in &undone.steps {
             self.env
                 .log
                 .log(|| format!("updater: {step} (error {code})"));
         }
-        self.set_notice(Some(match undone {
+        self.set_notice(Some(match undone.result {
             Err(swap::SwapError::RestoreFailed { renames }) => UpdaterNotice::RestoreFailed {
                 renames: notice_renames(renames),
             },
@@ -498,13 +532,18 @@ impl Updater {
     /// `.bak` back, so the next start finds one (spec S315). True when the
     /// record changed.
     pub fn at_quit(&mut self) -> bool {
-        if self.swapped.is_none() || self.env.install_dir.join(archive::EXE_NAME).exists() {
+        let Some((_, swapped)) = &self.swapped else {
+            return false;
+        };
+        if self.env.install_dir.join(archive::EXE_NAME).exists() {
             return false;
         }
+        let undone = undo(&self.env, swapped);
         let mut polled = Polled::default();
         self.start_failed(
             "the installed exe is gone at quit",
             UpdateRecordReason::Blocked,
+            undone,
             &mut polled,
         );
         polled.record_changed
