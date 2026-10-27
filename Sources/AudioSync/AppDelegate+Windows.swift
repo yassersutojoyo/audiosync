@@ -351,6 +351,7 @@ extension AppDelegate {
         a.openWebRemote = { [weak self] in self?.openWebRemoteWindow() }
         a.refreshDevices = { [weak self] in self?.rescanDevices() }
         a.refreshExternalState = { [weak self] in self?.rereadExternalState() }
+        a.refreshModel = { [weak self] in self?.pushModel() }
         a.mainWindowVisible = { [weak self] visible in
             guard let self, visible != self.nowPlayingOnScreen else { return }
             self.nowPlayingOnScreen = visible   // Now Playing polls only while someone sees it

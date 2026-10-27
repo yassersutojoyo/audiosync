@@ -150,6 +150,9 @@ final class AppModel: ObservableObject {
         /// The panel opened or the window became key: re-read what can change
         /// outside AudioSync.
         var refreshExternalState: () -> Void = {}
+        /// Brings the model up to date with AudioSync's own state, without the
+        /// slower look outside it (some rows depend on how long a search has run).
+        var refreshModel: () -> Void = {}
         /// The main window came on screen or left it (closed, minimized, covered).
         var mainWindowVisible: (Bool) -> Void = { _ in }
         var openEqualizer: () -> Void = {}
@@ -691,11 +694,16 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let screen = (item.screen ?? NSScreen.main)?.visibleFrame ?? item.frame
         // The status item's own screen, not the one with keyboard focus.
         model.panelRoom = item.frame.minY - Self.arrowRoom - screen.minY
+        let refreshStart = ProcessInfo.processInfo.systemUptime
+        model.actions.refreshModel()
+        let refreshMs = (ProcessInfo.processInfo.systemUptime - refreshStart) * 1000
+        DebugTrace.log("[AudioSync] panel show: model refresh \(String(format: "%.1f ms", refreshMs))")
         // The app's appearance, not the menu bar's, which follows the wallpaper.
         popover.appearance = NSApp.effectiveAppearance
         // Open at once, at the final size. The rows were rebuilt and laid out
         // when the panel last closed (`prepareNextOpen`), so this pass only
-        // applies what changed since; the refresh waits for `popoverDidShow`.
+        // applies what changed since; the look outside AudioSync waits for
+        // `popoverDidShow`.
         host.view.needsLayout = true
         host.view.layoutSubtreeIfNeeded()
         let size = host.sizeThatFits(in: CGSize(width: 10_000, height: 10_000))
@@ -748,7 +756,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let refreshed = ProcessInfo.processInfo.systemUptime
         DebugTrace.log("[AudioSync] panel open: size \(ms(since: start)), takeKey \(ms(since: sized)), "
                        + "refresh \(ms(since: keyed))")
-        DispatchQueue.main.async { DebugTrace.log("[AudioSync] panel open: SwiftUI pass \(ms(since: refreshed))") }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.host.sizing.followsContent else { return }
+            DebugTrace.log("[AudioSync] panel open: SwiftUI pass \(ms(since: refreshed))")
+            // The final size even if the popover missed the content's new preferred size.
+            let fit = self.host.sizeThatFits(in: CGSize(width: 10_000, height: 10_000))
+            if fit.width > 0, fit.height > 0, fit != self.popover.contentSize { self.popover.contentSize = fit }
+        }
     }
 
     func popoverDidClose(_ notification: Notification) {
