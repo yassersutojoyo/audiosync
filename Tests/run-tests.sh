@@ -41,14 +41,14 @@ CORE=(-I Sources/CAudioSyncCore -L core/target/universal-apple-darwin/release -l
 ENGINE_PARTS=(EngineParts.swift CoreEngine.swift OutputRenderer.swift OutputFades.swift Equalizer.swift Diagnostics.swift
   NativeAirPlayTap.swift CastTap.swift CalibrationTap.swift)
 
-build() {   # build <name> <test file> <source files…> [-- <more swiftc arguments…>]
-  local name=$1 test=$2; shift 2
+build() {   # [SWIFT_OPT=-Onone] build <name> <test file> <source files…> [-- <more swiftc arguments…>]
+  local name=$1 test=$2 opt=${SWIFT_OPT:--O}; shift 2
   mkdir -p "$OUT/$name"
   cp "$test" "$OUT/$name/main.swift"
   local srcs=() extra=()
   while [ $# -gt 0 ] && [ "$1" != "--" ]; do srcs+=("$SRC/$1"); shift; done
   if [ $# -gt 0 ]; then shift; extra=("$@"); fi
-  swiftc -O -swift-version 5 "$OUT/$name/main.swift" ${srcs[@]+"${srcs[@]}"} ${extra[@]+"${extra[@]}"} \
+  swiftc "$opt" -swift-version 5 "$OUT/$name/main.swift" ${srcs[@]+"${srcs[@]}"} ${extra[@]+"${extra[@]}"} \
     -o "$OUT/$name/run"
 }
 
@@ -258,11 +258,14 @@ if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
   # name the capture's and the engine's start errors, which bring the
   # engine's parts along (SyncEngine.swift with StreamEngine's StartError): the
   # logic suite links the core too.
-  build logic Tests/logictest.swift TrackMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
+  # Unoptimized: its -O compile was most of the macOS CI job, and no logic check relies on the optimizer.
+  logic_start=$SECONDS
+  SWIFT_OPT=-Onone build logic Tests/logictest.swift TrackMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift \
     AirPlayPairing.swift Notices.swift PermissionFlow.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
     AudioDevices.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift PanelColors.swift \
     NativeReceiver.swift NativeAirPlayModel.swift CastModel.swift CastSender.swift WindowRules.swift FieldEditor.swift AppSettings.swift Zones.swift Presets.swift HiddenSpeakers.swift SpeakerNames.swift AppLifecycle.swift UpdateGate.swift MicrophoneRequestGate.swift LocalDelay.swift InputLevel.swift DeviceVolume.swift \
     Localization.swift AboutPanel.swift MenuNote.swift MenuActions.swift BrandTokens.swift WebRemoteModel.swift CalibrationFlow.swift CalibrateAllFlow.swift GuideArtwork.swift GuideLayout.swift ProcessTapCapture.swift SyncEngine.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
+  echo "logic compile: $((SECONDS - logic_start)) s"
   "$OUT/logic/run" || status=1
   echo "▶ core (the app's wrappers of the core)"
   build core Tests/coretest.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
