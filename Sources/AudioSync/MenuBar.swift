@@ -598,6 +598,10 @@ enum PanelSwitches {
     static let standInBehindWindow = DebugTrace.enabled
         && UserDefaults.standard.bool(forKey: "PanelStandInBehindWindow")
 
+    /// `PanelScaleContent` scales the whole panel as it grows in, as before
+    /// `PanelReveal`, to compare the two.
+    static let scaleContent = DebugTrace.enabled && UserDefaults.standard.bool(forKey: "PanelScaleContent")
+
     /// The own shadow's values, or with the debug log on, those set with
     /// `defaults write <bundle ID> PanelShadowRadius|PanelShadowOpacity|PanelShadowOffsetY -float <n>`.
     static func shadow(dark: Bool) -> PanelShadow {
@@ -653,6 +657,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var standIn: NSVisualEffectView?
     private var systemBackground: [NSView] = []
     private var systemMaterial: [CALayer] = []
+    /// The panel layer the open's reveal mask (`PanelReveal`) sits on.
+    private weak var revealed: CALayer?
     private var noticeWatch: AnyCancellable?
     let model: AppModel
 
@@ -830,7 +836,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let ticket = closing
         var shadow: PanelShadowWindow?
         // Without its own shadow and background the panel would shrink inside a full-size box: it only fades.
-        if motion.grows, case let (layer, anchor)? = panelLayer(window), case let (own, tip)? = ownShadow(window) {
+        if motion.grows, case let (layer, anchor)? = panelLayer(window), case let (own, tip, _)? = ownShadow(window) {
             // From where a grow still running has got to, not from full size.
             func shrink(_ layer: CALayer, about anchor: CGPoint) {
                 let shrink = CABasicAnimation(keyPath: "transform")
@@ -903,7 +909,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     /// Fades the panel in and grows it out of the menu bar icon. The window
-    /// is already at its final size; only its layer moves.
+    /// is already at its final size; only a mask over its layer moves.
     private func animateOpen(_ motion: PanelMotion) {
         guard let window = host.view.window else { return }
         let target = panelLayer(window)
@@ -912,7 +918,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         window.alphaValue = 0
         var shadow: PanelShadowWindow?
         // Without its own shadow and background the panel would grow inside a full-size box: it only fades in.
-        if motion.grows, case let (layer, anchor)? = target, case let (own, tip)? = ownShadow(window) {
+        if motion.grows, case let (layer, anchor)? = target, case let (own, tip, body)? = ownShadow(window) {
             func grow(_ layer: CALayer, about anchor: CGPoint) {
                 let grow = CASpringAnimation(keyPath: "transform")
                 grow.mass = PanelMotion.mass
@@ -923,12 +929,18 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 grow.duration = motion.settles
                 layer.add(grow, forKey: Self.motionKey)
             }
-            grow(layer, about: anchor)
+            if PanelSwitches.scaleContent {
+                grow(layer, about: anchor)
+            } else {
+                reveal(layer, in: window, body: body, tip: tip, motion: motion)
+            }
             shadow = own
             grow(own.panel, about: tip)
             let ticket = closing
             DispatchQueue.main.asyncAfter(deadline: .now() + motion.settles) { [weak self, weak window] in
-                guard let self, let window, self.closing == ticket, !PanelSwitches.holdOwnShadow else { return }
+                guard let self, let window, self.closing == ticket else { return }
+                self.dropReveal()
+                guard !PanelSwitches.holdOwnShadow else { return }
                 self.setShadow(window, true)
                 self.dropOwnShadow(fade: Self.handBackFade)
             }
@@ -951,10 +963,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     /// Puts AudioSync's shadow under the panel in place of the system's, which
     /// would keep the window's full size while the panel scales. It returns
-    /// the shadow and the arrow's tip in its panel layer; nil when the
-    /// panel's shape or its background can't be found, and the system's
-    /// shadow stays.
-    private func ownShadow(_ window: NSWindow) -> (PanelShadowWindow, CGPoint)? {
+    /// the shadow, the arrow's tip in its panel layer and the panel's body in
+    /// the window; nil when the panel's shape or its background can't be
+    /// found, and the system's shadow stays.
+    private func ownShadow(_ window: NSWindow) -> (PanelShadowWindow, CGPoint, CGRect)? {
         guard let content = window.contentView, let frame = content.superview,
               let button = statusItem.button, let item = button.window else { return nil }
         let edge = frame.convert(frame.bounds, to: nil)
@@ -978,7 +990,46 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                                   body.width, body.height, edge.maxY - body.maxY))
         }
         setShadow(window, false)
-        return (shadow, tip)
+        return (shadow, tip, body)
+    }
+
+    /// The time per step of the open's reveal: a frame at 120 Hz, which a
+    /// 60 Hz display shows every other one of.
+    private static let revealStep: TimeInterval = 1.0 / 120
+
+    /// Grows a mask shaped like the panel over `layer` out of the menu bar
+    /// icon (`PanelReveal`); `body` and `tip` are in the window's coordinates.
+    private func reveal(_ layer: CALayer, in window: NSWindow, body: CGRect, tip: CGPoint, motion: PanelMotion) {
+        guard let frame = window.contentView?.superview else { return }
+        func toLayer(_ point: CGPoint) -> CGPoint { frame.convertToLayer(frame.convert(point, from: nil)) }
+        let origin = toLayer(.zero), right = toLayer(CGPoint(x: 1, y: 0)), up = toLayer(CGPoint(x: 0, y: 1))
+        let offset = layer.bounds.origin
+        let map = CGAffineTransform(a: right.x - origin.x, b: right.y - origin.y, c: up.x - origin.x,
+                                    d: up.y - origin.y, tx: origin.x - offset.x, ty: origin.y - offset.y)
+        let pixel = 1 / max(window.backingScaleFactor, 1)
+        let paths = PanelReveal.scales(motion, step: Self.revealStep).map { scale -> CGPath in
+            let outline = PanelShadow.outline(body: PanelReveal.body(body, scale: scale, about: tip, pixel: pixel),
+                                              tip: tip)
+            var shift = map
+            return outline.copy(using: &shift) ?? outline
+        }
+        let mask = CAShapeLayer()
+        mask.frame = layer.bounds
+        mask.contentsScale = window.backingScaleFactor
+        mask.path = paths.last
+        let steps = CAKeyframeAnimation(keyPath: "path")
+        steps.values = paths
+        steps.calculationMode = .discrete
+        steps.duration = Double(paths.count) * Self.revealStep
+        mask.add(steps, forKey: Self.motionKey)
+        Self.unanimated { layer.mask = mask }
+        revealed = layer
+    }
+
+    private func dropReveal() {
+        guard let layer = revealed else { return }
+        revealed = nil
+        Self.unanimated { layer.mask = nil }
     }
 
     /// How long the stand-in background takes to fade into the system's at rest.
@@ -1095,6 +1146,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     private func dropOwnShadow(fade: TimeInterval = 0) {
+        dropReveal()
         restoreBackground(fade: fade)
         guard let shadow = shadowWindow else { return }
         shadow.parent?.removeChildWindow(shadow)

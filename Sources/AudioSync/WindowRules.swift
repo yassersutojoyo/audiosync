@@ -142,8 +142,9 @@ enum CastAddRow: Equatable {
 
 /// How the menu bar panel opens and closes: it grows out of the menu bar icon
 /// on a spring too damped to bounce, and shrinks back quickly as it fades.
-/// With Reduce Motion it only fades. Only the panel's layer scales; the
-/// window keeps its final size, so nothing is laid out again per frame.
+/// With Reduce Motion it only fades. The open grows a mask over the panel
+/// (`PanelReveal`) and the close scales its layer; the window keeps its
+/// final size, so nothing is laid out again per frame.
 struct PanelMotion: Equatable {
     /// Where an open starts, or where a close ends; 1 is a plain fade.
     var scale: Double
@@ -258,11 +259,39 @@ struct PanelRest: Equatable {
     }
 }
 
-/// How the menu bar panel grows in without scaling its content.
+/// How the menu bar panel grows in without scaling its content: a mask
+/// shaped like the panel grows out of the icon over the content, which stays
+/// at its own size. A scaled layer is resampled, and its hairlines, edges and
+/// text blur until the scale ends; the mask's edges sit on the pixel grid at
+/// every step, so nothing snaps sharp at the end.
 enum PanelReveal {
-    static func body(_ body: CGRect, scale: Double, about tip: CGPoint, pixel: CGFloat) -> CGRect { body }
+    /// The panel's body scaled by `scale` about the arrow's tip, its edges
+    /// rounded to the nearest `pixel`.
+    static func body(_ body: CGRect, scale: Double, about tip: CGPoint, pixel: CGFloat) -> CGRect {
+        let s = CGFloat(scale)
+        func snap(_ value: CGFloat) -> CGFloat { pixel > 0 ? (value / pixel).rounded() * pixel : value }
+        func scaled(_ value: CGFloat, _ origin: CGFloat) -> CGFloat { snap(origin + (value - origin) * s) }
+        let minX = scaled(body.minX, tip.x), maxX = scaled(body.maxX, tip.x)
+        let minY = scaled(body.minY, tip.y), maxY = scaled(body.maxY, tip.y)
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
 
-    static func scales(_ motion: PanelMotion, step: TimeInterval) -> [Double] { [] }
+    /// The open's spring, one scale per `step` from `motion.scale` to exactly 1
+    /// at `motion.settles`, matching a `CASpringAnimation` with no initial velocity.
+    static func scales(_ motion: PanelMotion, step: TimeInterval) -> [Double] {
+        guard motion.grows, motion.stiffness > 0, step > 0 else { return [motion.scale, 1] }
+        let natural = (motion.stiffness / PanelMotion.mass).squareRoot()
+        let ratio = min(motion.dampingRatio, 0.999)
+        let damped = natural * (1 - ratio * ratio).squareRoot()
+        let count = Int((motion.settles / step).rounded(.up))
+        return (0...count).map { index in
+            guard index > 0 else { return motion.scale }
+            guard index < count else { return 1 }
+            let t = Double(index) * step
+            let left = exp(-ratio * natural * t) * (cos(damped * t) + ratio * natural / damped * sin(damped * t))
+            return 1 - (1 - motion.scale) * left
+        }
+    }
 }
 
 /// The shadow AudioSync draws around the menu bar panel while it grows in or
