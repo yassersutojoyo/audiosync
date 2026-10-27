@@ -1298,7 +1298,6 @@ fn selected_text_in_a_text_box_reaches_4_5_to_1() {
 /// The preset controls (spec S267, S268): token colors only, a focus ring,
 /// Narrator's label, value and hint on each row, F2 for Rename, and the
 /// Menu key and Shift+F10 through the row's context menu area.
-// covers: S268
 #[test]
 fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
     let main = include_str!("../ui/main.slint");
