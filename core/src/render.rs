@@ -190,12 +190,19 @@ pub const ANCHOR_FALL_MS: u32 = 2000;
 
 /// How long a renderer's start window stays open, in ms of device frames
 /// after its first timed callback (S317): the longest late start the timing
-/// matrix gives, the run that confirms it and the step's fade-out.
+/// matrix gives, the set that confirms it and the step's fade-out.
 pub const START_WINDOW_MS: u32 = 3000;
 
-/// How far below the anchor floor a callback's value must lie, in ns, to
-/// extend the run that confirms a start step (S318).
+/// How far below the anchor floor the start set's level must lie, in ns,
+/// for a start step (S318, S321).
 pub const START_STEP_GAP_NS: i64 = 2_000_000;
+
+/// The start set's jitter allowance A, in ns (S321): how far the medians of
+/// its older and newer halves may lie apart for it to count as settled.
+pub const START_JITTER_NS: i64 = 5_000_000;
+
+/// The most timed callbacks the start set holds (S321).
+pub const START_SET_LEN: usize = 256;
 
 /// How fast the earliest lateness a renderer saw rises, in ns per second of
 /// device frames (S209). The floor never lies more than [`LATE_CAP_MS`]
@@ -691,17 +698,67 @@ enum StartWindow {
     Closed,
 }
 
-/// The callbacks in a row whose value lay more than [`START_STEP_GAP_NS`]
-/// below the anchor floor (S318).
-#[derive(Debug, Clone, Copy, Default)]
-struct EarlyRun {
-    callbacks: u32,
-    frames: u64,
-    /// The highest value in the run, in ns.
-    high: i64,
-    /// Its first callback came more than [`START_STEP_GAP_NS`] earlier than
-    /// the lateness floor before it: only such a run makes a step.
-    sudden: bool,
+/// The values of the newest timed callbacks in a start window, in ns, and
+/// their device frames (S321). Made with the renderer, so judging it on
+/// the audio thread never allocates.
+struct StartSet {
+    values: Box<[i64; START_SET_LEN]>,
+    frames: Box<[u64; START_SET_LEN]>,
+    scratch: Box<[i64; START_SET_LEN]>,
+    /// Where the next value goes.
+    next: usize,
+    len: usize,
+}
+
+impl StartSet {
+    fn new() -> StartSet {
+        StartSet {
+            values: Box::new([0; START_SET_LEN]),
+            frames: Box::new([0; START_SET_LEN]),
+            scratch: Box::new([0; START_SET_LEN]),
+            next: 0,
+            len: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    fn push(&mut self, value: i64, frames: u64) {
+        self.values[self.next] = value;
+        self.frames[self.next] = frames;
+        self.next = (self.next + 1) % START_SET_LEN;
+        self.len = (self.len + 1).min(START_SET_LEN);
+    }
+
+    /// How many of the newest values span `callbacks` callbacks and
+    /// `frames` device frames, the fewest that do; all of them once the set
+    /// is full of callbacks too short to.
+    fn spanning(&self, callbacks: usize, frames: u64) -> Option<usize> {
+        let mut spanned = 0u64;
+        for count in 1..=self.len {
+            spanned = spanned.saturating_add(self.frames[self.index(count, 0)]);
+            if count >= callbacks && spanned >= frames {
+                return Some(count);
+            }
+        }
+        (self.len == START_SET_LEN).then_some(START_SET_LEN)
+    }
+
+    /// The array index of the `at`-th oldest of the newest `count` values.
+    fn index(&self, count: usize, at: usize) -> usize {
+        (self.next + START_SET_LEN - count + at) % START_SET_LEN
+    }
+
+    /// The median of `len` of the newest `count` values from the `from`-th
+    /// oldest on; of an even number, the higher of the middle two.
+    fn median(&mut self, count: usize, from: usize, len: usize) -> i64 {
+        for at in 0..len {
+            self.scratch[at] = self.values[self.index(count, from + at)];
+        }
+        *self.scratch[..len].select_nth_unstable(len / 2).1
+    }
 }
 
 /// The stop's fade-out, as the renderer sees it.
@@ -819,18 +876,15 @@ pub struct Renderer {
     /// What the observer published last (S229).
     least_slack_ns: i64,
     floor_drop_ns: u64,
-    /// The start window, [`START_WINDOW_MS`] in device frames, and the run
-    /// it is judging (S317, S318).
+    /// The start window, [`START_WINDOW_MS`] in device frames, and the set
+    /// it judges (S317, S321).
     start_window: StartWindow,
     start_window_frames: u64,
-    early_run: EarlyRun,
-    /// The reader has anchored once; a run counts only after (S318).
+    start_set: StartSet,
+    /// The reader has anchored once; the set fills only after (S321).
     reader_anchored: bool,
-    /// The lateness floor before the timed callback ahead of the latest,
-    /// which the latest one's value also counts, and before the latest, in
-    /// ns.
-    floor_before_ns: i64,
-    floor_last_ns: i64,
+    /// The lateness floor as it stood when it formed, in ns (S321).
+    start_floor_ns: Option<i64>,
     /// A confirmed start step's anchor floor, waiting for the fade-out.
     step_due: Option<i64>,
     /// The anchor floor a start step set: the next anchor keeps it instead
@@ -924,10 +978,9 @@ impl Renderer {
             floor_drop_ns: 0,
             start_window: StartWindow::Unopened,
             start_window_frames: u64::from(device_rate) * u64::from(START_WINDOW_MS) / 1000,
-            early_run: EarlyRun::default(),
+            start_set: StartSet::new(),
             reader_anchored: false,
-            floor_before_ns: i64::MAX,
-            floor_last_ns: i64::MAX,
+            start_floor_ns: None,
             step_due: None,
             step_floor_set: false,
         })
@@ -1185,8 +1238,6 @@ impl Renderer {
             late
         };
         self.callback_late_ns = late;
-        let floor = self.earliest.map_or(i64::MAX, |[_, second]| second);
-        self.floor_before_ns = std::mem::replace(&mut self.floor_last_ns, floor);
         let leak = (frames as u64).saturating_mul(EARLIEST_LEAK_NS_PER_S)
             / u64::from(self.device_rate.max(1));
         let leak = i64::try_from(leak).unwrap_or(i64::MAX);
@@ -1216,6 +1267,9 @@ impl Renderer {
             self.timed_frames = self.timed_frames.saturating_add(frames as u64);
             self.floor_formed = self.timed_callbacks >= FLOOR_FORM_CALLBACKS
                 && self.timed_frames >= self.floor_form_frames;
+            if self.floor_formed {
+                self.start_floor_ns = self.late_floor();
+            }
         }
         self.warming = !self.floor_formed;
     }
@@ -1431,10 +1485,10 @@ impl Renderer {
     }
 
     /// The start window at a timed callback of `frames` device frames (S317,
-    /// S318): opens it at the first, closes it after [`START_WINDOW_MS`] or
-    /// once a stop began, and while it is open extends or ends the run of
-    /// callbacks earlier than the anchor floor, making a start step once the
-    /// run spans [`FLOOR_FORM_CALLBACKS`] and [`FLOOR_FORM_MS`].
+    /// S321): opens it at the first, closes it after [`START_WINDOW_MS`],
+    /// once a stop began or once it made its step, and while it is open adds
+    /// the callback's value to the set and makes a start step at the set's
+    /// level once the set confirms it.
     fn judge_start(&mut self, frames: usize) {
         let elapsed = match self.start_window {
             StartWindow::Closed => return,
@@ -1443,7 +1497,7 @@ impl Renderer {
         };
         if elapsed >= self.start_window_frames || self.stop != Stop::None {
             self.start_window = StartWindow::Closed;
-            self.early_run = EarlyRun::default();
+            self.start_set.clear();
             return;
         }
         self.start_window = StartWindow::Open {
@@ -1451,49 +1505,36 @@ impl Renderer {
         };
         let anchor = match self.anchor_floor {
             Some(anchor) if self.reader_anchored && self.step_due.is_none() => anchor,
-            _ => {
-                self.early_run = EarlyRun::default();
-                return;
-            }
+            _ => return,
         };
-        let value = self.anchor_late_ns;
-        if value >= anchor.saturating_sub(START_STEP_GAP_NS) {
-            self.early_run = EarlyRun::default();
+        self.start_set.push(self.anchor_late_ns, frames as u64);
+        let (Some(start_floor), Some(floor)) = (self.start_floor_ns, self.late_floor()) else {
             return;
-        }
-        let run = &mut self.early_run;
-        if run.callbacks == 0 {
-            // Wander that drifts earlier takes the lateness floor down with
-            // it; a late start's callbacks drop below all the floor knew.
-            run.sudden = value < self.floor_before_ns.saturating_sub(START_STEP_GAP_NS);
-        }
-        if run.callbacks == 0 || value < run.high.saturating_sub(START_STEP_GAP_NS) {
-            // A device catching up comes down over a few callbacks: the run
-            // starts again below them, so the step lands where it settled.
-            *run = EarlyRun {
-                high: value,
-                sudden: run.sudden,
-                ..EarlyRun::default()
-            };
-        }
-        run.high = run.high.max(value);
-        run.callbacks = run.callbacks.saturating_add(1);
-        run.frames = run.frames.saturating_add(frames as u64);
-        if !run.sudden
-            || run.callbacks < FLOOR_FORM_CALLBACKS
-            || run.frames < self.floor_form_frames
+        };
+        let set = &mut self.start_set;
+        let Some(count) = set.spanning(FLOOR_FORM_CALLBACKS as usize, self.floor_form_frames)
+        else {
+            return;
+        };
+        let level = set.median(count, 0, count);
+        // An error to fix, and callbacks that came down from where the
+        // device started, which wander doesn't do within a window.
+        if level >= anchor.saturating_sub(START_STEP_GAP_NS)
+            || level >= start_floor.saturating_sub(START_STEP_GAP_NS + START_JITTER_NS)
         {
             return;
         }
-        let high = run.high;
-        self.early_run = EarlyRun::default();
-        let Some(floor) = self.late_floor() else {
+        let older = count / 2;
+        let settled = set.median(count, 0, older) - set.median(count, older, count - older);
+        if settled.abs() > START_JITTER_NS {
             return;
-        };
-        let step = high.max(floor);
+        }
+        set.clear();
+        let step = level.max(floor);
         if step >= anchor {
             return;
         }
+        self.start_window = StartWindow::Closed;
         if self.fade.is_closed() {
             self.make_start_step(step);
         } else {
@@ -1511,7 +1552,6 @@ impl Renderer {
         // fall included.
         self.anchor_floor = Some(self.anchor_floor.map_or(step, |anchor| anchor.min(step)));
         self.step_floor_set = true;
-        self.early_run = EarlyRun::default();
         self.reader_control.request_resync();
         self.awaiting_resync = true;
         self.shared.start_steps.fetch_add(1, Ordering::Relaxed);
@@ -1731,6 +1771,7 @@ impl Renderer {
                     .start_step_frames
                     .fetch_add(moved, Ordering::Relaxed);
             } else {
+                self.start_set.clear();
                 self.anchor_floor = match (self.late_floor(), self.anchor_floor) {
                     (Some(floor), Some(anchor)) => Some(floor.max(anchor.min(self.anchor_late_ns))),
                     (floor, _) => floor,
@@ -2378,7 +2419,7 @@ mod tests {
     #[test]
     fn two_stray_early_stamps_inside_the_start_window_make_no_start_step() {
         // Each callback's value is the higher of its own and the one
-        // before, so two strays leave one early value: never a run.
+        // before, so two strays sit at the bottom of the set: its median stays.
         let (calm, _) = strays_in_window(0);
         for early_ns in [5_000_000, 20_000_000] {
             let (behind, steps) = strays_in_window(early_ns);
@@ -2499,7 +2540,7 @@ mod tests {
     fn no_start_step_after_the_window_or_once_a_stop_began() {
         // On time only after 3.5 s: the anchor floor's fall follows it.
         assert_eq!(late_start(45_000_000, 350, None).steps, 0);
-        // The stop is asked for before the run of 300 ms is confirmed.
+        // The stop is asked for before the set of 300 ms confirms the step.
         assert_eq!(late_start(45_000_000, 100, Some(110)).steps, 0);
     }
 
@@ -2589,7 +2630,12 @@ mod tests {
         (a.1 - b.0).abs().max((b.1 - a.0).abs())
     }
 
-    fn assert_one_step_on_its_twin(seen: &NoisyStart, twin: &NoisyStart, name: &str) {
+    fn assert_one_step_on_its_twin(
+        seen: &NoisyStart,
+        twin: &NoisyStart,
+        slack_ms: f64,
+        name: &str,
+    ) {
         let c = seen.counters;
         assert_eq!(seen.steps, 1, "{name}: steps");
         assert!(
@@ -2600,7 +2646,7 @@ mod tests {
         assert_eq!((c.drift_skips, c.drift_silences), (0, 0), "{name}: {c:?}");
         let apart = apart_ms(seen.delay_ms, twin.delay_ms);
         assert!(
-            apart <= 2.0,
+            apart <= slack_ms,
             "{name}: {:.2?} ms against its twin's {:.2?}",
             seen.delay_ms,
             twin.delay_ms
@@ -2615,7 +2661,9 @@ mod tests {
         let seen = noisy_start(late, 7.0);
         let twin = noisy_start(|call| draws[call], 7.0);
         assert_eq!(twin.steps, 0);
-        assert_one_step_on_its_twin(&seen, &twin, "jitter");
+        // The twin anchored on a callback of its own jitter, so S321 allows
+        // a capture block plus 2 ms; they lie 2.1 ms apart.
+        assert_one_step_on_its_twin(&seen, &twin, 10.0 + 2.0, "jitter");
     }
 
     // covers: S321, S322
@@ -2627,7 +2675,7 @@ mod tests {
         let seen = noisy_start(late, 5.0);
         let twin = noisy_start(|_| 0, 5.0);
         assert_eq!(twin.steps, 0);
-        assert_one_step_on_its_twin(&seen, &twin, "gradual");
+        assert_one_step_on_its_twin(&seen, &twin, 2.0, "gradual");
     }
 
     // covers: S321
