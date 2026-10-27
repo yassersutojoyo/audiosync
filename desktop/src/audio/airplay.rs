@@ -1144,10 +1144,13 @@ pub struct AirPlaySpeakers {
     /// PIN pairing that stored nothing: paired until their session ends or
     /// they leave the sender (P182).
     paired_for_session: BTreeSet<String>,
-    /// The speakers a pairing the user started turned on this run: they
-    /// count as switched on by the user, so a lapsed session pairing
+    /// The speakers a pairing the user started turned on in this stream:
+    /// they count as switched on by the user, so a lapsed session pairing
     /// doesn't turn them off (S223).
     paired_by_user: BTreeSet<String>,
+    /// A stream that ran stopped since the last poll, which ends the PIN
+    /// sessions the user's clicks bought (S223).
+    stream_ended: bool,
     /// How the last AirPlay 1 attempt of a speaker ended when that moved it
     /// to AirPlay 2, as the sender keeps it while the speaker stays added.
     airplay1_outcome: BTreeMap<String, ErrorKind>,
@@ -1255,6 +1258,7 @@ impl AirPlaySpeakers {
             paired_in_attempt: BTreeSet::new(),
             paired_for_session: BTreeSet::new(),
             paired_by_user: BTreeSet::new(),
+            stream_ended: false,
             airplay1_outcome: BTreeMap::new(),
             session_paths: BTreeMap::new(),
             streaming: false,
@@ -1390,6 +1394,8 @@ impl AirPlaySpeakers {
             && self.added.is_empty()
             && self.pairings.is_empty()
             && self.password_asks.is_empty());
+        // Retry starts a new stream, so this one ends here.
+        self.every_time_stream_ended(events);
         self.listed.clear();
         self.added.clear();
         self.targets.clear();
@@ -1415,6 +1421,35 @@ impl AirPlaySpeakers {
         }
         self.mark_stopped(events);
         changed
+    }
+
+    /// A stream ended: the PIN session each click bought ends with it, so a
+    /// speaker asking for a code every time that is still on goes off with
+    /// the notice that it needs a PIN, and the next click asks again (S223).
+    /// One whose pairing or prompt is under way waits for it instead.
+    fn every_time_stream_ended(&mut self, events: &mut Vec<BackendEvent>) -> bool {
+        self.paired_by_user.clear();
+        let asking: Vec<String> = self
+            .settings
+            .iter()
+            .filter(|(id, settings)| {
+                settings.enabled
+                    && !self.pairings.contains_key(*id)
+                    && !self.password_asks.contains_key(*id)
+                    && self.asks_every_time(id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &asking {
+            self.log.log(|| {
+                format!(
+                    "AirPlay speaker {} turned off: it asks for a code every time and its stream ended",
+                    self.label(id)
+                )
+            });
+            self.turn_off(id, AirPlayProblem::NeedsPin, events);
+        }
+        !asking.is_empty()
     }
 
     /// The sender's discovery couldn't start, so it lists nothing: reported
@@ -3015,6 +3050,7 @@ impl AirPlaySpeakers {
         if !streaming {
             let step = self.pause.clear();
             self.apply_pause(step, "streaming stopped");
+            self.stream_ended |= self.streaming;
         }
         self.streaming = streaming;
         self.reconcile();
@@ -3372,6 +3408,9 @@ impl AirPlaySpeakers {
         self.note_kept_aside();
         if let Some(file) = self.store_kept_aside.take() {
             events.push(BackendEvent::PairingsKeptAside { file });
+        }
+        if std::mem::take(&mut self.stream_ended) {
+            changed |= self.every_time_stream_ended(&mut events);
         }
         changed |= self.turn_off_uninvited(&mut events);
         if changed {
