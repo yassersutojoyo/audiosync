@@ -66,12 +66,29 @@ fn clauses(spec: &str) -> Vec<Clause> {
     found
 }
 
+/// The rule of `scripts/spec_markers.py`: only the words right after the ID
+/// count, since a live clause may mention withdrawn things later on.
+fn opens_withdrawn(after_id: &str) -> bool {
+    let words = after_id
+        .trim_start()
+        .trim_start_matches(['*', '('])
+        .to_ascii_lowercase();
+    words.starts_with("withdrawn")
+        || ["retired", "superseded"].iter().any(|word| {
+            words
+                .strip_prefix(*word)
+                .is_some_and(|rest| !rest.starts_with(" in part"))
+        })
+}
+
 fn is_withdrawn(clause: &Clause) -> bool {
     clause
         .text
         .lines()
         .next()
-        .is_some_and(|line| line.to_ascii_lowercase().contains("withdrawn"))
+        .and_then(|line| line.trim_start().strip_prefix("- **"))
+        .and_then(|rest| rest.split_once("**"))
+        .is_some_and(|(_, after_id)| opens_withdrawn(after_id))
 }
 
 fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
@@ -181,11 +198,27 @@ fn pending() -> (BTreeMap<u32, String>, Vec<String>) {
     (pending, malformed)
 }
 
-fn spec_numbers() -> BTreeSet<u32> {
-    clauses(&spec_text())
+fn live_numbers(spec: &str) -> BTreeSet<u32> {
+    clauses(spec)
         .into_iter()
         .filter(|clause| !is_withdrawn(clause))
         .map(|clause| clause.number)
+        .collect()
+}
+
+fn spec_numbers() -> BTreeSet<u32> {
+    live_numbers(&spec_text())
+}
+
+fn missing(
+    known: &BTreeSet<u32>,
+    covered: &BTreeMap<u32, Vec<String>>,
+    pending: &BTreeMap<u32, String>,
+) -> Vec<u32> {
+    known
+        .iter()
+        .copied()
+        .filter(|number| !covered.contains_key(number) && !pending.contains_key(number))
         .collect()
 }
 
@@ -238,6 +271,21 @@ fn clause_text_runs_to_the_next_clause_or_heading() {
     assert_eq!(found.len(), 2);
     assert!(found[1].text.contains("*Source:* b."));
     assert!(!found[1].text.contains("Text."));
+}
+
+#[test]
+fn a_withdrawn_retired_or_superseded_clause_needs_no_marker_but_a_live_one_does() {
+    let spec = "- **P1** One.\n- **P2** *Withdrawn*: gone.\n\
+                - **P3** *Required.* Replaces the withdrawn P2.\n\
+                - **P4** *Retired with the bundled engine; kept as a record.*\n\
+                - **P5** *Retired in part with the bundled engine*: the rest holds.\n\
+                - **P6** (Superseded by P3.) The old rule.\n\
+                - **P7** *Superseded in part by P3*: the rest holds.\n";
+    let live = live_numbers(spec);
+    assert_eq!(live, BTreeSet::from([1, 3, 5, 7]));
+    let covered = BTreeMap::from([(1, vec!["a.rs".to_owned()]), (5, vec!["b.rs".to_owned()])]);
+    let pending = BTreeMap::from([(7, "a later stage".to_owned())]);
+    assert_eq!(missing(&live, &covered, &pending), vec![3]);
 }
 
 #[test]
@@ -323,11 +371,7 @@ fn every_clause_is_covered_or_pending() {
     let known = spec_numbers();
     let (covered, _) = covers();
     let (pending, _) = pending();
-    let missing: Vec<u32> = known
-        .iter()
-        .copied()
-        .filter(|number| !covered.contains_key(number) && !pending.contains_key(number))
-        .collect();
+    let missing = missing(&known, &covered, &pending);
     let stale: Vec<u32> = pending
         .keys()
         .copied()
