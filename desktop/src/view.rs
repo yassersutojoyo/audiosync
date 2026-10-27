@@ -8197,7 +8197,26 @@ mod tests {
         app.refresh();
         draw_frames();
         assert_eq!(app.fit_flyout(room), room);
-        assert_eq!((flyout.get_list_cut(), flyout.get_body_cut()), cuts);
+        assert_eq!(
+            (flyout.get_list_cut(), flyout.get_body_cut()),
+            cuts,
+            "nothing changed, the cuts stay"
+        );
+
+        let shorter = room - 40.0;
+        assert_eq!(app.fit_flyout(shorter), shorter);
+        let grown = flyout.get_list_cut() + flyout.get_body_cut();
+        assert!(grown > cuts.0 + cuts.1, "less room, a deeper cut");
+        assert!(
+            flyout.get_footer_bottom() + 16.0 <= shorter + 0.5,
+            "the buttons still show"
+        );
+        assert_eq!(app.fit_flyout(room), room);
+        assert_eq!(
+            (flyout.get_list_cut(), flyout.get_body_cut()),
+            cuts,
+            "the room back, the cuts as before"
+        );
     }
 
     /// A flyout with two notices, presets and an input's channel pairs, on a
