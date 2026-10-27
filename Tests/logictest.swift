@@ -4904,7 +4904,7 @@ do {
     check(damaged.localVolumes == ["a": 100, "b": 0, "e": 42],
           "settings: volumes are clamped to 0…100, anything else is dropped (S76)")
     check(damaged.localDelays == ["a": 20_000, "b": 0, "d": 1820],
-          "settings: delays are clamped to 0…20 000 ms, anything else is dropped (S77)")
+          "settings: delays are clamped to 0…20 000 ms, anything else is dropped (S179)")
     check(damaged.airplayVolumes == ["x": 101] && damaged.groups.isEmpty && damaged.enabledLocal == ["lc"]
             && damaged.appearance == .system,
           "settings: unreadable groups, IDs or appearance fall back to the defaults; an AirPlay own volume above 100 stays (S290)")
@@ -4921,7 +4921,7 @@ do {
     check(saved == migrated.localVolumes && stored.values[Keys.legacyLocalGains] == nil,
           "settings: the converted volumes are saved under the current key and the old key is removed")
     check(store.load() == migrated, "settings: a second launch reads the converted volumes as they are")
-    check(migrated.defaultDelayMs == 1500, "settings: an older single delay is where local speakers start (S77)")
+    check(migrated.defaultDelayMs == 1500, "settings: an older single delay is where local speakers start (S179)")
     stored.values = [Keys.legacyDelayMs: 90_000.0]
     check(store.load().defaultDelayMs == 20_000, "settings: an older single delay is clamped to 20 000 ms")
     stored.values = [Keys.localVolumes: ["a": 70.0], Keys.legacyLocalGains: ["a": 3.49]]
@@ -5505,12 +5505,12 @@ MainActor.assumeIsolated {
     let editor = NSTextView(frame: .zero)
     editor.isFieldEditor = true
     // AppKit sets the delegate this way when the field starts editing.
-    editor.perform(Selector(("setDelegate:")), with: field)
+    editor.perform(#selector(setter: NSText.delegate), with: field)
     check(FieldEditor.field(EditedDelayField.self, editedBy: editor)?.rowID == "dock",
           "delay panels: the click monitor finds the delay field the field editor types for, so a click on its own step keeps the typing")
     let otherField = NSTextField(frame: .zero)
     let other = NSTextView(frame: .zero)
-    other.perform(Selector(("setDelegate:")), with: otherField)
+    other.perform(#selector(setter: NSText.delegate), with: otherField)
     check(FieldEditor.field(EditedDelayField.self, editedBy: NSTextView(frame: .zero)) == nil
             && FieldEditor.field(EditedDelayField.self, editedBy: other) == nil,
           "delay panels: an editor typing for no field, or for another kind of field, has no delay field")
@@ -6863,7 +6863,7 @@ do {
 do {
     let t = UIStrings()
 
-    var inputs = CalibrateAllFlow.Inputs(
+    let inputs = CalibrateAllFlow.Inputs(
         streaming: true, reference: "mac",
         localOutputs: [(id: "usb", name: "Desk"), (id: "mac", name: "MacBook Speakers")],
         localOffsets: ["usb": 150], holdBacks: ["mac": 1750, "usb": 1900],
