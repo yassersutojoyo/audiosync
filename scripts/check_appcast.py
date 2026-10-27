@@ -494,6 +494,18 @@ def self_test():
                        f"{arm_name}, which is not attached")
         against_assets("Mac zip attached without its item", good()[1:], names + other_assets,
                        f"{names[0]} is attached but has no appcast item")
+        no_os = good()
+        no_os[1]["os"] = ""
+        against_assets("Windows item without sparkle:os", no_os, names + other_assets,
+                       f"{x64_name} with sparkle:os 'macos'; expected 'windows-x64'")
+        wrong_os = good()
+        wrong_os[2]["os"] = ' sparkle:os="windows-x64"'
+        against_assets("Windows item with the other arch's sparkle:os", wrong_os, names + other_assets,
+                       f"{arm_name} with sparkle:os 'windows-x64'; expected 'windows-arm64'")
+        mac_as_windows = good()
+        mac_as_windows[0]["os"] = ' sparkle:os="windows-x64"'
+        against_assets("Mac item marked windows-x64", mac_as_windows, names + other_assets,
+                       f"{names[0]} with sparkle:os 'windows-x64'; expected 'macos'")
         against_assets("assets from gh release view --json assets", good()[:1], names + other_assets,
                        f"{x64_name} is attached but has no appcast item",
                        use_file=lambda listed: json.dumps(
