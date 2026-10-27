@@ -107,7 +107,12 @@ extension AppDelegate {
             ? (try? calibrateAllPlan().get())?.first(where: { $0.id == speaker.id && $0.kind == speaker.kind })
             : speaker
         guard engine.isRunning, taking.allSatisfy(playing.contains), let now else {
-            appModel.calibrateAll.line = .cannotMeasureAgain(name: speaker.name)
+            let missing = CalibrationMissing.of(streaming: engine.isRunning, speaker: speaker.id,
+                                                reference: taking[0], playing: playing,
+                                                switchedOn: calibrateAllContext(taking: taking).switchedOn)
+            // Empty when both play but the plan has no row for the speaker now.
+            appModel.calibrateAll.line = .cannotMeasureAgain(name: speaker.name,
+                                                             missing: missing.isEmpty ? .speaker : missing)
             return
         }
         speaker = now
@@ -356,7 +361,8 @@ extension AppDelegate {
             if let reason = calibrationLeftOut(output.id) { leftOut[output.id] = reason }
         }
         return CalibrateAllFlow.Inputs(
-            streaming: engine.isRunning, reference: localReference, localOutputs: localOutputs,
+            streaming: engine.isRunning, reference: localReference,
+            referenceOn: localReference.map(enabledLocal.contains) ?? false, localOutputs: localOutputs,
             localOffsets: localOffsetMs, holdBacks: localHoldBacks, cast: cast,
             airPlay: appModel.airplay.filter { playing.contains($0.id) }.map { (id: $0.id, name: $0.name) },
             airPlayDelayMs: airPlayLatencyMs, airPlayHoldBackMs: NetworkHoldBack.airPlayAppliedMs(wanted),

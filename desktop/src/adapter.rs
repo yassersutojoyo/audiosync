@@ -4871,7 +4871,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             }
             Err(failure) => {
                 self.calibrate_all.phase = match (failure, name) {
-                    (Failure::NotPlaying, Some(name)) => AllPhase::CannotMeasureAgain(name),
+                    (Failure::NotPlaying(missing), Some(name)) => {
+                        AllPhase::CannotMeasureAgain(name, missing)
+                    }
                     (failure, _) => AllPhase::Failed(failure),
                 };
                 self.calibrate_all.endings += 1;
@@ -9946,7 +9948,9 @@ mod tests {
         );
         assert_eq!(
             state.calibration.phase,
-            calibration::Phase::Failed(calibration::Failure::NotPlaying)
+            calibration::Phase::Failed(calibration::Failure::NotPlaying(
+                calibration::Missing::STREAMING
+            ))
         );
         assert!(!state.calibration.busy);
         // Streaming, but the mock has no microphone: refused before the
@@ -10279,7 +10283,10 @@ mod tests {
         );
         assert_eq!(
             adapter.snapshot().calibrate_all.blocked,
-            Some(Failure::NotPlaying)
+            Some(Failure::NotPlaying(calibration::Missing {
+                reference: !enabled(&adapter, "builtin"),
+                ..calibration::Missing::STREAMING
+            }))
         );
         turn_on(&mut adapter, "builtin");
         assert_eq!(
