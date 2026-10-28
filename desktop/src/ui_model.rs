@@ -3244,6 +3244,7 @@ mod tests {
         );
     }
 
+    // covers: S246
     #[test]
     fn only_this_speaker_on_an_offline_cast_member_that_is_on_still_switches_the_others() {
         let mut backend = MockBackend::new();

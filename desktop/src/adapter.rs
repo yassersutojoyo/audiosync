@@ -2114,7 +2114,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     kind,
                     listed: listed.is_some() && !keep_off.contains(text),
                     on,
-                    busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
+                    busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id))
+                        || listed
+                            .and_then(|speaker| speaker.cast.as_ref())
+                            .is_some_and(|cast| cast.offline),
                     needs_airplay2: listed.is_none() && self.needs_airplay2(&key),
                     in_target: matches!(&key, SpeakerKey::AirPlay(id)
                         if self.audio.airplay_holding_target(id).is_some()),
@@ -2186,7 +2189,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     && !keep_off.contains(&member.key),
                 hidden: hidden.is_some(),
                 on: listed.is_some_and(|speaker| speaker.enabled),
-                busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
+                busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id))
+                    || listed
+                        .and_then(|speaker| speaker.cast.as_ref())
+                        .is_some_and(|cast| cast.offline),
                 needs_airplay2: listed.is_none() && hidden.is_none() && self.needs_airplay2(&key),
                 in_target,
                 fixed_volume: listed
