@@ -161,7 +161,9 @@ pub(crate) fn read_from<R: Read>(
         if let Some(end) = find_blank_line(&data) {
             break end;
         }
-        if data.len() > MAX_HEAD {
+        // Only once a blank line can no longer end within MAX_HEAD, so the
+        // answer doesn't depend on how the bytes were split.
+        if data.len() > MAX_HEAD + 3 {
             return Err(ReadError::HeadTooLarge);
         }
         fill(&mut data, reader)?;
@@ -175,7 +177,11 @@ pub(crate) fn read_from<R: Read>(
     }
     let length = match request.header("content-length") {
         None => 0,
-        Some(value) => value.parse::<usize>().map_err(|_| ReadError::Malformed)?,
+        // RFC 9110 §8.6 allows digits only; parse alone also takes a leading '+'.
+        Some(value) if value.bytes().all(|b| b.is_ascii_digit()) => {
+            value.parse::<usize>().map_err(|_| ReadError::Malformed)?
+        }
+        Some(_) => return Err(ReadError::Malformed),
     };
     if length > MAX_BODY {
         return Err(ReadError::BodyTooLarge);

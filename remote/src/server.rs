@@ -1150,6 +1150,10 @@ pub(crate) fn percent_decode(segment: &str) -> Option<String> {
     while index < bytes.len() {
         if bytes[index] == b'%' {
             let pair = segment.get(index + 1..index + 3)?;
+            // from_str_radix would also take "+F".
+            if !pair.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
             out.push(u8::from_str_radix(pair, 16).ok()?);
             index += 3;
         } else {
