@@ -4412,6 +4412,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         cast_address::remove(&mut self.cast_addresses, &address);
         self.audio.remove_cast_address(&address);
         self.take_events();
+        if self.snapshot().speaker(id).is_none() {
+            self.remove_from_zone(id);
+        }
         self.stop_if_idle();
     }
 
