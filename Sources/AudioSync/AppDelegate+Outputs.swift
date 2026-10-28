@@ -376,7 +376,11 @@ extension AppDelegate {
         noteLocalDeviceList(listing)   // the reference follows the list, streaming or not
         guard engine.isRunning else { return }   // stopped: startEngine syncs them once it runs
 
-        let applied = LocalOutputSync.apply(enabled: enabledLocal.subtracting(freshLinks.held), listing: listing,
+        let now = ProcessInfo.processInfo.systemUptime
+        stallRetry.settle(enabled: enabledLocal, nowS: now)
+        let afterStall = stallRetry.tracked
+        let applied = LocalOutputSync.apply(enabled: enabledLocal.subtracting(freshLinks.held)
+                                                .subtracting(stallRetry.held(nowS: now)), listing: listing,
                                             to: engine,
                                             bound: localBoundDevices,
                                             holdBacks: localHoldBackTargets(), gain: { effectiveGain($0) })
@@ -384,6 +388,23 @@ extension AppDelegate {
             localHoldBacks[uid] = holdBack
             clearNotices([SpeakerKey.make(id: uid, airplay: false)])
             if let device = listing.first(where: { $0.uid == uid }) { noteFreshLinkStart(uid, device) }
+            if afterStall.contains(uid) {
+                stallRetry.started(uid, nowS: now)
+                DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) reopened after a stall, "
+                    + "hold-back \(Int(holdBack.rounded())) ms")
+            }
+        }
+        // A start refused after a stall (another app holding the device in hog
+        // mode refuses every start) is a stall in a row: the speaker stays on (S334).
+        var failures: [LocalOutputSync.Failure] = []
+        for failure in applied.failures {
+            guard afterStall.contains(failure.uid), let retryAt = stallRetry.refused(failure.uid, nowS: now) else {
+                failures.append(failure)
+                continue
+            }
+            DebugTrace.log("[AudioSync] output \(engine.outputNumber(failure.uid)) not reopened after a stall: "
+                + "its device refused the start; trying again in \(Int(OutputStallRetry.retryEveryS)) s")
+            scheduleStallRetry(atS: retryAt)
         }
         for uid in applied.detached {
             localHoldBacks[uid] = nil
@@ -395,15 +416,15 @@ extension AppDelegate {
 
         // A speaker that won't start is switched off: it no longer holds the
         // others back, and the next reconcile doesn't try it again.
-        let report = LocalOutputSync.report(applied.failures, enabled: enabledLocal, origin: origin)
+        let report = LocalOutputSync.report(failures, enabled: enabledLocal, origin: origin)
         if let report { enabledLocal = report.enabled }
         retimeLocalOutputs()   // a joined, left or failed output can move the others' hold-back (S177)
 
         guard let report else { return }
         if report.alertNames != nil {   // the failures' names, for a click of the user's
-            let shown = applied.failures.map { shownName(local: $0.uid, system: $0.deviceName) }.joined(separator: ", ")
-            let rate = LocalOutputSync.sharedRefusedRate(applied.failures)
-            showAlert(text.outputCouldNotStart(names: shown, count: applied.failures.count, refusedCaptureRate: rate),
+            let shown = failures.map { shownName(local: $0.uid, system: $0.deviceName) }.joined(separator: ", ")
+            let rate = LocalOutputSync.sharedRefusedRate(failures)
+            showAlert(text.outputCouldNotStart(names: shown, count: failures.count, refusedCaptureRate: rate),
                       style: .warning)
         }
         for failure in report.notices {   // one notice per speaker, so each one clears by itself
@@ -413,6 +434,26 @@ extension AppDelegate {
         }
         stopIfIdle()   // the failed speaker may have been the only output
         pushModel()
+    }
+
+    /// The engine dropped local output `uid`, whose render callback stopped
+    /// (S334). A first stall reopens at the sync that follows; a stall before
+    /// the reopened stream played 5 s waits 10 s per try, the speaker on.
+    func outputStalled(_ uid: String) {
+        let step = stallRetry.stalled(uid, nowS: ProcessInfo.processInfo.systemUptime)
+        guard case .retry(let atS) = step else { return }
+        // S334 D1: the notice for a second stall goes here once its wording is approved.
+        DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) stalled again before playing "
+            + "\(Int(OutputStallRetry.trialS)) s; trying again every \(Int(OutputStallRetry.retryEveryS)) s")
+        scheduleStallRetry(atS: atS)
+    }
+
+    /// A sync just after uptime `atS`, when a held output may start again.
+    private func scheduleStallRetry(atS: Double) {
+        let wait = max(atS - ProcessInfo.processInfo.systemUptime, 0) + 0.1
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+            self?.syncLocalOutputs(origin: .automatic)
+        }
     }
 
     /// A Bluetooth output that started on a link that just came up gets one

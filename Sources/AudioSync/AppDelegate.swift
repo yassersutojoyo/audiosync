@@ -254,6 +254,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     let freshLinks = FreshLinkWatch()
     /// Speakers whose devices left the list a moment ago, still counted (S328).
     var briefLoss = LocalBriefLoss()
+    /// Local outputs whose render callback stopped, until a stream plays 5 s (S334).
+    var stallRetry = OutputStallRetry()
     /// The microphone calibration under way, if any (S232).
     var calibrationRun: CalibrationRun?
     /// Calibrate All Speakers under way, its sheet and the Undo of its Apply (S235 to S240).
@@ -416,14 +418,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// What the session engine and the Local Network probe report. Both
     /// report on the main thread (S113).
     private func handleEngineEvents() {
-        engine.onOutputGone = { [weak self] lostUID in
+        engine.onOutputGone = { [weak self] lostUID, loss in
             // The speaker stays on; a reconcile attaches it again once its
             // device is listed again (S68, EC1). One runs now, as for a
             // device-list change: a device that lingers in Core Audio's list
             // without being alive leaves the speaker list at once.
-            DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
-            self?.devicesChanged()
-            self?.checkBriefLosses()   // its start lead counts for 10 s at most (S328)
+            guard let self else { return }
+            if case .stalled = loss {
+                self.outputStalled(lostUID)
+            } else {
+                DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
+            }
+            self.devicesChanged()
+            self.checkBriefLosses()   // its start lead counts for 10 s at most (S328)
         }
         engine.onAppQuit = { [weak self] bundleID, pids in
             self?.appQuit(bundleID: bundleID, pids: pids, seenByCapture: true)

@@ -6359,6 +6359,7 @@ do {
 }
 
 // MARK: Status line: what capture and each output counted since the previous 5 s line (SessionTally, S229)
+// covers: S334 (each output's frames over the span)
 do {
     typealias Out = SessionTally.Output
     var numbers: [String: Int] = [:]
@@ -6373,9 +6374,9 @@ do {
     let bt = tokens.byUID["BT-AA:BB"] ?? 0
     let builtInBefore = tokens.byUID["Built-in"] ?? 0
     let old = SessionTally(capture: CaptureCounts(callbacks: 1_000, frames: 512_000, silentCallbacks: 4),
-                           outputs: ["BT-AA:BB": Out(number: 1, attach: bt, starvedRenders: 2, starvedFrames: 900, driftSkips: 1,
+                           outputs: ["BT-AA:BB": Out(number: 1, attach: bt, frames: 100_000, starvedRenders: 2, starvedFrames: 900, driftSkips: 1,
                                                      driftSilences: 4, lateCallbacks: 7, overloads: 1),
-                                     "Built-in": Out(number: 2, attach: builtInBefore, starvedRenders: 5, starvedFrames: 2_000,
+                                     "Built-in": Out(number: 2, attach: builtInBefore, frames: 900_000, starvedRenders: 5, starvedFrames: 2_000,
                                                      lateCallbacks: 3, overloads: 0)])
     // Built-in is detached and attached again within one tick (a replug), and its new renderer counts
     // past the old totals; USB joins.
@@ -6385,30 +6386,113 @@ do {
     check(builtInAfter != builtInBefore && tokens.byUID["BT-AA:BB"] == bt,
           "status line: a re-attach gets a new token, the other outputs keep theirs", "\(tokens.byUID)")
     let new = SessionTally(capture: CaptureCounts(callbacks: 1_500, frames: 752_000, silentCallbacks: 4),
-                           outputs: ["BT-AA:BB": Out(number: 1, attach: bt, starvedRenders: 3, starvedFrames: 1_412, driftSkips: 3,
+                           outputs: ["BT-AA:BB": Out(number: 1, attach: bt, frames: 340_000, starvedRenders: 3, starvedFrames: 1_412, driftSkips: 3,
                                                      driftSilences: 4, lateCallbacks: 7, overloads: 2),
-                                     "Built-in": Out(number: 2, attach: builtInAfter, starvedRenders: 7, starvedFrames: 3_360,
+                                     "Built-in": Out(number: 2, attach: builtInAfter, frames: 48_000, starvedRenders: 7, starvedFrames: 3_360,
                                                      driftSkips: 1, driftSilences: 2, lateCallbacks: 0, overloads: 0),
                                      "USB": Out(number: 3, attach: tokens.byUID["USB"] ?? 0, starvedRenders: 0, starvedFrames: 0,
                                                 lateCallbacks: 1, overloads: 0)])
     let line = SessionTally.statusText(since: old, now: new, seconds: 5.0)
     check(line == "status over 5.0 s: capture 240000 frames (48000 frames/s), 500 callbacks, 0 without usable channels"
-              + "; output 1: starved 1 (512 frames), drift skips 2, drift silences 0, late callbacks 0, IO overloads 1"
-              + "; output 2: starved 7 (3360 frames), drift skips 1, drift silences 2, late callbacks 0, IO overloads 0"
-              + "; output 3: starved 0 (0 frames), drift skips 0, drift silences 0, late callbacks 1, IO overloads 0",
-          "status line: deltas since the last line; a re-attached output's counts are all new, a new output counts from 0",
+              + "; output 1: 240000 frames, starved 1 (512 frames), drift skips 2, drift silences 0, late callbacks 0, IO overloads 1"
+              + "; output 2: 48000 frames, starved 7 (3360 frames), drift skips 1, drift silences 2, late callbacks 0, IO overloads 0"
+              + "; output 3: 0 frames, starved 0 (0 frames), drift skips 0, drift silences 0, late callbacks 1, IO overloads 0",
+          "status line: deltas since the last line, frames rendered per output; a re-attached output's counts are all new, a new output counts from 0",
           line)
     check(!line.contains("BT-AA") && !line.contains("Built-in") && !line.contains("USB"),
           "status line: outputs are numbered, never named", line)
     // BT-AA:BB left: the others keep their numbers in the line.
     let later = SessionTally(capture: new.capture, outputs: ["Built-in": new.outputs["Built-in"]!, "USB": new.outputs["USB"]!])
     let next = SessionTally.statusText(since: new, now: later, seconds: 5.0)
-    check(next.contains("; output 2: starved 0") && next.contains("; output 3: starved 0") && !next.contains("output 1"),
+    check(next.contains("; output 2: 0 frames, starved 0") && next.contains("; output 3: 0 frames, starved 0") && !next.contains("output 1"),
           "status line: an output leaving keeps the others' numbers", next)
     let idle = SessionTally.statusText(since: new, now: SessionTally(capture: new.capture), seconds: 0)
     check(idle == "status over 0.0 s: capture 0 frames (0 frames/s), 0 callbacks, 0 without usable channels"
               + "; no local outputs",
           "status line: no time passed gives a rate of 0, and no outputs say so", idle)
+}
+
+// MARK: Output stall: a render callback that stops while its device stays alive (OutputStall.swift, S334)
+// covers: S334 (frames against the uptime clock, per output; the reopen, its retries and the debug line)
+do {
+    typealias R = OutputStallWatch.Reading
+    var watch = OutputStallWatch()
+    var seen: [String: Double] = [:]   // uptime of each output's stall
+    // A plays, then its frames stop at 12.0; B keeps taking frames; C never took one (a link still coming up).
+    var a: Int64 = 0
+    var b: Int64 = 0
+    for tick in 0...8 {
+        let now = 10.0 + 0.5 * Double(tick)
+        if tick > 0 && now <= 12.0 { a += 512 }
+        if tick > 0 { b += 512 }
+        for stall in watch.check(["A": R(attach: 1, frames: a), "B": R(attach: 2, frames: b), "C": R(attach: 3, frames: 0)],
+                                 nowS: now) {
+            seen[stall.uid] = now
+        }
+    }
+    // D takes frames while the uptime clock sticks; E stops while it sticks (the Mac asleep), then wakes.
+    var sticky = OutputStallWatch()
+    var stuck: [OutputStallWatch.Stall] = []
+    var d: Int64 = 0
+    for _ in 0..<20 {
+        d += 512
+        stuck += sticky.check(["D": R(attach: 1, frames: d), "E": R(attach: 2, frames: 4_096)], nowS: 20.0)
+    }
+    let awake = sticky.check(["D": R(attach: 1, frames: d + 512), "E": R(attach: 2, frames: 4_096)], nowS: 21.5)
+    let late = sticky.check(["D": R(attach: 1, frames: d + 1_024), "E": R(attach: 2, frames: 4_096)], nowS: 22.0)
+    check(seen == ["A": 14.0] && stuck.isEmpty,
+          "output stall: frames that stop for 2 s after the first stall the output, a clock that sticks while they move never does",
+          "stalls \(seen), with the clock stuck \(stuck)")
+    check(awake.isEmpty && late == [OutputStallWatch.Stall(uid: "E", quietS: 2.0)],
+          "output stall: the 2 s count only uptime, so a sleep never counts toward them", "\(awake) \(late)")
+    var again = OutputStallWatch()
+    _ = again.check(["A": R(attach: 1, frames: 9_000)], nowS: 0)
+    let reattached = again.check(["A": R(attach: 2, frames: 0)], nowS: 3)
+    let fresh = again.check(["A": R(attach: 2, frames: 0)], nowS: 6)
+    check(reattached.isEmpty && fresh.isEmpty,
+          "output stall: a re-attached output is watched from its new renderer, not before it takes frames",
+          "\(reattached) \(fresh)")
+
+    let hog = OutputStallSign.read(hogOwner: 812, ownPID: 100, running: true)
+    check(hog == .hogMode(pid: 812) && OutputStallSign.read(hogOwner: -1, ownPID: 100, running: false) == .deviceNotRunning
+            && OutputStallSign.read(hogOwner: 100, ownPID: 100, running: true) == OutputStallSign.none
+            && OutputStallSign.read(hogOwner: nil, ownPID: 100, running: nil) == OutputStallSign.none,
+          "output stall: the sign is another process's hog mode with its PID, a device no longer running, or none")
+    let line = OutputStallSign.line(number: 2, quietS: 2.0, sign: hog)
+    check(line == "output 2 stalled: no frame for 2.0 s, another process (PID 812) holds its device in hog mode"
+            && OutputStallSign.line(number: 1, quietS: 2.5, sign: .none) == "output 1 stalled: no frame for 2.5 s, no sign",
+          "output stall: one debug line names the output's number, how long it stalled and the sign", line)
+    check(OutputLoss.stalled(quietS: 2, sign: .none).reason == "stalled" && OutputLoss.deviceGone.reason == "device lost",
+          "output stall: the stop line tells a stall from a lost device")
+
+    var retry = OutputStallRetry()
+    let first = retry.stalled("A", nowS: 100)
+    let notHeld = retry.held(nowS: 100)
+    retry.started("A", nowS: 100.5)
+    let second = retry.stalled("A", nowS: 103)
+    let heldWhile = retry.held(nowS: 112.9)
+    let heldAfter = retry.held(nowS: 113.1)
+    let refusedAt = retry.refused("A", nowS: 113.1)
+    let stillTracked = retry.tracked
+    retry.started("A", nowS: 123.2)
+    let afterPlaying = retry.stalled("A", nowS: 130)
+    check(first == .reopenNow && notHeld.isEmpty && second == .retry(atS: 113) && heldWhile == ["A"] && heldAfter.isEmpty
+            && refusedAt.map({ approx($0, 123.1, 1e-9) }) == true && stillTracked == ["A"] && afterPlaying == .reopenNow,
+          "output stall: a first stall reopens at once; a second within 5 s of play, or a refused start, retries every 10 s",
+          "\(first) \(second) \(heldWhile) \(String(describing: refusedAt)) \(afterPlaying)")
+    var other = OutputStallRetry()
+    let unstalled = other.refused("B", nowS: 5)
+    _ = other.stalled("B", nowS: 10)
+    other.started("B", nowS: 10.5)
+    other.settle(enabled: ["B"], nowS: 15.4)
+    let playing = other.tracked
+    other.settle(enabled: ["B"], nowS: 15.6)
+    let settled = other.tracked
+    _ = other.stalled("C", nowS: 20)
+    other.settle(enabled: ["B"], nowS: 20.1)
+    check(unstalled == nil && playing == ["B"] && settled.isEmpty && other.tracked.isEmpty,
+          "output stall: a refused start that followed no stall is switched off as before; 5 s of play or a switch-off ends a stall",
+          "\(String(describing: unstalled)) \(playing) \(settled) \(other.tracked)")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
@@ -6886,7 +6970,7 @@ do {
     let setGain: (StreamEngine) -> (String, Double) -> Void = StreamEngine.setGain(uid:g:)
     let setDelay: (StreamEngine) -> (String, Double) -> Void = StreamEngine.setDelay(uid:ms:)
     let equalizer: (StreamEngine) -> (Equalizer.Settings) -> Void = StreamEngine.updateEqualizer(_:)
-    let gone: ReferenceWritableKeyPath<StreamEngine, ((String) -> Void)?> = \.onOutputGone
+    let gone: ReferenceWritableKeyPath<StreamEngine, ((String, OutputLoss) -> Void)?> = \.onOutputGone
     let interrupted: ReferenceWritableKeyPath<StreamEngine, ((SourceCapture.Interruption) -> Void)?> = \.onInterrupted
     _ = (start, stop, running, attach, detach, detachTogether, active, setGain, setDelay, equalizer, gone, interrupted)
 
