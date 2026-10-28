@@ -95,6 +95,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - The web remote reports its port as in use when another app holds it on IPv4 or IPv6 alone. Before, it started anyway. On the Mac and on Windows.
 - Reloading the web remote page on a phone no longer disconnects that phone's other open remote page. On the Mac and on Windows.
 - On Windows, turning the web remote off, changing its port or quitting no longer freezes the window for up to half a second while a phone's page has stopped reading.
+- A muted AirPlay 1 speaker that AudioSync mutes by sending it silence no longer plays a moment of sound when it joins a stream that's already playing. On the Mac and on Windows.
 - In the Linux preview, an input with more than two channels offers every channel pair, as on Windows, a device with more than 64 channels plays or captures on its first 64 instead of stopping, and notice times show your local time instead of UTC.
 
 ## [0.7.1] - 2026-10-27
