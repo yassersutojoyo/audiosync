@@ -418,12 +418,21 @@ fn code(error: &io::Error) -> i32 {
 /// Deletes the `.new` files in the install folder and every temp folder an
 /// earlier update left; the `.bak` stays.
 pub fn remove_leftovers(install_dir: &Path, temp_root: &Path, log: &DebugLog) {
+    // A held temp folder means another copy may be between swap steps 1 and 4.
+    let swapping = fs::read_dir(temp_root).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry.file_name().to_string_lossy().starts_with(TEMP_PREFIX)
+                && held_elsewhere(&entry.path())
+        })
+    });
     for name in [
         format!("{}.new", archive::EXE_NAME),
         format!("{}.new", archive::NOTICES_NAME),
     ] {
         let path = install_dir.join(&name);
-        if path.exists() {
+        if path.exists() && swapping {
+            log.log(|| format!("updater: leftover {name} kept (an update is in progress)"));
+        } else if path.exists() {
             let removed = fs::remove_file(&path);
             log.log(|| format!("updater: leftover {name} {}", removed_text(&removed)));
         }
