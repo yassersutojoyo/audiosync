@@ -823,6 +823,15 @@ mod tests {
     }
 
     #[test]
+    fn an_output_past_64_channels_plays_on_its_first_64() {
+        let mut graph = Graph::default();
+        sink(&mut graph, 1, &[("audio.channels", "128")]);
+        assert_eq!(graph.sink_format(1), (48_000, 64));
+        graph.nodes.get_mut(&1).unwrap().format = Some((96_000, 128));
+        assert_eq!(graph.sink_format(1), (96_000, 64));
+    }
+
+    #[test]
     fn the_default_input_is_found_by_name() {
         let mut graph = Graph::default();
         graph.add(
