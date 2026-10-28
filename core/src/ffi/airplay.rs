@@ -2321,8 +2321,23 @@ pub extern "C" fn asc_airplay2_auto() -> bool {
 /// `AUDIOSYNC_AIRPLAY2`, and `AUDIOSYNC_AIRPLAY2_AUTO` (or the build's flag)
 /// decides what it means (S312).
 fn sender_config(setting: bool, switch: Option<&str>, auto: Option<&str>) -> SenderConfig {
-    SenderConfig::default()
-        .with_airplay2_switch(airplay2_auto(auto), setting || airplay2_switch(switch))
+    SenderConfig {
+        on_driver_thread: Some(raise_driver_thread),
+        ..SenderConfig::default()
+    }
+    .with_airplay2_switch(airplay2_auto(auto), setting || airplay2_switch(switch))
+}
+
+/// The driver thread's setup (P226): user-interactive QoS on macOS (S323).
+/// A refusal leaves the thread at its default class; the class ends with the
+/// thread, so there is nothing to hold.
+fn raise_driver_thread() -> Box<dyn std::any::Any> {
+    #[cfg(target_os = "macos")]
+    // SAFETY: changes only the calling thread's own QoS class.
+    unsafe {
+        libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 0);
+    }
+    Box::new(())
 }
 
 fn create_configured(open_browser: OpenBrowser, airplay2_setting: bool) -> *mut AscAirPlay {
@@ -4371,6 +4386,25 @@ mod tests {
     #[test]
     fn the_mac_app_raises_the_airplay_driver_thread() {
         assert!(sender_config(false, None, None).on_driver_thread.is_some());
+    }
+
+    // covers: S323
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_driver_thread_setup_gives_the_thread_user_interactive_qos() {
+        let class = std::thread::spawn(|| {
+            let _held = raise_driver_thread();
+            let mut class = libc::qos_class_t::QOS_CLASS_UNSPECIFIED;
+            let mut relative = 0;
+            // SAFETY: reads the calling thread's QoS into two locals.
+            unsafe {
+                libc::pthread_get_qos_class_np(libc::pthread_self(), &mut class, &mut relative)
+            };
+            class as u32
+        })
+        .join()
+        .expect("the thread ends");
+        assert_eq!(class, libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE as u32);
     }
 
     // covers: S312

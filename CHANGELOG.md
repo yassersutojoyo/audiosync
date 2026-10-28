@@ -23,6 +23,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On the Mac, AudioSync's AirPlay sender now asks macOS for a higher priority, as it already does on Windows, so a busy Mac is less likely to send audio packets to AirPlay speakers late.
 - On Windows, when the app you play from runs as administrator and quits or restarts, AudioSync now notices within about 2 seconds and stops or switches to the whole system, as your setting says, with the usual notice. Before, streaming went on in silence.
 - A speaker that drops off for a moment, such as a Bluetooth speaker losing its link, no longer makes your other speakers skip and then go silent while it reconnects. For 10 seconds after it disappears, the others keep their timing, so only that speaker has a gap. If it's still gone after 10 seconds, the others adjust once. On the Mac and on Windows.
 - A device on the network announcing a flood of fake Google Cast speakers no longer grows the speaker list without end: it keeps up to 128, and the speaker you play to stays listed. If something goes wrong inside AudioSync's Google Cast sender, the speaker stops with an error on its row and can be started again, instead of Google Cast going quiet until AudioSync restarts. On the Mac and on Windows.
