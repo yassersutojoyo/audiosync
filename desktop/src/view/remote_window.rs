@@ -273,6 +273,14 @@ impl App {
         self.show_remote_state();
     }
 
+    /// Follows a remote setting read after launch (S212): stopped, then
+    /// started as at launch when it is on or the debug switch asks for it.
+    pub(super) fn restore_remote_again(&self) {
+        self.stop_remote();
+        let debug_port = self.remote.borrow().debug_port;
+        self.restore_remote_with(debug_port);
+    }
+
     /// Opens the window, or brings it to the front; opening it makes a new
     /// pairing code and ends a lockout.
     pub fn show_remote(&self) {

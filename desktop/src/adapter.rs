@@ -1028,16 +1028,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Takes in the settings of the file ignored at launch, now that it
-    /// reads as settings, as if read at launch (S212): they replace what
-    /// changed since, except the AirPlay 2 path the sender started with. A
-    /// running session moves to their source as a switch does, and with none
-    /// running, speakers they leave on start one as auto-connect does. The
-    /// window shows them again. Returns true.
+    /// reads as settings, as if read at launch (S212): their values replace
+    /// those changed since, except the AirPlay 2 path the sender started
+    /// with. A running session moves to their source as a switch does, unless
+    /// it already captures that app; with none running, the listed
+    /// auto-connect speakers start one as at launch. The window shows them
+    /// again. Returns true.
     fn restore_read_late(&mut self, (saved, loaded): (Settings, settings::Loaded)) -> bool {
         self.log.log(|| {
             format!(
-                "settings: the file ignored at launch can be read now, {loaded}; it replaces \
-                 the changes made since launch"
+                "settings: the file ignored at launch can be read now, {loaded}; its values \
+                 replace those changed since launch"
             )
         });
         self.delays_to_migrate = matches!(
@@ -1049,9 +1050,21 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.restore(saved);
         self.airplay2_at_launch = airplay2_at_launch;
         let read = std::mem::replace(&mut self.chosen, before);
-        self.choose(read);
-        if !self.running() && !self.auto_connect_skipped && self.enabled_count() > 0 {
-            self.start_session(StartOrigin::AutoConnect);
+        // The file keeps an app without its process, so the same app has another key.
+        let same_app = matches!(
+            (&read, &self.chosen),
+            (Chosen::App { executable: a, .. }, Chosen::App { executable: b, .. })
+                if a.eq_ignore_ascii_case(b)
+        );
+        if !same_app {
+            self.choose(read);
+        }
+        if !self.running() {
+            let listed: Vec<String> = self.listed.iter().cloned().collect();
+            self.auto_connect(&listed);
+            // Every listed AirPlay speaker counts as appearing, as at launch.
+            self.airplay_listed.clear();
+            self.airplay_listed();
         }
         self.view_restored = true;
         true

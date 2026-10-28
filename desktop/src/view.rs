@@ -1177,6 +1177,9 @@ impl App {
             let airplay2_at_launch = self.ui.borrow().airplay2_at_launch;
             self.restore_view();
             self.ui.borrow_mut().airplay2_at_launch = airplay2_at_launch;
+            let airplay2 = self.ui.borrow().airplay2_experimental;
+            self.set_airplay2_experimental(airplay2);
+            self.restore_remote_again();
         }
         if changed {
             self.refresh();
@@ -5860,11 +5863,16 @@ mod tests {
         let file = ViewSettings {
             appearance: ui_model::Appearance::Dark,
             show_virtual_devices: true,
+            airplay2_experimental: true,
             ..ViewSettings::default()
         };
         *late_view.borrow_mut() = Some(file.clone());
         app.poll();
         assert_eq!(app.main.get_appearance(), crate::Appearance::Dark);
+        assert!(
+            app.ui.borrow().airplay2_notice.is_some(),
+            "the sender keeps its path until the next launch"
+        );
         app.save_settings();
         assert_eq!(app.backend.borrow().view_settings(), file);
     }
