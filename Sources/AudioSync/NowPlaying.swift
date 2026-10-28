@@ -290,14 +290,19 @@ final class NowPlayingMonitor {
         case .previous: verb = "previous track"
         }
         scripts.async { [weak self] in
-            _ = self?.run(target: bundleID, command: true, """
+            guard let self else { return }
+            guard self.consent.mayCommand(bundleID, permission: Self.permission(bundleID)) else {
+                DebugTrace.log("Now Playing: dropped a command to \(bundleID), which AudioSync may not control yet")
+                return
+            }
+            _ = self.run(target: bundleID, command: true, """
                 with timeout of 2 seconds
                     if application id "\(bundleID)" is running then
                         tell application id "\(bundleID)" to \(verb)
                     end if
                 end timeout
                 """)
-            DispatchQueue.main.async { self?.refresh() }
+            DispatchQueue.main.async { self.refresh() }
         }
     }
 
@@ -588,7 +593,8 @@ struct AutomationConsent {
         }
         if pending?.app == app { return .wait }
         switch permission {
-        case .allowed, .unknown: return .read
+        case .allowed: return .read
+        case .unknown: return .wait
         case .denied: return .refused
         case .undecided:
             guard mayAsk else { return .hold }
@@ -601,7 +607,7 @@ struct AutomationConsent {
 
     /// Whether a play, pause or skip command may go to `app`.
     func mayCommand(_ app: String, permission: Permission) -> Bool {
-        true
+        permission == .allowed && pending?.app != app
     }
 
     /// Consent request `token` returned; one a quit already ended changes nothing.
