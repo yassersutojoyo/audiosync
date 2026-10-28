@@ -314,6 +314,20 @@ fn install_in(
         Err(ArchiveError::Blocked) => return Installed::Blocked,
         Err(_) => return Installed::BrokenDownload,
     };
+    // The signature covers the bytes only, not the version the appcast names.
+    match archive::product_version(&unpacked.exe) {
+        Some(reported) if reported == update.version && reported > env.running => {}
+        reported => {
+            env.log.log(|| {
+                format!(
+                    "updater: the zip is refused (its exe reports version {}, not {})",
+                    reported.map_or_else(|| "none".to_owned(), |v| v.to_string()),
+                    update.version_text
+                )
+            });
+            return Installed::BrokenDownload;
+        }
+    }
     // The last point where a Cancel still leaves the install folder untouched.
     if cancel.load(Ordering::Relaxed) {
         return Installed::Cancelled;
@@ -468,7 +482,7 @@ pub mod tests {
         let zip = zip_of(&[
             (
                 archive::EXE_NAME,
-                &fake_exe(Arch::X64.pe_machine(), b"new exe"),
+                &fake_exe_reporting([0, 9, 0, 0], b"new exe"),
             ),
             (archive::NOTICES_NAME, b"new notices"),
         ]);
@@ -625,7 +639,7 @@ pub mod tests {
         let zip = zip_of(&[
             (
                 archive::EXE_NAME,
-                &fake_exe(Arch::X64.pe_machine(), b"served exe"),
+                &fake_exe_reporting([0, 9, 0, 0], b"served exe"),
             ),
             (archive::NOTICES_NAME, b"served notices"),
         ]);

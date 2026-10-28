@@ -4,6 +4,7 @@ use std::io::{self, Read};
 
 use super::appcast::Arch;
 use super::files::{is_blocked, is_disk_full};
+use super::version::Version;
 
 pub const EXE_NAME: &str = "audiosync.exe";
 pub const NOTICES_NAME: &str = "THIRD-PARTY-NOTICES.txt";
@@ -134,6 +135,31 @@ pub fn pe_machine(exe: &[u8]) -> Option<u16> {
     }
     head.get(offset + 4..offset + 6)
         .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+}
+
+/// The product version in `exe`'s version resource (`VS_FIXEDFILEINFO`), or
+/// `None` without one.
+pub fn product_version(exe: &[u8]) -> Option<Version> {
+    let key: Vec<u8> = "VS_VERSION_INFO\0"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let word = |at: usize| {
+        exe.get(at..at + 4)
+            .map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    };
+    // The fixed part follows the key at the next 32-bit boundary.
+    exe.windows(key.len())
+        .enumerate()
+        .filter(|(_, window)| *window == key.as_slice())
+        .map(|(at, _)| (at + key.len()).next_multiple_of(4))
+        .find(|&fixed| word(fixed) == Some(0xFEEF_04BD))
+        .and_then(|fixed| {
+            let (high, low) = (word(fixed + 16)?, word(fixed + 20)?);
+            Some(Version::from_parts(
+                &[high >> 16, high & 0xFFFF, low >> 16, low & 0xFFFF].map(u64::from),
+            ))
+        })
 }
 
 #[cfg(test)]
