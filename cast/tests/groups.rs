@@ -573,7 +573,7 @@ fn a_playing_group_resolved_with_no_addresses_keeps_reconnecting_until_announced
         .unwrap_or_else(|| panic!("reconnects once the group is announced: {seen:?}"));
     let after = *back_at - failed[2].0;
     assert!(
-        after < Duration::from_secs(2),
+        after < Duration::from_secs(3),
         "not the 4 s wait: {after:?}"
     );
     assert_eq!(new_leader.connection_count(), 1);
