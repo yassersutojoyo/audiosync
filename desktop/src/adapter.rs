@@ -10071,6 +10071,86 @@ mod tests {
         );
     }
 
+    // covers: S163
+    #[test]
+    fn picking_the_whole_system_again_after_the_app_quit_clears_the_switch_notice() {
+        let mut adapter = adapter();
+        adapter.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.poll();
+        adapter.poll();
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::SourceSwitched {
+                source: "Player".into()
+            }]
+        );
+
+        adapter.select_source("system");
+        assert!(messages(&adapter).is_empty());
+        assert!(adapter.snapshot().running, "streaming goes on");
+        assert_eq!(captures(&adapter).len(), 2, "with no capture restart");
+    }
+
+    // covers: S163
+    #[test]
+    fn another_channel_pair_while_stopped_clears_the_notice_of_why_the_input_stopped() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Interface (USB Audio)", "USB");
+        adapter.audio.set_input_channels(MIC, 4);
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.audio.disconnect_input(MIC);
+        for _ in 0..20 {
+            adapter.poll();
+        }
+        let unplugged = NoticeMessage::InputDisconnected {
+            source: "Interface (USB Audio)".to_owned(),
+        };
+        assert_eq!(messages(&adapter), [unplugged.clone()]);
+
+        adapter.select_input_pair(0);
+        assert_eq!(
+            messages(&adapter),
+            [unplugged],
+            "the pair already chosen keeps the notice of why streaming stopped"
+        );
+
+        adapter.select_input_pair(1);
+        assert!(messages(&adapter).is_empty());
+        assert!(!adapter.snapshot().running, "streaming stays stopped");
+    }
+
+    // covers: S163
+    #[test]
+    fn picking_the_playing_input_again_clears_the_busy_input_notice() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Interface (USB Audio)", "USB");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.audio.fail_capture(BackendError::DeviceGone);
+        adapter
+            .audio
+            .refuse_captures(Some(BackendError::DeviceBusy));
+        for _ in 0..20 {
+            adapter.poll();
+        }
+        assert!(adapter.snapshot().running, "the outputs play on");
+        assert_eq!(messages(&adapter), [NoticeMessage::CaptureFailed]);
+
+        adapter.select_source(&mic());
+        assert!(messages(&adapter).is_empty());
+        assert!(adapter.snapshot().running);
+    }
+
     #[test]
     fn zones_and_auto_connect_hold_airplay_speakers() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
