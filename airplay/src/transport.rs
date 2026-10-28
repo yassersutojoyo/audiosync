@@ -212,6 +212,7 @@ fn unreachable(error: &io::Error) -> bool {
             | io::ErrorKind::ConnectionReset
             | io::ErrorKind::HostUnreachable
             | io::ErrorKind::NetworkUnreachable
+            | io::ErrorKind::AddrNotAvailable
     )
 }
 
