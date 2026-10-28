@@ -1297,15 +1297,13 @@ impl Driver {
             delay: speaker.options.delay,
             software_volume: active.software_volume.then_some(speaker.options.volume),
             software_mute: active.software_mute,
+            muted: speaker.options.volume == Volume::Muted,
             reported_latency: ReportedLatency::from_audio_latency(audio_latency),
             airplay2: None,
         };
         let id = self
             .stream
             .add_speaker_with_counters(config, speaker.counters.clone(), now);
-        if active.software_mute && speaker.options.volume == Volume::Muted {
-            self.stream.set_software_volume(id, Volume::Muted);
-        }
         active.stream_id = Some(id);
         speaker.backoff.on_playing();
         self.stream_ids.insert(id, key.clone());

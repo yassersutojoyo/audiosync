@@ -1214,9 +1214,8 @@ fn a_muted_sm_speaker_joining_a_running_stream_sends_only_silence() {
     let mut config = speaker(2, Codec::Alac);
     config.software_mute = true;
     config.delay = Duration::from_millis(500);
-    let muted = rig.stream.add_speaker(config, rig.now);
-    rig.stream.set_software_volume(muted, Volume::Muted);
-    rig.drain();
+    config.muted = true;
+    let muted = rig.add(config);
     rig.run_for(Duration::from_secs(2));
     let audio = rig.audio(muted);
     assert!(!audio.is_empty());

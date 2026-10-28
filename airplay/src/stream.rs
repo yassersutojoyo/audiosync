@@ -106,8 +106,11 @@ pub struct SpeakerConfig {
     pub software_volume: Option<Volume>,
     /// A receiver with `sm=true` (and not `sv`): the samples are zeroed while
     /// it is muted, in an encoding of its own, and left as they are
-    /// otherwise (P121). It starts unmuted.
+    /// otherwise (P121).
     pub software_mute: bool,
+    /// With `software_mute`, whether it starts muted, so the packets cut
+    /// before it joined are zeroed too.
+    pub muted: bool,
     /// What the receiver reported of its own latency, reported back and
     /// never folded into Lf or the timeline (P110, P199).
     pub reported_latency: ReportedLatency,
@@ -143,6 +146,7 @@ impl SpeakerConfig {
             delay: Duration::ZERO,
             software_volume: None,
             software_mute: false,
+            muted: false,
             reported_latency: ReportedLatency::default(),
             airplay2: None,
         }
@@ -1135,7 +1139,7 @@ impl Stream {
                 store: PayloadStore::new(STORE_PACKETS, payload_bytes(codec)),
             }),
             (None, true) => Some(OwnEncoding {
-                gain: 1.0,
+                gain: if config.muted { 0.0 } else { 1.0 },
                 mute_only: true,
                 store: PayloadStore::new(STORE_PACKETS, payload_bytes(codec)),
             }),
