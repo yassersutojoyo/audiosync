@@ -21,6 +21,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the notice for an AirPlay speaker turned off because it asks for a code now says whether it needs a PIN or a password, as on Windows.
 - On Windows, AudioSync registers its AirPlay sending with Windows as audio work (the Pro Audio task), as it already did for its local outputs.
 - On the Mac, AudioSync's AirPlay sender now asks macOS for a higher priority, as it already does on Windows.
+- After you switch from a mix of apps to another source, the source menu keeps offering that mix, so picking it brings the same apps back, also from the Web Remote and after a restart. A mix that plays only some apps shows while at least one of them is open. On the Mac and on Windows.
 
 ### Fixed
 

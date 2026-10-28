@@ -3827,7 +3827,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if matches!(self.chosen, Chosen::Mix { .. }) {
             return None;
         }
-        self.last_mix.as_ref().map(|mix| Chosen::Mix {
+        let mix = self.last_mix.as_ref()?;
+        let listed = |app: &SavedMixApp| {
+            self.sources.iter().any(|source| {
+                matches!(source.id, SourceId::App { .. })
+                    && source.executable.eq_ignore_ascii_case(&app.executable)
+            })
+        };
+        // "Only these" with none of its apps listed would fail to start (S242).
+        if mix.mode == MixMode::Only && !mix.apps.iter().any(listed) {
+            return None;
+        }
+        Some(Chosen::Mix {
             mode: mix.mode,
             apps: mix.apps.clone(),
         })
