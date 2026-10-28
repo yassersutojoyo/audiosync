@@ -27,10 +27,10 @@ use super::{
     App, REMOTE_PUBLIC_NOTICE_ID, availability, cast_group_note, cast_state, row_state,
     speaker_kind, with_app,
 };
-use crate::Strings;
 use crate::network_profile::{ProfileSource, PublicNetworkWarning, Watch};
 use crate::remote::{self, Action, RemoteSettings, RowText};
 use crate::ui_model::{AppState, Notice, NoticeMessage, Speaker};
+use crate::{CastList, Strings};
 
 thread_local! {
     /// The app a command wakes on the event loop's thread.
@@ -93,6 +93,10 @@ pub(super) struct RemoteHost {
     public_since: String,
     /// The last reading failed and the log says so; repeats aren't logged.
     profiles_unread: bool,
+    /// The profiles read while a none-found note shows, whose firewall
+    /// advice depends on them; none read otherwise.
+    hint_watch: Option<Watch>,
+    hint_public: PublicNetworkWarning,
     /// The port the debug switch started this run's remote on; kept out of
     /// the settings, and dropped once the user changes the setting.
     debug_port: Option<u16>,
@@ -124,6 +128,8 @@ impl Default for RemoteHost {
             public_since: String::new(),
             debug_port: None,
             profiles_unread: false,
+            hint_watch: None,
+            hint_public: PublicNetworkWarning::default(),
         }
     }
 }
@@ -519,8 +525,37 @@ impl App {
             self.log_remote_events(server);
         }
         self.read_network_profiles();
+        self.read_hint_profiles();
         if self.remote_window.window().is_visible() {
             self.show_remote_state();
+        }
+    }
+
+    /// The none-found notes name Windows Firewall only while a connected
+    /// network is Public, as the Mac names Local Network access only once
+    /// macOS refused it. Profiles are read only while such a note shows.
+    fn read_hint_profiles(&self) {
+        let shows =
+            self.main.get_airplay_none_found() || self.main.get_cast_list() == CastList::NoneFound;
+        let public = {
+            let mut host = self.remote.borrow_mut();
+            if !shows {
+                host.hint_watch = None;
+                host.hint_public = PublicNetworkWarning::default();
+            } else if host.hint_watch.is_none() {
+                host.hint_watch = host
+                    .profiles
+                    .clone()
+                    .map(|source| Watch::start(source, PROFILE_CHECK));
+            }
+            if let Some(reading) = host.hint_watch.as_ref().and_then(Watch::latest) {
+                host.hint_public.read(reading.as_deref());
+            }
+            host.hint_public.public()
+        };
+        let strings = self.main.global::<Strings>();
+        if strings.get_public_network() != public {
+            strings.set_public_network(public);
         }
     }
 
@@ -669,6 +704,7 @@ mod tests {
     use crate::network_profile::{Category, ProfileSource};
     use crate::remote::RemoteSettings;
     use crate::ui_model::{MockBackend, NoticeMessage};
+    use crate::{CastList, Strings};
 
     fn free_port() -> u16 {
         // The port is free once this listener is dropped (and stays so in a test, likely enough).
@@ -1195,6 +1231,71 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "no reading");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+
+    /// Polls until the none-found notes take `public` in.
+    fn poll_until_hint(app: &super::App, public: bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            app.poll_remote();
+            if app.main.global::<Strings>().get_public_network() == public {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "no reading");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn the_none_found_notes_name_the_firewall_only_on_a_public_network() {
+        let mut backend = MockBackend::new();
+        backend.set_airplay_none_found(true);
+        let app = super::super::tests::app_over(backend);
+        let fake = Arc::new(FakeProfiles(std::sync::Mutex::new(vec![Category::Private])));
+        app.remote.borrow_mut().profiles = Some(fake.clone());
+        let strings = app.main.global::<Strings>();
+        let same_network = "No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers.";
+        let firewall = "No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).";
+
+        app.poll_remote();
+        assert!(
+            app.remote.borrow().hint_watch.is_some(),
+            "read while it shows"
+        );
+        for profiles in [vec![Category::Private], vec![Category::Domain], vec![]] {
+            *fake.0.lock().unwrap() = profiles.clone();
+            poll_until_hint(&app, false);
+            assert_eq!(
+                strings.get_airplay_none_found(),
+                same_network,
+                "{profiles:?}"
+            );
+            assert_eq!(strings.get_no_speakers(), "No speakers found");
+        }
+
+        *fake.0.lock().unwrap() = vec![Category::Private, Category::Public];
+        poll_until_hint(&app, true);
+        assert_eq!(strings.get_airplay_none_found(), firewall);
+        assert!(
+            strings
+                .get_network_none_found()
+                .contains("Windows Firewall")
+        );
+        assert!(
+            strings
+                .invoke_cast_list(CastList::NoneFound)
+                .contains("Windows Firewall")
+        );
+        assert_eq!(
+            strings.get_no_speakers(),
+            "No speakers found. On a Public network, Windows Firewall can block AudioSync."
+        );
+
+        // No note, no reading: the advice starts over the next time.
+        app.main.set_airplay_none_found(false);
+        app.poll_remote();
+        assert!(app.remote.borrow().hint_watch.is_none());
+        assert!(!strings.get_public_network());
     }
 
     #[test]

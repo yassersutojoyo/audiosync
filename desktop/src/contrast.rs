@@ -677,7 +677,7 @@ fn no_text_promises_airplay() {
                 || line.contains("return @tr(\"No AirPlay speaker was measured clearly,")
                 || line.contains("@tr(\"AirPlay speakers share one delay, so a new AirPlay delay")
                 || line.contains(
-                    "airplay-none-found: Platform.os == OperatingSystemType.linux ? \
+                    "airplay-none-found: root.public-network ? \
                      @tr(\"No AirPlay speakers found yet.",
                 )
                 || line.contains("plays up to {0} AirPlay 2 speakers at once, so {1} waits.")
@@ -695,7 +695,7 @@ fn no_text_promises_airplay() {
                 || line.contains("property <string> notice-airplay2-prefer-off-next-launch: @tr(")
                 || line.contains("return @tr(\"AirPlay 2 after restart\");")
                 || line.contains(
-                    "network-none-found: Platform.os == OperatingSystemType.linux ? \
+                    "network-none-found: root.public-network ? \
                      @tr(\"No AirPlay or Google Cast speakers found yet.",
                 )
                 || [
