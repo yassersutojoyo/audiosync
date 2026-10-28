@@ -1624,8 +1624,8 @@ mod tests {
         settings
     }
 
-    /// Settings with every field away from its default, except the
-    /// migration marks: a file without them is migrated as it loads.
+    /// Settings with every field away from its default, except the version
+    /// and the migration marks: a file without them is migrated as it loads.
     pub fn every_field() -> Settings {
         let sample = sample();
         Settings {
