@@ -415,8 +415,8 @@ fn code(error: &io::Error) -> i32 {
     error.raw_os_error().unwrap_or(-1)
 }
 
-/// Deletes the `.new` files in the install folder and every temp folder an
-/// earlier update left; the `.bak` stays.
+/// Deletes the `.new` files in the install folder, unless another copy holds
+/// an update folder, and every temp folder an earlier update left; the `.bak` stays.
 pub fn remove_leftovers(install_dir: &Path, temp_root: &Path, log: &DebugLog) {
     // A held temp folder means another copy may be between swap steps 1 and 4.
     let swapping = fs::read_dir(temp_root).is_ok_and(|entries| {
