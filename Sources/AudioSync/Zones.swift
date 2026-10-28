@@ -287,6 +287,12 @@ enum ZoneLayout {
         speakers.filter { zoned.contains(key($0)) }
     }
 
+    /// Whether the note and the Add by address button under a section's rows
+    /// each get a separator above them.
+    static func linesBelowRows(zoneBox: Bool, note: Bool, castAdd: Bool) -> (note: Bool, castAdd: Bool) {
+        (note, castAdd)
+    }
+
     struct ZoneGroup<T>: Identifiable {
         let zone: String
         let rows: [T]
