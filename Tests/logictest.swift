@@ -10719,20 +10719,21 @@ do {
     let suite = "permissions-logictest-\(ProcessInfo.processInfo.processIdentifier)"
     if let defaults = UserDefaults(suiteName: suite) {
         defaults.removePersistentDomain(forName: suite)
-        let firstRun = PermissionAsks.load(defaults)
+        let store = SettingsStore(read: { defaults.object(forKey: $0) }, write: { defaults.set($0, forKey: $1) })
+        let firstRun = PermissionAsks.load(store)
         defaults.set(["local-speaker"], forKey: AppSettings.Keys.enabledLocal)
-        let relaunch = PermissionAsks.load(defaults)
+        let relaunch = PermissionAsks.load(store)
         check(!firstRun.usedBefore && !relaunch.usedBefore
                 && relaunch.step(.localNetwork, state: .unknown, userAction: false) == .offer,
               "permissions: settings a fresh install saved don't skip the explanation on the next launch")
         defaults.removePersistentDomain(forName: suite)
         defaults.set(70, forKey: AppSettings.Keys.master)
-        let updated = PermissionAsks.load(defaults)
+        let updated = PermissionAsks.load(store)
         defaults.removeObject(forKey: AppSettings.Keys.master)
-        check(updated.usedBefore && PermissionAsks.load(defaults).usedBefore,
+        check(updated.usedBefore && PermissionAsks.load(store).usedBefore,
               "permissions: an update from a version without explanations is recognized once and remembered")
         defaults.set(["microphone", 7] as [Any], forKey: PermissionAsks.defaultsKey)
-        check(PermissionAsks.load(defaults).stored == ["microphone"],
+        check(PermissionAsks.load(store).stored == ["microphone"],
               "permissions: a stored entry that isn't a name is dropped alone")
         defaults.removePersistentDomain(forName: suite)
     } else {
