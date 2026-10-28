@@ -30,6 +30,9 @@ pub const FEED_URL: &str =
     "https://github.com/yassersutojoyo/audiosync/releases/latest/download/appcast.xml";
 /// How long a quit waits for a failed restart's undo (spec S303).
 const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+/// How long a quit waits for a running install: the 2 s of lock retries a
+/// quit leaves its swap, plus the file steps around them (spec S315).
+const QUIT_INSTALL_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
 
 pub const RELEASE_PAGE: &str = "https://github.com/yassersutojoyo/audiosync/releases/latest";
 
@@ -562,10 +565,22 @@ impl Updater {
     /// At quit, after a swap: a failed restart's undo still running ends
     /// first (spec S303), and an exe Windows security removed gets the
     /// `.bak` back, so the next start finds one (spec S315). Lock retries
-    /// share [`files::QUIT_RETRY_BUDGET`]. True when the record changed.
+    /// share [`files::QUIT_RETRY_BUDGET`]. A running install is cancelled
+    /// and, once in its swap, ends first. True when the record changed.
     pub fn at_quit(&mut self) -> bool {
         self.env.pause.quit();
         let mut polled = Polled::default();
+        if self.work == Work::Installing {
+            self.cancel.store(true, Ordering::Relaxed);
+            let deadline = std::time::Instant::now() + QUIT_INSTALL_WAIT;
+            while self.work == Work::Installing {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                match self.events.recv_timeout(left) {
+                    Ok(event) => self.apply(event, &mut polled),
+                    Err(_) => break,
+                }
+            }
+        }
         if self.work == Work::Restarting {
             self.finish_restart(&mut polled);
         }
