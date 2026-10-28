@@ -110,7 +110,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
     /// Local speakers the user wants on, by device UID.
     var enabledLocal: Set<String> {
-        didSet { if enabledLocal != oldValue { store.save(ids: enabledLocal, forKey: Keys.enabledLocal) } }
+        didSet {
+            guard enabledLocal != oldValue else { return }
+            store.save(ids: enabledLocal, forKey: Keys.enabledLocal)
+            briefLoss.followSwitches(from: oldValue, to: enabledLocal)   // switched off, a lost one no longer counts (S328)
+        }
     }
     var masterVolume: Double {
         didSet {

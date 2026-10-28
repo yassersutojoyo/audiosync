@@ -894,6 +894,32 @@ pub unsafe extern "C" fn asc_renderer_time_steps(renderer: *const AscRenderer) -
     unsafe { control_side(renderer) }.map_or(0, RendererControl::time_steps)
 }
 
+/// Any thread: the start lead `renderer` published for the session lead
+/// (S208), in capture-rate frames, into `frames`; false, leaving `frames`
+/// alone, before it published one or for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer, and `frames` is null or valid
+/// for a write.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_start_lead_frames(
+    renderer: *const AscRenderer,
+    frames: *mut i64,
+) -> bool {
+    // SAFETY: by the caller's contract the handle is null or live.
+    let Some(lead) = unsafe { control_side(renderer) }.and_then(RendererControl::start_lead_frames)
+    else {
+        return false;
+    };
+    if frames.is_null() {
+        return false;
+    }
+    // SAFETY: non-null, and by the caller's contract valid for a write.
+    unsafe { frames.write(lead) };
+    true
+}
+
 /// A renderer's start lead kept counting in its ring's session lead after
 /// the renderer is gone (S328), behind an opaque C pointer.
 pub struct AscHeldLead {

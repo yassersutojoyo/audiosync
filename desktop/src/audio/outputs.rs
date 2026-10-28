@@ -442,7 +442,7 @@ impl OutputPlan {
 
 /// The time one UI poll stands for in [`OutputPolicy::tick`]: the UI polls
 /// twice a second.
-const POLL_PERIOD: Duration = Duration::from_millis(500);
+pub(crate) const POLL_PERIOD: Duration = Duration::from_millis(500);
 
 /// Every output's settings, the master volume, and the decisions made from
 /// them.

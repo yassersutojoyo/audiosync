@@ -301,6 +301,12 @@ final class CoreRenderer {
         return CoreHeldLead(handle: held, captureRate: captureRate)
     }
 
+    /// Any thread: whether this renderer has published its start lead (S208).
+    var publishedLead: Bool {
+        var frames: Int64 = 0
+        return asc_renderer_start_lead_frames(handle, &frames)
+    }
+
     /// Control thread, before the output starts: whether its device is
     /// Bluetooth, which adds a capture block to its start lead (S230).
     func setBluetooth(_ bluetooth: Bool) { asc_renderer_set_bluetooth(handle, bluetooth) }

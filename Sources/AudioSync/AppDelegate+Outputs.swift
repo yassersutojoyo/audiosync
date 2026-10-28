@@ -224,19 +224,18 @@ extension AppDelegate {
                 .joined(separator: ", "))
     }
 
-    /// Lets go of the held start leads (S328) of the speakers that no longer
-    /// count: one switched off or now the reference at once, one still
-    /// missing once its brief loss ended, and any 10 s after its loss; the
-    /// rest count at their current hold-backs.
+    /// Lets go of the held start leads (S328) that no longer count
+    /// (`LocalBriefLoss.keepsLead`); the rest count at their current
+    /// hold-backs.
     private func syncHeldLeads(targets: [String: Double]) {
         let now = ProcessInfo.processInfo.systemUptime
         for (uid, since) in engine.heldLeadTimes {
-            let missing = !localListed.contains(uid)
-            if !enabledLocal.contains(uid) || uid == localReference || (missing && !briefLoss.held.contains(uid))
-                || now - since >= LocalBriefLoss.holdSeconds {
+            if briefLoss.keepsLead(of: uid, lostAt: since, now: now, listed: localListed.contains(uid),
+                                   enabled: enabledLocal.contains(uid), isReference: uid == localReference,
+                                   publishedAgain: engine.publishedLead(uid: uid)) {
+                if let ms = targets[uid] { engine.setHeldLeadDelay(uid: uid, ms: ms) }
+            } else {
                 engine.releaseHeldLead(uid: uid)
-            } else if let ms = targets[uid] {
-                engine.setHeldLeadDelay(uid: uid, ms: ms)
             }
         }
     }
@@ -249,8 +248,11 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] a lost speaker's 10 s are up: it no longer counts for the others' delays")
         }
         retimeLocalOutputs()
-        let due = ([briefLoss.nextExpiry].compactMap { $0 }
-            + engine.heldLeadTimes.values.map { $0 + LocalBriefLoss.holdSeconds }).min()
+        let held = engine.heldLeadTimes
+        // A speaker playing again lets its held lead go once its renderer publishes one.
+        let replaying = held.keys.contains { engine.activeOutputUIDs.contains($0) } ? [now + 0.5] : []
+        let due = ([briefLoss.nextExpiry].compactMap { $0 } + replaying
+            + held.values.map { $0 + LocalBriefLoss.holdSeconds }).min()
         guard let due else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, due - now) + 0.05) { [weak self] in
             self?.checkBriefLosses()
@@ -267,7 +269,7 @@ extension AppDelegate {
         let heldBefore = briefLoss.held
         briefLoss.noteListing(localListed, enabled: enabledLocal, reference: localReference,
                               now: ProcessInfo.processInfo.systemUptime)
-        if !briefLoss.held.subtracting(heldBefore).isEmpty {
+        if briefLoss.held != heldBefore {   // a speaker lost, or back and soon playing again
             DispatchQueue.main.async { [weak self] in self?.checkBriefLosses() }
         }
         dataSourceWatch.onChange = { [weak self] in self?.pushModel() }

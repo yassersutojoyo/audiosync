@@ -827,6 +827,11 @@ void asc_renderer_set_bluetooth(AscRenderer *renderer, bool bluetooth);
    frames (S230); 0 for any other device or a NULL handle. */
 int64_t asc_renderer_extra_lead_frames(const AscRenderer *renderer);
 
+/* Any thread: the start lead the renderer published for the session lead
+   (S208), in capture-rate frames, into *frames; false, leaving it alone,
+   before it published one or for a NULL handle. */
+bool asc_renderer_start_lead_frames(const AscRenderer *renderer, int64_t *frames);
+
 /*
  * A renderer's start lead kept counting in its ring's session lead after the
  * renderer is gone, for an output whose device went away while it stays

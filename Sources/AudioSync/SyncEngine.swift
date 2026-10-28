@@ -119,6 +119,10 @@ final class StreamEngine {
     /// was lost at.
     var heldLeadTimes: [String: Double] { heldLeads.mapValues { $0.since } }
 
+    /// Whether output `uid` plays again with a renderer that has published
+    /// its start lead (S328).
+    func publishedLead(uid: String) -> Bool { renderers[uid]?.publishedLead ?? false }
+
     /// The hold-back the host now counts for lost speaker `uid` (S328).
     func setHeldLeadDelay(uid: String, ms: Double) {
         heldLeads[uid]?.lead.setHoldBack(ms: ms)

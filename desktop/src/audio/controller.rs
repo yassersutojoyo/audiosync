@@ -57,7 +57,7 @@ use std::time::{Duration, Instant};
 use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
 use audiosync_core::lead::HeldLead;
-use audiosync_core::policy::delay::native_airplay_latency_ms;
+use audiosync_core::policy::delay::{BRIEF_LOSS_HOLD, native_airplay_latency_ms};
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::source_quit::{
     SourceQuitAction, SourceQuitWatch, Streaming, WhenSourceQuits,
@@ -152,10 +152,9 @@ const RESTART_TRIAL_POLLS: u32 = 10;
 
 /// A held start lead (S328) of an output whose device is still listed, so
 /// one that stopped by itself and starts again, ends this many polls after
-/// its renderer stopped at the latest, the 10 s of
-/// [`BRIEF_LOSS_HOLD`](audiosync_core::policy::delay::BRIEF_LOSS_HOLD) at
-/// the UI's two polls a second.
-const BRIEF_LOSS_POLLS: u32 = 20;
+/// its renderer stopped at the latest: [`BRIEF_LOSS_HOLD`] in UI polls.
+const BRIEF_LOSS_POLLS: u32 =
+    (BRIEF_LOSS_HOLD.as_millis() / super::outputs::POLL_PERIOD.as_millis()) as u32;
 
 /// How a running capture is doing.
 #[derive(Clone, Debug, PartialEq, Eq)]

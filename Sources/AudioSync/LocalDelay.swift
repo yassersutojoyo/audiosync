@@ -224,13 +224,17 @@ struct LocalBriefLoss: Equatable {
     /// The switched-on speakers went from `old` to `new`: each one switched
     /// off stops counting at once, also when it is switched on again before
     /// its device is back.
-    mutating func followSwitches(from old: Set<String>, to new: Set<String>) {}
+    mutating func followSwitches(from old: Set<String>, to new: Set<String>) {
+        for uid in old.subtracting(new) { _ = switchedOff(uid) }
+    }
 
     /// Whether the start lead held for lost speaker `uid` (lost at `lostAt`)
-    /// still counts at `now`.
+    /// still counts at `now`: not once it is switched off or the reference,
+    /// still missing after its brief loss ended, listed with a new renderer
+    /// that published its own lead (`publishedAgain`), or 10 s old.
     func keepsLead(of uid: String, lostAt: Double, now: Double, listed: Bool, enabled: Bool, isReference: Bool,
                    publishedAgain: Bool) -> Bool {
-        enabled && !isReference && (listed || held.contains(uid)) && now - lostAt < Self.holdSeconds
+        enabled && !isReference && (listed ? !publishedAgain : held.contains(uid)) && now - lostAt < Self.holdSeconds
     }
 
     /// A session restart (S20): no speaker is held any longer, and the new
