@@ -165,7 +165,7 @@ struct OutputStallRetry {
 
     /// The device refused the start of `uid`: after a stall that is a stall
     /// in a row, tried again at the uptime returned. nil for an output that
-    /// didn't stall, which is switched off as before (S69).
+    /// didn't stall: a refusal stays on (S331), a hard error is switched off (S69).
     mutating func refused(_ uid: String, nowS: Double) -> Double? {
         guard entries[uid] != nil else { return nil }
         let at = nowS + Self.retryEveryS
@@ -185,6 +185,65 @@ struct OutputStallRetry {
             guard let started = entry.startedAtS else { return true }
             return nowS - started < Self.trialS
         }
+    }
+
+    mutating func reset() {
+        entries = [:]
+    }
+}
+
+/// A listed output whose device refuses its start (S331): it stays on and is
+/// tried again every 3 s for as long as the user leaves it on; refused for
+/// 30 s, it counts as lost. Uptime, which stands still while the Mac sleeps.
+/// Main queue only.
+struct OutputRefusalRetry {
+    static let retryEveryS = 3.0
+    static let lostAfterS = 30.0
+
+    /// What the debug log tells, once each.
+    enum Tell: Equatable {
+        case refused
+        case lost
+    }
+
+    struct Step: Equatable {
+        /// The next try, at uptime.
+        var retryAtS: Double
+        var tell: Tell?
+    }
+
+    private struct Entry {
+        var sinceS: Double
+        var retryAtS: Double
+        var lost: Bool
+    }
+
+    private var entries: [String: Entry] = [:]
+
+    mutating func refused(_ uid: String, nowS: Double) -> Step {
+        let at = nowS + Self.retryEveryS
+        guard let was = entries[uid] else {
+            entries[uid] = Entry(sinceS: nowS, retryAtS: at, lost: false)
+            return Step(retryAtS: at, tell: .refused)
+        }
+        let lost = nowS - was.sinceS >= Self.lostAfterS
+        entries[uid] = Entry(sinceS: was.sinceS, retryAtS: at, lost: lost)
+        return Step(retryAtS: at, tell: lost && !was.lost ? .lost : nil)
+    }
+
+    /// Output `uid` started: the seconds its device refused it, nil for one it didn't.
+    mutating func started(_ uid: String, nowS: Double) -> Double? {
+        entries.removeValue(forKey: uid).map { nowS - $0.sinceS }
+    }
+
+    /// The outputs waiting for their next try, which no sync starts yet.
+    func held(nowS: Double) -> Set<String> {
+        Set(entries.filter { $0.value.retryAtS > nowS }.keys)
+    }
+
+    /// Forgets the outputs switched off.
+    mutating func settle(enabled: Set<String>) {
+        entries = entries.filter { enabled.contains($0.key) }
     }
 
     mutating func reset() {

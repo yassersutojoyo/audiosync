@@ -63,6 +63,27 @@ final class OutputRenderer: FadingOutput {
             }
         }
 
+        /// Whether the device refused the start while Core Audio still lists
+        /// it: gone or being rebuilt (a wake, a slow Bluetooth reconnect), or
+        /// held in hog mode by another process. A passing state, so the
+        /// output stays on (S331); any other failure is a hard one (S69).
+        var isRefusal: Bool {
+            switch self {
+            case .unitNotCreated(let status), .outputNotEnabled(let status), .deviceNotBound(let status),
+                 .formatRefused(let status), .callbackNotInstalled(let status), .unitNotInitialized(let status),
+                 .deviceDidNotStart(let status):
+                return Self.refusals.contains(status)
+            case .halUnitMissing, .coreUnavailable, .captureRateTooHigh:
+                return false
+            }
+        }
+
+        private static let refusals: Set<OSStatus> = [
+            OSStatus(kAudioHardwareBadDeviceError), OSStatus(kAudioHardwareBadObjectError),
+            OSStatus(kAudioHardwareBadStreamError), OSStatus(kAudioHardwareNotRunningError),
+            OSStatus(kAudioDevicePermissionsError), OSStatus(kAudioOutputUnitErr_InvalidDevice),
+        ]
+
         /// The status, and its four-character code when all four bytes are printable.
         private static func text(_ status: OSStatus) -> String {
             let code = UInt32(bitPattern: status)
