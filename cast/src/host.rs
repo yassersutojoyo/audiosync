@@ -95,8 +95,9 @@ impl DeviceMemory {
         self.offsets.get(device).copied()
     }
 
+    /// Stores `offset` capped at [`MAX_OFFSET`], as a restart reads it.
     pub fn set_offset(&mut self, device: DeviceId, offset: Duration) {
-        self.offsets.insert(device, offset);
+        self.offsets.insert(device, offset.min(MAX_OFFSET));
     }
 
     fn remember_format(&mut self, device: DeviceId, codec: Codec) -> bool {
