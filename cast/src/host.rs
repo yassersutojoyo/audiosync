@@ -49,6 +49,11 @@ use crate::session::{
 /// How long the worker drives a session between two looks at the command
 /// queue.
 const TICK: Duration = Duration::from_millis(50);
+/// A panic within this long of the one before counts as recurring (C107).
+const PANIC_WINDOW: Duration = Duration::from_secs(1);
+/// The first and the longest pause after a recurring panic.
+const PANIC_PAUSE: Duration = Duration::from_millis(100);
+const MAX_PANIC_PAUSE: Duration = Duration::from_secs(5);
 /// Events waiting for a host that doesn't poll.
 pub const MAX_HOST_EVENTS: usize = 256;
 /// What [`CastHost::shutdown`] waits beyond the teardown budget of C88.
@@ -391,11 +396,24 @@ impl CastHost {
                 .name("cast-host".to_owned())
                 .spawn(move || {
                     let mut worker = Worker::new(inbox, outbox, shared);
+                    let mut pause = Duration::ZERO;
+                    let mut last_panic: Option<Instant> = None;
                     while panic::catch_unwind(AssertUnwindSafe(|| worker.run())).is_err() {
                         worker.recover();
                         if worker.quitting() {
+                            worker.flush();
                             break;
                         }
+                        // A fault that recurs at once would otherwise spin the
+                        // worker at full speed.
+                        let recurring = last_panic.is_some_and(|at| at.elapsed() < PANIC_WINDOW);
+                        pause = if recurring {
+                            (pause * 2).clamp(PANIC_PAUSE, MAX_PANIC_PAUSE)
+                        } else {
+                            Duration::ZERO
+                        };
+                        thread::sleep(pause);
+                        last_panic = Some(Instant::now());
                     }
                 })?
         };

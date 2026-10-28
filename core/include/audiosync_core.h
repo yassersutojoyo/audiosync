@@ -2108,6 +2108,13 @@ bool asc_cast_add_device(AscCast *cast, const char *address);
 bool asc_cast_remove_device(AscCast *cast, const char *id);
 
 /*
+ * Names the device the user selected, by its ID, or none with a NULL or empty
+ * id, whether or not it plays: the list's cap of 128 devices never drops it
+ * (C108). Returns false for a NULL or dead handle, or an ID that doesn't read.
+ */
+bool asc_cast_set_selected(AscCast *cast, const char *id);
+
+/*
  * Takes the next device change, if one is waiting, into *device and returns
  * true. Returns false, leaving *device as it was, when none is waiting or
  * either pointer is NULL. Never waits.

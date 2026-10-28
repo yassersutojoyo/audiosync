@@ -23,7 +23,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
-- A device on the network announcing a flood of fake Google Cast speakers no longer grows the speaker list without end: it keeps up to 128, and the speaker you picked or play to stays. If AudioSync's Google Cast sender fails inside, the speaker's row shows an error and the speaker can be started again, instead of Google Cast going quiet until AudioSync restarts. On the Mac and on Windows.
+- A device on the network announcing a flood of fake Google Cast speakers no longer grows the speaker list without end: it keeps up to 128, and the speaker you play to stays listed. If something goes wrong inside AudioSync's Google Cast sender, the speaker stops with an error on its row and can be started again, instead of Google Cast going quiet until AudioSync restarts. On the Mac and on Windows.
 - A damaged entry in the AirPlay 2 timing cache now costs only that speaker, which goes back to its first-connect timing check, instead of the whole cache. On Windows, a saved Google Cast speakers file that AudioSync can't read is kept as a copy next to it before AudioSync first saves over it, so the delays and formats in it aren't lost.
 - A Google Cast speaker added by address that doesn't answer, for example because it's switched off, no longer counts as online, and it plays once it answers again. AudioSync checks it every 15 seconds. On the Mac and on Windows.
 - A local speaker whose sound starts late catches up in one step within its first 3 seconds, instead of playing late or drifting into place. On the Mac and on Windows.

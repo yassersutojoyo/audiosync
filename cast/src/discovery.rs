@@ -299,6 +299,12 @@ pub enum ListEvent {
     /// Its records went away during a session; it stays listed (C17).
     Offline(DeviceKey),
     Removed(DeviceKey),
+    /// The list was full: `dropped` left it to make room for `added`
+    /// (C108).
+    Displaced {
+        dropped: DeviceKey,
+        added: DeviceKey,
+    },
     Skipped(Skipped),
 }
 
@@ -310,8 +316,9 @@ pub struct DeviceList {
     /// How many times a session opened or closed on each device added by
     /// address.
     session_changes: Vec<(SocketAddr, u64)>,
-    /// The device the user selected, which the cap never drops (C108).
-    kept: Option<DeviceKey>,
+    /// The selected device and the members of the group in a session, which
+    /// the cap never drops (C108).
+    kept: Vec<DeviceKey>,
 }
 
 impl DeviceList {
@@ -319,10 +326,12 @@ impl DeviceList {
         DeviceList::default()
     }
 
-    /// Names the device the user selected, `None` when none is; the cap
-    /// never drops it (C108).
-    pub fn set_kept(&mut self, key: Option<DeviceKey>) {
-        self.kept = key;
+    /// Names the devices the cap never drops (C108): the one the user
+    /// selected, whether or not a session runs, and the members of the
+    /// group in a session.
+    pub fn set_kept(&mut self, keys: impl IntoIterator<Item = DeviceKey>) {
+        self.kept.clear();
+        self.kept.extend(keys);
     }
 
     pub fn entries(&self) -> &[Entry] {
@@ -491,17 +500,17 @@ impl DeviceList {
             entry.online = true;
             return ListEvent::Identified { from, id };
         }
+        let mut dropped = None;
         if self.entries.len() >= MAX_DEVICES {
-            let kept = self.kept;
             let oldest = self.entries.iter().position(|entry| {
                 matches!(entry.key, DeviceKey::Id(_))
                     && !entry.in_session
-                    && Some(entry.key) != kept
+                    && !self.kept.contains(&entry.key)
             });
             let Some(index) = oldest else {
                 return ListEvent::Skipped(Skipped::ListFull);
             };
-            self.entries.remove(index);
+            dropped = Some(self.entries.remove(index).key);
         }
         self.entries.push(Entry {
             key,
@@ -510,7 +519,13 @@ impl DeviceList {
             online: true,
             in_session: false,
         });
-        ListEvent::Added(key)
+        match dropped {
+            Some(dropped) => ListEvent::Displaced {
+                dropped,
+                added: key,
+            },
+            None => ListEvent::Added(key),
+        }
     }
 
     fn removed(&mut self, fullname: &str) -> ListEvent {

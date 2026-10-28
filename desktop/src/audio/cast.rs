@@ -1441,7 +1441,16 @@ impl CastSpeakers {
 
     /// Handles what discovery and the sender reported since the last poll.
     pub fn poll(&mut self) -> Vec<BackendEvent> {
-        self.list.set_kept(self.enabled.map(|id| self.key_of(id)));
+        let selected = self.enabled.map(|id| self.key_of(id));
+        let members = self
+            .attempt
+            .as_ref()
+            .and_then(|attempt| self.members.get(&attempt.device))
+            .into_iter()
+            .flatten()
+            .filter_map(|member| member.id.map(DeviceKey::Id));
+        let kept: Vec<DeviceKey> = selected.into_iter().chain(members).collect();
+        self.list.set_kept(kept);
         for _ in 0..MAX_BROWSE_PER_POLL {
             let Some(event) = self.link.as_mut().and_then(|link| link.poll_browse()) else {
                 break;
@@ -1450,8 +1459,12 @@ impl CastSpeakers {
                 ListEvent::Skipped(_) => {}
                 change => {
                     self.log.log(|| format!("Cast discovery: {change:?}"));
-                    if let ListEvent::Added(DeviceKey::Id(id)) | ListEvent::Identified { id, .. } =
-                        change
+                    if let ListEvent::Added(DeviceKey::Id(id))
+                    | ListEvent::Displaced {
+                        added: DeviceKey::Id(id),
+                        ..
+                    }
+                    | ListEvent::Identified { id, .. } = change
                     {
                         self.log_group(id);
                     }
@@ -2134,6 +2147,26 @@ pub mod tests {
         // One volume, sent to the group's session.
         cast.set_volume(ATTIC, 30.0);
         assert_eq!(fake.state().volumes, [0.3]);
+    }
+
+    #[test]
+    fn a_member_of_the_playing_group_stays_listed_through_a_flood_of_devices() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        fake.report(members(ATTIC, vec![member(KITCHEN, "Kitchen")]));
+        cast.poll();
+        for n in 1..=MAX_DEVICES {
+            fake.announce(&format!("{n:032x}"), &format!("Speaker {n}"), DEVICE_PORT);
+        }
+        cast.poll();
+        let listed: Vec<String> = cast.speakers().into_iter().map(|s| s.id).collect();
+        assert_eq!(listed.len(), MAX_DEVICES);
+        assert!(listed.iter().any(|id| id == KITCHEN));
+        assert!(
+            !listed.iter().any(|id| id == LIVING),
+            "the oldest other one went"
+        );
     }
 
     #[test]

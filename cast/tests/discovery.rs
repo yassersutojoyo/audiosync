@@ -348,17 +348,33 @@ fn a_flood_of_devices_keeps_the_list_at_its_cap() {
     list.set_in_session(playing, true);
     let (selected, event) = numbered(2);
     list.apply(event);
-    list.set_kept(Some(selected));
-    let (oldest, event) = numbered(3);
+    let (member, event) = numbered(3);
+    list.apply(event);
+    list.set_kept([selected, member]);
+    let (oldest, event) = numbered(4);
     list.apply(event);
     let last = 10_002;
-    for n in 4..=last {
-        list.apply(numbered(n).1);
+    let mut dropped = Vec::new();
+    for n in 5..=last {
+        match list.apply(numbered(n).1) {
+            ListEvent::Displaced {
+                dropped: key,
+                added,
+            } => {
+                assert_eq!(added, numbered(n).0);
+                dropped.push(key);
+            }
+            ListEvent::Added(_) => assert!(dropped.is_empty(), "added after the list was full"),
+            other => panic!("{other:?}"),
+        }
     }
     assert_eq!(list.entries().len(), MAX_DEVICES);
+    assert_eq!(dropped.len(), 1 + last as usize - MAX_DEVICES);
+    assert_eq!(dropped[0], oldest);
     for key in [
         playing,
         selected,
+        member,
         DeviceKey::Manual(manual),
         numbered(last).0,
     ] {
