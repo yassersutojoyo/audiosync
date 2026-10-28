@@ -2469,6 +2469,23 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 40.0);
     }
 
+    // covers: C70, C104 (answers come back in send order)
+    #[test]
+    fn a_late_answer_to_a_level_the_drag_passed_again_matches_the_one_sent_first() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in (51..=60).chain((52..60).rev()) {
+            cast.set_volume(KITCHEN, f64::from(position));
+        }
+        // What 100 ms pacing put on the wire, answered in that order.
+        for answer in [0.51, 0.56, 0.6, 0.55, 0.52] {
+            report(&fake, &mut cast, answer);
+        }
+        assert_eq!(shown(&cast, KITCHEN), 52.0);
+    }
+
     #[test]
     fn the_capture_feeds_the_current_session() {
         let (fake, mut cast) = listed();
