@@ -3,8 +3,9 @@ import AppKit
 /// Track info and transport control for scriptable players (Spotify, Music).
 ///
 /// macOS no longer lets third-party apps read the system-wide Now Playing
-/// center, so this talks to the players directly over Apple Events — the first
-/// call triggers the "AudioSync wants to control …" consent prompt
+/// center, so this talks to the players directly over Apple Events. A player
+/// macOS hasn't decided on gets one consent request (`AutomationConsent`),
+/// which raises the "AudioSync wants to control …" prompt
 /// (NSAppleEventsUsageDescription). Scripts run on a background queue, never on
 /// the main thread, so a hung player or a pending consent prompt can't freeze
 /// the menu bar. A player is only ever scripted while it is running: every
@@ -257,6 +258,7 @@ final class NowPlayingMonitor {
     private let scripts = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.nowplaying")
     private var artworkCache: [String: NSImage] = [:]   // "bundleID|title|album" → image
     private var denied: Set<String> = []                 // players refusing our Apple Events
+    private var consent = AutomationConsent()
 
     func startWatching() {
         guard timer == nil else { return }
@@ -313,9 +315,22 @@ final class NowPlayingMonitor {
             var paused: [Track] = []
             var empties: [String: EmptyReadings.Empty] = [:]
             var held = false
-            for bundleID in candidates where Self.isRunning(bundleID) {
-                if !mayAsk, Self.wouldAsk(bundleID) {
+            for bundleID in candidates {
+                let running = Self.isRunning(bundleID)
+                let permission = running ? Self.permission(bundleID) : .unknown
+                switch self.consent.step(bundleID, running: running, permission: permission, mayAsk: mayAsk,
+                                         at: ProcessInfo.processInfo.systemUptime) {
+                case .read: break
+                case .wait: continue
+                case .hold:
                     held = true
+                    continue
+                case .refused:
+                    self.noteRefusal(bundleID, true)
+                    empties[bundleID] = .denied
+                    continue
+                case .ask(let token):
+                    self.requestConsent(bundleID, token: token)
                     continue
                 }
                 switch self.query(bundleID) {
@@ -379,12 +394,34 @@ final class NowPlayingMonitor {
         !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
     }
 
-    /// Whether a script to the running player would raise the Automation
-    /// prompt. Asks macOS without prompting; may block, so scripts queue only.
-    private static func wouldAsk(_ bundleID: String) -> Bool {
+    /// Whether macOS lets AudioSync script the running player. Never prompts;
+    /// may block, so scripts queue only.
+    private static func permission(_ bundleID: String) -> AutomationConsent.Permission {
         let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
-        guard let desc = target.aeDesc else { return false }
-        return AEDeterminePermissionToAutomateTarget(desc, typeWildCard, typeWildCard, false) == wouldRequireConsent
+        return withExtendedLifetime(target) { () -> AutomationConsent.Permission in
+            guard let desc = target.aeDesc else { return .unknown }
+            let status = AEDeterminePermissionToAutomateTarget(desc, typeWildCard, typeWildCard, false)
+            return AutomationConsent.permission(status: Int(status))
+        }
+    }
+
+    /// Scripts queue. Raises macOS's prompt and waits for the user's answer
+    /// on its own thread, with no timeout: one would take the prompt down (S336).
+    private func requestConsent(_ bundleID: String, token: Int) {
+        DebugTrace.log("Now Playing: asking macOS whether AudioSync may control \(bundleID)")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
+            let status = withExtendedLifetime(target) { () -> OSStatus in
+                guard let desc = target.aeDesc else { return -1 }
+                return AEDeterminePermissionToAutomateTarget(desc, AEEventClass(kAECoreSuite), AEEventID(kAEGetData), true)
+            }
+            DebugTrace.log("Now Playing: the consent request for \(bundleID) returned \(status)")
+            guard let self else { return }
+            self.scripts.async {
+                self.consent.ended(token, at: ProcessInfo.processInfo.systemUptime)
+                DispatchQueue.main.async { if self.isRunning { self.refresh() } }
+            }
+        }
     }
 
     private func query(_ bundleID: String) -> Answer {
@@ -489,13 +526,88 @@ final class NowPlayingMonitor {
         let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
         let code = error?[NSAppleScript.errorNumber] as? Int
         if let error, command || !Self.meansNoTrack(code) { DebugTrace.log("[AudioSync] AppleScript error: \(error)") }
-        let refused = code == Self.notPermitted
-        let changed = refused ? denied.insert(target).inserted
-            : error == nil ? denied.remove(target) != nil : false
+        if code == Self.notPermitted {
+            noteRefusal(target, true)
+        } else if error == nil {
+            noteRefusal(target, false)
+        }
+        return error == nil ? result : nil
+    }
+
+    /// Scripts queue: macOS refuses (or allows again) AudioSync's Apple Events to `target`.
+    private func noteRefusal(_ target: String, _ refused: Bool) {
+        let changed = refused ? denied.insert(target).inserted : denied.remove(target) != nil
         if changed {
             DispatchQueue.main.async { [weak self] in self?.onAutomationDenied?(target, refused) }
         }
-        return error == nil ? result : nil
+    }
+}
+
+/// Whether Now Playing reads a player, asks macOS for consent to script it,
+/// or leaves it alone (S336). A reading never asks: macOS takes its prompt
+/// down when the reading's Apple Event times out, and the next reading raised it again.
+struct AutomationConsent {
+    enum Permission: Equatable { case allowed, denied, undecided, unknown }
+
+    enum Step: Equatable {
+        case read
+        /// Denied: nothing is sent, and the player gives no reading.
+        case refused
+        /// Undecided, and the user hasn't read AudioSync's explanation yet.
+        case hold
+        case wait
+        /// Make consent request `token` and report its end to `ended`.
+        case ask(Int)
+    }
+
+    /// The quiet span after a request ends, so a prompt can't flicker even
+    /// when macOS returns without asking.
+    static let askGap: TimeInterval = 10
+
+    private var pending: (app: String, token: Int)?
+    private var quietUntil: TimeInterval = -.infinity
+    private var lastToken = 0
+
+    /// An `AEDeterminePermissionToAutomateTarget` status.
+    static func permission(status: Int) -> Permission {
+        switch status {
+        case 0: return .allowed
+        case NowPlayingMonitor.notPermitted: return .denied
+        case Int(NowPlayingMonitor.wouldRequireConsent): return .undecided
+        default: return .unknown
+        }
+    }
+
+    /// One poll's verdict for `app`, asked for every candidate player, running
+    /// or not, so a quit ends its pending request.
+    mutating func step(_ app: String, running: Bool, permission: Permission, mayAsk: Bool,
+                       at now: TimeInterval) -> Step {
+        guard running else {
+            if pending?.app == app { end(at: now) }
+            return .wait
+        }
+        if pending?.app == app { return .wait }
+        switch permission {
+        case .allowed, .unknown: return .read
+        case .denied: return .refused
+        case .undecided:
+            guard mayAsk else { return .hold }
+            guard pending == nil, now >= quietUntil else { return .wait }
+            lastToken += 1
+            pending = (app, lastToken)
+            return .ask(lastToken)
+        }
+    }
+
+    /// Consent request `token` returned; one a quit already ended changes nothing.
+    mutating func ended(_ token: Int, at now: TimeInterval) {
+        guard pending?.token == token else { return }
+        end(at: now)
+    }
+
+    private mutating func end(at now: TimeInterval) {
+        pending = nil
+        quietUntil = now + Self.askGap
     }
 }
 
