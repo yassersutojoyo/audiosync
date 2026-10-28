@@ -655,21 +655,24 @@ fn the_default_input_is_recorded() {
     run("pw-cli", &["destroy", &node_id("mic-feed").to_string()]);
 }
 
-// covers: S14
-#[test]
-#[ignore = "needs the CI job's PipeWire daemon"]
-fn an_input_plays_the_channel_pair_chosen() {
+/// The capture's peak on pair 3-4 of a four-channel source at `positions`,
+/// with a tone fed to its first channel only, then to its third as well.
+fn pair_peaks(name: &str, positions: [&str; 4]) -> (f32, f32) {
+    let feed = format!("pair-feed-{name}");
     run(
         "pw-cli",
         &[
             "create-node",
             "adapter",
-            "{ factory.name=support.null-audio-sink node.name=pair-feed media.class=Audio/Source/Virtual object.linger=true audio.position=[AUX0 AUX1 AUX2 AUX3] }",
+            &format!(
+                "{{ factory.name=support.null-audio-sink node.name={feed} media.class=Audio/Source/Virtual object.linger=true audio.position=[{}] }}",
+                positions.join(" ")
+            ),
         ],
     );
     wait();
     let graph = Registry::start().unwrap().graph().unwrap();
-    let (_, node) = graph.named("pair-feed").expect("pair-feed is listed");
+    let (_, node) = graph.named(&feed).expect("the source is listed");
     let serial = node.prop("object.serial").unwrap().to_owned();
     let ring = Ring::for_rate(SESSION_RATE).unwrap();
     let (_control, processor) = equalizer();
@@ -685,15 +688,17 @@ fn an_input_plays_the_channel_pair_chosen() {
         Feeds::default(),
     )
     .unwrap();
-    let path = tone("pair", 440.0, 0.5, 10.0);
-    detached(&format!(
-        "pw-play --target 0 -P '{{ node.name = ci-pair-tone }}' {}",
+    let path = tone(&feed, 440.0, 0.5, 10.0);
+    let tone_node = format!("ci-tone-{name}");
+    let player = detached(&format!(
+        "pw-play --target 0 -P '{{ node.name = {tone_node} }}' {}",
         path.display()
     ));
     std::thread::sleep(Duration::from_millis(300));
+    let source = format!("{tone_node}:output_FL");
     run(
         "pw-link",
-        &["ci-pair-tone:output_FL", "pair-feed:input_AUX0"],
+        &[&source, &format!("{feed}:input_{}", positions[0])],
     );
     wait();
     ring.take_peak();
@@ -701,7 +706,7 @@ fn an_input_plays_the_channel_pair_chosen() {
     let outside = ring.take_peak();
     run(
         "pw-link",
-        &["ci-pair-tone:output_FL", "pair-feed:input_AUX2"],
+        &[&source, &format!("{feed}:input_{}", positions[2])],
     );
     wait();
     ring.take_peak();
@@ -709,9 +714,27 @@ fn an_input_plays_the_channel_pair_chosen() {
     let inside = ring.take_peak();
     assert_eq!(capture.state(), CaptureState::Running);
     drop(capture);
-    run("pw-cli", &["destroy", &node_id("pair-feed").to_string()]);
-    assert!(outside < 0.001, "peak {outside} with only channel 1 fed");
-    assert!(inside > 0.1, "peak {inside} with channel 3 fed");
+    kill(player);
+    run("pw-cli", &["destroy", &node_id(&feed).to_string()]);
+    (outside, inside)
+}
+
+// covers: S14
+#[test]
+#[ignore = "needs the CI job's PipeWire daemon"]
+fn an_input_plays_the_channel_pair_chosen() {
+    let (outside, inside) = pair_peaks("aux", ["AUX0", "AUX1", "AUX2", "AUX3"]);
+    assert!(outside < 0.001, "peak {outside} with only AUX0 fed");
+    assert!(inside > 0.1, "peak {inside} with AUX2 fed");
+}
+
+// covers: S14
+#[test]
+#[ignore = "needs the CI job's PipeWire daemon"]
+fn a_named_input_plays_its_channels_in_order() {
+    let (outside, inside) = pair_peaks("named", ["FL", "FR", "RL", "RR"]);
+    assert!(outside < 0.001, "peak {outside} with only FL fed");
+    assert!(inside > 0.1, "peak {inside} with RL fed");
 }
 
 #[test]

@@ -139,7 +139,7 @@ pub fn linux_summary(
             text.lines()
                 .find_map(|line| line.strip_prefix("PRETTY_NAME="))
         })
-        .map(|value| value.trim().trim_matches('"'))
+        .map(|value| value.trim().trim_matches(['"', '\'']))
         .filter(|name| !name.is_empty())
         .unwrap_or("Linux");
     let kernel = kernel.map_or_else(
@@ -985,6 +985,10 @@ mod tests {
                 "21.40"
             ),
             "Ubuntu 24.04.1 LTS, kernel 6.8.0-45-generic, x86_64, local time 21.40"
+        );
+        assert_eq!(
+            linux_summary(Some("PRETTY_NAME='Arch Linux'\n"), None, "x86_64", "08.00"),
+            "Arch Linux, version unknown, x86_64, local time 08.00"
         );
         assert_eq!(
             linux_summary(None, None, "aarch64", "07.05"),
