@@ -21,6 +21,7 @@
 # with the same key, and scripts/check_appcast.py checks the result. Without
 # them it stops, since Windows users would never see the release; --mac-only
 # writes a Mac-only appcast instead and refuses when Windows zips are there.
+# The final check gets the same choice, so it fails an appcast missing either OS.
 # covers: S311
 #
 # Environment:
@@ -121,7 +122,7 @@ if [ "$mac_only" = no ]; then
     || die "appcast.xml with the Windows items fails the S311 checks above"
   signed_for="$(basename "$zip") and both Windows zips"
 else
-  python3 -I scripts/check_appcast.py "$work/archives/appcast.xml" "$version" "$zip" \
+  python3 -I scripts/check_appcast.py --mac-only "$work/archives/appcast.xml" "$version" "$zip" \
     || die "appcast.xml fails the S311 checks above"
   signed_for="$(basename "$zip") only (--mac-only)"
 fi
