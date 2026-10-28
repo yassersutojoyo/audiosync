@@ -815,6 +815,29 @@ impl Driver {
         }
     }
 
+    /// A session that hasn't connected and lacks an address discovery now
+    /// lists starts again on the current addresses (P228).
+    pub(super) fn restart_unconnected(&mut self, key: &DeviceKey, now: Instant) {
+        let Some(speaker) = self.speakers.get(key) else {
+            return;
+        };
+        let Phase::Ap2(active) = &speaker.phase else {
+            return;
+        };
+        let tried = active.session.addresses();
+        if active.session.state() != Ap2State::Connecting
+            || speaker
+                .device
+                .airplay_socket_addrs()
+                .iter()
+                .all(|address| tried.contains(address))
+        {
+            return;
+        }
+        self.end_session(key, Phase::Idle);
+        self.start_session(key, StartKind::Host, now);
+    }
+
     /// Closes, without a TEARDOWN, a session that took PTP over an address
     /// outside the service's family and starts the speaker again: with the
     /// service moved to that family when no other session uses it and the

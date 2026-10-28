@@ -634,6 +634,11 @@ impl Ap2Session {
         self.remote
     }
 
+    /// The addresses the session connects to, in order (P17).
+    pub fn addresses(&self) -> &[SocketAddr] {
+        &self.config.addresses
+    }
+
     /// The `shk` the stream SETUP carries (P156).
     pub(crate) fn stream_key(&self) -> StreamKey {
         StreamKey::new(*self.stream_key)

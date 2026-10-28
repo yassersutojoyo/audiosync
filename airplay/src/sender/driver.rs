@@ -2412,6 +2412,7 @@ impl Driver {
                         speaker.device = (*device).clone();
                     }
                     let key = device.key.clone();
+                    self.restart_unconnected(&key, Instant::now());
                     // A receiver that restarted or changed its settings may
                     // answer AirPlay 1 differently when it comes back (P218).
                     if device.raop.is_none() {
