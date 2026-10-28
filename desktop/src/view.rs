@@ -991,7 +991,7 @@ impl App {
         app.connect_guide();
         app.connect_help();
         app.connect_remote();
-        app.restore_view();
+        app.restore_view(true);
         app.restore_remote();
         app.launch_update_check();
         app.refresh();
@@ -1173,13 +1173,20 @@ impl App {
     fn poll(&self) {
         let changed = self.backend.borrow_mut().poll();
         if self.backend.borrow_mut().take_view_restored() {
-            // The sender keeps the AirPlay 2 path it started with.
-            let airplay2_at_launch = self.ui.borrow().airplay2_at_launch;
-            self.restore_view();
+            let (remote, airplay2, airplay2_at_launch) = {
+                let ui = self.ui.borrow();
+                (ui.remote, ui.airplay2_experimental, ui.airplay2_at_launch)
+            };
+            // The window keeps its frame, and the sender its AirPlay 2 path.
+            self.restore_view(false);
             self.ui.borrow_mut().airplay2_at_launch = airplay2_at_launch;
-            let airplay2 = self.ui.borrow().airplay2_experimental;
-            self.set_airplay2_experimental(airplay2);
-            self.restore_remote_again();
+            let read = self.ui.borrow().airplay2_experimental;
+            if read != airplay2 {
+                self.set_airplay2_experimental(read);
+            }
+            if self.ui.borrow().remote != remote {
+                self.restore_remote_again();
+            }
         }
         if changed {
             self.refresh();
@@ -3312,7 +3319,8 @@ impl App {
     /// Virtual Devices, View > Appearance, and the main window's size and
     /// place, fitted to the monitor it opens on (the one at its saved place,
     /// else the primary one, where it opens centered), maximized when it was.
-    fn restore_view(&self) {
+    /// Without `with_frame` the main window keeps its size and place.
+    fn restore_view(&self, with_frame: bool) {
         let saved = self.backend.borrow().view_settings();
         let airplay2_auto = self.backend.borrow().airplay2_auto();
         self.main.set_airplay2_auto(airplay2_auto);
@@ -3326,7 +3334,7 @@ impl App {
         self.ui.borrow_mut().last_update_check = saved.last_update_check;
         self.ui.borrow_mut().update_record = saved.update_record.clone();
         self.apply_appearance(saved.appearance);
-        let Some(saved_frame) = saved.window else {
+        let (true, Some(saved_frame)) = (with_frame, saved.window) else {
             return;
         };
         let on_a_monitor = crate::platform::is_on_a_monitor(saved_frame.x, saved_frame.y);

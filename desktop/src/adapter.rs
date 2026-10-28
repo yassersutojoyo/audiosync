@@ -773,7 +773,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         for (endpoint_id, pair) in &saved.input_pairs {
             self.audio.set_input_pair(endpoint_id, *pair);
         }
-        self.input_pairs = saved.input_pairs.clone();
+        // A pair chosen while the file was held (S212) stays unless the file names that input.
+        self.input_pairs.extend(saved.input_pairs.clone());
         self.when_source_quits = WhenSourceQuits::from_stored(Some(&saved.when_source_quits));
         self.audio.set_when_source_quits(self.when_source_quits);
         if !self.delays_to_migrate {
@@ -824,7 +825,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.equalizer = saved.equalizer.settings();
         self.audio.set_equalizer(self.equalizer);
         self.equalizer_curves = settings::clamp_curves(&saved.equalizer_curves);
-        self.cast_addresses = saved.cast_addresses.clone();
+        let added = std::mem::replace(&mut self.cast_addresses, saved.cast_addresses.clone());
+        for address in added {
+            if !self.cast_addresses.contains(&address) {
+                self.cast_addresses.push(address);
+            }
+        }
         for address in saved
             .cast_addresses
             .iter()
