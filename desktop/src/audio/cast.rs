@@ -1338,6 +1338,10 @@ impl CastSpeakers {
             .attempt
             .as_mut()
             .is_some_and(|attempt| !std::mem::replace(&mut attempt.heard_volume, true));
+        if first {
+            // The sender sends no level before the device's first status.
+            self.unanswered.clear();
+        }
         // Answers come back in send order, so the oldest copy of a level a
         // drag passed twice is the one this answers.
         let answered = self
