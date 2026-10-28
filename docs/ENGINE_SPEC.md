@@ -739,7 +739,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | presets: the notice goes once its preset is current or every member it names is on | S265 |
 | presets: with no member present nothing changes and only the notice posts | S252, S265 |
 | presets: a recall from the app or the phone shows no alert | S120, S266 |
-| presets: the current mark follows a band change | S264 |
+| presets: the current mark follows a band change (for S259 the mark is worked out again after a band change; publishing on every model push is not checked) | S264, S259 |
 | presets: no presets, the submenu holds No Presets and the panel row is hidden | S260, S263 |
 | presets: the preset texts | S269 |
 | zones: a local speaker's gain goes through its zone, and no zone is the gain of before | S71, S249 |
