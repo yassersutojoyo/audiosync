@@ -496,6 +496,21 @@ pub enum BackendEvent {
         /// The endpoint ID.
         id: String,
     },
+    /// An output's stream stopped taking frames again before it had played
+    /// five seconds since the last time (S326). The output stays on, its
+    /// device still listed, and is opened again every ten seconds;
+    /// [`BackendEvent::OutputPlaysAgain`] tells once a stream plays.
+    OutputStalled {
+        /// The endpoint ID.
+        id: String,
+    },
+    /// An output reported stalled has played five seconds since it was
+    /// opened again, or no longer waits: it was switched off or streaming
+    /// stopped.
+    OutputPlaysAgain {
+        /// The endpoint ID.
+        id: String,
+    },
     /// Playback stopped on its own.
     Stopped {
         /// Why it stopped.

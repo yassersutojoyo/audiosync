@@ -90,7 +90,7 @@ use super::outputs::{
 };
 use super::pairings::PairingStore;
 use super::process::ProcessTable;
-use super::render::WakeCounts;
+use super::render::{Stall, WakeCounts};
 use super::routing::{
     self, Captured, DirectPath, DirectReason, EndpointAudio, EndpointVolume, PlayedOn,
 };
@@ -216,6 +216,12 @@ pub trait RendererHandle {
     /// zero for an output that doesn't count them.
     fn wakes(&self) -> WakeCounts {
         WakeCounts::default()
+    }
+
+    /// Why its stream ended when it stopped taking frames (S326); `None`
+    /// for any other end, and for an output that doesn't watch for it.
+    fn stall(&self) -> Option<Stall> {
+        None
     }
 }
 
@@ -3429,6 +3435,15 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::OutputFree { id } => {
             format!("output {} no longer waits for its device", label(names, id))
         }
+        BackendEvent::OutputStalled { id } => {
+            format!(
+                "output {} stalled again soon after a reopen",
+                label(names, id)
+            )
+        }
+        BackendEvent::OutputPlaysAgain { id } => {
+            format!("output {} no longer counts as stalled", label(names, id))
+        }
         BackendEvent::Stopped { reason } => format!("stopped: {}", describe_stop(reason)),
         BackendEvent::SwitchedToSystem => {
             "the captured app quit: the whole system is the source now".to_owned()
@@ -3521,6 +3536,7 @@ mod tests {
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
     use crate::audio::now_playing::fake::{FakeReader, shared_labels, track};
     use crate::audio::outputs::{EndpointProperties, EndpointReading};
+    use crate::audio::render::StallSign;
     use crate::audio::routing::{DirectPath, DirectReason, HOLD_CHECKS};
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
 
@@ -4877,6 +4893,105 @@ mod tests {
         );
     }
 
+    /// A stream that took no frame for 2 s while its buffer stayed full.
+    const FULL_STALL: Stall = Stall {
+        span: Duration::from_secs(2),
+        sign: StallSign::FullPadding,
+    };
+
+    // covers: S326
+    #[test]
+    fn a_stalled_output_reopens_at_the_next_poll_with_a_debug_line() {
+        let (mut backend, log, dir) = logged_backend("controller-stall");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let hold_back = backend.policy().hold_back_ms(SPEAKERS);
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        assert!(backend.poll().is_empty(), "a first stall posts no notice");
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES],
+            "the other output isn't opened again"
+        );
+        assert_eq!(
+            backend.policy().hold_back_ms(SPEAKERS),
+            hold_back,
+            "nor re-timed"
+        );
+        assert!(backend.policy().settings(HEADPHONES).enabled);
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "output \"Headphones\" (headphones) stalled: it took no frame for 2000 ms, its \
+               buffer stayed full; it is opened again",
+            ],
+        );
+
+        // Once it has played five seconds again, a stall is a first one.
+        poll_quietly(&mut backend, RESTART_TRIAL_POLLS);
+        backend.stall_renderer(
+            HEADPHONES,
+            Stall {
+                sign: StallSign::FrozenClock,
+                ..FULL_STALL
+            },
+        );
+        assert!(backend.poll().is_empty());
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "output \"Headphones\" (headphones) stalled: it took no frame for 2000 ms, its \
+               device clock stood still; it is opened again",
+            ],
+        );
+    }
+
+    // covers: S326
+    #[test]
+    fn a_second_stall_in_a_row_posts_the_lost_notice_and_keeps_the_output_on() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        poll_quietly(&mut backend, 1);
+        // It stalls again a second and a half after the reopen.
+        poll_quietly(&mut backend, 3);
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        let stalled = BackendEvent::OutputStalled {
+            id: HEADPHONES.to_owned(),
+        };
+        assert_eq!(backend.poll(), std::slice::from_ref(&stalled));
+        assert!(backend.policy().settings(HEADPHONES).enabled, "it stays on");
+        assert_eq!(playing(&backend), [SPEAKERS]);
+
+        // Opened again ten seconds later; a stall soon after that is told
+        // no more, and waits the same.
+        poll_quietly(&mut backend, STALL_RETRY_POLLS - 1);
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        assert!(backend.poll().is_empty(), "told once");
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        poll_quietly(&mut backend, STALL_RETRY_POLLS);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+
+        // Five seconds of play clear the notice.
+        poll_quietly(&mut backend, RESTART_TRIAL_POLLS - 1);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputPlaysAgain {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+        poll_quietly(&mut backend, 2);
+        assert_eq!(
+            backend.driver().renderers_started().len(),
+            2 + 3,
+            "the speakers were never opened again"
+        );
+    }
+
     #[test]
     fn the_session_ends_when_the_captured_app_quits() {
         let mut backend = backend();
@@ -4943,6 +5058,101 @@ mod tests {
         assert!(backend.driver().capture_running());
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+    }
+
+    // covers: S329
+    #[test]
+    fn a_capture_device_gone_reopens_only_the_capture_and_keeps_every_output_running() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        let id = id_of(&kitchen);
+        backend.set_airplay_enabled(&id, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let ring = backend.driver().capture_ring().expect("a ring");
+        fake.take_calls();
+
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        assert!(!backend.driver().capture_running(), "the capture is let go");
+        assert_eq!(
+            playing(&backend),
+            [HEADPHONES, SPEAKERS],
+            "the outputs play silence meanwhile"
+        );
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_running());
+        assert!(
+            Arc::ptr_eq(&backend.driver().capture_ring().expect("a ring"), &ring),
+            "the ring's timeline goes on"
+        );
+        assert!(backend.driver().capture_feeds_airplay());
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS],
+            "no output started again"
+        );
+        assert_eq!(backend.driver().renderers_faded(), 0);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+        let calls = fake.take_calls();
+        assert!(
+            !calls
+                .iter()
+                .any(|call| matches!(call, Call::Remove(_) | Call::Pause)),
+            "the AirPlay speaker stays in the stream: {calls:?}"
+        );
+        assert_eq!(backend.enabled_airplay(), [id]);
+    }
+
+    // covers: S329
+    #[test]
+    fn a_capture_back_in_another_format_restarts_the_session() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let ring = backend.driver().capture_ring().expect("a ring");
+        backend.fail_capture(BackendError::DeviceGone);
+        // Windows audio comes back at 44.1 kHz.
+        backend.set_capture_setup(crate::audio::capture::CAPTURE_ATTEMPTS[3]);
+        poll_quietly(&mut backend, 1 + RESTART_DELAY_POLLS);
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            3,
+            "the reopened capture gives way to a new session's"
+        );
+        assert!(backend.driver().capture_running());
+        assert!(
+            !Arc::ptr_eq(&backend.driver().capture_ring().expect("a ring"), &ring),
+            "a new ring"
+        );
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES, SPEAKERS]
+        );
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+    }
+
+    // covers: S329, S21
+    #[test]
+    fn a_capture_that_fails_its_last_try_stops_as_before() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        poll_quietly(&mut backend, RESTART_TRIES * RESTART_DELAY_POLLS);
+        assert_eq!(
+            playing(&backend),
+            [HEADPHONES, SPEAKERS],
+            "the outputs play on through the tries"
+        );
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(BackendError::DeviceGone),
+            }]
+        );
+        assert_eq!(backend.driver().capture_attempts(), 1 + 5);
+        assert_eq!(backend.running_source(), None);
+        assert!(playing(&backend).is_empty());
     }
 
     #[test]

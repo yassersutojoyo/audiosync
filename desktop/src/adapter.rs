@@ -3498,6 +3498,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     self.post(speaker_subject(&id), NoticeMessage::SpeakerLost { speaker });
                 }
             }
+            // Its stream stalled twice in a row while its device stays
+            // listed (S326): it stays on and is opened again every ten
+            // seconds, and the notice clears once a stream plays.
+            BackendEvent::OutputStalled { id } => {
+                let speaker = self.output_name(&id);
+                self.post(speaker_subject(&id), NoticeMessage::SpeakerLost { speaker });
+            }
+            BackendEvent::OutputPlaysAgain { id } => {
+                self.clear_if(speaker_subject(&id), |message| {
+                    matches!(message, NoticeMessage::SpeakerLost { .. })
+                });
+            }
             BackendEvent::OutputFailed { id, .. } => {
                 self.busy.remove(&id);
                 self.output_failed(&id, false);
