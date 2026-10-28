@@ -86,7 +86,8 @@ use super::now_playing::{Follow, SharedLabels, TrackInfo, TrackReader, TrackSour
 #[cfg(test)]
 use super::outputs::OutputParams;
 use super::outputs::{
-    AirPlay, Endpoint, EndpointReading, Listing, ListingNote, OutputPolicy, StreamSetup,
+    AirPlay, Endpoint, EndpointReading, Listing, ListingNote, OutputPolicy, RenderFormat,
+    StreamSetup,
 };
 use super::pairings::PairingStore;
 use super::process::ProcessTable;
@@ -223,6 +224,13 @@ pub trait RendererHandle {
     fn stall(&self) -> Option<Stall> {
         None
     }
+
+    /// Whether Windows said its stream was disconnected because its format
+    /// changed or its device went away (S330), which the render thread may
+    /// only notice at its next wait.
+    fn invalidated(&self) -> bool {
+        false
+    }
 }
 
 /// The platform calls the backend makes.
@@ -248,6 +256,19 @@ pub trait Driver {
 
     /// Whether outputs may have changed since the last call.
     fn outputs_changed(&mut self) -> bool;
+
+    /// The render endpoints whose device format Windows said changed since
+    /// the last call, each once (S330). Windows may say so for other
+    /// reasons too.
+    fn format_notices(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// The format an output on the endpoint `id` would open in now, from its
+    /// device's current mix format (S330).
+    fn output_format(&mut self, _id: &str) -> Result<RenderFormat, BackendError> {
+        Err(BackendError::UnsupportedFormat)
+    }
 
     /// A snapshot of the active render endpoints for the double-audio check
     /// ([`routing`](super::routing)): each one's name, whether it is the
@@ -5458,6 +5479,151 @@ mod tests {
         assert_eq!(backend.driver().capture_attempts(), 1 + 5);
         assert_eq!(backend.running_source(), None);
         assert!(playing(&backend).is_empty());
+    }
+
+    const AT_44_1: RenderFormat = RenderFormat {
+        rate: 44_100,
+        ..crate::audio::mock::MOCK_STREAM.format
+    };
+
+    // covers: S330
+    #[test]
+    fn a_format_notice_for_a_playing_output_reopens_it_in_the_new_format_in_the_same_poll() {
+        let (mut backend, log, dir) = logged_backend("controller-format-notice");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.change_output_format(HEADPHONES, AT_44_1);
+        assert!(backend.poll().is_empty(), "no notice");
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES],
+            "only that output opens again"
+        );
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(backend.playing_format(HEADPHONES), Some(AT_44_1));
+        assert!(
+            backend.driver().renderers_faded() == 0,
+            "an invalidated stream has no fade to play"
+        );
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "output \"Headphones\" (headphones): its format changed from 48000 Hz, 2 ch (mask \
+                 0x3) to 44100 Hz, 2 ch (mask 0x3); it opens again in the new format",
+                "output \"Headphones\" (headphones) started: 44100 Hz",
+            ],
+        );
+        poll_quietly(&mut backend, 2);
+        assert_eq!(backend.driver().renderers_started().len(), 3);
+    }
+
+    // covers: S330
+    #[test]
+    fn a_format_notice_that_changes_nothing_leaves_the_output_playing() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.notify_output_format(HEADPHONES);
+        poll_quietly(&mut backend, 2);
+        assert_eq!(backend.driver().renderers_started(), [HEADPHONES, SPEAKERS]);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S330, S177
+    #[test]
+    fn a_format_reopen_never_moves_another_outputs_hold_back() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let hold_backs = |backend: &MockBackend| {
+            [HEADPHONES, SPEAKERS].map(|id| backend.policy().hold_back_ms(id))
+        };
+        let before = hold_backs(&backend);
+        // A Bluetooth headset moving to its hands-free profile: its session
+        // says so before the render thread notices, in the same format here.
+        backend.disconnect_session(HEADPHONES);
+        assert!(backend.poll().is_empty(), "no notice");
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES]
+        );
+        assert_eq!(hold_backs(&backend), before);
+        backend.change_output_format(SPEAKERS, AT_44_1);
+        assert!(backend.poll().is_empty(), "no notice");
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES, SPEAKERS]
+        );
+        assert_eq!(hold_backs(&backend), before);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    fn microphone(backend: &mut MockBackend) -> SourceId {
+        backend.connect_input("mic", "Microphone", "USB");
+        SourceId::Input {
+            endpoint_id: "mic".to_owned(),
+        }
+    }
+
+    // covers: S333
+    #[test]
+    fn a_capture_start_on_a_busy_input_fails_with_the_busy_reason() {
+        let mut backend = backend();
+        let source = microphone(&mut backend);
+        backend.refuse_captures(Some(BackendError::DeviceBusy));
+        assert_eq!(backend.start(&source), Err(BackendError::DeviceBusy));
+        assert_eq!(backend.running_source(), None);
+        assert!(playing(&backend).is_empty());
+    }
+
+    // covers: S333, S329
+    #[test]
+    fn a_lost_capture_whose_input_is_busy_keeps_trying_every_3_s() {
+        let mut backend = backend();
+        let source = microphone(&mut backend);
+        backend.start(&source).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceBusy));
+        // The first try, then about 40 s of busy answers: far past the 5
+        // tries of a lost capture.
+        let busy_tries = 13;
+        poll_quietly(
+            &mut backend,
+            1 + RESTART_DELAY_POLLS + busy_tries * BUSY_RETRY_POLLS,
+        );
+        assert_eq!(
+            backend.driver().capture_attempts(),
+            2 + busy_tries as usize,
+            "one try every BUSY_RETRY_POLLS"
+        );
+        assert_eq!(backend.running_source(), Some(source));
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        backend.refuse_captures(None);
+        poll_quietly(&mut backend, BUSY_RETRY_POLLS);
+        assert!(backend.driver().capture_running());
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S333, S329
+    #[test]
+    fn a_busy_input_that_goes_away_gets_the_usual_tries() {
+        let mut backend = backend();
+        let source = microphone(&mut backend);
+        backend.start(&source).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceBusy));
+        poll_quietly(&mut backend, 1 + RESTART_DELAY_POLLS);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        // The busy answer took none of the 5 tries.
+        poll_quietly(
+            &mut backend,
+            BUSY_RETRY_POLLS + (RESTART_TRIES - 1) * RESTART_DELAY_POLLS - 1,
+        );
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(BackendError::DeviceGone),
+            }]
+        );
+        assert_eq!(backend.driver().capture_attempts(), 1 + 1 + 5);
+        assert_eq!(backend.running_source(), None);
     }
 
     #[test]

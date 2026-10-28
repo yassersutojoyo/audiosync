@@ -204,6 +204,9 @@ pub struct MockRenderer {
     hold_fades: Arc<AtomicBool>,
     stop_requested: bool,
     stall: Arc<StallSlot>,
+    /// How its stream was opened: in its device's format then.
+    setup: StreamSetup,
+    invalidated: Arc<AtomicBool>,
 }
 
 impl Drop for MockRenderer {
@@ -220,6 +223,10 @@ struct RendererLink {
     ended: Arc<AtomicBool>,
     dropped: Arc<AtomicBool>,
     stall: Arc<StallSlot>,
+    /// The format its stream was opened in.
+    format: RenderFormat,
+    /// Set when its audio session says it was disconnected.
+    invalidated: Arc<AtomicBool>,
 }
 
 impl RendererLink {
@@ -246,11 +253,15 @@ impl RendererHandle for MockRenderer {
     }
 
     fn setup(&self) -> Option<StreamSetup> {
-        Some(MOCK_STREAM)
+        Some(self.setup)
     }
 
     fn stall(&self) -> Option<Stall> {
         self.stall.get()
+    }
+
+    fn invalidated(&self) -> bool {
+        self.invalidated.load(Ordering::Relaxed)
     }
 }
 
@@ -268,6 +279,11 @@ pub struct MockDriver {
     changed: bool,
     listing_error: Option<BackendError>,
     output_errors: BTreeMap<String, BackendError>,
+    /// The mix formats of the outputs whose device isn't in
+    /// [`MOCK_STREAM`]'s format.
+    output_formats: BTreeMap<String, RenderFormat>,
+    /// The outputs whose device format Windows said changed, not yet taken.
+    format_notices: Vec<String>,
     capture_error: Option<BackendError>,
     /// The error only the next capture start fails with.
     next_capture_error: Option<BackendError>,
@@ -329,6 +345,8 @@ impl MockDriver {
             changed: false,
             listing_error: None,
             output_errors: BTreeMap::new(),
+            output_formats: BTreeMap::new(),
+            format_notices: Vec::new(),
             capture_error: None,
             next_capture_error: None,
             capture_setup: CAPTURE_ATTEMPTS[0],
@@ -463,6 +481,14 @@ impl MockDriver {
         self.volumes.get(id).copied().unwrap_or(Some(FULL_VOLUME))
     }
 
+    /// The mix format of output `id`'s device.
+    fn device_format(&self, id: &str) -> RenderFormat {
+        self.output_formats
+            .get(id)
+            .copied()
+            .unwrap_or(MOCK_STREAM.format)
+    }
+
     fn is_connected(&self, id: &str) -> bool {
         self.outputs.iter().any(|output| output.id == id)
     }
@@ -537,6 +563,17 @@ impl Driver for MockDriver {
 
     fn outputs_changed(&mut self) -> bool {
         std::mem::take(&mut self.changed)
+    }
+
+    fn format_notices(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.format_notices)
+    }
+
+    fn output_format(&mut self, id: &str) -> Result<RenderFormat, BackendError> {
+        if !self.is_connected(id) {
+            return Err(BackendError::DeviceGone);
+        }
+        Ok(self.device_format(id))
     }
 
     fn inputs(&mut self) -> Result<Vec<EndpointReading>, BackendError> {
@@ -694,12 +731,16 @@ impl Driver for MockDriver {
         let ended = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicBool::new(false));
         let stall = Arc::new(StallSlot::default());
+        let invalidated = Arc::new(AtomicBool::new(false));
+        let format = self.device_format(&endpoint.id);
         self.renderers.push(RendererLink {
             id: endpoint.id.clone(),
             ring: Arc::clone(reader.ring()),
             ended: Arc::clone(&ended),
             dropped: Arc::clone(&dropped),
             stall: Arc::clone(&stall),
+            format,
+            invalidated: Arc::clone(&invalidated),
         });
         self.renderers_started.push(endpoint.id.clone());
         Ok(MockRenderer {
@@ -709,6 +750,11 @@ impl Driver for MockDriver {
             hold_fades: Arc::clone(&self.hold_fades),
             stop_requested: false,
             stall,
+            setup: StreamSetup {
+                format,
+                ..MOCK_STREAM
+            },
+            invalidated,
         })
     }
 }
@@ -972,6 +1018,39 @@ impl Controller<MockDriver> {
                 renderer.ended.store(true, Ordering::Relaxed);
             }
         }
+    }
+
+    /// Changes the mix format of output `id`'s device, and Windows says so
+    /// (S330).
+    pub fn change_output_format(&mut self, id: &str, format: RenderFormat) {
+        let driver = self.driver_mut();
+        driver.output_formats.insert(id.to_owned(), format);
+        driver.format_notices.push(id.to_owned());
+    }
+
+    /// Windows says output `id`'s device format changed while it didn't.
+    pub fn notify_output_format(&mut self, id: &str) {
+        self.driver_mut().format_notices.push(id.to_owned());
+    }
+
+    /// The audio session of the output playing on `id` says it was
+    /// disconnected, before its render thread notices (S330).
+    pub fn disconnect_session(&mut self, id: &str) {
+        for renderer in &self.driver().renderers {
+            if renderer.id == id && renderer.plays() {
+                renderer.invalidated.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// The format the output playing on `id` opened its stream in.
+    pub fn playing_format(&self, id: &str) -> Option<RenderFormat> {
+        self.driver()
+            .renderers
+            .iter()
+            .rev()
+            .find(|renderer| renderer.id == id && renderer.plays())
+            .map(|renderer| renderer.format)
     }
 
     /// Makes the captures started from now on deliver `setup`'s format.
