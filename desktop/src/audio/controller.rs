@@ -3928,9 +3928,8 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 .map(|(id, playing)| (id.clone(), playing.handle.stall()))
                 .collect();
             // Released before the log says why they ended (S126).
-            for (id, stall) in &stopped {
+            for (id, _) in &stopped {
                 if let Some(playing) = session.outputs.remove(id)
-                    && stall.is_none()
                     && self.policy.settings(id).enabled
                 {
                     keep_lead(&mut session.held_leads, id, &playing.control);
