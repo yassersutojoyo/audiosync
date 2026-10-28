@@ -563,7 +563,20 @@ impl Channel {
                 self.events.push_back(Event::Multizone(message));
             }
             (Namespace::Receiver, "RECEIVER_STATUS") => {
-                self.on_status(id, ReceiverStatus::from_payload(&payload));
+                // A part the status leaves out is unknown, not empty (C37).
+                let Some(fields) = payload.get("status").and_then(|s| s.as_object()) else {
+                    return;
+                };
+                let mut status = ReceiverStatus::from_payload(&payload);
+                if let Some(known) = &self.status {
+                    if !fields.get("applications").is_some_and(|a| a.is_array()) {
+                        status.applications = known.applications.clone();
+                    }
+                    if !fields.get("volume").is_some_and(|v| v.is_object()) {
+                        status.volume = known.volume.clone();
+                    }
+                }
+                self.on_status(id, status);
             }
             (Namespace::Receiver, "LAUNCH_ERROR" | "INVALID_REQUEST") => {
                 let reason = device_text(
