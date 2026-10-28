@@ -472,7 +472,8 @@ struct UnwatchedApp {
 /// The start lead of an output whose renderer stopped while it stays on.
 struct LostLead {
     lead: HeldLead,
-    /// Polls left while its device is listed ([`BRIEF_LOSS_POLLS`]).
+    /// Polls left while its device is listed ([`BRIEF_LOSS_POLLS`], after
+    /// the [`STALL_RETRY_POLLS`] wait of one that stalled again).
     polls_left: u32,
 }
 
@@ -3940,7 +3941,16 @@ impl<D: Driver> AudioBackend for Controller<D> {
         let mut stalled_again = false;
         for (id, stall) in stopped {
             match stall {
-                Some(stall) if self.note_stall(&id, stall) => stalled_again = true,
+                Some(stall) if self.note_stall(&id, stall) => {
+                    stalled_again = true;
+                    if let Some(held) = self
+                        .session
+                        .as_mut()
+                        .and_then(|session| session.held_leads.get_mut(&id))
+                    {
+                        held.polls_left += STALL_RETRY_POLLS;
+                    }
+                }
                 Some(_) => ended.push(id),
                 None => {
                     self.log.log(|| {
