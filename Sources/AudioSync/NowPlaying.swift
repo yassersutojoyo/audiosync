@@ -4,7 +4,7 @@ import AppKit
 ///
 /// macOS no longer lets third-party apps read the system-wide Now Playing
 /// center, so this talks to the players directly over Apple Events. A player
-/// macOS hasn't decided on gets one consent request (`AutomationConsent`),
+/// not yet known to be allowed gets one waiting Apple event (`AutomationConsent`),
 /// which raises the "AudioSync wants to control …" prompt
 /// (NSAppleEventsUsageDescription). Scripts run on a background queue, never on
 /// the main thread, so a hung player or a pending consent prompt can't freeze
@@ -215,8 +215,6 @@ final class NowPlayingMonitor {
 
     /// errAEEventNotPermitted: the user hasn't allowed Automation for the target.
     static let notPermitted = -1743
-    /// errAEEventWouldRequireUserConsent: macOS hasn't asked about the target yet.
-    static let wouldRequireConsent: OSStatus = -1744
 
     /// errAENoSuchObject (a player open with no current track) and
     /// errAETimeout (a player busy or quitting) both mean "no track this time".
@@ -258,7 +256,18 @@ final class NowPlayingMonitor {
     private let scripts = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.nowplaying")
     private var artworkCache: [String: NSImage] = [:]   // "bundleID|title|album" → image
     private var denied: Set<String> = []                 // players refusing our Apple Events
-    private var consent = AutomationConsent()
+    private lazy var consent: AutomationConsent = {
+        let consent = AutomationConsent(queue: self.scripts) { app, mayPrompt, done in
+            DispatchQueue.global(qos: .userInitiated).async { done(NowPlayingMonitor.sendConsentEvent(app, mayPrompt: mayPrompt)) }
+        }
+        consent.onVerdict = { [weak self] app, verdict in
+            DebugTrace.log("Now Playing: AudioSync's control of \(app) is \(verdict)")
+            guard let self else { return }
+            self.noteRefusal(app, verdict == .denied)
+            DispatchQueue.main.async { if self.isRunning { self.refresh() } }
+        }
+        return consent
+    }()
 
     func startWatching() {
         guard timer == nil else { return }
@@ -291,7 +300,7 @@ final class NowPlayingMonitor {
         }
         scripts.async { [weak self] in
             guard let self else { return }
-            guard self.consent.mayCommand(bundleID, permission: Self.permission(bundleID)) else {
+            guard self.consent.mayCommand(bundleID) else {
                 DebugTrace.log("Now Playing: dropped a command to \(bundleID), which AudioSync may not control yet")
                 return
             }
@@ -321,21 +330,14 @@ final class NowPlayingMonitor {
             var empties: [String: EmptyReadings.Empty] = [:]
             var held = false
             for bundleID in candidates {
-                let running = Self.isRunning(bundleID)
-                let permission = running ? Self.permission(bundleID) : .unknown
-                switch self.consent.step(bundleID, running: running, permission: permission, mayAsk: mayAsk,
-                                         at: ProcessInfo.processInfo.systemUptime) {
+                switch self.consent.step(bundleID, running: Self.isRunning(bundleID), mayAsk: mayAsk) {
                 case .read: break
                 case .wait: continue
                 case .hold:
                     held = true
                     continue
                 case .refused:
-                    self.noteRefusal(bundleID, true)
                     empties[bundleID] = .denied
-                    continue
-                case .ask(let token):
-                    self.requestConsent(bundleID, token: token)
                     continue
                 }
                 switch self.query(bundleID) {
@@ -399,33 +401,27 @@ final class NowPlayingMonitor {
         !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
     }
 
-    /// Whether macOS lets AudioSync script the running player. Never prompts;
-    /// may block, so scripts queue only.
-    private static func permission(_ bundleID: String) -> AutomationConsent.Permission {
+    /// Gets the player's name. `mayPrompt`: waits up to `AutomationConsent.sendTimeout` for the user to answer
+    /// macOS's prompt; otherwise macOS answers -1744 instead of prompting.
+    private static func sendConsentEvent(_ bundleID: String, mayPrompt: Bool) -> Int {
         let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
-        return withExtendedLifetime(target) { () -> AutomationConsent.Permission in
-            guard let desc = target.aeDesc else { return .unknown }
-            let status = AEDeterminePermissionToAutomateTarget(desc, typeWildCard, typeWildCard, false)
-            return AutomationConsent.permission(status: Int(status))
-        }
-    }
-
-    /// Scripts queue. Raises macOS's prompt and waits for the user's answer
-    /// on its own thread, with no timeout: one would take the prompt down (S336).
-    private func requestConsent(_ bundleID: String, token: Int) {
-        DebugTrace.log("Now Playing: asking macOS whether AudioSync may control \(bundleID)")
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
-            let status = withExtendedLifetime(target) { () -> OSStatus in
-                guard let desc = target.aeDesc else { return -1 }
-                return AEDeterminePermissionToAutomateTarget(desc, AEEventClass(kAECoreSuite), AEEventID(kAEGetData), true)
-            }
-            DebugTrace.log("Now Playing: the consent request for \(bundleID) returned \(status)")
-            guard let self else { return }
-            self.scripts.async {
-                self.consent.ended(token, at: ProcessInfo.processInfo.systemUptime)
-                DispatchQueue.main.async { if self.isRunning { self.refresh() } }
-            }
+        let event = NSAppleEventDescriptor(eventClass: AEEventClass(kAECoreSuite), eventID: AEEventID(kAEGetData),
+                                           targetDescriptor: target, returnID: AEReturnID(kAutoGenerateReturnID),
+                                           transactionID: AETransactionID(kAnyTransactionID))
+        guard let name = NSAppleEventDescriptor.record().coerce(toDescriptorType: DescType(typeObjectSpecifier)) else { return -1 }
+        name.setDescriptor(NSAppleEventDescriptor(typeCode: OSType(cProperty)), forKeyword: AEKeyword(keyAEDesiredClass))
+        name.setDescriptor(NSAppleEventDescriptor(enumCode: OSType(formPropertyID)), forKeyword: AEKeyword(keyAEKeyForm))
+        name.setDescriptor(NSAppleEventDescriptor(typeCode: OSType(pName)), forKeyword: AEKeyword(keyAEKeyData))
+        name.setDescriptor(NSAppleEventDescriptor.null(), forKeyword: AEKeyword(keyAEContainer))
+        event.setParam(name, forKeyword: AEKeyword(keyDirectObject))
+        do {
+            // 0x20000: kAEDoNotPromptForUserConsent.
+            let quiet: NSAppleEventDescriptor.SendOptions = [.waitForReply, .neverInteract, NSAppleEventDescriptor.SendOptions(rawValue: 0x0002_0000)]
+            let reply = try event.sendEvent(options: mayPrompt ? [.waitForReply, .canInteract] : quiet,
+                                            timeout: mayPrompt ? AutomationConsent.sendTimeout : AutomationConsent.quietTimeout)
+            return Int(reply.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber))?.int32Value ?? 0)
+        } catch {
+            return (error as NSError).code
         }
     }
 
@@ -531,11 +527,7 @@ final class NowPlayingMonitor {
         let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
         let code = error?[NSAppleScript.errorNumber] as? Int
         if let error, command || !Self.meansNoTrack(code) { DebugTrace.log("[AudioSync] AppleScript error: \(error)") }
-        if code == Self.notPermitted {
-            noteRefusal(target, true)
-        } else if error == nil {
-            noteRefusal(target, false)
-        }
+        consent.noted(target, code: error == nil ? 0 : code ?? -1)
         return error == nil ? result : nil
     }
 
@@ -548,77 +540,89 @@ final class NowPlayingMonitor {
     }
 }
 
-/// Whether Now Playing reads a player, asks macOS for consent to script it,
-/// or leaves it alone (S336). A reading never asks: macOS takes its prompt
-/// down when the reading's Apple Event times out, and the next reading raised it again.
-struct AutomationConsent {
-    enum Permission: Equatable { case allowed, denied, undecided, unknown }
+/// Whether Now Playing reads a player (S336). Until a player is known to be
+/// allowed, the only thing sent to it is one Apple event that waits for the
+/// user's answer to macOS's prompt, off `queue`; its result is the verdict.
+final class AutomationConsent {
+    enum Verdict: Equatable { case allowed, denied, undecided }
 
     enum Step: Equatable {
         case read
-        /// Denied: nothing is sent, and the player gives no reading.
+        /// Denied: the player gives no reading.
         case refused
         /// Undecided, and the user hasn't read AudioSync's explanation yet.
         case hold
         case wait
-        /// Make consent request `token` and report its end to `ended`.
-        case ask(Int)
     }
 
-    /// The quiet span after a request ends, so a prompt can't flicker even
-    /// when macOS returns without asking.
-    static let askGap: TimeInterval = 10
+    /// How long the send waits for an answer: macOS takes its prompt down when the send times out.
+    static let sendTimeout: TimeInterval = 300
+    /// The same for a send that can't prompt, which holds back a prompting one for that player.
+    static let quietTimeout: TimeInterval = 2
 
-    private var pending: (app: String, token: Int)?
-    private var quietUntil: TimeInterval = -.infinity
-    private var lastToken = 0
+    /// `queue`: a player's verdict changed.
+    var onVerdict: ((String, Verdict) -> Void)?
 
-    /// An `AEDeterminePermissionToAutomateTarget` status.
-    static func permission(status: Int) -> Permission {
-        switch status {
-        case 0: return .allowed
+    private let queue: DispatchQueue
+    private let send: (String, Bool, @escaping (Int) -> Void) -> Void
+    private var verdicts: [String: Verdict] = [:]
+    private var sending: Set<String> = []
+
+    /// `send(app, mayPrompt, done)` must not block `queue`; it reports 0 or the Apple Event Manager's error.
+    init(queue: DispatchQueue, send: @escaping (String, Bool, @escaping (Int) -> Void) -> Void) {
+        self.queue = queue
+        self.send = send
+    }
+
+    /// `queue` only. A player not yet allowed gets the send, unless its last one is still out;
+    /// it may prompt only once the user has read the explanation (`mayAsk`).
+    func step(_ app: String, running: Bool, mayAsk: Bool) -> Step {
+        guard running else { return .wait }
+        let verdict = verdicts[app] ?? .undecided
+        if verdict == .allowed { return .read }
+        if !sending.contains(app) { start(app, mayPrompt: mayAsk) }
+        return verdict == .denied ? .refused : mayAsk ? .wait : .hold
+    }
+
+    /// Any reply but a refusal proves the event got through; these never reached the player.
+    static func verdict(code: Int) -> Verdict {
+        switch code {
         case NowPlayingMonitor.notPermitted: return .denied
-        case Int(NowPlayingMonitor.wouldRequireConsent): return .undecided
-        default: return .unknown
+        // Not running, gone, timed out, no interaction allowed, consent needed, or no event built.
+        case -600, -609, -1712, -1713, -1744, -1: return .undecided
+        default: return .allowed
         }
     }
 
-    /// One poll's verdict for `app`, asked for every candidate player, running
-    /// or not, so a quit ends its pending request.
-    mutating func step(_ app: String, running: Bool, permission: Permission, mayAsk: Bool,
-                       at now: TimeInterval) -> Step {
-        guard running else {
-            if pending?.app == app { end(at: now) }
-            return .wait
-        }
-        if pending?.app == app { return .wait }
-        switch permission {
-        case .allowed: return .read
-        case .unknown: return .wait
-        case .denied: return .refused
-        case .undecided:
-            guard mayAsk else { return .hold }
-            guard pending == nil, now >= quietUntil else { return .wait }
-            lastToken += 1
-            pending = (app, lastToken)
-            return .ask(lastToken)
+    /// `queue` only. What a reading or command to an allowed `app` returned, 0 for success.
+    func noted(_ app: String, code: Int) {
+        switch code {
+        case 0: set(app, .allowed)
+        case NowPlayingMonitor.notPermitted: set(app, .denied)
+        // errAETimeout: after a reset of the permission, a reading's 2 s timeout takes the new prompt down.
+        case -1712: set(app, .undecided)
+        default: break
         }
     }
 
-    /// Whether a play, pause or skip command may go to `app`.
-    func mayCommand(_ app: String, permission: Permission) -> Bool {
-        permission == .allowed && pending?.app != app
+    /// `queue` only.
+    func mayCommand(_ app: String) -> Bool { verdicts[app] == .allowed }
+
+    private func start(_ app: String, mayPrompt: Bool) {
+        if verdicts[app] == nil { DebugTrace.log("Now Playing: sending \(app) one Apple event that waits for macOS's answer") }
+        sending.insert(app)
+        send(app, mayPrompt) { [weak self] code in
+            guard let self else { return }
+            self.queue.async {
+                self.sending.remove(app)
+                self.set(app, Self.verdict(code: code))
+            }
+        }
     }
 
-    /// Consent request `token` returned; one a quit already ended changes nothing.
-    mutating func ended(_ token: Int, at now: TimeInterval) {
-        guard pending?.token == token else { return }
-        end(at: now)
-    }
-
-    private mutating func end(at now: TimeInterval) {
-        pending = nil
-        quietUntil = now + Self.askGap
+    private func set(_ app: String, _ verdict: Verdict) {
+        guard verdicts.updateValue(verdict, forKey: app) != verdict else { return }
+        onVerdict?(app, verdict)
     }
 }
 
