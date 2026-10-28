@@ -134,7 +134,7 @@ fn after_a_stall_of_the_whole_process_the_output_returns_to_its_delay() {
 
 // covers: S207
 #[test]
-fn an_output_back_after_the_capture_is_trimmed_back_to_its_delay() {
+fn an_output_back_after_the_capture_returns_to_its_delay() {
     let worst = worst_offset(&run(240, 260).0, RECOVERED_S);
     assert!(worst.abs() <= 2.0, "off its delay by up to {worst:.2} ms");
 }

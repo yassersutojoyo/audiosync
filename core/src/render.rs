@@ -171,6 +171,11 @@ pub const STALE_STAMP_MS: u64 = 100;
 /// See [`STALE_STAMP_MS`].
 pub const STALE_STAMP_BLOCKS: u64 = 4;
 
+/// A timed callback whose output time lies more than this, in ms, past the
+/// end of the previous one's frames found a stall: the device played that
+/// long without frames from the renderer (S207).
+pub const STALL_GAP_MS: u64 = 100;
+
 /// The most a callback's lateness moves its reader's delay, in ms (S209).
 pub const LATE_CAP_MS: u64 = 50;
 
@@ -395,6 +400,8 @@ struct Shared {
     floor_drop_ns: AtomicU64,
     /// The observer's steps in the device's output times (S229).
     time_steps: AtomicU64,
+    /// Re-anchors after a stall (S207).
+    stall_reanchors: AtomicU64,
     /// Start steps made, and the capture frames they moved the output
     /// later by (S318).
     start_steps: AtomicU64,
@@ -485,6 +492,7 @@ impl RendererControl {
                 least_slack_ns: AtomicI64::new(i64::MAX),
                 floor_drop_ns: AtomicU64::new(0),
                 time_steps: AtomicU64::new(0),
+                stall_reanchors: AtomicU64::new(0),
                 start_steps: AtomicU64::new(0),
                 start_step_frames: AtomicU64::new(0),
                 bluetooth: AtomicBool::new(false),
@@ -654,6 +662,11 @@ impl RendererControl {
     /// (S229); 0 without output times.
     pub fn time_steps(&self) -> u64 {
         self.shared.time_steps.load(Ordering::Relaxed)
+    }
+
+    /// The times the reader re-anchored at its delay after a stall (S207).
+    pub fn stall_reanchors(&self) -> u64 {
+        self.shared.stall_reanchors.load(Ordering::Relaxed)
     }
 
     /// The start steps the renderer made inside its start window (S318).
@@ -876,8 +889,9 @@ pub struct Renderer {
     start_lead_fixed: bool,
     /// A delay went to the reader; closed until the read that applies it.
     awaiting_resync: bool,
-    /// The trim found the newest stamp stale and no fresh one since.
-    capture_stalled: bool,
+    /// A stall was found, by a stale stamp or a gap in the output times, and
+    /// no fresh stamp came since.
+    stalled: bool,
     /// A held correction waits for the fade-out; closed until the first
     /// read after it (S188).
     correction_due: bool,
@@ -1006,7 +1020,7 @@ impl Renderer {
             anchor_late_ns: 0,
             start_lead_fixed: false,
             awaiting_resync: false,
-            capture_stalled: false,
+            stalled: false,
             correction_due: false,
             frames_after_fade: None,
             tracking: RESTART,
@@ -1169,6 +1183,13 @@ impl Renderer {
         let mut pull_wake_ns = 0;
         let floor_late_ns = match (time, now) {
             (Some(time), Some(now)) => {
+                // A stall the capture came back from first leaves no stale stamp.
+                if let Some((last, last_frames)) = self.previous_output {
+                    let span = (last_frames as u64).saturating_mul(1_000_000_000)
+                        / u64::from(self.device_rate.max(1));
+                    let gap_ns = time.saturating_sub(last.saturating_add(span));
+                    self.stalled |= gap_ns > STALL_GAP_MS * 1_000_000;
+                }
                 let late_ns = self.lateness(time, now, frames);
                 self.form_floor(frames);
                 self.judge_start(frames);
@@ -1435,8 +1456,9 @@ impl Renderer {
     /// goes on as `next` says (S207). Returns the trim it asks for, in
     /// capture frames: positive to slow the converter, negative to speed it
     /// up, 0 for none. Restarts the tracking when the newest stamp is
-    /// stale, and re-anchors the reader at the first fresh one after it;
-    /// a callback without a usable stamp changes nothing.
+    /// stale, and re-anchors the reader at the first fresh one after it or
+    /// after a gap in the output times; a callback without a usable stamp
+    /// changes nothing.
     fn follow(&mut self, now: u64, frames: usize, need: usize, next: &NextRead) -> i64 {
         // Before the floor forms Jt is 0, so a late callback's fill would
         // hold its whole lateness and raise the reference (S207, S209).
@@ -1451,12 +1473,13 @@ impl Renderer {
         let rate = u64::from(self.capture_rate.max(1));
         if now.saturating_sub(stamp.time_ns) > self.stale_stamp_ns() {
             self.tracking = RESTART;
-            self.capture_stalled = true;
+            self.stalled = true;
             return 0;
         }
         // The stall moved the capture and this output by different amounts,
         // which a reference measured from here would keep for good.
-        if std::mem::take(&mut self.capture_stalled) && self.stop == Stop::None {
+        if std::mem::take(&mut self.stalled) && self.stop == Stop::None {
+            self.shared.stall_reanchors.fetch_add(1, Ordering::Relaxed);
             self.ask_reader_delay();
             return 0;
         }
