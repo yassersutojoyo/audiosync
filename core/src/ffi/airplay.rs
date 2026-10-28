@@ -4367,6 +4367,12 @@ mod tests {
         }
     }
 
+    // covers: S323
+    #[test]
+    fn the_mac_app_raises_the_airplay_driver_thread() {
+        assert!(sender_config(false, None, None).on_driver_thread.is_some());
+    }
+
     // covers: S312
     #[test]
     fn with_the_flag_on_the_path_is_on_and_the_switch_prefers_airplay2() {
