@@ -1622,7 +1622,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// streaming, capture starts again from the new one (S141, S163).
     fn choose(&mut self, picked: Chosen) {
         if picked.key() == self.chosen.key() {
-            self.clear_switch_failed();
+            self.clear_source_notice_if_running();
             return;
         }
         self.log
@@ -3401,12 +3401,19 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
-    /// The notice of a switch that couldn't start goes when streaming stops
-    /// or the user picks a source or pair, the one playing included.
+    /// The notice of a switch that couldn't start goes when streaming stops.
     fn clear_switch_failed(&mut self) {
         self.clear_if(NoticeSubject::Source, |message| {
             matches!(message, NoticeMessage::SwitchFailed { .. })
         });
+    }
+
+    /// Picking the source or pair already in use answers its notice while
+    /// streaming; while stopped the notice says why streaming stopped (S163).
+    fn clear_source_notice_if_running(&mut self) {
+        if self.running() {
+            self.notices.clear(&[NoticeSubject::Source]);
+        }
     }
 
     /// Starts streaming when a speaker was switched on while nothing streams
@@ -4195,7 +4202,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             return;
         };
         if self.chosen_input_pair() == pair {
-            self.clear_switch_failed();
+            self.clear_source_notice_if_running();
             return;
         }
         let (endpoint_id, name) = (endpoint_id.clone(), name.clone());
@@ -4215,7 +4222,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             self.input_pairs.insert(endpoint_id.clone(), pair);
         }
         self.audio.set_input_pair(&endpoint_id, pair);
-        self.notices.clear(&[NoticeSubject::Capture]);
+        self.notices
+            .clear(&[NoticeSubject::Source, NoticeSubject::Capture]);
         let switch = source_switch(self.running());
         let started = switch
             .start
@@ -10112,7 +10120,7 @@ mod tests {
         let unplugged = NoticeMessage::InputDisconnected {
             source: "Interface (USB Audio)".to_owned(),
         };
-        assert_eq!(messages(&adapter), [unplugged.clone()]);
+        assert_eq!(messages(&adapter), std::slice::from_ref(&unplugged));
 
         adapter.select_input_pair(0);
         assert_eq!(
