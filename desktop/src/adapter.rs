@@ -13028,6 +13028,80 @@ mod tests {
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
     }
 
+    // covers: S245, S252
+    #[test]
+    fn a_recall_skips_a_deleted_zone_even_after_a_new_zone_is_made() {
+        let mut adapter = preset_adapter(Vec::new());
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.new_zone_with(&key(HEADPHONES), "Kitchen");
+        adapter.set_zone_volume("zone:2", 30.0);
+        Backend::save_preset(&mut adapter, "Evening").expect("saved");
+        adapter.delete_zone("zone:2");
+        adapter.new_zone_with(&key(HEADPHONES), "Porch");
+        adapter.recall_preset("preset:1");
+        let zones = adapter.snapshot().zones;
+        let porch = zones.iter().find(|zone| zone.name == "Porch").unwrap();
+        assert_eq!(porch.volume, 100.0);
+        assert_ne!(porch.id, "zone:2");
+        assert!(
+            adapter.presets[0]
+                .zones
+                .iter()
+                .all(|zone| zone.id != "zone:2"),
+            "{:?}",
+            adapter.presets[0].zones
+        );
+    }
+
+    // covers: S251
+    #[test]
+    fn a_deleted_presets_id_is_never_given_to_a_new_preset() {
+        let mut adapter = preset_adapter(Vec::new());
+        turn_on(&mut adapter, HEADPHONES);
+        Backend::save_preset(&mut adapter, "One").expect("saved");
+        Backend::save_preset(&mut adapter, "Two").expect("saved");
+        Backend::delete_preset(&mut adapter, "preset:2");
+        Backend::save_preset(&mut adapter, "Three").expect("saved");
+        assert_eq!(adapter.presets[1].id, "preset:3");
+    }
+
+    // covers: S245, S251
+    #[test]
+    fn a_settings_file_without_the_id_counters_gives_ids_above_every_stored_one() {
+        let mut porch = zone(vec![key(SPEAKERS)]);
+        porch.id = "zone:7".to_owned();
+        let mut late = saved_preset(&[(key(SPEAKERS), None)]);
+        late.id = "preset:5".to_owned();
+        let old = Settings {
+            speaker_zones: vec![zone(Vec::new()), porch],
+            speaker_presets: vec![saved_preset(&[(key(SPEAKERS), None)]), late],
+            ..Settings::default()
+        };
+        let mut json: serde_json::Value = serde_json::from_str(&old.to_json()).unwrap();
+        let fields = json.as_object_mut().unwrap();
+        fields.remove("last_zone_id");
+        fields.remove("last_preset_id");
+        let reopen = |text: &str| {
+            let mut adapter = preset_adapter(Vec::new());
+            adapter.restore(Settings::from_json(text).unwrap().0);
+            turn_on(&mut adapter, HEADPHONES);
+            adapter
+        };
+        let mut adapter = reopen(&json.to_string());
+        adapter.new_zone_with(&key(HEADPHONES), "Den");
+        Backend::save_preset(&mut adapter, "Night").expect("saved");
+        assert_eq!(adapter.snapshot().zones[2].id, "zone:8");
+        assert_eq!(adapter.presets[2].id, "preset:6");
+
+        adapter.delete_zone("zone:8");
+        Backend::delete_preset(&mut adapter, "preset:6");
+        let mut adapter = reopen(&adapter.current_settings().to_json());
+        adapter.new_zone_with(&key(HEADPHONES), "Den");
+        Backend::save_preset(&mut adapter, "Night").expect("saved");
+        assert_eq!(adapter.snapshot().zones[2].id, "zone:9");
+        assert_eq!(adapter.presets[2].id, "preset:7");
+    }
+
     // covers: S251, S265
     #[test]
     fn a_hidden_speaker_is_never_saved_and_a_recall_names_it_hidden() {
