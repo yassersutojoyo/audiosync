@@ -2554,6 +2554,27 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 35.0, "a change from elsewhere");
     }
 
+    // covers: C105 (a device that rounds to its 0.05 step)
+    #[test]
+    fn a_first_status_within_half_a_step_of_the_slider_is_not_set_again() {
+        let (fake, mut cast) = listed();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_volume(KITCHEN, 36.0);
+        cast.set_streaming(true);
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.35,
+                step_interval: Some(0.05),
+                ..DeviceVolume::default()
+            }),
+        });
+        cast.poll();
+        assert!(sent(&fake).is_empty(), "{:?}", sent(&fake));
+        assert_eq!(shown(&cast, KITCHEN), 36.0);
+    }
+
     // covers: C70, C104, C105 (nothing is sent before the first status)
     #[test]
     fn a_level_set_before_the_first_status_never_swallows_a_later_change_from_elsewhere() {
