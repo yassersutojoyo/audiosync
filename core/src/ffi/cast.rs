@@ -29,7 +29,7 @@
 //! [`asc_cast_next_event`] reports [`CAST_EVENT_FAILED`] once, with where
 //! the panic happened; the host then destroys it and may create another.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 use std::ffi::{CStr, CString, c_char};
 use std::net::{IpAddr, SocketAddr};
 use std::panic::{self, AssertUnwindSafe};
@@ -42,7 +42,7 @@ use audiosync_cast::audio::{AudioWriter, Codec, audio_ring};
 use audiosync_cast::discovery::mdns::MdnsBrowser;
 use audiosync_cast::discovery::reach::Reachability;
 use audiosync_cast::discovery::{
-    BrowseEvent, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent,
+    Announcements, BrowseEvent, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent,
 };
 use audiosync_cast::error::ConnectError;
 use audiosync_cast::group::{GroupMember, GroupRecords};
@@ -475,8 +475,7 @@ pub struct AscCast {
     shared: Arc<Shared>,
     input_taken: bool,
     list: DeviceList,
-    /// Devices whose records went away during a session (C17).
-    offline: BTreeSet<DeviceId>,
+    announcements: Announcements,
     browser: Option<Box<dyn Browse>>,
     open_browser: OpenBrowser,
     changes: VecDeque<Change>,
@@ -725,17 +724,8 @@ impl AscCast {
     }
 
     fn listed(&mut self, event: ListEvent) {
-        // A re-resolve of a device still listed, such as a TXT change, is
-        // not the device announcing itself again (C81).
-        match event {
-            ListEvent::Offline(DeviceKey::Id(id)) => {
-                self.offline.insert(id);
-            }
-            ListEvent::Added(DeviceKey::Id(id)) => self.host.announced(id),
-            ListEvent::Updated(DeviceKey::Id(id)) if self.offline.remove(&id) => {
-                self.host.announced(id);
-            }
-            _ => {}
+        if let Some(id) = self.announcements.note(&self.list, &event) {
+            self.host.announced(id);
         }
         match event {
             ListEvent::Added(key) => {
@@ -1172,7 +1162,7 @@ fn create_with(memory_json: &str, open_browser: OpenBrowser) -> *mut AscCast {
             shared: Arc::new(Shared::new()),
             input_taken: false,
             list: DeviceList::new(),
-            offline: BTreeSet::new(),
+            announcements: Announcements::default(),
             browser: None,
             open_browser,
             changes: VecDeque::new(),
@@ -2820,6 +2810,37 @@ mod tests {
         assert!(devices(handle).is_empty());
         let (attempt, refused) = start(handle, &id);
         assert_eq!((attempt, refused), (0, CAST_REFUSED_UNKNOWN));
+        destroy(handle);
+    }
+
+    // The handle feeds every list change to the announcement rule: a change
+    // it already saw announces nothing a second time.
+    // CAST_SPEC: C81, C90
+    #[test]
+    fn list_changes_reach_the_announcement_rule() {
+        let handle = create();
+        let id = DeviceId::parse(KITCHEN).expect("id");
+        let key = DeviceKey::Id(id);
+        let seen_again = |handle| {
+            let cast = inside(handle);
+            cast.announcements
+                .note(&cast.list, &ListEvent::Updated(key))
+                .is_none()
+        };
+        let at = |last| {
+            record(
+                KITCHEN,
+                "Kitchen",
+                DEVICE_PORT,
+                Ipv4Addr::new(192, 0, 2, last),
+            )
+        };
+        browse(handle, vec![BrowseEvent::Resolved(at(6))], false);
+        devices(handle);
+        assert!(seen_again(handle), "found");
+        browse(handle, vec![BrowseEvent::Resolved(at(7))], false);
+        devices(handle);
+        assert!(seen_again(handle), "at another address");
         destroy(handle);
     }
 

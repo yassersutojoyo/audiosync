@@ -34,7 +34,7 @@
 //! under an ID that follows from the address ([`CastAddress::device_id`]),
 //! and a host name is looked up on a thread of its own.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -46,7 +46,9 @@ use std::time::{Duration, Instant};
 use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, audio_ring};
 use audiosync_cast::discovery::mdns::MdnsBrowser;
 use audiosync_cast::discovery::reach::Reachability;
-use audiosync_cast::discovery::{BrowseEvent, DeviceId, DeviceKey, DeviceList, Entry, ListEvent};
+use audiosync_cast::discovery::{
+    Announcements, BrowseEvent, DeviceId, DeviceKey, DeviceList, Entry, ListEvent,
+};
 use audiosync_cast::group::{GroupMember, GroupRecords};
 use audiosync_cast::host::{
     AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, StartRefused,
@@ -550,8 +552,7 @@ pub struct CastSpeakers {
     link: Option<Box<dyn CastLink>>,
     feed: CastFeed,
     list: DeviceList,
-    /// Devices whose records went away during a session (C17).
-    offline: BTreeSet<DeviceId>,
+    announcements: Announcements,
     /// The one device the user turned on.
     enabled: Option<DeviceId>,
     /// Each device's volume as its latest status reports it.
@@ -599,7 +600,7 @@ impl CastSpeakers {
             link: Some(link),
             feed: CastFeed::new(),
             list: DeviceList::new(),
-            offline: BTreeSet::new(),
+            announcements: Announcements::default(),
             enabled: None,
             volumes: BTreeMap::new(),
             requested: None,
@@ -1469,20 +1470,7 @@ impl CastSpeakers {
                 ListEvent::Skipped(_) => {}
                 change => {
                     self.log.log(|| format!("Cast discovery: {change:?}"));
-                    // A re-resolve of a device still listed, such as a TXT
-                    // change, is not the device announcing itself again.
-                    let back = match change {
-                        ListEvent::Offline(DeviceKey::Id(id)) => {
-                            self.offline.insert(id);
-                            None
-                        }
-                        ListEvent::Added(DeviceKey::Id(id)) => Some(id),
-                        ListEvent::Updated(DeviceKey::Id(id)) => {
-                            self.offline.remove(&id).then_some(id)
-                        }
-                        _ => None,
-                    };
-                    if let Some(id) = back
+                    if let Some(id) = self.announcements.note(&self.list, &change)
                         && let Some(link) = self.link.as_mut()
                     {
                         link.announced(id);
