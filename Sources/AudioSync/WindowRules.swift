@@ -613,16 +613,18 @@ struct PromptWithdrawal {
 /// Equalizer settings as the app stores them (JSON in UserDefaults).
 enum StoredEqualizer {
     /// The saved settings, or the defaults when nothing usable is saved: no
-    /// data, data that doesn't decode, or a band count other than the
-    /// equalizer's (from a build with different bands).
+    /// data or data that doesn't decode. A band count other than the
+    /// equalizer's (from a build with different bands) keeps the saved bands,
+    /// flat for missing ones, extras dropped.
     static func decode(_ data: Data?) -> Equalizer.Settings {
         guard let data, let saved = try? JSONDecoder().decode(Equalizer.Settings.self, from: data),
-              saved.gains.count == Equalizer.frequencies.count,
               saved.preamp.isFinite, saved.gains.allSatisfy(\.isFinite)
         else { return Equalizer.Settings() }
+        let count = Equalizer.frequencies.count
         var stepped = saved
         stepped.preamp = Equalizer.quantized(saved.preamp)
-        stepped.gains = saved.gains.map(Equalizer.quantized)
+        stepped.gains = (Array(saved.gains.prefix(count)) + [Double](repeating: 0, count: max(0, count - saved.gains.count)))
+            .map(Equalizer.quantized)
         return stepped
     }
 
