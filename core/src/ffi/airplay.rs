@@ -106,8 +106,8 @@ use crate::policy::remote::{
 use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
 use crate::volume::{
-    NO_ZONE_POSITION, ReadBack, RowMove, device_level, device_level_for_db, level_on_speaker,
-    level_set_on_speaker, row_move, sanitize_own,
+    NO_ZONE_POSITION, ReadBack, RowMove, device_level, device_level_for_db, is_echo_of,
+    level_on_speaker, level_set_on_speaker, row_move, sanitize_own,
 };
 
 /// What a receiver event reports ([`AscAirPlayReceiver::event`]): discovery
@@ -931,14 +931,8 @@ fn device_volume(level: f64) -> Volume {
     }
 }
 
-/// A reported level this close to the one sent is the speaker rounding it,
-/// not a person's change: the first such read (S291), or a DACP volume
-/// within [`VOLUME_SETTLE`] of the set (S271).
-const VOLUME_TOLERANCE_DB: f64 = 0.5;
-
-/// How long after the host sets a volume [`VOLUME_TOLERANCE_DB`] applies:
-/// a receiver that rounds to 0.3 dB steps can echo the set within 0.5 dB,
-/// and a remote press later can land that close too (S271).
+/// How long after the host sets a volume a DACP volume on the row sent is
+/// the speaker's echo, not a person's change (S271, S276).
 const VOLUME_SETTLE: Duration = Duration::from_secs(3);
 
 /// What [`AscAirPlayEvent::warning`] says for a sender warning.
@@ -1355,7 +1349,7 @@ impl AscAirPlay {
                 .is_some_and(|at| at.elapsed() < VOLUME_SETTLE);
             // The level the speaker has, the held one with k at 0 (S290).
             let sent = device_volume(own.level).wire_db();
-            own.echo = recent && (db - sent).abs() < VOLUME_TOLERANCE_DB;
+            own.echo = recent && is_echo_of(db, sent);
             own.reported = device_level_for_db(db);
         }
         own
@@ -2907,8 +2901,9 @@ pub unsafe extern "C" fn asc_airplay_set_zone_volume(
 /// already the speaker's level in the sender, so a reconnect or a member
 /// that starts late plays at it and the host doesn't set it again.
 /// Dropped: a level read before the host last set the volume, one that
-/// comes while the row is dragged, the first one within 0.5 dB of a level
-/// sent (its echo), and one within 0.05 dB of the last reading kept.
+/// comes while the row is dragged, the first one on the row of a level sent
+/// or on its 0.6 dB grid point (its echo), and one within 0.05 dB of the
+/// last reading kept.
 /// Stopped speakers, speakers that leave volume to the sender (`sv`, P121),
 /// and ones that turned a read down or whose reads stopped aren't asked.
 ///

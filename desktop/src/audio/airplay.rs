@@ -97,8 +97,8 @@ use audiosync_core::policy::remote::{
 use audiosync_core::resample::Resampler;
 use audiosync_core::volume::{
     DEFAULT_LOCAL_POSITION, NO_ZONE_POSITION, ReadBack, device_level, device_level_for_db,
-    level_on_speaker, level_set_on_speaker, own_for_device_level, row_move, sanitize_own,
-    sanitize_position,
+    is_echo_of, level_on_speaker, level_set_on_speaker, own_for_device_level, row_move,
+    sanitize_own, sanitize_position,
 };
 
 use super::SESSION_RATE;
@@ -783,13 +783,8 @@ fn held_level(level: f64, zone: f64, master: f64) -> Option<f64> {
 /// How often playing speakers are asked for their own volume (P122, S291).
 const VOLUME_READ_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Within [`VOLUME_SETTLE`] of a set, a DACP volume this close to the one
-/// sent is the speaker rounding it, not a person's change (S276).
-const VOLUME_TOLERANCE_DB: f64 = 0.5;
-
-/// How long after a set [`VOLUME_TOLERANCE_DB`] applies to a DACP volume:
-/// a receiver that rounds to 0.3 dB steps can echo the set within 0.5 dB,
-/// and a remote press later can land that close too (S271).
+/// How long after a set a DACP volume on the row sent is the speaker's
+/// echo, not a person's change (S271, S276).
 const VOLUME_SETTLE: Duration = Duration::from_secs(3);
 
 /// How long a slider that started editing holds its row with no move: a
@@ -2932,7 +2927,7 @@ impl AirPlaySpeakers {
                 _ => device_volume(own.level),
             }
             .wire_db();
-            own.echo = added.read.recent(now) && (db - has).abs() < VOLUME_TOLERANCE_DB;
+            own.echo = added.read.recent(now) && is_echo_of(db, has);
             own.reported = device_level_for_db(db);
         }
         own

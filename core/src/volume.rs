@@ -234,8 +234,25 @@ pub fn level_on_speaker(
     }
 }
 
-/// The first reading this close to a level sent is the speaker's echo (S291).
-pub const ECHO_TOLERANCE_DB: f64 = 0.5;
+/// The measured television keeps a level sent on this grid, so its echo of
+/// a level between two grid points lies up to half a step away (S291).
+const SET_GRID_DB: f64 = 0.6;
+
+/// Whether reading `db` is the speaker's echo of `sent_db` (S291, S276): on
+/// the row sent, or that level kept on the measured television's grid. One
+/// remote step anywhere else is a change, however soon it comes.
+pub fn is_echo_of(db: f64, sent_db: f64) -> bool {
+    let steps = db / SET_GRID_DB;
+    if (steps - steps.round()).abs() * SET_GRID_DB <= BASELINE_TOLERANCE_DB
+        && (db - sent_db).abs() <= SET_GRID_DB / 2.0 + BASELINE_TOLERANCE_DB
+    {
+        return true;
+    }
+    match (device_level_for_db(db), device_level_for_db(sent_db)) {
+        (Some(read), Some(sent)) => row_level(read) == row_level(sent),
+        _ => false,
+    }
+}
 
 /// After the echo, a reading this close to the baseline changes nothing (S291).
 pub const BASELINE_TOLERANCE_DB: f64 = 0.05;
@@ -248,7 +265,7 @@ pub struct ReadBack {
 }
 
 impl ReadBack {
-    /// The host sent the speaker `db`: the first reading near it is its echo.
+    /// The host sent the speaker `db`: the first reading on its row is its echo.
     pub fn sent(&mut self, db: f64) {
         self.echo_of = Some(db);
         self.baseline = None;
@@ -268,7 +285,7 @@ impl ReadBack {
             return false;
         }
         if let Some(sent) = self.echo_of.take() {
-            if (db - sent).abs() < ECHO_TOLERANCE_DB {
+            if is_echo_of(db, sent) {
                 self.baseline = Some(db);
                 return false;
             }
