@@ -977,8 +977,7 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     sender.pause();
     let paused = Instant::now();
     assert!(wait_until(LONG, || count(&server, "FLUSH") == 2));
-    std::thread::sleep(Duration::from_millis(4_500));
-    assert!(count(&server, "POST /feedback") >= feedback + 2);
+    assert!(wait_until(LONG, || count(&server, "POST /feedback") >= feedback + 2));
     let (seq, rtptime) = rtp_info(&server);
     // The FLUSH names the first packet held back. Packets before it left
     // before the sender took the pause, however late a busy runner stamps
