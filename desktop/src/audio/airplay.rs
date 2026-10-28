@@ -1365,6 +1365,7 @@ impl AirPlaySpeakers {
         self.pause.forget();
         self.listed.clear();
         self.added.clear();
+        self.paired_for_session.clear();
         self.targets.clear();
         self.target_missing.clear();
         self.gone_targets.clear();
@@ -1423,6 +1424,7 @@ impl AirPlaySpeakers {
         self.every_time_stream_ended(events);
         self.listed.clear();
         self.added.clear();
+        self.paired_for_session.clear();
         self.targets.clear();
         self.target_missing.clear();
         self.gone_targets.clear();
@@ -4283,9 +4285,9 @@ impl AirPlaySpeakers {
                 {
                     added.state = SpeakerState::Retrying { at };
                     if !self.listed.contains_key(id) {
-                        // It played on after its announcement lapsed: lost
-                        // now, it has no row to retry for.
-                        self.reconcile();
+                        // It played on after its announcement lapsed: it
+                        // stays in the sender, with no retry notice for a
+                        // speaker the list no longer shows.
                         return true;
                     }
                     events.push(BackendEvent::AirPlayTrouble {
