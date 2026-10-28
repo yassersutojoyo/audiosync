@@ -1779,15 +1779,17 @@ do {
     let firstMusic = h.step(consentMusic)
     h.answer(consentMusic, 0)
     let done = DispatchSemaphore(value: 0)
-    var spotify: [AutomationConsent.Step] = [], music: [AutomationConsent.Step] = []
+    final class Seen { var spotify: [AutomationConsent.Step] = [], music: [AutomationConsent.Step] = [] }
+    let seen = Seen()
     h.queue.async {
         for _ in 0..<30 {
-            spotify.append(h.consent.step(consentSpotify, running: true, mayAsk: true))
-            music.append(h.consent.step(consentMusic, running: true, mayAsk: true))
+            seen.spotify.append(h.consent.step(consentSpotify, running: true, mayAsk: true))
+            seen.music.append(h.consent.step(consentMusic, running: true, mayAsk: true))
         }
         done.signal()
     }
     let finished = done.wait(timeout: .now() + 5) == .success
+    let spotify = seen.spotify, music = seen.music
     check(finished && h.calls(consentSpotify) == 1 && spotify.allSatisfy { $0 == .wait },
           "automation consent: only one Apple event is in flight per undecided player, and it isn't read meanwhile",
           "\(finished) \(h.calls(consentSpotify)) \(Set(spotify.map { "\($0)" }))")

@@ -262,8 +262,9 @@ final class NowPlayingMonitor {
         }
         consent.onVerdict = { [weak self] app, verdict in
             DebugTrace.log("Now Playing: AudioSync's control of \(app) is \(verdict)")
-            self?.noteRefusal(app, verdict == .denied)
-            DispatchQueue.main.async { if self?.isRunning == true { self?.refresh() } }
+            guard let self else { return }
+            self.noteRefusal(app, verdict == .denied)
+            DispatchQueue.main.async { if self.isRunning { self.refresh() } }
         }
         return consent
     }()
@@ -594,10 +595,9 @@ final class AutomationConsent {
     private func start(_ app: String) {
         if verdicts[app] == nil { DebugTrace.log("Now Playing: sending \(app) one Apple event that waits for macOS's answer") }
         sending.insert(app)
-        let queue = self.queue
         send(app) { [weak self] code in
-            queue.async {
-                guard let self else { return }
+            guard let self else { return }
+            self.queue.async {
                 self.sending.remove(app)
                 self.set(app, code == 0 ? .allowed : code == NowPlayingMonitor.notPermitted ? .denied : .undecided)
             }
