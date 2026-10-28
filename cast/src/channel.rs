@@ -580,6 +580,13 @@ impl Channel {
                     }
                     if !fields.get("volume").is_some_and(|v| v.is_object()) {
                         status.volume = known.volume.clone();
+                    } else if fields
+                        .get("volume")
+                        .and_then(|v| v.get("level"))
+                        .and_then(serde_json::Value::as_f64)
+                        .is_none()
+                    {
+                        status.volume.level = known.volume.level;
                     }
                 }
                 self.on_status(id, status);
