@@ -59,6 +59,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, when Windows audio restarts or the captured device drops out for a moment, only the capture starts again. Your speakers keep playing, silent for that moment, and AirPlay and Google Cast speakers stay connected, instead of every speaker stopping and starting again.
 - On Windows, a speaker whose format changes while it plays, for example after you change its sample rate in the Sound settings or when a Bluetooth headset switches to its hands-free mode, plays again in the new format within about half a second. Before, it could stay silent for up to a second and a half. The other speakers keep their timing.
 - On Windows, when another app takes the input device you're streaming for itself (exclusive mode), your speakers stay on and AudioSync tries the input again every 3 seconds until that app lets go. Meanwhile the notice says AudioSync couldn't capture audio from the source, and it clears once the input plays again. Before, streaming stopped after about 5 seconds with a notice that the capture was lost.
+- On Windows, a Bluetooth speaker that starts playing within 3 seconds of connecting restarts once about 2 seconds later, with a short gap, as on the Mac, where such a speaker played late for the whole stream. On Windows this hasn't been checked with a real Bluetooth speaker yet.
 
 ## [0.7.1] - 2026-10-27
 
