@@ -1405,13 +1405,19 @@ fn failure(cast: &mut AscCast) -> Option<AscCastEvent> {
 /// `id` is null or a NUL-terminated string, unchanged during the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_cast_set_selected(cast: *mut AscCast, id: *const c_char) -> bool {
-    // SAFETY: as the caller's.
-    let selected = match unsafe { host_text(id) } {
-        None | Some("") => None,
-        Some(text) => match device_key(text) {
-            Some(key) => Some(key),
-            None => return false,
-        },
+    let selected = if id.is_null() {
+        None
+    } else {
+        // SAFETY: non-null, and by the caller's contract NUL-terminated and
+        // unchanged during the call.
+        match unsafe { CStr::from_ptr(id) }.to_str() {
+            Err(_) => return false,
+            Ok("") => None,
+            Ok(text) => match device_key(text) {
+                Some(key) => Some(key),
+                None => return false,
+            },
+        }
     };
     // SAFETY: as the caller's.
     unsafe {
@@ -2541,6 +2547,7 @@ mod tests {
         // SAFETY: a live handle and NUL-terminated strings.
         unsafe {
             assert!(!asc_cast_set_selected(handle, c"kitchen".as_ptr()));
+            assert!(!asc_cast_set_selected(handle, c"\xff\xfe".as_ptr()));
             assert!(asc_cast_set_selected(handle, selected.as_ptr()));
         }
         let changes = devices(handle);

@@ -54,6 +54,7 @@ const PANIC_WINDOW: Duration = Duration::from_secs(1);
 /// The first and the longest pause after a recurring panic.
 const PANIC_PAUSE: Duration = Duration::from_millis(100);
 const MAX_PANIC_PAUSE: Duration = Duration::from_secs(5);
+const PANIC_PAUSE_SLICE: Duration = Duration::from_millis(50);
 /// Events waiting for a host that doesn't poll.
 pub const MAX_HOST_EVENTS: usize = 256;
 /// What [`CastHost::shutdown`] waits beyond the teardown budget of C88.
@@ -306,9 +307,9 @@ struct Shared {
     /// Set before the quit command is sent: teardowns from then on keep to
     /// C88's budget.
     quitting: Arc<AtomicBool>,
-    /// Makes the worker panic once while it handles the next start.
+    /// How many of the next starts make the worker panic.
     #[cfg(test)]
-    panic_in_start: AtomicBool,
+    panic_in_start: std::sync::atomic::AtomicU32,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -388,7 +389,7 @@ impl CastHost {
             memory: Mutex::new(memory),
             quitting: Arc::new(AtomicBool::new(false)),
             #[cfg(test)]
-            panic_in_start: AtomicBool::new(false),
+            panic_in_start: std::sync::atomic::AtomicU32::new(0),
         });
         let worker = {
             let shared = Arc::clone(&shared);
@@ -412,7 +413,15 @@ impl CastHost {
                         } else {
                             Duration::ZERO
                         };
-                        thread::sleep(pause);
+                        // In slices, so a quit meanwhile keeps to C88's budget.
+                        let until = Instant::now() + pause;
+                        while !worker.quitting() {
+                            let left = until.saturating_duration_since(Instant::now());
+                            if left.is_zero() {
+                                break;
+                            }
+                            thread::sleep(left.min(PANIC_PAUSE_SLICE));
+                        }
                         last_panic = Some(Instant::now());
                     }
                 })?
@@ -816,8 +825,12 @@ impl Worker {
         let device = target.id;
         self.in_hand = Some((attempt, device));
         #[cfg(test)]
-        if self.shared.panic_in_start.swap(false, Ordering::SeqCst) {
-            panic!("a test panic in the Cast worker");
+        {
+            let left = self.shared.panic_in_start.load(Ordering::SeqCst);
+            if left > 0 {
+                self.shared.panic_in_start.store(left - 1, Ordering::SeqCst);
+                panic!("a test panic in the Cast worker");
+            }
         }
         if !selected.load(Ordering::SeqCst) {
             return self.ended(attempt, device, SessionEnd::Deselected);
@@ -1017,7 +1030,7 @@ mod tests {
     #[test]
     fn a_panic_in_the_worker_ends_the_attempt_and_the_next_start_runs() {
         let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
-        host.shared.panic_in_start.store(true, Ordering::SeqCst);
+        host.shared.panic_in_start.store(1, Ordering::SeqCst);
         let first = start(&mut host, 1).expect("starts");
         let end = next_of(&host, first);
         assert!(
@@ -1041,5 +1054,24 @@ mod tests {
             }
         }
         assert!(host.shutdown());
+    }
+
+    // A quit during the pause after recurring panics waits one slice, not
+    // the pause, which by the sixth panic is 1.6 s.
+    #[test]
+    fn a_quit_during_the_pause_after_recurring_panics_ends_at_once() {
+        let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+        host.shared.panic_in_start.store(6, Ordering::SeqCst);
+        for byte in 1..=6 {
+            let attempt = start(&mut host, byte).expect("starts");
+            assert!(matches!(next_of(&host, attempt), HostEvent::Ended { .. }));
+        }
+        let quit = Instant::now();
+        assert!(host.shutdown());
+        assert!(
+            quit.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            quit.elapsed()
+        );
     }
 }
