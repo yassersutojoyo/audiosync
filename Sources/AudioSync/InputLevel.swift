@@ -11,6 +11,8 @@ final class InputLevel: ObservableObject {
     @Published private(set) var level: Float = 0
     @Published private(set) var shown = false
     private var timer: Timer?
+    private var peak: (() -> Float?)?
+    private var visible = false
 
     var isPolling: Bool { timer?.isValid == true }
 
@@ -34,11 +36,23 @@ final class InputLevel: ObservableObject {
     }
 
     /// Updates the meter from `peak` now and every `ASC_METER_POLL_MS` until
-    /// it answers nil (no input device captured), which hides it.
+    /// it answers nil (no input device captured), which hides it; only while
+    /// the main window is on screen.
     func follow(_ peak: @escaping () -> Float?) {
+        self.peak = peak
+        restartPolling()
+    }
+
+    /// Whether the main window, the meter's only place, is on screen.
+    func setVisible(_ visible: Bool) {
+        self.visible = visible
+        restartPolling()
+    }
+
+    private func restartPolling() {
         timer?.invalidate()
         timer = nil
-        guard update(peak: peak()) else { return }
+        guard visible, let peak, update(peak: peak()) else { return }
         let poll = Timer(timeInterval: Double(ASC_METER_POLL_MS) / 1000, repeats: true) { [weak self] timer in
             guard let self, self.update(peak: peak()) else {
                 timer.invalidate()
@@ -48,9 +62,6 @@ final class InputLevel: ObservableObject {
         RunLoop.main.add(poll, forMode: .common)
         timer = poll
     }
-
-    /// Whether the main window, the meter's only place, is on screen.
-    func setVisible(_ visible: Bool) {}
 }
 
 /// The note under the source while an input device plays and an AirPlay
