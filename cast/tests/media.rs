@@ -443,7 +443,6 @@ fn steps_move_by_the_step_interval_from_the_reported_level() {
     channel.tick(start + VOLUME_INTERVAL);
     let out = sent(&mut channel);
     assert_eq!(out.len(), 2);
-    // The answer to the last level, rounded by the device.
     let last_id = out[1].2["requestId"].as_u64().expect("id");
     channel.handle(
         start,
@@ -460,6 +459,55 @@ fn steps_move_by_the_step_interval_from_the_reported_level() {
     let no_step = json!({"level": 0.5});
     let mut channel = running(start, no_step);
     assert_eq!(channel.step_volume(start, true), Err(VolumeError::NoStep));
+}
+
+// covers: C69, C70, C104
+#[test]
+fn a_level_equal_to_the_reported_one_is_not_awaited() {
+    let start = Instant::now();
+    let top = json!({"level": 1.0, "controlType": "attenuation", "stepInterval": 0.05});
+    let mut channel = running(start, top);
+    assert_eq!(channel.step_volume(start, true), Ok(1.0));
+    sent(&mut channel);
+    channel.handle(
+        start,
+        status(
+            0,
+            vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")],
+            json!({"level": 0.3, "controlType": "attenuation", "stepInterval": 0.05}),
+        ),
+    );
+    let level = channel
+        .step_volume(start + VOLUME_INTERVAL, false)
+        .expect("step");
+    assert!(
+        (level - 0.25).abs() < 1e-9,
+        "builds on the reported 0.3: {level}"
+    );
+}
+
+// covers: C69, C70
+#[test]
+fn a_rounded_answer_without_the_request_id_answers_the_level() {
+    let start = Instant::now();
+    let mut channel = running(start, volume());
+    channel.set_volume(start, 0.73).expect("sent");
+    sent(&mut channel);
+    channel.handle(
+        start,
+        status(
+            0,
+            vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")],
+            json!({"level": 0.7, "controlType": "attenuation", "stepInterval": 0.1}),
+        ),
+    );
+    let level = channel
+        .step_volume(start + VOLUME_INTERVAL, false)
+        .expect("step");
+    assert!(
+        (level - 0.6).abs() < 1e-9,
+        "builds on the reported 0.7: {level}"
+    );
 }
 
 // covers: C70

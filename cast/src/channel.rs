@@ -478,7 +478,10 @@ impl Channel {
             Namespace::Receiver,
             json!({"type": "SET_VOLUME", "volume": {"level": level}}),
         );
-        self.volume_unconfirmed = Some((id, level));
+        // A device reports only changes, so the level it already has gets no answer (C104).
+        let current = self.status.as_ref().map(|status| status.volume.level);
+        self.volume_unconfirmed =
+            (!current.is_some_and(|current| answers_level(level, current))).then_some((id, level));
     }
 
     /// Tears the session down (C44, C87): media `STOP` for the sender's
@@ -914,9 +917,13 @@ impl Channel {
             // control that turned fixed meanwhile (C68).
             self.volume_queued = None;
         }
-        // The answer to an older level leaves the newer one unanswered (C70).
+        // The answer to an older level leaves the newer one unanswered (C70); a
+        // device that rounds to its step may answer without the request id.
+        let rounding = status.volume.step_interval.filter(|step| step.is_finite());
         if self.volume_unconfirmed.is_some_and(|(request, level)| {
-            request == id || answers_level(level, status.volume.level)
+            request == id
+                || answers_level(level, status.volume.level)
+                || rounding.is_some_and(|step| (level - status.volume.level).abs() < step / 2.0)
         }) {
             self.volume_unconfirmed = None;
         }
