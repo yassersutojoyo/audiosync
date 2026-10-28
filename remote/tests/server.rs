@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -1183,6 +1183,31 @@ fn a_busy_port_is_reported_as_such() {
         |_: &Command| {},
     );
     assert!(taken.unwrap_err().port_in_use());
+}
+
+// covers: S337
+#[test]
+fn a_port_another_app_holds_on_ipv4_only_is_in_use() {
+    let start_beside = |holder: Ipv4Addr, listen: Vec<IpAddr>| {
+        let other = TcpListener::bind((holder, 0)).unwrap();
+        let port = other.local_addr().unwrap().port();
+        let config = Config {
+            port,
+            listen,
+            ..Config::default()
+        };
+        RemoteServer::start(config, |_: &Command| {}).unwrap_err()
+    };
+    let loopback = vec![
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+    ];
+    assert!(start_beside(Ipv4Addr::LOCALHOST, loopback).port_in_use());
+    // Windows Firewall asks about a test program that binds every address, so CI alone runs this.
+    if std::env::var_os("AUDIOSYNC_LAN_TESTS").is_some_and(|value| !value.is_empty()) {
+        let every = Config::default().listen;
+        assert!(start_beside(Ipv4Addr::UNSPECIFIED, every).port_in_use());
+    }
 }
 
 fn pairing_code_lines(remote: &Remote) -> Vec<String> {
