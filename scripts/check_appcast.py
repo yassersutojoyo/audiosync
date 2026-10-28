@@ -369,6 +369,8 @@ def self_test():
         run("tag form of the version", good(), everything, None, version="v0.8.0")
         run("Mac only, no zips", good()[:1], [], None)
         run("Mac only, Mac zip", good()[:1], [mac], None)
+        run("Mac-only appcast without --mac-only", good()[:1], [mac], "0 windows-x64 items; expected 1")
+        run("Mac-only appcast, no zips, without --mac-only", good()[:1], [], "0 windows-arm64 items; expected 1")
         run("macos named on the Mac item",
             [fixture_item(mac, os_attr="macos")] + good()[1:], everything, None)
         run("Windows items without Windows zips", good(), [mac], "expected 0 without")
@@ -493,6 +495,8 @@ def self_test():
         x64_name, arm_name = names[1], names[2]
         against_assets("assets of a full release", good(), names + other_assets, None)
         against_assets("assets of a Mac-only release", good()[:1], names[:1] + other_assets, None)
+        against_assets("Mac-only assets without --mac-only", good()[:1], names[:1] + other_assets,
+                       "no windows-x64 item")
         against_assets("Windows zips attached, appcast Mac-only", good()[:1], names + other_assets,
                        f"{x64_name} is attached but has no appcast item")
         against_assets("arm64 zip attached without its item", good()[:2], names + other_assets,
