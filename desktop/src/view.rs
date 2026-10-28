@@ -11277,6 +11277,73 @@ mod tests {
         assert_eq!(announce_for(&mut a, &cant(5)), "say Kitchen can't play");
     }
 
+    /// The view's own notices have fixed ids far above the backend's, so an
+    /// id says nothing about when a notice was posted: a backend notice
+    /// after one is news, and so is the fixed one coming back after it left.
+    // covers: S153
+    #[test]
+    fn a_notice_after_a_fixed_id_notice_is_still_announced() {
+        let mut a = NoticeAnnouncer::default();
+        assert_eq!(announce_for(&mut a, &[]), "keep");
+        let update = (UPDATER_NOTICE_ID, "update", "Update");
+        assert_eq!(announce_for(&mut a, &[update]), "say Update");
+        let capture = (1, "source", "Capture lost");
+        assert_eq!(announce_for(&mut a, &[capture, update]), "say Capture lost");
+        assert_eq!(announce_for(&mut a, &[capture]), "keep", "update left");
+        assert_eq!(
+            announce_for(&mut a, &[capture, update]),
+            "say Update",
+            "and came back"
+        );
+    }
+
+    /// The tray tooltip once the notices were listed as `history` shows,
+    /// one refresh each.
+    fn tooltip_after(strings: &Strings<'_>, history: &[&[ui_model::Notice]]) -> String {
+        let mut announcer = NoticeAnnouncer::default();
+        let mut state = MockBackend::new().snapshot();
+        for notices in history {
+            let listed: Vec<Listed> = notices
+                .iter()
+                .map(|n| Listed {
+                    id: n.id,
+                    subject: n.subject.clone(),
+                    title: notice_title(strings, &n.message),
+                })
+                .collect();
+            announcer.next(&listed);
+            state.notices = notices.to_vec();
+        }
+        tray_tooltip(strings, &state)
+    }
+
+    /// The tooltip names the notice posted last, also when an older one has
+    /// a fixed id far above the backend's.
+    // covers: S153
+    #[test]
+    fn the_tray_tooltip_names_a_notice_posted_after_a_fixed_id_one() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let notice = |id, subject: &str, message| ui_model::Notice {
+            id,
+            subject: subject.into(),
+            message,
+            time: "09.40".into(),
+        };
+        let airplay2 = notice(
+            AIRPLAY2_NOTICE_ID,
+            "AirPlay 2 (Experimental)",
+            NoticeMessage::AirPlay2NextLaunch {
+                on: true,
+                prefer: false,
+            },
+        );
+        let capture = notice(1, "source", NoticeMessage::CaptureLost);
+        let title = notice_title(&strings, &NoticeMessage::CaptureLost);
+        let tooltip = tooltip_after(&strings, &[&[], &[airplay2.clone()], &[capture, airplay2]]);
+        assert!(tooltip.ends_with(&format!("Notice: {title}")), "{tooltip}");
+    }
+
     /// The live region empties as soon as the notice it names is gone, so
     /// Narrator's scan mode finds no stray announcement; other notices
     /// leaving keep it.
