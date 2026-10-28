@@ -462,6 +462,31 @@ fn steps_move_by_the_step_interval_from_the_reported_level() {
     assert_eq!(channel.step_volume(start, true), Err(VolumeError::NoStep));
 }
 
+// covers: C69, C70, C104
+#[test]
+fn a_level_equal_to_the_reported_one_is_not_awaited() {
+    let start = Instant::now();
+    let top = json!({"level": 1.0, "controlType": "attenuation", "stepInterval": 0.05});
+    let mut channel = running(start, top);
+    assert_eq!(channel.step_volume(start, true), Ok(1.0));
+    sent(&mut channel);
+    channel.handle(
+        start,
+        status(
+            0,
+            vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")],
+            json!({"level": 0.3, "controlType": "attenuation", "stepInterval": 0.05}),
+        ),
+    );
+    let level = channel
+        .step_volume(start + VOLUME_INTERVAL, false)
+        .expect("step");
+    assert!(
+        (level - 0.25).abs() < 1e-9,
+        "builds on the reported 0.3: {level}"
+    );
+}
+
 // covers: C70
 #[test]
 fn a_drag_sends_at_most_one_level_per_100_ms_and_status_changes_are_not_echoed() {
