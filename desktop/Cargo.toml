@@ -153,6 +153,11 @@ pipewire = { version = "0.10.1", features = ["v1_0_0"] }
 # (MIT OR Apache-2.0, already in the build).
 libc = "0.2.191"
 
+[dev-dependencies]
+# Slint's element search, so tests can run the accessibility actions UI
+# Automation sends. Test-only, never in a build; already in Slint's graph.
+i-slint-backend-testing = { version = "=1.18.1", default-features = false }
+
 # The Linux live tests feed the whole system's capture to the airplay and
 # cast crates' own test receivers, compiled in from their tests/common
 # folders; these are what those receivers use, with the specs the two

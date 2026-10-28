@@ -651,6 +651,11 @@ export component SpeakerBadge inherits Rectangle {
     accessible-action-default => {
         root.toggled();
     }
+    accessible-action-expand => {
+        if root.expandable && !root.expanded {
+            root.expanded-changed(true);
+        }
+    }
 
     focus := FocusScope {
         enabled: root.enabled;
@@ -2757,8 +2762,8 @@ export component ZoneHeader inherits Rectangle {
                         accessible-role: button;
                         accessible-label: root.item.expanded ? Strings.hide-zone-speakers(root.item.name) : Strings.show-zone-speakers(root.item.name);
                         accessible-value: root.live ? "" : count-text.text;
-                        accessible-expandable: true;
-                        accessible-expanded: root.item.expanded;
+                        // No expanded state: UI Automation then offers Invoke,
+                        // and Slint 1.18 drops the Collapse that state would ask for.
                         accessible-action-default => {
                             root.expanded-changed(!root.item.expanded);
                         }
