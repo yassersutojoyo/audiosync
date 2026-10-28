@@ -3,6 +3,8 @@
 //! that asks for NTP with 501.
 
 mod common;
+#[path = "../examples/fake_tv/options.rs"]
+mod options;
 #[path = "../examples/fake_tv/television.rs"]
 mod television;
 
@@ -13,23 +15,52 @@ use audiosync_airplay::ap2::Timing;
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
+use audiosync_airplay::rtsp::{Method, Request};
 use audiosync_airplay::sender::{
     PtpPorts, Sender, SenderConfig, SpeakerEvent, SpeakerOptions, SpeakerState,
 };
 use audiosync_airplay::volume::Volume;
 use plist::Value;
 
-use common::ap2::{Ap2Server, read_dict, request_key};
+use common::ap2::{Ap2Server, FakeAp2, dict, plist, read_dict, request_key};
 use common::net::{Events, HostAudio, free_ptp_ports, serial, wait_until};
 use television::{Pin, television};
 
 const LONG: Duration = Duration::from_secs(15);
 
+fn session_setup(fake: &mut FakeAp2, timing: &str) -> u16 {
+    let mut request = Request::new(Method::Setup, "rtsp://127.0.0.1/1");
+    request.headers.push("CSeq", "1");
+    request.body = plist(dict(&[(
+        "timingProtocol",
+        Value::String(timing.to_owned()),
+    )]));
+    fake.feed(&request.encode());
+    fake.answered
+        .last()
+        .and_then(Option::as_ref)
+        .map_or(0, |answer| answer.status)
+}
+
+#[test]
+fn the_ptp_only_flag_takes_no_value() {
+    let parse = |args: &[&str]| options::parse(args.iter().map(|arg| (*arg).to_owned()));
+    assert!(!parse(&["--lan"]).expect("--lan").ptp_only);
+    assert!(parse(&["--ptp-only"]).expect("--ptp-only alone").ptp_only);
+    let pin = parse(&["--ptp-only", "--pin", "once"]).expect("with --pin once");
+    assert!(pin.ptp_only && pin.pin == Pin::Once);
+    let password = parse(&["--ptp-only", "--password", "secret"]).expect("with --password");
+    assert!(password.ptp_only && password.pin == Pin::Password);
+    assert_eq!(password.code, "secret");
+    let lan = parse(&["--ptp-only", "--lan"]).expect("with --lan");
+    assert!(lan.ptp_only && lan.on_network);
+}
+
 #[test]
 fn the_ptp_only_television_announces_bit_41_and_refuses_ntp() {
     let plain = television::txt(Pin::None, 0, television::DEVICE_ID);
     let txt = television::ptp_only_txt(plain.clone());
-    fn features_of(entries: &[(&'static str, String)]) -> Option<&str> {
+    fn features_of<'a>(entries: &'a [(&'static str, String)]) -> Option<&'a str> {
         entries
             .iter()
             .find(|(key, _)| *key == "features")
@@ -53,13 +84,15 @@ fn the_ptp_only_television_announces_bit_41_and_refuses_ntp() {
         0,
         television::DEVICE_ID,
     );
-    assert!(fake.refuse_timing.is_empty());
+    assert_eq!(session_setup(&mut fake, "NTP"), 200);
+    assert_eq!(session_setup(&mut fake, "PTP"), 200);
     television::ptp_only(&mut fake);
     let features = read_dict(&fake.info_body)
         .and_then(|info| info.get("features").and_then(Value::as_signed_integer))
         .expect("features in /info");
     assert_eq!(features, 0x1_0240_i64 << 32);
-    assert_eq!(fake.refuse_timing, ["NTP"]);
+    assert_eq!(session_setup(&mut fake, "NTP"), 501);
+    assert_eq!(session_setup(&mut fake, "PTP"), 200);
 }
 
 #[test]
@@ -121,7 +154,7 @@ fn the_sender_plays_the_ptp_only_television_on_one_ptp_retry() {
             .fake()
             .keys()
             .iter()
-            .any(|k| k == "SETPEERS")),
+            .any(|k| k == "SETUP stream")),
         "{:?}",
         server.fake().keys()
     );
@@ -142,9 +175,22 @@ fn the_sender_plays_the_ptp_only_television_on_one_ptp_retry() {
         .collect();
     assert_eq!(setups, [("NTP".to_owned(), 501), ("PTP".to_owned(), 200)]);
     let keys = fake.keys();
-    let record_at = keys.iter().position(|k| k == "RECORD").expect("RECORD");
-    let peers_at = keys.iter().position(|k| k == "SETPEERS").expect("SETPEERS");
-    assert!(record_at < peers_at, "{keys:?}");
+    let order: Vec<&str> = keys
+        .iter()
+        .map(String::as_str)
+        .filter(|key| key.starts_with("SETUP") || *key == "RECORD" || *key == "SETPEERS")
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "SETUP session",
+            "SETUP session",
+            "RECORD",
+            "SETPEERS",
+            "SETUP stream"
+        ],
+        "{keys:?}"
+    );
     drop(fake);
 
     events.drain(&sender);
