@@ -740,6 +740,24 @@ mod tests {
         );
     }
 
+    // covers: S212
+    #[test]
+    fn a_remote_setting_read_after_launch_starts_or_stops_the_remote() {
+        let backend = MockBackend::new();
+        let late_view = backend.late_view.clone();
+        let app = over_loopback(backend);
+        let port = free_port();
+        *late_view.borrow_mut() = Some(crate::ui_model::ViewSettings {
+            remote: RemoteSettings { on: true, port },
+            ..crate::ui_model::ViewSettings::default()
+        });
+        app.poll();
+        assert!(app.remote_listening(), "on in the file, it listens");
+        *late_view.borrow_mut() = Some(crate::ui_model::ViewSettings::default());
+        app.poll();
+        assert!(!app.remote_listening(), "off in the file, it stops");
+    }
+
     #[test]
     fn opening_the_window_again_makes_a_new_code() {
         let app = over_loopback(MockBackend::new());

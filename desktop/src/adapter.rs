@@ -11936,6 +11936,25 @@ mod tests {
 
     // covers: S212
     #[test]
+    fn held_settings_read_later_start_nothing_for_a_speaker_on_without_auto_connect() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-no-auto");
+        let held = dir.join("held");
+        let mut users = SettingsFile::at(held.clone()).load().0;
+        users.auto_connect.clear();
+        std::fs::write(&held, users.to_json()).expect("written");
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(&held, &path).expect("moved back");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().master_volume, 64.0);
+        assert_eq!(adapter.audio.running_source(), None, "as at launch");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
     fn a_settings_file_held_at_launch_is_applied_once_it_can_be_read() {
         use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
         let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held");
