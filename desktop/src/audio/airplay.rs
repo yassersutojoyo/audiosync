@@ -5609,6 +5609,47 @@ pub mod tests {
     }
 
     #[test]
+    fn a_tv_that_asks_every_time_needs_its_pin_again_on_a_new_sender() {
+        let tv = airplay2_every_time_tv(9, "Den");
+        let id = id_of(&tv);
+        let paired = |fake: &FakeAirPlay| {
+            fake.set_airplay2(true);
+            let mut airplay = speakers(fake);
+            airplay.set_streaming(true);
+            pin_shown(fake, &mut airplay, &tv);
+            assert!(airplay.submit_pin(&id, "4821"));
+            fake.pairing(&tv, PairingEvent::PairedForSession);
+            airplay.poll();
+            assert_eq!(
+                airplay.speakers()[0].availability,
+                AirPlayAvailability::Open
+            );
+            airplay
+        };
+        let retried = |airplay: &mut AirPlaySpeakers| {
+            let second = FakeAirPlay::new();
+            second.set_airplay2(true);
+            airplay.replace_link(second.link());
+            second.appear(&tv);
+            airplay.poll();
+            assert_eq!(
+                airplay.speakers()[0].availability,
+                AirPlayAvailability::NeedsPin
+            );
+        };
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = paired(&fake);
+        fake.stop_running();
+        airplay.poll();
+        retried(&mut airplay);
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = paired(&fake);
+        retried(&mut airplay);
+    }
+
+    #[test]
     fn a_pairing_in_the_attempt_that_fails_stops_with_the_notice() {
         let tv = airplay2_tv(9, "Loft");
         let id = id_of(&tv);
