@@ -746,7 +746,13 @@ impl Ap2Session {
         }
         if self.state != Ap2State::TearingDown {
             times.extend(self.feedback_due);
-            times.extend(self.peers_update_at);
+            // An update waiting behind an answer or a FLUSH has nothing to
+            // wake for; its past deadline would spin the driver.
+            let blocked =
+                self.in_flight.is_some() || (self.state == Ap2State::Ready && self.flush_wanted);
+            if !blocked {
+                times.extend(self.peers_update_at);
+            }
         }
         if self.state == Ap2State::Ready {
             times.extend(self.read_due);
