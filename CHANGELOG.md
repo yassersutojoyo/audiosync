@@ -99,6 +99,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, when macOS's network discovery stops, a Google Cast speaker that was on but no longer listed goes off, so another speaker can play. Before, it stayed on with nothing playing. Two copies of AudioSync opened at the same moment no longer both quit; one of them stays.
 - On the Mac, a saved equalizer preamp or band gain beyond 12 dB either way loads at the nearest limit.
 - A Google Cast speaker that reconnects keeps the volume it had, and a volume change made just as it reconnects still reaches it. On the Mac and on Windows.
+- On Windows, when another program holds your settings file while AudioSync starts, AudioSync reads it once it's free and uses it, starting the speakers you set to connect automatically. Before, it kept the defaults and could later save them over your settings.
 - In the Linux preview, an input with more than two channels offers every channel pair, as on Windows, a device with more than 64 channels plays or captures on its first 64 instead of stopping, and notice times show your local time instead of UTC.
 
 ## [0.7.1] - 2026-10-27
