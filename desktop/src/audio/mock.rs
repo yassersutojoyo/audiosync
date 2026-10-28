@@ -58,6 +58,10 @@ pub const MOCK_STREAM: StreamSetup = StreamSetup {
 /// The mock's Explorer, which started AudioSync and every mock app.
 const EXPLORER_PID: u32 = 900;
 
+/// `E_ACCESSDENIED`: what Windows answers when a process running as
+/// administrator is opened for a wait.
+const ACCESS_DENIED: i32 = 0x8007_0005_u32 as i32;
+
 /// How a mock output starts: unmuted, at full volume.
 const FULL_VOLUME: EndpointVolume = EndpointVolume {
     muted: false,
@@ -144,6 +148,9 @@ struct CaptureLink {
     retargets: u32,
     /// The format it captures in.
     setup: CaptureAttempt,
+    /// The error code its app's process refused a wait with, as an app
+    /// running as administrator does (S327).
+    watch_refused: Option<i32>,
 }
 
 fn lock(link: &Mutex<CaptureLink>) -> std::sync::MutexGuard<'_, CaptureLink> {
@@ -182,6 +189,10 @@ impl CaptureHandle for MockCapture {
 
     fn holds_all(&self) -> bool {
         !lock(&self.link).missing
+    }
+
+    fn watch_refused(&self) -> Option<i32> {
+        lock(&self.link).watch_refused
     }
 }
 
@@ -273,6 +284,8 @@ pub struct MockDriver {
     next_capture_error: Option<BackendError>,
     /// The format the next captures start in.
     capture_setup: CaptureAttempt,
+    /// The processes that can't be opened to wait for their exit.
+    unwatchable: BTreeSet<u32>,
     capture: Option<Arc<Mutex<CaptureLink>>>,
     /// Every output started that hasn't ended by itself.
     renderers: Vec<RendererLink>,
@@ -332,6 +345,7 @@ impl MockDriver {
             capture_error: None,
             next_capture_error: None,
             capture_setup: CAPTURE_ATTEMPTS[0],
+            unwatchable: BTreeSet::new(),
             capture: None,
             renderers: Vec::new(),
             active_sessions: BTreeMap::new(),
@@ -661,6 +675,15 @@ impl Driver for MockDriver {
             return Err(BackendError::InputGone);
         }
         self.captures_started.push(target.clone());
+        let watch_refused = match &target {
+            CaptureTarget::Loopback(activation)
+                if activation.mode == LoopbackMode::IncludeTree
+                    && self.unwatchable.contains(&activation.target_pid) =>
+            {
+                Some(ACCESS_DENIED)
+            }
+            _ => None,
+        };
         let link = Arc::new(Mutex::new(CaptureLink {
             target,
             state: CaptureState::Running,
@@ -670,6 +693,7 @@ impl Driver for MockDriver {
             missing: false,
             retargets: 0,
             setup: self.capture_setup,
+            watch_refused,
         }));
         self.capture = Some(Arc::clone(&link));
         Ok(MockCapture { link })
@@ -784,7 +808,15 @@ impl Controller<MockDriver> {
         }
     }
 
-    /// Quits a process. A capture of its tree reports that its source quit.
+    /// Makes process `pid` one AudioSync can't open to wait for its exit,
+    /// as an app running as administrator: a capture of its tree then
+    /// doesn't notice when it quits.
+    pub fn refuse_watch(&mut self, pid: u32) {
+        self.driver_mut().unwatchable.insert(pid);
+    }
+
+    /// Quits a process. A capture of its tree reports that its source quit,
+    /// unless it couldn't watch it.
     pub fn quit_app(&mut self, pid: u32) {
         let driver = self.driver_mut();
         driver.processes.retain(|process| process.pid != pid);
@@ -809,7 +841,7 @@ impl Controller<MockDriver> {
                 }
                 CaptureTarget::Input { .. } => false,
             };
-            if captures_app && link.state == CaptureState::Running {
+            if captures_app && link.watch_refused.is_none() && link.state == CaptureState::Running {
                 link.state = CaptureState::SourceQuit;
             }
         }

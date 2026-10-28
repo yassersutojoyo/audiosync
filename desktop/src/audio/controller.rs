@@ -186,6 +186,14 @@ pub trait CaptureHandle {
     fn glitches(&self) -> CaptureGlitches {
         CaptureGlitches::default()
     }
+
+    /// The Windows error code with which the captured app's process refused
+    /// to be opened for a wait (an app running as administrator, say): the
+    /// capture then can't tell that the app quit (S327). `None` while it
+    /// watches its app, and for any other capture.
+    fn watch_refused(&self) -> Option<i32> {
+        None
+    }
 }
 
 /// A running output. Dropping it stops the output at once and waits for its
@@ -5284,6 +5292,83 @@ mod tests {
         for _ in 0..count {
             let events = backend.poll();
             assert!(events.is_empty(), "{events:?}");
+        }
+    }
+
+    /// Starts capturing the player, which Windows won't let AudioSync wait
+    /// for when `refused`.
+    fn start_player(backend: &mut MockBackend, refused: bool) {
+        if refused {
+            backend.refuse_watch(PLAYER_PID);
+        }
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+    }
+
+    // covers: S327
+    #[test]
+    fn an_unwatched_app_that_leaves_the_process_list_quits_the_source_within_one_check() {
+        let mut backend = backend();
+        start_player(&mut backend, true);
+        backend.quit_app(PLAYER_PID);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+        assert_eq!(backend.running_source(), None);
+        assert!(playing(&backend).is_empty());
+    }
+
+    // covers: S327
+    #[test]
+    fn an_unwatched_app_whose_process_id_returns_with_another_start_time_counts_as_quit() {
+        let mut backend = backend();
+        start_player(&mut backend, true);
+        backend.quit_app(PLAYER_PID);
+        backend.add_app(PLAYER_PID, "player.exe");
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+        // The next start captures the app's new process from the stored
+        // source.
+        start_player(&mut backend, false);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert_eq!(
+            backend.running_source(),
+            Some(SourceId::App {
+                root_pid: PLAYER_PID
+            })
+        );
+    }
+
+    // covers: S327
+    #[test]
+    fn an_unwatched_app_that_restarts_gets_the_same_quit_handling_as_a_watched_one() {
+        for setting in [WhenSourceQuits::Stop, WhenSourceQuits::SwitchToSystem] {
+            let outcome = |refused: bool| {
+                let mut backend = backend();
+                backend.set_when_source_quits(setting);
+                start_player(&mut backend, refused);
+                backend.quit_app(PLAYER_PID);
+                backend.add_app(PLAYER_PID + 1, "player.exe");
+                let events = backend.poll();
+                poll_quietly(&mut backend, 2);
+                (
+                    events,
+                    backend.running_source(),
+                    backend.driver().captures_started().to_vec(),
+                    playing(&backend),
+                )
+            };
+            assert_eq!(outcome(true), outcome(false), "{setting:?}");
         }
     }
 
