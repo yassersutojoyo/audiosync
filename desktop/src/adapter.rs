@@ -9394,6 +9394,44 @@ mod tests {
         assert!(messages(&adapter).is_empty());
     }
 
+    // Mac sitting 28 Oct: a receiver quit mid-stream lost its row instead
+    // of waiting off the network.
+    // covers: P215, S222
+    #[test]
+    fn a_speaker_whose_receiver_is_gone_mid_stream_keeps_its_row_and_its_place_in_the_sender_off_the_network(
+    ) {
+        let off_network = SpeakerState::Waiting(ui_model::Waiting::NotOnNetwork);
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        fake.gone(&kitchen);
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        fake.state(&kitchen, AirPlayState::Unannounced);
+        adapter.poll();
+        let calls = fake.take_calls();
+        assert!(
+            !calls.iter().any(|call| matches!(call, Call::Remove(_))),
+            "it left the sender: {calls:?}"
+        );
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), off_network);
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
+        assert_eq!(adapter.snapshot().active_speakers(), 1, "Streaming to 1");
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+
+        fake.appear(&kitchen);
+        adapter.poll();
+        let calls = fake.take_calls();
+        assert!(
+            !calls.iter().any(|call| matches!(call, Call::Add { .. })),
+            "it joined the sender anew: {calls:?}"
+        );
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+    }
+
     #[test]
     fn a_sender_that_stops_running_leaves_a_notice() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
