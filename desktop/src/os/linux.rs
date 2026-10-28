@@ -50,10 +50,8 @@ pub fn notice_time() -> String {
     // SAFETY: tm is plain data, which localtime_r fills.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     // SAFETY: both pointers are to live locals of the right types.
-    let offset = if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() {
-        0
-    } else {
-        i64::from(tm.tm_gmtoff)
-    };
-    crate::platform::clock_at(i64::from(now), offset)
+    if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() {
+        return format!("{} UTC", crate::platform::clock_at(i64::from(now), 0));
+    }
+    crate::platform::clock_at(i64::from(now), i64::from(tm.tm_gmtoff))
 }

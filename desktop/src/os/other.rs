@@ -114,6 +114,6 @@ pub fn computer_name() -> Option<String> {
 pub fn notice_time() -> String {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs());
-    format!("{:02}.{:02}", seconds / 3600 % 24, seconds / 60 % 60)
+        .map_or(0, |since| i64::try_from(since.as_secs()).unwrap_or(0));
+    crate::platform::clock_at(seconds, 0)
 }
