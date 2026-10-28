@@ -1516,6 +1516,8 @@ impl<D: Driver> Controller<D> {
     /// still fading after [`STOP_FADE_CAP`]) is released and rests, and one
     /// rested is left to the output sync, which starts it again.
     fn tick_fresh_restarts(&mut self) {
+        // First, so one whose rest ends as its device leaves is still lost.
+        self.cancel_stale_fresh_restarts();
         let ids: Vec<String> = self.fresh_restarts.keys().cloned().collect();
         for id in ids {
             let Some(restart) = self.fresh_restarts.remove(&id) else {
