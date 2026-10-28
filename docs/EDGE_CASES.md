@@ -1,6 +1,6 @@
 # Edge cases
 
-What AudioSync does when the world changes under a running session, where the code that handles it lives, and how each case is checked. Cite a case by its ID (EC1 to EC13); the IDs don't change when cases are added.
+What AudioSync does when the world changes under a running session, where the code that handles it lives, and how each case is checked. Cite a case by its ID (EC1 to EC14); the IDs don't change when cases are added.
 
 "Automated" names the checks in `Tests/` that cover the decision logic; every logic check for a case starts with its ID, so `Tests/run-tests.sh | grep EC7` lists them. Ring-buffer checks are cited by name too, but the test run only prints the ring suite's summary, so their names show up only when one fails. Anything that needs a person (unplugging a device, Bluetooth, sleep, changing a device's format, the network) is under "Manual". The manual steps play audio, so do them at a sensible volume.
 
@@ -19,6 +19,7 @@ What AudioSync does when the world changes under a running session, where the co
 | EC11 | Very long speaker names | Automated (logic) and manual |
 | EC12 | AirPlay network loss | Automated (logic) and manual |
 | EC13 | Streaming switched off and on while audio plays | Automated (logic) and manual |
+| EC14 | Automation consent for Spotify or Music | Automated (logic) and manual |
 
 The reconciles mentioned below are `reconcileAirPlaySpeakers()` (`AppDelegate+AirPlay.swift`) and `reconcileLocal()` (`AppDelegate+Outputs.swift`). Events run them (S101): Core Audio's device-list notice (`AppDelegate.observeDeviceList`, bursts merged over 0.3 s) and a lost output run `reconcileLocal()`; the launch, Refresh Devices, Retry and the sender's own discovery changes and speaker events cover the AirPlay side; a wake runs both; a restart of the sender after a failed start, a denied Local Network answer to ask again and the Local Network hint get one reconcile when they fall due (`AppDelegate.scheduleDueReconcile`). A safety net (`AppDelegate.startSafetyNet`) runs both every 30 s for what no event reports.
 
@@ -166,3 +167,13 @@ Code path: `stopEngine` (`AppDelegate+Engine.swift`) stops the session: `StreamE
 Automated: "EC13 native airplay: a speaker leaves when switched off or when streaming stops".
 
 Manual: start AudioSync with the debug log on (`docs/DEVELOPMENT.md`). Stream to an AirPlay speaker and a local speaker with music playing, the local delay set so the two line up. Switch streaming off, wait 5 s and switch it on while the music keeps playing. Expected: the AirPlay speaker plays again within a few seconds and still lines up with the local speaker at the same delay, without retyping it. Repeat three times, once with streaming off for more than 15 s, then once by switching the last speaker off and on again. The debug log shows the speaker removed at each stop and added again at each start ("native AirPlay: removed …", "native AirPlay: added …").
+
+## EC14: Automation consent for Spotify or Music
+
+Expected (Mac): the first time AudioSync reads Spotify or Music, after you have read its explanation of the permission, macOS asks once whether AudioSync may control that app, and the prompt stays up until you answer. Until then AudioSync doesn't read that app or send it play, pause or skip, and another player it is already allowed to control is read as usual. Allow: the track shows within a few seconds. Don't Allow: no track from that app and no new prompt, with the Automation notice and its settings button; allowing AudioSync later in System Settings > Privacy & Security > Automation brings the track back without a restart. If the app quits while the prompt is up, AudioSync stops waiting on it, and once the app runs again it asks again no sooner than 10 s later, never in a loop (S336).
+
+Code path: `NowPlayingMonitor.refresh` (`NowPlaying.swift`) asks macOS for each running player's permission without a prompt, and `AutomationConsent.step` decides whether to read it, skip it or make the one consent request, which `requestConsent` runs off the main thread with no timeout; `AutomationConsent.ended` takes its return. `send` drops a command unless `AutomationConsent.mayCommand` allows it.
+
+Automated: the "automation consent: …" logic checks (one request that waits for the answer, Don't Allow and a later allow, a player that quits with its prompt up, one request at a time across players, the 10 s gap, commands to a player not allowed yet, a permission macOS can't tell yet).
+
+Manual: on a Mac where AudioSync has never asked about Spotify, reset it with `tccutil reset AppleEvents io.github.yassersutojoyo.audiosync`, start AudioSync with the debug log on (`docs/DEVELOPMENT.md`) and play something in Spotify. Expected: one prompt that stays up for at least a minute while you wait; Allow shows the track. Run the reset again, quit Spotify while the prompt is up, open it again: at most one new prompt, and no prompt coming and going. Choose Don't Allow: no further prompt and the Automation notice; switch AudioSync on for Spotify in System Settings: the track comes back. The debug log shows "asking macOS whether AudioSync may control" once per prompt.

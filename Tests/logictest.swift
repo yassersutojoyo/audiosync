@@ -1743,6 +1743,134 @@ do {
     check(verdicts.allSatisfy { $0 == .waiting }, "capture: silent zeros with nothing live → waiting")
 }
 
+// MARK: Automation consent: one request at a time, and a player isn't read while its request is pending
+// covers: S336 (0.7.1 after an update: a prompt that each 2 s reading's timeout took down came back on every reading)
+func consentAsk(_ step: AutomationConsent.Step) -> Int? {
+    if case .ask(let token) = step { return token }
+    return nil
+}
+let consentSpotify = "com.spotify.client"
+let consentMusic = "com.apple.Music"
+do {
+    // Readings every 2 s; the user answers Spotify's prompt at 31 s. Music was allowed long ago.
+    var consent = AutomationConsent()
+    var permissions: [String: AutomationConsent.Permission] = [consentSpotify: .undecided, consentMusic: .allowed]
+    var asks: [Int] = []
+    var answered = false
+    var spotifyReadsBefore = 0, spotifyReadsAfter = 0, musicReads = 0
+    for tick in 0...40 {
+        let now = 2 * Double(tick)
+        if !answered, now >= 31, let token = asks.first {
+            permissions[consentSpotify] = .allowed
+            consent.ended(token, at: 31)
+            answered = true
+        }
+        for app in [consentSpotify, consentMusic] {
+            let step = consent.step(app, running: true, permission: permissions[app] ?? .unknown, mayAsk: true, at: now)
+            if let token = consentAsk(step) { asks.append(token) }
+            guard step == .read else { continue }
+            if app == consentMusic {
+                musicReads += 1
+            } else if answered {
+                spotifyReadsAfter += 1
+            } else {
+                spotifyReadsBefore += 1
+            }
+        }
+    }
+    check(asks.count == 1 && spotifyReadsBefore == 0 && spotifyReadsAfter == 25 && musicReads == 41,
+          "automation consent: an undecided player gets one request that waits for the answer, is read after Allow, and other players read on",
+          "\(asks) \(spotifyReadsBefore) \(spotifyReadsAfter) \(musicReads)")
+}
+do {
+    // Don't Allow at 5 s, then allowed again in System Settings at 130 s.
+    var consent = AutomationConsent()
+    let first = consentAsk(consent.step(consentSpotify, running: true, permission: .undecided, mayAsk: true, at: 0))
+    consent.ended(first ?? -1, at: 5)
+    let refused = (3...60).map {
+        consent.step(consentSpotify, running: true, permission: .denied, mayAsk: true, at: 2 * Double($0))
+    }
+    let allowed = consent.step(consentSpotify, running: true, permission: .allowed, mayAsk: true, at: 130)
+    check(first != nil && refused.allSatisfy { $0 == .refused } && allowed == .read,
+          "automation consent: after Don't Allow a player is neither read nor asked again until the decision changes",
+          "\(String(describing: first)) \(Set(refused.map { "\($0)" })) \(allowed)")
+}
+do {
+    // Spotify quits at 4 s with its prompt up and starts again at 6 s; the request returns late, at 20 s.
+    var consent = AutomationConsent()
+    let first = consentAsk(consent.step(consentSpotify, running: true, permission: .undecided, mayAsk: true, at: 0))
+    let quit = consent.step(consentSpotify, running: false, permission: .unknown, mayAsk: true, at: 4)
+    var asks: [Double] = []
+    var tokens: [Int] = []
+    for tick in 3...15 {
+        let now = 2 * Double(tick)
+        if now == 20, let first { consent.ended(first, at: now) }
+        if let token = consentAsk(consent.step(consentSpotify, running: true, permission: .undecided, mayAsk: true, at: now)) {
+            asks.append(now)
+            tokens.append(token)
+        }
+    }
+    check(first != nil && quit == .wait && asks == [14] && tokens.first != first,
+          "automation consent: a player that quits ends its pending request, its late return changes nothing, and the next request waits 10 s",
+          "\(quit) \(asks) \(tokens) \(String(describing: first))")
+}
+do {
+    // Before the explanation was read nothing asks; after it, one request at a time across players.
+    var consent = AutomationConsent()
+    let held = (0..<10).map {
+        consent.step(consentSpotify, running: true, permission: .undecided, mayAsk: false, at: 2 * Double($0))
+    }
+    let spotifyAsk = consentAsk(consent.step(consentSpotify, running: true, permission: .undecided, mayAsk: true, at: 20))
+    let musicWhile = consent.step(consentMusic, running: true, permission: .undecided, mayAsk: true, at: 22)
+    consent.ended(spotifyAsk ?? -1, at: 24)
+    let musicSoon = consent.step(consentMusic, running: true, permission: .undecided, mayAsk: true, at: 26)
+    let musicAsk = consentAsk(consent.step(consentMusic, running: true, permission: .undecided, mayAsk: true, at: 34))
+    check(held.allSatisfy { $0 == .hold } && spotifyAsk != nil && musicWhile == .wait && musicSoon == .wait && musicAsk != nil,
+          "automation consent: nothing asks before the explanation was read, and only one request is pending across players",
+          "\(spotifyAsk != nil) \(musicWhile) \(musicSoon) \(musicAsk != nil)")
+}
+do {
+    // macOS returns without a decision at once, every time: 60 s of readings ask 5 times, 12 s apart.
+    var consent = AutomationConsent()
+    var asks: [Double] = []
+    for tick in 0..<30 {
+        let now = 2 * Double(tick)
+        if let token = consentAsk(consent.step(consentSpotify, running: true, permission: .undecided, mayAsk: true, at: now)) {
+            asks.append(now)
+            consent.ended(token, at: now + 0.1)
+        }
+    }
+    check(asks == [0, 12, 24, 36, 48], "automation consent: a request that returns undecided is not repeated within 10 s",
+          "\(asks)")
+}
+do {
+    // A window button or a speaker's remote press: only an allowed player with no request pending gets it.
+    var consent = AutomationConsent()
+    let undecided = consent.mayCommand(consentSpotify, permission: .undecided)
+    let unknown = consent.mayCommand(consentSpotify, permission: .unknown)
+    let denied = consent.mayCommand(consentSpotify, permission: .denied)
+    _ = consent.step(consentSpotify, running: true, permission: .undecided, mayAsk: true, at: 0)
+    let pending = consent.mayCommand(consentSpotify, permission: .allowed)
+    let other = consent.mayCommand(consentMusic, permission: .allowed)
+    check(!undecided && !unknown && !denied && !pending && other,
+          "automation consent: a play, pause or skip command never goes to a player macOS hasn't allowed",
+          "\(undecided) \(unknown) \(denied) \(pending) \(other)")
+}
+do {
+    // Just launched, macOS can't tell yet (-600): the player is neither read nor asked about until it can.
+    var consent = AutomationConsent()
+    let early = (0..<3).map {
+        consent.step(consentSpotify, running: true, permission: .unknown, mayAsk: true, at: 2 * Double($0))
+    }
+    let decided = consentAsk(consent.step(consentSpotify, running: true, permission: .undecided, mayAsk: true, at: 6))
+    check(early.allSatisfy { $0 == .wait } && decided != nil,
+          "automation consent: a player whose permission macOS can't tell yet is not read",
+          "\(early) \(String(describing: decided))")
+}
+check(AutomationConsent.permission(status: 0) == .allowed && AutomationConsent.permission(status: -1743) == .denied
+        && AutomationConsent.permission(status: -1744) == .undecided && AutomationConsent.permission(status: -600) == .unknown,
+      "automation consent: macOS's answers read as allowed, denied, undecided, and anything else as unknown")
+
 // MARK: Capture watch: a capture that stops calling back is opened again, the capture only
 /// Now Playing's reading at `uptime` of a source playing with its position moving on with the clock.
 func moving(_ uptime: Double) -> CaptureFlowWatch.Source {
