@@ -116,6 +116,11 @@ use crate::ui_model::{
 /// audio come and go rarely.
 const SOURCE_POLLS: u32 = 6;
 
+/// A settings save that failed is tried again this many polls later, about
+/// every thirty seconds: a Windows sign-out ends the app without the quit
+/// save, so a change made just before must not wait for the next one.
+const SAVE_RETRY_POLLS: u32 = 60;
+
 /// The results of the last Calibrate All, kept until closed or out of date.
 struct KeptSheet {
     sheet: Sheet,
@@ -11650,6 +11655,58 @@ mod tests {
             .filter(|message| message.contains("settings: couldn't be saved"))
             .count();
         assert_eq!(failures, 1, "one attempt per change, not per poll");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_change_whose_save_failed_is_saved_later_without_another_change() {
+        let dir = test_dir("adapter-settings-retry-on-polls");
+        let path = dir.join(settings::FILE_NAME);
+        let blocked = crate::data_folder::temporary_path(&path);
+        std::fs::create_dir(&blocked).expect("blocked");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let file = SettingsFile::at(path.clone());
+        let mut adapter =
+            AudioAdapter::with_settings(launch_audio(), || "09.41".to_owned(), log.clone(), file);
+        adapter.set_master_volume(64.0);
+        for _ in 0..2 * SAVE_RETRY_POLLS {
+            adapter.poll();
+        }
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        for _ in 0..SAVE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert_eq!(SettingsFile::at(path.clone()).load().0.master_volume, 64.0);
+        assert!(messages(&adapter).is_empty(), "the notice goes");
+        assert!(log.flush(TEST_FLUSH));
+        let failures = read_messages(&dir.join(FILE_NAME))
+            .iter()
+            .filter(|message| message.contains("settings: couldn't be saved"))
+            .count();
+        assert_eq!(failures, 1, "the retries are not logged");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn going_back_to_the_saved_settings_ends_a_failed_save() {
+        let dir = test_dir("adapter-settings-back-to-saved");
+        let path = dir.join(settings::FILE_NAME);
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.set_master_volume(64.0);
+        adapter.poll();
+        let blocked = crate::data_folder::temporary_path(&path);
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        adapter.set_master_volume(64.0);
+        assert!(adapter.poll(), "the notice goes");
+        assert!(messages(&adapter).is_empty());
+        // The value that failed, chosen again, is saved at once.
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert_eq!(SettingsFile::at(path.clone()).load().0.master_volume, 65.0);
         let _ = std::fs::remove_dir_all(dir);
     }
 
