@@ -6154,6 +6154,20 @@ mod tests {
         );
     }
 
+    // covers: S326, S328
+    #[test]
+    fn a_stalled_output_keeps_its_lead_in_the_session_lead_until_it_reopens() {
+        let mut backend = backend();
+        backend.set_output_period(HEADPHONES, 9_600);
+        backend.set_output_period(SPEAKERS, 480);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let before = backend.session_lead();
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        assert!(backend.poll().is_empty(), "a first stall posts no notice");
+        assert_eq!(starts_of(&backend, HEADPHONES), 2);
+        assert_eq!(backend.session_lead(), before);
+    }
+
     // covers: S326
     #[test]
     fn a_second_stall_in_a_row_posts_the_lost_notice_and_keeps_the_output_on() {
