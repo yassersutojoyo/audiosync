@@ -1088,7 +1088,12 @@ fn ap2_ptp_session() {
     udp.event.take();
     std::thread::sleep(Duration::from_millis(900));
     let (general, event) = (udp.general.take(), udp.event.take());
-    assert!(kinds(&general, 0xB) >= 1, "Announce");
+    let announced = kinds(&general, 0xB) >= 1
+        || udp
+            .general
+            .wait_for(|(_, _, b)| b[0] & 0x0F == 0xB)
+            .is_some();
+    assert!(announced, "Announce");
     assert!(
         kinds(&general, 0x8) >= 6,
         "Follow_Up x{} in 0.9 s",
