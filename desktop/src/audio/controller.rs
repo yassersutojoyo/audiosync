@@ -377,12 +377,15 @@ struct Session<D: Driver> {
 /// A single app captured whose process Windows won't open for a wait (an
 /// app running as administrator, say): the host checks every
 /// [`MIX_FOLLOW_INTERVAL`] that it still runs (S327).
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct UnwatchedApp {
     pid: u32,
     /// Its start time as the capture started, when it could be read: a
     /// process ID reused by another process has another one.
     created: Option<u64>,
+    /// Its executable as the capture started, when it was listed: a process
+    /// ID reused by another app is told by it even without start times.
+    executable: Option<String>,
     /// When the last check ran; `None` before the first.
     checked: Option<Instant>,
 }
@@ -2206,23 +2209,24 @@ impl<D: Driver> Controller<D> {
                  {code:#010x}): AudioSync checks every 2 s that it still runs"
             )
         });
-        let created = self
+        let entry = self
             .driver
             .processes()
             .ok()
-            .and_then(|processes| processes.get(pid).and_then(|entry| entry.created));
+            .and_then(|processes| processes.get(pid).cloned());
         Some(UnwatchedApp {
             pid,
-            created,
+            created: entry.as_ref().and_then(|entry| entry.created),
+            executable: entry.map(|entry| entry.executable),
             checked: None,
         })
     }
 
     /// Whether the running session's unwatched app quit, checked every
     /// [`MIX_FOLLOW_INTERVAL`] (S327): its process ID is no longer listed, or
-    /// is listed with another start time. A start time that can't be read
-    /// either time doesn't count as another, and a list that can't be read
-    /// waits for the next check.
+    /// is listed with another executable or start time. A start time that
+    /// can't be read either time doesn't count as another, and a list that
+    /// can't be read waits for the next check.
     fn unwatched_app_quit(&mut self, now: Instant) -> bool {
         let Some(app) = self
             .session
@@ -2238,16 +2242,19 @@ impl<D: Driver> Controller<D> {
             return false;
         }
         app.checked = Some(now);
-        let app = *app;
+        let app = app.clone();
         let Ok(processes) = self.driver.processes() else {
             return false;
         };
-        let runs = processes
-            .get(app.pid)
-            .is_some_and(|entry| match (app.created, entry.created) {
-                (Some(then), Some(now)) => then == now,
-                _ => true,
-            });
+        let runs = processes.get(app.pid).is_some_and(|entry| {
+            app.executable
+                .as_deref()
+                .is_none_or(|executable| executable.eq_ignore_ascii_case(&entry.executable))
+                && match (app.created, entry.created) {
+                    (Some(then), Some(now)) => then == now,
+                    _ => true,
+                }
+        });
         if !runs {
             self.log.log(|| {
                 format!(
