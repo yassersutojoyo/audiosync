@@ -529,6 +529,13 @@ fn device_memory_keeps_formats_and_offsets_and_skips_damaged_entries() {
     let damaged = DeviceMemory::from_json(&format!(r#"{{"{A}": {{"offsetMs": 60000}}}}"#));
     assert_eq!(damaged.offset(&A), Some(MAX_OFFSET), "clamped on load");
     assert_eq!(MAX_OFFSET, Duration::from_secs(20));
+    let mut long = DeviceMemory::default();
+    long.set_offset(A, Duration::from_secs(30));
+    assert_eq!(
+        DeviceMemory::from_json(&long.to_json()).offset(&A),
+        long.offset(&A),
+        "an offset reads back after a restart as it was set"
+    );
 
     let mut host = CastHost::new(memory).expect("worker");
     host.set_offset(B, Duration::from_millis(40));
