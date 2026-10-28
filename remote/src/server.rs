@@ -329,6 +329,8 @@ struct Published {
     revision: u64,
     current: Option<State>,
     history: VecDeque<(u64, Arc<str>)>,
+    /// A command reached the app since the last snapshot.
+    commanded: bool,
 }
 
 impl Published {
@@ -527,6 +529,7 @@ impl Shared {
         match lock(&self.sink).as_ref() {
             Some(sink) => {
                 sink(command);
+                lock(&self.published).commanded = true;
                 true
             }
             None => false,
@@ -693,12 +696,14 @@ impl RemoteServer {
 
     /// Makes `state` the current snapshot and streams it to the open pages;
     /// returns its revision. A snapshot equal to the current one keeps the
-    /// current revision and sends nothing.
+    /// current revision and sends nothing, unless a command reached the app
+    /// since the last one: a page shows what it sent until a snapshot comes.
     pub fn publish(&self, state: State) -> u64 {
         let mut published = lock(&self.shared.published);
-        if published.current.as_ref() == Some(&state) {
+        if !published.commanded && published.current.as_ref() == Some(&state) {
             return published.revision;
         }
+        published.commanded = false;
         published.revision += 1;
         let revision = published.revision;
         published
