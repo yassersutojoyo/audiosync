@@ -486,6 +486,31 @@ fn a_level_equal_to_the_reported_one_is_not_awaited() {
     );
 }
 
+// covers: C69, C70, C104
+#[test]
+fn a_level_the_device_rounds_onto_the_reported_one_is_not_awaited() {
+    let start = Instant::now();
+    let reported = json!({"level": 0.7, "controlType": "attenuation", "stepInterval": 0.1});
+    let mut channel = running(start, reported);
+    channel.set_volume(start, 0.72).expect("sent");
+    sent(&mut channel);
+    channel.handle(
+        start,
+        status(
+            0,
+            vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")],
+            json!({"level": 0.3, "controlType": "attenuation", "stepInterval": 0.1}),
+        ),
+    );
+    let level = channel
+        .step_volume(start + VOLUME_INTERVAL, false)
+        .expect("step");
+    assert!(
+        (level - 0.2).abs() < 1e-9,
+        "builds on the reported 0.3: {level}"
+    );
+}
+
 // covers: C69, C70
 #[test]
 fn a_rounded_answer_without_the_request_id_answers_the_level() {
