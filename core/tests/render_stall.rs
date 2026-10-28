@@ -42,8 +42,9 @@ fn write(writer: &mut RingWriter, first: u64, at: u128) {
 
 /// The output's capture-to-output delay at each open callback's last frame,
 /// in ms, with the time it was played at in s, when the stall stops the
-/// capture for `capture_gap_ms` and the output for `output_gap_ms`.
-fn run(capture_gap_ms: u128, output_gap_ms: u128) -> Vec<(f64, f64)> {
+/// capture for `capture_gap_ms` and the output for `output_gap_ms`; and the
+/// output's resyncs.
+fn run(capture_gap_ms: u128, output_gap_ms: u128) -> (Vec<(f64, f64)>, u64) {
     let ring = Ring::for_rate(RATE).unwrap();
     let mut writer = ring.writer().unwrap();
     let gain = Arc::new(SharedGain::new(1.0));
@@ -99,12 +100,12 @@ fn run(capture_gap_ms: u128, output_gap_ms: u128) -> Vec<(f64, f64)> {
         let captured_at = index as f64 / f64::from(RATE) + skipped;
         delays.push((played_at, (played_at - captured_at) * 1000.0));
     }
-    delays
+    (delays, control.counters().resyncs)
 }
 
-/// The largest offset, in ms, from [`RECOVERED_S`] on, from the mean delay
-/// before the stall.
-fn worst_offset(delays: &[(f64, f64)]) -> f64 {
+/// The largest offset, in ms, from `from_s` on, from the mean delay before
+/// the stall.
+fn worst_offset(delays: &[(f64, f64)], from_s: f64) -> f64 {
     let before: Vec<f64> = delays
         .iter()
         .filter(|&&(at, _)| at < STALL_AT_S as f64)
@@ -113,7 +114,7 @@ fn worst_offset(delays: &[(f64, f64)]) -> f64 {
     let at_delay = before.iter().sum::<f64>() / before.len() as f64;
     let after: Vec<f64> = delays
         .iter()
-        .filter(|&&(at, _)| at >= RECOVERED_S)
+        .filter(|&&(at, _)| at >= from_s)
         .map(|&(_, d)| d - at_delay)
         .collect();
     assert!(!before.is_empty() && !after.is_empty());
@@ -127,13 +128,29 @@ fn worst_offset(delays: &[(f64, f64)]) -> f64 {
 fn after_a_stall_of_the_whole_process_the_output_returns_to_its_delay() {
     // The output comes back 20 ms before the capture, while the capture's
     // newest stamp is still stale.
-    let worst = worst_offset(&run(260, 240));
+    let worst = worst_offset(&run(260, 240).0, RECOVERED_S);
     assert!(worst.abs() <= 2.0, "off its delay by up to {worst:.2} ms");
 }
 
 // covers: S207
 #[test]
 fn an_output_back_after_the_capture_is_trimmed_back_to_its_delay() {
-    let worst = worst_offset(&run(240, 260));
+    let worst = worst_offset(&run(240, 260).0, RECOVERED_S);
     assert!(worst.abs() <= 2.0, "off its delay by up to {worst:.2} ms");
+}
+
+// covers: S207
+#[test]
+fn a_gap_of_a_stall_in_the_output_times_re_anchors_the_output_at_once() {
+    // The Mac's sample of 2026-10-28 17.54: the capture writes again first,
+    // so no stamp is stale, and the outputs' times step by 206.8, 208.3 and
+    // 224.0 ms. Each is back at its delay within a second, by one resync.
+    for output_gap_ms in [207, 208, 224] {
+        let (delays, resyncs) = run(200, output_gap_ms);
+        let worst = worst_offset(&delays, STALL_AT_S as f64 + 1.0);
+        assert!(
+            worst.abs() <= 2.0 && resyncs == 1,
+            "{output_gap_ms} ms: off by up to {worst:.2} ms, {resyncs} resyncs"
+        );
+    }
 }
