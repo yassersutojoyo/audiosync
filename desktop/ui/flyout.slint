@@ -349,6 +349,8 @@ export component TrayFlyout inherits Window {
     width: 340px;
     // True once Windows draws the flyout's rounded frame (border and shadow).
     in property <bool> rounded;
+    // The content's fade as the flyout opens, set by the app (src/tray.rs).
+    in property <float> content-opacity: 1;
     background: Tokens.surface;
     default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
@@ -408,6 +410,7 @@ export component TrayFlyout inherits Window {
     }
 
     focus := FocusScope {
+        opacity: root.content-opacity;
         key-pressed(event) => {
             if event.text == Key.Escape {
                 root.close-requested();

@@ -45,6 +45,8 @@ mod backdrop;
 mod contrast;
 mod data_folder;
 mod debug_log;
+#[cfg(any(windows, test))]
+mod flyout_motion;
 mod guide;
 mod launch_at_login;
 mod network_profile;

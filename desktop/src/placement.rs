@@ -20,6 +20,32 @@ impl Bounds {
     }
 }
 
+/// The side of the screen the flyout opens from: the taskbar's, as far as
+/// `icon` and `work_area` tell.
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Edge {
+    Bottom,
+    Top,
+    Right,
+    Left,
+}
+
+#[cfg(any(windows, test))]
+pub fn taskbar_edge(icon: Bounds, work_area: Bounds) -> Edge {
+    if icon.bottom() <= work_area.y {
+        Edge::Top
+    } else if icon.y < work_area.bottom() && icon.x >= work_area.right() {
+        Edge::Right
+    } else if icon.y < work_area.bottom() && icon.right() <= work_area.x {
+        Edge::Left
+    } else {
+        // Bottom (the default), and an overflow icon or an auto-hidden
+        // taskbar, which open above the icon too.
+        Edge::Bottom
+    }
+}
+
 /// The flyout's top-left corner for a flyout of `width` x `height` next to
 /// `icon`, in `work_area` (the monitor minus the taskbar), `gap` away from
 /// the taskbar and the screen edges. All in physical pixels.
@@ -33,21 +59,15 @@ pub fn flyout_origin(
 ) -> (f64, f64) {
     let center_x = icon.x + icon.width / 2.0;
     let center_y = icon.y + icon.height / 2.0;
-    let (x, y) = if icon.y >= work_area.bottom() {
-        // Taskbar at the bottom (the default): open above the icon.
-        (center_x - width / 2.0, work_area.bottom() - gap - height)
-    } else if icon.bottom() <= work_area.y {
-        // Taskbar at the top.
-        (center_x - width / 2.0, work_area.y + gap)
-    } else if icon.x >= work_area.right() {
-        // Taskbar on the right.
-        (work_area.right() - gap - width, center_y - height / 2.0)
-    } else if icon.right() <= work_area.x {
-        // Taskbar on the left.
-        (work_area.x + gap, center_y - height / 2.0)
-    } else {
+    let (x, y) = match taskbar_edge(icon, work_area) {
+        Edge::Bottom if icon.y >= work_area.bottom() => {
+            (center_x - width / 2.0, work_area.bottom() - gap - height)
+        }
         // An overflow icon or an auto-hidden taskbar: above the icon.
-        (center_x - width / 2.0, icon.y - gap - height)
+        Edge::Bottom => (center_x - width / 2.0, icon.y - gap - height),
+        Edge::Top => (center_x - width / 2.0, work_area.y + gap),
+        Edge::Right => (work_area.right() - gap - width, center_y - height / 2.0),
+        Edge::Left => (work_area.x + gap, center_y - height / 2.0),
     };
     (
         clamp(x, work_area.x + gap, work_area.right() - gap - width),
@@ -148,6 +168,29 @@ mod tests {
             flyout_origin(icon(12.0, 900.0), 320.0, 500.0, work, 12.0).0,
             60.0
         );
+    }
+
+    #[test]
+    fn the_flyout_opens_from_the_taskbars_edge() {
+        let top = Bounds {
+            x: 0.0,
+            y: 48.0,
+            width: 1920.0,
+            height: 1032.0,
+        };
+        let right = Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1872.0,
+            height: 1080.0,
+        };
+        let left = Bounds { x: 48.0, ..right };
+        assert_eq!(taskbar_edge(icon(1500.0, 1044.0), SCREEN), Edge::Bottom);
+        assert_eq!(taskbar_edge(icon(800.0, 12.0), top), Edge::Top);
+        assert_eq!(taskbar_edge(icon(1884.0, 900.0), right), Edge::Right);
+        assert_eq!(taskbar_edge(icon(12.0, 900.0), left), Edge::Left);
+        // An overflow icon sits inside the work area: above it, as at the bottom.
+        assert_eq!(taskbar_edge(icon(1500.0, 900.0), SCREEN), Edge::Bottom);
     }
 
     #[test]

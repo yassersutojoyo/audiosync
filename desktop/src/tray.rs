@@ -25,6 +25,8 @@ use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, Predefin
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 #[cfg(windows)]
+use crate::flyout_motion::{self, Slide};
+#[cfg(windows)]
 use crate::placement::{self, Bounds};
 #[cfg(windows)]
 use crate::platform;
@@ -55,6 +57,11 @@ const REOPEN_GUARD: Duration = Duration::from_millis(300);
 #[cfg(windows)]
 const FLYOUT_GAP: f64 = 12.0;
 
+/// How often the flyout's open motion moves on: as often as the event loop
+/// wakes, about once a frame.
+#[cfg(windows)]
+const MOTION_TICK: Duration = Duration::from_millis(8);
+
 /// How often the taskbar's theme and the icon size are checked again. A
 /// registry read and a system metric: cheap enough to poll.
 #[cfg(windows)]
@@ -71,6 +78,11 @@ thread_local! {
     /// The icon the flyout last opened next to: a refresh while it is open
     /// can change its height, and it is placed again.
     static FLYOUT_ICON: Cell<Option<Bounds>> = const { Cell::new(None) };
+    /// Where the flyout belongs (physical pixels); while it opens, the
+    /// motion runs toward it, and a refresh that moves it moves the target.
+    static FLYOUT_PLACE: Cell<Option<(i32, i32)>> = const { Cell::new(None) };
+    static FLYOUT_MOTION: Cell<Option<(Slide, Instant)>> = const { Cell::new(None) };
+    static FLYOUT_MOTION_TIMER: slint::Timer = slint::Timer::default();
 }
 
 pub struct Tray {
@@ -396,9 +408,67 @@ fn show_flyout(app: &App, icon: Bounds) {
     let rounded = app.apply_frame(flyout, "tray flyout", crate::backdrop::Frame::Flyout);
     app.flyout.set_rounded(rounded);
     FLYOUT_ICON.with(|cell| cell.set(Some(icon)));
+    start_open_motion(app, icon);
     place_flyout(app, icon);
     platform::bring_to_front(flyout);
     app.flyout.invoke_take_focus();
+}
+
+/// The work area of the icon's monitor; without one, the screen above the icon.
+#[cfg(windows)]
+fn work_area_of(icon: Bounds) -> Bounds {
+    platform::work_area_at(icon.x, icon.y).unwrap_or(Bounds {
+        x: 0.0,
+        y: 0.0,
+        width: icon.x + icon.width,
+        height: icon.y,
+    })
+}
+
+/// Starts the flyout's slide in from the taskbar and its fade. Windows'
+/// animation setting is read at each open, since it can change while the
+/// app runs.
+#[cfg(windows)]
+fn start_open_motion(app: &App, icon: Bounds) {
+    let scale = f64::from(app.flyout.window().scale_factor());
+    let edge = placement::taskbar_edge(icon, work_area_of(icon));
+    let slide = flyout_motion::plan(flyout_motion::animations_on(), edge, scale);
+    FLYOUT_MOTION.with(|cell| cell.set(slide.map(|slide| (slide, Instant::now()))));
+    app.flyout
+        .set_content_opacity(if slide.is_some() { 0.0 } else { 1.0 });
+    FLYOUT_MOTION_TIMER.with(|timer| {
+        if slide.is_some() {
+            timer.start(slint::TimerMode::Repeated, MOTION_TICK, step_open_motion);
+        } else {
+            timer.stop();
+        }
+    });
+}
+
+#[cfg(windows)]
+fn step_open_motion() {
+    let Some(app) = APP.with(|cell| cell.borrow().upgrade()) else {
+        return;
+    };
+    let flyout = app.flyout.window();
+    let motion = FLYOUT_MOTION.with(Cell::get);
+    let (Some((slide, started)), Some((x, y))) = (motion, FLYOUT_PLACE.with(Cell::get)) else {
+        return;
+    };
+    let step = slide.at(started.elapsed());
+    // Closed mid-motion: the next open starts over.
+    let done = step.done || !flyout.is_visible();
+    let (dx, dy) = if done { (0.0, 0.0) } else { step.offset };
+    let at = slint::PhysicalPosition::new(x + dx.round() as i32, y + dy.round() as i32);
+    if flyout.position() != at {
+        flyout.set_position(at);
+    }
+    app.flyout
+        .set_content_opacity(if done { 1.0 } else { step.opacity });
+    if done {
+        FLYOUT_MOTION.with(|cell| cell.set(None));
+        FLYOUT_MOTION_TIMER.with(slint::Timer::stop);
+    }
 }
 
 /// Sizes the flyout to its parts, as much as the work area of the icon's
@@ -407,18 +477,19 @@ fn show_flyout(app: &App, icon: Bounds) {
 fn place_flyout(app: &App, icon: Bounds) {
     let flyout = app.flyout.window();
     let scale = f64::from(flyout.scale_factor());
-    let work_area = platform::work_area_at(icon.x, icon.y).unwrap_or(Bounds {
-        x: 0.0,
-        y: 0.0,
-        width: icon.x + icon.width,
-        height: icon.y,
-    });
+    let work_area = work_area_of(icon);
     let gap = FLYOUT_GAP * scale;
     let room = (work_area.height - 2.0 * gap) / scale;
     let height = f64::from(app.fit_flyout(room as f32)) * scale;
     let (x, y) =
         placement::flyout_origin(icon, f64::from(flyout.size().width), height, work_area, gap);
-    let origin = slint::PhysicalPosition::new(x.round() as i32, y.round() as i32);
+    let place = (x.round() as i32, y.round() as i32);
+    FLYOUT_PLACE.with(|cell| cell.set(Some(place)));
+    if FLYOUT_MOTION.with(Cell::get).is_some() {
+        step_open_motion();
+        return;
+    }
+    let origin = slint::PhysicalPosition::new(place.0, place.1);
     if flyout.position() != origin {
         flyout.set_position(origin);
     }
