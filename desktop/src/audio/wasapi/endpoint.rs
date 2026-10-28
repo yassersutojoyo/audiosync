@@ -639,6 +639,8 @@ struct StallWatch {
     clock_runs: bool,
     /// The clock's position at the last read.
     position: Option<u64>,
+    /// When the last read was.
+    read: Option<Instant>,
 }
 
 impl StallWatch {
@@ -653,6 +655,17 @@ impl StallWatch {
         buffer_frames: u32,
         position: Option<u64>,
     ) -> Option<Stall> {
+        // Reads come at least every 500 ms while the thread runs, so a longer
+        // gap is time it didn't run, a sleep of the PC say, and never counts
+        // toward a stall (S332).
+        if self
+            .read
+            .is_some_and(|read| now.saturating_duration_since(read) >= STALL_SPAN)
+            && self.took.is_some()
+        {
+            self.took = Some(now);
+        }
+        self.read = Some(now);
         if padding < buffer_frames {
             self.took = Some(now);
         }
@@ -801,6 +814,34 @@ mod tests {
             let stall = watch.observe(at(start, ms), BUFFER - PERIOD, BUFFER, Some(stuck));
             assert_eq!(stall, None, "{ms} ms");
         }
+    }
+
+    // covers: S332, S326
+    #[test]
+    fn a_wake_hours_after_the_last_read_starts_the_stall_span_over() {
+        let start = Instant::now();
+        let mut watch = StallWatch::default();
+        for ms in (0..1_000).step_by(10) {
+            let stall = watch.observe(at(start, ms), BUFFER - PERIOD, BUFFER, None);
+            assert_eq!(stall, None);
+        }
+        // The PC sleeps two hours in a wait; at the first read after the
+        // wake the device hasn't taken a frame yet.
+        let woke = 2 * 3_600_000;
+        for ms in (woke..woke + 2_000).step_by(500) {
+            assert_eq!(
+                watch.observe(at(start, ms), BUFFER, BUFFER, None),
+                None,
+                "{ms} ms"
+            );
+        }
+        assert_eq!(
+            watch.observe(at(start, woke + 2_000), BUFFER, BUFFER, None),
+            Some(Stall {
+                span: Duration::from_secs(2),
+                sign: StallSign::FullPadding,
+            })
+        );
     }
 
     #[test]

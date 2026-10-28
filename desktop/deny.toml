@@ -36,6 +36,7 @@ exceptions = [
     # LicenseRef-Slint-Software-3.0"; public builds take them under
     # GPL-3.0-only, which only Slint's crates may use.
     { crate = "i-slint-backend-selector", allow = ["GPL-3.0-only"] },
+    { crate = "i-slint-backend-testing", allow = ["GPL-3.0-only"] },
     { crate = "i-slint-backend-winit", allow = ["GPL-3.0-only"] },
     { crate = "i-slint-common", allow = ["GPL-3.0-only"] },
     { crate = "i-slint-compiler", allow = ["GPL-3.0-only"] },

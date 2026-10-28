@@ -80,6 +80,9 @@ final class OutputRenderer: FadingOutput {
     /// alive (unplugged, or a Bluetooth device out of range, S68). The output
     /// keeps its unit until `halt`.
     var onDeviceGone: (() -> Void)?
+    /// Called on the main queue, once per start, when the device's rate or
+    /// output channel count no longer matches what the start read (S330).
+    var onFormatChanged: ((OutputDeviceFormat, OutputDeviceFormat) -> Void)?
 
     /// The session's delay ring, which every start reads.
     private let delayRing: CoreDelayRing
@@ -103,6 +106,11 @@ final class OutputRenderer: FadingOutput {
     private static var plausibleLatencyNs: [String: UInt64] = [:]
     private var aliveListener: (device: AudioObjectID, block: AudioObjectPropertyListenerBlock)?
     private var overloadListener: (device: AudioObjectID, block: AudioObjectPropertyListenerBlock)?
+    private var formatListener: (device: AudioObjectID, block: AudioObjectPropertyListenerBlock)?
+    /// The device's format as the latest start read it.
+    private var startedFormat: OutputDeviceFormat?
+    private var formatCheckQueued = false
+    private var formatChanged = false
     /// The latest start's device is a Bluetooth one (Classic or LE).
     private(set) var isBluetooth = false
     /// Bumped by every start and stop, so a listener call queued for an
@@ -225,7 +233,10 @@ final class OutputRenderer: FadingOutput {
         renderRate = started.rate
         reportedLoss = false
         stalled = false
+        formatChanged = false
+        formatCheckQueued = false
         startedDevice = device
+        startedFormat = Self.deviceFormat(device)
         stopNote = "running"
         let reportedNs = Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
         let uid = Self.deviceString(device, kAudioDevicePropertyDeviceUID)
@@ -236,6 +247,7 @@ final class OutputRenderer: FadingOutput {
         isBluetooth = bluetooth
         installDeviceAliveListener(device)
         installOverloadListener(device)
+        installFormatListener(device)
         startDebugReport()
         startLateCallbackReport(device: device)
         let extraLeadMs = target?.renderer.extraLeadMs ?? 0
@@ -252,6 +264,7 @@ final class OutputRenderer: FadingOutput {
         generation &+= 1
         uninstallDeviceAliveListener()
         uninstallOverloadListener()
+        uninstallFormatListener()
         debugTimer?.cancel()
         debugTimer = nil
         lateTimer?.cancel()
@@ -262,6 +275,8 @@ final class OutputRenderer: FadingOutput {
             stopNote = "stopped without a fade: its device is gone"
         } else if stalled {
             stopNote = "stopped without a fade: it took no frame"
+        } else if formatChanged {
+            stopNote = "stopped without a fade: its device's format changed"
         } else if let renderer = target?.renderer, renderer.fadeEndNs != nil {
             stopNote = renderer.hasFaded(latencyNs: latencyNs, nowNs: now)
                 ? "stopped once its fade-out had played" : "stopped before its fade-out had played"
@@ -632,6 +647,63 @@ final class OutputRenderer: FadingOutput {
         overloadListener = nil
         var address = Self.overloadAddress
         AudioObjectRemovePropertyListenerBlock(listener.device, &address, Self.overloadQueue, listener.block)
+    }
+
+    // MARK: - Device format (S330)
+
+    private static var formatAddresses: [AudioObjectPropertyAddress] {
+        [AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+                                    mScope: kAudioObjectPropertyScopeGlobal,
+                                    mElement: kAudioObjectPropertyElementMain),
+         AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration,
+                                    mScope: kAudioObjectPropertyScopeOutput,
+                                    mElement: kAudioObjectPropertyElementMain)]
+    }
+
+    /// The start reads it and a format notice reads it the same way, so a
+    /// device whose format didn't change compares equal.
+    private static func deviceFormat(_ device: AudioObjectID) -> OutputDeviceFormat? {
+        guard let rate = deviceNominalRate(device) else { return nil }
+        let channels = AudioDevices.channelCount(of: device, in: kAudioObjectPropertyScopeOutput)
+        return channels > 0 ? OutputDeviceFormat(rate: rate, channels: channels) : nil
+    }
+
+    /// Watches `device`'s rate and output channels on the main queue and
+    /// reports a change once per start, read a moment after the first notice.
+    private func installFormatListener(_ device: AudioObjectID) {
+        let mark = generation
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            guard let self, self.generation == mark, !self.formatCheckQueued else { return }
+            self.formatCheckQueued = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + OutputFormatWatch.settleS) { [weak self] in
+                guard let self, self.generation == mark, !self.formatChanged, !self.reportedLoss else { return }
+                self.formatCheckQueued = false
+                let fading = self.target?.renderer.fadeEndNs != nil
+                let now = OutputRenderer.deviceFormat(device)
+                guard case .reopen(let old, let new) = OutputFormatWatch.decide(
+                    started: self.startedFormat, now: now, fadingOut: fading) else { return }
+                self.formatChanged = true
+                self.onFormatChanged?(old, new)
+            }
+        }
+        var installed = false
+        for var address in Self.formatAddresses {
+            let status = AudioObjectAddPropertyListenerBlock(device, &address, DispatchQueue.main, block)
+            if status == noErr {
+                installed = true
+            } else {
+                DebugTrace.log("[AudioSync] output device \(device): its format can't be watched (status \(status))")
+            }
+        }
+        if installed { formatListener = (device, block) }
+    }
+
+    private func uninstallFormatListener() {
+        guard let listener = formatListener else { return }
+        formatListener = nil
+        for var address in Self.formatAddresses {
+            AudioObjectRemovePropertyListenerBlock(listener.device, &address, DispatchQueue.main, listener.block)
+        }
     }
 
     // MARK: - Debug log

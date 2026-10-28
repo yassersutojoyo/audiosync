@@ -97,6 +97,9 @@ windows = { version = "0.62", features = [
     # QueryPerformanceCounter: the capture loop's clock while loopback
     # delivers nothing, in the time base of the packets' positions.
     "Win32_System_Performance",
+    # PowerRegisterSuspendResumeNotification: a sleep and wake while
+    # streaming (src/audio/wasapi/power.rs).
+    "Win32_System_Power",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
@@ -149,6 +152,11 @@ pipewire = { version = "0.10.1", features = ["v1_0_0"] }
 # clock_gettime(CLOCK_MONOTONIC), the clock PipeWire's graph times count in
 # (MIT OR Apache-2.0, already in the build).
 libc = "0.2.191"
+
+[dev-dependencies]
+# Slint's element search, so tests can run the accessibility actions UI
+# Automation sends. Test-only, never in a build; already in Slint's graph.
+i-slint-backend-testing = { version = "=1.18.1", default-features = false }
 
 # The Linux live tests feed the whole system's capture to the airplay and
 # cast crates' own test receivers, compiled in from their tests/common

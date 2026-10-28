@@ -52,6 +52,10 @@ final class StreamEngine {
     /// halted and detached; the speaker stays on.
     var onOutputGone: ((String, OutputLoss) -> Void)?
 
+    /// When Now Playing last read the captured source as playing, nil while
+    /// it shows it paused or can't read it (S335 D3).
+    var sourcePlayingReadAt: (() -> TimeInterval?)?
+
     /// The core's volume curve, for the host's gain arithmetic (S70, S71).
     let gainCurve = CoreGainCurve()
 
@@ -88,6 +92,12 @@ final class StreamEngine {
     /// Each attached output's token; a re-attach under the same UID is a new
     /// renderer whose counters start at 0.
     private var attachTokens = AttachTokens()
+    /// The running session's capture watch (S335), its 0.5 s timer, what a
+    /// reopen opens and the last try's error.
+    private var flowWatch = CaptureFlowWatch()
+    private var flowTimer: DispatchSourceTimer?
+    private var opened: (source: AudioSource, inputPair: Int)?
+    private var reopenError: SourceCapture.CaptureError?
     /// The 0.5 s check for outputs whose render callback stopped (S334).
     private var stallTimer: DispatchSourceTimer?
     private var stallWatch = OutputStallWatch()
@@ -102,6 +112,7 @@ final class StreamEngine {
         retirement.finishAll()
         fadeTimer?.cancel()
         statusTimer?.cancel()
+        flowTimer?.cancel()
         stallTimer?.cancel()
     }
 
@@ -185,6 +196,7 @@ final class StreamEngine {
         try capture.start(source: source, parts: parts, inputPair: inputPair, rebuild: rebuild)
         self.parts = parts
         isRunning = true
+        startFlowWatch(source: source, inputPair: inputPair)
         DebugTrace.log("[AudioSync] session started: \(source) at \(capture.sampleRate) Hz")
         startStallWatch()
         if DebugTrace.enabled {
@@ -306,6 +318,7 @@ final class StreamEngine {
         holdCalibrationTime(false)
         stopStallWatch()
         stopStatusLine()
+        stopFlowWatch()
         isRunning = false
         self.parts = nil
         let leaving = renderers.keys.sorted().compactMap { uid in renderers[uid].map { (uid: uid, renderer: $0) } }
@@ -363,6 +376,10 @@ final class StreamEngine {
     /// tell the host, which rebuilds it or reports the lost source.
     private func handleInterruption(_ reason: SourceCapture.Interruption) {
         guard isRunning else { return }
+        if case .sourceLost(.aggregateDeviceFailed) = reason {
+            follow(flowWatch.report(.aggregateDied, at: ProcessInfo.processInfo.systemUptime))
+            return
+        }
         stop()
         onInterrupted?(reason)
     }
@@ -388,6 +405,90 @@ final class StreamEngine {
         fadeTimer = timer
     }
 
+    // MARK: - Capture watch
+
+    /// Core Audio's service restarted (S335): every object the session held
+    /// died with it, so each output is dropped without a fade, to be attached
+    /// again by UID at the next sync, and the capture counts as stopped at once.
+    func serviceRestarted() {
+        guard isRunning else { return }
+        for (uid, renderer) in renderers.sorted(by: { $0.key < $1.key }) { handleOutputLost(uid, renderer, .deviceGone) }
+        follow(flowWatch.report(.serviceRestarted, at: ProcessInfo.processInfo.systemUptime))
+    }
+
+    private func startFlowWatch(source: AudioSource, inputPair: Int) {
+        stopFlowWatch()
+        flowWatch = CaptureFlowWatch()
+        opened = (source, inputPair)
+        reopenError = nil
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + .milliseconds(500), repeating: .milliseconds(500), leeway: .milliseconds(50))
+        timer.setEventHandler { [weak self] in
+            guard let self, self.isRunning else { return }
+            self.follow(self.flowWatch.tick(callbacks: self.capture.counts?.callbacks, reading: self.capture.isReading,
+                                            playingReadAt: self.sourcePlayingReadAt?(),
+                                            at: ProcessInfo.processInfo.systemUptime))
+        }
+        timer.resume()
+        flowTimer = timer
+    }
+
+    private func stopFlowWatch() {
+        flowTimer?.cancel()
+        flowTimer = nil
+        opened = nil
+    }
+
+    private func follow(_ step: CaptureFlowWatch.Step) {
+        switch step {
+        case .none:
+            return
+        case .stopped(let sign):
+            capture.halt()
+            DebugTrace.log("[AudioSync] capture stopped delivering (\(sign.description)); "
+                           + "opening the capture again while the outputs and speakers play on")
+        case .tryOpen(let number):
+            reopenCapture(try: number)
+        case .kept(let number):
+            DebugTrace.log("[AudioSync] capture reopen try \(number) of \(CaptureFlowWatch.tries) kept")
+        case .giveUp:
+            DebugTrace.log("[AudioSync] capture reopen: all \(CaptureFlowWatch.tries) tries failed")
+            stopForLostCapture(reopenError ?? .aggregateDeviceFailed(kAudioHardwareNotRunningError))
+        }
+    }
+
+    /// Opens only the capture again, into the session's parts: every output
+    /// keeps its renderer and hold-back and the senders stay fed (S335).
+    private func reopenCapture(try number: Int) {
+        guard let parts, let opened else { return }
+        let rate = capture.sampleRate
+        do {
+            try capture.reopen(source: opened.source, parts: parts, inputPair: opened.inputPair)
+        } catch {
+            let failure = error as? SourceCapture.CaptureError ?? .tapNotCreated(kAudioHardwareUnspecifiedError)
+            DebugTrace.log("[AudioSync] capture reopen try \(number) of \(CaptureFlowWatch.tries) failed: \(failure)")
+            reopenError = failure
+            guard CaptureFlowWatch.retries(after: failure) else {
+                stopForLostCapture(failure)
+                return
+            }
+            follow(flowWatch.failed(at: ProcessInfo.processInfo.systemUptime))
+            return
+        }
+        DebugTrace.log("[AudioSync] capture reopen try \(number) of \(CaptureFlowWatch.tries): "
+                       + "open at \(capture.sampleRate) Hz")
+        if CaptureRate.needsRestart(current: rate, reported: capture.sampleRate) {
+            DebugTrace.log("[AudioSync] capture rate changed: \(rate) → \(capture.sampleRate) Hz")
+            stop()
+            onInterrupted?(.formatChanged)
+        }
+    }
+
+    private func stopForLostCapture(_ error: SourceCapture.CaptureError) {
+        stop()
+        onInterrupted?(.sourceLost(error))
+    }
+
     // MARK: - Local outputs
 
     /// Starts rendering the session on `deviceID` as output `uid`, at
@@ -411,6 +512,10 @@ final class StreamEngine {
         renderer.onDeviceGone = { [weak self, weak renderer] in
             guard let self, let renderer else { return }
             self.handleOutputLost(uid, renderer, .deviceGone)
+        }
+        renderer.onFormatChanged = { [weak self, weak renderer] old, new in
+            guard let self, let renderer else { return }
+            self.handleOutputLost(uid, renderer, .formatChanged(old: old, new: new))
         }
         try renderer.start(on: device, captureRate: capture.sampleRate, delayMs: delayMs)
         renderers[uid] = renderer
@@ -489,14 +594,16 @@ final class StreamEngine {
         renderers[uid]?.setGain(linear: g)
     }
 
-    /// The device of output `uid` is gone (S68) or its render callback
-    /// stopped (S334): its renderer halts at once, without a fade (S185),
-    /// also when it was fading out on its way out. A running one is dropped
-    /// and reported to the host, which keeps the speaker on and adds it again
-    /// once its device is listed (S137, S161). A stall's debug line comes
-    /// after the renderer is released.
+    /// The device of output `uid` is gone (S68), its render callback stopped
+    /// (S334) or its device's format changed (S330): its renderer halts at
+    /// once, without a fade (S185), also when it was fading out on its way
+    /// out. A running one is dropped and reported to the host, which keeps
+    /// the speaker on and adds it again once its device is listed (S137,
+    /// S161). A stall's or a format change's debug line comes after the
+    /// renderer is released.
     private func handleOutputLost(_ uid: String, _ renderer: OutputRenderer, _ loss: OutputLoss) {
         renderer.onDeviceGone = nil
+        renderer.onFormatChanged = nil
         if renderers[uid] === renderer, let lead = renderer.holdLead() {
             heldLeads[uid] = (lead, ProcessInfo.processInfo.systemUptime)
         }
@@ -509,6 +616,9 @@ final class StreamEngine {
         if case .stalled(let quietS, let sign) = loss {
             DebugTrace.log("[AudioSync] " + OutputStallSign.line(number: outputNumber(uid), quietS: quietS, sign: sign))
         }
+        if case .formatChanged(let old, let new) = loss {
+            DebugTrace.log("[AudioSync] " + OutputFormatWatch.line(number: outputNumber(uid), old: old, new: new))
+        }
         onOutputGone?(uid, loss)
     }
 
@@ -518,6 +628,7 @@ final class StreamEngine {
     private static func logStopped(_ uid: String, _ renderer: OutputRenderer, why reason: String,
                                    bluetoothOutputs: Int) {
         renderer.onDeviceGone = nil
+        renderer.onFormatChanged = nil
         DebugTrace.log("[AudioSync] output stopped (\(reason)): \(uid), \(renderer.stopNote), "
                 + renderer.statusText(bluetoothOutputs: bluetoothOutputs))
     }

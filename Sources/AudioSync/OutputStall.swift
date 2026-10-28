@@ -90,11 +90,14 @@ enum OutputLoss: Equatable {
     case deviceGone
     /// Its render callback took no frame for `quietS` seconds (S334).
     case stalled(quietS: Double, sign: OutputStallSign)
+    /// Its device's rate or channel count changed under it (S330).
+    case formatChanged(old: OutputDeviceFormat, new: OutputDeviceFormat)
 
     var reason: String {
         switch self {
         case .deviceGone: return "device lost"
         case .stalled: return "stalled"
+        case .formatChanged: return "format changed"
         }
     }
 }
@@ -123,6 +126,12 @@ struct OutputStallRetry {
 
     /// The outputs whose stall isn't over yet.
     var tracked: Set<String> { Set(entries.keys) }
+
+    /// The outputs a sync starts again after a stall; `formatReopens` are
+    /// starting again because their device's format changed (S330).
+    func afterStall(formatReopens: Set<String>) -> Set<String> {
+        tracked.subtracting(formatReopens)
+    }
 
     mutating func stalled(_ uid: String, nowS: Double) -> Step {
         if let started = entries[uid]?.startedAtS, nowS - started < Self.trialS {

@@ -259,8 +259,7 @@ component FlyoutZoneHeader inherits Rectangle {
                     accessible-role: button;
                     accessible-label: root.item.expanded ? Strings.hide-zone-speakers(root.item.name) : Strings.show-zone-speakers(root.item.name);
                     accessible-value: root.live ? "" : root.count;
-                    accessible-expandable: true;
-                    accessible-expanded: root.item.expanded;
+                    // No expanded state, as on the main window's arrow: UI Automation offers Invoke.
                     accessible-action-default => {
                         root.expanded-changed(!root.item.expanded);
                     }

@@ -1781,6 +1781,120 @@ do {
     check(verdicts.allSatisfy { $0 == .waiting }, "capture: silent zeros with nothing live → waiting")
 }
 
+// MARK: Capture watch: a capture that stops calling back is opened again, the capture only
+// covers: S335 (the 2 s span while Now Playing reads the source playing, the service restart and a quiet source, through the main queue's 0.5 s ticks)
+do {
+    // Callbacks at 0 and 0.5 s, then none while the source plays: 2 s after the last one the capture counts as stopped.
+    var watch = CaptureFlowWatch()
+    var steps: [CaptureFlowWatch.Step] = []
+    for (uptime, count) in [(100.0, 4 as UInt64), (100.5, 9), (101, 9), (101.5, 9), (102, 9), (102.5, 9)] {
+        steps.append(watch.tick(callbacks: count, reading: true, playingReadAt: uptime, at: uptime))
+    }
+    let stall = steps.dropLast().allSatisfy { $0 == .none } && steps.last == .stopped(.noCallback(2))
+
+    // A service restart stops a capture that flows, at once.
+    var restarted = CaptureFlowWatch()
+    _ = restarted.tick(callbacks: 3, reading: true, playingReadAt: nil, at: 10)
+    let atOnce = restarted.report(.serviceRestarted, at: 10.2) == .stopped(.serviceRestarted)
+
+    // A tap stops calling back when its source goes quiet: with Now Playing showing
+    // no play, or unable to read it, that is never a stop; nor is a tap that never called back.
+    var quietened = CaptureFlowWatch()
+    var never = CaptureFlowWatch()
+    var quietSteps: [CaptureFlowWatch.Step] = []
+    for tick in 0..<40 {
+        let uptime = 50 + 0.5 * Double(tick)
+        quietSteps.append(quietened.tick(callbacks: UInt64(min(tick, 4) * 47), reading: true, playingReadAt: nil, at: uptime))
+        quietSteps.append(never.tick(callbacks: 0, reading: true, playingReadAt: uptime, at: uptime))
+    }
+    let quiet = quietSteps.allSatisfy { $0 == .none }
+    check(stall && atOnce && quiet,
+          "capture watch: no callback for 2 s after the first asks for a capture reopen, a service restart asks at once, a quiet source never does",
+          "\(steps) \(atOnce) \(quiet)")
+}
+// covers: S335 (D3: a Mac sitting counted 0 capture callbacks with Spotify paused)
+do {
+    // Spotify plays until 3 s, then pauses; Now Playing reads it every 2 s, so it
+    // still shows playing until its reading at 4 s.
+    func playingReadAt(_ uptime: Double) -> Double? {
+        let readAt = (uptime / 2).rounded(.down) * 2
+        return readAt < 3 ? readAt : nil
+    }
+    var watch = CaptureFlowWatch()
+    var steps: [CaptureFlowWatch.Step] = []
+    for tick in 0...120 {
+        let uptime = 0.5 * Double(tick)
+        steps.append(watch.tick(callbacks: UInt64(min(tick, 6) * 10), reading: true, playingReadAt: playingReadAt(uptime),
+                                at: uptime))
+    }
+    // A service restart while paused: the reopened tap calls back nothing, and its try is kept all the same.
+    var restarted = CaptureFlowWatch()
+    _ = restarted.tick(callbacks: 10, reading: true, playingReadAt: nil, at: 0)
+    var afterRestart = [restarted.report(.serviceRestarted, at: 0)]
+    for tick in 1...120 {
+        afterRestart.append(restarted.tick(callbacks: 0, reading: true, playingReadAt: nil, at: 0.5 * Double(tick)))
+    }
+    check(steps.allSatisfy { $0 == .none }
+            && afterRestart.filter { $0 != .none } == [.stopped(.serviceRestarted), .tryOpen(1), .kept(1)],
+          "capture watch: a tap that stops calling back while the source is paused never ends the session",
+          "\(steps.filter { $0 != .none }) \(afterRestart.filter { $0 != .none })")
+}
+// covers: S335 (5 tries 1 s apart, a try kept after 5 s, the last failed try stops the session)
+do {
+    var watch = CaptureFlowWatch()
+    _ = watch.tick(callbacks: 1, reading: true, playingReadAt: 0, at: 0)
+    let stop = watch.report(.aggregateDied, at: 0.5)
+    let early = watch.tick(callbacks: nil, reading: false, playingReadAt: 1, at: 1)
+    let first = watch.tick(callbacks: nil, reading: false, playingReadAt: 1.5, at: 1.5)
+    // The reopened capture's counter starts again at 0.
+    var trial: [CaptureFlowWatch.Step] = []
+    for tick in 1...10 {
+        let uptime = 1.5 + 0.5 * Double(tick)
+        trial.append(watch.tick(callbacks: UInt64(tick * 10), reading: true, playingReadAt: uptime, at: uptime))
+    }
+    check(stop == .stopped(.aggregateDied) && early == .none && first == .tryOpen(1)
+            && trial.dropLast().allSatisfy { $0 == .none } && trial.last == .kept(1),
+          "capture watch: the first try comes 1 s after the stop and is kept once it delivered for 5 s",
+          "\(stop) \(early) \(first) \(trial)")
+    let again = watch.tick(callbacks: 100, reading: true, playingReadAt: 8.5, at: 8.5)
+    check(again == .stopped(.noCallback(2)), "capture watch: a kept capture is watched on until the session ends", "\(again)")
+
+    // Every try fails while the source plays: two that can't open, three that open and never call back.
+    var failing = CaptureFlowWatch()
+    _ = failing.tick(callbacks: 1, reading: true, playingReadAt: 0, at: 0)
+    var seen = [failing.report(.serviceRestarted, at: 0)]
+    var now = 0.0
+    while now < 60, seen.last != .giveUp {
+        now += 0.5
+        let step = failing.tick(callbacks: 0, reading: true, playingReadAt: now, at: now)
+        seen.append(step)
+        if case .tryOpen(let n) = step, n <= 2 { seen.append(failing.failed(at: now)) }
+    }
+    let tries = seen.compactMap { step -> Int? in if case .tryOpen(let n) = step { return n } else { return nil } }
+    check(tries == [1, 2, 3, 4, 5] && seen.last == .giveUp && seen.filter({ $0 == .giveUp }).count == 1,
+          "capture watch: 5 tries, then the session stops as S21 says", "\(seen)")
+
+    // A stop the host is told of while the capture is already closed asks for nothing more.
+    var closed = CaptureFlowWatch()
+    _ = closed.tick(callbacks: 1, reading: true, playingReadAt: nil, at: 0)
+    _ = closed.report(.aggregateDied, at: 0)
+    check(closed.report(.serviceRestarted, at: 0.2) == .none,
+          "capture watch: a second stop while the capture is closed changes nothing")
+
+    // An app tap waiting for an audio process has no IOProc by design.
+    var waiting = CaptureFlowWatch()
+    _ = waiting.tick(callbacks: 5, reading: true, playingReadAt: 0, at: 0)
+    let idle = (1...20).map { waiting.tick(callbacks: 5, reading: false, playingReadAt: 0.5 * Double($0), at: 0.5 * Double($0)) }
+    check(idle.allSatisfy { $0 == .none }, "capture watch: an app tap waiting for an audio process is never a stop")
+
+    check(CaptureFlowWatch.retries(after: .aggregateDeviceFailed(kAudioHardwareBadDeviceError))
+            && CaptureFlowWatch.retries(after: .tapNotCreated(kAudioHardwareNotRunningError))
+            && !CaptureFlowWatch.retries(after: .appNotRunning("com.example.player"))
+            && !CaptureFlowWatch.retries(after: .inputNotFound("input"))
+            && !CaptureFlowWatch.retries(after: .inputHandsFree("input")),
+          "capture watch: an app that quit or an input device that left ends the tries at once")
+}
+
 // MARK: Calibration fill: a quiet tap still carries the test signal (CalibrationTap.swift)
 do {
     // Calibrate All on All System Audio with nothing playing failed every time: the
@@ -6532,6 +6646,41 @@ do {
     check(unstalled == nil && playing == ["B"] && settled.isEmpty && other.tracked.isEmpty,
           "output stall: a refused start that followed no stall is switched off as before; 5 s of play or a switch-off ends a stall",
           "\(String(describing: unstalled)) \(playing) \(settled) \(other.tracked)")
+}
+
+// MARK: Output format: a device whose rate or channels change under a running output (OutputFormatWatch.swift, S330)
+// covers: S330 (the Mac host's reopen decision and its debug line)
+do {
+    typealias F = OutputDeviceFormat
+    let stereo48 = F(rate: 48_000, channels: 2)
+    func decide(_ now: F?, from started: F? = F(rate: 48_000, channels: 2), fadingOut: Bool = false) -> OutputFormatWatch.Verdict {
+        OutputFormatWatch.decide(started: started, now: now, fadingOut: fadingOut)
+    }
+    let rate = decide(F(rate: 44_100, channels: 2))
+    let mono = decide(F(rate: 48_000, channels: 1))
+    let same = decide(F(rate: 48_000.0001, channels: 2))
+    check(rate == .reopen(old: stereo48, new: F(rate: 44_100, channels: 2))
+            && mono == .reopen(old: stereo48, new: F(rate: 48_000, channels: 1)) && same == .keep,
+          "output format: a running output reopens once its device reports another rate or channel count, never for a notice that changes neither",
+          "\(rate) \(mono) \(same)")
+    let quiet = [decide(F(rate: 44_100, channels: 2), fadingOut: true), decide(nil), decide(stereo48, from: nil),
+                 decide(F(rate: 0, channels: 0))]
+    check(quiet.allSatisfy { $0 == .keep },
+          "output format: an output fading out, or a format the start or the notice can't read, is never reopened", "\(quiet)")
+    let line = OutputFormatWatch.line(number: 2, old: stereo48, new: F(rate: 24_000, channels: 1))
+    check(line == "output 2: its device's format changed from 48000 Hz, 2 ch to 24000 Hz, 1 ch; reopening it",
+          "output format: one debug line names the output's number and the old and the new format", line)
+    check(OutputLoss.formatChanged(old: stereo48, new: stereo48).reason == "format changed",
+          "output format: the stop line tells a format change from a stall or a lost device")
+    var trial = OutputStallRetry()
+    _ = trial.stalled("A", nowS: 100)
+    trial.started("A", nowS: 100.5)
+    let asFormat = trial.afterStall(formatReopens: ["A"])
+    let asStall = trial.afterStall(formatReopens: [])
+    let inARow = trial.stalled("A", nowS: 103)
+    check(asFormat.isEmpty && asStall == ["A"] && inARow == .retry(atS: 113),
+          "output format: a format change during a stall trial reopens as a format change and leaves the trial as it was",
+          "\(asFormat) \(asStall) \(inARow)")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
