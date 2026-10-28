@@ -6433,6 +6433,27 @@ mod tests {
         assert_eq!(starts_of(&ended, BUDS), 2);
     }
 
+    // covers: S325, S68
+    #[test]
+    fn an_output_whose_device_leaves_as_its_restart_rest_ends_is_lost() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fresh_buds(&mut backend);
+        // Fade out, release, then the first of its two polls of rest.
+        poll_quietly(&mut backend, 6);
+        assert_eq!(starts_of(&backend, BUDS), 1);
+        backend.disconnect_output(BUDS);
+        let events = backend.poll();
+        assert!(
+            events.contains(&BackendEvent::OutputLost {
+                id: BUDS.to_owned(),
+            }),
+            "{events:?}"
+        );
+        assert_eq!(starts_of(&backend, BUDS), 1);
+        assert!(backend.policy().settings(BUDS).enabled, "it stays on");
+    }
+
     fn microphone(backend: &mut MockBackend) -> SourceId {
         backend.connect_input("mic", "Microphone", "USB");
         SourceId::Input {
