@@ -7499,6 +7499,23 @@ do {
             && afterRestart?.enabled == [] && afterRestart?.notices.map(\.uid) == ["usb"],
           "EC1 new ID: a restart that won't start is reported and switched off, with no device left bound",
           "removed \(refused.removed), applied \(failedRestart), report \(String(describing: afterRestart))")
+
+    // covers: S328 (a restart keeps the output's start lead in the session lead; a switch-off lets it go)
+    final class LeadNotingEngine: LocalOutputEngine {
+        var activeOutputUIDs: [String] = ["usb", "bt"]
+        var keptLead: [String: Bool] = [:]
+        func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {}
+        func detachOutput(uid: String) { keptLead[uid] = false }
+        func detachOutputs(uids: [String]) { for uid in uids { keptLead[uid] = false } }
+        func detachOutputs(uids: [String], keepingLeads: Bool) { for uid in uids { keptLead[uid] = keepingLeads } }
+        func setGain(uid: String, g: Double) {}
+    }
+    let leads = LeadNotingEngine()
+    _ = LocalOutputSync.apply(enabled: ["usb"], listing: [usbAgain], to: leads, bound: ["usb": 52],
+                              holdBacks: [:], gain: { _ in 1 })
+    check(leads.keptLead == ["usb": true, "bt": false],
+          "S328 restart: an output restarted on a new device ID keeps its start lead, one switched off lets it go",
+          "kept lead \(leads.keptLead)")
 }
 
 // MARK: The engine's control interface (S112) and the thread it is used on (S113)
