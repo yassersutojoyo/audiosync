@@ -1,7 +1,7 @@
 //! The server: its listeners, one thread per connection, the routes, and
 //! the event stream that carries each new snapshot to the open pages.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
@@ -56,6 +56,8 @@ const MAX_REFUSED: usize = 16;
 const HISTORY: usize = 32;
 /// Server events kept for a host that doesn't poll.
 pub const MAX_SERVER_EVENTS: usize = 64;
+/// How often one refused address gets a line in the log.
+const REFUSAL_LOG_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The time limits; the defaults are the product's, tests shorten them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -364,6 +366,8 @@ struct Shared {
     changed: Condvar,
     sink: Mutex<Option<CommandSink>>,
     events: Mutex<VecDeque<ServerEvent>>,
+    /// When each refused address was last reported.
+    refusals: Mutex<HashMap<IpAddr, Instant>>,
     connections: Mutex<Vec<Connection>>,
     /// The open event streams, oldest first, with the token each belongs to.
     streams: Mutex<Vec<(u64, String)>>,
@@ -635,6 +639,7 @@ impl RemoteServer {
             changed: Condvar::new(),
             sink: Mutex::new(Some(Box::new(on_command))),
             events: Mutex::new(VecDeque::new()),
+            refusals: Mutex::new(HashMap::new()),
             connections: Mutex::new(Vec::new()),
             streams: Mutex::new(Vec::new()),
             next_stream: AtomicU64::new(0),
@@ -856,6 +861,18 @@ fn drain_refused(refused: &mut VecDeque<(TcpStream, Instant)>) {
     });
 }
 
+/// Whether a refusal of `peer` is reported: once per address per
+/// [`REFUSAL_LOG_INTERVAL`], for at most [`MAX_SERVER_EVENTS`] addresses at
+/// once, so a scan from the internet neither floods the log nor grows the map.
+fn note_refusal(reported: &mut HashMap<IpAddr, Instant>, peer: IpAddr, now: Instant) -> bool {
+    reported.retain(|_, at| now.duration_since(*at) < REFUSAL_LOG_INTERVAL);
+    if reported.contains_key(&peer) || reported.len() >= MAX_SERVER_EVENTS {
+        return false;
+    }
+    reported.insert(peer, now);
+    true
+}
+
 /// Starts serving a connection, or answers 503 and hands the connection
 /// back to linger: closing with an unread request would reset it, and a
 /// reset can discard the answer before the client reads it.
@@ -865,7 +882,9 @@ fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) -> Option<Tc
         .local_addr()
         .is_ok_and(|local| net::admits_peer(from, local.ip()));
     if !admitted {
-        shared.report(ServerEvent::NotPrivate { from });
+        if note_refusal(&mut lock(&shared.refusals), from, Instant::now()) {
+            shared.report(ServerEvent::NotPrivate { from });
+        }
         let _ = stream.shutdown(Shutdown::Both);
         return None;
     }
@@ -1481,6 +1500,27 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_refused_address_is_reported_once_a_minute() {
+        let mut reported = HashMap::new();
+        let start = Instant::now();
+        let public = address("203.0.113.5");
+        let later = start + Duration::from_secs(59);
+        assert!(note_refusal(&mut reported, public, start));
+        assert!(!note_refusal(&mut reported, public, later));
+        assert!(note_refusal(&mut reported, address("203.0.113.6"), later));
+        assert!(note_refusal(
+            &mut reported,
+            public,
+            start + REFUSAL_LOG_INTERVAL
+        ));
+        for host in 0..MAX_SERVER_EVENTS {
+            let peer = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, host as u16));
+            note_refusal(&mut reported, peer, later);
+        }
+        assert_eq!(reported.len(), MAX_SERVER_EVENTS);
     }
 
     #[test]
