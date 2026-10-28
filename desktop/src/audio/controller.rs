@@ -6200,6 +6200,38 @@ mod tests {
         assert_eq!(backend.session_lead(), before);
     }
 
+    // covers: S328
+    #[test]
+    fn a_held_lead_ends_once_its_hold_runs_out_while_the_device_stays_listed() {
+        let mut backend = backend();
+        backend.set_output_period(HEADPHONES, 9_600);
+        backend.set_output_period(SPEAKERS, 480);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let before = backend.session_lead();
+        // The reopened stream never publishes a lead of its own.
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        poll_quietly(&mut backend, BRIEF_LOSS_POLLS - 1);
+        assert_eq!(backend.session_lead(), before);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert!(backend.session_lead() < before);
+    }
+
+    // covers: S328
+    #[test]
+    fn an_output_switched_off_while_its_lead_is_held_drops_the_lead_at_once() {
+        let mut backend = backend();
+        backend.set_output_period(HEADPHONES, 9_600);
+        backend.set_output_period(SPEAKERS, 480);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let before = backend.session_lead();
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(backend.session_lead(), before);
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        assert!(backend.session_lead() < before);
+    }
+
     // covers: S326
     #[test]
     fn a_second_stall_in_a_row_posts_the_lost_notice_and_keeps_the_output_on() {
