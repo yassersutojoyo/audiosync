@@ -57,7 +57,7 @@ The Windows parts are in the Windows preview, out since 0.7.1.
 ## New in 0.6
 
 - Google Cast speakers, on the Mac and on Windows, one at a time. You set each one's offset by ear, and Resync restarts it if it drifts.
-- Cast and AirPlay speakers together: the side that's ahead waits for the other, AirPlay up to 20 s.
+- Cast and AirPlay speakers together: the side that's ahead waits for the other, AirPlay up to 3 s back then (20 s now).
 - On the Mac, Calibrate with Microphone sets a local speaker's delay for you.
 - On the Mac, rename a speaker with a double-click on its name.
 - If the app you capture quits, AudioSync can switch to all system audio instead of stopping.
