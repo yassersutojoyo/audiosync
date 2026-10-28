@@ -111,3 +111,4 @@ S334 Hosts only: the Mac host ending an output whose render callback hands its d
 S335 Hosts only: the Mac host watching its capture for the whole session and on Core Audio's service restart, reopening only the capture, both watches resting from the will-sleep notice to the wake; the Mac logic suite's "capture watch: ..." tests check it.
 S336 Hosts only: the Mac host sending one waiting Apple event per player not yet allowed and reading only allowed players; the Mac logic suite checks it.
 S337 Web remote only: the remote crate failing its start as a port in use when another app holds its port on any address it listens on; the remote crate's tests check it.
+S338 Web remote only: the remote crate closing connections from peers outside the home network ranges and rate-limiting their log lines; the remote crate's tests check it.

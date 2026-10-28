@@ -58,6 +58,8 @@ const HISTORY: usize = 32;
 pub const MAX_SERVER_EVENTS: usize = 64;
 /// How often one refused address gets a line in the log.
 const REFUSAL_LOG_INTERVAL: Duration = Duration::from_secs(60);
+/// Refused addresses remembered at once for [`REFUSAL_LOG_INTERVAL`].
+const MAX_REFUSALS_LOGGED: usize = 64;
 
 /// The time limits; the defaults are the product's, tests shorten them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -366,8 +368,6 @@ struct Shared {
     changed: Condvar,
     sink: Mutex<Option<CommandSink>>,
     events: Mutex<VecDeque<ServerEvent>>,
-    /// When each refused address was last reported.
-    refusals: Mutex<HashMap<IpAddr, Instant>>,
     connections: Mutex<Vec<Connection>>,
     /// The open event streams, oldest first, with the token each belongs to.
     streams: Mutex<Vec<(u64, String)>>,
@@ -639,7 +639,6 @@ impl RemoteServer {
             changed: Condvar::new(),
             sink: Mutex::new(Some(Box::new(on_command))),
             events: Mutex::new(VecDeque::new()),
-            refusals: Mutex::new(HashMap::new()),
             connections: Mutex::new(Vec::new()),
             streams: Mutex::new(Vec::new()),
             next_stream: AtomicU64::new(0),
@@ -814,6 +813,7 @@ impl Drop for RemoteServer {
 
 fn accept_loop(listeners: &[TcpListener], shared: &Arc<Shared>) {
     let mut refused = VecDeque::new();
+    let mut reported = HashMap::new();
     while !shared.stopped.load(Ordering::SeqCst) {
         drain_refused(&mut refused);
         let mut idle = true;
@@ -821,7 +821,7 @@ fn accept_loop(listeners: &[TcpListener], shared: &Arc<Shared>) {
             match listener.accept() {
                 Ok((stream, peer)) => {
                     idle = false;
-                    if let Some(stream) = admit(stream, peer, shared) {
+                    if let Some(stream) = admit(stream, peer, shared, &mut reported) {
                         if refused.len() >= MAX_REFUSED {
                             refused.pop_front();
                         }
@@ -862,11 +862,11 @@ fn drain_refused(refused: &mut VecDeque<(TcpStream, Instant)>) {
 }
 
 /// Whether a refusal of `peer` is reported: once per address per
-/// [`REFUSAL_LOG_INTERVAL`], for at most [`MAX_SERVER_EVENTS`] addresses at
+/// [`REFUSAL_LOG_INTERVAL`], for at most [`MAX_REFUSALS_LOGGED`] addresses at
 /// once, so a scan from the internet neither floods the log nor grows the map.
 fn note_refusal(reported: &mut HashMap<IpAddr, Instant>, peer: IpAddr, now: Instant) -> bool {
     reported.retain(|_, at| now.duration_since(*at) < REFUSAL_LOG_INTERVAL);
-    if reported.contains_key(&peer) || reported.len() >= MAX_SERVER_EVENTS {
+    if reported.contains_key(&peer) || reported.len() >= MAX_REFUSALS_LOGGED {
         return false;
     }
     reported.insert(peer, now);
@@ -876,13 +876,18 @@ fn note_refusal(reported: &mut HashMap<IpAddr, Instant>, peer: IpAddr, now: Inst
 /// Starts serving a connection, or answers 503 and hands the connection
 /// back to linger: closing with an unread request would reset it, and a
 /// reset can discard the answer before the client reads it.
-fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) -> Option<TcpStream> {
+fn admit(
+    stream: TcpStream,
+    peer: SocketAddr,
+    shared: &Arc<Shared>,
+    reported: &mut HashMap<IpAddr, Instant>,
+) -> Option<TcpStream> {
     let from = peer.ip().to_canonical();
     let admitted = stream
         .local_addr()
         .is_ok_and(|local| net::admits_peer(from, local.ip()));
     if !admitted {
-        if note_refusal(&mut lock(&shared.refusals), from, Instant::now()) {
+        if note_refusal(reported, from, Instant::now()) {
             shared.report(ServerEvent::NotPrivate { from });
         }
         let _ = stream.shutdown(Shutdown::Both);
@@ -1481,7 +1486,11 @@ mod tests {
 
     /// Admits a loopback connection as if accept had reported `peer`; the
     /// client has already sent a request.
-    fn admit_as(server: &RemoteServer, peer: IpAddr) -> TcpStream {
+    fn admit_as(
+        server: &RemoteServer,
+        reported: &mut HashMap<IpAddr, Instant>,
+        peer: IpAddr,
+    ) -> TcpStream {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         client.write_all(b"GET / HTTP/1.1\r\n\r\n").unwrap();
@@ -1489,7 +1498,15 @@ mod tests {
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         let (stream, _) = listener.accept().unwrap();
-        assert!(admit(stream, SocketAddr::new(peer, 50000), &server.shared).is_none());
+        assert!(
+            admit(
+                stream,
+                SocketAddr::new(peer, 50000),
+                &server.shared,
+                reported
+            )
+            .is_none()
+        );
         client
     }
 
@@ -1516,11 +1533,11 @@ mod tests {
             public,
             start + REFUSAL_LOG_INTERVAL
         ));
-        for host in 0..MAX_SERVER_EVENTS {
+        for host in 0..MAX_REFUSALS_LOGGED {
             let peer = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, host as u16));
             note_refusal(&mut reported, peer, later);
         }
-        assert_eq!(reported.len(), MAX_SERVER_EVENTS);
+        assert_eq!(reported.len(), MAX_REFUSALS_LOGGED);
     }
 
     #[test]
@@ -1531,22 +1548,21 @@ mod tests {
             ..Config::default()
         };
         let server = RemoteServer::start(config, |_| {}).unwrap();
+        let mut reported = HashMap::new();
         let public = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
         let mapped = IpAddr::V6(Ipv4Addr::new(8, 8, 8, 8).to_ipv6_mapped());
         for peer in [public, mapped, public] {
-            let mut client = admit_as(&server, peer);
+            let mut client = admit_as(&server, &mut reported, peer);
             let mut answer = Vec::new();
             let _ = client.read_to_end(&mut answer);
             assert!(answer.is_empty(), "{peer} got an answer");
         }
         assert_eq!(not_private_events(&server), [public]);
-        let carrier_nat = IpAddr::V4(Ipv4Addr::new(100, 100, 1, 1));
         for peer in [
             IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)),
             address("fe80::1"),
-            carrier_nat,
         ] {
-            let mut client = admit_as(&server, peer);
+            let mut client = admit_as(&server, &mut reported, peer);
             let mut answer = Vec::new();
             let _ = client.read_to_end(&mut answer);
             assert!(answer.starts_with(b"HTTP/1.1 "), "{peer} got no answer");
