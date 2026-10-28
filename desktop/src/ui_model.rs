@@ -1630,8 +1630,10 @@ pub trait Backend {
     fn set_view_settings(&mut self, _settings: ViewSettings) {}
 
     /// Saves the settings now, without waiting for the next poll: the app
-    /// is about to quit.
-    fn save_settings(&mut self) {}
+    /// is about to quit. Returns whether no change is left unsaved.
+    fn save_settings(&mut self) -> bool {
+        true
+    }
 }
 
 /// Where the main window was and how big: the position of its outer frame

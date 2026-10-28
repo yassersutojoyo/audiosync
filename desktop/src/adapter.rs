@@ -5191,12 +5191,13 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.view = settings;
     }
 
-    fn save_settings(&mut self) {
+    fn save_settings(&mut self) -> bool {
         self.must_save |= self.unsaved.is_some();
         let _ = self.persist();
         // Before the backend drops and the Cast host shuts down, so the last
         // offset change is kept even when its event was never polled.
         self.save_cast_memory();
+        true
     }
 
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
@@ -11740,6 +11741,23 @@ mod tests {
             .filter(|message| message.contains("settings: couldn't be saved"))
             .count();
         assert_eq!(failures, 1, "one attempt per change, not per poll");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
+    fn the_last_save_tells_whether_a_change_is_still_unsaved() {
+        let dir = test_dir("adapter-settings-last-save");
+        let path = dir.join(settings::FILE_NAME);
+        let blocked = crate::data_folder::temporary_path(&path);
+        std::fs::create_dir(&blocked).expect("blocked");
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.set_master_volume(64.0);
+        adapter.poll();
+        assert!(!adapter.save_settings(), "the file is still blocked");
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        assert!(adapter.save_settings());
+        assert_eq!(SettingsFile::at(path.clone()).load().0.master_volume, 64.0);
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -699,6 +699,14 @@ unsafe extern "system" fn color_set_procedure(
     result
 }
 
+/// Runs `ending` on this thread when Windows ends the session (sign-out,
+/// shutdown or restart), which may end the process as soon as it returns.
+/// Returns the hidden window that receives that message, `None` without one.
+#[cfg(windows)]
+pub fn on_session_end(_ending: Box<dyn Fn()>) -> Option<isize> {
+    None
+}
+
 /// Whether the taskbar (and the notification area) uses the light theme, so
 /// the tray icon picks its dark-on-light variant. Dark when it can't be read,
 /// the Windows 11 default.
@@ -888,6 +896,35 @@ mod tests {
         assert!(!names_color_set(&wide("ImmersiveColorSetX")));
         assert!(!names_color_set(&wide("Environment")));
         assert!(!names_color_set(&[]));
+    }
+
+    // covers: S212
+    #[cfg(windows)]
+    #[test]
+    fn the_end_of_a_windows_session_runs_its_handler_once_and_never_holds_it_up() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        use windows::Win32::Foundation::{HWND, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DestroyWindow, SendMessageW, WM_ENDSESSION, WM_QUERYENDSESSION,
+        };
+
+        let runs = Rc::new(Cell::new(0));
+        let counted = runs.clone();
+        let window = on_session_end(Box::new(move || counted.set(counted.get() + 1)))
+            .expect("the hidden window");
+        let hwnd = HWND(window as *mut core::ffi::c_void);
+        // SAFETY: the window belongs to this thread, so each SendMessageW
+        // runs its procedure right here.
+        unsafe {
+            let query = SendMessageW(hwnd, WM_QUERYENDSESSION, None, None);
+            assert_ne!(query.0, 0, "the session may end");
+            SendMessageW(hwnd, WM_ENDSESSION, Some(WPARAM(0)), None);
+            assert_eq!(runs.get(), 0, "an end that was called off runs nothing");
+            SendMessageW(hwnd, WM_ENDSESSION, Some(WPARAM(1)), None);
+            assert_eq!(runs.get(), 1);
+            let _ = DestroyWindow(hwnd);
+        }
     }
 
     #[test]
