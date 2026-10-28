@@ -3350,7 +3350,10 @@ mod tests {
         driver.report_changes(changes);
         driver.run_timers(now);
         assert_eq!(state(&mut driver), Some((State::Connecting, 2)));
-        assert_eq!(driver.speakers[&key].counters.connect_starts(), 0);
+        assert_eq!(
+            driver.active(&key).map(|active| active.key),
+            Some(session_key)
+        );
 
         // The writer's close and the reader's last bytes, late: dropped.
         driver.io_event(closed(1), now);
