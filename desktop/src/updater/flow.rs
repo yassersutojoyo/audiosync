@@ -14,7 +14,7 @@ use ed25519_dalek::VerifyingKey;
 use super::appcast::{self, Arch, Update};
 use super::archive::{self, ArchiveError};
 use super::fetch::{self, Fetch, FetchError, Kind};
-use super::files::{Files, Pause, Retrying, is_blocked, is_disk_full};
+use super::files::{Files, Pause, Retrying, is_blocked, is_disk_full, is_locked};
 use super::relaunch::Launch;
 use super::signature;
 use super::swap::{self, Rename, StepLog, SwapError, Swapped};
@@ -169,7 +169,9 @@ pub fn install(
             };
         }
     };
+    let held = hold(&dir);
     let outcome = install_in(env, update, &dir, progress, cancel);
+    drop(held);
     let removed = fs::remove_dir_all(&dir);
     env.log.log(|| {
         let said = match &outcome {
@@ -187,6 +189,32 @@ pub fn install(
         )
     });
     outcome
+}
+
+/// A handle on `dir` that shares reading and writing but not deleting, so
+/// another copy's `remove_leftovers` (the same user in another session)
+/// sees the folder in use and leaves it.
+fn hold(dir: &Path) -> io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    fs::OpenOptions::new()
+        .read(true)
+        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0)
+        .open(dir)
+}
+
+/// Whether another copy holds `dir` through `hold`.
+fn held_elsewhere(dir: &Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Storage::FileSystem::{DELETE, FILE_FLAG_BACKUP_SEMANTICS};
+    fs::OpenOptions::new()
+        .access_mode(DELETE.0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0)
+        .open(dir)
+        .is_err_and(|error| is_locked(&error))
 }
 
 fn install_in(
@@ -403,6 +431,10 @@ pub fn remove_leftovers(install_dir: &Path, temp_root: &Path, log: &DebugLog) {
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with(TEMP_PREFIX) && entry.path().is_dir() {
+            if held_elsewhere(&entry.path()) {
+                log.log(|| format!("updater: leftover {name} kept (in use by another copy)"));
+                continue;
+            }
             let removed = fs::remove_dir_all(entry.path());
             log.log(|| format!("updater: leftover {name} {}", removed_text(&removed)));
         }
