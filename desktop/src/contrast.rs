@@ -1500,7 +1500,10 @@ fn only_a_flyout_zone_badge_switches_the_zone() {
         "Left and Right fold it"
     );
     assert_eq!(header.matches("TouchArea {").count(), 1, "the row only");
-    assert!(header.contains("accessible-expanded: root.item.expanded;"));
+    assert!(
+        !header.contains("accessible-expanded:"),
+        "UI Automation offers Invoke only on an arrow with no expanded state"
+    );
     assert!(flyout.contains("for speaker in zone.expanded ? zone.members : []: FlyoutRow {"));
     assert!(flyout.contains("root.zone-expanded-changed(zone.id, open);"));
 }
