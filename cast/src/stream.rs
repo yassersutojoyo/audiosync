@@ -126,7 +126,7 @@ pub const MAX_LOGGED_TEXT: usize = 96;
 pub const MAX_HEX_RUN: usize = 8;
 
 impl FetchHeaders {
-    fn parse<'a>(lines: impl Iterator<Item = &'a str>) -> FetchHeaders {
+    pub(crate) fn parse<'a>(lines: impl Iterator<Item = &'a str>) -> FetchHeaders {
         let mut headers = FetchHeaders::default();
         for line in lines {
             let Some((name, value)) = line.split_once(':') else {
@@ -155,7 +155,7 @@ impl FetchHeaders {
     }
 
     /// Scrubs `token` before capping, so a cut never leaves part of it.
-    fn for_log(mut self, token: &str) -> FetchHeaders {
+    pub(crate) fn for_log(mut self, token: &str) -> FetchHeaders {
         let scrub = |text: &mut String, is_range: bool| {
             *text = replace_ignoring_case(&percent_decoded(text), token, "<token>");
             if has_hex_run(text) && !(is_range && is_byte_range(text)) {
@@ -177,11 +177,17 @@ impl FetchHeaders {
     }
 }
 
+/// Decoding passes a logged header gets. Each pass undoes one level of
+/// `%25`, so without a cap an 8 KiB header nested thousands deep costs
+/// thousands of passes.
+const MAX_DECODE_PASSES: usize = 8;
+
 /// Decodes `%XX` escapes until none is left, so a token escaped twice is
-/// found too; each pass shortens the text, so the loop ends.
+/// found too. Text still escaped after [`MAX_DECODE_PASSES`] could hide the
+/// token, so it is redacted whole.
 fn percent_decoded(text: &str) -> String {
     let mut text = text.to_owned();
-    loop {
+    for _ in 0..MAX_DECODE_PASSES {
         let bytes = text.as_bytes();
         let mut decoded = Vec::with_capacity(bytes.len());
         let mut index = 0;
@@ -207,6 +213,7 @@ fn percent_decoded(text: &str) -> String {
         }
         text = String::from_utf8_lossy(&decoded).into_owned();
     }
+    "<redacted>".to_owned()
 }
 
 fn replace_ignoring_case(text: &str, needle: &str, with: &str) -> String {

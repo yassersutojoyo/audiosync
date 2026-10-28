@@ -45,3 +45,6 @@ pub mod message;
 pub mod session;
 pub mod status;
 pub mod stream;
+
+#[cfg(test)]
+mod never_panics;
