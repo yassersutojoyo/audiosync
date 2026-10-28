@@ -5675,6 +5675,31 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
+    // covers: S331
+    #[test]
+    fn a_busy_output_whose_device_then_refuses_to_open_is_no_longer_busy() {
+        let mut backend = backend();
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputBusy {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+        // The other app let go while Windows rebuilds the endpoint.
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        let events: Vec<BackendEvent> =
+            (0..BUSY_RETRY_POLLS).flat_map(|_| backend.poll()).collect();
+        assert_eq!(
+            events,
+            [BackendEvent::OutputFree {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+        assert!(backend.policy().settings(HEADPHONES).enabled);
+    }
+
     #[test]
     fn turning_on_an_output_whose_device_is_busy_keeps_it_on() {
         let mut backend = backend();
