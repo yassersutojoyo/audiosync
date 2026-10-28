@@ -291,7 +291,7 @@ final class NowPlayingMonitor {
         }
         scripts.async { [weak self] in
             guard let self else { return }
-            guard self.consent.mayCommand(bundleID, permission: Self.permission(bundleID)) else {
+            guard self.consent.mayCommand(bundleID, permission: self.permission(bundleID)) else {
                 DebugTrace.log("Now Playing: dropped a command to \(bundleID), which AudioSync may not control yet")
                 return
             }
@@ -322,7 +322,7 @@ final class NowPlayingMonitor {
             var held = false
             for bundleID in candidates {
                 let running = Self.isRunning(bundleID)
-                let permission = running ? Self.permission(bundleID) : .unknown
+                let permission = running ? self.permission(bundleID) : .unknown
                 switch self.consent.step(bundleID, running: running, permission: permission, mayAsk: mayAsk,
                                          at: ProcessInfo.processInfo.systemUptime) {
                 case .read: break
@@ -399,9 +399,31 @@ final class NowPlayingMonitor {
         !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
     }
 
-    /// Whether macOS lets AudioSync script the running player. Never prompts;
-    /// may block, so scripts queue only.
-    private static func permission(_ bundleID: String) -> AutomationConsent.Permission {
+    /// Scripts queue. Whether macOS lets AudioSync script the running player, waiting
+    /// at most `checkBound`: the check never answered for an undecided Spotify (S336).
+    private func permission(_ bundleID: String) -> AutomationConsent.Permission {
+        if let verdict = consent.startCheck(bundleID) { return verdict }
+        let answer = CheckAnswer()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let permission = Self.checkPermission(bundleID)
+            answer.permission = permission
+            self?.scripts.async { self?.consent.checked(bundleID, permission) }
+            answer.done.signal()
+        }
+        guard answer.done.wait(timeout: .now() + AutomationConsent.checkBound) == .success else {
+            DebugTrace.log("Now Playing: no answer within 1 s on whether AudioSync may control \(bundleID)")
+            return consent.timedOut(bundleID)
+        }
+        return answer.permission
+    }
+
+    private final class CheckAnswer {
+        let done = DispatchSemaphore(value: 0)
+        var permission = AutomationConsent.Permission.unknown
+    }
+
+    /// Never prompts; may block.
+    private static func checkPermission(_ bundleID: String) -> AutomationConsent.Permission {
         let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
         return withExtendedLifetime(target) { () -> AutomationConsent.Permission in
             guard let desc = target.aeDesc else { return .unknown }
@@ -423,7 +445,8 @@ final class NowPlayingMonitor {
             DebugTrace.log("Now Playing: the consent request for \(bundleID) returned \(status)")
             guard let self else { return }
             self.scripts.async {
-                self.consent.ended(token, at: ProcessInfo.processInfo.systemUptime)
+                self.consent.ended(token, at: ProcessInfo.processInfo.systemUptime,
+                                   answer: AutomationConsent.permission(status: Int(status)))
                 DispatchQueue.main.async { if self.isRunning { self.refresh() } }
             }
         }
@@ -568,10 +591,15 @@ struct AutomationConsent {
     /// The quiet span after a request ends, so a prompt can't flicker even
     /// when macOS returns without asking.
     static let askGap: TimeInterval = 10
+    /// How long a poll waits for the no-prompt check. Answers come at once when
+    /// macOS knows, and the wait must stay well inside the 2 s polling interval.
+    static let checkBound: TimeInterval = 1
 
     private var pending: (app: String, token: Int)?
     private var quietUntil: TimeInterval = -.infinity
     private var lastToken = 0
+    private var checking: Set<String> = []
+    private var verdicts: [String: Permission] = [:]
 
     /// An `AEDeterminePermissionToAutomateTarget` status.
     static func permission(status: Int) -> Permission {
@@ -610,9 +638,31 @@ struct AutomationConsent {
         permission == .allowed && pending?.app != app
     }
 
-    /// Consent request `token` returned; one a quit already ended changes nothing.
-    mutating func ended(_ token: Int, at now: TimeInterval) {
-        guard pending?.token == token else { return }
+    /// nil: start the no-prompt check for `app` now. Otherwise one is still out,
+    /// and this is the verdict to use, so a check that hangs never adds a thread.
+    mutating func startCheck(_ app: String) -> Permission? {
+        guard checking.insert(app).inserted else { return verdicts[app] ?? .undecided }
+        return nil
+    }
+
+    /// The check for `app` answered, however late.
+    mutating func checked(_ app: String, _ permission: Permission) {
+        checking.remove(app)
+        verdicts[app] = permission
+    }
+
+    /// The check for `app` gave no answer within `checkBound`: macOS answers at
+    /// once for an allowed or denied player, so it counts as undecided.
+    mutating func timedOut(_ app: String) -> Permission {
+        verdicts[app] = .undecided
+        return .undecided
+    }
+
+    /// Consent request `token` returned `answer`; one a quit already ended changes nothing.
+    mutating func ended(_ token: Int, at now: TimeInterval, answer: Permission = .unknown) {
+        guard let app = pending?.app, pending?.token == token else { return }
+        // The request's answer stands in for a check that is still out.
+        if answer == .allowed || answer == .denied { verdicts[app] = answer }
         end(at: now)
     }
 
