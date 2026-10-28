@@ -293,8 +293,9 @@ enum ZoneLayout {
     }
 
     /// H11: the speaker whose switch takes the focus once `hidden`'s row in
-    /// `section` goes: the next row's, else the previous row's.
-    static func focusAfterHiding<T>(_ hidden: String, in section: [T], key: (T) -> String,
+    /// `section` goes: the next row's, else the previous row's. `zone` lists
+    /// the shown members of `hidden`'s zone in zone order, empty for none.
+    static func focusAfterHiding<T>(_ hidden: String, in section: [T], zone: [T] = [], key: (T) -> String,
                                     zoned: Set<String>) -> T? {
         // A zone member's full row sits under its zone, maybe collapsed, so
         // a speaker in no zone passes the focus only among the others.

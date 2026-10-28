@@ -5177,6 +5177,13 @@ do {
           "zones: hiding a speaker moves the focus to the next row the window shows, past a zone member")
     check(ZoneLayout.focusAfterHiding("lc:c", in: hideRows, key: { $0 }, zoned: zoned) == "lc:a",
           "zones: hiding the last row moves the focus to the previous row the window shows, past a zone member")
+    let roomZoned: Set<String> = ["cc:den", "cc:kitchen", "cc:office"]
+    check(ZoneLayout.focusAfterHiding("cc:den", in: ["cc:den", "cc:kitchen", "cc:office"], zone: ["cc:den", "cc:office"],
+                                      key: { $0 }, zoned: roomZoned) == "cc:office",
+          "zones: hiding a zone member moves the focus to the next member of its own zone")
+    check(ZoneLayout.focusAfterHiding("cc:den", in: ["cc:bath", "cc:den", "cc:kitchen"], zone: ["cc:den"],
+                                      key: { $0 }, zoned: roomZoned) == "cc:bath",
+          "zones: hiding a zone's only shown member moves the focus to a row in no zone")
 
     func onlyThis(_ key: String, _ members: [ZoneLayout.Member]) -> [String] {
         ZoneLayout.onlyThis(key, members: members).map { "\($0.key) \($0.on ? "on" : "off")" }

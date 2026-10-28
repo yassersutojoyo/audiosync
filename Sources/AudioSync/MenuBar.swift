@@ -431,7 +431,9 @@ final class AppModel: ObservableObject {
     func hide(_ speaker: Speaker) {
         let sections = layout
         let section = sections.thisMac.contains { $0.id == speaker.id } ? sections.thisMac : sections.connected
-        let neighbour = ZoneLayout.focusAfterHiding(speaker.key, in: section, key: \.key, zoned: zonedKeys)
+        let members = zone(holding: speaker.key)?.members.compactMap { self.speaker(of: $0) } ?? []
+        let neighbour = ZoneLayout.focusAfterHiding(speaker.key, in: section, zone: members, key: \.key,
+                                                    zoned: zonedKeys)
         actions.hideSpeaker(HiddenSpeakers.key(id: speaker.id, tag: speaker.tag), speaker.name,
                             text.speakerTag(speaker.tag, airPlay2: speaker.airPlay2))
         focusSwitch = neighbour?.id
