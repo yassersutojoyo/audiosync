@@ -150,7 +150,7 @@ impl Request {
 #[derive(Clone, Debug)]
 struct Media {
     media_session_id: Option<i64>,
-    /// The media session this load replaces, whose late status is not its.
+    /// The media session before this load; a late status of it is ignored.
     replaces: Option<i64>,
     content_id: String,
     /// The first `PLAYING` arrived.
