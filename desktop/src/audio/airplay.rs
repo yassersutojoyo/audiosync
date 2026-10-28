@@ -2955,7 +2955,11 @@ impl AirPlaySpeakers {
         } else {
             None
         };
-        let volume = if on_speaker {
+        let heard = self
+            .calibration_solo
+            .as_deref()
+            .is_none_or(|solo| solo == row);
+        let volume = if on_speaker && heard {
             device_volume(moved.device_level)
         } else {
             self.volume_of(row)

@@ -481,6 +481,9 @@ struct Added {
     unreadable: bool,
     /// The user drags its own slider, so read-backs are ignored (S271).
     dragging: bool,
+    /// Another speaker is measured: it stays muted, and a level set on it
+    /// meanwhile is kept, not sent (S276).
+    silenced: bool,
     /// The echo of the level last sent and the baseline of its reads (S291).
     read_back: ReadBack,
     /// The device level last sent, which the host's row shows (S290).
@@ -518,6 +521,7 @@ impl Added {
             volume_set_at: Some(Instant::now()),
             unreadable: false,
             dragging: false,
+            silenced: false,
             read_back: ReadBack::default(),
             level: 0.0,
             playing: false,
@@ -532,8 +536,9 @@ impl Added {
         self.level = device_level_for_db(volume.wire_db()).unwrap_or(0.0);
     }
 
-    /// Sends `volume`.
+    /// Sends `volume`, muted while silenced.
     fn set_volume(&mut self, sender: &Sender, volume: Volume) {
+        let volume = if self.silenced { Volume::Muted } else { volume };
         self.sent(volume);
         match &self.target {
             Some(id) => sender.set_target_volume(id, volume),
@@ -1348,7 +1353,12 @@ impl AscAirPlay {
                 .volume_set_at
                 .is_some_and(|at| at.elapsed() < VOLUME_SETTLE);
             // The level the speaker has, the held one with k at 0 (S290).
-            let sent = device_volume(own.level).wire_db();
+            let sent = if added.silenced {
+                Volume::Muted
+            } else {
+                device_volume(own.level)
+            }
+            .wire_db();
             own.echo = recent && is_echo_of(db, sent);
             own.reported = device_level_for_db(db);
         }
@@ -2840,6 +2850,42 @@ pub unsafe extern "C" fn asc_airplay_set_volume_dragging(
             added.dragging = dragging;
             // A read asked before this answers with a level from the drag.
             added.reading = false;
+            true
+        })
+    }
+}
+
+/// Keeps the speaker added under `id` muted while another speaker is
+/// measured, its own volume unchanged; a level set on it meanwhile is kept,
+/// not sent (S276). Unsilenced, it sends nothing: the host sends its level.
+/// False when the handle or `id` is null or no speaker was added under `id`.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract; `id` is null or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_set_silenced(
+    airplay: *mut AscAirPlay,
+    id: *const c_char,
+    silenced: bool,
+) -> bool {
+    // SAFETY: by the caller's contract null or a NUL-terminated string.
+    let Some(id) = (unsafe { host_text(id) }) else {
+        return false;
+    };
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, false, |airplay| {
+            let Some(added) = airplay.added.get_mut(id) else {
+                return false;
+            };
+            added.silenced = silenced;
+            if silenced {
+                added.volume_set();
+                added.set_volume(&airplay.sender, Volume::Muted);
+            }
             true
         })
     }
