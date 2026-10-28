@@ -2,6 +2,8 @@
 //! crate's own types, injected through a channel, become devices and one
 //! list keyed by `id`. No test browses the real network.
 
+mod common;
+
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -13,6 +15,7 @@ use audiosync_cast::discovery::{
     BrowseEvent, CastDevice, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent,
     MAX_DEVICES, SERVICE_TYPE, ServiceRecord, Skipped, Txt,
 };
+use common::{Behavior, FakeDevice};
 use mdns_sd::{ServiceEvent, ServiceInfo, TxtProperty};
 
 const ID: &str = "3f2a8c41d27e4b8f9a06c1d5e7f80b12";
@@ -584,12 +587,16 @@ fn a_manual_address_is_checked_at_once_and_again_on_the_interval() {
     assert!(!list.get(DeviceKey::Manual(on)).expect("listed").online);
 }
 
+// A proxy or filter on the path may take the TCP connect with no device
+// behind it (a Mac reached 192.0.2.1 that way, 2026-10-28).
 // covers: C18
 #[test]
-fn the_live_check_reaches_a_listening_port_only() {
+fn the_live_check_reaches_a_device_that_completes_the_tls_handshake_only() {
+    let device = FakeDevice::start(Behavior::default());
+    assert!(connects(device.address));
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a loopback port");
-    let open = listener.local_addr().expect("its address");
-    assert!(connects(open));
+    let silent = listener.local_addr().expect("its address");
+    assert!(!connects(silent), "a TCP accept alone is no answer");
     let closed = {
         let spare = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a loopback port");
         spare.local_addr().expect("its address")
