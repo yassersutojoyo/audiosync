@@ -31,6 +31,7 @@ item's zip must be among them. The names come as arguments (paths count by
 file name) or, with --assets-file, from a file holding the output of
 `gh release view TAG --json assets` or one name per line. It also wants a
 Mac item and, without --mac-only, an item for each Windows architecture.
+With the gh output, each item's length must also be its zip's attached size.
 
 Usage:
     scripts/check_appcast.py [--mac-only] APPCAST VERSION [ZIP...]
@@ -201,8 +202,9 @@ def check(appcast, version, zips, mac_only=False):
     return problems
 
 
-def read_asset_names(path):
-    """Asset names from `gh release view TAG --json assets` output, or one per line; - is stdin."""
+def read_assets(path):
+    """Asset names and sizes from `gh release view TAG --json assets` output, or names one per
+    line (size None); - is stdin."""
     if path == "-":
         text = sys.stdin.read()
     else:
@@ -212,13 +214,15 @@ def read_asset_names(path):
         listed = json.loads(text)
         if isinstance(listed, dict):
             listed = listed.get("assets", [])
-        return [entry["name"] if isinstance(entry, dict) else str(entry) for entry in listed]
-    return [line.strip() for line in text.splitlines() if line.strip()]
+        return {entry["name"] if isinstance(entry, dict) else str(entry):
+                entry.get("size") if isinstance(entry, dict) else None for entry in listed}
+    return {line.strip(): None for line in text.splitlines() if line.strip()}
 
 
 def asset_problems(appcast, version, assets, mac_only=False):
-    """One line per release zip without an appcast item, per item whose zip is not attached,
-    and per OS the release must reach that has no item."""
+    """One line per release zip without an appcast item, per item whose zip is not attached
+    or whose length is not the attached size (when assets maps a name to one), and per OS the
+    release must reach that has no item."""
     version = version[1:] if version.startswith("v") else version
     try:
         root = ET.parse(appcast).getroot()
@@ -238,6 +242,9 @@ def asset_problems(appcast, version, assets, mac_only=False):
                                 f"to the v{version} release")
             elif not url.endswith(url_prefix + name):
                 problems.append(f"item {number}: url {url!r} does not end in {url_prefix}{name}")
+            elif assets[name] is not None and enclosure.get("length") != str(assets[name]):
+                problems.append(f"item {number}: length {enclosure.get('length')!r}; the attached "
+                                f"{name} is {assets[name]} bytes")
             # The Windows updater picks an enclosure by sparkle:os alone, never by its url.
             os_name = enclosure.get(sparkle("os"), "")
             os_name = "macos" if os_name in MAC_OS else os_name
@@ -603,16 +610,16 @@ def main(argv):
     if args.assets:
         if args.add:
             parser.error("--assets checks a finished appcast; it takes no --add")
-        names = [os.path.basename(name) for name in args.zips]
+        names = {os.path.basename(name): None for name in args.zips}
         if args.assets_file:
             try:
-                names += read_asset_names(args.assets_file)
+                names.update(read_assets(args.assets_file))
             except (OSError, ValueError, KeyError, TypeError) as error:
                 print(f"{args.assets_file}: not a list of asset names ({error})")
                 return 1
         if not names:
             parser.error("--assets needs the asset names, as arguments or with --assets-file")
-        problems = asset_problems(args.appcast, args.version, set(names), args.mac_only)
+        problems = asset_problems(args.appcast, args.version, names, args.mac_only)
         for problem in problems:
             print(problem)
         return 1 if problems else 0

@@ -29,9 +29,11 @@ scripts/sign_appcast.sh $ONLY "$VERSION"    # → appcast.xml, for the app's upd
 cp scripts/install.sh install.sh
 ASSETS=(AudioSync.dmg "AudioSync-$VERSION.zip" appcast.xml install.sh THIRD_PARTY_NOTICES.md)
 shasum -a 256 "${ASSETS[@]}" > SHA256SUMS.txt
-# every zip that goes on the release needs its appcast item, under the right sparkle:os
+# the zips must still be the ones signed (same length), and every zip that goes on the
+# release needs its appcast item, under the right sparkle:os
 # (joined with &&, so a failed check stops before the tag)
-python3 -I scripts/check_appcast.py --assets $ONLY appcast.xml "$VERSION" "${ASSETS[@]}" SHA256SUMS.txt \
+python3 -I scripts/check_appcast.py $ONLY appcast.xml "$VERSION" AudioSync-"$VERSION"*.zip \
+  && python3 -I scripts/check_appcast.py --assets $ONLY appcast.xml "$VERSION" "${ASSETS[@]}" SHA256SUMS.txt \
   && git tag -a "v$VERSION" -m "AudioSync $VERSION" && git push origin "v$VERSION" \
   && gh release create "v$VERSION" --title "AudioSync $VERSION" --notes-file "$NOTES" \
      "${ASSETS[@]}" SHA256SUMS.txt
@@ -44,7 +46,7 @@ python3 -I scripts/check_appcast.py --assets $ONLY .build/release-check/appcast.
   --assets-file .build/release-check/assets.json
 ```
 
-The `--assets` check fails when a zip in the list, such as a Windows zip, has no appcast item or sits under the wrong `sparkle:os` (the Windows updater picks its item by `sparkle:os` alone), or when an item names a zip that isn't in the list. It also fails when the appcast has no Mac item or, without `--mac-only`, no item for one of the Windows zips, so a release that forgot the Windows zips stops here. Run it before `gh release create`: once the release is public, `releases/latest/download/appcast.xml` serves its appcast at once. If it fails there, fix the zips or run `scripts/sign_appcast.sh` again, and don't tag yet. The run after publishing only confirms what GitHub serves. If that one fails, never edit or re-upload the published release: publish a new patch version with a correct appcast.
+The first check compares each zip with its appcast item: a zip made again after `scripts/sign_appcast.sh` ran almost always has another length, so it stops here instead of shipping with a stale length and signature that every updater refuses (the check reads lengths only, not signatures). The `--assets` check fails when a zip in the list, such as a Windows zip, has no appcast item or sits under the wrong `sparkle:os` (the Windows updater picks its item by `sparkle:os` alone), or when an item names a zip that isn't in the list. It also fails when the appcast has no Mac item or, without `--mac-only`, no item for one of the Windows zips, so a release that forgot the Windows zips stops here. Run it before `gh release create`: once the release is public, `releases/latest/download/appcast.xml` serves its appcast at once. If either fails there, fix the zips, then run `scripts/sign_appcast.sh` again, and don't tag yet. The run after publishing only confirms what GitHub serves, including that each item's length is the size GitHub reports for its zip. If that one fails, never edit or re-upload the published release: publish a new patch version with a correct appcast.
 
 `scripts/install.sh` (the Terminal install in the README) depends on two of these: it downloads `AudioSync-$VERSION.zip`, expects `AudioSync.app` at the top of it, and checks it against that file's line in `SHA256SUMS.txt`. Keep both names and the `--keepParent` zip as they are. The copy attached to the release lets someone install that exact version with the script that shipped with it.
 
