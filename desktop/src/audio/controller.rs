@@ -6348,6 +6348,58 @@ mod tests {
         assert!(suspended.driver().capture_running());
     }
 
+    // covers: S332, S329
+    #[test]
+    fn a_capture_lost_as_the_resume_window_ends_gets_the_usual_tries() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        sleep_two_hours(&mut backend);
+        poll_quietly(&mut backend, polls_in(60) - 1);
+        // Lost at the window's last poll: its tries fall after the window.
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        poll_quietly(&mut backend, RESTART_TRIES * RESTART_DELAY_POLLS);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(BackendError::DeviceGone),
+            }]
+        );
+        assert_eq!(backend.driver().capture_attempts(), 1 + 5);
+    }
+
+    // covers: S332, S329
+    #[test]
+    fn polls_held_by_starts_that_dont_answer_are_no_resume() {
+        let (mut backend, log, dir) = logged_backend("controller-resume-hung");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        // Both outputs' streams end, and their starts again each hold the
+        // poll 11 s without an answer.
+        backend.hang_output_starts_for(Duration::from_secs(11));
+        backend.fail_output(SPEAKERS, Some(BackendError::NotResponding));
+        backend.fail_output(HEADPHONES, Some(BackendError::NotResponding));
+        backend.end_renderer(SPEAKERS);
+        backend.end_renderer(HEADPHONES);
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        // The capture gets the tries of S329, not a resume window.
+        let mut events = Vec::new();
+        for _ in 0..=RESTART_TRIES * RESTART_DELAY_POLLS {
+            events.extend(backend.poll());
+        }
+        assert!(
+            events.contains(&BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(BackendError::DeviceGone),
+            }),
+            "{events:?}"
+        );
+        let lines = logged(&log, &dir);
+        assert!(
+            !lines.iter().any(|line| line.contains("the PC woke")),
+            "{lines:?}"
+        );
+    }
+
     // covers: S332, S331, S327
     #[test]
     fn a_refusal_or_an_app_check_never_counts_the_time_asleep() {

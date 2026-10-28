@@ -330,6 +330,9 @@ pub struct MockDriver {
     /// The system clock: it stands still between polls unless a test moves
     /// it, as across a sleep.
     wall_clock: SystemTime,
+    /// How far the system clock moves while an output start that doesn't
+    /// answer holds the caller.
+    hang_cost: Duration,
     /// The endpoint ID of every output start asked for, refused ones
     /// included.
     renderer_attempts: Vec<String>,
@@ -389,6 +392,7 @@ impl MockDriver {
             renderer_attempts: Vec::new(),
             power_notices: Vec::new(),
             wall_clock: SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000),
+            hang_cost: Duration::ZERO,
         }
     }
 
@@ -769,6 +773,9 @@ impl Driver for MockDriver {
             return Err(BackendError::DeviceGone);
         }
         if let Some(error) = self.output_errors.get(&endpoint.id) {
+            if *error == BackendError::NotResponding {
+                self.wall_clock += self.hang_cost;
+            }
             return Err(error.clone());
         }
         self.renderers
@@ -1143,6 +1150,12 @@ impl Controller<MockDriver> {
     /// PC sleeps that long.
     pub fn pass_wall_time(&mut self, span: Duration) {
         self.driver_mut().wall_clock += span;
+    }
+
+    /// Makes each output start that doesn't answer hold the caller for
+    /// `span` of wall time.
+    pub fn hang_output_starts_for(&mut self, span: Duration) {
+        self.driver_mut().hang_cost = span;
     }
 
     /// Makes the running capture fail with `error`.
