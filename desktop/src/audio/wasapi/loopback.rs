@@ -420,7 +420,7 @@ fn open_stream(target: &CaptureTarget) -> Result<CaptureStream, BackendError> {
             )
         };
         match initialized {
-            Ok(()) => return finish_stream(client, attempt),
+            Ok(()) => return finish_stream(target, client, attempt),
             Err(error) => match capture_error(target, "IAudioClient::Initialize", error.code()) {
                 // No other format gets past the privacy settings, or a
                 // device another app holds (S333).
@@ -449,16 +449,17 @@ fn capture_error(target: &CaptureTarget, call: &'static str, code: HRESULT) -> B
 
 /// Connects an initialized client to its event and capture service.
 fn finish_stream(
+    target: &CaptureTarget,
     client: IAudioClient,
     attempt: CaptureAttempt,
 ) -> Result<CaptureStream, BackendError> {
     let event = Event::auto_reset()?;
     // SAFETY: calls on an initialized client; the event outlives the stream.
     unsafe { client.SetEventHandle(event.raw()) }
-        .map_err(|error| system_error("IAudioClient::SetEventHandle", &error))?;
+        .map_err(|error| finish_error(target, "IAudioClient::SetEventHandle", error.code()))?;
     // SAFETY: as above.
     let capture = unsafe { client.GetService::<IAudioCaptureClient>() }
-        .map_err(|error| system_error("IAudioClient::GetService", &error))?;
+        .map_err(|error| finish_error(target, "IAudioClient::GetService", error.code()))?;
     Ok(CaptureStream {
         client,
         capture,
@@ -467,6 +468,11 @@ fn finish_stream(
         autoconvert: attempt.autoconvert,
         pair: attempt.pair,
     })
+}
+
+/// How [`finish_stream`] reads a failed `call` on `target`'s client.
+fn finish_error(_target: &CaptureTarget, call: &'static str, code: HRESULT) -> BackendError {
+    system_error(call, &windows::core::Error::from_hresult(code))
 }
 
 /// The attempts that capture every channel of input device `endpoint_id`
@@ -1339,6 +1345,23 @@ mod tests {
             lane_start_error(&lane, AUDCLNT_E_DEVICE_INVALIDATED),
             BackendError::DeviceGone
         );
+    }
+
+    // covers: S333
+    #[test]
+    fn a_capture_whose_device_went_away_after_initialize_is_gone() {
+        use windows::Win32::Media::Audio::AUDCLNT_E_DEVICE_INVALIDATED;
+        let app = CaptureTarget::Loopback(Activation {
+            mode: LoopbackMode::IncludeTree,
+            target_pid: 4,
+        });
+        for call in ["IAudioClient::SetEventHandle", "IAudioClient::GetService"] {
+            assert_eq!(
+                finish_error(&app, call, AUDCLNT_E_DEVICE_INVALIDATED),
+                BackendError::DeviceGone,
+                "{call}"
+            );
+        }
     }
 
     // covers: S333, S141
