@@ -116,7 +116,7 @@ A Windows 11 version (x64 and ARM64) is out as a preview since 0.7.1, with the s
 
 ### Switching to the Store version
 
-The Store version keeps its own settings, so it starts fresh: your speakers, delays and volumes aren't carried over, and an Apple TV asks for its PIN once more. If you keep the download version too, turn off Launch at Sign-In in its tray menu first, or uninstall it, so only one AudioSync starts when you sign in.
+The Store version keeps its own settings, so it starts fresh: your speakers, delays and volumes aren't carried over, and an Apple TV asks for its PIN once more. Before you switch, turn off Launch at Sign-In in the download version's tray menu, or uninstall it, so only one AudioSync starts when you sign in.
 -->
 
 ## Linux
