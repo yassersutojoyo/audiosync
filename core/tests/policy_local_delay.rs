@@ -683,7 +683,7 @@ fn bluetooth_lost_at_5_s() -> (BriefLosses, Retimer) {
     (losses, retimer)
 }
 
-// covers: S328
+// covers: S328, S176, S208
 #[test]
 fn a_lost_output_keeps_its_offset_and_lead_for_10_s() {
     let (mut losses, mut retimer) = bluetooth_lost_at_5_s();

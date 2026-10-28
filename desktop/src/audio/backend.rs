@@ -512,9 +512,17 @@ pub enum BackendEvent {
         /// The endpoint ID.
         id: String,
     },
+    /// An output whose device Windows still lists has refused to open for
+    /// about thirty seconds (S331). The output stays on and is tried again
+    /// every few seconds; [`BackendEvent::OutputPlaysAgain`] tells once it
+    /// plays.
+    OutputRefused {
+        /// The endpoint ID.
+        id: String,
+    },
     /// An output reported stalled has played five seconds since it was
-    /// opened again, or no longer waits: it was switched off or streaming
-    /// stopped.
+    /// opened again, or one reported refused plays, or either no longer
+    /// waits: it was switched off, failed, or streaming stopped.
     OutputPlaysAgain {
         /// The endpoint ID.
         id: String,

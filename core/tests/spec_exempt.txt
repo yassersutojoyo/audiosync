@@ -6,72 +6,38 @@
 S6 Architecture overview only; each component it names has its own clauses.
 S10 Mac host only: the process tap leaves AudioSync's own process out; its logic suite checks it for app sources, mixes and their taps.
 S11 Mac host only: the Core Audio process objects that make up an app source; its logic suite checks it.
-S13 Mac host only: the process tap mutes the tapped processes' own output; its logic suite checks that a retap keeps the app muted, and the mute itself has no automated test.
+S13 Mac host only: the process tap mutes the tapped processes' own output; its logic suite checks that every tap is set up muted and private (SourceCapture.configureTap) and that a retap keeps the app muted.
 S60 Mac host only: Core Audio output device enumeration and device object IDs; the --hardware engine suite checks it.
 S61 The renderer object wraps a Core Audio output unit; its pure parts are S56, S62, S64 and S65, and the --hardware engine suite checks the rest.
 S66 A renderer's delay call measured on real hardware by the --hardware engine suite; its pure parts are S3 and S46.
 S67 Frames a real output device renders per second; the --hardware engine suite checks it.
 S72 Retired in part with the bundled engine: what stands, re-applying every active local output's gain on a master change, is the host's; the gain itself is S71's; the Mac logic suite checks the host's part.
-S73 Retired with the bundled engine: an AirPlay speaker's own volume as the engine reported it; the core's engine_volume and adopt_reported_volume went too.
-S74 Retired with the bundled engine: its coalesced volume writes; the core's LatestValues went too.
-S82 Retired with the bundled engine: its working folder layout and creating the pipe before it launched; the FIFO feed got the path.
-S83 Retired with the FIFO feed: the pipe's wire format.
-S84 Retired with the FIFO feed: its interface.
-S86 Retired with the FIFO feed: its float to PCM16 conversion.
-S87 Retired with the FIFO feed: its queue between the capture thread and the writer.
-S88 Retired with the FIFO feed: its writer thread's start and stop.
-S89 Retired with the FIFO feed: opening the pipe.
-S90 Retired with the FIFO feed: its backlog cap.
-S91 Retired with the FIFO feed: delivery to a reader that drains the pipe.
-S92 Retired with the FIFO feed: a reader that goes away.
-S93 Retired with the FIFO feed: a full pipe, short writes and frame alignment.
-S95 Retired with the FIFO feed: no pipe write on the capture thread.
-S96 Retired with the bundled engine; host-side by design: the engine's config file belonged to the host that launched the engine, which wrote it before each launch with that run's password.
-S97 Retired with the bundled engine; host-side by design: the password and the config file belonged to the host that launched the engine; its API client (S101) saw the first answer, and the host rewrote its own file.
-S98 Retired with the bundled engine: its process lifecycle; the core's policy::engine went too.
-S99 Retired with the bundled engine: its pipe playback; the core's policy::engine went too.
-S100 Retired with the bundled engine: its output list; the core's policy::reconcile went too.
 S101 The host's reconciles, driven by Core Audio's device-list notice, the sender's events and a 30 s safety net (the Mac logic suite's "reconcile: …" tests); the rest, the bundled engine's HTTP client transport (timeouts, serial write queue, path encoding), is retired.
-S102 Retired with the bundled engine: its reachability and restarts; the core's policy::reconcile went too.
-S103 Retired with the bundled engine: its switch-on tracking; the core's policy::reconcile went too.
-S104 Retired with the bundled engine: its reconcile of each reported speaker; the core's policy::reconcile went too.
-S105 Retired with the bundled engine: its per-speaker volume writes; the core's policy::reconcile went too.
 S106 Retired in part with the bundled engine: the decisions on the engine's reports; what stands, the access kinds, is the Mac host's (AirPlayPairing.Access), which its logic suite checks; the core's policy::pairing went too.
-S107 Retired with the bundled engine: its pairing stages; the core's policy::pairing went too.
-S108 Retired with the bundled engine: its prompt queue; the core's policy::pairing went too.
-S109 Retired with the bundled engine: its drop reaction; the drop reasons and their reaction live on in session::DropReason and S136.
-S110 Retired with the bundled engine: its quit sequence, the API write drain and the engine's process signals.
 S111 Mac host only: the app's SIGTERM and SIGINT handlers and the exit path; its logic suite checks the quit steps.
 S112 Host only: the interface of the Mac host's engine wrapper (Core Audio device IDs, callbacks); the Mac logic suite and the Windows adapter tests check it.
 S113 Host only: the Mac host makes its control calls and gets its callbacks on the main thread; the Mac logic suite and Tests/run-tests.sh check it, and the Windows adapter tests check that reports wait for the UI thread's poll.
 S114 Session start orchestration, which starts the host's capture after the core's ring and equalizer; the Windows controller's a_failed_start_leaves_nothing_running_and_every_feed_free tests its failure path.
 S115 Session stop orchestration, which stops the host's capture and renderers; the Windows controller's a_second_stop_is_safe_and_no_capture_runs_once_a_stop_finished tests it.
-S129 Retired with the FIFO feed: its writer thread.
-S143 Retired with the bundled engine and the FIFO feed: the engine's restart and the pipe's reopen.
-S148 Retired with the bundled engine and the FIFO feed: a network loss as the engine's reconcile saw it.
 S154 Mac host only: the Local Network hint and the Bonjour browser states behind it; its logic suite checks it.
 S155 Mac host only: the AppKit appearance setting; its logic suite checks it.
 S156 Repository shell tooling (shellcheck), checked by CI and Tests/run-tests.sh.
-S160 Retired with the FIFO feed: its diagnostic counters.
 S167 Retired in part with the bundled engine: its list and reconcile; what stands, the Local Network hint for an empty list, is the host's (S154), which the Mac logic suite checks.
-S168 Retired with the bundled engine: track info after each start of the pipe; the core's policy::track_info went too.
-S169 Retired with the FIFO feed: the live edge on every open of the pipe.
 S170 The hosts' debug log files, which the Mac logic suite and the Windows host's tests check; neither lives in the core.
 S171 Mac host only: Core Audio device lists, their alive state, channel counts and private aggregate devices; its logic suite checks it.
 S173 Mac host only: the reference output, from Core Audio transport types and stream terminal types; its logic suite checks it.
-S174 The Windows app's reference output, from its endpoint kinds and endpoint IDs.
-S180 One-time migration of the Windows app's settings file.
+S174 Windows host only: the reference output, from its endpoint kinds and endpoint IDs; outputs.rs the_built_in_output_with_the_smallest_endpoint_id_is_the_reference checks it.
+S180 Windows host only: the one-time migration of its settings file; adapter.rs an_older_settings_file_is_migrated_once_and_saved_in_the_new_version checks it.
 S181 Hosts only: what the Mac and Windows windows show for offsets and the AirPlay delay; the Mac logic suite and the Windows tests check it.
 S186 Session stop and source change order in the host's engine wrapper (fade requests, the bounded wait, then stopping Core Audio or WASAPI IO); the core's parts are S185 and S189; the Mac logic suite, the --hardware engine suite and the Windows tests check it.
 S192 Hosts only: which rows read a device volume, and that the host never writes one by itself; the Mac logic suite and the Windows tests check it.
 S193 Mac host only: Core Audio volume and mute properties of an output device; its logic suite checks them through a fake Core Audio, a real device by hand.
-S194 WASAPI endpoint volume and mute (IAudioEndpointVolume).
+S194 Windows host only: WASAPI endpoint volume and mute (IAudioEndpointVolume); the wasapi/volume.rs and controller/device_volume.rs tests check it.
 S195 Hosts only: Core Audio property listeners and WASAPI endpoint volume notifications, and the thread hop to the UI; the Mac logic suite and the Windows tests check it.
 S198 Hosts only: where the device-volume hint shows in the main window and the panel or flyout rows; the Mac logic suite and the Windows tests check it.
 S199 Hosts only: the hint's wording in UIStrings (Mac) and strings.slint (Windows); the Mac logic suite and the Windows tests check it.
 S200 Hosts only: VoiceOver and Narrator labels of the hint and its fix button; the Mac logic suite and the Windows tests check it.
 S202 Hosts only: re-reads when a device goes away, comes back or its row is switched on again; the Mac logic suite and the Windows tests check it.
-S203 Retired with the FIFO feed: the live edge after a stall of the pipe.
 S204 Mac host only: settings the Mac app saved under the bundled engine's output IDs move to the native sender's receiver IDs; its logic suite checks it.
 S211 Mac host only: the source picker's entries; its logic suite checks it.
 S212 Hosts only: stored settings read back and clamped (the user defaults on the Mac, a JSON file on Windows); the Mac logic suite and the Windows host's tests check it.
@@ -92,7 +58,7 @@ S257 Web remote and hosts only: the zone and preset routes and what the hosts ap
 S258 Web remote and hosts only: writes wait out a microphone run; the remote crate's, the Windows host's and the Mac logic suites check it.
 S242 Hosts only: the Mac process tap and the Windows per-app loopback mix pick and follow the apps; the Mac logic suite and the Windows capture tests check it.
 S244 Hosts only: the core's local delay model takes no source, so live input can't change it; the Windows controller tests check that the hosts pass the network wait under every source.
-S259 Hosts only: the Presets card in the main window; the Windows tests check it, and the Mac card has no automated test.
+S259 Hosts only: the Presets card in the main window; the Windows tests check it, and the Mac logic suite checks its rows (PresetCore.rows), not its SwiftUI layout.
 S260 Hosts only: the preset row of the menu bar panel and the tray flyout; the Mac logic suite and the Windows tests check it.
 S261 Hosts only: the Presets submenu and its shortcuts; the Mac logic suite and the Windows tests check it.
 S262 Hosts only: saving, renaming, updating and deleting presets; the Mac logic suite and the Windows tests check it.
@@ -101,11 +67,11 @@ S264 Hosts only: where the current-preset mark shows; its rule is S253's, which 
 S265 Hosts only: carrying out a recall and its notice; the plan is S252's, which the core covers.
 S266 Hosts only: a recall's focus and the phone's start origin; the Mac logic suite and the Windows tests check it.
 S267 Hosts only: keyboard reach and focus of the preset controls; the Windows tests check it, the Mac by hand.
-S268 Hosts only: the preset controls' colors in light and dark; the Windows contrast tests check it, the Mac by screenshot.
-S269 Hosts only: the preset wording in UIStrings (Mac) and strings.slint (Windows).
+S268 Hosts only: the preset controls' colors in light and dark; the Windows contrast tests and the Mac logic suite (the Presets card's tokens and their 4.5:1 contrast) check it.
+S269 Hosts only: the preset wording in UIStrings (Mac) and strings.slint (Windows); the Mac logic suite's "presets: the preset texts" and view.rs the_preset_texts_come_from_strings check it.
 S280 Hosts only: keeping each speaker's reported latency and setting the session's L; the rule is the AirPlay crate's (AirPlay spec P200); the Windows tests and the Mac logic suite check it.
 S281 Hosts only: re-timing on a new L reported by the AirPlay sender, through S177 and S178, which the core covers.
-S282 Hosts only: the debug log lines for reported latencies and L.
+S282 Hosts only: the debug log lines for reported latencies and L; the Mac logic suite and airplay.rs a_receiver_reporting_nothing_starts_at_zero_without_a_warning check them.
 S283 Hosts only: each AirPlay speaker's reported latency as its starting estimate, the per-speaker delay and L the host derives from it; S235's window part is the core's `airplay_wait_ms`, covered there.
 S284 Hosts only: Lf, E and each row's delay with several AirPlay 2 receivers, a target at its largest member's R_s; the Windows tests and the Mac logic suite check it.
 S285 Hosts only: every AirPlay 2 speaker playing, the two wait reasons and one speaker's failure on its own row; the Windows tests and the Mac logic suite check them, the two reasons included.
@@ -138,7 +104,7 @@ S326 Hosts only: the Windows output thread ending a stream that takes no frame f
 S327 Hosts only: the Windows host checking every 2 s for an app source it can't watch; the Windows tests named in the clause check it.
 S329 Hosts only: the Windows host reopening only the capture after DeviceGone; the Windows tests named in the clause check it.
 S330 Hosts only: the Windows host reopening an output in its new format when Windows invalidates its stream under it, and the Mac host when its device's rate or channel count changes; the Windows tests and the Mac logic suite named in the clause check it.
-S331 Hosts only: the Windows host retrying an output Windows refuses while it rebuilds the endpoint; it awaits an advisor verdict, and its Windows tests follow the advisor's pick (the clause names none yet, only an idea for a test that fails first).
+S331 Hosts only: the Windows host retrying an output Windows refuses while it rebuilds the endpoint; controller.rs a_refusal_or_an_app_check_never_counts_the_time_asleep checks the 30 s refusal count, and what follows the 30 s awaits a decision.
 S332 Hosts only: the Windows host following sleep and resume and trying a lost capture for 60 s after a wake; the Windows tests named in the clause check it.
 S333 Hosts only: the Windows capture reading an input another app holds as busy and the controller retrying it every 3 s; the Windows tests named in the clause check it.
 S334 Hosts only: the Mac host ending an output whose render callback hands its device no frame for 2 s after it took frames once and attaching it again; the Mac logic suite checks it.

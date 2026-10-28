@@ -823,7 +823,7 @@ pub mod tests {
         untouched(&updater);
     }
 
-    // covers: S298
+    // covers: S298, S305
     #[test]
     fn a_manual_check_right_after_cancel_is_answered_once_the_download_stops() {
         let Gated {
@@ -915,7 +915,7 @@ pub mod tests {
         assert!(plist.contains(&format!("<string>{FEED_URL}</string>")));
     }
 
-    // covers: S305
+    // covers: S305, S302
     #[test]
     fn offline_at_launch_is_quiet_and_a_manual_check_says_so() {
         let (mut updater, _) = updater("offline-quiet");
@@ -970,7 +970,7 @@ pub mod tests {
         assert_eq!(updater.notice(), latest.as_ref());
     }
 
-    // covers: S305
+    // covers: S305, S296
     #[test]
     fn a_manual_check_with_nothing_newer_says_the_running_version_is_the_latest() {
         let (mut updater, _) = updater("up-to-date");

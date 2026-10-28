@@ -23,27 +23,28 @@ VERSION=x.y.z
 NOTES=path/to/release-notes.md          # your local notes file, not committed
 ./make-dmg.sh                               # → AudioSync.dmg
 ditto -c -k --keepParent /Applications/AudioSync.app "AudioSync-$VERSION.zip"
-# Windows preview below: put both Windows zips here first; a release without them needs --mac-only
-scripts/sign_appcast.sh "$VERSION"          # → appcast.xml, for the app's updater
+# Windows preview below: put both Windows zips here first; a release without them sets ONLY=--mac-only
+ONLY=
+scripts/sign_appcast.sh $ONLY "$VERSION"    # → appcast.xml, for the app's updater
 cp scripts/install.sh install.sh
 ASSETS=(AudioSync.dmg "AudioSync-$VERSION.zip" appcast.xml install.sh THIRD_PARTY_NOTICES.md)
 shasum -a 256 "${ASSETS[@]}" > SHA256SUMS.txt
 # every zip that goes on the release needs its appcast item, under the right sparkle:os
 # (joined with &&, so a failed check stops before the tag)
-python3 -I scripts/check_appcast.py --assets appcast.xml "$VERSION" "${ASSETS[@]}" SHA256SUMS.txt \
+python3 -I scripts/check_appcast.py --assets $ONLY appcast.xml "$VERSION" "${ASSETS[@]}" SHA256SUMS.txt \
   && git tag -a "v$VERSION" -m "AudioSync $VERSION" && git push origin "v$VERSION" \
   && gh release create "v$VERSION" --title "AudioSync $VERSION" --notes-file "$NOTES" \
      "${ASSETS[@]}" SHA256SUMS.txt
 
-# confirmation: the same check on the release as GitHub serves it
+# confirmation: the same check on the release as GitHub serves it (VERSION and ONLY as set above)
 mkdir -p .build/release-check
 gh release view "v$VERSION" --json assets > .build/release-check/assets.json
 gh release download "v$VERSION" --pattern appcast.xml --output .build/release-check/appcast.xml --clobber
-python3 -I scripts/check_appcast.py --assets .build/release-check/appcast.xml "$VERSION" \
+python3 -I scripts/check_appcast.py --assets $ONLY .build/release-check/appcast.xml "$VERSION" \
   --assets-file .build/release-check/assets.json
 ```
 
-The `--assets` check fails when a zip in the list, such as a Windows zip, has no appcast item or sits under the wrong `sparkle:os` (the Windows updater picks its item by `sparkle:os` alone), or when an item names a zip that isn't in the list. Run it before `gh release create`: once the release is public, `releases/latest/download/appcast.xml` serves its appcast at once. If it fails there, fix the zips or run `scripts/sign_appcast.sh` again, and don't tag yet. The run after publishing only confirms what GitHub serves. If that one fails, never edit or re-upload the published release: publish a new patch version with a correct appcast.
+The `--assets` check fails when a zip in the list, such as a Windows zip, has no appcast item or sits under the wrong `sparkle:os` (the Windows updater picks its item by `sparkle:os` alone), or when an item names a zip that isn't in the list. It also fails when the appcast has no Mac item or, without `--mac-only`, no item for one of the Windows zips, so a release that forgot the Windows zips stops here. Run it before `gh release create`: once the release is public, `releases/latest/download/appcast.xml` serves its appcast at once. If it fails there, fix the zips or run `scripts/sign_appcast.sh` again, and don't tag yet. The run after publishing only confirms what GitHub serves. If that one fails, never edit or re-upload the published release: publish a new patch version with a correct appcast.
 
 `scripts/install.sh` (the Terminal install in the README) depends on two of these: it downloads `AudioSync-$VERSION.zip`, expects `AudioSync.app` at the top of it, and checks it against that file's line in `SHA256SUMS.txt`. Keep both names and the `--keepParent` zip as they are. The copy attached to the release lets someone install that exact version with the script that shipped with it.
 
@@ -61,7 +62,7 @@ Publish it as a normal release, not a pre-release. The README and the site link 
 
 The Windows build can ride along with a Mac release as an unsigned preview, but only after that same commit was tried on a real Windows 11 PC, by the maintainer or by a session running on his PC with his OK: start it with `AUDIOSYNC_DEBUG=1`, play to a local output (and to a paired Bluetooth speaker when one is available), check that the app keeps running and each of those speakers shows as playing, and check `%TEMP%\audiosync-debug.log` for errors and for the stream starting on each of them. Without that try, no Windows files go on the release. Take `audiosync-windows-x64` and `audiosync-windows-arm64` from the Windows CI run of the release commit (CI keeps them for 7 days; re-run the workflow if they're gone), and attach each as a zip of its `audiosync.exe` with the `THIRD-PARTY-NOTICES.txt` from the same artifact, named exactly `AudioSync-$VERSION-windows-x64.zip` and `AudioSync-$VERSION-windows-arm64.zip` (`scripts/sign_appcast.sh` looks for those names only). Add both zips to `ASSETS` above, so they're in `SHA256SUMS.txt`, checked against the appcast and on the release.
 
-The Windows app will update itself from the same `appcast.xml` as the Mac (`docs/ENGINE_SPEC.md` section 19). Put both Windows zips next to `AudioSync-$VERSION.zip` before you run `scripts/sign_appcast.sh`, and it adds them to the appcast: one item per zip next to the Mac item, signed with the same EdDSA key, with the zip's length, its `sparkle:os` (`windows-x64` or `windows-arm64`) and the Mac item's versions. It stops when either Windows zip is missing, naming it, or when a Windows zip sits there under any other name, and checks the finished appcast with `scripts/check_appcast.py` (S311), which also wants exactly `audiosync.exe` and `THIRD-PARTY-NOTICES.txt` at the top of each Windows zip. The first time an appcast carries Windows items, point the Mac app at it once and check that it offers the Mac update only (S310). A release without the Windows zips needs `scripts/sign_appcast.sh --mac-only "$VERSION"`, which leaves the Windows items out and refuses to run when Windows zips are there.
+The Windows app will update itself from the same `appcast.xml` as the Mac (`docs/ENGINE_SPEC.md` section 19). Put both Windows zips next to `AudioSync-$VERSION.zip` before you run `scripts/sign_appcast.sh`, and it adds them to the appcast: one item per zip next to the Mac item, signed with the same EdDSA key, with the zip's length, its `sparkle:os` (`windows-x64` or `windows-arm64`) and the Mac item's versions. It stops when either Windows zip is missing, naming it, or when a Windows zip sits there under any other name, and checks the finished appcast with `scripts/check_appcast.py` (S311), which also wants exactly `audiosync.exe` and `THIRD-PARTY-NOTICES.txt` at the top of each Windows zip. The first time an appcast carries Windows items, point the Mac app at it once and check that it offers the Mac update only (S310). A release without the Windows zips needs `ONLY=--mac-only` in the steps above, so `scripts/sign_appcast.sh --mac-only "$VERSION"` leaves the Windows items out (and refuses to run when Windows zips are there) and both `--assets` checks accept an appcast without them.
 
 Say plainly in the release notes that it's an unsigned preview (SmartScreen will warn on first launch), Windows 11 only, and what its AirPlay reaches: receivers that take AirPlay 1, with a password prompt for a receiver that has one and a PIN prompt for an Apple TV that asks for a code, while AirPlay 2 stays experimental and off unless File > AirPlay 2 (Experimental) is on (and whether each was tried on a real speaker or Apple TV). The app carries Slint's attribution in its About dialog (see `THIRD_PARTY_NOTICES.md`), so the release notes need no badge.
 
