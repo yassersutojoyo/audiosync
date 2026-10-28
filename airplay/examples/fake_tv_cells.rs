@@ -455,6 +455,45 @@ fn d1(tv: &Tv, host: &mut Host) -> Cell {
     )
 }
 
+fn d1_once(tv: &Tv, host: &mut Host) -> Cell {
+    const SWITCH_ONS: usize = 2;
+    let device = tv.device();
+    let key = device.key.clone();
+    let prompt = |event: &PairingEvent| *event == PairingEvent::PinRequested;
+    let stored = |host: &Host| {
+        host.events.seen.iter().find_map(|(_, event)| match event {
+            SenderEvent::Pairing {
+                key: k,
+                event: PairingEvent::HomeKitPaired(credentials),
+            } if *k == key => Some(credentials.clone()),
+            _ => None,
+        })
+    };
+    host.sender.start_pairing(device.clone());
+    if host.run_until(None, LONG, |host| host.pairing(&key, prompt) >= 1) {
+        let _ = host.sender.submit_pin(&key, CODE);
+    }
+    host.run_until(None, LONG, |host| stored(host).is_some());
+    let credentials = stored(host);
+    for on in 1..=SWITCH_ONS {
+        let mut options = SpeakerOptions::new(volume_for_row(20));
+        options.homekit_credentials = credentials.clone();
+        host.sender.add_speaker(device.clone(), options);
+        host.run_until(Some(&key), LONG, |host| host.playing(&key) >= on);
+        host.run(Some(&key), Duration::from_secs(1));
+        host.sender.remove_speaker(&key);
+        host.run_until(None, LONG, |_| tv.count("TEARDOWN") >= on);
+    }
+    let (started, done) = tv.pin_pairings();
+    cells::d1_once(
+        SWITCH_ONS,
+        host.pairing(&key, prompt),
+        started,
+        done,
+        host.playing(&key),
+    )
+}
+
 /// Adds the password television with `password` or `credentials`, waits
 /// until it plays or fails, and removes it again.
 fn password_step(
@@ -660,6 +699,11 @@ fn main() -> ExitCode {
     let tv = Tv::start(Pin::EveryTime);
     let mut host = Host::start();
     report.show(&d1(&tv, &mut host));
+    host.sender.shutdown();
+
+    let tv = Tv::start(Pin::Once);
+    let mut host = Host::start();
+    report.show(&d1_once(&tv, &mut host));
     host.sender.shutdown();
 
     let tv = Tv::start(Pin::Password);

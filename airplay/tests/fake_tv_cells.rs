@@ -2,11 +2,30 @@
 
 #[path = "../examples/fake_tv/cells.rs"]
 mod cells;
+mod common;
+#[path = "../examples/fake_tv/television.rs"]
+mod television;
 
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
+use audiosync_airplay::discovery::{
+    Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
+};
 use audiosync_airplay::error::ErrorKind;
+use audiosync_airplay::pairing::PairingEvent;
+use audiosync_airplay::rtsp::Method;
+use audiosync_airplay::sender::{
+    Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
+};
+use audiosync_airplay::volume::Volume;
 use cells::{Cell, PasswordStep, Pause, Status, db_for_row, row_for_db};
+use common::ap2::Ap2Server;
+use common::hap::{item, untlv};
+use common::net::{Events, HostAudio, free_ptp_ports, serial};
+use television::{Pin, television};
+
+const LONG: Duration = Duration::from_secs(15);
 
 #[test]
 fn rows_map_to_the_default_line_and_back() {
@@ -123,6 +142,140 @@ fn d1_passes_only_with_a_pin_at_every_switch_on() {
         Status::Fail,
         "one switch-on proves nothing"
     );
+}
+
+#[test]
+fn d1_once_passes_only_with_one_pin_for_every_switch_on() {
+    let pass = cells::d1_once(2, 1, 1, 1, 2);
+    assert_eq!(pass.status, Status::Pass, "{}", pass.line());
+    assert_eq!(
+        pass.value,
+        "2 switch-ons: 1 PIN prompts, 1 PIN pairings started, 1 done, 2 playing"
+    );
+    assert_eq!(cells::d1_once(2, 2, 2, 2, 2).status, Status::Fail);
+    assert_eq!(cells::d1_once(2, 1, 1, 1, 1).status, Status::Fail);
+    assert_eq!(cells::d1_once(1, 1, 1, 1, 1).status, Status::Fail);
+}
+
+/// D1.once run end to end: the sender pairs with the PIN once, then plays
+/// twice on the stored credentials.
+#[test]
+fn d1_once_passes_against_a_television_that_asks_for_a_pin_once() {
+    const CODE: &str = "4821";
+    const SWITCH_ONS: usize = 2;
+    let _serial = serial();
+    let server = Ap2Server::start(television(
+        "AudioSync Test TV",
+        Pin::Once,
+        CODE,
+        television::FEATURES_METADATA,
+        television::DEVICE_ID,
+    ));
+    let record = ServiceRecord {
+        kind: ServiceKind::AirPlay,
+        instance: "AudioSync Test TV".to_owned(),
+        host: format!("{}.local", television::HOST_LABEL),
+        port: server.address.port(),
+        txt: television::txt(
+            Pin::Once,
+            television::FEATURES_METADATA,
+            television::DEVICE_ID,
+        )
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value}").into_bytes())
+        .collect(),
+        addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
+    };
+    let key = DeviceKey::Id(DeviceId(television::DEVICE_ID));
+    let device = Device::from_records(key.clone(), None, Some(&record)).expect("its record");
+    let (sender, writer) = Sender::start(SenderConfig {
+        airplay2: true,
+        airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
+        ptp_ports: free_ptp_ports(),
+        ..SenderConfig::default()
+    })
+    .expect("the sender starts");
+    let _audio = HostAudio::start(writer);
+    let mut events = Events::default();
+    let prompt = |event: &SenderEvent| {
+        matches!(
+            event,
+            SenderEvent::Pairing {
+                event: PairingEvent::PinRequested,
+                ..
+            }
+        )
+    };
+
+    sender.start_pairing(device.clone());
+    assert!(
+        events.wait_for(&sender, LONG, prompt).is_some(),
+        "no PIN prompt"
+    );
+    sender.submit_pin(&key, CODE).expect("digits");
+    let paired = events.wait_for(&sender, LONG, |event| {
+        matches!(
+            event,
+            SenderEvent::Pairing {
+                event: PairingEvent::HomeKitPaired(_),
+                ..
+            }
+        )
+    });
+    let Some(SenderEvent::Pairing {
+        event: PairingEvent::HomeKitPaired(credentials),
+        ..
+    }) = paired
+    else {
+        panic!("no credentials: {:?}", server.fake().keys());
+    };
+    for on in 1..=SWITCH_ONS {
+        let mut options = SpeakerOptions::new(Volume::Db(-20.0));
+        options.homekit_credentials = Some(credentials.clone());
+        sender.add_speaker(device.clone(), options);
+        let playing = |state: &SpeakerState| *state == SpeakerState::Playing;
+        assert!(
+            events
+                .wait_state(&sender, &key, on, LONG, playing)
+                .is_some(),
+            "{:?} {:?}",
+            events.of(&key),
+            server.fake().keys()
+        );
+        sender.remove_speaker(&key);
+        let stopped = |state: &SpeakerState| *state == SpeakerState::Stopped;
+        assert!(
+            events
+                .wait_state(&sender, &key, on, LONG, stopped)
+                .is_some()
+        );
+    }
+
+    let mut pairings = (0, 0);
+    for (request, _) in &server.fake().requests {
+        if request.method != Method::Post || request.uri != "/pair-setup" {
+            continue;
+        }
+        let items = untlv(&request.body);
+        match item(&items, 6).and_then(|state| state.first().copied()) {
+            Some(1) if item(&items, 19).is_none() => pairings.0 += 1,
+            Some(5) => pairings.1 += 1,
+            _ => {}
+        }
+    }
+    let prompts = events
+        .seen
+        .iter()
+        .filter(|(_, event)| prompt(event))
+        .count();
+    let playing = events
+        .of(&key)
+        .iter()
+        .filter(|event| matches!(event, SpeakerEvent::State(SpeakerState::Playing)))
+        .count();
+    let cell = cells::d1_once(SWITCH_ONS, prompts, pairings.0, pairings.1, playing);
+    assert_eq!(cell.status, Status::Pass, "{}", cell.line());
+    sender.shutdown();
 }
 
 #[test]
