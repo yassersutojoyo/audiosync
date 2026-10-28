@@ -1111,6 +1111,58 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
     }
 
+    // A send from a local address the host no longer has, as after a DHCP
+    // renew moved it to a new one, can't reach the receiver (P141).
+    // covers: P141
+    #[test]
+    fn a_lost_local_address_is_unreachable() {
+        assert!(unreachable(&io::Error::from(
+            io::ErrorKind::AddrNotAvailable
+        )));
+    }
+
+    // Windows refuses a send to the unspecified address with
+    // WSAEADDRNOTAVAIL, the error a vanished local address gives.
+    // covers: P141
+    #[cfg(windows)]
+    #[test]
+    fn two_sends_without_a_usable_address_make_the_session_lost() {
+        use crate::ids::{OsEntropy, SessionIds};
+        use crate::session::{Output, Session, SessionConfig, SessionEvent};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let tcp = TcpStream::connect(address).expect("connect");
+        let (_receiver, _) = listener.accept().expect("accept");
+        let (notify, _received) = panicking_on(|_| false);
+        let now = Instant::now();
+        let (io, connection) = SessionIo::open(
+            SessionKey(10),
+            1,
+            tcp,
+            SenderClock::new(now),
+            Arc::new(SpeakerCounters::default()),
+            notify,
+        )
+        .expect("session I/O");
+        let config = SessionConfig::new(vec![address], crate::volume::Volume::Db(-20.0));
+        let ids = SessionIds::generate(&mut OsEntropy).expect("identifiers");
+        let mut session = Session::new(config, ids, now);
+        session.handle_connected(connection, now);
+        let nowhere = SocketAddr::from((Ipv4Addr::UNSPECIFIED, 9));
+        for _ in 0..2 {
+            if let Some(result) = io.send(LocalSocket::Control, nowhere, &[0; 20]) {
+                session.handle_udp_send(result, now);
+            }
+        }
+        let lost = std::iter::from_fn(|| session.poll_output()).any(|output| {
+            matches!(output, Output::Event(SessionEvent::Failed(error))
+                if error.kind == crate::error::ErrorKind::Lost)
+        });
+        assert!(lost);
+        drop(io);
+    }
+
     /// A driver that panics on the events `bug` picks, as a bug in a
     /// thread's work would, and passes every other event on.
     fn panicking_on(bug: fn(&IoEvent) -> bool) -> (impl Notify, mpsc::Receiver<IoEvent>) {
