@@ -7229,6 +7229,13 @@ do {
                            .unitNotCreated(OSStatus(kAudioHardwareIllegalOperationError))]
     check(refusalKinds.allSatisfy(\.isRefusal) && !hardKinds.contains(where: \.isRefusal),
           "S331 refused start: a device gone, rebuilt, not running or held in hog mode refuses; a format or any other error is hard")
+    let hogged = RefusingEngine(active: [], refusing: ["usb"],
+                                refusal: SF.deviceDidNotStart(OSStatus(EAGAIN)))
+    let hoggedStart = LocalOutputSync.apply(enabled: ["usb"], listing: [usb], to: hogged, holdBacks: [:], gain: { _ in 1 })
+    check(SF.unitNotInitialized(OSStatus(EAGAIN)).isRefusal && hoggedStart.failures.first?.refusal != nil
+            && LocalOutputSync.report(hoggedStart.failures, enabled: ["usb"], origin: .user) == nil,
+          "S331 refused start: a start the HAL output unit fails with 35 (EAGAIN) on a hogged device stays on, with no alert",
+          "\(hoggedStart.failures)")
 
     var refusals = OutputRefusalRetry()
     let firstRefusal = refusals.refused("bt", nowS: 100)
