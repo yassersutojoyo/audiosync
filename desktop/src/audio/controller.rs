@@ -2133,8 +2133,11 @@ impl<D: Driver> Controller<D> {
             if !invalidated && !changed {
                 continue;
             }
-            if let Some(session) = self.session.as_mut() {
-                drop(session.outputs.remove(&id));
+            if let Some(session) = self.session.as_mut()
+                && let Some(playing) = session.outputs.remove(&id)
+                && self.policy.settings(&id).enabled
+            {
+                keep_lead(&mut session.held_leads, &id, &playing.control);
             }
             // Written once the old stream is released (S126).
             self.log.log(|| {
