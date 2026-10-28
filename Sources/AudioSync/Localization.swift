@@ -812,7 +812,7 @@ struct UIStrings {
 
     /// `refusedCaptureRate`: the capture rate (Hz) when that was the reason.
     func outputCouldNotStart(names: [String], refusedCaptureRate: Double? = nil) -> String {
-        let shown = names.joined(separator: ", ")
+        let shown = listed(names)
         let deviceName = shown.isEmpty ? unknownDevice : shown
         let one = names.count <= 1
         let first = "\(deviceName) couldn't start, so " + (one ? "it's off. " : "they're off. ")
