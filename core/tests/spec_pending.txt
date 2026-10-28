@@ -4,5 +4,3 @@
 # gains a `// covers:` test, so the line goes when the core implements it. A
 # clause only the host can implement belongs in tests/spec_exempt.txt instead.
 S328 The delay model doesn't yet keep a switched-on output whose device left the list in the base and the session lead for 10 s.
-S331 The Windows host doesn't yet retry an output Windows refuses while it rebuilds the endpoint as the clause says; it awaits an advisor verdict.
-S332 The Windows host doesn't yet follow sleep and resume as the clause says; it awaits an advisor verdict.

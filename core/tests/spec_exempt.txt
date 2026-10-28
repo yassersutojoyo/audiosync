@@ -139,4 +139,6 @@ S326 Hosts only: the Windows output thread ending a stream that takes no frame f
 S327 Hosts only: the Windows host checking every 2 s for an app source it can't watch; the Windows tests will check it (tests named in the clause, to come).
 S329 Hosts only: the Windows host reopening only the capture after DeviceGone; the Windows tests named in the clause check it.
 S330 Hosts only: the Windows host reopening an output in its new format when Windows invalidates its stream under it; the Windows tests named in the clause check it.
+S331 Hosts only: the Windows host retrying an output Windows refuses while it rebuilds the endpoint; it awaits an advisor verdict, and the Windows tests will check it (tests named in the clause, to come).
+S332 Hosts only: the Windows host following sleep and resume; it awaits an advisor verdict, and the Windows tests will check it (tests named in the clause, to come).
 S333 Hosts only: the Windows capture reading an input another app holds as busy and the controller retrying it every 3 s; the Windows tests named in the clause check it.
