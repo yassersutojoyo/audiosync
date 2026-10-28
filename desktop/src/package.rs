@@ -277,6 +277,17 @@ mod tests {
     }
 
     #[test]
+    fn a_package_whose_name_never_came_still_counts_and_reads_as_unnamed() {
+        let query = Scripted::new(NAME, &[ERROR_INSUFFICIENT_BUFFER, 87]);
+        let identity = detect(&query);
+        assert!(identity.is_packaged());
+        let line = log_line(&identity, Some(Path::new("LocalCache")), None);
+        assert!(!line.contains("package: ;"), "{line}");
+        assert!(line.contains("unnamed"), "{line}");
+        assert!(line.ends_with("LocalCache"), "{line}");
+    }
+
+    #[test]
     fn the_test_process_has_no_package_and_asks_once() {
         assert!(!current().is_packaged());
         assert!(std::ptr::eq(current(), current()));

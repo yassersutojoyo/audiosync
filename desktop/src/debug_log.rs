@@ -215,16 +215,35 @@ pub fn env_skips_auto_connect() -> bool {
 /// (`crate::package::log_line`).
 #[cfg(not(target_os = "linux"))]
 fn env_path() -> (Option<PathBuf>, Option<String>) {
+    let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    launch_path(
+        std::env::var_os(ENV_VAR).as_deref(),
+        crate::package::current(),
+        std::env::temp_dir,
+        crate::package::local_cache_folder,
+        local_app_data.as_deref(),
+    )
+}
+
+/// [`env_path`] for a setting, an identity and the folders Windows names.
+/// A packaged run whose local cache can't be found has no log at all: it
+/// has nowhere of its own to write, and `%TEMP%` belongs to the unpackaged
+/// copy.
+#[cfg(any(not(target_os = "linux"), test))]
+fn launch_path(
+    setting: Option<&OsStr>,
+    identity: &crate::package::Identity,
+    temp: impl FnOnce() -> PathBuf,
+    local_cache: impl FnOnce() -> Option<PathBuf>,
+    local_app_data: Option<&Path>,
+) -> (Option<PathBuf>, Option<String>) {
     use crate::package;
-    let setting = std::env::var_os(ENV_VAR);
-    if setting.as_deref() != Some(OsStr::new("1")) {
+    if setting != Some(OsStr::new("1")) {
         return (None, None);
     }
-    let identity = package::current();
-    let folder = package::log_folder(identity, std::env::temp_dir, package::local_cache_folder);
-    let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
-    let line = package::log_line(identity, folder.as_deref(), local_app_data.as_deref());
-    let path = folder.and_then(|folder| log_path(setting.as_deref(), &folder));
+    let folder = package::log_folder(identity, temp, local_cache);
+    let line = package::log_line(identity, folder.as_deref(), local_app_data);
+    let path = folder.and_then(|folder| log_path(setting, &folder));
     (path, Some(line))
 }
 
@@ -446,6 +465,45 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[test]
+    fn a_packaged_launch_logs_to_the_local_cache_or_not_at_all() {
+        use crate::package::Identity;
+        let one = Some(OsStr::new("1"));
+        let base = Path::new(r"D:\Profiles\someone\AppData\Local");
+        let relative = Path::new("Packages")
+            .join("AudioSync_abcdefghjkmnp")
+            .join("LocalCache");
+        let cache = base.join(&relative);
+        let name = "AudioSync_0.9.0.0_x64__abcdefghjkmnp";
+        let packaged = Identity::Packaged(name.to_owned());
+        let no_temp = || -> PathBuf { panic!("a packaged run never asks for %TEMP%") };
+
+        let (path, line) = launch_path(one, &packaged, no_temp, || Some(cache.clone()), Some(base));
+        assert_eq!(path, Some(cache.join(FILE_NAME)));
+        let line = line.expect("a first line");
+        let shown = relative.display().to_string();
+        assert!(line.contains(name) && line.contains(&shown), "{line}");
+        assert!(!line.contains("someone"), "{line}");
+
+        let (path, _) = launch_path(one, &packaged, no_temp, || None, Some(base));
+        assert_eq!(path, None, "no local cache: no log, and never %TEMP%");
+
+        let (path, line) = launch_path(
+            one,
+            &Identity::Unpackaged,
+            || PathBuf::from("temp"),
+            || panic!("an unpackaged run never asks for the package"),
+            Some(base),
+        );
+        assert_eq!(path, Some(Path::new("temp").join(FILE_NAME)));
+        assert_eq!(line.as_deref(), Some("package: none"));
+
+        for setting in [None, Some(OsStr::new("0"))] {
+            let off = launch_path(setting, &packaged, no_temp, || panic!("off"), Some(base));
+            assert_eq!(off, (None, None));
+        }
+    }
 
     // covers: S170
     #[test]

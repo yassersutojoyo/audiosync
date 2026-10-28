@@ -675,7 +675,7 @@ fn runs(release: bool, identity: &crate::package::Identity, log: &DebugLog) -> b
 /// The updater for a release flag and package identity. The leftover sweep
 /// runs only past the gate: a packaged run leaves the unpackaged copy's
 /// `.new` files and update folders alone.
-fn for_exe(
+pub fn for_exe(
     log: DebugLog,
     release: bool,
     identity: &crate::package::Identity,
@@ -984,6 +984,18 @@ pub mod tests {
             lines
                 .iter()
                 .any(|line| line.contains("updater: off") && line.contains(name)),
+            "{lines:?}"
+        );
+
+        let path = dir.join("unnamed.log");
+        let log = DebugLog::new(Some(path.clone()));
+        assert!(!runs(true, &Identity::Packaged(String::new()), &log));
+        assert!(log.flush(crate::debug_log::TEST_FLUSH));
+        let lines = crate::debug_log::read_messages(&path);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("updater: off") && line.contains("unnamed")),
             "{lines:?}"
         );
 

@@ -8143,6 +8143,39 @@ mod tests {
         assert!(!app.main.get_updater_available());
     }
 
+    /// Both updater menu items, Help > Check for Updates… among them, show
+    /// only while an updater exists; a packaged release build gets none.
+    #[cfg(windows)]
+    #[test]
+    fn a_packaged_release_build_hides_the_updater_menu_items() {
+        use crate::updater::{Updater, files::RealFiles, flow::tests::fixture};
+        let app = app_over(MockBackend::new());
+        let f = fixture(
+            "menu-follows",
+            false,
+            std::sync::Arc::new(RealFiles),
+            DebugLog::default(),
+        );
+        *app.updater.borrow_mut() = Some(Updater::new(f.env));
+        app.refresh();
+        assert!(app.main.get_updater_available());
+
+        let packaged = crate::package::Identity::Packaged("AudioSync_0.9.0.0_x64__abc".to_owned());
+        let install = crate::updater::tests::test_dir("menu-follows-packaged");
+        let temp = install.join("temp");
+        let built = crate::updater::for_exe(
+            DebugLog::default(),
+            true,
+            &packaged,
+            || Some(install.clone()),
+            temp,
+        );
+        assert!(built.is_none());
+        *app.updater.borrow_mut() = built;
+        app.refresh();
+        assert!(!app.main.get_updater_available());
+    }
+
     // covers: S308
     /// Tab reaches each button of the updater's notice, Space or Enter
     /// presses it, and the notice reports its focus.
