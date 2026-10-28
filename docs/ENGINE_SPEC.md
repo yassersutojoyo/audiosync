@@ -2225,6 +2225,8 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | a_zone_name_is_cut_to_sixty_characters_like_a_speakers | S150, S228 |
 | a_speaker_moved_to_another_zone_leaves_its_first | S245 |
 | deleting_a_zone_leaves_its_members_in_no_zone | S245 |
+| removing_a_speaker_added_by_address_takes_it_out_of_its_zone (`desktop/src/adapter.rs`) | S245 |
+| a_hidden_device_a_browse_found_keeps_its_zone_when_its_address_is_removed (`desktop/src/adapter.rs`) | S245 |
 | a_zone_click_switches_only_present_members_and_hidden_ones_are_absent | S246 |
 | a_zone_click_turns_on_one_cast_member_the_first_not_busy | S246 |
 | a_zone_click_never_switches_off_a_cast_outside_its_zone | S246 |

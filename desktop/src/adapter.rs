@@ -4412,7 +4412,13 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         cast_address::remove(&mut self.cast_addresses, &address);
         self.audio.remove_cast_address(&address);
         self.take_events();
-        if self.snapshot().speaker(id).is_none() {
+        // Hidden rows are left out of the snapshot, so ask the sender.
+        let listed = self
+            .audio
+            .cast_speakers()
+            .into_iter()
+            .any(|speaker| Some(speaker.id.as_str()) == cast_id(id));
+        if !listed {
             self.remove_from_zone(id);
         }
         self.stop_if_idle();
@@ -11941,7 +11947,12 @@ mod tests {
     fn a_hidden_device_a_browse_found_keeps_its_zone_when_its_address_is_removed() {
         let (mut adapter, fake) = cast_adapter();
         let den = "00112233445566778899aabbccddeeff";
-        fake.announce_at(den, "Den", DEVICE_PORT, std::net::Ipv4Addr::new(192, 0, 2, 31));
+        fake.announce_at(
+            den,
+            "Den",
+            DEVICE_PORT,
+            std::net::Ipv4Addr::new(192, 0, 2, 31),
+        );
         adapter.restore(Settings {
             speaker_zones: vec![zone(vec![key(SPEAKERS), cc(den)])],
             ..Settings::default()
