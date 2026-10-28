@@ -19,7 +19,7 @@ use audiosync_airplay::sender::{
     Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
 };
 use audiosync_airplay::volume::Volume;
-use cells::{Cell, PasswordStep, Pause, Status, db_for_row, row_for_db};
+use cells::{Cell, PasswordStep, Pause, PtpRun, Status, db_for_row, row_for_db};
 use common::ap2::Ap2Server;
 use common::hap::{item, untlv};
 use common::net::{Events, HostAudio, free_ptp_ports, serial};
@@ -470,4 +470,45 @@ fn manual_cells_name_their_step() {
     );
     assert!(manual.iter().all(|cell| cell.status == Status::Manual));
     assert!(manual.iter().all(|cell| !cell.value.is_empty()));
+}
+
+#[test]
+fn ptp_cells_pass_only_on_the_timing_path_they_name() {
+    let run = |setups: &[(&str, u16)]| PtpRun {
+        setups: setups
+            .iter()
+            .map(|(timing, status)| (timing.to_string(), *status))
+            .collect(),
+        setpeers: 1,
+        playing: true,
+        unsupported: false,
+    };
+    let retried = run(&[("NTP", 501), ("PTP", 200)]);
+    let direct = run(&[("PTP", 200)]);
+    assert_eq!(
+        cells::ptp_first(&retried).line(),
+        "PTP.first PASS    session SETUP NTP 501/PTP 200, 1 SETPEERS, playing"
+    );
+    assert_eq!(cells::ptp_first(&direct).status, Status::Fail);
+    for cell in [cells::ptp_gone(&direct), cells::ptp_remember(&direct)] {
+        assert_eq!(cell.status, Status::Pass, "{}", cell.line());
+    }
+    for cell in [cells::ptp_gone(&retried), cells::ptp_remember(&retried)] {
+        assert_eq!(cell.status, Status::Fail, "{}", cell.line());
+    }
+    let unsupported = PtpRun {
+        unsupported: true,
+        ..direct.clone()
+    };
+    let no_peers = PtpRun {
+        setpeers: 0,
+        ..direct.clone()
+    };
+    let silent = PtpRun {
+        playing: false,
+        ..direct
+    };
+    for broken in [unsupported, no_peers, silent] {
+        assert_eq!(cells::ptp_gone(&broken).status, Status::Fail);
+    }
 }
