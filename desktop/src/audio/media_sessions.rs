@@ -174,10 +174,7 @@ impl TrackReader for MediaSessionReader {
     }
 
     fn played_last(&mut self, app_id: Option<&str>) {
-        let mut state = self.shared.lock();
-        if state.track_played_last.as_deref() != app_id {
-            state.track_played_last = app_id.map(str::to_owned);
-        }
+        self.shared.lock().track_played_last = app_id.map(str::to_owned);
     }
 }
 

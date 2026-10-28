@@ -627,15 +627,18 @@ impl TrackInfo {
                 {
                     0
                 }
-                // Windows reports a track change as neither playing nor paused, as it does a stop.
-                Some(_) if self.idle_readings + 1 < DROP_AFTER => self.idle_readings + 1,
+                // Windows reports a track change as neither playing nor paused, as it does a stop;
+                // no track may be an app that missed its answer.
+                _ if self.idle_readings + 1 < DROP_AFTER => self.idle_readings + 1,
                 _ => {
                     self.last_played = None;
                     0
                 }
             };
             reader.played_last(self.last_played.as_deref());
-            self.reading = Some(reading);
+            if reading.track.is_some() || self.last_played.is_none() {
+                self.reading = Some(reading);
+            }
         }
         let since = self.since.unwrap_or(now);
         if self.reading.is_none() && now.saturating_duration_since(since) < READING_WAIT {
@@ -1168,6 +1171,14 @@ mod tests {
         };
 
         play_then_pause(&mut info);
+        for _ in 1..DROP_AFTER {
+            reader.read(None);
+            assert_eq!(
+                info.sync(Some(&whole_system()), start),
+                None,
+                "no answer yet"
+            );
+        }
         reader.read(None);
         let sent = info.sync(Some(&whole_system()), start).expect("quit");
         assert_eq!(sent.track, whole_system_label());
@@ -1757,6 +1768,10 @@ mod tests {
         let resumed = info.sync(Some(&source), start).expect("it is sent");
         assert_eq!(resumed.progress, progress(30, 180));
 
+        for _ in 1..DROP_AFTER {
+            reader.read(None);
+            info.sync(Some(&source), start);
+        }
         reader.read(None);
         let labels = info.sync(Some(&source), start).expect("it is sent");
         assert_eq!(labels.progress, None);
