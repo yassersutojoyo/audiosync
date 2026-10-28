@@ -3807,6 +3807,8 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::OutputFree { id } => {
             format!("output {} no longer waits for its device", label(names, id))
         }
+        BackendEvent::CaptureBusy => "capture busy: another app holds its input".to_owned(),
+        BackendEvent::CaptureFree => "the capture no longer waits for its input".to_owned(),
         BackendEvent::OutputStalled { id } => {
             format!(
                 "output {} stalled again soon after a reopen",
@@ -5658,6 +5660,25 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
+    // covers: S330, S68
+    #[test]
+    fn a_session_disconnected_with_its_device_unplugged_is_lost() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        // Its session says so before its render thread notices.
+        backend.disconnect_session(HEADPHONES);
+        backend.disconnect_output_unnoticed(HEADPHONES);
+        let events = backend.poll();
+        assert!(
+            events.contains(&BackendEvent::OutputLost {
+                id: HEADPHONES.to_owned(),
+            }),
+            "{events:?}"
+        );
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        assert!(backend.policy().settings(HEADPHONES).enabled, "it stays on");
+    }
+
     fn microphone(backend: &mut MockBackend) -> SourceId {
         backend.connect_input("mic", "Microphone", "USB");
         SourceId::Input {
@@ -5684,13 +5705,16 @@ mod tests {
         backend.start(&source).unwrap();
         backend.fail_capture(BackendError::DeviceGone);
         backend.refuse_captures(Some(BackendError::DeviceBusy));
-        // The first try, then about 40 s of busy answers: far past the 5
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::CaptureBusy],
+            "the first busy answer is told"
+        );
+        // Then about 40 s of busy answers, told no more: far past the 5
         // tries of a lost capture.
         let busy_tries = 13;
-        poll_quietly(
-            &mut backend,
-            1 + RESTART_DELAY_POLLS + busy_tries * BUSY_RETRY_POLLS,
-        );
+        poll_quietly(&mut backend, busy_tries * BUSY_RETRY_POLLS);
         assert_eq!(
             backend.driver().capture_attempts(),
             2 + busy_tries as usize,
@@ -5699,9 +5723,24 @@ mod tests {
         assert_eq!(backend.running_source(), Some(source));
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
         backend.refuse_captures(None);
-        poll_quietly(&mut backend, BUSY_RETRY_POLLS);
+        poll_quietly(&mut backend, BUSY_RETRY_POLLS - 1);
+        assert_eq!(backend.poll(), [BackendEvent::CaptureFree]);
         assert!(backend.driver().capture_running());
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S333
+    #[test]
+    fn a_busy_capture_is_told_free_when_streaming_stops() {
+        let mut backend = backend();
+        let source = microphone(&mut backend);
+        backend.start(&source).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceBusy));
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.poll(), [BackendEvent::CaptureBusy]);
+        backend.stop();
+        assert_eq!(backend.poll(), [BackendEvent::CaptureFree]);
     }
 
     // covers: S333, S329
@@ -5712,7 +5751,8 @@ mod tests {
         backend.start(&source).unwrap();
         backend.fail_capture(BackendError::DeviceGone);
         backend.refuse_captures(Some(BackendError::DeviceBusy));
-        poll_quietly(&mut backend, 1 + RESTART_DELAY_POLLS);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.poll(), [BackendEvent::CaptureBusy]);
         backend.refuse_captures(Some(BackendError::DeviceGone));
         // The busy answer took none of the 5 tries.
         poll_quietly(
@@ -5721,9 +5761,12 @@ mod tests {
         );
         assert_eq!(
             backend.poll(),
-            [BackendEvent::Stopped {
-                reason: StopReason::CaptureFailed(BackendError::DeviceGone),
-            }]
+            [
+                BackendEvent::CaptureFree,
+                BackendEvent::Stopped {
+                    reason: StopReason::CaptureFailed(BackendError::DeviceGone),
+                }
+            ]
         );
         assert_eq!(backend.driver().capture_attempts(), 1 + 1 + 5);
         assert_eq!(backend.running_source(), None);
