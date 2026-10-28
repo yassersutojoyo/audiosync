@@ -87,7 +87,6 @@ fn lossy(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-
 const HTTP_BYTES: &[u8] =
     b"\r\n\r\n\r\n:: /?#%;=,\"\t0123456789GET POST HTTP/1.1 Host Content-Length Cookie";
 
@@ -406,7 +405,6 @@ fn an_endless_peer_is_cut_off_at_the_limits() {
     }
 }
 
-
 const ESCAPE_BYTES: &[u8] = b"%%%%0123456789abcdefABCDEFGgxz+-/ ";
 
 fn check_decoded(segment: &str) {
@@ -541,7 +539,6 @@ fn hosts_and_origins_from_any_text_are_judged_without_panic() {
         check_host(edge);
     }
 }
-
 
 const JSON_BYTES: &[u8] = b"{}[]\":,0123456789.eE+- truefalsnul\\u\"\"";
 
