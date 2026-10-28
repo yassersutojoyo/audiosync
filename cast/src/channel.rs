@@ -150,6 +150,8 @@ impl Request {
 #[derive(Clone, Debug)]
 struct Media {
     media_session_id: Option<i64>,
+    /// The media session this load replaces, whose late status is not its.
+    replaces: Option<i64>,
     content_id: String,
     /// The first `PLAYING` arrived.
     played: bool,
@@ -340,6 +342,7 @@ impl Channel {
         if let Some(id) = media_session_id {
             self.media = Some(Media {
                 media_session_id: Some(id),
+                replaces: None,
                 content_id: content_id.to_owned(),
                 played: true,
                 rebuffering: false,
@@ -373,8 +376,10 @@ impl Channel {
         // load.
         self.pending
             .retain(|pending| pending.request != Request::MediaStatus);
+        let replaces = self.media.as_ref().and_then(|media| media.media_session_id);
         self.media = Some(Media {
             media_session_id: None,
+            replaces,
             content_id: request.url.clone(),
             played: false,
             rebuffering: false,
@@ -717,7 +722,15 @@ impl Channel {
         let Some(media) = self.media.as_mut() else {
             return;
         };
-        if media.media_session_id.is_none() && !awaiting_reply {
+        let other_content = status
+            .content_id
+            .as_ref()
+            .is_some_and(|content| *content != media.content_id);
+        if media.media_session_id.is_none()
+            && !awaiting_reply
+            && !other_content
+            && status.media_session_id != media.replaces
+        {
             media.media_session_id = status.media_session_id;
             if let Some(media_session_id) = status.media_session_id {
                 self.events.push_back(Event::Loaded { media_session_id });
@@ -726,10 +739,6 @@ impl Channel {
         let other_session = status.media_session_id.is_some()
             && media.media_session_id.is_some()
             && status.media_session_id != media.media_session_id;
-        let other_content = status
-            .content_id
-            .as_ref()
-            .is_some_and(|content| *content != media.content_id);
         if !media.played {
             // Before PLAYING, the status of what played before may still
             // arrive; only the sender's own media session counts.
