@@ -1867,46 +1867,75 @@ do {
           "automation consent: a player whose permission macOS can't tell yet is not read",
           "\(early) \(String(describing: decided))")
 }
-do {
-    // Spotify's no-prompt check never answers (measured on a Mac, 2026-10-28); the user allows its prompt at 10 s.
-    var consent = AutomationConsent()
-    var checks = 0, reads = 0
-    var asks: [Int] = []
-    var answered = false
-    for tick in 0...20 {
-        let now = 2 * Double(tick)
-        if !answered, now >= 10, let token = asks.first {
-            consent.ended(token, at: now, answer: .allowed)
-            answered = true
-        }
-        let permission: AutomationConsent.Permission
-        if let cached = consent.startCheck(consentSpotify) {
-            permission = cached
-        } else {
-            checks += 1
-            permission = consent.timedOut(consentSpotify)
-        }
-        let step = consent.step(consentSpotify, running: true, permission: permission, mayAsk: true, at: now)
-        if let token = consentAsk(step) { asks.append(token) }
-        if step == .read { reads += 1 }
+// Stands in for macOS's no-prompt check: it never answers while the player is undecided
+// (measured on a Mac, 2026-10-28) and answers at once once the user has decided.
+final class FakeConsentCheck {
+    private let lock = NSLock()
+    private var decision = AutomationConsent.Permission.undecided
+    private var count = 0
+    var calls: Int { lock.lock(); defer { lock.unlock() }; return count }
+    func decide(_ permission: AutomationConsent.Permission) { lock.lock(); decision = permission; lock.unlock() }
+    func check(_ app: String) -> AutomationConsent.Permission {
+        lock.lock()
+        count += 1
+        let answer = decision
+        lock.unlock()
+        if answer == .undecided { DispatchSemaphore(value: 0).wait() }
+        return answer
     }
-    check(checks == 1 && asks.count == 1 && reads == 16,
-          "automation consent: a check that never answers counts as undecided, starts no second check, and the one request's Allow lets the player be read",
-          "\(checks) \(asks) \(reads)")
+}
+// Readings every 2 s through the real bounded check; the prompt is answered at 4 s, System Settings changes it at 60 s.
+func consentSettingsChange(request: AutomationConsent.Permission, settings: AutomationConsent.Permission) -> [AutomationConsent.Step] {
+    let mac = FakeConsentCheck()
+    let queue = DispatchQueue(label: "consent-check-test")
+    let checks = ConsentChecks(queue: queue, bound: 0.02, check: mac.check)
+    var consent = AutomationConsent()
+    var steps: [AutomationConsent.Step] = []
+    for tick in 0...40 {
+        let now = 2 * Double(tick)
+        if now == 4, let token = consentAsk(steps[0]) {
+            mac.decide(request)
+            consent.ended(token, at: now)
+            queue.sync { checks.requestAnswered(consentSpotify, request, at: now) }
+        }
+        if now == 60 { mac.decide(settings) }
+        let permission = queue.sync { checks.permission(consentSpotify, at: now) }
+        steps.append(consent.step(consentSpotify, running: true, permission: permission, mayAsk: true, at: now))
+    }
+    return steps
 }
 do {
-    // Before the explanation was read a timed-out check holds; its late answer lets the next check start.
+    let denyThenAllow = consentSettingsChange(request: .denied, settings: .allowed)
+    let allowThenRevoke = consentSettingsChange(request: .allowed, settings: .denied)
+    check(consentAsk(denyThenAllow[0]) != nil && denyThenAllow[1] == .wait && denyThenAllow[2] == .refused
+            && denyThenAllow.last == .read && allowThenRevoke[2] == .read && allowThenRevoke.last == .refused,
+          "automation consent: a check that never answers counts as undecided, and after the request's answer a change in System Settings is followed both ways",
+          "\(denyThenAllow) \(allowThenRevoke)")
+}
+do {
+    // Never decided and never answering, for 200 s before the explanation was read.
+    let mac = FakeConsentCheck()
+    let queue = DispatchQueue(label: "consent-check-test")
+    let checks = ConsentChecks(queue: queue, bound: 0.02, check: mac.check)
     var consent = AutomationConsent()
-    let first = consent.startCheck(consentSpotify)
-    let held = consent.step(consentSpotify, running: true, permission: consent.timedOut(consentSpotify), mayAsk: false, at: 0)
-    let whileOut = consent.startCheck(consentSpotify)
-    consent.checked(consentSpotify, .denied)
-    let afterAnswer = consent.startCheck(consentSpotify)
-    let other = consent.startCheck(consentMusic)
-    check(first == nil && held == .hold && whileOut == .undecided && afterAnswer == nil && other == nil
-            && !consent.mayCommand(consentSpotify, permission: whileOut ?? .allowed),
-          "automation consent: a timed-out check holds before the explanation, and its late answer lets the next check start",
-          "\(String(describing: first)) \(held) \(String(describing: whileOut)) \(String(describing: afterAnswer))")
+    let steps = (0...100).map { tick -> AutomationConsent.Step in
+        let permission = queue.sync { checks.permission(consentSpotify, at: 2 * Double(tick)) }
+        return consent.step(consentSpotify, running: true, permission: permission, mayAsk: false, at: 2 * Double(tick))
+    }
+    check(steps.allSatisfy { $0 == .hold } && mac.calls == 3,
+          "automation consent: a stuck check holds the player, and a fresh one starts only 30 s later, at most 3 stuck at once",
+          "\(Set(steps.map { "\($0)" })) \(mac.calls)")
+}
+do {
+    // Allowed long ago: a command right after a reading finds the answer, not a check still counted as out.
+    let mac = FakeConsentCheck()
+    mac.decide(.allowed)
+    let queue = DispatchQueue(label: "consent-check-test")
+    let checks = ConsentChecks(queue: queue, bound: 0.02, check: mac.check)
+    let (reading, command) = queue.sync { (checks.permission(consentSpotify, at: 0), checks.permission(consentSpotify, at: 0.1)) }
+    check(reading == .allowed && command == .allowed && AutomationConsent().mayCommand(consentSpotify, permission: command),
+          "automation consent: a check that answers at once counts for the next command at once",
+          "\(reading) \(command)")
 }
 check(AutomationConsent.permission(status: 0) == .allowed && AutomationConsent.permission(status: -1743) == .denied
         && AutomationConsent.permission(status: -1744) == .undecided && AutomationConsent.permission(status: -600) == .unknown,
