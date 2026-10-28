@@ -359,6 +359,8 @@ struct Attempt {
     id: String,
     /// A group's addresses, kept current from discovery (C90, C103).
     group: Option<GroupRecords>,
+    /// A single device's addresses, kept current from discovery (C111).
+    records: Option<GroupRecords>,
 }
 
 /// What the handle and its input share: the writing end of the running
@@ -960,6 +962,7 @@ impl AscCast {
             key,
             id: device_id_text(key),
             group,
+            records: None,
         });
         Ok(attempt)
     }
@@ -2629,6 +2632,38 @@ mod tests {
         assert_eq!(
             records.get().group,
             [SocketAddr::new(IpAddr::from([192, 0, 2, 6]), 32_000)]
+        );
+        // SAFETY: a live handle.
+        unsafe { asc_cast_stop(handle) };
+        destroy(handle);
+    }
+
+    // CAST_SPEC: C111
+    #[test]
+    fn a_single_devices_session_follows_its_latest_address() {
+        let handle = create();
+        let at = |ip| record(KITCHEN, "Kitchen", DEVICE_PORT, ip);
+        browse(
+            handle,
+            vec![BrowseEvent::Resolved(at(Ipv4Addr::new(192, 0, 2, 5)))],
+            false,
+        );
+        devices(handle);
+        let (attempt, _) = start(handle, KITCHEN);
+        assert!(attempt > 0);
+        browse(
+            handle,
+            vec![BrowseEvent::Resolved(at(Ipv4Addr::new(192, 0, 2, 9)))],
+            false,
+        );
+        devices(handle);
+        let records = inside(handle).attempts[0]
+            .records
+            .clone()
+            .expect("a single device's records");
+        assert_eq!(
+            records.get().group,
+            [SocketAddr::new(IpAddr::from([192, 0, 2, 9]), DEVICE_PORT)]
         );
         // SAFETY: a live handle.
         unsafe { asc_cast_stop(handle) };
