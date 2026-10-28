@@ -11915,6 +11915,24 @@ mod tests {
         assert!(row.cast.as_ref().is_some_and(|cast| cast.added_by_address));
     }
 
+    // covers: S245
+    #[test]
+    fn removing_a_speaker_added_by_address_takes_it_out_of_its_zone() {
+        let (mut adapter, _fake) = cast_adapter();
+        let id = cc_address("192.0.2.20");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), id.clone()])],
+            ..Settings::default()
+        });
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.20"), Ok(()));
+        adapter.remove_cast_address(&id);
+        assert_eq!(
+            adapter.current_settings().speaker_zones[0].members,
+            [key(SPEAKERS)]
+        );
+    }
+
     fn cast_ended(attempt: u64, end: SessionEnd) -> HostEvent {
         HostEvent::Ended {
             attempt: AttemptId(attempt),
