@@ -7611,6 +7611,11 @@ do {
     check(AppLifecycle.answersSecondLaunch(exiting: false), "second launch: the running copy shows its window")
     check(!AppLifecycle.answersSecondLaunch(exiting: true),
           "second launch: a copy that is quitting doesn't answer, so the new one waits for it")
+    check(!AppLifecycle.defersToOtherCopy(ownPID: 500, otherPID: 501, otherFinishedLaunching: false)
+            && AppLifecycle.defersToOtherCopy(ownPID: 501, otherPID: 500, otherFinishedLaunching: false),
+          "second launch: of two copies launching together, the lower PID stays and only the other leaves")
+    check(AppLifecycle.defersToOtherCopy(ownPID: 500, otherPID: 501, otherFinishedLaunching: true),
+          "second launch: a copy that finished launching is asked to show its window, whatever its PID")
     check(Set(AppLifecycle.exitSignals) == [SIGTERM, SIGINT] && AppLifecycle.exitSignals.count == 2,
           "quit: SIGTERM and Ctrl-C's SIGINT both take the clean exit path (S111)",
           "\(AppLifecycle.exitSignals)")
@@ -10307,6 +10312,34 @@ do {
     _ = stopped.apply(.discoveryStopped)
     check(stopped.devices[manualID] != nil && stopped.devices[realID] == nil,
           "cast model: when discovery stops, a speaker added by address stays listed, as the sender keeps it")
+
+    // The sender reports the browsed speaker gone just before or just after it reports discovery stopped.
+    var goneFirst = CastModel()
+    goneFirst.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    _ = goneFirst.turnOn(realID)
+    goneFirst.apply(.gone(id: realID))
+    let goneFirstOutcome = goneFirst.apply(.discoveryStopped)
+    var goneAfter = CastModel()
+    goneAfter.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    _ = goneAfter.turnOn(realID)
+    let goneAfterOutcome = goneAfter.apply(.discoveryStopped)
+    goneAfter.apply(.gone(id: realID))
+    check(goneFirstOutcome == .turnedOff(realID, problem: nil) && goneFirst.enabled == nil
+            && goneAfterOutcome == .turnedOff(realID, problem: nil) && goneAfter.enabled == nil
+            && goneAfter.rows.isEmpty && goneAfter.turnOn(manualID) == nil,
+          "cast model: when discovery stops, a speaker that is on with no session goes off with its row, "
+            + "so nothing keeps streaming for it and another one can go on")
+
+    var startStopped = CastModel()
+    startStopped.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    _ = startStopped.turnOn(realID)
+    startStopped.startSent(realID)
+    _ = startStopped.apply(.discoveryStopped)
+    _ = startStopped.started(realID, attempt: 3, refusal: 0)
+    let startStoppedListed = startStopped.rows == [realID] && startStopped.status(of: realID) == .connecting
+    check(startStoppedListed && startStopped.turnOff(realID) && startStopped.plan(streaming: true) == .stop,
+          "cast model: when discovery stops while a start waits for its number, the speaker stays listed "
+            + "and Off still stops it")
 
     check(t.castAddProblem(.notFound)
             == "AudioSync couldn't find a speaker at that address. Check that it's on and try again."

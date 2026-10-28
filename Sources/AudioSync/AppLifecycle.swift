@@ -66,6 +66,11 @@ enum AppLifecycle {
     /// it is quitting: the new copy then waits for it to go and carries on.
     static func answersSecondLaunch(exiting: Bool) -> Bool { !exiting }
 
+    /// Whether a new copy that finds another one running leaves it the speakers.
+    static func defersToOtherCopy(ownPID: Int32, otherPID: Int32, otherFinishedLaunching: Bool) -> Bool {
+        true
+    }
+
     /// The signals that end AudioSync the clean way (S111): the entry point
     /// marks the app as quitting, so a second launch arriving meanwhile waits
     /// instead of being answered, runs Quit's steps with their fade-out and
