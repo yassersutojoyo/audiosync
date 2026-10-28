@@ -1531,6 +1531,57 @@ pub mod tests {
         );
     }
 
+    /// Real files, except that renaming a `.new` into place always meets a
+    /// sharing violation, as while Defender scans the fresh exe.
+    struct LockedNews;
+
+    impl crate::updater::files::Files for LockedNews {
+        fn create(
+            &self,
+            path: &Path,
+            exclusive: bool,
+        ) -> std::io::Result<Box<dyn crate::updater::files::Sink>> {
+            RealFiles.create(path, exclusive)
+        }
+        fn remove(&self, path: &Path) -> std::io::Result<()> {
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            if from.extension().is_some_and(|extension| extension == "new") {
+                return Err(std::io::Error::from_raw_os_error(32));
+            }
+            RealFiles.rename(from, to)
+        }
+    }
+
+    // covers: S315
+    #[test]
+    fn a_quit_while_the_swap_retries_a_locked_new_exe_leaves_an_exe_in_place() {
+        let (entered_sender, entered) = mpsc::channel();
+        let entered_sender = Mutex::new(Some(entered_sender));
+        let mut f = fixture(
+            "quit-during-swap",
+            false,
+            Arc::new(LockedNews),
+            DebugLog::default(),
+        );
+        f.env.pause = Arc::new(files::Pause::counted(move |_| {
+            if let Some(sender) = entered_sender.lock().unwrap().take() {
+                let _ = sender.send(());
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }));
+        let mut updater = Updater::new(f.env);
+        updater.check(Trigger::Manual);
+        updater.wait();
+        updater.press(UpdaterButton::Download);
+        entered
+            .recv_timeout(WAIT)
+            .expect("step 4 waits to retry the locked new exe");
+        updater.at_quit();
+        assert_eq!(folder(&updater), old_folder());
+    }
+
     // covers: S303, S316
     #[test]
     fn a_quit_right_after_the_undo_still_finds_its_result() {
