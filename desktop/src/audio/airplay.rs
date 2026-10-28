@@ -995,6 +995,8 @@ struct PasswordAsk {
     /// The stereo pair or home theater group whose member asks: the
     /// password typed switches that target on.
     target: Option<String>,
+    /// For a pairing whose stream ended: as [`PairingRun::outlived_stream`].
+    outlived_stream: bool,
 }
 
 /// What the sender plays for one row: a speaker, or a stereo pair or home
@@ -1452,15 +1454,18 @@ impl AirPlaySpeakers {
     /// One whose pairing or prompt is under way waits for it instead.
     fn every_time_stream_ended(&mut self, events: &mut Vec<BackendEvent>) -> bool {
         self.paired_by_user.clear();
-        let outliving: Vec<String> = self
-            .pairings
-            .keys()
-            .filter(|id| self.asks_every_time(id))
-            .cloned()
-            .collect();
-        for id in outliving {
-            if let Some(run) = self.pairings.get_mut(&id) {
-                run.outlived_stream = true;
+        // Stopped and started again before this ran: a failure now comes
+        // within the new stream.
+        if !self.streaming {
+            let outliving: Vec<String> = self
+                .pairings
+                .keys()
+                .chain(self.password_asks.keys())
+                .filter(|id| self.asks_every_time(id))
+                .cloned()
+                .collect();
+            for id in outliving {
+                self.mark_outlived_stream(&id, true);
             }
         }
         let waiting = self.waiting_for_user();
@@ -1482,6 +1487,15 @@ impl AirPlaySpeakers {
             self.turn_off(id, AirPlayProblem::NeedsPin, events);
         }
         !asking.is_empty()
+    }
+
+    fn mark_outlived_stream(&mut self, id: &str, outlived: bool) {
+        if let Some(run) = self.pairings.get_mut(id) {
+            run.outlived_stream = outlived;
+        }
+        if let Some(ask) = self.password_asks.get_mut(id) {
+            ask.outlived_stream = ask.pair && outlived;
+        }
     }
 
     /// The sender's discovery couldn't start, so it lists nothing: reported
@@ -2420,11 +2434,11 @@ impl AirPlaySpeakers {
     /// Queues the speaker's password prompt; one already waiting keeps its
     /// place.
     fn queue_password_ask(&mut self, id: &str, wrong: bool, pair: bool, target: Option<&str>) {
-        let order = match self.password_asks.get(id) {
-            Some(ask) => ask.order,
+        let (order, outlived_stream) = match self.password_asks.get(id) {
+            Some(ask) => (ask.order, ask.outlived_stream),
             None => {
                 self.next_ask_order += 1;
-                self.next_ask_order
+                (self.next_ask_order, false)
             }
         };
         self.password_asks.insert(
@@ -2434,6 +2448,7 @@ impl AirPlaySpeakers {
                 order,
                 pair,
                 target: target.map(str::to_owned),
+                outlived_stream,
             },
         );
         self.log.log(|| {
@@ -2468,7 +2483,11 @@ impl AirPlaySpeakers {
                     self.label(id)
                 )
             });
-            return self.start_pairing(id).is_ok();
+            let started = self.start_pairing(id).is_ok();
+            if ask.outlived_stream {
+                self.mark_outlived_stream(id, true);
+            }
+            return started;
         }
         if let Some(target) = ask.target {
             self.log.log(|| {
@@ -3102,6 +3121,17 @@ impl AirPlaySpeakers {
             let step = self.pause.clear();
             self.apply_pause(step, "streaming stopped");
             self.stream_ended |= self.streaming;
+        } else if !self.streaming {
+            // A pairing that fails from now on fails within this stream (S223).
+            let ids: Vec<String> = self
+                .pairings
+                .keys()
+                .chain(self.password_asks.keys())
+                .cloned()
+                .collect();
+            for id in ids {
+                self.mark_outlived_stream(&id, false);
+            }
         }
         self.streaming = streaming;
         self.reconcile();
@@ -3572,12 +3602,15 @@ impl AirPlaySpeakers {
                     ErrorKind::PasswordRequired | ErrorKind::WrongPassword
                 ) =>
             {
-                if self.pairings.remove(id).is_none() {
+                let Some(run) = self.pairings.remove(id) else {
                     return false;
-                }
+                };
                 let wrong = self.passwords.remove(id).is_some()
                     || matches!(error.kind, ErrorKind::WrongPassword);
                 self.queue_password_ask(id, wrong, true, None);
+                if run.outlived_stream {
+                    self.mark_outlived_stream(id, true);
+                }
                 true
             }
             PairingEvent::Failed { .. } => {
@@ -5562,6 +5595,34 @@ pub mod tests {
         assert_eq!(
             airplay.speakers()[0].availability,
             AirPlayAvailability::NeedsPin
+        );
+    }
+
+    // covers: S223
+    #[test]
+    fn an_every_time_pairing_failing_after_a_stop_and_start_before_a_poll_says_pairing_failed() {
+        let tv = airplay2_every_time_tv(9, "Den");
+        let id = id_of(&tv);
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        airplay.set_streaming(true);
+        pin_shown(&fake, &mut airplay, &tv);
+
+        // The poll that takes in the ended stream runs once the new one has
+        // started.
+        airplay.set_streaming(false);
+        airplay.set_streaming(true);
+        airplay.poll();
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(&tv, pairing_failed(ErrorKind::PairingFailed, false));
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayFailed {
+                id: id.clone(),
+                problem: AirPlayProblem::PairingFailed,
+            }),
+            "it failed within the new stream: {events:?}"
         );
     }
 
