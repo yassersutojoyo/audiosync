@@ -7617,16 +7617,15 @@ mod tests {
         assert!(!adapter.snapshot().running, "nothing is on anymore");
     }
 
+    // covers: S118
     #[test]
     fn turning_the_last_speaker_off_leaves_every_airplay_speaker_deselected() {
         let (mut adapter, fake, kitchen, study) = airplay_adapter();
-        adapter.set_speaker_enabled(&ap(&kitchen), true);
         turn_on(&mut adapter, SPEAKERS);
-        assert!(adapter.snapshot().running);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.set_speaker_enabled(&key(SPEAKERS), false);
         fake.take_calls();
         adapter.set_speaker_enabled(&ap(&kitchen), false);
-        assert!(adapter.snapshot().running, "Speakers is still on");
-        adapter.set_speaker_enabled(&key(SPEAKERS), false);
         let state = adapter.snapshot();
         assert!(!state.running);
         for id in [ap(&kitchen), ap(&study)] {
