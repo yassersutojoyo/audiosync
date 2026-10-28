@@ -613,6 +613,77 @@ fn before_playing_a_status_of_an_earlier_media_session_changes_nothing() {
     }));
 }
 
+// covers: C50
+#[test]
+fn a_load_reply_without_a_media_session_waits_for_this_loads_own_status() {
+    let start = Instant::now();
+    let empty_reply = |request_id: u32| {
+        json_message(
+            "t-1",
+            "*",
+            NS_MEDIA,
+            json!({"type": "MEDIA_STATUS", "requestId": request_id, "status": []}),
+        )
+    };
+    let with_content = |id: i64, content_id: &str, state: &str| {
+        json_message(
+            "t-1",
+            "*",
+            NS_MEDIA,
+            json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [
+                {"mediaSessionId": id, "playerState": state, "media": {"contentId": content_id}}
+            ]}),
+        )
+    };
+
+    // A late status of another URL's media.
+    let mut channel = running(start, volume());
+    channel
+        .load(start, &request(Metadata::default()))
+        .expect("loads");
+    sent(&mut channel);
+    channel.handle(start, empty_reply(102));
+    channel.handle(start, with_content(1, "http://192.0.2.10:1/other.wav", "IDLE"));
+    channel.handle(start, with_content(2, URL, "PLAYING"));
+    let seen = events(&mut channel);
+    assert!(
+        seen.contains(&Event::Loaded {
+            media_session_id: 2
+        }) && seen.contains(&Event::Playing {
+            media_session_id: 2
+        }),
+        "{seen:?}"
+    );
+    assert!(!seen.contains(&Event::Loaded {
+        media_session_id: 1
+    }));
+
+    // A reload of the same URL: a late status of the media it replaces.
+    let mut channel = playing(start);
+    channel
+        .load(start, &request(Metadata::default()))
+        .expect("loads again");
+    sent(&mut channel);
+    channel.handle(start, empty_reply(103));
+    channel.handle(start, media_status("t-1", 0, 7, "PLAYING", None));
+    channel.handle(start, media_status("t-1", 0, 8, "PLAYING", None));
+    let seen = events(&mut channel);
+    assert!(
+        seen.contains(&Event::Loaded {
+            media_session_id: 8
+        }) && seen.contains(&Event::Playing {
+            media_session_id: 8
+        }),
+        "{seen:?}"
+    );
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, Event::PlaybackEnded(_))),
+        "{seen:?}"
+    );
+}
+
 // covers: C29, C83
 #[test]
 fn an_error_reply_to_a_request_the_sender_never_sent_changes_nothing() {
