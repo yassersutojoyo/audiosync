@@ -909,7 +909,9 @@ impl GapFill {
     /// as wrong (`AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR`). `None`: nothing to
     /// go by, so the caller counts it as captured just now.
     pub fn packet_start(&self, position: u64, timestamp_error: bool) -> Option<u64> {
-        let _ = timestamp_error;
+        if timestamp_error {
+            return self.end();
+        }
         (position != 0).then_some(position)
     }
 
