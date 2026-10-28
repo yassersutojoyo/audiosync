@@ -3528,6 +3528,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     matches!(message, NoticeMessage::SpeakerBusy { .. })
                 });
             }
+            // Streaming stays on while another app holds the input (S333).
+            // The existing capture notice stands in until the maintainer
+            // approves a busy-specific text.
+            BackendEvent::CaptureBusy => {
+                self.post(NoticeSubject::Source, NoticeMessage::CaptureFailed);
+            }
+            BackendEvent::CaptureFree => {
+                self.clear_if(NoticeSubject::Source, |message| {
+                    matches!(message, NoticeMessage::CaptureFailed)
+                });
+            }
             BackendEvent::Stopped { reason } => {
                 let message = match reason {
                     StopReason::SourceQuit => {
@@ -6380,6 +6391,28 @@ mod tests {
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
         assert_eq!(adapter.audio.driver().captures_started().len(), 2);
         assert_eq!(playing(&adapter), [SPEAKERS]);
+    }
+
+    // covers: S333
+    #[test]
+    fn a_lost_capture_whose_input_is_busy_shows_the_capture_notice_until_it_runs() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().fail_capture(BackendError::DeviceGone);
+        adapter
+            .audio_mut()
+            .refuse_captures(Some(BackendError::DeviceBusy));
+        for _ in 0..10 {
+            adapter.poll();
+            assert!(adapter.snapshot().running, "streaming stays on");
+        }
+        assert_eq!(messages(&adapter), [NoticeMessage::CaptureFailed]);
+        adapter.audio_mut().refuse_captures(None);
+        for _ in 0..10 {
+            adapter.poll();
+        }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert!(adapter.snapshot().running);
     }
 
     #[test]

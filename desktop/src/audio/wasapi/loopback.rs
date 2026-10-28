@@ -29,9 +29,7 @@ use audiosync_core::eq::EqProcessor;
 use audiosync_core::ring::RingWriter;
 
 use crate::audio::capture::Feeds;
-use windows::Win32::Foundation::{
-    E_ACCESSDENIED, E_FAIL, HANDLE, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT,
-};
+use windows::Win32::Foundation::{E_FAIL, HANDLE, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
@@ -330,7 +328,7 @@ fn run(
     let _task = ProAudioTask::join();
     // SAFETY: starts the stream initialized above.
     if let Err(error) = unsafe { stream.client.Start() } {
-        return ready.fail(system_error("IAudioClient::Start", &error));
+        return ready.fail(capture_error(target, "IAudioClient::Start", error.code()));
     }
     let waited = ready.ok(CaptureAttempt {
         format: stream.format,
@@ -423,19 +421,30 @@ fn open_stream(target: &CaptureTarget) -> Result<CaptureStream, BackendError> {
         };
         match initialized {
             Ok(()) => return finish_stream(client, attempt),
-            // No other format gets past the privacy settings.
-            Err(error)
-                if matches!(target, CaptureTarget::Input { .. })
-                    && error.code() == E_ACCESSDENIED =>
-            {
-                return Err(BackendError::MicrophoneBlocked);
-            }
-            Err(error) => {
-                first_error.get_or_insert(system_error("IAudioClient::Initialize", &error));
-            }
+            Err(error) => match capture_error(target, "IAudioClient::Initialize", error.code()) {
+                // No other format gets past the privacy settings, or a
+                // device another app holds (S333).
+                error @ (BackendError::MicrophoneBlocked | BackendError::DeviceBusy) => {
+                    return Err(error);
+                }
+                error => {
+                    first_error.get_or_insert(error);
+                }
+            },
         }
     }
     Err(first_error.unwrap_or(BackendError::UnsupportedFormat))
+}
+
+/// How a capture reads a failed `IAudioClient` call on its stream: as a
+/// failed call on its device, as an output's are (S333), and an input's
+/// `E_ACCESSDENIED` as the privacy settings' block (S141).
+fn capture_error(target: &CaptureTarget, call: &'static str, code: HRESULT) -> BackendError {
+    if matches!(target, CaptureTarget::Input { .. }) {
+        input_code_error(call, code)
+    } else {
+        device_code_error(call, code)
+    }
 }
 
 /// Connects an initialized client to its event and capture service.
@@ -1274,6 +1283,53 @@ mod tests {
         assert_eq!(done.recv_timeout(HANG * 3), Ok(()));
         assert!(STUCK.none_within(HANG), "the thread ends");
         answers.join().expect("the answer comes");
+    }
+
+    fn microphone() -> CaptureTarget {
+        CaptureTarget::Input {
+            endpoint_id: "{0.0.1.00000000}.{mic}".to_owned(),
+            pair: 0,
+        }
+    }
+
+    // covers: S333
+    #[test]
+    fn an_input_held_exclusively_is_busy_at_initialize_and_at_start() {
+        use windows::Win32::Media::Audio::AUDCLNT_E_DEVICE_IN_USE;
+        for call in ["IAudioClient::Initialize", "IAudioClient::Start"] {
+            assert_eq!(
+                capture_error(&microphone(), call, AUDCLNT_E_DEVICE_IN_USE),
+                BackendError::DeviceBusy,
+                "{call}"
+            );
+        }
+    }
+
+    // covers: S333
+    #[test]
+    fn an_input_whose_device_went_away_is_gone_at_initialize() {
+        use windows::Win32::Media::Audio::AUDCLNT_E_DEVICE_INVALIDATED;
+        assert_eq!(
+            capture_error(
+                &microphone(),
+                "IAudioClient::Initialize",
+                AUDCLNT_E_DEVICE_INVALIDATED
+            ),
+            BackendError::DeviceGone
+        );
+    }
+
+    // covers: S333, S141
+    #[test]
+    fn an_input_blocked_by_privacy_settings_stays_microphone_blocked() {
+        use windows::Win32::Foundation::E_ACCESSDENIED;
+        for call in ["IAudioClient::Initialize", "IAudioClient::Start"] {
+            assert_eq!(
+                capture_error(&microphone(), call, E_ACCESSDENIED),
+                BackendError::MicrophoneBlocked,
+                "{call}"
+            );
+        }
     }
 
     #[test]

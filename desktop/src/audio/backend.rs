@@ -496,6 +496,14 @@ pub enum BackendEvent {
         /// The endpoint ID.
         id: String,
     },
+    /// A lost capture's input device is held by another app in exclusive
+    /// mode (S333). Streaming stays on and the input is tried again every
+    /// few seconds; [`BackendEvent::CaptureFree`] tells once it no longer
+    /// waits.
+    CaptureBusy,
+    /// A capture reported busy no longer waits for its input: it captures
+    /// again, or its session ended.
+    CaptureFree,
     /// An output's stream stopped taking frames again before it had played
     /// five seconds since the last time (S326). The output stays on, its
     /// device still listed, and is opened again every ten seconds;
