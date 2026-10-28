@@ -3245,6 +3245,34 @@ mod tests {
     }
 
     #[test]
+    fn only_this_speaker_on_an_offline_cast_member_that_is_on_still_switches_the_others() {
+        let mut backend = MockBackend::new();
+        let template = backend.snapshot().speakers[2].clone();
+        backend.add_speaker(Speaker {
+            id: "cc:den".into(),
+            name: "Den".into(),
+            kind: SpeakerKind::Cast,
+            enabled: true,
+            cast: Some(CastRow {
+                state: CastState::Playing,
+                muted: false,
+                volume_fixed: false,
+                volume_step: 1.0,
+                group: None,
+                added_by_address: true,
+                offline: true,
+            }),
+            ..template
+        });
+        backend.add_zone("zone:a", "Living", &["cc:den", "local:speakers"]);
+        backend.set_speaker_enabled("local:speakers", true);
+        assert_eq!(
+            backend.snapshot().only_this_steps("cc:den"),
+            [("local:speakers".to_owned(), false)]
+        );
+    }
+
+    #[test]
     fn use_target_instead_puts_the_pair_in_its_members_place() {
         let mut backend = MockBackend::zones_preview();
         backend.use_target_instead("airplay:left");

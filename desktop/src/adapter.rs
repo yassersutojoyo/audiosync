@@ -11991,6 +11991,49 @@ mod tests {
         );
     }
 
+    // covers: S246
+    #[test]
+    fn a_zone_click_passes_over_an_offline_cast_member() {
+        let (mut adapter, _fake) = cast_adapter();
+        let id = cc_address("192.0.2.20");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![id.clone(), cc(CAST_KITCHEN)])],
+            ..Settings::default()
+        });
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.20"), Ok(()));
+        adapter.poll();
+
+        adapter.toggle_zone("zone:1");
+        let state = adapter.snapshot();
+        assert!(!state.speaker(&id).unwrap().enabled, "it can't start now");
+        assert!(state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+    }
+
+    // covers: S246, S252
+    #[test]
+    fn a_recall_leaves_an_offline_cast_member_off_as_busy() {
+        let (mut adapter, _fake) = cast_adapter();
+        let id = cc_address("192.0.2.20");
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[(key(SPEAKERS), None), (id.clone(), None)])],
+            ..Settings::default()
+        });
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.20"), Ok(()));
+        adapter.poll();
+
+        adapter.recall_preset("preset:1");
+        assert!(!speaker_of(&adapter, &id).enabled);
+        assert_eq!(
+            preset_notices(&adapter),
+            [left_off_notice(
+                "Evening",
+                &[("192.0.2.20", PresetLeftOff::Busy)]
+            )]
+        );
+    }
+
     fn cast_ended(attempt: u64, end: SessionEnd) -> HostEvent {
         HostEvent::Ended {
             attempt: AttemptId(attempt),
