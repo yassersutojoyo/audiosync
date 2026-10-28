@@ -6960,6 +6960,24 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
+    // covers: S328, S330
+    #[test]
+    fn a_format_reopen_keeps_the_outputs_lead_in_the_session_lead() {
+        let mut backend = backend();
+        backend.set_output_period(HEADPHONES, 9_600);
+        backend.set_output_period(SPEAKERS, 480);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let before = backend.session_lead();
+        // The reopened stream hasn't published a lead of its own yet.
+        backend.disconnect_session(HEADPHONES);
+        assert!(backend.poll().is_empty(), "no notice");
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES]
+        );
+        assert_eq!(backend.session_lead(), before);
+    }
+
     // covers: S330, S68
     #[test]
     fn a_session_disconnected_with_its_device_unplugged_is_lost() {
