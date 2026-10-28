@@ -977,6 +977,31 @@ fn a_level_waiting_for_its_interval_reaches_the_device_after_a_reconnect() {
     device.join();
 }
 
+// covers: C37, C81
+#[test]
+fn a_reconnect_whose_first_status_has_no_level_keeps_the_known_level() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    let known = session.volume().expect("volume").level;
+    device.send(Command::ForgetLevel);
+    device.send(Command::DropConnection);
+    let mut seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { .. })
+    });
+    session.run_for(Duration::from_millis(500));
+    seen.extend(std::iter::from_fn(|| session.poll_event()));
+    assert_eq!(device.connection_count(), 2);
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Volume(_))),
+        "{seen:?}"
+    );
+    assert_eq!(session.volume().expect("volume").level, known);
+    session.stop();
+    device.join();
+}
+
 // covers: C25, C81
 #[test]
 fn an_oversized_frame_from_the_device_is_a_fault_the_session_recovers_from() {
