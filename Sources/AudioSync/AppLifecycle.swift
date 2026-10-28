@@ -69,7 +69,8 @@ enum AppLifecycle {
     /// Whether a new copy that finds another one running leaves it the speakers.
     /// Two copies still launching can't hear each other's show request yet, so
     /// the lower PID stays and only the other leaves.
-    static func defersToOtherCopy(ownPID: Int32, otherPID: Int32, otherFinishedLaunching: Bool) -> Bool {
+    static func defersToOtherCopy(ownPID: Int32, ownLaunch: Date?, otherPID: Int32, otherLaunch: Date?,
+                                  otherFinishedLaunching: Bool) -> Bool {
         otherFinishedLaunching || otherPID < ownPID
     }
 

@@ -7611,11 +7611,20 @@ do {
     check(AppLifecycle.answersSecondLaunch(exiting: false), "second launch: the running copy shows its window")
     check(!AppLifecycle.answersSecondLaunch(exiting: true),
           "second launch: a copy that is quitting doesn't answer, so the new one waits for it")
-    check(!AppLifecycle.defersToOtherCopy(ownPID: 500, otherPID: 501, otherFinishedLaunching: false)
-            && AppLifecycle.defersToOtherCopy(ownPID: 501, otherPID: 500, otherFinishedLaunching: false),
-          "second launch: of two copies launching together, the lower PID stays and only the other leaves")
-    check(AppLifecycle.defersToOtherCopy(ownPID: 500, otherPID: 501, otherFinishedLaunching: true),
-          "second launch: a copy that finished launching is asked to show its window, whatever its PID")
+    do {
+        func defers(_ own: (Int32, Date?), _ other: (Int32, Date?), finished: Bool = false) -> Bool {
+            AppLifecycle.defersToOtherCopy(ownPID: own.0, ownLaunch: own.1, otherPID: other.0, otherLaunch: other.1,
+                                           otherFinishedLaunching: finished)
+        }
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        check(defers((300, t0 + 1), (99_000, t0)) && !defers((99_000, t0), (300, t0 + 1)),
+              "second launch: of two copies launching together, the one launched first stays and only the other leaves, even after a PID wrap")
+        check(!defers((500, t0), (501, t0)) && defers((501, t0), (500, t0))
+                && !defers((500, nil), (501, t0)) && defers((501, t0), (500, nil)),
+              "second launch: with equal or unknown launch times, the lower PID stays and only the other leaves")
+        check(defers((500, t0), (501, t0 + 1), finished: true),
+              "second launch: a copy that finished launching is asked to show its window, whatever its PID")
+    }
     check(Set(AppLifecycle.exitSignals) == [SIGTERM, SIGINT] && AppLifecycle.exitSignals.count == 2,
           "quit: SIGTERM and Ctrl-C's SIGINT both take the clean exit path (S111)",
           "\(AppLifecycle.exitSignals)")

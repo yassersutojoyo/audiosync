@@ -18,7 +18,9 @@ final class ReplyFlag { var received = false }
 
 if let other = otherRunningCopy(),
    AppLifecycle.defersToOtherCopy(ownPID: ProcessInfo.processInfo.processIdentifier,
+                                  ownLaunch: NSRunningApplication.current.launchDate,
                                   otherPID: other.processIdentifier,
+                                  otherLaunch: other.launchDate,
                                   otherFinishedLaunching: other.isFinishedLaunching) {
     let center = DistributedNotificationCenter.default()
     let flag = ReplyFlag()
