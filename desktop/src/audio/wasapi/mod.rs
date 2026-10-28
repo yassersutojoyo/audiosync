@@ -35,7 +35,7 @@ use super::backend::BackendError;
 use super::calibration::{Microphone, MicrophoneError};
 use super::capture::{CaptureTarget, Feeds};
 use super::controller::{Controller, Driver};
-use super::outputs::{Endpoint, EndpointReading, Listing};
+use super::outputs::{Endpoint, EndpointReading, Listing, RenderFormat};
 use super::process::ProcessTable;
 use super::routing::{EndpointAudio, EndpointVolume};
 use crate::debug_log::DebugLog;
@@ -84,6 +84,14 @@ impl Driver for WasapiDriver {
 
     fn outputs_changed(&mut self) -> bool {
         self.watcher.take_changed()
+    }
+
+    fn format_notices(&mut self) -> Vec<String> {
+        self.watcher.take_format_changes()
+    }
+
+    fn output_format(&mut self, id: &str) -> Result<RenderFormat, BackendError> {
+        endpoint::current_format(id)
     }
 
     fn inputs(&mut self) -> Result<Vec<EndpointReading>, BackendError> {

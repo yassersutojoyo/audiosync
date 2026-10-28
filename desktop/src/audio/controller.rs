@@ -393,6 +393,9 @@ struct CaptureReopen {
     wait: u32,
     /// The tries left after that one ([`RESTART_TRIES`]).
     tries_left: u32,
+    /// When a try first found the input held by another app; busy answers
+    /// take no try (S333).
+    busy_since: Option<Instant>,
 }
 
 /// An output whose stream stalled (S326), until its reopened stream has
@@ -1667,6 +1670,61 @@ impl<D: Driver> Controller<D> {
         true
     }
 
+    /// Ends at once, without a fade, the stream of each playing output that
+    /// Windows invalidated under it (S330): its audio session said so, or
+    /// its device now reports another format than the stream opened in.
+    /// The same poll's [`Self::sync_outputs`] opens it again in the new
+    /// format at its current hold-back, and as it takes part throughout, no
+    /// other output is re-timed. A notice whose device still reports the
+    /// stream's format changes nothing. Returns whether a session said its
+    /// stream was disconnected, which may mean its device went away.
+    fn drop_reformatted_outputs(&mut self) -> bool {
+        let noticed = self.driver.format_notices();
+        let Some(session) = self.session.as_ref() else {
+            return false;
+        };
+        let mut disconnected = false;
+        let marked: Vec<(String, bool, Option<RenderFormat>)> = session
+            .outputs
+            .iter()
+            .filter_map(|(id, playing)| {
+                let invalidated = playing.handle.invalidated();
+                (invalidated || noticed.contains(id)).then(|| {
+                    let opened = playing.handle.setup().map(|setup| setup.format);
+                    (id.clone(), invalidated, opened)
+                })
+            })
+            .collect();
+        for (id, invalidated, opened) in marked {
+            let now = self.driver.output_format(&id).ok();
+            let changed = matches!((opened, now), (Some(opened), Some(now)) if opened != now);
+            if !invalidated && !changed {
+                continue;
+            }
+            disconnected |= invalidated;
+            if let Some(session) = self.session.as_mut() {
+                drop(session.outputs.remove(&id));
+            }
+            // Written once the old stream is released (S126).
+            self.log.log(|| {
+                let (opened, now) = (describe_format(opened), describe_format(now));
+                let output = label(&self.names, &id);
+                if changed {
+                    format!(
+                        "output {output}: its format changed from {opened} to {now}; it opens \
+                         again in the new format"
+                    )
+                } else {
+                    format!(
+                        "output {output}: Windows disconnected its stream, opened in {opened}; \
+                         it opens again in {now}"
+                    )
+                }
+            });
+        }
+        disconnected
+    }
+
     /// Counts a poll of play for each reopened output that stalled (S326):
     /// once one has played [`RESTART_TRIAL_POLLS`], its stall is over, and
     /// a notice about it clears.
@@ -1755,6 +1813,7 @@ impl<D: Driver> Controller<D> {
         session.reopen = Some(CaptureReopen {
             wait: RESTART_DELAY_POLLS,
             tries_left: RESTART_TRIES - 1,
+            busy_since: None,
         });
         self.log.log(|| {
             "the capture was lost: Windows audio restarted or its device went away; it opens \
@@ -1769,7 +1828,9 @@ impl<D: Driver> Controller<D> {
     /// another rate or channel count, the session starts again (S20). A
     /// failed try waits for the next while tries are left and it may work
     /// later; after the last, streaming stops (S21), unless the captured app
-    /// quit and the setting moves to the whole system (S227).
+    /// quit and the setting moves to the whole system (S227). An input that
+    /// another app holds takes no try: it is tried every
+    /// [`BUSY_RETRY_POLLS`] for as long as it stays held (S333).
     fn reopen_capture_when_due(&mut self) {
         let Some(session) = self.session.as_mut() else {
             return;
@@ -1782,6 +1843,7 @@ impl<D: Driver> Controller<D> {
             return;
         }
         let tries_left = reopen.tries_left;
+        let busy_since = reopen.busy_since;
         let source = session.source.clone();
         let ring = Arc::clone(&session.ring);
         let started_as = session.started_as;
@@ -1826,17 +1888,44 @@ impl<D: Driver> Controller<D> {
                     session.reopen = None;
                     session.trial_polls = RESTART_TRIAL_POLLS;
                 }
+                if let Some(since) = busy_since {
+                    self.log.log(|| {
+                        format!(
+                            "the other app let go of the input after {:.1} s",
+                            since.elapsed().as_secs_f64()
+                        )
+                    });
+                }
                 self.log
                     .log(|| "the capture runs again; the outputs played on".to_owned());
+            }
+            Err(error @ BackendError::DeviceBusy) => {
+                if busy_since.is_none() {
+                    self.log.log(|| {
+                        format!(
+                            "the capture couldn't open again: {error} It tries again every 3 s \
+                             while the outputs play on."
+                        )
+                    });
+                }
+                if let Some(session) = self.session.as_mut() {
+                    session.reopen = Some(CaptureReopen {
+                        wait: BUSY_RETRY_POLLS,
+                        tries_left,
+                        busy_since: Some(busy_since.unwrap_or_else(Instant::now)),
+                    });
+                }
             }
             Err(error) if tries_left > 0 && (writer_held || may_start_later(&error)) => {
                 self.log.log(|| {
                     if writer_held {
-                        "the capture couldn't open again yet: the lost capture still holds the                          ring. It tries again in a moment."
+                        "the capture couldn't open again yet: the lost capture still holds the \
+                         ring. It tries again in a moment."
                             .to_owned()
                     } else {
                         format!(
-                            "the capture couldn't open again yet: {error} It tries again in a                              moment."
+                            "the capture couldn't open again yet: {error} It tries again in a \
+                             moment."
                         )
                     }
                 });
@@ -1844,6 +1933,7 @@ impl<D: Driver> Controller<D> {
                     session.reopen = Some(CaptureReopen {
                         wait: RESTART_DELAY_POLLS,
                         tries_left: tries_left - 1,
+                        busy_since,
                     });
                 }
             }
@@ -3161,10 +3251,11 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 }
             }
         }
+        let disconnected = self.drop_reformatted_outputs();
 
         // A stopped output may mean a device went away before its
         // notification arrived, so the list is read again then too.
-        self.refresh_if_needed(!ended.is_empty() || stalled_again);
+        self.refresh_if_needed(!ended.is_empty() || stalled_again || disconnected);
         // An output whose device is no longer listed is lost too, whether or
         // not its stream noticed, and so is one that couldn't play while its
         // device was still listed.
@@ -3483,9 +3574,21 @@ fn describe_stream(setup: Option<StreamSetup>) -> String {
     };
     let buffer_ms = f64::from(setup.buffer_frames) * 1_000.0 / f64::from(format.rate.max(1));
     format!(
-        "{} Hz, {} ch (mask 0x{:x}), {samples}; buffer {} frames ({buffer_ms:.1} ms)",
-        format.rate, format.channels, format.channel_mask, setup.buffer_frames
+        "{}, {samples}; buffer {} frames ({buffer_ms:.1} ms)",
+        describe_format(Some(format)),
+        setup.buffer_frames
     )
+}
+
+/// An output's rate, channels and channel mask, as the log shows them.
+fn describe_format(format: Option<RenderFormat>) -> String {
+    match format {
+        Some(format) => format!(
+            "{} Hz, {} ch (mask 0x{:x})",
+            format.rate, format.channels, format.channel_mask
+        ),
+        None => "a format not known".to_owned(),
+    }
 }
 
 /// The log line of a capture that started: what it captures, the format

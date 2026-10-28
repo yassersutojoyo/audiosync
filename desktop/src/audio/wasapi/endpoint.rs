@@ -24,12 +24,15 @@ use windows::Win32::Foundation::{WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
     AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_NOPERSIST,
-    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, IAudioClient, IAudioClock, IAudioRenderClient,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, AudioSessionDisconnectReason, AudioSessionState,
+    DisconnectReasonDeviceRemoval, DisconnectReasonFormatChanged, IAudioClient, IAudioClock,
+    IAudioRenderClient, IAudioSessionControl, IAudioSessionEvents, IAudioSessionEvents_Impl,
     WAVEFORMATEX,
 };
 use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::Win32::System::Threading::{WaitForMultipleObjects, WaitForSingleObject};
-use windows::core::HSTRING;
+use windows::core::{BOOL, GUID, HSTRING, PCWSTR};
+use windows_core::implement;
 
 use super::com::{
     Apartment, ComMemory, Event, ProAudioTask, Ready, Worker, device_error, float_format,
@@ -83,9 +86,15 @@ pub struct EndpointRenderer {
     wakes: Arc<WakeCounters>,
     /// The stall that ended the stream, if one did.
     stall: Arc<StallSlot>,
+    /// Set when its audio session says it was disconnected (S330).
+    invalidated: Arc<AtomicBool>,
 }
 
 impl RendererHandle for EndpointRenderer {
+    fn invalidated(&self) -> bool {
+        self.invalidated.load(Ordering::Acquire)
+    }
+
     fn request_stop(&mut self) {
         self.control.request_fade_out();
         self.stop.set();
@@ -141,6 +150,7 @@ pub(super) fn start(
     let probe = ClockProbe::from_env();
     let wakes = Arc::new(WakeCounters::default());
     let stall = Arc::new(StallSlot::default());
+    let invalidated = Arc::new(AtomicBool::new(false));
     let (thread, setup) = {
         let stop = Arc::clone(&stop);
         let abort = Arc::clone(&abort);
@@ -149,6 +159,7 @@ pub(super) fn start(
         let probe = probe.clone();
         let wakes = Arc::clone(&wakes);
         let stall = Arc::clone(&stall);
+        let invalidated = Arc::clone(&invalidated);
         spawn_worker("audiosync-output", move |ready| {
             let signals = Signals {
                 stop: &stop,
@@ -156,6 +167,7 @@ pub(super) fn start(
                 ended: &ended,
                 wakes: &wakes,
                 stall: &stall,
+                invalidated: &invalidated,
             };
             run(&id, reader, &control, gain, probe, &signals, ready);
         })?
@@ -170,7 +182,137 @@ pub(super) fn start(
         probe,
         wakes,
         stall,
+        invalidated,
     })
+}
+
+/// The format an output on the endpoint `id` would open in now: its
+/// current mix format, as [`open_stream`] reads it (S330).
+pub(super) fn current_format(id: &str) -> Result<RenderFormat, BackendError> {
+    let client = activate(id)?;
+    // SAFETY: a call on the client made above; ComMemory frees the format
+    // after its last use.
+    let mix = ComMemory::new(
+        unsafe { client.GetMixFormat() }
+            .map_err(|error| device_error("IAudioClient::GetMixFormat", &error))?,
+    );
+    // SAFETY: the mix format lives until `mix` drops.
+    render_format(unsafe { read_mix_format(mix.as_ptr()) })
+}
+
+/// An audio client on the endpoint `id`.
+fn activate(id: &str) -> Result<IAudioClient, BackendError> {
+    let enumerator = enumerator()?;
+    // SAFETY: calls on COM objects this thread owns.
+    unsafe {
+        let device = enumerator
+            .GetDevice(&HSTRING::from(id))
+            .map_err(|error| device_error("IMMDeviceEnumerator::GetDevice", &error))?;
+        device
+            .Activate(CLSCTX_ALL, None)
+            .map_err(|error| device_error("IMMDevice::Activate", &error))
+    }
+}
+
+/// Sets a flag when Windows disconnects an output's audio session because
+/// its format changed or its device went away (S330). Windows calls it on
+/// its own threads, so it only stores the flag.
+#[implement(IAudioSessionEvents)]
+struct SessionWatch {
+    invalidated: Arc<AtomicBool>,
+}
+
+impl IAudioSessionEvents_Impl for SessionWatch_Impl {
+    fn OnDisplayNameChanged(
+        &self,
+        _name: &PCWSTR,
+        _context: *const GUID,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnIconPathChanged(
+        &self,
+        _path: &PCWSTR,
+        _context: *const GUID,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnSimpleVolumeChanged(
+        &self,
+        _volume: f32,
+        _mute: BOOL,
+        _context: *const GUID,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnChannelVolumeChanged(
+        &self,
+        _count: u32,
+        _volumes: *const f32,
+        _changed: u32,
+        _context: *const GUID,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnGroupingParamChanged(
+        &self,
+        _grouping: *const GUID,
+        _context: *const GUID,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnStateChanged(&self, _state: AudioSessionState) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnSessionDisconnected(
+        &self,
+        reason: AudioSessionDisconnectReason,
+    ) -> windows::core::Result<()> {
+        if reason == DisconnectReasonFormatChanged || reason == DisconnectReasonDeviceRemoval {
+            self.invalidated.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+}
+
+/// A [`SessionWatch`] registered on a stream's audio session, unregistered
+/// on drop.
+struct SessionRegistration {
+    control: IAudioSessionControl,
+    events: IAudioSessionEvents,
+}
+
+impl SessionRegistration {
+    /// Registers a watch on `client`'s session; `None` when Windows refuses,
+    /// and the render loop's own check then finds an invalidated stream.
+    fn new(client: &IAudioClient, invalidated: &Arc<AtomicBool>) -> Option<SessionRegistration> {
+        // SAFETY: calls on an initialized client this thread owns.
+        let control = unsafe { client.GetService::<IAudioSessionControl>() }.ok()?;
+        let events: IAudioSessionEvents = SessionWatch {
+            invalidated: Arc::clone(invalidated),
+        }
+        .into();
+        // SAFETY: the watch stays alive and registered until this value
+        // unregisters it on drop.
+        unsafe { control.RegisterAudioSessionNotification(&events) }.ok()?;
+        Some(SessionRegistration { control, events })
+    }
+}
+
+impl Drop for SessionRegistration {
+    fn drop(&mut self) {
+        // SAFETY: unregisters the watch registered on this session.
+        let _ = unsafe {
+            self.control
+                .UnregisterAudioSessionNotification(&self.events)
+        };
+    }
 }
 
 /// What the render thread shares with its [`EndpointRenderer`].
@@ -185,6 +327,8 @@ struct Signals<'a> {
     wakes: &'a WakeCounters,
     /// Set by the thread before it marks the output ended for a stall.
     stall: &'a StallSlot,
+    /// Set by the stream's session watch.
+    invalidated: &'a Arc<AtomicBool>,
 }
 
 /// The render thread.
@@ -205,6 +349,8 @@ fn run(
         Ok(stream) => stream,
         Err(error) => return ready.fail(error),
     };
+    // Dropped before the stream, at the end of this thread.
+    let _session = SessionRegistration::new(&stream.client, signals.invalidated);
     let channels = usize::from(stream.format.channels);
     // Every buffer the loop uses is allocated here, before it starts.
     let mut pipeline =
@@ -264,17 +410,11 @@ struct RenderStream {
 /// mix format when that is float, or in float at the mix format's rate and
 /// channels, converted by Windows, otherwise.
 fn open_stream(id: &str) -> Result<RenderStream, BackendError> {
-    let enumerator = enumerator()?;
+    let client = activate(id)?;
     // SAFETY: calls on COM objects this thread owns. The mix format is freed
     // by ComMemory after the last use of its pointer, and the format passed
     // to Initialize lives through the call, which copies it.
     unsafe {
-        let device = enumerator
-            .GetDevice(&HSTRING::from(id))
-            .map_err(|error| device_error("IMMDeviceEnumerator::GetDevice", &error))?;
-        let client: IAudioClient = device
-            .Activate(CLSCTX_ALL, None)
-            .map_err(|error| device_error("IMMDevice::Activate", &error))?;
         let mix = ComMemory::new(
             client
                 .GetMixFormat()
@@ -690,6 +830,7 @@ mod tests {
             .expect("it starts")
         };
         let renderer = EndpointRenderer {
+            invalidated: Arc::new(AtomicBool::new(false)),
             stop,
             abort,
             ended: Arc::new(AtomicBool::new(false)),
