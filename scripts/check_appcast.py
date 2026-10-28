@@ -101,17 +101,36 @@ def stray_zips(folder, version):
                   if name.endswith(".zip") and "windows" in name.lower() and name not in wanted)
 
 
-def windows_zip_problems(path):
+def exe_product_version(data):
+    """The product version in an exe's VS_FIXEDFILEINFO as "a.b.c.d", or None."""
+    key = "VS_VERSION_INFO".encode("utf-16-le") + bytes(2)
+    at = data.find(key)
+    while at >= 0:
+        # The fixed part follows the key at the next 32-bit boundary.
+        fixed = (at + len(key) + 3) // 4 * 4
+        if fixed + 24 <= len(data):
+            words = struct.unpack_from("<6I", data, fixed)
+            if words[0] == 0xFEEF04BD:
+                return f"{words[4] >> 16}.{words[4] & 0xFFFF}.{words[5] >> 16}.{words[5] & 0xFFFF}"
+        at = data.find(key, at + 1)
+    return None
+
+
+def windows_zip_problems(path, version):
     try:
         with zipfile.ZipFile(path) as archive:
             names = set(archive.namelist())
+            exe = archive.read("audiosync.exe") if names == WINDOWS_ZIP_FILES else b""
     except (OSError, zipfile.BadZipFile) as error:
         return [f"{path}: not a readable zip ({error})"]
-    if names == WINDOWS_ZIP_FILES:
-        return []
-    want = ", ".join(sorted(WINDOWS_ZIP_FILES))
-    got = ", ".join(sorted(names)) or "nothing"
-    return [f"{path}: holds {got}; expected exactly {want} at the top level"]
+    if names != WINDOWS_ZIP_FILES:
+        want = ", ".join(sorted(WINDOWS_ZIP_FILES))
+        got = ", ".join(sorted(names)) or "nothing"
+        return [f"{path}: holds {got}; expected exactly {want} at the top level"]
+    reported = exe_product_version(exe)
+    if reported != ".".join((version.split(".") + ["0"] * 4)[:4]):
+        return [f"{path}: audiosync.exe reports version {reported or 'none'}; expected {version}"]
+    return []
 
 
 def check(appcast, version, zips, mac_only=False):
@@ -133,7 +152,7 @@ def check(appcast, version, zips, mac_only=False):
             if mac_only:
                 problems.append(f"{path}: a Windows zip, but --mac-only says the release has none")
             else:
-                problems += windows_zip_problems(path)
+                problems += windows_zip_problems(path, version)
     if zips and not mac_only:
         problems += [f"no {arch} zip given ({MAC_ONLY_HINT})"
                      for arch in WINDOWS_ARCHES if arch not in zip_by_os]
@@ -369,9 +388,9 @@ def self_test():
         nested = os.path.join(folder, "nested", "AudioSync-0.8.0-windows-arm64.zip")
         os.mkdir(os.path.dirname(nested))
         write_zip(mac, {"AudioSync.app/Contents/Info.plist": "plist"})
-        windows = {"audiosync.exe": "MZ", "THIRD-PARTY-NOTICES.txt": "notices"}
+        windows = {"audiosync.exe": fixture_exe("0.8.0.0"), "THIRD-PARTY-NOTICES.txt": "notices"}
         write_zip(x64, windows)
-        write_zip(arm, {**windows, "audiosync.exe": "MZ arm"})
+        write_zip(arm, {**windows, "audiosync.exe": fixture_exe("0.8.0.0") + b"arm"})
         write_zip(extra, {**windows, "readme.txt": "x"})
         write_zip(nested, {"audiosync/audiosync.exe": "MZ", "THIRD-PARTY-NOTICES.txt": "n"})
 
