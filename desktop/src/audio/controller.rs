@@ -1664,6 +1664,21 @@ impl<D: Driver> Controller<D> {
         }
     }
 
+    /// Cancels the restarts (S325) still due at a sleep (S332): the link's
+    /// timing before it says nothing about the link after. One already
+    /// fading or resting is out of its stream and finishes as it would.
+    fn cancel_fresh_restarts_for_sleep(&mut self) {
+        let due: Vec<String> = self
+            .fresh_restarts
+            .iter()
+            .filter(|(_, restart)| matches!(restart, FreshRestart::Due(_)))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in due {
+            self.cancel_fresh_restart(&id, "the PC slept");
+        }
+    }
+
     fn cancel_fresh_restart(&mut self, id: &str, why: &str) {
         let Some(restart) = self.fresh_restarts.remove(id) else {
             return;
@@ -2176,6 +2191,7 @@ impl<D: Driver> Controller<D> {
             match notice {
                 PowerNotice::Suspend if self.power.suspended.is_none() => {
                     self.power.suspended = Some(now);
+                    self.cancel_fresh_restarts_for_sleep();
                     self.log.log(|| {
                         "the PC is going to sleep: a capture lost now is opened again once it \
                          wakes"
@@ -2242,6 +2258,11 @@ impl<D: Driver> Controller<D> {
         }
         for left in self.refused.values_mut() {
             *left = REFUSED_GIVE_UP_POLLS;
+        }
+        // A sleep whose suspend notice went missing cancels them here.
+        self.cancel_fresh_restarts_for_sleep();
+        for appeared in self.appeared.values_mut() {
+            *appeared = self.polls;
         }
         let by = match found {
             ResumeFound::Notice => "as Windows' resume notice said",
