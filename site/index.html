@@ -368,7 +368,7 @@
             <li>AirPlay speakers and Apple TVs</li>
             <li>Built-in speakers and the headphone jack</li>
             <li>HDMI or DisplayPort, USB and Bluetooth outputs</li>
-            <li>A Google Cast speaker (Google Home groups come in the next version)</li>
+            <li>A Google Cast speaker</li>
           </ul>
         </div>
       </div>
@@ -441,8 +441,8 @@
         </article>
         <article class="card feature reveal">
           <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true" focusable="false"><rect x="4" y="6" width="10" height="20" rx="3"/><rect x="18" y="6" width="10" height="20" rx="3"/><circle cx="9" cy="19" r="2.5"/><circle cx="23" cy="19" r="2.5"/></svg>
-          <h3>Groups and auto-connect</h3>
-          <p>Save a set of speakers as a group, let favorites connect on their own, and start AudioSync at login if you like.</p>
+          <h3>Zones and auto-connect</h3>
+          <p>Put speakers that play together in a zone, let favorites connect on their own, and start AudioSync at login if you like.</p>
         </article>
         <article class="card feature reveal">
           <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="7" y="14" width="18" height="13" rx="3"/><path d="M11 14v-3a5 5 0 0 1 10 0v3"/></svg>
@@ -480,15 +480,15 @@
         <ul class="limits">
           <li><span><strong>There's a two-second lag.</strong> AirPlay adds a fixed delay of about 2 s, and nothing can shorten it. You won't notice with music, but it gets in the way of video and games.</span></li>
           <li><span><strong>You set the delays.</strong> Every output except the Mac's own speakers gets a delay you pick (AirPlay speakers share one), and AudioSync remembers it per device.</span></li>
-          <li><span><strong>Not every speaker plays yet.</strong> AudioSync now streams with its own AirPlay sender, which speaks the original AirPlay for now, so a speaker that only takes AirPlay 2 won't play unless you start AudioSync with <code>AUDIOSYNC_AIRPLAY2=1</code>. That experimental support plays one AirPlay 2 speaker at a time. The next version adds a switch for it in the menu.</span></li>
-          <li><span><strong>Pairs and HomePods are untested.</strong> Showing a stereo pair or a home theater group as one speaker comes in the next version, and no real pair has been tried yet. I haven't tried the new sender on a HomePod yet, so if yours doesn't show up or play, please open an issue on GitHub with the debug log.</span></li>
+          <li><span><strong>Not every speaker plays yet.</strong> AudioSync streams with its own AirPlay sender, which speaks the original AirPlay by default, so a speaker that only takes AirPlay 2 won't play until you turn on AirPlay 2 (Experimental) in the menu and reopen AudioSync. That experimental support plays one AirPlay 2 speaker at a time.</span></li>
+          <li><span><strong>Pairs and HomePods are untested.</strong> With AirPlay 2 on, a stereo pair or a home theater group shows as one speaker, but no real pair has been tried yet. I haven't tried the new sender on a HomePod yet, so if yours doesn't show up or play, please open an issue on GitHub with the debug log.</span></li>
           <li><span><strong>Track info is limited.</strong> Now Playing only picks up Spotify and Apple Music.</span></li>
           <li><span><strong>It's an alpha.</strong> Expect rough edges.</span></li>
         </ul>
       </div>
       <div class="card note reveal">
         <h3>Coming from Airfoil?</h3>
-        <p>The idea is the same: send the whole Mac, or one app, to AirPlay speakers and local outputs together. AudioSync just does less. It plays to AirPlay receivers, Google Cast speakers (one at a time, with an offset you set by ear; Google Home groups come in the next version) and the outputs macOS already knows about, and it needs macOS 15 or later. AirPlay 2 is still experimental and off by default.</p>
+        <p>The idea is the same: send the whole Mac, or one app, to AirPlay speakers and local outputs together. AudioSync just does less. It plays to AirPlay receivers, Google Cast speakers (one at a time, with an offset you set by ear) and the outputs macOS already knows about, and it needs macOS 15 or later. AirPlay 2 is still experimental and off by default.</p>
       </div>
     </div>
   </section>
@@ -532,7 +532,7 @@ cd audiosync
           <p>The first run needs a network connection and takes a while. After that, <code>./build.sh</code> is all you need. <a href="https://github.com/yassersutojoyo/audiosync/blob/main/docs/DEVELOPMENT.md">The development notes</a> have the details.</p>
         </div>
       </div>
-      <p class="soon reveal">Windows 11 and Linux versions are in the works too. They aren't out yet.</p>
+      <p class="soon reveal">A Windows 11 preview (x64 and ARM64) is on the Releases page. A Linux version is in the works, but it isn't out yet.</p>
     </div>
   </section>
 </main>

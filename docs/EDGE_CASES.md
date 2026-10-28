@@ -45,7 +45,7 @@ Windows: the same, with the device list as the signal too: an output stops when 
 
 Expected: the same as EC1. A headset that drops out (out of range, powered off, taken by another device) goes silent and leaves the list; the rest keep playing. When it reconnects it plays again as soon as macOS lists it. A headset switching to its hands-free profile (another app opens its microphone) changes its sample rate; see EC4. A headset that macOS lists again before it is ready to play refuses the start: it stays on and is tried again every 3 s until it plays (S331).
 
-Code path: the same as EC1 (`OutputRenderer` alive listener, `StreamEngine.handleOutputLost`, `reconcileLocal()`, `syncLocalOutputs()`, `LocalOutputSync.plan`). A Bluetooth headset used as the input-device source follows the input path in EC1. Auto-connect (`AppDelegate+Groups.swift`, `autoConnect`) turns a reappearing speaker on when it's marked for auto-connect.
+Code path: the same as EC1 (`OutputRenderer` alive listener, `StreamEngine.handleOutputLost`, `reconcileLocal()`, `syncLocalOutputs()`, `LocalOutputSync.plan`). A Bluetooth headset used as the input-device source follows the input path in EC1. Auto-connect (`AppDelegate+Zones.swift`, `autoConnect`) turns a reappearing speaker on when it's marked for auto-connect.
 
 Automated: "EC2 Bluetooth: a disconnected headset waits; the other speaker keeps playing", "EC2 Bluetooth: a reconnected headset is attached again"; the "EC2 Bluetooth fresh link: …" checks (S325); plus the EC1 checks.
 
