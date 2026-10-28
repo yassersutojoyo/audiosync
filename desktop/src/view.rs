@@ -994,6 +994,12 @@ impl App {
         app.restore_view();
         app.restore_remote();
         app.launch_update_check();
+        if app.login.borrow().status() == launch_at_login::Status::Missing {
+            app.log.log(|| {
+                "launch at sign-in: the startup entry names an exe that is gone; shown off, left as it is"
+                    .to_owned()
+            });
+        }
         app.refresh();
         let weak = Rc::downgrade(&app);
         app.poll_timer

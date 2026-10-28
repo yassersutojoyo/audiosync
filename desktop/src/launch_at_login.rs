@@ -16,7 +16,8 @@
 //! A Run value that starts another copy of AudioSync (the exe moved, or
 //! another build wrote it) still shows as on. It is rewritten or removed only
 //! when the user turns the option on or off: the documentation asks programs
-//! started from the Run key not to write to it while they run.
+//! started from the Run key not to write to it while they run. One whose exe
+//! is gone starts nothing, so it shows as off, and is left as it is too.
 //!
 //! On Linux the same option is the autostart entry
 //! (`crate::os::xdg::autostart`), through the same [`StartupStore`].
@@ -72,6 +73,11 @@ pub trait StartupStore {
     fn same_exe(&self, a: &Path, b: &Path) -> bool {
         same_exe(a, b)
     }
+
+    /// Whether the exe at `path` is there.
+    fn exe_exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
 }
 
 /// The startup entry as Windows has it now.
@@ -84,6 +90,8 @@ pub enum Status {
     /// The Run value starts another exe: AudioSync moved since it was
     /// written, or another copy wrote it.
     Elsewhere,
+    /// The Run value starts an exe that is gone, so nothing starts.
+    Missing,
     /// Task Manager or Settings turned the entry off.
     TurnedOffInSettings,
 }
@@ -135,6 +143,7 @@ pub fn status(store: &dyn StartupStore, exe: Option<&Path>) -> Status {
     }
     match (store.command_exe(&command), exe) {
         (Some(listed), Some(exe)) if store.same_exe(&listed, exe) => Status::On,
+        (Some(listed), _) if !store.exe_exists(&listed) => Status::Missing,
         _ => Status::Elsewhere,
     }
 }
@@ -386,6 +395,10 @@ impl StartupStore for MemoryStore {
     fn approval(&self) -> Option<Vec<u8>> {
         self.0.borrow().approval.clone()
     }
+
+    fn exe_exists(&self, _: &Path) -> bool {
+        !self.0.borrow().listed_exe_gone
+    }
 }
 
 #[cfg(all(windows, not(test)))]
@@ -630,6 +643,7 @@ mod tests {
             e.run = Some(gone.to_owned());
             e.listed_exe_gone = true;
         });
+        assert_eq!(login.status(), Status::Missing);
         assert!(!login.is_on());
         assert!(!login.reread());
         assert_eq!(store.entry().run.as_deref(), Some(gone));
