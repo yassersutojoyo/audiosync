@@ -200,7 +200,7 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
   - *Per output.* Each renderer decides from its own callbacks only, and a step moves only its own output. It changes neither the renderer's start lead nor its hold-back, so the session lead K (S208) and every other output, local or AirPlay, stay where they are, and nothing re-times (S177). Network outputs (AirPlay and Google Cast speakers) make no start step: the sender sets their timing, not device callbacks, and the renderer serves local outputs only.
   - *Counting.* A step is neither a drift correction (S50 to S53) nor a dry read, and the reader's counters of those don't count it. The renderer counts its start steps and the capture frames they moved its output, apart from S207's trims and S206's slow-downs.
 - **S319** *Required* (S317's sources; S207, S209). After the window. A device whose callbacks come earlier only after its renderer's window closed, or a run still unconfirmed when it closes, is followed as S209 says and nothing more: the anchor floor falls toward the callbacks over `ANCHOR_FALL_MS`, dry reads and kept slow-downs pay toward the fall, and S207's trim carries the output at most a 256th of each callback's reads and at least a frame. No step is made then, however large the gap: the output plays continuous sound by then, and a step would be heard as a dropout in it. A run unconfirmed at the window's end is dropped, and what the anchor floor already fell stays. The matrix's I6 bound for such a fall is unchanged (S209 "A late start").
-- **S320** *Required* (S317's sources; the core test `a_480_frame_output_that_starts_45_ms_late_plays_on_its_twins_delay_from_3_s` in `core/tests/timing_matrix.rs`). What the timing matrix shows.
+- **S320** *Required* (S317's sources; core tests in `core/tests/timing_matrix.rs`, `a_480_frame_output_that_starts_45_ms_late_plays_on_its_twins_delay_from_3_s`, `only_a_late_start_makes_a_start_step` and `late_first_cases_on_draws_of_their_own_hold_every_invariant`, and in `core/src/render.rs`, `two_stray_early_stamps_inside_the_start_window_make_no_start_step`). What the timing matrix shows.
   - *A late start the window catches.* In each of the matrix's late-first cases (first callbacks 15.4 or 45 ms late for 0.6 to 1.8 s, all inside the window), the late output makes exactly one start step, inside its window, and no drift correction (I2 counts none, the step included). From the window's end its delay lies within 2 ms of its on-time twin's. I6 judges its trim from the window's end plus one `ANCHOR_FALL_MS`, with the same 16 frames against its clock as an output on time and no extension for the trim's cap. I1, I3 to I5 and I7 hold as before, with one exception in I7: a start step anchors through a resync (S318) and counts as no re-time, so I7 counts an output's resyncs less its start steps. Its 2 ms holds because its anchor lands at the capture's write position, not on a block (S322).
   - *No step mid-stream.* No output on time makes a step, and no output makes one after its window: in the 48 cases, the 16 stall cases (I8 included) and the late-first cases' other outputs, every renderer counts zero start steps.
   - *The red test.* The matrix's case f20 (the 480-frame output at 48 kHz whose first callbacks come 45 ms late; core test `a_480_frame_output_that_starts_45_ms_late_plays_on_its_twins_delay_from_3_s` in `core/tests/timing_matrix.rs`) has its delay within 2 ms of its on-time twin's from 3 s after its first callback on, with one start step and no drift correction. Without S318 the test fails: the trim carries the output at most 2.1 ms a second, so it reaches its delay only about 22 s after its callbacks came on time (S209 "A late start"). That red shows only the slow fall: with the step in place, f2, f6 and f20 still ended about 3 ms off, because their twin's late second callback went into S207's reference and played it later (S209 "The floor forms first"); they come within 2 ms since that reference waits for the floor.
@@ -332,7 +332,7 @@ S172 to S181 replace the rule that local outputs play at once unless an AirPlay 
 
   The first row is the reported bug: under S78, with no AirPlay speaker chosen, the USB speaker plays at 0 like the built-in speakers and its delay does nothing.
 - **S177** *Required.* Re-timing. The host recomputes every hold-back whenever T changes (a speaker switched on or off, a device listed again or lost, S161, S68), the offset of an output taking part changes, the reference changes (S173, S174), the AirPlay condition flips (S79), or L changes (S178). Each running renderer whose hold-back changed gets the new one through `setDelay` (S66): an increase inserts exactly that much silence (S47), a decrease skips forward (S48), and nothing is ever played twice (S49); an increase of more than 5 s instead restarts the reader and plays at once at the new hold-back, replaying up to that increase (S187, large increases). A renderer whose hold-back is unchanged gets no call, so it gets no resync. An output being attached starts at its current hold-back (S117, S45). When m changes, the hold-back of every output already taking part whose own offset didn't change moves by that same change: a Bluetooth speaker at −250 switched on next to the built-in speakers and a USB speaker at +150 makes those two wait 250 ms longer (250 ms of silence each, then in step with it), and switched off again, they skip 250 ms forward; editing that Bluetooth speaker's offset to −300 leaves its own hold-back at 0 and moves the other two 50 ms later. A poll that finds the AirPlay engine unreachable leaves the listed set as it was (S81), so it re-times nothing. This replaces S80, where only the AirPlay flip re-timed outputs and every hold-back went to 0 or came back from it. A switch of the source changes no hold-back (S244). S328 amends the device-lost case: for 10 s after a switched-on output's device leaves the list, it still counts toward the other outputs' timing, so a brief loss and return re-time nothing.
-- **S328** *A local output whose device leaves the list for a moment.* *Required* (AudioSync design 2026-10-28; amends S172 and S177, reason below; from a review of `desktop/src/audio/outputs.rs:597`, `desktop/src/audio/controller.rs:1512` and `core/src/policy/delay.rs:165` at the time, and a user's report that the sound kept dropping in and out: with no AirPlay speaker chosen and a Bluetooth speaker at −250 as the base m, that speaker leaving the device list for one poll made every other output skip 250 ms forward and its return inserted 250 ms of silence on all of them, two hitches on every speaker per Bluetooth flap; tests in the core, `a_lost_output_keeps_its_offset_and_lead_for_10_s`, `a_lost_output_listed_again_within_10_s_moves_no_hold_back`, `a_lost_output_still_missing_after_10_s_retimes_once` and `switching_off_a_lost_output_retimes_at_once`, and in `desktop/src/audio/controller.rs`, `a_bluetooth_output_unlisted_for_one_poll_leaves_the_built_in_delay_unchanged`; on the Mac, a logic-suite test "local delay: an output lost for one poll keeps the others' hold-backs"). An output the user keeps switched on, other than the reference, whose device leaves the list keeps counting for 10 s from the first device list that no longer shows it in what sets the other outputs' timing: its offset in the base m (S176) and its last start lead in the session lead K (S208), while its renderer stops as S68 says. Listed again within the 10 s, it is attached at its unchanged hold-back (S117) and no other output's hold-back moves, so a flap costs a gap on that speaker only. Still missing at 10 s, it stops counting and the outputs re-time once as S177 says (a skip forward on each output whose hold-back drops). Switched off during the 10 s, it stops counting at once (S177). Any other re-timing during the 10 s (an offset edit, the AirPlay condition, L) counts it as it was. The same goes for the start lead alone of such an output whose stream stopped for good while its device stays listed (S68): it counts in K until the output's new renderer has published its own lead, 10 s at most, so that restart re-times no other output. A lost reference re-times at once as before: the reference is the computer's own audio hardware (S173, S174), which doesn't drop off a wireless link. A session restart during the 10 s (a format change, S20, or a source switch) clears the hold: the new session counts only the devices listed then. Why 10 s: a short window costs every other speaker two re-times per flap (a skip forward, then inserted silence), the drop-outs the report describes, while a long one costs only extra hold-back on the others for a speaker that is gone, lag against a picture and nothing for music; 10 s covers a Bluetooth endpoint being listed again after a brief link loss and bounds that lag when the speaker really left. No Windows reconnect time has been measured yet: if a measured Bluetooth flap (off and on three times, device gone to device back read from the debug log) exceeds 10 s in two of three tries, this window becomes 30 s, the time the Windows app already gives a refused device (`REFUSED_GIVE_UP_POLLS`), with the numbers cited here. Meanwhile the other outputs stay later against the screen by at most the lost output's share of m and K, still in step with each other. The amendment: S172 counts as taking part only outputs whose devices are listed now, and S177 re-times when a device is lost or listed again; for the 10 s after a switched-on output's device leaves the list, both read as this clause says. S177's other triggers and its rule that an increase inserts silence and a decrease skips forward are unchanged. Each host builds the set of outputs taking part itself (the Windows outputs list, the Mac's local delay model) before the core computes the hold-backs, so both hosts keep a lost output in that set for the 10 s, and the core's delay model carries the base and lead it counted.
+- **S328** *A local output whose device leaves the list for a moment.* *Required* (AudioSync design 2026-10-28; amends S172 and S177, reason below; from a review of `desktop/src/audio/outputs.rs:597`, `desktop/src/audio/controller.rs:1512` and `core/src/policy/delay.rs:165` at the time, and a user's report that the sound kept dropping in and out: with no AirPlay speaker chosen and a Bluetooth speaker at −250 as the base m, that speaker leaving the device list for one poll made every other output skip 250 ms forward and its return inserted 250 ms of silence on all of them, two hitches on every speaker per Bluetooth flap; tests in the core, `a_lost_output_keeps_its_offset_and_lead_for_10_s`, `a_lost_output_listed_again_within_10_s_moves_no_hold_back`, `a_lost_output_still_missing_after_10_s_retimes_once`, `switching_off_a_lost_output_retimes_at_once`, `an_output_switched_off_before_its_device_left_isnt_held`, `a_lost_reference_retimes_at_once` and `a_session_restart_clears_the_hold`, and in `desktop/src/audio/controller.rs`, `a_bluetooth_output_unlisted_for_one_poll_leaves_the_built_in_delay_unchanged`, `a_bluetooth_output_still_unlisted_after_10_s_retimes_the_others_once`, `a_lost_bluetooth_output_switched_off_retimes_the_others_at_once` and `a_session_restart_counts_only_the_outputs_listed_then`; on the Mac, a logic-suite test "local delay: an output lost for one poll keeps the others' hold-backs"). An output the user keeps switched on, other than the reference, whose device leaves the list keeps counting for 10 s from the first device list that no longer shows it in what sets the other outputs' timing: its offset in the base m (S176) and its last start lead in the session lead K (S208), while its renderer stops as S68 says. Listed again within the 10 s, it is attached at its unchanged hold-back (S117) and no other output's hold-back moves, so a flap costs a gap on that speaker only. Still missing at 10 s, it stops counting and the outputs re-time once as S177 says (a skip forward on each output whose hold-back drops). Switched off during the 10 s, it stops counting at once (S177). Any other re-timing during the 10 s (an offset edit, the AirPlay condition, L) counts it as it was. The same goes for the start lead alone of such an output whose stream stopped for good while its device stays listed (S68): it counts in K until the output's new renderer has published its own lead, 10 s at most, so that restart re-times no other output. A lost reference re-times at once as before: the reference is the computer's own audio hardware (S173, S174), which doesn't drop off a wireless link. A session restart during the 10 s (a format change, S20, or a source switch) clears the hold: the new session counts only the devices listed then. Why 10 s: a short window costs every other speaker two re-times per flap (a skip forward, then inserted silence), the drop-outs the report describes, while a long one costs only extra hold-back on the others for a speaker that is gone, lag against a picture and nothing for music; 10 s covers a Bluetooth endpoint being listed again after a brief link loss and bounds that lag when the speaker really left. No Windows reconnect time has been measured yet: if a measured Bluetooth flap (off and on three times, device gone to device back read from the debug log) exceeds 10 s in two of three tries, this window becomes 30 s, the time the Windows app already gives a refused device (`REFUSED_GIVE_UP_POLLS`), with the numbers cited here. Meanwhile the other outputs stay later against the screen by at most the lost output's share of m and K, still in step with each other. The amendment: S172 counts as taking part only outputs whose devices are listed now, and S177 re-times when a device is lost or listed again; for the 10 s after a switched-on output's device leaves the list, both read as this clause says. S177's other triggers and its rule that an increase inserts silence and a decrease skips forward are unchanged. Each host builds the set of outputs taking part itself (the Windows outputs list, the Mac's local delay model) before the core computes the hold-backs, so both hosts keep a lost output in that set for the 10 s, and the core's delay model carries the base and lead it counted.
 - **S244** *Required* (rewritten 2026-10-24; Windows test "live_input_waits_for_an_airplay_speaker_like_any_source"). Live input changes no hold-back. While the source is an input device (live input), every output plays as under the system mix or an app's audio: with a network speaker playing (an AirPlay speaker chosen, S178, or a Cast speaker on), the local outputs wait for it by L or the Cast speaker's wait, whichever is longer (S176), so the network speakers and the local outputs stay in step, and the sound reaches every speaker about L after the input; with no network speaker playing, the local outputs play at the session lead (S208) and line up with each other by their offsets alone, as under any source. A switch of the source to or from live input re-times nothing (S177). Calibration does not depend on the source either: the offsets and the AirPlay delay measured on music hold for live input. Reason: with a network speaker playing, that speaker sounds about L after the input whether or not the local outputs wait, so a live voice or instrument can't be heard in step with it in the room either way; a line-in source that is silent in the room (a turntable, a phone, a console) needs the speakers in step with each other, which only the wait gives. This replaces the earlier S244 (2026-10-23), under which a local output skipped the network wait for live input and the network speakers then sounded about L after the local outputs.
 - **S178** *Required.* The AirPlay latency L of S176, the time from a frame's arrival to the moment the AirPlay speakers are taken to sound it, depends on the AirPlay sender and only counts while an AirPlay speaker is chosen. Each sender has one stored host setting for it, kept across launches, which the window shows as the *AirPlay delay* (S181); the user tunes it to line the reference up with the AirPlay speakers. Input that isn't finite is ignored and other input is clamped.
   - *Retired with the bundled engine (2026-10-20); kept as a record.* *Bundled engine (the Mac's AirPlay sender before AudioSync's own).* The engine reports no latency, so the setting is absolute: L is the stored AirPlay delay, 0 to 20 000 ms, 2000 by default (S77's default; `README.md`: AirPlay speakers play about two seconds late). It takes over the role the reference's own delay had under S77 (S179). In the usual case h(x) = L + o′(x), which is S78's "configured delay" with configured = L + offset.
@@ -402,7 +402,7 @@ S235 to S241 measure every speaker that is on in one run, local outputs, Cast sp
 - **S239** *Required.* Measure Again. Any row but the reference's can be measured again: a new run of the reference's sweep and that speaker's two, from the values the sheet started with, whose steps name the sheet's rows. Its result replaces that row alone, and the AirPlay delay is worked out again. A Measure Again run that is cancelled or ended by a change (S240) is dropped: the sheet and that row stay exactly as they were.
 - **S240** *Required.* Ending a run. A cancel, a change of the speaker list, a speaker taking part turned off, a switch of the source, any zone click (S245), even one that switches nothing, and, for Calibrate Zone (S255), the measured zone losing a member or being deleted stop the run: no more steps, and its sheet ends with that reason, keeping the rows measured so far for display, with nothing to apply. A zone click and a change to the measured zone end it as a change of the speaker list. A run finished with steps still waiting ends as cancelled.
 - **S241** *Required.* A Cast speaker's wait. The expected arrival the host gives a Cast speaker (S235), which is also how long the music already sent to it plays out before the first sweep, comes from one rule both hosts call: its stored offset, counted up to 20 000 ms, plus the Cast feed's hold-back plus 500 ms; with no stored offset (none, or 0 ms, which the sender keeps after Undo) the hold-back plus a starting guess by the format the session plays, 3000 ms for WAV and 6000 ms for FLAC or a format not reported yet (CAST_SPEC C77a; the FLAC figure is derived, not measured). A negative offset, or one that is not a number, also counts as no stored offset, here and for the searching window of S235. The guess never delays another output. Reason: a guess too short lets music overlap the first sweep, one too long only costs time, and leaving the hold-back out made a host wait too little while AirPlay holds the Cast feed back.
-- **S255** *Required* (`core/src/calibrate_all.rs`, `zone_plan`, `Run::listing`, `Sheet::measure_again_off`, `airplay_moves`; `asc_calibration_run_create_listing`, `asc_calibration_sheet_measure_again_off`, `asc_calibration_zone_plan`; `CalibrateAllFlow.swift`, `CalibrateAllFlow.zonePlan`, `CalibrateAllFlow.airPlayMoves`, `CalibrateAllFlow.offersZoneRun`, `CalibrateAllFlow.startFailure`, `CalibrateAllFlow.deletingZone`; `AppDelegate+CalibrateAll.swift`, `calibrateZone`; `desktop/src/audio/calibrate_all.rs`, `ZoneScope`; `desktop/src/adapter.rs`, `start_calibrate_zone`; `desktop/src/ui_model.rs`, `AppState::offers_zone_run`). *Calibrate Zone.* "Calibrate Zone…" in a zone's Options menu runs Calibrate All (S235 to S241) over that zone. The item is off while none of the zone's members is present or a calibration holds the outputs, since a start would then do nothing. The sheet's rows are the reference first, then the zone's members in zone order, and the sheet says "Bring the computer into <zone>", since the microphone and the reference stay on the computer. Hidden and absent members and members that play as part of a target (S246, S247) are left out. A present member that is off is listed with "Off" as its reason and never swept, and the run never switches it on; once the user turns it on, Measure Again (S239) measures it from its stored delay and expected arrival as the host reads them then, since the sheet read them while it didn't play. Speakers on outside the zone are silenced in the mix send for the run, never through device volume (S192) or by switching them off, are never measured, and keep their stored values: they carry the faded music, a local output is at gain 0 and an AirPlay speaker muted in its stream while a sweep is on its path, and the run waits until they would have played a sweep out before it lets them be heard. They are restored on every way a run ends (cancel, each S240 end, Apply, Undo), nothing is stored, and a quit mid-run leaves no trace. A zone with only the reference measurable is refused as nothing to measure. The shared AirPlay delay is the median of the zone's certain AirPlay rows (S237), an off row counting toward neither the median nor the old delay. Since it moves every AirPlay speaker, the AirPlay line names, in zone order, each other zone with a listed AirPlay member, plus "speakers in no zone" when a listed AirPlay speaker is in none. Apply and Undo follow S238, Measure Again S239. The results' start button runs that zone again, the speakers outside it silenced again, never a whole run. Once the measured zone is deleted, the results read as Calibrate All's and that button runs every speaker. Reason: the microphone hears one room, so measuring a zone that is a room keeps speakers elsewhere out of the recording without turning anything off (core tests `a_zone_run_…`, `the_airplay_line_…`; logic tests "calibrate zone: …"; Windows tests `a_zone_…`, `deleting_the_measured_zone_ends_the_run`, `the_cards_button_after_a_zone_run_runs_that_zone_again`, `calibrate_zone_is_offered_…`, `the_calibrate_all_card_of_a_zone_run_names_the_zone`, `a_zone_run_is_ticked_once_it_starts`).
+- **S255** *Required* (`core/src/calibrate_all.rs`, `zone_plan`, `Run::listing`, `Sheet::measure_again_off`, `airplay_moves`; `asc_calibration_run_create_listing`, `asc_calibration_sheet_measure_again_off`, `asc_calibration_zone_plan`; `CalibrateAllFlow.swift`, `CalibrateAllFlow.zonePlan`, `CalibrateAllFlow.airPlayMoves`, `CalibrateAllFlow.offersZoneRun`, `CalibrateAllFlow.startFailure`, `CalibrateAllFlow.deletingZone`; `AppDelegate+CalibrateAll.swift`, `calibrateZone`; `desktop/src/audio/calibrate_all.rs`, `ZoneScope`; `desktop/src/adapter.rs`, `start_calibrate_zone`; `desktop/src/ui_model.rs`, `AppState::offers_zone_run`). *Calibrate Zone.* "Calibrate Zone…" in a zone's Options menu runs Calibrate All (S235 to S241) over that zone. The item is off while none of the zone's members is present or a calibration holds the outputs, since a start would then do nothing. The sheet's rows are the reference first, then the zone's members in zone order, and the sheet says "Bring the computer into <zone>", since the microphone and the reference stay on the computer. Hidden and absent members and members that play as part of a target (S246, S247) are left out. A present member that is off is listed with "Off" as its reason and never swept, and the run never switches it on; once the user turns it on, Measure Again (S239) measures it from its stored delay and expected arrival as the host reads them then, since the sheet read them while it didn't play. Speakers on outside the zone are silenced in the mix send for the run, never through device volume (S192) or by switching them off, are never measured, and keep their stored values: they carry the faded music, a local output is at gain 0 and an AirPlay speaker muted in its stream while a sweep is on its path, and the run waits until they would have played a sweep out before it lets them be heard. They are restored on every way a run ends (cancel, each S240 end, Apply, Undo), nothing is stored, and a quit mid-run leaves no trace. A zone with only the reference measurable is refused as nothing to measure. The shared AirPlay delay is the median of the zone's certain AirPlay rows (S237), an off row counting toward neither the median nor the old delay. Since it moves every AirPlay speaker, the AirPlay line names, in zone order, each other zone with a listed AirPlay member, plus "speakers in no zone" when a listed AirPlay speaker is in none. Apply and Undo follow S238, Measure Again S239. The results' start button runs that zone again, the speakers outside it silenced again, never a whole run. Once the measured zone is deleted, the results read as Calibrate All's and that button runs every speaker. Reason: the microphone hears one room, so measuring a zone that is a room keeps speakers elsewhere out of the recording without turning anything off (core tests `a_zone_run_…`, `the_airplay_line_…`, `the_zone_plan_crosses_the_boundary_as_the_core_makes_it`; logic tests "calibrate zone: …"; Windows tests `a_zone_…`, `calibrate_zone_reads_the_zone_now_and_says_why_it_cant_start`, `deleting_the_measured_zone_ends_the_run`, `the_cards_button_after_a_zone_run_runs_that_zone_again`, `calibrate_zone_is_offered_…`, `the_calibrate_all_card_of_a_zone_run_names_the_zone`, `a_zone_run_is_ticked_once_it_starts`).
 
 ## 9. FIFO feed (PCM into the AirPlay engine)
 
@@ -524,10 +524,10 @@ Retired with the bundled engine on 2026-10-20, all but S111 and part of S101 and
 - **S138** *Bluetooth drop.* *Superseded in part by S175*: a Bluetooth device that sounds late gets a negative offset instead of "a little less delay". *Observed* (S68; `README.md`: Bluetooth adds its own lag, so users set a little less delay). Handled like an unplug. *Required:* a device that returns at a different nominal rate (e.g. a headset profile) is rendered through S62; its extra latency is not compensated automatically.
 - **S325** *Bluetooth speaker on a link that just came up.* *Observed* (Mac sitting 2026-10-27, debug log and the system log: a Bluetooth speaker switched on at its own power button joined 0.5 s after Core Audio listed it and played audibly late for the whole stream, with no resync, drift, starvation or output-time step; the same output switched off and on 1.4 s later started with the same reported latency and played in sync. Its A2DP link sends no delay reports, so the extra lag on the first stream is invisible to the app.) *Required* (`FreshLinkWatch` in `SpeakerState.swift`; `syncLocalOutputs` in `AppDelegate+Outputs.swift`; tests "EC2 Bluetooth fresh link: …"): the host notes when each output device UID appears in a device list, except in the first list it reads (devices present at launch have a settled link). A Bluetooth output that starts within 3 s of its UID appearing is restarted once, 2 s after it started: it fades out like a switch-off (S185), is held off the sync until its fade has played, rests 1 s, and starts again through the next sync with its current delay and gain, fading in (S184). The other outputs, their hold-backs and the session are untouched. The restart uses up the appearance, so the second start plays as is; a UID that leaves the list and comes back is fresh again; switching the speaker off before the restart cancels it, and so does the end of the session it started in (a stop, a capture rebuild or a source switch). Every Bluetooth start logs its decision. *Windows* (*Required*; AudioSync design 2026-10-28, from a review of `desktop/src/audio/controller.rs:1105-1194` at the time, where a Bluetooth output (`OutputKind::Bluetooth`) only gets its Bluetooth lead (`set_bluetooth`) and nothing notes when its device appeared, so a speaker that reconnects mid-stream and starts on a link still coming up stays late until the user switches it off and on; not yet measured on Windows, where the same A2DP link without delay reports is assumed; tests in `desktop/src/audio/controller.rs`, `a_bluetooth_output_that_starts_within_3_s_of_being_listed_restarts_once_2_s_later`, `a_bluetooth_output_listed_at_launch_or_after_4_s_starts_as_is`, `a_wired_output_that_just_appeared_starts_as_is`, `a_fresh_link_restart_never_moves_another_outputs_hold_back`, `switching_it_off_or_ending_the_session_cancels_the_restart`, `a_sleep_cancels_a_fresh_link_restart_and_the_output_plays_on` and `a_bluetooth_links_3_s_start_over_at_the_resume`): the controller follows the same rule. It notes the poll at which each output endpoint ID appears in its device list, except in the first list it reads; a Bluetooth output that starts within 3 s of its ID appearing (6 polls at the UI's two a second) is restarted once, 2 s after it started (4 polls): it fades out like a switch-off (S185), its old stream is released once that fade has played, it rests 1 s, and it starts again at the next poll after that through the usual output sync with its current hold-back and gain, fading in (S184). During the restart it counts as taking part (S172), so no other output's hold-back moves (S177), and nothing posts a notice. The restart uses up the appearance; an ID that leaves the list and comes back is fresh again; switching the output off, the session's end (a stop, a source switch or a capture rebuilt in another format) and a sleep (S332) cancel it; a start that fails or stalls before the restart goes by S68, S326 and S331 and cancels it too. Every Bluetooth start logs its decision in the debug log, written outside the render path (S126). Red test idea: on the fake backend, a Bluetooth endpoint added to the list after the first read and started 1 poll later is stopped and started again exactly once, about 4 polls after its first start plus the fade and the 1 s rest, while a wired one added the same way is started once.
 - **S139** *Sleep and wake.* *Retired in part with the bundled engine (2026-10-20)*: the Observed part (the output poll, the wake grace, pipe playback) describes that engine and is a record; the Required part still stands for the capture and the local outputs, all but its sentence on the FIFO feed, which went with it. *Observed* (the bundled engine's host; today `observeSleepAndWake` and `wokeFromSleep` in `AppDelegate+AirPlay.swift` keep only that nothing is scheduled while the Mac sleeps and that its wake reconciles, test "reconcile: nothing is scheduled while the Mac sleeps; its wake reconciles (S101)"; the wake grace and the re-selection during it retired with the engine, and today's code has neither). The host follows the system's sleep and wake notices; the displays waking also counts as a wake while the host still takes the Mac to be asleep, in case the wake notice is missed. From going to sleep until waking it sends no output poll, and an answer or a failure that comes back meanwhile decides nothing and doesn't count toward reachability (S102). A wake polls at once and opens a wake grace of 20 s, counted from the engine's first answer after the wake, however long that takes; failed polls don't start it. During the grace a wanted `open` speaker the engine reports off is selected again instead of being dropped, at most once per poll (S103, S104), and pipe playback is requested again with each such selection (S99). A speaker the user switched off stays off, one that isn't `open` follows S106–S107, and a new engine run is a restart (S102, S143). After the grace the usual rules apply (S104, S106–S109): an `open` speaker still reported off is dropped as unreachable with a notice (S148). *Required:* nothing else needs dedicated handling, and nothing may crash: a callback gap of any length is a stall (S51, S55: resume at the exact delay, no replay); a capture format change after wake goes through S20; a device that vanished goes through S68; capture that never resumes surfaces through S18; the FIFO backlog cap (S90) keeps stale audio from reaching AirPlay, and a pipe the engine kept open but stopped reading across the sleep resumes at the live edge (S203), so the writer's own backlog adds no lag after the wake; what sat in the kernel's pipe buffer still plays first.
-- **S326** *An output stream that stops taking frames (Windows; the Mac by S334).* *Required* (Windows host; AudioSync design 2026-10-28, from a review of `desktop/src/audio/wasapi/endpoint.rs:392-417` at the time: an output thread that Windows stops signalling while `GetCurrentPadding` still succeeds with a full buffer wakes on its 500 ms wait, writes 0 frames and never ends, so the row shows the speaker playing with no sound, no notice and no retry; tests in `desktop/src/audio/wasapi/endpoint.rs`, `a_stream_that_never_signals_with_full_padding_ends_as_stalled_within_2_s` and `a_frozen_clock_with_full_padding_ends_as_stalled_within_2_s` and `a_stream_that_takes_frames_is_never_stalled_by_a_clock_that_sticks`, and in `desktop/src/audio/controller.rs`, `a_stalled_output_reopens_at_the_next_poll_with_a_debug_line` and `a_second_stall_in_a_row_posts_the_lost_notice_and_keeps_the_output_on`). A running output stream counts as stalled when, after it has taken frames once (the padding fell below a full buffer, or the device clock moved), for 2 s of wall time in a row it takes no frame, counted as frames accepted by the device against wall time rather than as callbacks: every padding read in that span shows the whole buffer still queued, so nothing could be written, and a device clock that stops while the padding still drops never counts as a stall on its own; the log names the sign: a full buffer, or a device clock that also stopped. Waits that end on the 500 ms timeout count toward the 2 s like wakes on the device's event; a stream that is fading out to stop, or that hasn't taken a frame yet (a Bluetooth link still coming up after a reconnect or a wake), isn't checked. The rule holds per output: one output's stalls never re-time or reopen another. The output thread then ends as it does for a stream Windows invalidated: the output counts as lost while its device stays listed, so it keeps taking part (S172) and no other output's hold-back moves (S177), and it is opened again at the next poll in the device's current mix format at its current hold-back (S117). The debug log gets one line naming the output, how long it stalled and which sign showed it (a full buffer, or a device clock that also stopped), written after the stream is released and never from the render path (S126). A first stall posts no notice, like any stream Windows invalidates under a listed device. When the reopened stream stalls again before it has played 5 s (the trial span a restarted capture gets, `RESTART_TRIAL_POLLS`), the output posts the notice an output whose device left the list gets (S68), stays switched on, and is opened again every 10 s (the spacing `STALL_RETRY_POLLS` gives a device that didn't answer) until a stream plays 5 s, which clears the notice; stalling never switches an output off. Why 2 s: a shared stream's buffer holds tens of milliseconds and a Bluetooth endpoint's a few hundred, so a stall of 2 s is already plainly audible on that output and a reopen costs it little more; the span is four of the thread's 500 ms waits, so a late event or two never ends a healthy stream; and it stays well under the about 5 s a capture's restarts take (`RESTART_TRIES`) and the 30 s a refused device gets (`REFUSED_GIVE_UP_POLLS`), so a stalled speaker sounds again about 2.5 s after it went quiet instead of never. A stall that would have ended on its own after the 2 s costs at most the reopen's gap, about 0.5 to 1 s, on that output only; the capture, the other outputs and the AirPlay and Cast speakers don't change.
+- **S326** *An output stream that stops taking frames (Windows; the Mac by S334).* *Required* (Windows host; AudioSync design 2026-10-28, from a review of `desktop/src/audio/wasapi/endpoint.rs:392-417` at the time: an output thread that Windows stops signalling while `GetCurrentPadding` still succeeds with a full buffer wakes on its 500 ms wait, writes 0 frames and never ends, so the row shows the speaker playing with no sound, no notice and no retry; tests in `desktop/src/audio/wasapi/endpoint.rs`, `a_stream_that_never_signals_with_full_padding_ends_as_stalled_within_2_s` and `a_frozen_clock_with_full_padding_ends_as_stalled_within_2_s` and `a_stream_that_takes_frames_is_never_stalled_by_a_clock_that_sticks` and `a_wake_hours_after_the_last_read_starts_the_stall_span_over`, in `desktop/src/audio/controller.rs`, `a_stalled_output_reopens_at_the_next_poll_with_a_debug_line` and `a_second_stall_in_a_row_posts_the_lost_notice_and_keeps_the_output_on`, and in `desktop/src/adapter.rs`, `a_stream_that_stalls_twice_in_a_row_is_reported_until_one_plays_five_seconds`). A running output stream counts as stalled when, after it has taken frames once (the padding fell below a full buffer, or the device clock moved), for 2 s of wall time in a row it takes no frame, counted as frames accepted by the device against wall time rather than as callbacks: every padding read in that span shows the whole buffer still queued, so nothing could be written, and a device clock that stops while the padding still drops never counts as a stall on its own; the log names the sign: a full buffer, or a device clock that also stopped. Waits that end on the 500 ms timeout count toward the 2 s like wakes on the device's event; a stream that is fading out to stop, or that hasn't taken a frame yet (a Bluetooth link still coming up after a reconnect or a wake), isn't checked. The rule holds per output: one output's stalls never re-time or reopen another. The output thread then ends as it does for a stream Windows invalidated: the output counts as lost while its device stays listed, so it keeps taking part (S172) and no other output's hold-back moves (S177), and it is opened again at the next poll in the device's current mix format at its current hold-back (S117). The debug log gets one line naming the output, how long it stalled and which sign showed it (a full buffer, or a device clock that also stopped), written after the stream is released and never from the render path (S126). A first stall posts no notice, like any stream Windows invalidates under a listed device. When the reopened stream stalls again before it has played 5 s (the trial span a restarted capture gets, `RESTART_TRIAL_POLLS`), the output posts the notice an output whose device left the list gets (S68), stays switched on, and is opened again every 10 s (the spacing `STALL_RETRY_POLLS` gives a device that didn't answer) until a stream plays 5 s, which clears the notice; stalling never switches an output off. Why 2 s: a shared stream's buffer holds tens of milliseconds and a Bluetooth endpoint's a few hundred, so a stall of 2 s is already plainly audible on that output and a reopen costs it little more; the span is four of the thread's 500 ms waits, so a late event or two never ends a healthy stream; and it stays well under the about 5 s a capture's restarts take (`RESTART_TRIES`) and the 30 s a refused device gets (`REFUSED_GIVE_UP_POLLS`), so a stalled speaker sounds again about 2.5 s after it went quiet instead of never. A stall that would have ended on its own after the 2 s costs at most the reopen's gap, about 0.5 to 1 s, on that output only; the capture, the other outputs and the AirPlay and Cast speakers don't change.
 - **S334** *An output stream that stops taking frames (Mac).* *Required* (Mac host; AudioSync design 2026-10-28; extends S326 to the Mac so one rule holds on both hosts, and amends S68 and the switch-off of a refused start for a stalled output; from a review of `Sources/AudioSync/OutputRenderer.swift:541-558`, `Sources/AudioSync/SyncEngine.swift:421-430` and `:506-528` and `Sources/AudioSync/SpeakerState.swift:121-125` at the time: the Mac watches only an output device's alive flag, so a render callback that stops while the device stays alive (another app taking the device in hog mode, a Bluetooth device inside a multi-output device dropping, IO that doesn't resume after a wake or a Core Audio restart) leaves the row playing with no sound, no notice and no retry, a device that leaves the list without that flag going false keeps its dead renderer, and the 5 s status line reads the same for that output as for a healthy one; trigger not reproduced yet; test in the Mac logic suite, `Tests/logictest.swift`, "output stall: frames that stop for 2 s after the first stall the output, a clock that sticks while they move never does", no hardware needed). S326's rule holds on the Mac as written: the 2 s, checked only once the output has taken frames and not while it fades out to stop (S185) or rests for a fresh-link restart (S325); per output only; the reopen at the next sync in the device's current format at the current hold-back (S117); no notice for a first stall; a second stall before the reopened stream has played 5 s brings the notice, retries every 10 s until a stream plays 5 s, which clears it; stalling never switches an output off. What differs is what the Mac measures, how the stream ends and what it logs. *Measure:* the frames each output's render callback hands its device, silence included, so an empty ring or a stopped capture (S53) never looks like a stall. Off the render path (S126), every 0.5 s on the main queue, the host reads that count and the system uptime clock, which stands still while the Mac sleeps, so the sleep itself never counts and the 2 s start at the wake. An output whose count hasn't moved for 2 s of that clock is stalled. The Mac has no padding to read and a render callback that runs is the device taking frames, so S326's second sign, a device clock that stops while frames move, has no Mac counterpart. *End:* the renderer stops without a fade, since nothing plays, and is dropped like an output whose IO stopped for good (S68): the speaker stays on, its device stays listed so it keeps taking part (S172) and no other output's hold-back moves (S177); its start lead keeps counting in the session lead K (S208) until its new renderer publishes one, 10 s at most, through the same hold S328 gives a lost output's lead, so the others don't re-anchor while it retries (on Windows a stalled output's lead leaves K, a gap S326 doesn't cover yet). The host reads the device list again at once, so the next sync attaches it again by UID. A reopened output that starts but never takes a frame isn't checked, as in S326, so it stays quiet until the next device change; a [MAC] check of a device held in hog mode shows whether macOS ever starts one that way. This covers a device that left the list without its alive flag going false. A start the device refuses after a stall (another app holding it in hog mode refuses every start) counts as a stall in a row: the output stays on and is tried again every 10 s instead of being switched off. *Log:* one debug line per stall, written after the renderer is released and never from the render path, naming the output by its session number as the status line does (no device name), how long it stalled, and the sign read on the main queue after the stall: another process holding the device in hog mode, with that process ID, the device no longer running, or neither. Each reopen writes one more line with its result. The 5 s status line prints each output's frames rendered over its span, so an output that went quiet reads 0 frames there, and a log tells which speaker stopped. [DECISION NEEDED] The notice: the Mac has no per-output notice today (S68 posts none). Options: (a) add one for the second stall, worded as a UI proposal for the maintainer's OK; (b) debug line only on the Mac. Pick (a), so the rule stays one on both hosts; the stall, reopen and retries don't wait for the wording, and until it is approved the Mac writes the debug line only.
 - **S140** *Sample-rate change.* *Observed* (S20, S30). A capture rate change restarts the session: new ring history at the new Rc, equalizer coefficients recomputed and state zeroed, FIFO resampler re-rated, renderers re-added. *Required:* an output device whose rate or channel count changes reopens that output alone in the new format at its current hold-back (S330); each start's renderer converts from the capture rate to the rate its device runs at then (S62).
-- **S329** *Windows audio drops the capture for a moment.* *Required* (Windows host; AudioSync design 2026-10-28, from a review of `desktop/src/audio/controller.rs:1607` and `:2816` at the time and the same report of sound dropping in and out: a capture lost with `DeviceGone` ends every output and the AirPlay feed and starts the whole session again about 1 s later (`RESTART_DELAY_POLLS`), 1 to 1.5 s of silence on every speaker plus each output's start; tests in `desktop/src/audio/controller.rs`, `a_capture_device_gone_reopens_only_the_capture_and_keeps_every_output_running`, `a_capture_reopen_waits_while_the_lost_capture_still_holds_the_ring`, `a_capture_back_in_another_format_restarts_the_session` and `a_capture_that_fails_its_last_try_stops_as_before`). When the capture of a running session is lost with `DeviceGone` (Windows audio restarted, or the captured device went away), only the capture is opened again, with the same tries and spacing as before (`RESTART_DELAY_POLLS`, `RESTART_TRIES`, `RESTART_TRIAL_POLLS`). Every local output keeps its renderer, its reader and its hold-back, the AirPlay and Cast speakers stay connected and keep being fed, and the ring's timeline goes on, so every output plays silence while the capture is away (S53) and the captured audio again at its unchanged delay once it is back (S54), as AirPlay and Cast speakers stay connected across a source switch (S141). The loss already writes a debug line ("the capture was lost: Windows audio restarted ..."); each reopen try writes one more with its result, so a debug log shows whether a user's dropouts line up with capture losses. A capture back in the format the session started with changes nothing else. One back at another rate or channel count restarts the session as a format change does (S20, S140). When every try fails, streaming stops as S21 says, as before. An output whose own device the same event took goes by S68 and S326 on its own. The Mac reopens only its capture the same way, on the triggers of S335.
+- **S329** *Windows audio drops the capture for a moment.* *Required* (Windows host; AudioSync design 2026-10-28, from a review of `desktop/src/audio/controller.rs:1607` and `:2816` at the time and the same report of sound dropping in and out: a capture lost with `DeviceGone` ends every output and the AirPlay feed and starts the whole session again about 1 s later (`RESTART_DELAY_POLLS`), 1 to 1.5 s of silence on every speaker plus each output's start; tests in `desktop/src/audio/controller.rs`, `a_capture_device_gone_reopens_only_the_capture_and_keeps_every_output_running`, `a_capture_reopen_waits_while_the_lost_capture_still_holds_the_ring`, `a_capture_back_in_another_format_restarts_the_session` and `a_capture_that_fails_its_last_try_stops_as_before`, with the sleep and busy-input cases `a_capture_still_failing_60_s_after_a_resume_stops_as_before`, `a_capture_lost_as_the_resume_window_ends_gets_the_usual_tries`, `polls_held_by_starts_that_dont_answer_are_no_resume` and `a_lost_capture_whose_input_is_busy_keeps_trying_every_3_s`). When the capture of a running session is lost with `DeviceGone` (Windows audio restarted, or the captured device went away), only the capture is opened again, with the same tries and spacing as before (`RESTART_DELAY_POLLS`, `RESTART_TRIES`, `RESTART_TRIAL_POLLS`). Every local output keeps its renderer, its reader and its hold-back, the AirPlay and Cast speakers stay connected and keep being fed, and the ring's timeline goes on, so every output plays silence while the capture is away (S53) and the captured audio again at its unchanged delay once it is back (S54), as AirPlay and Cast speakers stay connected across a source switch (S141). The loss already writes a debug line ("the capture was lost: Windows audio restarted ..."); each reopen try writes one more with its result, so a debug log shows whether a user's dropouts line up with capture losses. A capture back in the format the session started with changes nothing else. One back at another rate or channel count restarts the session as a format change does (S20, S140). When every try fails, streaming stops as S21 says, as before. An output whose own device the same event took goes by S68 and S326 on its own. The Mac reopens only its capture the same way, on the triggers of S335.
 - **S330** *An output whose format changes under it (Windows and Mac).* *Required* (Windows host; AudioSync design 2026-10-28, from a review of `desktop/src/audio/wasapi/endpoint.rs:53-58` and `:393-423`, `desktop/src/audio/controller.rs:3111-3161`, `desktop/src/audio/wasapi/devices.rs:357-366` and `desktop/src/adapter.rs:3492-3499` at the time: a listed output whose stream Windows invalidates (its mix format or rate changed in the Sound settings, or a Bluetooth headset moved between its stereo and hands-free profiles) stops asking for audio without a word; its render thread finds out at its next 500 ms wait (`WAIT_MS`) and ends, and the controller opens it again only at the next UI poll, so that output alone goes quiet for about 0.5 to 1.5 s with no notice, by design; tests in `desktop/src/audio/controller.rs`, `a_format_notice_for_a_playing_output_reopens_it_in_the_new_format_in_the_same_poll`, `a_format_notice_that_changes_nothing_leaves_the_output_playing`, `a_format_reopen_never_moves_another_outputs_hold_back` and `a_session_disconnected_with_its_device_unplugged_is_lost`). The host follows two more Windows notices for every output it plays: the device's format property changing (the device listener's property notice for the endpoint's device format, today ignored unless it is the friendly name) and the output's own audio session saying it was disconnected because its format changed or its device went away. Such a notice marks that output, and the next poll ends its stream at once (no fade: an invalidated stream has nothing to play out) and, in the same poll, opens it again in the device's current mix format at its current hold-back (S117), without waiting for the render thread's 500 ms check. A notice whose device still reports the format the stream was opened with, and whose stream still works, changes nothing, since Windows may send the property notice for other reasons. The output counts as taking part throughout (S172), so no other output's hold-back moves (S177), and like any stream Windows invalidates under a listed device it posts no notice; the debug log gets one line naming the output, the old and the new format, written after the old stream is released (S126). A reopen that Windows refuses while it rebuilds the endpoint goes by S331, a device that left the list by S68. So the gap on that output is the time to the next poll plus the open, at most about 0.5 s plus the open instead of up to 1.5 s, and the capture, the other outputs and the AirPlay and Cast speakers don't change. A render thread that sees its stream fail before the notice arrives ends as it does today, and the poll that sees it reopens it as above. Red test idea: on the fake backend, a format notice for a playing, listed output with a new mix format makes the very next poll stop and start that renderer in the new format, and the poll after it starts nothing more. *Mac host* (AudioSync design 2026-10-28, from a review of `Sources/AudioSync/OutputRenderer.swift:236-238` and `:336-344` at the time: a local output reads its device's rate and channel count once, when it starts, and listens only for the device's alive flag and its IO overloads, so when a listed device's nominal rate or output channel count changes while it plays (a rate picked in Audio MIDI Setup, a Bluetooth headset moving to its hands-free profile) the output unit converts to the new format by itself and the output keeps playing, with no notice and no session restart, but its renderer still writes at the rate and channel count of the start and its timing still counts the latency and lead measured then; test in the Mac logic suite, `Tests/logictest.swift`, "output format: a running output reopens once its device reports another rate or channel count, never for a notice that changes neither" and "output format: a format change during a stall trial reopens as a format change and leaves the trial as it was", no hardware needed). For every local output it plays, the host listens on the main queue for its device's nominal rate and output stream configuration. 0.1 s after the first such notice, so the notices of one change are read together, it reads the device's rate and its output channels summed over its streams and compares them with what the start read the same way. When either differs, the output's renderer stops without a fade (the unit has already moved to the new format, so nothing is left to play out) and, in the same main-queue turn, the host starts it again by UID in the device's current format at its current hold-back (S117). A notice that changes neither, an output fading out to stop (S185) and a format that can't be read change nothing; a device that leaves goes by S68. The output's start lead stays held while it reopens (S328), so no other output's hold-back moves (S177); no notice is posted, and the reopened output is watched for stalls from its new renderer (S334). A format change inside the 5 s trial that follows a stall (S334) reopens the output as a format change, with its own log line, and leaves that trial as it was. The debug log gets one line naming the output by its session number (no device name) and the old and the new format, written after the old renderer is released and never from the render path (S126). A reopen the device refuses goes as a refused start does today (S69), the Mac's side of the question S331 leaves open on Windows. When the same change also changes the capture's format (a system tap following that device), S20's session restart covers it as before. So that output is quiet for about 0.1 s plus its start, and the capture, the other outputs and the AirPlay and Cast speakers don't change.
 - **S331** *A listed output that keeps refusing to open (Windows).* *Required* (Windows host; AudioSync design 2026-10-28, from a review of `desktop/src/audio/controller.rs:140-145`, `:1060-1071` and `:1197-1228` at the time: an output whose device Windows still lists but refuses to open as if it were gone (`AUDCLNT_E_ENDPOINT_CREATE_FAILED` while a Bluetooth speaker reconnects slowly or the endpoint is rebuilt after a wake) is tried at every poll for 30 s (`REFUSED_GIVE_UP_POLLS`, 60 polls) and then counts as a start that failed (S69): it is switched off with the `OutputFailed` notice, and the user has to switch it on again even when the device answers a moment later). The first 30 s stay as they are: a try at every poll, told once in the debug log, no notice. What happens after them is a product choice, **[DECISION NEEDED]** for the advisor:
   - *Option A, as today.* At 30 s the output is switched off (S69) with the start failure notice. The row tells the truth (off, failed), nothing retries in the background, and a device that comes back later waits for the user.
@@ -542,7 +542,7 @@ Retired with the bundled engine on 2026-10-20, all but S111 and part of S101 and
 - **S142** *Source app quits.* *Observed* (`AppDelegate+Engine.swift`, `sourceAppQuit`; `AppLifecycle.swift`, `sourceQuit`). With S227's setting at Stop (the default on Windows; on the Mac, Stop is the setting turned off): When the app whose bundle ID is the source terminates during a session: stop, post a "source" notice (no modal alert). Stopping ends every AirPlay speaker's session, but the speakers the user chose stay chosen, and the source stays that app, so the next start plays to the same speakers from the same app (`AppDelegate.swift`, `appQuit`, and `AppDelegate+Engine.swift`, `stopEngine`; Windows: `desktop/src/audio/controller.rs`, `StopReason::SourceQuit`). Before 2026-10-21 this clause said every AirPlay speaker was deselected, which the bundled engine's host did and neither app has done since that engine went (2026-10-20).
 - **S164** *Source app quit decision.* *Observed* (`AudioSource.swift`, `SourceQuit`; `AppLifecycle.swift`, `sourceQuit`; core `policy/source.rs`, `depends_on_app`; tests "EC6 app quit: …" and "mix quit: …"). Only an app source ends with a quit, and only when the quitting app's bundle ID equals the source's. Another app quitting, an app without a bundle ID, and any quit while the source is the whole system or an input device change nothing. A mix of several apps (S242) counts as one app source that ends only with the last of its apps: one of them quitting while others still run changes nothing, and the session keeps capturing the rest; "all except" outlives every app. The Mac judges a mix's quit one second after the app quit (`AppLifecycle.waitsForRecheck`, `mixQuitRecheck`), since macOS's list of running apps can miss the mix's other apps in the moment one of them quits; when the mix's capture finds none of its apps, the session is rebuilt after the same second and goes on with the apps still running, or fails as their quit (S227 e). An app source's capture looks at its apps again whenever macOS's list of running apps changes, not only when an audio process comes or goes (`AppTapFollow.followsRunningApps`), so an app that quits without an audio process, or that macOS still lists in the moment its last audio process ends, is seen too. An app counts as running while one of its processes still exists, read afresh at each look from macOS's list of running apps (its bundle ID in any letter case) and from the processes an earlier look found (`AppTapFollow.runningPIDs`): a running app without an audio process, a paused player for instance, is not a quit, and its capture waits for a new audio process, while an app that quits without a terminate notice, or that macOS still lists after it quit, counts as quit once its process is gone. A capture that loses its last audio process looks once more a second later, so an app that quits while playing is seen then; while the capture waits for an audio process it also looks every 5 seconds whether its apps still run (`AppLifecycle.waitRecheck`, `AppTapFollow.rechecksWhileWaiting`), so one that quits later, already without an audio process and without a terminate notice, is seen within about 6 seconds (that look and the second look a second later) and judged as on that notice. The re-check runs only while something waits: it ends when an audio process appears or the session stops or is rebuilt. A rebuild after a capture format change or a mix's loss also counts the processes the last session found, while a fresh start reads only macOS's list. A look that finds none of the apps running counts only once a second look, a second later, still finds none, since in the turn one app quits macOS's list can miss the others: an app of a mix quitting while another runs never loses the capture. The capture's own report of an app whose processes it saw have all ended (S227) needs no second look: it acts at the look that finds them gone, through the terminate notice's path, where a mix's app is still judged a second later. A quit matches the source's app regardless of letter case (`AppLifecycle.sourceSpelling`), a precaution in case the running app reports a spelling that differs from the saved one. Windows and Linux report a mix's quit only once every one of its apps has exited.
 - **S227** *When the source app quits.* *Required* (AudioSync design, 2026-10-21; core tests "source quit: …"; the Windows app follows it, `desktop/src/audio/controller.rs`, `SourceQuitWatch`, tests "an app that quits gives way to the whole system …"; the Mac app asks the core through `asc_source_quit_decide`, `AppLifecycle.sourceQuit` and `AppDelegate.sourceAppQuit`, logic tests "source quit: …" and "EC6 app quit: …"). A setting chooses what a running session does when the app it captures quits: *Stop* or *Switch to whole-system audio*. It is stored as `stop` or `system`. On Windows Stop is the default: a missing or unknown value reads as Stop, so a copy that never stored it, or an older copy reading a newer value, behaves as S142 says. On the Mac Switch is the default (2026-10-27): nothing stored reads as Switch, while a stored `stop` (the check item turned off) stays Stop; a value it doesn't know reads as Switch too, the default, as other unknown stored values read as theirs (2026-10-28; before, it read as Stop) (logic tests "source quit: nothing stored reads as system, the Mac's default (S227)", "source quit: a stored stop reads as stop (S227)", "source quit: a value this copy doesn't know reads as system, the default, like nothing stored (S227)", "settings: Switch to All System Audio When the Source App Quits turned off stays off (S227)"). Before 2026-10-27 the Mac's default was Stop too. Whether a quit concerns the session stays S164's decision: only an app source, and only its own app quitting (on Windows, where the capture itself reports that its app ended, the host passes the source's own app ID). With Stop the session does what S142 says: it stops and posts the "source" notice, the AirPlay speakers the user chose stay chosen, and the source stays that app, so the next start plays to the same speakers from it again. With Switch the session goes on with the whole system as its source, the way a source change does (S141, S163, S186): only the capture is rebuilt, so every output fades out on the app and in on the system audio while the AirPlay and Cast speakers stay connected, the stored source becomes the whole system (S12), and an informational "source" notice names the app that quit and says that whole-system audio plays now. When the whole system can't be captured, streaming stops with the start notice of S21, since there is no older source to go back to (Mac tests "EC6 app quit: switching to the whole system keeps the AirPlay and Cast speakers connected (S227)", "EC6 app quit: the switch to the whole system rebuilds only the capture and logs why (S227)", "EC6 app quit: a whole system that can't start stops streaming, with no app to go back to (S227)", "EC6 app quit: the switch to the whole system never waits on the microphone prompt (S227)"). Before 2026-10-25 the Mac's Switch stopped the session, every speaker included, and started a new one. Edge cases: (a) a quit while no session runs changes nothing under either setting, and the source stays the app; (b) while the source is already the whole system, or an input device, no quit concerns it (S164), so nothing stops and nothing switches; (c) the app starting again after a switch changes nothing: AudioSync stays on whole-system audio and never switches back by itself, since other apps may be playing by then, and only the user picking the app again makes it the source; (d) changing the setting while a session plays does nothing at that moment: the setting in force when the quit arrives decides, and changing it after a switch doesn't undo the switch; (e) a device change doesn't hold the decision back: an output device coming or going (S161) doesn't rebuild the session, so the quit is handled as in any running session, and a session being rebuilt when the quit arrives (after a capture format change, S20 and S140, or on Windows a capture starting again after Windows audio restarted or its device went away) counts as running: Stop stops it and drops the rebuild, Switch lets that one rebuild start with whole-system audio instead of the app, never a second rebuild after it; (f) the same quit reported again (the system's notice and the capture's own report, or a repeated notice) changes nothing the second time, since by then the session has stopped or the source is the whole system; (g) on the Mac a whole system whose capture fails is tried again, 3 attempts in all, 0.5 seconds apart, before streaming stops with the start notice (`AppLifecycle.SystemSwitch`; logic tests "source quit: …" marked S227 g): when an app's last audio process ends, its capture lets the app's tap go and waits for a new one, and a quit arriving moments later made the whole system's tap in the gap after that tap was destroyed, which Core Audio refused (`kAudioHardwareUnspecifiedError` after about a second; Podcasts on 2026-10-26, in 2 of 3 runs), while a start a moment later worked. So the first attempt waits until a second has passed since the capture last destroyed a tap, ending the capture that still waits for the app first (on the Mac sitting of 2026-10-26 a tap made 1 ms after the destroy failed in 5 of 5 runs and one made 1.9 s after worked); a destroy longer ago adds no wait. A start that ends before the capture (no speaker, a permission) is not tried again. A stop, a start or a source change by the user during a wait ends the attempts with no notice of the switch, a start that failed included, since its own alert has been shown; auto-connect starting the whole system during a wait ends them as a switch that started, with its notice. *Windows:* the setting is the check item File > Switch to All System Audio When the Source App Quits (on means Switch), kept in the settings file as `when_source_quits`; the notice reads "<app> quit, so AudioSync switched to All System Audio." With Switch, a capture of an app that quit before it could start (one waiting for the last session's fade, or a capture starting again after a loss) starts the whole system instead, which is the rebuild of (e); with Stop such a start ends streaming as before, with the notice that the capture stopped. *Mac:* the setting is the check item AudioSync > Switch to All System Audio When the Source App Quits in the app menu, next to Launch at Login, kept in the user defaults as `whenSourceQuits` and on until the user turns it off; the notice reads the same. The quit reaches the Mac three ways, each through the same decision: macOS reporting an app that terminated, the capture finding its app gone (`.sourceLost(.appNotRunning)`, which stopped the session, so Switch starts the whole system), and the rebuild after a capture format change failing because the app is gone, which is the rebuild of (e); with Stop each ends as S142 says. macOS sends no terminate notice for some apps (Podcasts leaving a mix with Music, macOS 27.0.1, 2026-10-26), so the capture of an app source also reports each of its apps whose processes have all ended since its last look as that notice (`AppTapFollow.quitSince`, `SourceCapture.onAppQuit`): it takes the notice's path, a mix's app judged a second later, and the debug log says "app quit seen by the capture". The notice and the capture's report of the same quit, matched by bundle ID and a shared process, act once in either order (`AppLifecycle.QuitReports`; logic tests "source app quit: the capture reports an app whose processes all ended since its last look, never one it saw no process of", "source app quit: the capture's report and macOS's notice of the same quit act once, whichever comes first", "source app quit: an app quit seen by the capture takes the terminate notice's path, a mix's judged a second later").
-- **S327** *An app source Windows won't let AudioSync watch.* *Required* (Windows host; AudioSync design 2026-10-28, from a review of `desktop/src/audio/wasapi/processes.rs:162-172` and `desktop/src/audio/wasapi/loopback.rs:186-190` at the time: when the captured app's process can't be opened with `SYNCHRONIZE` access, as with an app running as administrator, the capture runs without a watch, so when that app quits or restarts the loopback of the gone process delivers nothing, the gap fill writes silence and streaming goes on with no quit handling, no notice, and a restarted app never picked up; tests in `desktop/src/audio/controller.rs`, `an_unwatched_app_that_leaves_the_process_list_quits_the_source_within_one_check`, `an_unwatched_app_whose_process_id_returns_with_another_start_time_counts_as_quit` and `an_unwatched_app_that_restarts_gets_the_same_quit_handling_as_a_watched_one`). When the capture of a single-app source starts and the app's process can't be opened for waiting, the session still starts and writes one debug line saying the app can't be watched, with the Windows error code. Instead of the watch, every 2 s (the interval a mix already follows its apps at, `MIX_FOLLOW_INTERVAL`) the host checks that the process still runs: its process ID is in the system's process list and, when its start time could be read as the capture started, it still has that start time, so a reused process ID isn't taken for the app. Once the check finds the process gone, the host handles it exactly as a watched app's quit, plus one debug line saying the check found it: S164 decides whether it concerns the session, and S227's setting chooses Stop (S142: streaming stops with the "source" notice, the chosen speakers stay chosen, the source stays that app) or Switch to whole-system audio, with the same notices. So the user hears at most about 2 s more silence before the quit takes effect than with a watched app. A restart is a quit followed by a new process, handled as for a watched app: the new process isn't followed into the running session; with Stop, the next start captures the app's new process from the stored source (S12), and with Switch the whole system already plays it. The check runs only for an unwatched single-app source, never for a watched app, a mix (which follows its apps already) or the whole system.
+- **S327** *An app source Windows won't let AudioSync watch.* *Required* (Windows host; AudioSync design 2026-10-28, from a review of `desktop/src/audio/wasapi/processes.rs:162-172` and `desktop/src/audio/wasapi/loopback.rs:186-190` at the time: when the captured app's process can't be opened with `SYNCHRONIZE` access, as with an app running as administrator, the capture runs without a watch, so when that app quits or restarts the loopback of the gone process delivers nothing, the gap fill writes silence and streaming goes on with no quit handling, no notice, and a restarted app never picked up; tests in `desktop/src/audio/controller.rs`, `an_unwatched_app_that_leaves_the_process_list_quits_the_source_within_one_check`, `an_unwatched_app_whose_process_id_returns_with_another_start_time_counts_as_quit`, `an_unwatched_app_whose_process_id_another_app_took_counts_as_quit_without_a_start_time`, `an_unwatched_app_that_restarts_gets_the_same_quit_handling_as_a_watched_one`, `an_unwatched_app_streams_on_while_it_runs_and_is_checked_every_two_seconds`, `only_a_single_app_that_refused_a_watch_is_checked` and `a_refusal_or_an_app_check_never_counts_the_time_asleep`). When the capture of a single-app source starts and the app's process can't be opened for waiting, the session still starts and writes one debug line saying the app can't be watched, with the Windows error code. Instead of the watch, every 2 s (the interval a mix already follows its apps at, `MIX_FOLLOW_INTERVAL`) the host checks that the process still runs: its process ID is in the system's process list and, when its start time could be read as the capture started, it still has that start time, so a reused process ID isn't taken for the app. Once the check finds the process gone, the host handles it exactly as a watched app's quit, plus one debug line saying the check found it: S164 decides whether it concerns the session, and S227's setting chooses Stop (S142: streaming stops with the "source" notice, the chosen speakers stay chosen, the source stays that app) or Switch to whole-system audio, with the same notices. So the user hears at most about 2 s more silence before the quit takes effect than with a watched app. A restart is a quit followed by a new process, handled as for a watched app: the new process isn't followed into the running session; with Stop, the next start captures the app's new process from the stored source (S12), and with Switch the whole system already plays it. The check runs only for an unwatched single-app source, never for a watched app, a mix (which follows its apps already) or the whole system.
 - **S143** *Retired with the bundled engine and the FIFO feed (2026-10-20); kept as a record.* *AirPlay engine restart.* *Observed* (S98, S102, S105, S81, S169, "fifo: reader closing mid-stream does not kill the process", "EC7 engine restart: the reopened pipe starts as close to live as a fresh start"). The pipe reader disappears; the FIFO writer survives and reopens (S92) at the live edge, so AirPlay comes back with the latency it had before and the local delays still line up (S169); the host restarts the engine after 2 s within the crash-loop limits; while it is unreachable the AirPlay list and local delays stay as they were; when it answers again, wanted speakers are re-selected at their own volume, and each one the new engine plays by itself gets it back, at the first answer that lists it (S105); pipe playback is requested at once (S99). Local outputs keep playing throughout.
 - **S144** *All speakers off, then on.* *Observed* (S118, S119). Switching the last speaker off stops the session and deselects AirPlay; switching any on starts a new session (ring reset, S39) with the saved per-speaker delays and volumes.
 - **S145** *Default output change.* *Required; Observed* basis (S60; `README.md` "Using it": keep the macOS output on a local device). Renderers are bound to device UIDs, so changing the macOS default output never moves, stops or re-times them. System capture taps processes, not a device, and continues; if the change alters the capture format, S20 applies. macOS's own AirPlay output is hidden from the list by default (S151).
@@ -1482,6 +1482,121 @@ Removed on 2026-10-19 with the Swift engine (`Tests/paritytest.swift`): with one
 
 Removed on 2026-10-20 with the bundled engine: it ran a private engine whose only output was its fifo output and checked that the pipe's audio came out of it, and that pipe playback came back no later than at the start after a pause, a stop and a writer that closed (the fifo feed's S83 and S88, and the retired S96 and S99).
 
+### Ring, resampler and volume: core (`cargo test` in `core/`)
+
+The core checks for the ring, the resampler, the output stage and the volume curve. The reader's own checks are under "ring buffer" above.
+
+| Test | Clauses |
+|---|---|
+| delays_convert_to_frames_at_the_capture_rate (`core/src/ffi/sync.rs`) | S3 |
+| milliseconds_convert_to_floored_frames (`core/src/reader.rs`) | S3 |
+| an_input_device_contributes_its_first_two_channels (`core/tests/volume.rs`) | S14 |
+| a_ring_has_one_writer_at_a_time (`core/src/ffi/ring.rs`) | S35 |
+| full_ring_overwrites_oldest_without_waiting (`core/src/ring.rs`) | S35 |
+| a_ring_sized_for_192_khz_refuses_readers_and_renderers_above_it (`core/src/ffi/render.rs`) | S36 |
+| frames_written_is_a_monotonic_total (`core/src/ring.rs`) | S37 |
+| margin_and_capacity_are_validated (`core/src/ring.rs`) | S40 |
+| readable_window_is_w_minus_c_plus_m_to_w (`core/src/ring.rs`) | S40 |
+| the_read_bound_covers_what_the_resampler_asks_for (`core/src/render.rs`) | S62 |
+| input_frames_for_sizes_requests_exactly (`core/src/resample.rs`) | S62 |
+| an_absurd_request_saturates_instead_of_overflowing (`core/src/resample.rs`) | S62 |
+| every_output_frame_is_multiplied_by_the_gain_and_gain_zero_is_exact_zeros (`core/tests/volume.rs`) | S64 |
+| a_gain_change_ramps_over_one_callback_then_holds (`core/tests/volume.rs`) | S64 |
+| negative_zero_crosses_the_boundary_as_zero (`core/src/ffi.rs`) | S70 |
+| the_volume_reference_values_match_the_spec (`core/tests/spec_tables.rs`) | S70 |
+| zero_is_silent_and_100_is_unity (`core/tests/volume.rs`) | S70 |
+| fifty_is_about_minus_18_db_and_ten_about_minus_60_db (`core/tests/volume.rs`) | S70 |
+| the_curve_is_strictly_increasing_over_integer_positions (`core/tests/volume.rs`) | S70 |
+| position_and_gain_round_trip (`core/tests/volume.rs`) | S70 |
+| the_curve_is_monotonic_and_inverts (`core/tests/volume.rs`) | S70 |
+| legacy_percentages_migrate_through_the_inverse_curve (`core/tests/volume.rs`) | S75 |
+| frame_counts_match_the_spec_runs (`core/src/resample.rs`) | S85 |
+| equal_rates_pass_samples_through_unchanged (`core/src/resample.rs`) | S85 |
+| at_ratio_one_without_a_trim_every_sample_is_the_input_21_frames_earlier_bit_for_bit (`core/src/resample.rs`) | S85 |
+| phase_is_carried_across_blocks (`core/src/resample.rs`) | S85 |
+| upsampling_reproduces_a_sine_accurately (`core/src/resample.rs`) | S85 |
+| downsampling_keeps_the_passband_and_rejects_aliases (`core/src/resample.rs`) | S85 |
+| dc_passes_with_unit_gain (`core/src/resample.rs`) | S85 |
+| weight_bank_and_table_paths_agree (`core/src/resample.rs`) | S85 |
+| kernel_is_a_windowed_sinc (`core/src/resample.rs`) | S85 |
+| a_reset_starts_a_new_stream (`core/src/ffi/render.rs`) | S94 |
+| set_input_rate_resets_phase_and_history (`core/src/resample.rs`) | S94 |
+| non_finite_samples_pass_through_the_reader_unchanged (`core/src/reader.rs`) | S123 |
+| shared_types_are_send_and_sync (`core/tests/realtime.rs`) | S128 |
+
+### Equalizer: core (`cargo test` in `core/`)
+
+| Test | Clauses |
+|---|---|
+| every_capture_rate_from_8_to_384_khz_gives_stable_filters (`core/tests/eq.rs`) | S16 |
+| ten_bands_centered_from_32_hz_to_16_khz_in_ascending_order (`core/tests/eq.rs`) | S22 |
+| the_host_quantizes_to_half_db_steps_between_minus_and_plus_12_db (`core/tests/eq.rs`) | S23 |
+| the_dsp_applies_any_finite_gain_it_is_given (`core/tests/eq.rs`) | S23 |
+| settings_start_disabled_flat_and_at_unity_preamp (`core/tests/eq.rs`) | S24 |
+| bands_are_rbj_peaking_filters_with_q_141 (`core/tests/eq.rs`) | S25 |
+| the_first_enabled_block_after_being_disabled_starts_from_zero_state (`core/tests/eq.rs`) | S28 |
+| a_change_takes_effect_at_the_next_block_and_keeps_filter_state (`core/tests/eq.rs`) | S31 |
+| measured_response_matches_the_reference_measurements (`core/tests/eq.rs`) | S32 |
+| presets_cross_the_boundary_in_menu_order (`core/src/ffi.rs`) | S33 |
+| twelve_presets_with_unique_ids_in_menu_order (`core/tests/eq.rs`) | S33 |
+| a_preset_sets_the_gains_only_and_matching_is_exact (`core/tests/eq.rs`) | S33 |
+| reset_reads_flat_and_zeroes_the_preamp (`core/tests/eq.rs`) | S33 |
+| finite_input_after_a_non_finite_one_is_finite_within_one_block (`core/tests/eq.rs`) | S125 |
+| work_per_block_is_twenty_biquad_steps_per_frame (`core/src/eq.rs`) | S127 |
+| a_saved_curve_keeps_its_gains_and_matches_after_the_presets (`core/tests/eq.rs`) | S270 |
+| saving_under_a_taken_name_replaces_that_curve_and_names_are_checked (`core/tests/eq.rs`) | S270 |
+| the_list_is_capped_and_stored_curves_are_cleaned_on_reading (`core/tests/eq.rs`) | S270 |
+
+### Capture, sessions, speakers and notices: core (`cargo test` in `core/`)
+
+The decisions the hosts take from the core: sources and capture, session start and stop, the speaker list and the notice list.
+
+| Test | Clauses |
+|---|---|
+| sources_round_trip_through_their_stored_form (`core/tests/policy_capture.rs`) | S12 |
+| a_missing_value_is_the_system_and_a_legacy_bundle_id_an_app (`core/tests/policy_capture.rs`) | S12 |
+| only_an_app_source_has_a_bundle_id (`core/tests/policy_capture.rs`) | S12 |
+| an_input_source_needs_the_microphone_permission (`core/tests/policy_capture.rs`) | S15 |
+| capture_frames_mean_flowing (`core/tests/policy_capture.rs`) | S18 |
+| capture_playing_only_briefly_is_still_waiting_and_the_grace_period_means_not_working (`core/tests/policy_capture.rs`) | S18 |
+| the_check_runs_3_s_after_a_start_then_every_2_s_and_reports_only_changes (`core/tests/policy_capture.rs`) | S18 |
+| known_playing_counts_any_player_for_system_only_that_app_for_an_app_never_for_an_input (`core/tests/policy_capture.rs`) | S19 |
+| a_lost_source_stops_keeps_the_speakers_chosen_and_posts_a_source_notice (`core/tests/policy_session.rs`) | S21 |
+| a_failed_output_is_disabled_with_a_notice_and_an_alert_only_when_the_user_caused_it (`core/tests/policy_session.rs`) | S69 |
+| output_sync_adds_enabled_present_outputs_and_removes_disabled_ones (`core/tests/policy_session.rs`) | S117 |
+| turning_a_speaker_on_starts_streaming_or_joins_the_running_session (`core/tests/policy_session.rs`) | S119 |
+| a_failed_automatic_start_holds_automatic_starts_until_the_user_acts (`core/tests/policy_session.rs`) | S120 |
+| switching_streaming_off_by_hand_holds_auto_connect (`core/tests/policy_session.rs`) | S120 |
+| a_failed_start_stops_everything_keeps_the_speakers_chosen_and_alerts_only_a_user (`core/tests/policy_session.rs`) | S121 |
+| speaker_states_and_clicks (`core/tests/policy_session.rs`) | S122 |
+| every_error_state_has_its_reaction (`core/tests/policy_session.rs`) | S136 |
+| a_source_switch_stops_without_deselecting_then_starts_as_the_user (`core/tests/policy_session.rs`) | S141 |
+| renderers_follow_device_uids_not_the_default_output (`core/tests/policy_session.rs`) | S145 |
+| sixteen_and_more_local_outputs_sync_without_a_limit (`core/tests/policy_session.rs`) | S146 |
+| long_unicode_names_are_display_only (`core/tests/policy_speakers.rs`) | S147 |
+| a_chosen_hidden_device_stays_listed_in_order (`core/tests/policy_speakers.rs`) | S151 |
+| hardware_and_unknown_transports_are_never_hidden (`core/tests/policy_speakers.rs`) | S151 |
+| transport_types_map_to_their_tag_and_only_built_in_is_this_mac (`core/tests/policy_speakers.rs`) | S152 |
+| layout_this_mac_keeps_the_os_order_and_everything_else_sorts_by_name (`core/tests/policy_speakers.rs`) | S152 |
+| name_order_is_a_total_order (`core/tests/policy_speakers.rs`) | S152 |
+| notices_are_newest_first_one_per_subject_and_capped_at_four (`core/tests/policy_speakers.rs`) | S153 |
+| a_notice_changed_in_place_keeps_its_place (`core/tests/policy_speakers.rs`) | S153 |
+| clearing_removes_only_the_given_subjects (`core/tests/policy_speakers.rs`) | S153 |
+| automation_notices_are_per_player_and_carry_their_pane (`core/tests/policy_speakers.rs`) | S153 |
+| the_same_rate_or_an_unreadable_one_keeps_playing (`core/tests/policy_capture.rs`) | S157 |
+| a_session_started_with_every_speaker_off_runs_until_its_last_speaker_goes (`core/tests/policy_session.rs`) | S162 |
+
+### Streaming start and stop: Windows (`cargo test` in `desktop/`)
+
+| Test | Clauses |
+|---|---|
+| one_capture_writes_one_equalized_ring_that_each_output_on_reads (`desktop/src/audio/controller.rs`) | S6 |
+| the_whole_system_excludes_audiosyncs_own_tree (`desktop/src/audio/capture.rs`) | S10 |
+| a_failed_start_leaves_nothing_running_and_every_feed_free (`desktop/src/audio/controller.rs`) | S114 |
+| a_start_that_fails_before_its_capture_never_tries_one_and_holds_no_feed (`desktop/src/audio/controller.rs`) | S114 |
+| each_start_captures_into_a_fresh_ring_through_an_equalizer_already_set (`desktop/src/audio/controller.rs`) | S114 |
+| a_second_stop_is_safe_and_no_capture_runs_once_a_stop_finished (`desktop/src/audio/controller.rs`) | S115 |
+
 ### local delay model: core (`cargo test` in `core/`)
 
 The checks for S172 to S179 in the Rust core, test functions with `// covers:` markers (`core/tests/policy_local_delay.rs`, the S176 table check in `core/tests/spec_tables.rs`, and the C interface's in `core/src/ffi/sync.rs`). Here and in the two tables below, every example uses the built-in speakers or the BuiltIn output as the reference R, a USB speaker at +150 ms, a Bluetooth speaker at −250 ms and, with AirPlay chosen, L = 2000 ms, as in S176, unless the name says otherwise; the first row of each table reproduces the reported bug.
@@ -1493,7 +1608,7 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | the_smallest_offset_taking_part_plays_at_once_and_no_hold_back_is_negative | S176 |
 | a_switched_off_reference_doesnt_take_part | S172, S176 |
 | a_lone_output_plays_at_once_whatever_its_offset | S176 |
-| an_airplay_speaker_chosen_adds_l_on_top | S176 |
+| an_airplay_speaker_chosen_adds_l_on_top | S8, S176 |
 | an_output_later_than_airplay_sets_the_base | S176 |
 | hold_backs_are_capped_at_20000_ms | S176 |
 | offsets_are_clamped_to_minus_2000_to_20000_and_non_finite_input_is_ignored | S175 |
@@ -1524,13 +1639,16 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | hold_backs_through_the_c_interface_match_the_rust_ones | S172, S176 |
 | offsets_and_airplay_settings_are_sanitized | S175, S178 |
 | the_mac_migration_through_the_c_interface_matches_the_rust_one | S179 |
+| a_configured_delay_is_0_to_20000_ms_and_defaults_to_2000 (`core/tests/policy_delay.rs`) | S179 |
 | a_lost_output_keeps_its_offset_and_lead_for_10_s | S176, S208, S328 |
 | a_lost_output_listed_again_within_10_s_moves_no_hold_back | S177, S328 |
 | a_lost_output_still_missing_after_10_s_retimes_once | S177, S328 |
 | switching_off_a_lost_output_retimes_at_once | S177, S328 |
+| a_late_speaker_switched_on_and_off_three_times_retimes_each_other_output_six_times (`core/tests/policy_local_delay.rs`) | S177 |
 | an_output_switched_off_before_its_device_left_isnt_held | S328 |
 | a_lost_reference_retimes_at_once | S328 |
 | a_session_restart_clears_the_hold | S328 |
+| only_a_chosen_and_listed_airplay_speaker_counts (`core/tests/policy_delay.rs`) | S79 |
 
 ### local delay model: Windows (`cargo test` in `desktop/`)
 
@@ -1541,6 +1659,7 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | headphones_on_the_pc_jack_are_not_the_reference | S174 |
 | no_built_in_output_means_no_reference | S174 |
 | hold_backs_follow_the_offsets_of_the_outputs_taking_part | S174, S176 |
+| the_bus_tells_bluetooth_usb_and_software_devices (`desktop/src/audio/outputs.rs`) | S174 |
 | an_airplay_speaker_chosen_adds_the_sender_latency_on_top | S176, S178 |
 | live_input_waits_for_an_airplay_speaker_like_any_source | S176, S177, S244 |
 | live_input_waits_for_a_cast_speaker_and_a_source_switch_re_times_nothing | S176, S177, S244 |
@@ -1566,6 +1685,7 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | a_bluetooth_output_still_unlisted_after_10_s_retimes_the_others_once (`desktop/src/audio/controller.rs`) | S328 |
 | a_lost_bluetooth_output_switched_off_retimes_the_others_at_once (`desktop/src/audio/controller.rs`) | S328 |
 | a_session_restart_counts_only_the_outputs_listed_then (`desktop/src/audio/controller.rs`) | S328 |
+| a_speaker_on_that_wasnt_listed_since_launch_doesnt_count_as_on (`desktop/src/adapter.rs`) | S162 |
 
 ### local delay model: Mac
 
@@ -1585,6 +1705,8 @@ The checks for S182 to S191 in the Rust core, test functions with `// covers:` m
 | fades_follow_the_raised_cosine_over_20_ms_at_the_streams_rate | S182 |
 | a_fade_reversed_midway_never_jumps | S182 |
 | a_fade_of_half_a_frame_more_rounds_up | S182 |
+| a_new_rate_keeps_the_level_of_a_fade_under_way (`core/src/fade.rs`) | S182 |
+| the_curves_meet_their_ends_exactly (`core/src/fade.rs`) | S182 |
 | the_fade_multiplies_after_the_gain_and_a_closed_output_is_exact_zeros_even_for_nan | S183 |
 | a_read_reports_its_leading_silence_and_its_copied_frames | S184 |
 | audio_after_a_masked_range_or_a_dry_read_fades_in | S184 |
@@ -1598,7 +1720,8 @@ The checks for S182 to S191 in the Rust core, test functions with `// covers:` m
 | a_held_correction_stays_within_t_plus_2n_plus_the_fade | S188 |
 | holding_corrections_leaves_prime_resync_and_dry_reads_as_they_were | S188 |
 | the_native_input_fades_in_after_each_rate_set_and_out_on_a_stop_request | S189 |
-| fading_allocates_and_locks_nothing_on_the_audio_thread | S190 |
+| an_input_fade_leaves_the_callers_block_alone (`core/src/fade.rs`) | S189 |
+| fading_allocates_and_locks_nothing_on_the_audio_thread | S126, S127, S190 |
 | no_step_across_a_start_a_stop_or_a_delay_change_exceeds_the_ramps_slope | S191 |
 
 ### large delays: core (`cargo test` in `core/`)
@@ -1665,8 +1788,10 @@ The checks for S206 and S207 (`core/tests/render_start.rs`). The capture writes 
 | the_session_lead_moves_the_other_outputs_only_when_it_changes | S208 |
 | a_bluetooth_output_adds_a_capture_block_to_its_own_start_lead_only | S208, S230 |
 | a_bluetooth_output_s_implausible_reported_latency_gives_way_and_leaves_the_session_lead_alone | S208, S231 |
+| a_c_renderer_windows_a_bluetooth_device_s_reported_latency (`core/src/ffi/render.rs`) | S231 |
 | the_session_lead_is_the_most_a_lead_exceeds_its_hold_back (`core/src/lead.rs`) | S208 |
 | a_renderer_past_the_last_slot_gets_none (`core/src/lead.rs`) | S208 |
+| a_calm_mix_holds_every_invariant (`core/tests/timing_matrix.rs`) | S208 |
 | a_reader_is_floored_at_its_lead (`core/src/reader.rs`) | S42, S44, S206 |
 | a_reader_tells_what_its_next_read_can_go_on_with (`core/src/reader.rs`) | S206, S207 |
 | a_slow_down_needs_that_many_fewer_frames_and_lands_exactly_that_much_later (`core/src/resample.rs`) | S206 |
@@ -1679,8 +1804,12 @@ The checks for S206 and S207 (`core/tests/render_start.rs`). The capture writes 
 | a_stamp_is_never_loaded_half_written (`core/src/ring.rs`) | S128, S207 |
 | the_clock_never_goes_back (`core/src/clock.rs`) | S207 |
 | following_the_capture_clock_allocates_nothing (`core/tests/realtime.rs`) | S126, S207 |
+| airplay_input_calls_never_touch_the_heap (`core/src/ffi.rs`) | S126 |
+| cast_input_calls_never_touch_the_heap (`core/src/ffi.rs`) | S126 |
 | the_largest_of_the_last_blocks_is_published (`core/src/ring.rs`) | S38, S206 |
 | parts_of_one_block_count_together (`core/src/ring.rs`) | S38, S206 |
+| oversized_write_keeps_the_last_capacity_frames (`core/src/ring.rs`) | S38 |
+| resampled_frame_counts_keep_pace_with_the_input (`core/src/ffi/render.rs`) | S85 |
 
 ### render start: Windows (`cargo test` in `desktop/`)
 
@@ -1702,9 +1831,13 @@ The checks for S196, S197 and S201 in the Rust core, test functions with `// cov
 | a_device_at_13_or_25_percent_is_low_and_one_at_26_percent_is_fine | S196 |
 | a_muted_device_is_muted_whatever_its_volume | S196 |
 | an_unknown_or_non_finite_volume_shows_nothing | S196 |
+| a_part_without_its_flag_is_unknown_whatever_its_value (`core/src/ffi/device_volume.rs`) | S196 |
+| the_percent_is_whole_and_clamped (`core/src/policy/device_volume.rs`) | S196 |
 | the_fix_raises_to_75_percent_only_at_25_or_less_and_never_lowers | S197 |
 | the_fix_unmutes_without_touching_a_fine_volume | S197 |
 | a_reading_logs_only_when_its_decision_changes | S201 |
+| a_log_line_only_when_the_decision_changes (`core/src/ffi/device_volume.rs`) | S201 |
+| every_decision_has_the_name_the_core_logs (`core/src/ffi/device_volume.rs`) | S201 |
 
 ### device volume: Windows (`cargo test` in `desktop/`)
 
@@ -1716,13 +1849,17 @@ The Windows checks for S192 to S202 (`desktop/src/audio/controller/device_volume
 | a_muted_output_shows_the_unmute_fix | S196, S198 |
 | the_fix_sets_75_percent_and_unmutes_once_each | S197 |
 | nothing_is_written_without_a_click | S192, S197 |
+| a_fix_that_windows_audio_doesnt_answer_shows_no_device_volume_until_a_later_try (`desktop/src/audio/controller/device_volume.rs`) | S197 |
+| the_fix_reads_the_device_again_and_never_lowers_a_volume_raised_meanwhile (`desktop/src/audio/controller/device_volume.rs`) | S197 |
 | an_endpoint_whose_volume_cannot_be_read_shows_nothing | S194, S196 |
 | a_mute_read_beside_a_failed_volume_read_fails_the_whole_read (`desktop/src/audio/wasapi/volume.rs`) | S194 |
+| reads_the_default_outputs_volume_and_mute (`desktop/src/audio/wasapi/volume.rs`) | S194 |
 | an_endpoint_volume_notification_updates_the_row | S195, S202 |
 | the_hint_and_the_fix_name_the_output_for_narrator | S199, S200 |
 | the_flyout_row_shows_the_glyph_and_the_hint_in_its_description | S198, S199 |
 | the_device_volume_percent_reads_n_percent_without_a_space_in_every_locale (`desktop/src/view.rs`) | S199 |
 | a_volume_change_logs_only_when_its_decision_changes | S201 |
+| the_fix_keeps_the_keyboard_focus_in_the_row (`desktop/src/contrast.rs`) | S198 |
 
 Outside these suites, `cargo test real_endpoint_volumes -- --ignored --nocapture` in `desktop/` reads the PC's own endpoint volumes and registers and unregisters a listener on each, changing nothing (S194, S195).
 
@@ -1731,6 +1868,16 @@ Outside these suites, `cargo test real_endpoint_volumes -- --ignored --nocapture
 The Mac's checks for S192 to S202 were written first and failed against the Mac code of that day (the first one reproduced the quiet MacBook speakers at 13 %); they pass now and are listed in the logic table as "device volume". They drive the host's Core Audio access through a fake that keeps a volume and a mute per element, records the listeners and every write, and notifies a listened control, so no real device is read or written; the decisions come from the core (`asc_device_volume_decide`, S196, S197, S201).
 
 By hand on the Mac, outside these suites: set the built-in speakers to 13 % in Audio MIDI Setup, switch them on in AudioSync and see the hint; click Set to 75% and hear the level rise, with the hint gone and the system volume at 75 %; check the hint and the button in light and dark appearance and with VoiceOver (S193, S198, S200).
+
+### Panics at the C interface: core (`cargo test` in `core/`)
+
+| Test | Clauses |
+|---|---|
+| a_failure_after_a_caught_panic_says_where_it_happened_and_never_what_it_said (`core/src/ffi/airplay.rs`) | S205 |
+| a_failure_after_a_panic_in_an_input_write_says_where_it_happened (`core/src/ffi/airplay.rs`) | S205 |
+| a_failure_after_the_driver_panicked_says_where_the_latest_panic_happened (`core/src/ffi/airplay.rs`) | S205 |
+| a_panic_inside_a_call_stays_at_the_boundary_and_kills_the_handle (`core/src/ffi/cast.rs`) | S205 |
+| the_probe_panics_inside_the_guard_and_the_sender_fails_saying_where (`core/src/panic_probe.rs`) | S205 |
 
 ### source quit: core (`cargo test` in `core/`)
 
@@ -1742,6 +1889,7 @@ The checks for S227 in the Rust core, test functions with `// covers:` markers (
 | stop_does_what_a_source_app_quit_did_before_the_setting | S142, S164, S227 |
 | switch_moves_a_running_session_to_whole_system_audio | S227 |
 | a_quit_while_no_session_runs_changes_nothing | S142, S227 |
+| the_source_app_quitting_stops_keeps_the_speakers_chosen_and_notices_without_an_alert (`core/tests/policy_session.rs`) | S142 |
 | a_whole_system_or_input_source_never_stops_or_switches_on_a_quit | S164, S227 |
 | another_app_or_one_without_an_id_quitting_changes_nothing | S164, S227 |
 | the_app_starting_again_after_a_switch_keeps_whole_system_audio | S227 |
@@ -1749,6 +1897,7 @@ The checks for S227 in the Rust core, test functions with `// covers:` markers (
 | a_quit_during_a_rebuild_stops_it_or_rebuilds_with_whole_system_audio | S227 |
 | the_same_quit_reported_twice_acts_once | S227 |
 | picking_a_source_forgets_the_switch | S227 |
+| bad_arguments_never_switch (`core/src/ffi/source_quit.rs`) | S227 |
 
 ### calibration: core (`cargo test` in `core/`)
 
@@ -1773,7 +1922,51 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | the_signal_and_the_estimate_cross_the_boundary | S232, S233 |
 | a_recording_is_measured_across_the_boundary | S234 |
 
-### Calibrate All Speakers: core (`cargo test` in `core/`)
+### AirPlay speakers, passwords, PINs and the pairing file: core and Windows (`cargo test` in `core/` and `desktop/`)
+
+| Test | Clauses |
+|---|---|
+| a_speaker_saved_on_that_now_asks_for_a_password_goes_off_with_a_notice_at_a_launch (`desktop/src/adapter.rs`) | S222 |
+| an_unannounced_airplay_speaker_stays_on_without_a_notice_until_it_plays (`desktop/src/adapter.rs`) | S222 |
+| a_receiver_asking_every_time_with_credentials_no_answer_turned_down_reads_as_paired (`core/src/ffi/airplay.rs`) | S223 |
+| an_every_time_speaker_turned_on_by_hand_goes_off_with_a_notice_when_streaming_stops (`desktop/src/adapter.rs`) | S223 |
+| an_every_time_speaker_whose_pin_prompt_outlives_the_stream_turns_on_once_paired (`desktop/src/adapter.rs`) | S223 |
+| an_every_time_pairing_that_fails_after_the_stream_ended_says_it_needs_a_pin (`desktop/src/adapter.rs`) | S223 |
+| closing_the_pin_prompt_after_the_stream_ended_drops_the_by_hand_mark (`desktop/src/adapter.rs`) | S223 |
+| an_every_time_pairing_whose_password_prompt_outlived_the_stream_says_it_needs_a_pin (`desktop/src/adapter.rs`) | S223 |
+| an_every_time_pairing_that_asks_for_a_password_after_the_stream_ended_says_it_needs_a_pin (`desktop/src/adapter.rs`) | S223 |
+| an_every_time_pairing_whose_password_starts_a_new_stream_says_pairing_failed (`desktop/src/adapter.rs`) | S223 |
+| an_every_time_pairing_that_fails_once_a_new_stream_runs_says_pairing_failed (`desktop/src/adapter.rs`) | S223 |
+| an_every_time_speaker_whose_password_prompt_waits_in_line_turns_on_once_paired (`desktop/src/adapter.rs`) | S223 |
+| an_every_time_speaker_turned_on_by_hand_goes_off_with_a_notice_when_the_sender_fails (`desktop/src/adapter.rs`) | S223 |
+| a_speaker_asking_every_time_with_stored_credentials_auto_connects_and_joins_with_them (`desktop/src/adapter.rs`) | S223 |
+| a_rejected_verify_turns_an_auto_connected_every_time_speaker_off_with_a_pin_notice (`desktop/src/adapter.rs`) | S223 |
+| after_a_rejected_verify_an_every_time_speaker_stays_off_without_a_second_verify (`desktop/src/adapter.rs`) | S223 |
+| a_verify_that_ends_without_a_rejection_marks_nothing_and_names_no_pin (`desktop/src/adapter.rs`) | S223 |
+| credentials_turned_down_earlier_this_run_keep_an_every_time_speaker_from_auto_connecting (`desktop/src/adapter.rs`) | S223 |
+| an_every_time_speaker_with_stored_credentials_turned_on_by_hand_verifies_before_the_pin (`desktop/src/adapter.rs`) | S223 |
+| an_every_time_pairing_failing_after_a_stop_and_start_before_a_poll_says_pairing_failed (`desktop/src/audio/airplay.rs`) | S223 |
+| a_file_others_may_write_is_made_owner_only_and_still_used (`core/src/airplay2_identity.rs`) | S224 |
+| a_file_that_isnt_read_is_reported_unread_and_left_alone (`core/src/airplay2_identity.rs`) | S224 |
+| the_owner_and_mode_decide_how_a_file_is_used (`core/src/airplay_pairings.rs`) | S224 |
+| the_host_is_told_how_private_the_files_were_found (`core/src/ffi/airplay.rs`) | S224 |
+| forget_deletes_a_kept_aside_copy_that_holds_a_receiver_the_store_no_longer_pairs (`core/src/ffi/airplay.rs`) | S224 |
+| a_file_others_may_read_is_made_owner_only_and_still_used (`core/tests/airplay_pairings.rs`) | S224 |
+| an_ignored_file_others_may_read_still_reports_it_was_tightened (`core/tests/airplay_pairings.rs`) | S224 |
+| a_symbolic_link_in_the_files_place_is_not_followed (`core/tests/airplay_pairings.rs`) | S224 |
+| a_file_another_account_owns_is_reported_unread (`core/tests/airplay_pairings.rs`) | S224 |
+
+### The observer: core and Windows (`cargo test` in `core/` and `desktop/`)
+
+| Test | Clauses |
+|---|---|
+| a_steady_output_keeps_a_positive_slack_and_counts_nothing (`core/tests/observer.rs`) | S229 |
+| nothing_is_measured_before_the_output_has_played_its_warm_up (`core/tests/observer.rs`) | S229 |
+| a_jump_in_the_output_times_counts_once_and_jitter_below_a_millisecond_never (`core/tests/observer.rs`) | S229 |
+| a_10_ms_zero_hole_inside_a_tone_is_one_hole (`desktop/src/audio/capture.rs`) | S229 |
+| a_mix_marks_frames_whose_every_lane_gave_flagged_or_filled_silence (`desktop/src/audio/mix.rs`) | S229 |
+
+### Calibrate All Speakers: core and Windows (`cargo test` in `core/` and `desktop/`)
 
 The checks for S235 to S241 in the Rust core (`core/tests/calibrate_all.rs`, synthetic recordings of the core's own signal at known arrivals; `core/src/ffi/calibrate_all.rs` for the C interface).
 
@@ -1804,13 +1997,40 @@ The checks for S235 to S241 in the Rust core (`core/tests/calibrate_all.rs`, syn
 | cancel_or_a_change_mid_run_applies_nothing | S240 |
 | a_cast_speakers_wait_is_its_offset_and_hold_back_or_a_guess_by_format | S241 |
 | a_run_its_sheet_apply_and_measure_again_cross_the_boundary | S235, S236, S237, S238, S239 |
+| measure_again_on_an_airplay_row_works_the_shared_delay_out_again (`core/tests/calibrate_all.rs`) | S239 |
 | a_refused_reference_and_bad_arguments | S236 |
+| each_class_is_clamped_to_its_own_range_and_says_so (`core/tests/calibrate_all.rs`) | S236 |
+| the_implausible_limit_is_22000_ms_on_either_sweep (`core/tests/calibrate_all.rs`) | S236 |
 | a_zone_run_measures_the_reference_and_present_members_that_are_on | S255, S235 |
+| a_latency_that_is_negative_or_infinite_keeps_the_shortest_window (`core/tests/calibrate_all.rs`) | S235 |
+| an_empty_speaker_list_has_no_reference (`core/tests/calibrate_all.rs`) | S235 |
 | a_zone_run_leaves_hidden_absent_and_target_members_out | S255, S246 |
 | a_zone_run_silences_speakers_outside_the_zone | S255 |
 | the_airplay_line_names_the_other_zones_it_moves | S255, S237 |
+| an_even_count_takes_the_mean_of_the_middle_two_and_a_spread_at_the_limit_is_certain (`core/tests/calibrate_all.rs`) | S237 |
 | a_zone_run_ended_by_a_change_keeps_its_off_rows_and_applies_nothing | S240, S255 |
+| a_cancel_after_the_last_step_changes_nothing (`core/tests/calibrate_all.rs`) | S240 |
+| every_end_code_crosses_the_boundary_and_an_ended_sheet_is_refused (`core/src/ffi/calibrate_all.rs`) | S240 |
 | a_zone_run_lists_an_off_member_that_measure_again_measures_once_on | S255 |
+| the_zone_plan_crosses_the_boundary_as_the_core_makes_it (`core/src/ffi/calibrate_all.rs`) | S255 |
+| a_zone_run_needs_a_member_that_is_on_and_present (`desktop/src/audio/calibrate_all.rs`) | S246, S255 |
+| a_zone_run_sweeps_its_members_in_zone_order_and_keeps_the_rest_silenced (`desktop/src/audio/calibrate_all.rs`) | S255 |
+| calibrate_zone_reads_the_zone_now_and_says_why_it_cant_start (`desktop/src/adapter.rs`) | S255 |
+| a_zone_click_ends_the_run_and_applies_nothing (`desktop/src/adapter.rs`) | S240, S255 |
+| deleting_the_measured_zone_ends_the_run (`desktop/src/adapter.rs`) | S240, S255 |
+| the_cards_button_after_a_zone_run_runs_that_zone_again (`desktop/src/adapter.rs`) | S255 |
+| calibrate_zone_is_offered_while_a_member_is_here_and_no_calibration_holds_the_outputs (`desktop/src/ui_model.rs`) | S255 |
+| calibrate_zone_is_offered_for_a_zone_with_a_member_here (`desktop/src/view.rs`) | S255 |
+| the_calibrate_all_card_of_a_zone_run_names_the_zone (`desktop/src/view.rs`) | S255 |
+| a_zone_run_is_ticked_once_it_starts (`desktop/src/view.rs`) | S255 |
+
+### Every app except some: Windows (`cargo test` in `desktop/`)
+
+| Test | Clauses |
+|---|---|
+| the_double_audio_notice_leaves_the_all_except_wording_to_the_ui (`desktop/src/adapter.rs`) | S242 |
+| every_app_but_some_is_moved_and_kept_unmuted_like_one_app (`desktop/src/guide.rs`) | S242 |
+| double_audio_from_all_apps_except_some_names_the_source_in_the_uis_words (`desktop/src/view.rs`) | S242 |
 
 ### Speaker keys: core and Windows (`cargo test` in `core/` and `desktop/`)
 
@@ -1832,6 +2052,9 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | Test | Clauses |
 |---|---|
 | zone_names_follow_the_group_name_rules | S150, S245 |
+| a_new_group_without_a_name_counts_up_past_names_in_use (`core/tests/policy_speakers.rs`) | S150 |
+| a_rename_is_trimmed_and_a_blank_one_keeps_the_name (`core/tests/policy_speakers.rs`) | S150 |
+| group_names_are_trimmed_and_blank_is_no_name (`core/tests/policy_speakers.rs`) | S150 |
 | a_zone_name_is_cut_to_sixty_characters_like_a_speakers | S150, S228 |
 | a_speaker_moved_to_another_zone_leaves_its_first | S245 |
 | deleting_a_zone_leaves_its_members_in_no_zone | S245 |
@@ -1849,17 +2072,27 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | the_migration_keeps_each_key_in_its_first_group | S248 |
 | a_zone_click_turns_on_its_present_members_and_one_cast_speaker | S246 |
 | a_zone_click_leaves_a_cast_speaker_outside_the_zone_on | S246 |
+| a_cast_member_kept_off_by_an_unlisted_cast_speaker_keeps_its_note (`desktop/src/adapter.rs`) | S246 |
+| a_cast_member_off_beside_a_local_speaker_has_no_note (`desktop/src/view.rs`) | S246 |
+| a_zone_members_own_row_keeps_one_cast_speaker_at_a_time (`desktop/src/adapter.rs`) | S246 |
+| a_zone_stereo_pair_the_sender_cant_list_says_it_needs_airplay2 (`desktop/src/adapter.rs`) | S246 |
 | the_groups_become_zones_once_and_are_saved_with_the_mark | S248 |
 | without_zones_every_gain_and_level_is_bit_identical | S71, S249, S250 |
 | the_local_gain_is_own_times_zone_times_master | S71, S249 |
+| a_local_output_plays_at_its_gain_times_the_master_gain (`core/tests/volume.rs`) | S71 |
+| an_outputs_gain_is_its_own_times_the_masters (`core/src/ffi.rs`) | S71 |
 | the_airplay_level_is_own_times_zone_times_master | S249 |
+| bad_zone_volumes_change_nothing (`core/src/ffi/airplay.rs`) | S249 |
 | the_cast_level_is_master_times_zone_times_own | S249, C104 |
 | a_read_back_at_zone_50_restores_the_own_volume | S250 |
-| a_read_back_with_zone_0_leaves_the_own_volume | S250 |
+| a_read_back_with_zone_0_leaves_the_own_volume | S250, S290 |
 | a_device_volume_near_the_sent_level_is_ignored_for_3_s_only (core) | S276, S271 |
 | a_read_back_near_the_level_sent_or_at_master_0_keeps_the_own_volume (Windows) | S250, S290, S291 |
 | a_read_back_while_the_slider_is_dragged_is_ignored | S271 |
-| a_read_back_one_remote_step_away_moves_only_that_speakers_volume | S250, S271 |
+| a_slider_that_keeps_moving_past_the_idle_time_keeps_holding_the_row (`desktop/src/audio/airplay.rs`) | S271 |
+| a_read_back_one_remote_step_away_moves_only_that_speakers_volume (core) | S250, S271 |
+| a_read_back_one_remote_step_away_moves_only_that_speakers_volume (Windows) | S250, S290, S291 |
+| a_read_back_through_the_zone_divides_by_zone_times_master (`core/tests/volume.rs`) | S250 |
 | a_speaker_whose_reads_stopped_is_not_asked_again | S271 |
 | a_new_session_asks_a_speaker_whose_reads_stopped_again | S271 |
 | a_reading_maps_linearly_onto_0_to_100 (core) | S289 |
@@ -1868,7 +2101,7 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | the_master_and_the_zone_are_no_ceiling_for_a_row_move (core) | S290 |
 | with_k_at_0_a_row_move_sends_nothing (core) | S290 |
 | a_master_move_keeps_the_own_volume_and_caps_the_level_at_100 (core) | S290 |
-| the_shared_s290_vectors_hold_through_the_c_interface (core) | S290 |
+| the_shared_s290_vectors_hold_through_the_c_interface (core) | S275, S276, S290 |
 | a_master_or_zone_move_and_back_gives_the_level_read_before (Windows) | S290 |
 | a_device_volume_reports_the_level_it_was_sent | S276, S290 |
 | a_device_volume_at_k_0_reports_its_level_and_keeps_the_own_volume (core) | S276, S290 |
@@ -1889,6 +2122,7 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | a_zone_volume_change_reaches_the_playing_members_as_a_master_change_does | S72, S249 |
 | a_v2_settings_file_is_read_as_v3_with_its_groups_as_zones | S245, S248 |
 | zones_keep_cast_keys_and_empty_zones_and_each_speaker_once | S245 |
+| every_zone_member_but_the_hidden_ones_has_a_row_that_its_count_counts (`desktop/src/view.rs`) | S245 |
 | an_absent_members_last_listed_name_survives_a_reload | S286 |
 | a_members_name_follows_it_and_leaves_with_it | S286 |
 | an_absent_zone_member_keeps_its_last_name_after_a_relaunch | S286 |
@@ -1903,6 +2137,8 @@ The checks for S273 to S279 run against the core's decision with a fake now-play
 | a_remote_play_while_the_app_plays_sends_nothing | S274 |
 | a_remote_pause_without_a_reading_goes_as_play_pause | S274 |
 | a_remote_command_with_no_app_to_control_does_nothing | S274, S279 |
+| a_remote_pause_after_the_reading_stopped_goes_as_play_pause (`core/src/ffi/airplay.rs`) | S274 |
+| a_remote_transport_reaches_the_host_as_a_remote_event (`core/src/ffi/airplay.rs`) | S274 |
 | a_remote_volume_up_moves_only_that_speakers_row_by_5 (core) | S275, S250, S290 |
 | a_remote_volume_step_is_sent_and_starts_the_3_s_window | S275, S271 |
 | remote_volume_steps_clamp_at_0_and_100 | S275 |
@@ -1912,11 +2148,14 @@ The checks for S273 to S279 run against the core's decision with a fake now-play
 | a_muted_device_volume_sets_the_own_volume_to_0 | S276 |
 | mute_toggle_twice_restores_the_position_before | S277 |
 | mute_toggle_after_a_volume_change_does_not_restore | S277 |
+| a_users_volume_change_forgets_the_muted_position (`core/src/ffi/airplay.rs`) | S277 |
 | a_members_command_moves_the_targets_row | S278 |
 | one_press_passed_on_by_two_members_counts_once | S278 |
 | two_presses_300_ms_apart_both_count | S278 |
 | a_command_for_a_speaker_that_stopped_does_nothing | S273 |
 | every_remote_command_gives_one_log_line | S279 |
+| a_remote_transport_goes_to_the_now_playing_control (`desktop/src/audio/airplay.rs`) | S274 |
+| a_remote_control_goes_to_the_session_track_info_follows (`desktop/src/audio/now_playing.rs`) | S274 |
 
 ### Speaker presets: core and Windows (`cargo test` in `core/` and `desktop/`)
 
@@ -1943,8 +2182,33 @@ The checks for S251 to S254 in the Rust core (`core/tests/policy_presets.rs`, `c
 | the_current_check_crosses_the_boundary_as_the_core_makes_it | S253 |
 | a_preset_never_stores_the_preamp | S251 |
 | a_v3_settings_file_round_trips_presets | S251, S254 |
+| a_preset_with_an_unreadable_volume_or_gain_keeps_the_rest (`desktop/src/settings.rs`) | S251 |
+| save_as_preset_is_off_at_the_most_presets_the_app_keeps (`desktop/src/view.rs`) | S251 |
+| save_as_preset_stops_at_the_most_presets_a_settings_file_keeps (`desktop/src/adapter.rs`) | S251 |
 | recall_leaves_delays_offsets_and_zone_members_untouched | S252 |
 | a_recalled_preset_is_current | S252, S253 |
+| a_recalled_zone_volume_reaches_the_playing_members (`desktop/src/adapter.rs`) | S252 |
+
+### Speaker presets in the Windows app: Windows (`cargo test` in `desktop/`)
+
+| Test | Clauses |
+|---|---|
+| ctrl_and_a_digit_recalls_from_the_guide_and_the_flyout_too (`desktop/src/view.rs`) | S261 |
+| save_as_preset_with_no_speaker_on_says_what_to_do_first (`desktop/src/view.rs`) | S262 |
+| the_preset_notice_follows_its_preset_and_goes_once_it_plays_in_full (`desktop/src/adapter.rs`) | S265 |
+| a_member_another_app_casts_to_stays_off_as_in_use (`desktop/src/adapter.rs`) | S265 |
+| a_member_its_stereo_pair_holds_stays_off_and_names_the_pair (`desktop/src/adapter.rs`) | S265 |
+| a_stereo_pair_needs_airplay2_until_the_switch_saved_on_is_relaunched (`desktop/src/adapter.rs`) | S265 |
+| a_zone_stereo_pair_needs_airplay2_until_the_switch_saved_on_is_relaunched (`desktop/src/adapter.rs`) | S265 |
+| with_the_airplay2_variable_set_a_stereo_pair_does_not_need_airplay2 (`desktop/src/adapter.rs`) | S265 |
+| a_recall_that_leaves_a_hidden_speaker_off_says_so_in_one_notice (`desktop/src/view.rs`) | S265 |
+| a_recall_with_no_speaker_left_changes_nothing_and_says_so (`desktop/src/view.rs`) | S265 |
+| a_member_that_was_on_before_a_recall_keeps_its_own_failure_notice (`desktop/src/adapter.rs`) | S266 |
+| a_recall_leaves_the_keyboard_focus_on_the_row_or_the_notice_that_had_it (`desktop/src/view.rs`) | S266 |
+| after_a_delete_the_focus_goes_to_the_next_row_then_to_save_as_preset (`desktop/src/view.rs`) | S267 |
+| the_menu_key_and_shift_f10_open_a_preset_rows_menu (`desktop/src/view.rs`) | S267 |
+| the_preset_controls_use_tokens_and_reach_the_keyboard (`desktop/src/contrast.rs`) | S268 |
+| the_preset_texts_come_from_strings (`desktop/src/view.rs`) | S269 |
 
 ### Web remote zones, presets and calibrating: remote crate, Windows and Mac (`cargo test` in `remote/` and `desktop/`, the logic suite)
 
@@ -1961,6 +2225,7 @@ The checks for S256 to S258, S287 and S288 in the remote crate (`remote/src/stat
 | a_zone_with_no_member_that_can_play_answers_409 | S257 |
 | bad_bodies_answer_400_and_out_of_range_422 | S257 |
 | a_body_over_4_kib_answers_413 | S257 |
+| path_segments_decode_or_refuse (`remote/src/never_panics.rs`) | S257 |
 | every_write_answers_409_while_calibrating | S256, S258 |
 | pairing_and_unpair_stay_open_while_calibrating | S258 |
 | the_calibrating_line_and_disabled_controls_keep_4_5_to_1_in_both_themes | S258 |
@@ -2009,11 +2274,16 @@ The hosts (Windows in `desktop/`, test names as below; the Mac in the logic suit
 | a_receiver_reporting_nothing_starts_at_zero_without_a_warning | S283, S282 |
 | the_estimate_waits_while_an_airplay_speaker_sounds (a joiner at 300 ms with E = 220 plays 80 ms late until the stream is empty) | S283 |
 | calibrate_all_measures_relative_to_the_reported_latency (the AirPlay delay moves only by the measured excess over L_s + E + d_s) | S283, S237 |
+| a_speaker_above_a_held_estimate_keeps_its_own_delay (`desktop/src/audio/airplay.rs`) | S283 |
 | calibrate_all_window_grows_with_the_reported_latency (core, `airplay_wait_ms` with R_s 220: 220 ms longer) | S235 |
 | several_airplay2_receivers_share_lf_and_e_and_a_target_uses_its_largest_member (members at 220 and 50 ms: the target's e_s is 220 and both members get the same d′_s) | S284 |
 | an_airplay2_receiver_leaving_while_others_sound_changes_no_delay (E and every d′_s held until the stream is empty; the sender holds Lf) | S284 |
+| a_target_member_leaving_while_others_sound_changes_no_delay (`desktop/src/audio/airplay.rs`) | S284 |
+| several_airplay_2_receivers_share_lf_and_e_and_a_target_uses_its_largest_member (`desktop/src/audio/airplay.rs`) | S284 |
 | every_airplay2_speaker_switched_on_goes_to_the_sender_and_only_one_it_refuses_waits_switched_on_and_on_its_own_row | S285 |
 | one_airplay2_speaker_failing_leaves_the_others_playing (a password prompt, a PIN pairing and an unreachable speaker; the Windows test adds a wrong password) | S285 |
+| every_airplay_2_speaker_switched_on_plays_and_only_a_17th_or_one_needing_ptp_on_another_network_waits (`desktop/src/adapter.rs`) | S285 |
+| one_airplay_2_speaker_failing_leaves_the_others_playing (`desktop/src/adapter.rs`) | S285 |
 
 The Mac logic suite has these four as "airplay latency: …" checks. The sender reports both wait reasons of S285 (AirPlay spec P204 and P205), and both hosts check them: a 17th speaker waits as too many AirPlay 2 speakers, and a receiver on another PTP network waits with that reason.
 
@@ -2096,6 +2366,8 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 |---|---|
 | values_out_of_range_are_clamped (`desktop/src/settings.rs`) | S212 |
 | a_master_or_speaker_value_that_isnt_a_number_is_dropped_and_the_rest_reads (`desktop/src/settings.rs`) | S212 |
+| a_file_that_isnt_json_or_has_no_readable_version_is_still_refused (`desktop/src/settings.rs`) | S212 |
+| an_unreadable_value_in_any_field_costs_only_that_value (`desktop/src/settings.rs`) | S212 |
 | the_log_is_on_only_when_audiosync_debug_is_exactly_1 (`desktop/src/debug_log.rs`) | S170 |
 | a_log_that_is_off_creates_no_file_and_builds_no_message (`desktop/src/debug_log.rs`) | S170 |
 | each_launch_empties_the_last_log (`desktop/src/debug_log.rs`) | S170 |
@@ -2106,6 +2378,10 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | another_image_for_the_same_track_goes_out_once | S219 |
 | a_restarted_sender_gets_the_track_and_its_artwork_again | S219 |
 | a_busy_cover_takes_a_lower_quality_before_a_smaller_side | S217, S272 |
+| a_larger_picture_gets_a_large_and_a_small_image (`desktop/src/audio/now_playing.rs`) | S272 |
+| an_image_within_the_small_limits_is_one_encoding_for_both (`desktop/src/audio/now_playing.rs`) | S272 |
+| the_large_image_is_at_most_1024_px_a_side_and_128_kib (`desktop/src/audio/now_playing.rs`) | S272 |
+| the_small_image_is_at_most_600_px_a_side_and_40_kib (`desktop/src/audio/now_playing.rs`) | S272 |
 | artwork_that_never_fits_or_fails_to_encode_is_none | S217 |
 | a_tighter_byte_limit_gives_a_smaller_image_of_the_same_shape | S217 |
 | a_small_image_is_never_scaled_up | S217 |
@@ -2119,6 +2395,7 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | escape_drops_the_typed_airplay_delay (`desktop/src/view.rs`) | S220 |
 | escape_in_the_airplay_delay_field_leaves_the_applied_delay (`desktop/src/view.rs`) | S220 |
 | an_airplay_delay_over_its_range_applies_clamped_once (`desktop/src/view.rs`) | S220 |
+| now_playing_carries_two_images_and_an_airplay1_speaker_gets_the_small_one (`core/src/ffi/airplay.rs`) | S272 |
 
 ### Windows updater: Windows (`cargo test` in `desktop/`)
 
@@ -2147,7 +2424,7 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 | offline_at_launch_is_quiet_and_a_manual_check_says_so (and Try Again checks again) | S302, S305 |
 | relaunch_waits_for_the_old_process_before_claiming_the_instance | S303 |
 | an_old_process_that_outlives_the_wait_gets_the_claim_retried_and_logged | S303 |
-| a_check_after_a_swap_without_a_restart_shows_restart_now_and_touches_no_file (manual and launch check) | S301, S303, S305 |
+| a_check_after_a_swap_without_a_restart_shows_restart_now_and_touches_no_file (manual and launch check) | S297, S303, S305, S306 |
 | a_leftover_new_is_deleted_before_the_exclusive_create | S301, S302 |
 | a_failed_relaunch_restores_the_bak (the exe and the notices pair) | S303 |
 | a_failed_restore_lists_every_bak_with_its_name_the_exe_first | S302 |
@@ -2172,6 +2449,7 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 | a_manual_check_with_nothing_newer_says_the_running_version_is_the_latest | S296, S305 |
 | a_failed_install_reports_and_try_again_retries | S302, S306 |
 | update_checks_are_on_by_default_and_keep_their_time (and a record of a blocked version, kept and read back) | S305, S316 |
+| a_manual_check_says_it_is_checking_until_the_answer_replaces_it (`desktop/src/updater/mod.rs`) | S305 |
 | a_new_exe_that_exits_or_never_signals_is_ended_and_the_bak_restored (a stand-in exe that exits at once, and one that sleeps past a shortened wait; the old process keeps streaming throughout) | S303, S314, S316 |
 | the_new_instance_signals_before_it_reads_the_settings_or_claims_the_instance (a stand-in new exe records the order of its steps: the signal comes first, the lock and the settings read come only after the old process ended, and with an old process that never ends, only after the 10 s wait) | S303, S314 |
 | the_start_signal_reaches_the_old_process_and_a_silent_child_is_ended (a ping.exe stand-in: signalled from another thread, `cmd.exe /c exit 3`, and one that outlives a 300 ms wait and is ended) | S314 |
@@ -2200,6 +2478,16 @@ The release side:
 |---|---|
 | `scripts/check_appcast.py --self-test` (fixture appcasts and zips built in a temp folder: one Mac item and one item per Windows arch with one enclosure each carrying a well-formed `sparkle:edSignature`, the same short version and build number, URLs and lengths matching the zips, each Windows zip holding only `audiosync.exe` and `THIRD-PARTY-NOTICES.txt`; each break fails with its own line; the Windows items its writer adds pass; a Windows zip under another name is reported as a stray; `--assets` fails on an attached zip without an item and on an item whose zip is not attached). `Tests/signappcasttest.sh` (off a Mac, before any signing: `scripts/sign_appcast.sh` refuses a release missing either Windows zip and names it, and refuses `--mac-only` when Windows zips are there). `scripts/sign_appcast.sh` adds the Windows items through it and runs the same check on each release appcast, on the release Mac | S311 |
 
+### AirPlay 2 path: core and Windows (`cargo test` in `core/` and `desktop/`)
+
+| Test | Clauses |
+|---|---|
+| with_the_flag_on_the_path_is_on_and_the_switch_prefers_airplay2 (`core/src/ffi/airplay.rs`) | S312 |
+| with_the_flag_on_only_the_switch_lists_a_dual_receiver_on_airplay2 (`core/src/ffi/airplay.rs`) | S312 |
+| a_dual_receiver_is_listed_on_the_path_its_session_takes (`core/src/ffi/airplay.rs`) | S313 |
+| a_dual_receiver_reads_the_path_its_session_takes (`desktop/src/adapter.rs`) | S313 |
+| a_stopped_or_new_sender_forgets_the_path_a_session_took (`desktop/src/audio/airplay.rs`) | S313 |
+
 ### Start steps and late Windows wakes: core (`cargo test` in `core/`)
 
 | Test | Clauses |
@@ -2213,7 +2501,17 @@ The release side:
 | a_speaker_clock_3_ppm_fast_loses_11_ms_of_lag_in_an_hour_without_a_correction (`core/tests/drift_hour.rs`) | S50, S57, S322 |
 | only_a_late_start_makes_a_start_step (`core/tests/timing_matrix.rs`) | S318, S320, S321 |
 | a_480_frame_output_that_starts_45_ms_late_plays_on_its_twins_delay_from_3_s (`core/tests/timing_matrix.rs`) | S317, S318, S320 |
+| a_stop_while_the_start_step_waits_for_its_fade_makes_no_step (`core/src/render.rs`) | S318 |
 | late_first_cases_on_draws_of_their_own_hold_every_invariant (`core/tests/timing_matrix.rs`) | S207, S209, S320 |
+| a_resync_after_two_stray_early_stamps_lands_where_it_would_without_them (`core/src/render.rs`) | S209 |
+| a_resync_on_a_third_stray_early_stamp_lands_where_it_would_without_them (`core/src/render.rs`) | S209 |
+| callbacks_that_drift_late_slowly_are_lateness_not_drift (`core/tests/render_wander.rs`) | S209 |
+| late_bluetooth_callbacks_never_run_an_output_dry_or_correct_drift_once_settled (`core/tests/render_jitter.rs`) | S209 |
+| one_stray_early_callback_never_moves_an_output (`core/tests/render_jitter.rs`) | S209 |
+| outputs_on_time_play_the_same_with_output_times_as_without (`core/tests/render_jitter.rs`) | S209 |
+| the_anchor_floor_falls_toward_earlier_callbacks_and_never_rises (`core/src/render.rs`) | S209 |
+| two_early_callbacks_in_a_row_move_an_output_at_most_the_cap_until_the_floor_leaks_back (`core/tests/render_jitter.rs`) | S209 |
+| two_stray_early_stamps_move_no_output_by_more_than_2_ms (`core/tests/timing_matrix.rs`) | S209 |
 | a_windows_wake_that_comes_after_the_buffer_ran_dry_moves_no_output_and_corrects_no_drift (`core/tests/timing_matrix.rs`) | S207, S324 |
 | a_windows_endpoint_whose_wakes_jitter_by_up_to_3_ms_makes_no_start_step (`core/tests/render_start.rs`) | S324 |
 
@@ -2250,18 +2548,29 @@ The release side:
 | a_refusal_or_an_app_check_never_counts_the_time_asleep (`desktop/src/audio/controller.rs`) | S327, S331, S332 |
 | a_sleep_cancels_a_fresh_link_restart_and_the_output_plays_on (`desktop/src/audio/controller.rs`) | S325, S332 |
 | a_bluetooth_links_3_s_start_over_at_the_resume (`desktop/src/audio/controller.rs`) | S325, S332 |
+| a_bluetooth_output_that_starts_within_3_s_of_being_listed_restarts_once_2_s_later (`desktop/src/audio/controller.rs`) | S325 |
+| a_bluetooth_output_listed_at_launch_or_after_4_s_starts_as_is (`desktop/src/audio/controller.rs`) | S325 |
+| a_wired_output_that_just_appeared_starts_as_is (`desktop/src/audio/controller.rs`) | S325 |
+| a_fresh_link_restart_never_moves_another_outputs_hold_back (`desktop/src/audio/controller.rs`) | S177, S325 |
+| switching_it_off_or_ending_the_session_cancels_the_restart (`desktop/src/audio/controller.rs`) | S325 |
 | a_wake_hours_after_the_last_read_starts_the_stall_span_over (`desktop/src/audio/wasapi/endpoint.rs`) | S326, S332 |
 | an_idle_wake_two_hours_on_writes_21_s_and_keeps_pace_from_now (`desktop/src/audio/capture.rs`) | S332 |
+| a_jump_or_a_discontinuity_gets_silence_for_the_time_between (`desktop/src/audio/capture.rs`) | S332 |
 | a_format_notice_for_a_playing_output_reopens_it_in_the_new_format_in_the_same_poll (`desktop/src/audio/controller.rs`) | S330 |
 | a_format_notice_that_changes_nothing_leaves_the_output_playing (`desktop/src/audio/controller.rs`) | S330 |
 | a_format_reopen_never_moves_another_outputs_hold_back (`desktop/src/audio/controller.rs`) | S177, S330 |
 | a_session_disconnected_with_its_device_unplugged_is_lost (`desktop/src/audio/controller.rs`) | S68, S330 |
 | an_input_held_exclusively_is_busy_at_initialize_and_at_start (`desktop/src/audio/wasapi/loopback.rs`) | S333 |
 | an_input_blocked_by_privacy_settings_stays_microphone_blocked (`desktop/src/audio/wasapi/loopback.rs`) | S141, S333 |
+| a_source_switch_under_a_sounding_airplay_speaker_sends_the_sender_nothing (`desktop/src/audio/controller.rs`) | S141 |
+| a_source_that_cant_start_gives_way_to_the_old_one_under_the_same_airplay_speaker (`desktop/src/adapter.rs`) | S141 |
+| a_source_that_fails_once_the_old_outputs_faded_gives_way_under_the_same_cast_speaker (`desktop/src/adapter.rs`) | S141 |
+| an_input_or_channel_pair_that_cant_start_gives_way_to_the_old_one (`desktop/src/adapter.rs`) | S141 |
 | a_capture_start_on_a_busy_input_fails_with_the_busy_reason (`desktop/src/audio/controller.rs`) | S333 |
 | a_lost_capture_whose_input_is_busy_keeps_trying_every_3_s (`desktop/src/audio/controller.rs`) | S329, S333 |
 | a_busy_capture_is_told_free_when_streaming_stops (`desktop/src/audio/controller.rs`) | S333 |
 | a_lost_capture_whose_input_is_busy_shows_the_capture_notice_until_it_runs (`desktop/src/adapter.rs`) | S333 |
+| an_input_whose_device_went_away_is_gone_at_initialize (`desktop/src/audio/wasapi/loopback.rs`) | S333 |
 
 ## 19. Windows updater
 

@@ -995,7 +995,7 @@ pub mod tests {
         );
     }
 
-    // covers: S297, S303, S306
+    // covers: S297, S303, S305, S306
     #[test]
     fn a_check_after_a_swap_without_a_restart_shows_restart_now_and_touches_no_file() {
         let (mut updater, fetch) = updater("swapped");

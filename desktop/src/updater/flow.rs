@@ -773,7 +773,7 @@ pub mod tests {
         );
     }
 
-    // covers: S298
+    // covers: S302
     #[test]
     fn a_disk_full_write_deletes_every_partial_file() {
         struct Full;
