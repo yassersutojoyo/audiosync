@@ -710,6 +710,99 @@ fn a_block_is_equalized_once_in_place_and_both_consumers_get_the_same_samples() 
     );
 }
 
+/// P of S26: the largest gain of the ten bands in series on the 1/12-octave
+/// grid from 20 Hz to 20 kHz, in dB.
+fn grid_peak_db(gains_db: &[f64; BAND_COUNT], fs: f64) -> f64 {
+    let bands = design_bands(gains_db, fs);
+    (0..)
+        .map(|k| 20.0 * 2f64.powf(f64::from(k) / 12.0))
+        .take_while(|&f| f <= 20_000.0)
+        .map(|f| bands.iter().map(|b| response_db(b, f, fs)).sum::<f64>())
+        .fold(f64::NEG_INFINITY, f64::max)
+}
+
+/// Largest change between neighbouring frames on either channel.
+fn largest_step(interleaved: &[f32]) -> f32 {
+    let frames: Vec<&[f32]> = interleaved.chunks_exact(2).collect();
+    frames
+        .windows(2)
+        .flat_map(|pair| [pair[1][0] - pair[0][0], pair[1][1] - pair[0][1]])
+        .fold(0.0f32, |step, d| step.max(d.abs()))
+}
+
+// covers: S26
+#[test]
+fn bass_boost_on_a_full_scale_33_hz_sine_never_reaches_the_clamp() {
+    let bass = preset("bassBoost").unwrap();
+    let (_c, mut processor) = configured(48_000.0, enabled(bass.gains_db, 0.0));
+    for start in (0..48_000).step_by(BLOCK) {
+        let mut block = sine(start, BLOCK, 33.0, 48_000.0, 1.0);
+        processor.process(&mut block);
+        let peak = block.iter().fold(0.0f32, |peak, x| peak.max(x.abs()));
+        assert!(peak < 1.0, "clamped in the block at frame {start}");
+    }
+}
+
+// covers: S25, S26
+#[test]
+fn flat_stays_bit_transparent() {
+    let (_c, mut processor) = configured(48_000.0, enabled([0.0; BAND_COUNT], 0.0));
+    for start in (0..8 * BLOCK).step_by(BLOCK) {
+        let input = sine(start, BLOCK, 997.0, 48_000.0, 0.9);
+        let mut block = input.clone();
+        processor.process(&mut block);
+        assert_eq!(block, input, "block at frame {start}");
+    }
+}
+
+// covers: S26, S33
+#[test]
+fn the_engine_takes_the_cascade_peak_off_the_user_preamp() {
+    let bass = preset("bassBoost").unwrap();
+    let peak = grid_peak_db(&bass.gains_db, 48_000.0);
+    assert!(peak > 0.0, "Bass Boost peaks at {peak:.2} dB");
+    let (control, mut processor) = configured(48_000.0, enabled(bass.gains_db, -6.0));
+    assert_eq!(control.settings().preamp_db, -6.0, "the user's preamp is kept");
+    let at_1k: f64 = design_bands(&bass.gains_db, 48_000.0)
+        .iter()
+        .map(|b| response_db(b, 1000.0, 48_000.0))
+        .sum();
+    let measured = measure_db(&mut processor, 48_000.0, 1000.0, 0.25);
+    let expected = -6.0 - peak + at_1k;
+    assert!(
+        (measured - expected).abs() < 0.05,
+        "measured {measured:.3} dB, expected {expected:.3} dB"
+    );
+}
+
+// covers: S27, S28
+#[test]
+fn toggling_bass_boost_on_a_steady_tone_never_steps_further_than_the_tone() {
+    let on = enabled(preset("bassBoost").unwrap().gains_db, 0.0);
+    let off = EqSettings {
+        enabled: false,
+        ..on
+    };
+    let (mut control, mut processor) = configured(48_000.0, off);
+    let input = sine(0, 40 * BLOCK, 33.0, 48_000.0, 0.5);
+    let mut output = Vec::with_capacity(input.len());
+    for (index, chunk) in input.chunks(2 * BLOCK).enumerate() {
+        match index {
+            10 => control.set_settings(on),
+            25 => control.set_settings(off),
+            _ => {}
+        }
+        let mut block = chunk.to_vec();
+        processor.process(&mut block);
+        output.extend_from_slice(&block);
+    }
+    let tone = largest_step(&input);
+    let worst = largest_step(&output);
+    assert!(worst <= tone, "step {worst} against the tone's {tone}");
+    let last = input.len() - 2 * BLOCK;
+    assert_eq!(output[last..], input[last..], "bypassed once the ramp is over");
+}
+
 proptest! {
     // covers: S123, S125
     #[test]

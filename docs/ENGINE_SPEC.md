@@ -1704,6 +1704,10 @@ The checks for the delay reader (S41 to S59, S158, S159), in `core/src/reader.rs
 | the_rate_defaults_to_48_khz_and_a_change_recomputes_and_zeroes_state (`core/tests/eq.rs`) | S30, S140 |
 | a_block_is_equalized_once_in_place_and_both_consumers_get_the_same_samples (`core/tests/eq.rs`) | S7, S34 |
 | output_is_always_finite_and_within_full_scale (`core/tests/eq.rs`) | S123, S125 |
+| bass_boost_on_a_full_scale_33_hz_sine_never_reaches_the_clamp (`core/tests/eq.rs`) | S26 |
+| flat_stays_bit_transparent (`core/tests/eq.rs`) | S25, S26 |
+| the_engine_takes_the_cascade_peak_off_the_user_preamp (`core/tests/eq.rs`) | S26, S33 |
+| toggling_bass_boost_on_a_steady_tone_never_steps_further_than_the_tone (`core/tests/eq.rs`) | S27, S28 |
 | the_preset_table_matches_the_spec (`core/tests/spec_tables.rs`) | S22, S33 |
 
 ### Capture, sessions, speakers and notices: core (`cargo test` in `core/`)
