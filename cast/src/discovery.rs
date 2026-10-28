@@ -163,6 +163,8 @@ pub enum Skipped {
     BadId,
     /// No address to connect to.
     NoAddress,
+    /// The list is full of devices it keeps (C108).
+    ListFull,
 }
 
 impl CastDevice {
@@ -250,7 +252,9 @@ fn ordered(addresses: &[IpAddr]) -> Vec<IpAddr> {
     list
 }
 
-/// The most devices the list holds (C108).
+/// The most devices the list holds (C108). Far above the Cast devices of a
+/// home, and it keeps a host announcing made-up ones from growing the list,
+/// and each event's lookup in it, without end.
 pub const MAX_DEVICES: usize = 128;
 
 /// How the host's list names a device (C16, C18).
@@ -315,7 +319,8 @@ impl DeviceList {
         DeviceList::default()
     }
 
-    /// Names the device the user selected, `None` when none is.
+    /// Names the device the user selected, `None` when none is; the cap
+    /// never drops it (C108).
     pub fn set_kept(&mut self, key: Option<DeviceKey>) {
         self.kept = key;
     }
@@ -485,6 +490,18 @@ impl DeviceList {
             entry.device = Some(device);
             entry.online = true;
             return ListEvent::Identified { from, id };
+        }
+        if self.entries.len() >= MAX_DEVICES {
+            let kept = self.kept;
+            let oldest = self.entries.iter().position(|entry| {
+                matches!(entry.key, DeviceKey::Id(_))
+                    && !entry.in_session
+                    && Some(entry.key) != kept
+            });
+            let Some(index) = oldest else {
+                return ListEvent::Skipped(Skipped::ListFull);
+            };
+            self.entries.remove(index);
         }
         self.entries.push(Entry {
             key,

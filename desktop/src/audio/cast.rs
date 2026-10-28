@@ -1441,6 +1441,7 @@ impl CastSpeakers {
 
     /// Handles what discovery and the sender reported since the last poll.
     pub fn poll(&mut self) -> Vec<BackendEvent> {
+        self.list.set_kept(self.enabled.map(|id| self.key_of(id)));
         for _ in 0..MAX_BROWSE_PER_POLL {
             let Some(event) = self.link.as_mut().and_then(|link| link.poll_browse()) else {
                 break;
@@ -1708,7 +1709,7 @@ pub mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     use audiosync_cast::client::Fingerprint;
-    use audiosync_cast::discovery::{DEVICE_PORT, ServiceRecord};
+    use audiosync_cast::discovery::{DEVICE_PORT, MAX_DEVICES, ServiceRecord};
     use audiosync_cast::error::ConnectError;
 
     use super::*;
@@ -1900,6 +1901,23 @@ pub mod tests {
         assert_eq!(fake.state().browse.len(), extra);
         cast.poll();
         assert!(fake.state().browse.is_empty());
+    }
+
+    #[test]
+    fn the_selected_speaker_stays_listed_through_a_flood_of_devices() {
+        let fake = FakeCast::default();
+        let selected = format!("{:032x}", 1);
+        fake.announce(&selected, "Kitchen", DEVICE_PORT);
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.poll();
+        cast.set_enabled(&selected, true).expect("switched on");
+        for n in 2..=MAX_DEVICES + 10 {
+            fake.announce(&format!("{n:032x}"), &format!("Speaker {n}"), DEVICE_PORT);
+        }
+        cast.poll();
+        let speakers = cast.speakers();
+        assert_eq!(speakers.len(), MAX_DEVICES);
+        assert!(speakers.iter().any(|speaker| speaker.id == selected));
     }
 
     #[test]
