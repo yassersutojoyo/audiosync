@@ -2194,6 +2194,8 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | an_ignored_file_others_may_read_still_reports_it_was_tightened (`core/tests/airplay_pairings.rs`) | S224 |
 | a_symbolic_link_in_the_files_place_is_not_followed (`core/tests/airplay_pairings.rs`) | S224 |
 | a_file_another_account_owns_is_reported_unread (`core/tests/airplay_pairings.rs`) | S224 |
+| a_folder_in_the_files_place_is_never_written_over (`core/src/airplay_pairings.rs`) | S224 |
+| a_file_that_cant_be_read_keeps_every_pairing_it_holds (`core/tests/airplay_pairings.rs`) | S224 |
 | a_speaker_asking_every_time_saved_on_with_stored_credentials_stays_on_at_a_launch (`desktop/src/adapter.rs`) | S222, S223 |
 | a_speaker_saved_on_that_now_asks_for_a_pin_goes_off_with_a_notice_at_a_launch (`desktop/src/adapter.rs`) | S222, S223 |
 

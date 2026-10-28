@@ -628,4 +628,30 @@ mod tests {
         assert_eq!(verdict(0o100600, 502, 501), Verdict::Foreign);
         assert_eq!(verdict(0o100644, 0, 501), Verdict::Foreign);
     }
+
+    // covers: S224
+    #[test]
+    fn a_folder_in_the_files_place_is_never_written_over() {
+        // A folder reads as an error other than NotFound on every host, as a
+        // permission or disk error would.
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-scratch")
+            .join("airplay-pairings-store")
+            .join("unreadable.dat");
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("a folder");
+        let (mut store, loaded) = PairingStore::open(path.clone());
+        assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+        assert!(!store.writable);
+        let credentials = Credentials::new(
+            "0123456789ABCDEF",
+            [3; audiosync_airplay::pairing::SECRET_BYTES],
+        )
+        .expect("valid");
+        assert!(store.insert("02005E005301", credentials).is_err());
+        assert!(store.contains("02005E005301"), "kept for this run");
+        assert!(path.is_dir());
+        let _ = fs::remove_dir_all(&path);
+    }
 }
