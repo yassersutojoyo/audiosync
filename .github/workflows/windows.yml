@@ -196,6 +196,8 @@ jobs:
 
   build:
     name: Release build (${{ matrix.arch }})
+    # No artifact from a run whose tests or license check failed.
+    needs: [test, licenses]
     strategy:
       fail-fast: false
       matrix:
