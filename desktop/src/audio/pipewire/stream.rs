@@ -45,7 +45,7 @@ use super::registry;
 use super::timing::{self, PacketClock};
 use crate::audio::backend::BackendError;
 use crate::audio::capture::{CaptureAttempt, CaptureConverter, Feeds, GapFill};
-use crate::audio::capture::{CaptureTarget, LoopbackMode};
+use crate::audio::capture::{CaptureTarget, LoopbackMode, StreamFormat};
 use crate::audio::controller::{CaptureHandle, CaptureState};
 use crate::audio::process::ProcessTable;
 
@@ -82,7 +82,7 @@ const QUIT_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 struct Status {
     /// The first failure, as one of the codes above.
     failed: AtomicU8,
-    /// Whether PipeWire agreed to [`CAPTURE_FORMAT`].
+    /// Whether PipeWire agreed to the format asked for.
     agreed: AtomicBool,
     /// Whether a linked capture failed to make a link it wants.
     missing_links: AtomicBool,
@@ -142,6 +142,7 @@ pub struct MonitorCapture {
     stop: pw::channel::Sender<Message>,
     /// Whether it links apps' streams, so it can move to other apps.
     linked: bool,
+    setup: CaptureAttempt,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -154,7 +155,7 @@ impl CaptureHandle for MonitorCapture {
         self.status
             .agreed
             .load(Ordering::Acquire)
-            .then_some(format::SETUP)
+            .then_some(self.setup)
     }
 
     fn retarget(&mut self, target: &CaptureTarget) -> bool {
@@ -337,8 +338,20 @@ pub fn start_plan(
     equalizer: EqProcessor,
     feeds: Feeds,
 ) -> Result<MonitorCapture, BackendError> {
+    start_setup(plan, format::SETUP, writer, equalizer, feeds)
+}
+
+/// [`start_plan`] asking for `setup`'s format and playing its pair.
+pub fn start_setup(
+    plan: Plan,
+    setup: CaptureAttempt,
+    writer: RingWriter,
+    equalizer: EqProcessor,
+    feeds: Feeds,
+) -> Result<MonitorCapture, BackendError> {
     let linked = plan.filter.is_some();
-    let converter = CaptureConverter::new(CAPTURE_FORMAT, writer, equalizer, feeds)?;
+    let converter =
+        CaptureConverter::new(setup.format, writer, equalizer, feeds)?.reading(setup.pair);
     let status = Arc::new(Status::default());
     let (stop, stop_receiver) = pw::channel::channel();
     let (ready, ready_receiver) = mpsc::channel();
@@ -348,6 +361,7 @@ pub fn start_plan(
         .spawn(move || {
             let served = serve(
                 plan,
+                setup.format,
                 converter,
                 stop_receiver,
                 ready.clone(),
@@ -366,6 +380,7 @@ pub fn start_plan(
         status,
         stop,
         linked,
+        setup,
         thread: Some(thread),
     };
     match ready_receiver.recv_timeout(START_TIMEOUT) {
@@ -396,13 +411,14 @@ pub fn probe() -> Result<(), BackendError> {
 /// The capture's audio path, from PipeWire's buffers to the converter.
 struct Feed {
     converter: CaptureConverter,
+    block_align: usize,
     gaps: GapFill,
     clock: PacketClock,
 }
 
 impl Feed {
     /// A buffer of `frames` frames from the cycle at `cycle_hns`: `bytes`
-    /// in [`CAPTURE_FORMAT`], or `None` when it wasn't mapped (then silence).
+    /// in the format asked for, or `None` when it wasn't mapped (then silence).
     fn buffer(&mut self, cycle_hns: u64, bytes: Option<&[u8]>, frames: usize) {
         let start = self.clock.place(cycle_hns, frames);
         let (fill, skip, _) = self.gaps.packet(start, frames, false);
@@ -415,7 +431,7 @@ impl Feed {
         }
         match bytes {
             Some(bytes) => {
-                let from = (skip * CAPTURE_FORMAT.block_align()).min(bytes.len());
+                let from = (skip * self.block_align).min(bytes.len());
                 self.converter.push(&bytes[from..], frames - skip, false);
             }
             None => self.converter.push(&[], frames - skip, true),
@@ -453,16 +469,22 @@ fn negotiated(param: &Pod) -> Negotiated {
     }
 }
 
-/// The `EnumFormat` param that asks for [`CAPTURE_FORMAT`], front left and
-/// right, as a serialized pod.
-fn enum_format() -> Result<Vec<u8>, BackendError> {
+/// The `EnumFormat` param that asks for `asked`, as a serialized pod: front
+/// left and right for stereo, else the device's channels in order.
+fn enum_format(asked: StreamFormat) -> Result<Vec<u8>, BackendError> {
     let mut info = AudioInfoRaw::new();
     info.set_format(AudioFormat::F32LE);
-    info.set_rate(CAPTURE_FORMAT.rate);
-    info.set_channels(u32::from(CAPTURE_FORMAT.channels));
+    info.set_rate(asked.rate);
+    info.set_channels(u32::from(asked.channels));
     let mut position = [0; spa::sys::SPA_AUDIO_MAX_CHANNELS as usize];
-    position[0] = spa::sys::SPA_AUDIO_CHANNEL_FL;
-    position[1] = spa::sys::SPA_AUDIO_CHANNEL_FR;
+    if asked.channels == 2 {
+        position[0] = spa::sys::SPA_AUDIO_CHANNEL_FL;
+        position[1] = spa::sys::SPA_AUDIO_CHANNEL_FR;
+    } else {
+        for (channel, slot) in (0..u32::from(asked.channels)).zip(&mut position) {
+            *slot = spa::sys::SPA_AUDIO_CHANNEL_AUX0 + channel;
+        }
+    }
     info.set_position(position);
     let object = Value::Object(Object {
         type_: SpaTypes::ObjectParamFormat.as_raw(),
@@ -479,6 +501,7 @@ fn enum_format() -> Result<Vec<u8>, BackendError> {
 /// it couldn't be; an `Err` returned is a failure before the loop ran.
 fn serve(
     plan: Plan,
+    asked: StreamFormat,
     converter: CaptureConverter,
     stop: pw::channel::Receiver<Message>,
     ready: mpsc::Sender<Result<(), BackendError>>,
@@ -533,11 +556,16 @@ fn serve(
         properties.insert(TARGET_KEY, serial.as_str());
         properties.insert("node.dont-fallback", "true");
     }
+    if asked != CAPTURE_FORMAT {
+        // Channels copied in order, so the pair is the device's own.
+        properties.insert("channelmix.disable", "true");
+    }
     let stream =
         StreamRc::new(core.clone(), NODE_NAME, properties).map_err(|_| BackendError::DeviceGone)?;
 
     let feed = Rc::new(RefCell::new(Feed {
         converter,
+        block_align: asked.block_align(),
         gaps: GapFill::started(CAPTURE_FORMAT.rate, timing::monotonic_hns()),
         clock: PacketClock::new(CAPTURE_FORMAT.rate),
     }));
@@ -580,7 +608,7 @@ fn serve(
                 if id != ParamType::Format.as_raw() {
                     return;
                 }
-                match format::check(negotiated(param)) {
+                match format::check(negotiated(param), asked) {
                     Ok(()) => status.agreed.store(true, Ordering::Release),
                     Err(error) => {
                         status.fail(&error);
@@ -607,11 +635,11 @@ fn serve(
                 };
                 let chunk = data.chunk();
                 let offset = chunk.offset() as usize;
-                let frames = format::frames_in(chunk.size(), chunk.stride());
+                let frames = format::frames_in(chunk.size(), chunk.stride(), feed.block_align);
                 if frames == 0 {
                     continue;
                 }
-                let length = frames * CAPTURE_FORMAT.block_align();
+                let length = frames * feed.block_align;
                 let bytes = data
                     .data()
                     .and_then(|mapped| mapped.get(offset..offset + length));
@@ -625,7 +653,7 @@ fn serve(
         .register()
         .map_err(|_| BackendError::DeviceGone)?;
 
-    connect(&stream, wiring, &enum_format()?)?;
+    connect(&stream, wiring, &enum_format(asked)?)?;
 
     // The `default` metadata and its listener, once the registry announces it.
     let defaults: Rc<RefCell<Option<(Metadata, MetadataListener)>>> = Rc::default();
@@ -1105,7 +1133,7 @@ mod tests {
 
     #[test]
     fn the_asked_format_serializes() {
-        let bytes = enum_format().unwrap();
+        let bytes = enum_format(CAPTURE_FORMAT).unwrap();
         let pod = Pod::from_bytes(&bytes).unwrap();
         assert_eq!(
             negotiated(pod),

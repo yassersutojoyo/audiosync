@@ -1,16 +1,14 @@
-//! The one format the capture asks PipeWire for, and the check of the
-//! format it gets: interleaved 32-bit float, stereo, at the session rate.
+//! The format the capture asks PipeWire for, and the check of the format
+//! it gets: interleaved 32-bit float at the session rate, stereo, or every
+//! channel of an input device that plays a pair past 1-2.
 //! PipeWire's adapter converts whatever the output plays to it, so the
 //! converter never resamples.
 
-#[cfg(target_os = "linux")]
 use audiosync_core::channels::InputPair;
 
 use crate::audio::SESSION_RATE;
 use crate::audio::backend::BackendError;
-#[cfg(target_os = "linux")]
-use crate::audio::capture::CaptureAttempt;
-use crate::audio::capture::{SampleType, StreamFormat};
+use crate::audio::capture::{CaptureAttempt, SampleType, StreamFormat};
 
 /// What the capture asks for and accepts.
 pub const CAPTURE_FORMAT: StreamFormat = StreamFormat {
@@ -20,12 +18,31 @@ pub const CAPTURE_FORMAT: StreamFormat = StreamFormat {
 };
 
 /// How the capture is set up once PipeWire agreed: the adapter converts.
-#[cfg(target_os = "linux")]
 pub const SETUP: CaptureAttempt = CaptureAttempt {
     format: CAPTURE_FORMAT,
     autoconvert: true,
     pair: InputPair::FIRST,
 };
+
+/// How an input device with `channels` channels is captured for the pair
+/// stored as `saved`: pair 1-2, or a pair the device no longer has, keeps
+/// the adapter's stereo mix of the device, as Windows does; any other pair
+/// takes every channel unmixed and plays that pair.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn input_setup(saved: u16, channels: u16) -> CaptureAttempt {
+    let (pair, _) = InputPair::resolve(saved, channels);
+    if pair.index == 0 {
+        return SETUP;
+    }
+    CaptureAttempt {
+        format: StreamFormat {
+            channels,
+            ..CAPTURE_FORMAT
+        },
+        autoconvert: true,
+        pair,
+    }
+}
 
 /// The format PipeWire settled on, as it reported it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,14 +55,14 @@ pub struct Negotiated {
     pub channels: u32,
 }
 
-/// Whether `negotiated` is [`CAPTURE_FORMAT`]: anything else is
+/// Whether `negotiated` is the `asked` format: anything else is
 /// [`BackendError::UnsupportedFormat`], since the converter is built for
 /// that format before the stream connects.
-pub fn check(negotiated: Negotiated) -> Result<(), BackendError> {
+pub fn check(negotiated: Negotiated, asked: StreamFormat) -> Result<(), BackendError> {
     let expected = negotiated.raw_audio
         && negotiated.f32_interleaved
-        && negotiated.rate == CAPTURE_FORMAT.rate
-        && negotiated.channels == u32::from(CAPTURE_FORMAT.channels);
+        && negotiated.rate == asked.rate
+        && negotiated.channels == u32::from(asked.channels);
     if expected {
         Ok(())
     } else {
@@ -54,12 +71,12 @@ pub fn check(negotiated: Negotiated) -> Result<(), BackendError> {
 }
 
 /// The frames a buffer of `size` bytes holds at `stride` bytes per frame;
-/// a stride of 0 (not set) means the format's own.
-pub fn frames_in(size: u32, stride: i32) -> usize {
+/// a stride of 0 (not set) means `block_align`, the format's own.
+pub fn frames_in(size: u32, stride: i32, block_align: usize) -> usize {
     let stride = usize::try_from(stride)
         .ok()
         .filter(|&stride| stride > 0)
-        .unwrap_or_else(|| CAPTURE_FORMAT.block_align());
+        .unwrap_or(block_align);
     size as usize / stride
 }
 
@@ -81,7 +98,7 @@ mod tests {
 
     #[test]
     fn the_asked_format_is_accepted() {
-        assert_eq!(check(AGREED), Ok(()));
+        assert_eq!(check(AGREED, CAPTURE_FORMAT), Ok(()));
     }
 
     #[test]
@@ -105,7 +122,10 @@ mod tests {
             },
         ];
         for other in others {
-            assert_eq!(check(other), Err(BackendError::UnsupportedFormat));
+            assert_eq!(
+                check(other, CAPTURE_FORMAT),
+                Err(BackendError::UnsupportedFormat)
+            );
         }
     }
 
@@ -148,9 +168,9 @@ mod tests {
 
     #[test]
     fn frames_follow_the_stride() {
-        assert_eq!(frames_in(8192, 8), 1024);
-        assert_eq!(frames_in(8190, 8), 1023);
-        assert_eq!(frames_in(8192, 0), 1024);
-        assert_eq!(frames_in(8192, -8), 1024);
+        assert_eq!(frames_in(8192, 8, 8), 1024);
+        assert_eq!(frames_in(8190, 8, 8), 1023);
+        assert_eq!(frames_in(8192, 0, 8), 1024);
+        assert_eq!(frames_in(8192, -8, 8), 1024);
     }
 }

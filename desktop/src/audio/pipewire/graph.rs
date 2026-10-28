@@ -328,8 +328,7 @@ impl Graph {
         listing
     }
 
-    /// The input devices, hands-free ones left out. Only their first two
-    /// channels are offered.
+    /// The input devices, hands-free ones left out.
     pub fn inputs(&self) -> Vec<EndpointReading> {
         self.nodes
             .values()
@@ -344,7 +343,7 @@ impl Graph {
                     form_factor: None,
                     enumerator: node.prop("device.api").map(str::to_owned),
                     display_port: false,
-                    channels: node.prop_channels().map(|channels| channels.min(2)),
+                    channels: node.prop_channels(),
                 }),
             })
             .collect()

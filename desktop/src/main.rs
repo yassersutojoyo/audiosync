@@ -137,7 +137,8 @@ fn main() -> ExitCode {
     let log = DebugLog::from_env(relaunched);
     log.log(|| {
         format!(
-            "AudioSync for Windows {} (audiosync-core {}), process {}; times are UTC",
+            "AudioSync for {} {} (audiosync-core {}), process {}; times are UTC",
+            platform::host_name(std::env::consts::OS),
             env!("CARGO_PKG_VERSION"),
             audiosync_core::VERSION,
             std::process::id(),

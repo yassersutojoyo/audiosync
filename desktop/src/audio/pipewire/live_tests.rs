@@ -655,6 +655,65 @@ fn the_default_input_is_recorded() {
     run("pw-cli", &["destroy", &node_id("mic-feed").to_string()]);
 }
 
+// covers: S14
+#[test]
+#[ignore = "needs the CI job's PipeWire daemon"]
+fn an_input_plays_the_channel_pair_chosen() {
+    run(
+        "pw-cli",
+        &[
+            "create-node",
+            "adapter",
+            "{ factory.name=support.null-audio-sink node.name=pair-feed media.class=Audio/Source/Virtual object.linger=true audio.position=[AUX0 AUX1 AUX2 AUX3] }",
+        ],
+    );
+    wait();
+    let graph = Registry::start().unwrap().graph().unwrap();
+    let (_, node) = graph.named("pair-feed").expect("pair-feed is listed");
+    let serial = node.prop("object.serial").unwrap().to_owned();
+    let ring = Ring::for_rate(SESSION_RATE).unwrap();
+    let (_control, processor) = equalizer();
+    let capture = stream::start_setup(
+        stream::Plan {
+            wiring: stream::Wiring::Input,
+            filter: None,
+            serial: Some(serial),
+        },
+        super::format::input_setup(1, 4),
+        ring.writer().unwrap(),
+        processor,
+        Feeds::default(),
+    )
+    .unwrap();
+    let path = tone("pair", 440.0, 0.5, 10.0);
+    detached(&format!(
+        "pw-play --target 0 -P '{{ node.name = ci-pair-tone }}' {}",
+        path.display()
+    ));
+    std::thread::sleep(Duration::from_millis(300));
+    run(
+        "pw-link",
+        &["ci-pair-tone:output_FL", "pair-feed:input_AUX0"],
+    );
+    wait();
+    ring.take_peak();
+    std::thread::sleep(Duration::from_millis(500));
+    let outside = ring.take_peak();
+    run(
+        "pw-link",
+        &["ci-pair-tone:output_FL", "pair-feed:input_AUX2"],
+    );
+    wait();
+    ring.take_peak();
+    std::thread::sleep(Duration::from_millis(500));
+    let inside = ring.take_peak();
+    assert_eq!(capture.state(), CaptureState::Running);
+    drop(capture);
+    run("pw-cli", &["destroy", &node_id("pair-feed").to_string()]);
+    assert!(outside < 0.001, "peak {outside} with only channel 1 fed");
+    assert!(inside > 0.1, "peak {inside} with channel 3 fed");
+}
+
 #[test]
 #[ignore = "needs the CI job's PipeWire daemon, its PulseAudio server and sink as-a"]
 fn a_pulseaudio_app_is_found_by_the_process_it_names() {

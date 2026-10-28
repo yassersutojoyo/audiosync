@@ -94,7 +94,72 @@ pub fn system_summary() -> String {
     )
 }
 
-#[cfg(not(windows))]
+/// The system the app runs on, for the debug log: the distribution named
+/// by `/etc/os-release`, the kernel release, the architecture and the
+/// local time.
+#[cfg(target_os = "linux")]
+pub fn system_summary() -> String {
+    let os_release = std::fs::read_to_string("/etc/os-release")
+        .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+        .ok();
+    let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease").ok();
+    linux_summary(
+        os_release.as_deref(),
+        kernel.as_deref(),
+        std::env::consts::ARCH,
+        &local_clock(),
+    )
+}
+
+/// The local time now, hours and minutes.
+#[cfg(target_os = "linux")]
+fn local_clock() -> String {
+    // SAFETY: time with a null pointer only returns the time.
+    let now = unsafe { libc::time(std::ptr::null_mut()) };
+    // SAFETY: tm is plain data, which localtime_r fills.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers are to live locals of the right types.
+    if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() {
+        return "unknown".to_owned();
+    }
+    format!("{:02}.{:02}", tm.tm_hour, tm.tm_min)
+}
+
+/// The Linux line of the debug log, from the text of `os-release`, the
+/// kernel release, the architecture and the local time.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn linux_summary(
+    os_release: Option<&str>,
+    kernel: Option<&str>,
+    arch: &str,
+    local_time: &str,
+) -> String {
+    let name = os_release
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("PRETTY_NAME="))
+        })
+        .map(|value| value.trim().trim_matches('"'))
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Linux");
+    let kernel = kernel.map_or_else(
+        || "version unknown".to_owned(),
+        |kernel| format!("kernel {}", kernel.trim()),
+    );
+    format!("{name}, {kernel}, {arch}, local time {local_time}")
+}
+
+/// The host's name as the debug log's first line gives it, from Rust's
+/// name for the OS.
+pub fn host_name(os: &str) -> &str {
+    match os {
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn system_summary() -> String {
     format!(
         "{} on {}, not Windows: example speakers only",
