@@ -1062,7 +1062,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
             (Chosen::App { executable: a, .. }, Chosen::App { executable: b, .. })
                 if a.eq_ignore_ascii_case(b)
         );
-        if !same_app {
+        // A capture the user started outlives a file app that doesn't run; the next start uses it.
+        let absent_app = self.running()
+            && matches!(&read, Chosen::App { executable, .. }
+                if !matches!(self.audio.find_app(0, executable), Ok(Some(_))));
+        if absent_app {
+            self.chosen = read;
+        } else if !same_app {
             self.choose(read);
         }
         if !self.running() {
