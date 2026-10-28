@@ -917,9 +917,13 @@ impl Channel {
             // control that turned fixed meanwhile (C68).
             self.volume_queued = None;
         }
-        // The answer to an older level leaves the newer one unanswered (C70).
+        // The answer to an older level leaves the newer one unanswered (C70); a
+        // device that rounds to its step may answer without the request id.
+        let rounding = status.volume.step_interval.filter(|step| step.is_finite());
         if self.volume_unconfirmed.is_some_and(|(request, level)| {
-            request == id || answers_level(level, status.volume.level)
+            request == id
+                || answers_level(level, status.volume.level)
+                || rounding.is_some_and(|step| (level - status.volume.level).abs() < step / 2.0)
         }) {
             self.volume_unconfirmed = None;
         }
