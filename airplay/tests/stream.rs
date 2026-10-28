@@ -1204,6 +1204,33 @@ fn volume_software() {
     assert_eq!(volume_requests, 1, "mute stays in the samples");
 }
 
+// covers: P121
+#[test]
+fn a_muted_sm_speaker_joining_a_running_stream_sends_only_silence() {
+    let mut rig = Rig::with_host();
+    rig.add(speaker(1, Codec::Alac));
+    rig.run_for(Duration::from_secs(3));
+
+    let mut config = speaker(2, Codec::Alac);
+    config.software_mute = true;
+    config.delay = Duration::from_millis(500);
+    let muted = rig.stream.add_speaker(config, rig.now);
+    rig.stream.set_software_volume(muted, Volume::Muted);
+    rig.drain();
+    rig.run_for(Duration::from_secs(2));
+    let audio = rig.audio(muted);
+    assert!(!audio.is_empty());
+    for packet in &audio {
+        assert!(
+            decode(Codec::Alac, &packet.payload)
+                .iter()
+                .all(|f| *f == [0, 0]),
+            "audible packet at {:.3} s",
+            packet.at
+        );
+    }
+}
+
 fn half(sample: i16) -> i16 {
     (f64::from(sample) * 0.5).round() as i16
 }
