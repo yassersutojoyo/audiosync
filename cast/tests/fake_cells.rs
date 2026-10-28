@@ -399,41 +399,46 @@ fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
 // covers: C75
 #[test]
 fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops() {
+    const PACE: f64 = 0.5;
+    const WAV_BYTES_PER_SECOND: f64 = 192_000.0;
     let device = FakeDevice::start(Behavior {
-        read_pace: Some(0.5),
+        read_pace: Some(PACE),
         ..Behavior::default()
     });
     let (mut session, _feed) = start(&device);
     let started = Instant::now();
-    let mut lines: Vec<(f64, Diagnostics)> = Vec::new();
+    // Seconds since start, the line, and the audio the device has read.
+    let mut lines: Vec<(f64, Diagnostics, f64)> = Vec::new();
     let mut seen = Vec::new();
     let cap = Duration::from_secs(2);
     let full = cap - Duration::from_millis(40);
     // The loopback socket buffers fill before the sender's queue starts to,
-    // and their size differs per system. The run goes on 3 s past the full
-    // queue and the first offer, so a late automatic restart is caught.
-    let until = started + Duration::from_secs(60);
+    // and their size differs per system (Linux took 28 s on CI). The run goes
+    // on 5 s past the full queue and the first offer, so a late automatic
+    // restart is caught.
+    let until = started + Duration::from_secs(75);
     let mut settled: Option<Instant> = None;
-    while settled.is_none_or(|at| at.elapsed() < Duration::from_secs(3)) {
+    while settled.is_none_or(|at| at.elapsed() < Duration::from_secs(5)) {
         assert!(
             Instant::now() < until,
-            "no full queue and offer in 60 s: {lines:?}"
+            "no full queue and offer in 75 s: {lines:?}"
         );
         session.run_for(Duration::from_millis(50));
         while let Some(event) = session.poll_event() {
             if let SessionEvent::Diagnostics(line) = &event {
-                lines.push((started.elapsed().as_secs_f64(), line.clone()));
+                let read = device.bytes_read() as f64 / WAV_BYTES_PER_SECOND;
+                lines.push((started.elapsed().as_secs_f64(), line.clone(), read));
             }
             seen.push(event);
         }
         if settled.is_none()
-            && lines.iter().any(|(_, line)| line.queued >= full)
-            && lines.iter().any(|(_, line)| line.resync_offered)
+            && lines.iter().any(|(_, line, _)| line.queued >= full)
+            && lines.iter().any(|(_, line, _)| line.resync_offered)
         {
             settled = Some(Instant::now());
         }
     }
-    for (_, line) in &lines {
+    for (_, line, _) in &lines {
         assert!(line.queued <= cap, "{line:?}");
         assert_eq!(
             line.resync_offered,
@@ -441,50 +446,45 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
             "{line:?}"
         );
     }
-    let per_second =
-        |from: &(f64, Diagnostics), to: &(f64, Diagnostics), of: fn(&Diagnostics) -> Duration| {
-            (of(&to.1).as_secs_f64() - of(&from.1).as_secs_f64()) / (to.0 - from.0)
-        };
+    // Audio the feed made that the device has not taken: in flight, queued,
+    // or dropped and counted as drift. TCP flow control releases the socket
+    // in bursts whose size depends on the system, so the queue alone moves in
+    // steps (on Linux CI, sent stood still for 6 s); this sum does not.
+    let piled = |(_, line, read): &(f64, Diagnostics, f64)| {
+        (line.sent + line.queued + line.drift).as_secs_f64() - read
+    };
+    let per_second = |from: &(f64, Diagnostics, f64), to: &(f64, Diagnostics, f64)| {
+        (piled(to) - piled(from)) / (to.0 - from.0)
+    };
+    // The feed runs in real time and the device reads at PACE, so the pile
+    // grows at 1 - PACE. Chunk framing adds 0.2 % to the bytes read; the
+    // margin covers sampling jitter. Audio dropped without being counted as
+    // drift, or counted twice, moves the rate out of it.
+    let expected = (1.0 - PACE - 0.15)..=(1.0 - PACE + 0.15);
 
     // A stalled feed or pump also drops ring backlog (C64), so the queue
     // reaching its cap marks where the overflow drops begin.
     let filled = lines
         .iter()
-        .position(|(_, line)| line.queued >= full)
+        .position(|(_, line, _)| line.queued >= full)
         .expect("a full queue");
-    let piling: Vec<_> = lines[..filled]
-        .iter()
-        .filter(|(_, line)| line.queued > Duration::ZERO)
-        .collect();
-    assert!(piling.len() >= 2, "{lines:?}");
-    assert!(
-        piling
-            .windows(2)
-            .all(|pair| pair[1].1.queued > pair[0].1.queued),
-        "the queue shrank before it was full: {lines:?}"
-    );
-    let growth = per_second(piling[0], piling[piling.len() - 1], |line| line.queued);
-    assert!((0.25..=0.8).contains(&growth), "{growth} s/s: {lines:?}");
+    assert!(filled >= 2, "{lines:?}");
+    let growth = per_second(&lines[0], &lines[filled]);
+    assert!(expected.contains(&growth), "{growth} s/s: {lines:?}");
 
     let dropping = &lines[filled..];
-    assert!(dropping.len() >= 3, "{lines:?}");
-    assert!(
-        dropping[dropping.len() - 1].1.frames_dropped > 0,
-        "{lines:?}"
-    );
+    assert!(dropping.len() >= 4, "{lines:?}");
+    let last = &dropping[dropping.len() - 1];
+    assert!(last.1.frames_dropped > 0, "{lines:?}");
     assert!(
         dropping
             .windows(2)
-            .all(|pair| pair[1].1.drift > pair[0].1.drift),
-        "the drift stopped growing: {lines:?}"
+            .all(|pair| pair[1].1.drift >= pair[0].1.drift),
+        "the drift went down: {lines:?}"
     );
-    let drift_rate = per_second(&dropping[0], &dropping[dropping.len() - 1], |line| {
-        line.drift
-    });
-    assert!(
-        (0.25..=0.9).contains(&drift_rate),
-        "{drift_rate} s/s: {lines:?}"
-    );
+    assert!(last.1.drift > dropping[0].1.drift, "{lines:?}");
+    let overflow = per_second(&dropping[0], last);
+    assert!(expected.contains(&overflow), "{overflow} s/s: {lines:?}");
 
     // Resync stays the user's: no new LOAD, no restart of any kind (C79).
     assert_eq!(device.payloads(NS_MEDIA, "LOAD").len(), 1);
@@ -499,12 +499,12 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
     device.join();
     let offered_at = lines
         .iter()
-        .find(|(_, line)| line.resync_offered)
-        .map_or(0.0, |(at, _)| *at);
+        .find(|(_, line, _)| line.resync_offered)
+        .map_or(0.0, |(at, _, _)| *at);
     cell(
         "C75",
         &format!(
-            "read at half speed: queue +{growth:.2} s/s, full at {:.1} s, then drift +{drift_rate:.2} s/s, resync offered at {offered_at:.1} s, 1 LOAD",
+            "read at half speed: audio piles up +{growth:.2} s/s, queue full at {:.1} s, then +{overflow:.2} s/s with drops, resync offered at {offered_at:.1} s, 1 LOAD",
             lines[filled].0
         ),
     );

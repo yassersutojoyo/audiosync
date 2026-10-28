@@ -216,6 +216,8 @@ pub struct Fetch {
     pub head: String,
     /// The raw body bytes, chunk framing included, up to a cap.
     pub body: Vec<u8>,
+    /// Every body byte read, chunk framing included, past the cap too.
+    pub received: usize,
     pub ended: bool,
 }
 
@@ -438,6 +440,12 @@ impl FakeDevice {
 
     pub fn fetches(&self) -> Vec<Fetch> {
         self.fetches.lock().expect("fetches").clone()
+    }
+
+    /// Body bytes read over every fetch, without copying the bodies.
+    pub fn bytes_read(&self) -> usize {
+        let fetches = self.fetches.lock().expect("fetches");
+        fetches.iter().map(|fetch| fetch.received).sum()
     }
 
     pub fn negotiated_suites(&self) -> Vec<CipherSuite> {
@@ -715,6 +723,7 @@ fn fetch(
         let mut fetches = fetches.lock().expect("fetches");
         let record = &mut fetches[index];
         if head_done {
+            record.received += count;
             if record.body.len() < 4 << 20 {
                 record.body.extend_from_slice(&buffer[..count]);
             }
@@ -724,6 +733,7 @@ fn fetch(
                 head_done = true;
                 record.head = String::from_utf8_lossy(&data[..end]).into_owned();
                 record.body = data[end + 4..].to_vec();
+                record.received = record.body.len();
             }
         }
         // The WAV header chunk and one block of audio.
