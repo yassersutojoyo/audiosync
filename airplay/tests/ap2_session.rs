@@ -832,6 +832,22 @@ fn teardown_during_the_session_setup_tears_down_the_session_it_made() {
     assert!(rig.event_connects.is_empty());
 }
 
+// covers: P25, P129
+#[test]
+fn teardown_during_the_session_setup_carries_the_answers_session() {
+    let mut fake = FakeAp2::new();
+    fake.session = Some("5A1B2C3D".to_owned());
+    fake.hold = Some("SETUP session".to_owned());
+    let mut rig = Ap2Rig::new(ap2_config(), fake);
+    rig.advance(Duration::from_millis(100));
+    let now = rig.now;
+    rig.session.teardown(now);
+    rig.advance(Duration::from_millis(200));
+    rig.release();
+    let teardown = rig.fake.last("TEARDOWN").expect("TEARDOWN");
+    assert_eq!(teardown.headers.get("Session"), Some("5A1B2C3D"));
+}
+
 // covers: P129
 #[test]
 fn teardown_during_an_unanswered_session_setup_closes_after_two_seconds() {
