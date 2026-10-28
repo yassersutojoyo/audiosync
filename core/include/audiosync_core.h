@@ -264,6 +264,7 @@ extern "C" {
 #define ASC_CAST_ERROR_VOLUME 8       /* the device was not ready, or has no volume step */
 #define ASC_CAST_ERROR_ARTWORK 9      /* artwork that is not PNG or JPEG, or over 1280 by 720 */
 #define ASC_CAST_ERROR_GROUP 10       /* no longer reported: a Cast group plays like a device */
+#define ASC_CAST_ERROR_INTERNAL 11    /* a fault inside the sender; the next start runs (C107) */
 
 /* A Cast stream's format (AscCastEvent.format). */
 #define ASC_CAST_FORMAT_WAV 1
@@ -2105,6 +2106,13 @@ bool asc_cast_add_device(AscCast *cast, const char *address);
  * browse found stays listed under its id.
  */
 bool asc_cast_remove_device(AscCast *cast, const char *id);
+
+/*
+ * Names the device the user selected, by its ID, or none with a NULL or empty
+ * id, whether or not it plays: the list's cap of 128 devices never drops it
+ * (C108). Returns false for a NULL or dead handle, or an ID that doesn't read.
+ */
+bool asc_cast_set_selected(AscCast *cast, const char *id);
 
 /*
  * Takes the next device change, if one is waiting, into *device and returns

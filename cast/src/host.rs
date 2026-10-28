@@ -26,6 +26,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::net::SocketAddr;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{
     self, Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError, TrySendError,
@@ -48,6 +49,12 @@ use crate::session::{
 /// How long the worker drives a session between two looks at the command
 /// queue.
 const TICK: Duration = Duration::from_millis(50);
+/// A panic within this long of the one before counts as recurring (C107).
+const PANIC_WINDOW: Duration = Duration::from_secs(1);
+/// The first and the longest pause after a recurring panic.
+const PANIC_PAUSE: Duration = Duration::from_millis(100);
+const MAX_PANIC_PAUSE: Duration = Duration::from_secs(5);
+const PANIC_PAUSE_SLICE: Duration = Duration::from_millis(50);
 /// Events waiting for a host that doesn't poll.
 pub const MAX_HOST_EVENTS: usize = 256;
 /// What [`CastHost::shutdown`] waits beyond the teardown budget of C88.
@@ -300,6 +307,9 @@ struct Shared {
     /// Set before the quit command is sent: teardowns from then on keep to
     /// C88's budget.
     quitting: Arc<AtomicBool>,
+    /// How many of the next starts make the worker panic.
+    #[cfg(test)]
+    panic_in_start: std::sync::atomic::AtomicU32,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -378,12 +388,43 @@ impl CastHost {
             active: Mutex::new(None),
             memory: Mutex::new(memory),
             quitting: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            panic_in_start: std::sync::atomic::AtomicU32::new(0),
         });
         let worker = {
             let shared = Arc::clone(&shared);
             thread::Builder::new()
                 .name("cast-host".to_owned())
-                .spawn(move || Worker::new(inbox, outbox, shared).run())?
+                .spawn(move || {
+                    let mut worker = Worker::new(inbox, outbox, shared);
+                    let mut pause = Duration::ZERO;
+                    let mut last_panic: Option<Instant> = None;
+                    while panic::catch_unwind(AssertUnwindSafe(|| worker.run())).is_err() {
+                        worker.recover();
+                        if worker.quitting() {
+                            worker.flush();
+                            break;
+                        }
+                        // A fault that recurs at once would otherwise spin the
+                        // worker at full speed.
+                        let recurring = last_panic.is_some_and(|at| at.elapsed() < PANIC_WINDOW);
+                        pause = if recurring {
+                            (pause * 2).clamp(PANIC_PAUSE, MAX_PANIC_PAUSE)
+                        } else {
+                            Duration::ZERO
+                        };
+                        // In slices, so a quit meanwhile keeps to C88's budget.
+                        let until = Instant::now() + pause;
+                        while !worker.quitting() {
+                            let left = until.saturating_duration_since(Instant::now());
+                            if left.is_zero() {
+                                break;
+                            }
+                            thread::sleep(left.min(PANIC_PAUSE_SLICE));
+                        }
+                        last_panic = Some(Instant::now());
+                    }
+                })?
         };
         Ok(CastHost {
             commands,
@@ -454,8 +495,9 @@ impl CastHost {
         Ok(attempt)
     }
 
-    /// Whether the worker still runs: false after [`CastHost::shutdown`],
-    /// and when a panic ended it, which no event reports.
+    /// Whether the worker still runs: false after [`CastHost::shutdown`].
+    /// A panic in the worker ends the attempt it was handling as failed
+    /// and the worker carries on (C107).
     pub fn is_running(&self) -> bool {
         self.worker
             .as_ref()
@@ -585,6 +627,9 @@ struct Worker {
     /// Lives as long as the worker, so a device's next session sees the
     /// certificate of its last one (C21).
     fingerprints: Arc<Mutex<FingerprintBook>>,
+    /// The attempt from its start until its `Ended`, which a panic in
+    /// between still owes the host (C107).
+    in_hand: Option<(AttemptId, DeviceId)>,
 }
 
 impl Worker {
@@ -596,6 +641,25 @@ impl Worker {
             shared,
             running: None,
             fingerprints: Arc::new(Mutex::new(FingerprintBook::new())),
+            in_hand: None,
+        }
+    }
+
+    /// After a panic: the session in hand is torn down as far as it still
+    /// can be and its attempt ends as failed, which frees the slot (C107).
+    fn recover(&mut self) {
+        if let Some(running) = self.running.take() {
+            let quitting = self.quitting();
+            let _ = panic::catch_unwind(AssertUnwindSafe(move || {
+                if quitting {
+                    running.session.quit();
+                } else {
+                    running.session.stop();
+                }
+            }));
+        }
+        if let Some((attempt, device)) = self.in_hand.take() {
+            self.ended(attempt, device, SessionEnd::Failed(SessionError::Internal));
         }
     }
 
@@ -634,7 +698,7 @@ impl Worker {
         self.shared.quitting.load(Ordering::SeqCst)
     }
 
-    fn run(mut self) {
+    fn run(&mut self) {
         loop {
             self.flush();
             let command = if self.running.is_some() {
@@ -759,6 +823,15 @@ impl Worker {
         selected: Arc<AtomicBool>,
     ) {
         let device = target.id;
+        self.in_hand = Some((attempt, device));
+        #[cfg(test)]
+        {
+            let left = self.shared.panic_in_start.load(Ordering::SeqCst);
+            if left > 0 {
+                self.shared.panic_in_start.store(left - 1, Ordering::SeqCst);
+                panic!("a test panic in the Cast worker");
+            }
+        }
         if !selected.load(Ordering::SeqCst) {
             return self.ended(attempt, device, SessionEnd::Deselected);
         }
@@ -901,11 +974,104 @@ impl Worker {
     }
 
     fn ended(&mut self, attempt: AttemptId, device: DeviceId, end: SessionEnd) {
+        if self.in_hand.is_some_and(|(held, _)| held == attempt) {
+            self.in_hand = None;
+        }
         self.shared.release(attempt);
         self.emit(HostEvent::Ended {
             attempt,
             device,
             end,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::audio_ring;
+
+    fn target(byte: u8) -> CastTarget {
+        CastTarget {
+            id: DeviceId([byte; 16]),
+            addresses: Vec::new(),
+            group: None,
+        }
+    }
+
+    fn start(host: &mut CastHost, byte: u8) -> Result<AttemptId, StartRefused> {
+        let (_writer, reader) = audio_ring(48_000);
+        host.start(target(byte), 48_000, Metadata::default(), reader)
+    }
+
+    fn attempt_of(event: &HostEvent) -> Option<AttemptId> {
+        match event {
+            HostEvent::Session { attempt, .. }
+            | HostEvent::Started { attempt, .. }
+            | HostEvent::Ended { attempt, .. } => Some(*attempt),
+            _ => None,
+        }
+    }
+
+    fn next_of(host: &CastHost, attempt: AttemptId) -> HostEvent {
+        let until = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < until {
+            while let Some(event) = host.poll_event() {
+                if attempt_of(&event) == Some(attempt) {
+                    return event;
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("no event of {attempt:?}");
+    }
+
+    // covers: C107
+    #[test]
+    fn a_panic_in_the_worker_ends_the_attempt_and_the_next_start_runs() {
+        let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+        host.shared.panic_in_start.store(1, Ordering::SeqCst);
+        let first = start(&mut host, 1).expect("starts");
+        let end = next_of(&host, first);
+        assert!(
+            matches!(
+                end,
+                HostEvent::Ended {
+                    end: SessionEnd::Failed(SessionError::Internal),
+                    ..
+                }
+            ),
+            "{end:?}"
+        );
+        assert!(host.is_running());
+        assert_eq!(host.playing(), None);
+        let second = start(&mut host, 2).expect("the slot is free again");
+        let mut event = next_of(&host, second);
+        if !matches!(event, HostEvent::Ended { .. }) {
+            host.stop();
+            while !matches!(event, HostEvent::Ended { .. }) {
+                event = next_of(&host, second);
+            }
+        }
+        assert!(host.shutdown());
+    }
+
+    // A quit during the pause after recurring panics waits one slice, not
+    // the pause, which by the sixth panic is 1.6 s.
+    #[test]
+    fn a_quit_during_the_pause_after_recurring_panics_ends_at_once() {
+        let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+        host.shared.panic_in_start.store(6, Ordering::SeqCst);
+        for byte in 1..=6 {
+            let attempt = start(&mut host, byte).expect("starts");
+            assert!(matches!(next_of(&host, attempt), HostEvent::Ended { .. }));
+        }
+        let quit = Instant::now();
+        assert!(host.shutdown());
+        assert!(
+            quit.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            quit.elapsed()
+        );
     }
 }
