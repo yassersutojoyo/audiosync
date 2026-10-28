@@ -741,6 +741,17 @@ impl CastSpeakers {
                     manual.resolved = Some(socket);
                     self.log.log(|| format!("Cast: {text} is at {socket}"));
                     self.pending.push(BackendEvent::CastChanged);
+                    let browsed = self
+                        .list
+                        .entries()
+                        .iter()
+                        .find_map(|entry| match entry.key {
+                            DeviceKey::Id(id) if entry.addresses.contains(&socket) => Some(id),
+                            _ => None,
+                        });
+                    if let Some(id) = browsed {
+                        self.identified(socket, id);
+                    }
                 }
                 Err(error) => {
                     manual.retry_at = Some(Instant::now() + LOOKUP_RETRY);
@@ -788,8 +799,9 @@ impl CastSpeakers {
         }
     }
 
-    /// A browse found the device a speaker added by address is (C18): one
-    /// that is on stays on as that device, and its offset goes with it.
+    /// A browse, or a lookup that lands on a browsed address, found the
+    /// device a speaker added by address is (C18): one that is on stays on
+    /// as that device, and its offset goes with it.
     fn identified(&mut self, from: SocketAddr, id: DeviceId) {
         let Some(manual) = self
             .manual
