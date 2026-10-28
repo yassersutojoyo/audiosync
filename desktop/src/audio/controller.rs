@@ -1664,6 +1664,21 @@ impl<D: Driver> Controller<D> {
         }
     }
 
+    /// Cancels the restarts (S325) still due at a sleep (S332): the link's
+    /// timing before it says nothing about the link after. One already
+    /// fading or resting is out of its stream and finishes as it would.
+    fn cancel_fresh_restarts_for_sleep(&mut self) {
+        let due: Vec<String> = self
+            .fresh_restarts
+            .iter()
+            .filter(|(_, restart)| matches!(restart, FreshRestart::Due(_)))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in due {
+            self.cancel_fresh_restart(&id, "the PC slept");
+        }
+    }
+
     fn cancel_fresh_restart(&mut self, id: &str, why: &str) {
         let Some(restart) = self.fresh_restarts.remove(id) else {
             return;
@@ -2176,6 +2191,7 @@ impl<D: Driver> Controller<D> {
             match notice {
                 PowerNotice::Suspend if self.power.suspended.is_none() => {
                     self.power.suspended = Some(now);
+                    self.cancel_fresh_restarts_for_sleep();
                     self.log.log(|| {
                         "the PC is going to sleep: a capture lost now is opened again once it \
                          wakes"
@@ -2242,6 +2258,11 @@ impl<D: Driver> Controller<D> {
         }
         for left in self.refused.values_mut() {
             *left = REFUSED_GIVE_UP_POLLS;
+        }
+        // A sleep whose suspend notice went missing cancels them here.
+        self.cancel_fresh_restarts_for_sleep();
+        for appeared in self.appeared.values_mut() {
+            *appeared = self.polls;
         }
         let by = match found {
             ResumeFound::Notice => "as Windows' resume notice said",
@@ -6925,6 +6946,45 @@ mod tests {
         assert_eq!(starts_of(&ended, BUDS), 2, "started with the session");
         poll_quietly(&mut ended, 20);
         assert_eq!(starts_of(&ended, BUDS), 2);
+    }
+
+    // covers: S325, S332
+    #[test]
+    fn a_sleep_cancels_a_fresh_link_restart_and_the_output_plays_on() {
+        let noticed = |backend: &mut MockBackend| sleep_two_hours(backend);
+        let by_clock = |backend: &mut MockBackend| {
+            backend.pass_wall_time(Duration::from_secs(11));
+        };
+        let sleeps: [&dyn Fn(&mut MockBackend); 2] = [&noticed, &by_clock];
+        for sleep in sleeps {
+            let mut backend = backend();
+            backend.start(&SourceId::WholeSystem).unwrap();
+            fresh_buds(&mut backend);
+            poll_quietly(&mut backend, 1);
+            sleep(&mut backend);
+            poll_quietly(&mut backend, 20);
+            assert_eq!(starts_of(&backend, BUDS), 1, "no restart");
+            assert_eq!(backend.driver().renderers_faded(), 0);
+            assert_eq!(playing(&backend), [BUDS, HEADPHONES, SPEAKERS]);
+        }
+    }
+
+    // covers: S325, S332
+    #[test]
+    fn a_bluetooth_links_3_s_start_over_at_the_resume() {
+        // Listed 2.5 s before the sleep and started at the resume: its link
+        // counts as new.
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        backend.poll();
+        poll_quietly(&mut backend, 5);
+        sleep_two_hours(&mut backend);
+        poll_quietly(&mut backend, 1);
+        backend.set_output_enabled(BUDS, true).unwrap();
+        poll_quietly(&mut backend, 20);
+        assert_eq!(starts_of(&backend, BUDS), 2, "it restarted");
+        assert_eq!(backend.driver().renderers_faded(), 1);
     }
 
     // covers: S325, S68
