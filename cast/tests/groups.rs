@@ -16,6 +16,7 @@ use audiosync_cast::client::FingerprintBook;
 use audiosync_cast::discovery::{
     BrowseEvent, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent, ServiceRecord,
 };
+use audiosync_cast::error::ConnectError;
 use audiosync_cast::group::{GroupMember, GroupRecords, MemberList, MultizoneMessage};
 use audiosync_cast::host::{CastHost, CastTarget, DeviceMemory, StartRefused};
 use audiosync_cast::media::Metadata;
@@ -472,6 +473,36 @@ fn a_leader_handover_reconnects_to_the_new_records_and_relaunches() {
     assert_eq!(new_leader.payloads(NS_MULTIZONE, "GET_STATUS").len(), 1);
     session.stop();
     new_leader.join();
+}
+
+// covers: C80, C81
+#[test]
+fn a_group_without_addresses_keeps_retrying_until_its_records_list_one() {
+    let leader = FakeDevice::start(Behavior {
+        members: Some(members_json()),
+        ..Behavior::default()
+    });
+    let records = GroupRecords::new(Vec::new());
+    let config = SessionConfig {
+        addresses: Vec::new(),
+        format: StreamFormat::wav(48_000).expect("rate"),
+        metadata: Metadata::default(),
+        artwork: None,
+        group: Some(records.clone()),
+        fingerprints: None,
+    };
+    let (writer, reader) = audio_ring(48_000);
+    let _feed = feed(writer);
+    let selected = Arc::new(AtomicBool::new(true));
+    let mut failures = Vec::new();
+    let session = CastSession::start(config, reader, selected, |error, wait| {
+        failures.push((matches!(error, ConnectError::NoAddress), wait));
+        records.set_group(vec![leader.address]);
+    });
+    let mut session = session.expect("plays once the records list an address");
+    assert_eq!(failures, [(true, Duration::from_secs(1))]);
+    session.stop();
+    leader.join();
 }
 
 // covers: C98
