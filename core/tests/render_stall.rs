@@ -1,0 +1,132 @@
+//! A short stall of the whole process on the Mac (the sitting of
+//! 2026-10-28: a 2 s `sample` of the app held every thread for about
+//! 240 ms). The capture loses the blocks it would have written meanwhile and
+//! each output's device plays on without buffers from us, so its output
+//! timeline steps by the callbacks it missed. The two rarely lose the same
+//! time, and the difference, inside the dead band, was kept for good: a
+//! Bluetooth speaker stayed audibly late against the other outputs. Here the
+//! output comes back first, while the capture's newest stamp is still stale.
+//!
+//! The capture writes a ramp in stamped 512-frame blocks at 48 kHz; the
+//! output asks for 512 device frames at 44.1 kHz per callback, on time, and
+//! is given the time it reads at and its first frame's output time.
+
+use std::sync::Arc;
+
+use audiosync_core::fade::FadeState;
+use audiosync_core::reader::Reader;
+use audiosync_core::render::{Renderer, RendererControl};
+use audiosync_core::ring::{Ring, RingWriter};
+use audiosync_core::volume::SharedGain;
+
+const RATE: u32 = 48_000;
+const DEVICE_RATE: u32 = 44_100;
+/// Time units per second: both rates' frames are whole numbers of units.
+const SECOND: u128 = 48_000 * 44_100;
+const BLOCK: usize = 512;
+const CALLBACK: usize = 512;
+const STALL_AT_S: u128 = 5;
+const CAPTURE_GAP_MS: u128 = 260;
+/// The output's IO cycle comes back 20 ms before the capture's.
+const OUTPUT_GAP_MS: u128 = 240;
+const SECONDS: u128 = 30;
+/// Delays from this many s on are judged against those before the stall.
+const RECOVERED_S: f64 = 20.0;
+
+fn ns(at: u128) -> u64 {
+    (1_000_000_000 + at * 1_000_000_000 / SECOND) as u64
+}
+
+fn write(writer: &mut RingWriter, first: u64, at: u128) {
+    let samples: Vec<f32> = (first..first + BLOCK as u64)
+        .flat_map(|i| [(i as f64 / 1e6) as f32; 2])
+        .collect();
+    writer.write_at(&samples, BLOCK, ns(at));
+}
+
+/// The output's capture-to-output delay at each open callback's last frame,
+/// in ms, with the time it was played at in s.
+fn run() -> Vec<(f64, f64)> {
+    let ring = Ring::for_rate(RATE).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let gain = Arc::new(SharedGain::new(1.0));
+    let write_period = BLOCK as u128 * SECOND / u128::from(RATE);
+    let callback_period = CALLBACK as u128 * SECOND / u128::from(DEVICE_RATE);
+    let stall_at = STALL_AT_S * SECOND;
+    let capture_back = stall_at + CAPTURE_GAP_MS * SECOND / 1000;
+    let output_back = stall_at + OUTPUT_GAP_MS * SECOND / 1000;
+    let mut written = 0u64;
+    for _ in 0..RATE as usize / BLOCK {
+        write(&mut writer, written, 0);
+        written += BLOCK as u64;
+    }
+    let reader = Reader::new(Arc::clone(&ring), RATE);
+    let control = RendererControl::new(&reader);
+    let mut renderer =
+        Renderer::new(reader, &control, Arc::clone(&gain), RATE, DEVICE_RATE, 2).unwrap();
+    let mut out = vec![0.0f32; CALLBACK * 2];
+    // Frames from this index on were captured this many s later than their
+    // index says: the capture's own skip.
+    let mut skip: Option<(u64, f64)> = None;
+    let mut delays = Vec::new();
+    let (mut k, mut pull) = (1u128, 0u128);
+    loop {
+        let write_at = k * write_period;
+        let pull_at = pull * callback_period;
+        if write_at.min(pull_at) > SECONDS * SECOND {
+            break;
+        }
+        if write_at <= pull_at {
+            if write_at >= stall_at && write_at < capture_back {
+                skip.get_or_insert((written, 0.0)).1 += BLOCK as f64 / f64::from(RATE);
+            } else {
+                write(&mut writer, written, write_at);
+                written += BLOCK as u64;
+            }
+            k += 1;
+            continue;
+        }
+        pull += 1;
+        if pull_at >= stall_at && pull_at < output_back {
+            continue;
+        }
+        let output_at = pull_at + SECOND / 5;
+        renderer.render_timed_at(&mut out, ns(output_at), ns(pull_at));
+        if renderer.fade_state() != FadeState::Open || pull_at < 2 * SECOND {
+            continue;
+        }
+        let last = CALLBACK - 1;
+        let index = (f64::from(out[last * 2]) * 1e6).round() as u64;
+        let played_at = output_at as f64 / SECOND as f64 + last as f64 / f64::from(DEVICE_RATE);
+        let skipped = skip.map_or(0.0, |(from, s)| if index >= from { s } else { 0.0 });
+        let captured_at = index as f64 / f64::from(RATE) + skipped;
+        delays.push((played_at, (played_at - captured_at) * 1000.0));
+    }
+    delays
+}
+
+// covers: S207
+#[test]
+fn after_a_stall_of_the_whole_process_the_output_returns_to_its_delay() {
+    let delays = run();
+    let before: Vec<f64> = delays
+        .iter()
+        .filter(|&&(at, _)| at < STALL_AT_S as f64)
+        .map(|&(_, d)| d)
+        .collect();
+    let at_delay = before.iter().sum::<f64>() / before.len() as f64;
+    let after: Vec<f64> = delays
+        .iter()
+        .filter(|&&(at, _)| at >= RECOVERED_S)
+        .map(|&(_, d)| d)
+        .collect();
+    assert!(!before.is_empty() && !after.is_empty());
+    let worst = after
+        .iter()
+        .map(|d| d - at_delay)
+        .fold(0.0f64, |w, off| if off.abs() > w.abs() { off } else { w });
+    assert!(
+        worst.abs() <= 2.0,
+        "off its delay before the stall by up to {worst:.2} ms from {RECOVERED_S} s on"
+    );
+}
