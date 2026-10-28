@@ -513,7 +513,10 @@ mod tests {
     #[test]
     fn the_running_test_binary_can_be_renamed_aside_and_back() {
         const HOLD: &str = "AUDIOSYNC_SWAP_TEST_HOLD";
+        const READY: &str = "running-copy-ready";
         if std::env::var_os(HOLD).is_some() {
+            let mut out = io::stdout();
+            let _ = writeln!(out, "{READY}").and_then(|()| out.flush());
             let _ = io::Read::read_to_end(&mut io::stdin(), &mut Vec::new());
             return;
         }
@@ -547,11 +550,18 @@ mod tests {
             ])
             .env(HOLD, "1")
             .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("the copy starts");
         let child = copy.child.insert(child);
+        // A renamed test would run nothing and leave a dead image to rename.
+        let out = io::BufReader::new(child.stdout.take().unwrap());
+        let mut lines = io::BufRead::lines(out);
+        let ready = lines
+            .by_ref()
+            .any(|line| line.is_ok_and(|line| line == READY));
+        assert!(ready, "the copy runs this test and holds");
         let aside = running.with_extension("exe.renamed-aside");
         let there = RealFiles.rename(&running, &aside);
         let back = there
@@ -559,6 +569,7 @@ mod tests {
             .ok()
             .map(|_| RealFiles.rename(&aside, &running));
         drop(child.stdin.take());
+        lines.for_each(drop);
         let exit = child.wait().expect("the copy exits");
         there.expect("a running image renames aside");
         back.unwrap().expect("and back");
