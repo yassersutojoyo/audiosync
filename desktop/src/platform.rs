@@ -965,6 +965,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_clock_follows_the_local_offset_across_midnight() {
+        assert_eq!(clock_at(0, 0), "00.00");
+        assert_eq!(clock_at(86_399, 0), "23.59");
+        assert_eq!(clock_at(16 * 3600 + 40 * 60, 7 * 3600), "23.40");
+        assert_eq!(clock_at(20 * 3600, 7 * 3600), "03.00");
+        assert_eq!(clock_at(3600, -2 * 3600), "23.00");
+        assert_eq!(clock_at(0, 5 * 3600 + 30 * 60), "05.30");
+    }
+
     // covers: S170
     #[test]
     fn the_log_names_the_host_it_runs_on() {
