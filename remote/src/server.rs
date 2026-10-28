@@ -46,6 +46,7 @@ const RESERVED_REQUEST: Duration = Duration::from_secs(1);
 /// Event streams one paired device may hold; a new one ends the oldest.
 const MAX_STREAMS_PER_DEVICE: usize = 2;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+const PROBE: Duration = Duration::from_millis(1);
 /// How long a stop waits for the connection threads.
 const STOP_GRACE: Duration = Duration::from_millis(500);
 /// How long a refused connection is drained before it is closed.
@@ -366,7 +367,7 @@ struct Shared {
     events: Mutex<VecDeque<ServerEvent>>,
     connections: Mutex<Vec<Connection>>,
     /// The open event streams, oldest first, with the token each belongs to.
-    streams: Mutex<Vec<(u64, String)>>,
+    streams: Mutex<Vec<(u64, String, Arc<TcpStream>)>>,
     next_stream: AtomicU64,
 }
 
@@ -457,21 +458,35 @@ impl Shared {
         }
     }
 
-    /// Registers a new event stream for `token`, ending the device's oldest
-    /// beyond [`MAX_STREAMS_PER_DEVICE`].
-    fn open_stream(&self, token: &str) -> u64 {
+    /// Registers a new event stream for `token`, dropping the device's
+    /// streams their page closed, then ending its oldest beyond
+    /// [`MAX_STREAMS_PER_DEVICE`].
+    fn open_stream(&self, token: &str, probe: TcpStream) -> u64 {
         let id = self.next_stream.fetch_add(1, Ordering::SeqCst);
+        let probes: Vec<(u64, Arc<TcpStream>)> = lock(&self.streams)
+            .iter()
+            .filter(|(_, owner, _)| owner == token)
+            .map(|(id, _, probe)| (*id, Arc::clone(probe)))
+            .collect();
+        // A closed page's stream lingers until a write fails; evicting a live one would mark its page replaced.
+        let gone: Vec<u64> = probes
+            .iter()
+            .filter(|(_, probe)| closed(probe))
+            .map(|(id, _)| *id)
+            .collect();
         let ended = {
             let mut streams = lock(&self.streams);
-            streams.push((id, token.to_owned()));
+            let before = streams.len();
+            streams.retain(|(id, _, _)| !gone.contains(id));
+            streams.push((id, token.to_owned(), Arc::new(probe)));
             let mine: Vec<u64> = streams
                 .iter()
-                .filter(|(_, owner)| owner == token)
-                .map(|(id, _)| *id)
+                .filter(|(_, owner, _)| owner == token)
+                .map(|(id, _, _)| *id)
                 .collect();
             let excess = mine.len().saturating_sub(MAX_STREAMS_PER_DEVICE);
-            streams.retain(|(id, _)| !mine[..excess].contains(id));
-            excess > 0
+            streams.retain(|(id, _, _)| !mine[..excess].contains(id));
+            streams.len() <= before
         };
         if ended {
             self.wake_streams();
@@ -480,11 +495,11 @@ impl Shared {
     }
 
     fn stream_open(&self, id: u64) -> bool {
-        lock(&self.streams).iter().any(|(open, _)| *open == id)
+        lock(&self.streams).iter().any(|(open, _, _)| *open == id)
     }
 
     fn close_stream(&self, id: u64) {
-        lock(&self.streams).retain(|(open, _)| *open != id);
+        lock(&self.streams).retain(|(open, _, _)| *open != id);
     }
 
     /// Marks the connection that owns `paired` as paired; false when it was
@@ -1365,9 +1380,26 @@ fn preset(request: &Request, id: Option<String>, shared: &Shared) -> Answer {
 /// for a heartbeat. It ends when the server stops, the device is forgotten
 /// or the device opens a stream too many, which sends a last `replaced` event.
 fn stream_events(stream: TcpStream, token: &str, shared: &Shared) {
-    let id = shared.open_stream(token);
+    let Ok(probe) = stream.try_clone() else {
+        return;
+    };
+    let id = shared.open_stream(token, probe);
     send_events(stream, token, id, shared);
     shared.close_stream(id);
+}
+
+/// Whether the page closed its event stream; a page never sends on one.
+fn closed(stream: &TcpStream) -> bool {
+    if stream.set_read_timeout(Some(PROBE)).is_err() {
+        return false;
+    }
+    match stream.peek(&mut [0u8; 1]) {
+        Ok(count) => count == 0,
+        Err(error) => !matches!(
+            error.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+        ),
+    }
 }
 
 fn send_events(mut stream: TcpStream, token: &str, id: u64, shared: &Shared) {
