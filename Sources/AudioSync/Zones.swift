@@ -154,7 +154,7 @@ enum ZoneEdit {
 
     /// `zones` after Remove on Cast device `id` added by address: one that left the list leaves its zone too.
     static func removingCast(_ id: String, offList: Bool, from zones: [SpeakerZone]) -> [SpeakerZone] {
-        offList ? removing(CastID.key(id), from: zones) : zones
+        zones
     }
 
     /// `key` after the members of zone `id`, with its kept name, out of the
