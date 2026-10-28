@@ -800,6 +800,36 @@ fn a_resumed_app_without_its_media_reloads_once() {
     }
 }
 
+// covers: C55, C81
+#[test]
+fn a_recovery_on_another_local_address_streams_from_that_address() {
+    let device = FakeDevice::start(Behavior {
+        on_media_status: OnMediaStatus::Empty,
+        ..Behavior::default()
+    });
+    let (writer, reader) = audio_ring(48_000);
+    let _feed = feed(writer, 9);
+    let mut config = config(&device);
+    config.addresses.push(device.address_v6);
+    let selected = Arc::new(AtomicBool::new(true));
+    let mut session =
+        CastSession::start(config, reader, selected, |_, _| {}).expect("plays on 127.0.0.1");
+    assert!(session.stream_url().starts_with("http://127.0.0.1:"));
+
+    device.send(Command::MoveToIpv6);
+    let until = Instant::now() + Duration::from_secs(20);
+    while count(&device, NS_MEDIA, "LOAD") < 2 && Instant::now() < until {
+        session.run_for(Duration::from_millis(50));
+    }
+    let loads = device.payloads(NS_MEDIA, "LOAD");
+    assert_eq!(loads.len(), 2, "loaded again after the reconnect on ::1");
+    let url = loads[1]["media"]["contentId"].as_str().expect("a URL");
+    assert!(url.starts_with("http://[::1]:"), "{url}");
+    assert_eq!(session.stream_url(), url);
+    session.stop();
+    device.join();
+}
+
 /// The header of a PNG of `width` by `height` pixels: all the stream server
 /// reads of it.
 fn png(width: u32, height: u32) -> Vec<u8> {

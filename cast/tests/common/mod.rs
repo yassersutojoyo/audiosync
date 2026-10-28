@@ -202,6 +202,9 @@ pub enum Command {
     /// Close the current TCP connection without a TLS close, then accept
     /// the next one.
     DropConnection,
+    /// [`Command::DropConnection`], and from then on accept on ::1 only,
+    /// as a device whose host's IPv4 address went away.
+    MoveToIpv6,
     /// Forget the running apps without telling anyone.
     ClearApps,
     /// Stop reading the current connection, so the sender's writes fill
@@ -223,6 +226,8 @@ pub struct Fetch {
 
 pub struct FakeDevice {
     pub address: SocketAddr,
+    /// The same device on ::1.
+    pub address_v6: SocketAddr,
     pub log: Arc<Mutex<Vec<CastMessage>>>,
     pub fetches: Arc<Mutex<Vec<Fetch>>>,
     pub connections: Arc<Mutex<u32>>,
@@ -284,6 +289,10 @@ impl FakeDevice {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         listener.set_nonblocking(true).expect("nonblocking");
         let address = listener.local_addr().expect("address");
+        let mut listener = Some(listener);
+        let listener_v6 = TcpListener::bind("[::1]:0").expect("bind ::1");
+        listener_v6.set_nonblocking(true).expect("nonblocking");
+        let address_v6 = listener_v6.local_addr().expect("address");
         let log = Arc::new(Mutex::new(Vec::new()));
         let fetches = Arc::new(Mutex::new(Vec::new()));
         let connections = Arc::new(Mutex::new(0));
@@ -299,6 +308,7 @@ impl FakeDevice {
             commands: commands.clone(),
             fetches: Arc::clone(&fetches),
             stop_fetching: Arc::clone(&stop_fetching),
+            ipv4_closed: false,
         };
         let thread_log = Arc::clone(&log);
         let thread_connections = Arc::clone(&connections);
@@ -312,7 +322,14 @@ impl FakeDevice {
                     Ok(Command::Disconnect) | Err(mpsc::TryRecvError::Disconnected) => return,
                     Ok(_) | Err(mpsc::TryRecvError::Empty) => {}
                 }
-                match listener.accept() {
+                if device.ipv4_closed {
+                    listener = None;
+                }
+                let accepted = match listener.as_ref().map(TcpListener::accept) {
+                    Some(Ok(accepted)) => Ok(accepted),
+                    _ => listener_v6.accept(),
+                };
+                match accepted {
                     Ok((tcp, _)) => {
                         *thread_connections.lock().expect("count") += 1;
                         let _ = tcp.set_nonblocking(false);
@@ -347,6 +364,7 @@ impl FakeDevice {
         });
         FakeDevice {
             address,
+            address_v6,
             log,
             fetches,
             connections,
@@ -490,6 +508,7 @@ struct Device {
     commands: mpsc::Sender<Command>,
     fetches: Arc<Mutex<Vec<Fetch>>>,
     stop_fetching: Arc<AtomicBool>,
+    ipv4_closed: bool,
 }
 
 impl Device {
@@ -821,6 +840,11 @@ fn serve(
                 Ok(Command::ClearApps) => device.apps.clear(),
                 Ok(Command::Stall) => stalled = true,
                 Ok(Command::DropConnection) => {
+                    let _ = stream.sock.0.shutdown(std::net::Shutdown::Both);
+                    return false;
+                }
+                Ok(Command::MoveToIpv6) => {
+                    device.ipv4_closed = true;
                     let _ = stream.sock.0.shutdown(std::net::Shutdown::Both);
                     return false;
                 }
