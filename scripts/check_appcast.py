@@ -54,6 +54,7 @@ import datetime
 import io
 import json
 import os
+import re
 import struct
 import sys
 import tempfile
@@ -79,10 +80,15 @@ S310_REFUSAL = (f"the appcast carries Windows items, but no S310 Mac check is on
 def s310_mac_check():
     """The date the S310 Mac check passed, from the constant or the variable; None without one."""
     for text in (S310_MAC_CHECK_PASSED, os.environ.get(S310_VARIABLE, "")):
+        # fromisoformat alone also takes 20261101 and 2026-W44-4.
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text.strip()):
+            continue
         try:
-            return datetime.date.fromisoformat(text.strip())
+            date = datetime.date.fromisoformat(text.strip())
         except ValueError:
             continue
+        if date <= datetime.date.today():
+            return date
     return None
 
 
@@ -631,11 +637,16 @@ def self_test():
                        names + other_assets, "no S310 Mac check is on record")
         against_assets("a Mac-only release without the S310 record", good()[:1],
                        names[:1] + other_assets, None, mac_only=True)
-        S310_MAC_CHECK_PASSED = "2026-11-01"
+        S310_MAC_CHECK_PASSED = "2026-10-28"
         against_assets("Windows items with the S310 check recorded in the script", good(),
                        names + other_assets, None)
         S310_MAC_CHECK_PASSED = ""
-        os.environ[S310_VARIABLE] = "2026-11-01"
+        for bad in ("yes", "20261028", "2026-W44-4", "2026-02-30",
+                    (datetime.date.today() + datetime.timedelta(days=1)).isoformat()):
+            os.environ[S310_VARIABLE] = bad
+            against_assets(f"Windows items with {S310_VARIABLE}={bad}", good(),
+                           names + other_assets, "no S310 Mac check is on record")
+        os.environ[S310_VARIABLE] = "2026-10-28"
         against_assets("assets of a full release", good(), names + other_assets, None)
         against_assets("assets of a Mac-only release", good()[:1], names[:1] + other_assets, None,
                        mac_only=True)
