@@ -417,6 +417,8 @@ pub struct CastInfo {
     /// Set for a speaker the user added by address (spec C18): the address
     /// as the settings keep it.
     pub address: Option<String>,
+    /// No record or address check vouches for it now (spec C17, C18).
+    pub offline: bool,
     /// Whether the user turned it on.
     pub enabled: bool,
     /// The device's volume as it last reported it, 0 to 100.

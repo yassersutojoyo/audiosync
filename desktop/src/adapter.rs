@@ -2497,6 +2497,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     members: group.members,
                 }),
                 added_by_address: speaker.address.is_some(),
+                offline: speaker.offline,
             }),
             group: None,
             mic_left_out: None,
