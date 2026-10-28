@@ -5373,8 +5373,17 @@ do {
           "equalizer storage: nothing saved, or unreadable data, gives the defaults")
     var fewBands = tuned
     fewBands.gains = [1, 2, 3]
-    check(StoredEqualizer.decode(StoredEqualizer.encode(fewBands)) == Equalizer.Settings(),
-          "equalizer storage: settings with another band count give the defaults")
+    let padded = StoredEqualizer.decode(StoredEqualizer.encode(fewBands))
+    check(padded.enabled && padded.preamp == -3
+            && padded.gains == [1, 2, 3] + [Double](repeating: 0, count: Equalizer.frequencies.count - 3),
+          "equalizer storage: saved settings with fewer bands keep theirs and the missing ones are flat (S23)",
+          "\(padded)")
+    var manyBands = tuned
+    manyBands.gains += [5, -5]
+    let truncated = StoredEqualizer.decode(StoredEqualizer.encode(manyBands))
+    check(truncated == tuned,
+          "equalizer storage: saved settings with more bands keep the first ones and drop the extras (S23)",
+          "\(truncated)")
     var outOfRange = tuned
     outOfRange.preamp = 60; outOfRange.gains[1] = -40
     let clamped = StoredEqualizer.decode(StoredEqualizer.encode(outOfRange))
