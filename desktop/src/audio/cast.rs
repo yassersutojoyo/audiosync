@@ -2488,6 +2488,21 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 52.0);
     }
 
+    // covers: C70, C104, C105 (nothing is sent before the first status)
+    #[test]
+    fn a_level_set_before_the_first_status_never_swallows_a_later_change_from_elsewhere() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_volume(KITCHEN, 30.0);
+        report(&fake, &mut cast, 0.8);
+        report(&fake, &mut cast, 0.3);
+        report(&fake, &mut cast, 0.7);
+        assert_eq!(shown(&cast, KITCHEN), 70.0);
+        report(&fake, &mut cast, 0.3);
+        assert_eq!(shown(&cast, KITCHEN), 30.0);
+    }
+
     #[test]
     fn the_capture_feeds_the_current_session() {
         let (fake, mut cast) = listed();
