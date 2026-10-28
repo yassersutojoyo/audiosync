@@ -20,6 +20,8 @@ use crate::{StartError, audio, single_instance};
 #[path = "../tray.rs"]
 mod tray;
 
+pub use tray::stop_open_motion;
+
 /// The WASAPI backend, with the media sessions as the playing track and the
 /// now-playing card's controls.
 pub fn start(log: &DebugLog) -> Result<Started, StartError> {

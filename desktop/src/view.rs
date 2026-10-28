@@ -4012,6 +4012,8 @@ impl App {
     }
 
     pub fn hide_flyout(&self) {
+        #[cfg(windows)]
+        crate::os::stop_open_motion();
         let _ = self.flyout.hide();
     }
 

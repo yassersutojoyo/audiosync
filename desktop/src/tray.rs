@@ -25,7 +25,7 @@ use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, Predefin
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 #[cfg(windows)]
-use crate::flyout_motion::{self, Slide};
+use crate::flyout_motion::{self, Slide, Tick};
 #[cfg(windows)]
 use crate::placement::{self, Bounds};
 #[cfg(windows)]
@@ -81,7 +81,8 @@ thread_local! {
     /// Where the flyout belongs (physical pixels); while it opens, the
     /// motion runs toward it, and a refresh that moves it moves the target.
     static FLYOUT_PLACE: Cell<Option<(i32, i32)>> = const { Cell::new(None) };
-    static FLYOUT_MOTION: Cell<Option<(Slide, Instant)>> = const { Cell::new(None) };
+    /// The open motion, with when the window showed (`None` before it did).
+    static FLYOUT_MOTION: Cell<Option<(Slide, Option<Instant>)>> = const { Cell::new(None) };
     static FLYOUT_MOTION_TIMER: slint::Timer = slint::Timer::default();
 }
 
@@ -204,6 +205,7 @@ impl Tray {
             match event {
                 WindowEvent::Focused(false) => {
                     FLYOUT_CLOSED_AT.with(|at| at.set(Some(Instant::now())));
+                    stop_open_motion();
                     let _ = window.hide();
                 }
                 // Slint reads the Windows accent after this filter returns.
@@ -397,7 +399,13 @@ fn on_menu_event(id: MenuId) {
 #[cfg(windows)]
 fn show_flyout(app: &App, icon: Bounds) {
     let flyout = app.flyout.window();
+    // Faded out and at its starting place before it shows, so it never
+    // appears drawn in full where it last was.
+    FLYOUT_ICON.with(|cell| cell.set(Some(icon)));
+    start_open_motion(app, icon);
+    place_flyout(app, icon);
     if flyout.show().is_err() {
+        stop_open_motion();
         return;
     }
     flyout.with_winit_window(|window| {
@@ -407,8 +415,8 @@ fn show_flyout(app: &App, icon: Bounds) {
     // With the system's rounded frame, the flyout leaves out its own edge.
     let rounded = app.apply_frame(flyout, "tray flyout", crate::backdrop::Frame::Flyout);
     app.flyout.set_rounded(rounded);
-    FLYOUT_ICON.with(|cell| cell.set(Some(icon)));
-    start_open_motion(app, icon);
+    FLYOUT_MOTION.with(|cell| cell.set(cell.get().map(|(slide, _)| (slide, Some(Instant::now())))));
+    // Shown on the icon's monitor, the window has that monitor's scale.
     place_flyout(app, icon);
     platform::bring_to_front(flyout);
     app.flyout.invoke_take_focus();
@@ -430,10 +438,9 @@ fn work_area_of(icon: Bounds) -> Bounds {
 /// app runs.
 #[cfg(windows)]
 fn start_open_motion(app: &App, icon: Bounds) {
-    let scale = f64::from(app.flyout.window().scale_factor());
     let edge = placement::taskbar_edge(icon, work_area_of(icon));
-    let slide = flyout_motion::plan(flyout_motion::animations_on(), edge, scale);
-    FLYOUT_MOTION.with(|cell| cell.set(slide.map(|slide| (slide, Instant::now()))));
+    let slide = flyout_motion::plan(flyout_motion::animations_on(), edge);
+    FLYOUT_MOTION.with(|cell| cell.set(slide.map(|slide| (slide, None))));
     app.flyout
         .set_content_opacity(if slide.is_some() { 0.0 } else { 1.0 });
     FLYOUT_MOTION_TIMER.with(|timer| {
@@ -443,6 +450,13 @@ fn start_open_motion(app: &App, icon: Bounds) {
             timer.stop();
         }
     });
+}
+
+/// Ends the open motion where it is; the next open sets the content's fade.
+#[cfg(windows)]
+pub fn stop_open_motion() {
+    FLYOUT_MOTION.with(|cell| cell.set(None));
+    FLYOUT_MOTION_TIMER.with(slint::Timer::stop);
 }
 
 #[cfg(windows)]
@@ -455,20 +469,27 @@ fn step_open_motion() {
     let (Some((slide, started)), Some((x, y))) = (motion, FLYOUT_PLACE.with(Cell::get)) else {
         return;
     };
-    let step = slide.at(started.elapsed());
-    // Closed mid-motion: the next open starts over.
-    let done = step.done || !flyout.is_visible();
-    let (dx, dy) = if done { (0.0, 0.0) } else { step.offset };
-    let at = slint::PhysicalPosition::new(x + dx.round() as i32, y + dy.round() as i32);
+    // Its clock starts once the window shows; until then it waits at its start.
+    let (elapsed, visible) = match started {
+        None => (Duration::ZERO, true),
+        Some(at) => (at.elapsed(), flyout.is_visible()),
+    };
+    let ((dx, dy), opacity) = match slide.tick(elapsed, f64::from(flyout.scale_factor()), visible) {
+        Tick::Move { offset, opacity } => (offset, opacity),
+        Tick::Settle => {
+            stop_open_motion();
+            ((0, 0), 1.0)
+        }
+        Tick::Abandon => {
+            stop_open_motion();
+            return;
+        }
+    };
+    let at = slint::PhysicalPosition::new(x + dx, y + dy);
     if flyout.position() != at {
         flyout.set_position(at);
     }
-    app.flyout
-        .set_content_opacity(if done { 1.0 } else { step.opacity });
-    if done {
-        FLYOUT_MOTION.with(|cell| cell.set(None));
-        FLYOUT_MOTION_TIMER.with(slint::Timer::stop);
-    }
+    app.flyout.set_content_opacity(opacity);
 }
 
 /// Sizes the flyout to its parts, as much as the work area of the icon's

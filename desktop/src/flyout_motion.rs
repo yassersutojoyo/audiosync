@@ -17,45 +17,58 @@ pub const FADE: Duration = Duration::from_millis(167);
 pub const DISTANCE: f64 = 16.0;
 
 /// An open motion under way, from where the flyout starts relative to its
-/// place, in physical pixels.
+/// place, in logical pixels; each tick scales it by the window's scale
+/// then, which is the icon monitor's once the window is there.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Slide {
     from: (f64, f64),
 }
 
-/// Where the flyout is at one moment of its motion.
+/// What one tick of the motion does to the flyout.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Step {
-    /// How far from its place, in physical pixels (rounded by the caller).
-    pub offset: (f64, f64),
-    pub opacity: f32,
-    pub done: bool,
+pub enum Tick {
+    /// `offset` physical pixels from its place, the content at `opacity`.
+    Move { offset: (i32, i32), opacity: f32 },
+    /// The motion ended: in place, the content fully shown.
+    Settle,
+    /// It closed mid-motion: the motion stops and the content stays faded,
+    /// so the next open never shows it at full strength first.
+    Abandon,
 }
 
-/// The motion for a flyout opening from `edge` at `scale`; `None` opens it
-/// in place. `animations` is Windows' setting; one Windows didn't report
-/// counts as off, so a motion-sensitive user never gets motion by mistake.
-pub fn plan(animations: Option<bool>, edge: Edge, scale: f64) -> Option<Slide> {
+/// The motion for a flyout opening from `edge`; `None` opens it in place.
+/// `animations` is Windows' setting; one Windows didn't report counts as
+/// off, so a motion-sensitive user never gets motion by mistake.
+pub fn plan(animations: Option<bool>, edge: Edge) -> Option<Slide> {
     if animations != Some(true) {
         return None;
     }
-    let distance = DISTANCE * scale;
     let from = match edge {
-        Edge::Bottom => (0.0, distance),
-        Edge::Top => (0.0, -distance),
-        Edge::Right => (distance, 0.0),
-        Edge::Left => (-distance, 0.0),
+        Edge::Bottom => (0.0, DISTANCE),
+        Edge::Top => (0.0, -DISTANCE),
+        Edge::Right => (DISTANCE, 0.0),
+        Edge::Left => (-DISTANCE, 0.0),
     };
     Some(Slide { from })
 }
 
 impl Slide {
-    pub fn at(self, elapsed: Duration) -> Step {
-        let left = 1.0 - decelerate(fraction(elapsed, SLIDE));
-        Step {
-            offset: (self.from.0 * left, self.from.1 * left),
+    /// Where the flyout is `elapsed` into its motion at `scale`; `visible`
+    /// says whether it is still open.
+    pub fn tick(self, elapsed: Duration, scale: f64, visible: bool) -> Tick {
+        if !visible {
+            return Tick::Abandon;
+        }
+        if elapsed >= SLIDE && elapsed >= FADE {
+            return Tick::Settle;
+        }
+        let left = (1.0 - decelerate(fraction(elapsed, SLIDE))) * scale;
+        Tick::Move {
+            offset: (
+                (self.from.0 * left).round() as i32,
+                (self.from.1 * left).round() as i32,
+            ),
             opacity: fraction(elapsed, FADE) as f32,
-            done: elapsed >= SLIDE && elapsed >= FADE,
         }
     }
 }
@@ -103,39 +116,58 @@ mod tests {
         Duration::from_millis(n)
     }
 
+    fn moved(tick: Tick) -> ((i32, i32), f32) {
+        match tick {
+            Tick::Move { offset, opacity } => (offset, opacity),
+            other => panic!("{other:?}"),
+        }
+    }
+
     #[test]
     fn no_motion_when_windows_animations_are_off_or_unknown() {
-        assert_eq!(plan(Some(false), Edge::Bottom, 1.0), None);
-        assert_eq!(plan(None, Edge::Bottom, 1.0), None);
-        assert!(plan(Some(true), Edge::Bottom, 1.0).is_some());
+        assert_eq!(plan(Some(false), Edge::Bottom), None);
+        assert_eq!(plan(None, Edge::Bottom), None);
+        assert!(plan(Some(true), Edge::Bottom).is_some());
     }
 
     #[test]
     fn it_starts_on_the_taskbars_side_scaled_and_faded_out() {
-        let start = |edge| plan(Some(true), edge, 1.5).unwrap().at(Duration::ZERO);
-        assert_eq!(start(Edge::Bottom).offset, (0.0, 24.0));
-        assert_eq!(start(Edge::Top).offset, (0.0, -24.0));
-        assert_eq!(start(Edge::Right).offset, (24.0, 0.0));
-        assert_eq!(start(Edge::Left).offset, (-24.0, 0.0));
-        assert_eq!(start(Edge::Bottom).opacity, 0.0);
-        assert!(!start(Edge::Bottom).done);
+        let start = |edge, scale| {
+            moved(
+                plan(Some(true), edge)
+                    .unwrap()
+                    .tick(Duration::ZERO, scale, true),
+            )
+        };
+        assert_eq!(start(Edge::Bottom, 1.5), ((0, 24), 0.0));
+        assert_eq!(start(Edge::Top, 1.5).0, (0, -24));
+        assert_eq!(start(Edge::Right, 1.5).0, (24, 0));
+        assert_eq!(start(Edge::Left, 1.5).0, (-24, 0));
+        // The scale is the window's at each tick, not at the click.
+        assert_eq!(start(Edge::Bottom, 2.0).0, (0, 32));
     }
 
     #[test]
     fn it_decelerates_into_place_and_fades_in_first() {
-        let slide = plan(Some(true), Edge::Bottom, 1.0).unwrap();
-        let early = slide.at(ms(50)).offset.1;
-        let late = slide.at(ms(200)).offset.1;
-        assert!(16.0 - early > late, "most of the way is covered early");
-        assert!(late > 0.0 && late < 1.0, "{late}");
+        let slide = plan(Some(true), Edge::Bottom).unwrap();
+        let early = moved(slide.tick(ms(50), 4.0, true)).0.1;
+        let late = moved(slide.tick(ms(200), 4.0, true)).0.1;
+        assert!(64 - early > late, "most of the way is covered early");
+        assert!(late > 0 && late < 4, "{late}");
 
-        let faded = slide.at(FADE);
-        assert_eq!(faded.opacity, 1.0);
-        assert!(faded.offset.1 > 0.0 && !faded.done, "still settling");
+        let (offset, opacity) = moved(slide.tick(FADE, 4.0, true));
+        assert_eq!(opacity, 1.0);
+        assert!(offset.1 > 0, "still settling");
 
-        let end = slide.at(SLIDE);
-        assert_eq!((end.offset, end.opacity, end.done), ((0.0, 0.0), 1.0, true));
-        assert_eq!(slide.at(ms(400)).offset, (0.0, 0.0));
+        assert_eq!(slide.tick(SLIDE, 1.0, true), Tick::Settle);
+        assert_eq!(slide.tick(ms(400), 1.0, true), Tick::Settle);
+    }
+
+    #[test]
+    fn a_close_mid_motion_leaves_the_content_faded() {
+        let slide = plan(Some(true), Edge::Bottom).unwrap();
+        assert_eq!(slide.tick(ms(60), 1.0, false), Tick::Abandon);
+        assert_eq!(slide.tick(ms(400), 1.0, false), Tick::Abandon);
     }
 
     #[test]

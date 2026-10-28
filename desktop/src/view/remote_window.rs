@@ -533,10 +533,15 @@ impl App {
 
     /// The none-found notes name Windows Firewall only while a connected
     /// network is Public, as the Mac names Local Network access only once
-    /// macOS refused it. Profiles are read only while such a note shows.
+    /// macOS refused it. Profiles are read from the start of a search, so
+    /// the note has its words when it appears, until a speaker turns up.
     fn read_hint_profiles(&self) {
-        let shows =
-            self.main.get_airplay_none_found() || self.main.get_cast_list() == CastList::NoneFound;
+        let shows = self.main.get_airplay_none_found()
+            || self.main.get_airplay_searching()
+            || matches!(
+                self.main.get_cast_list(),
+                CastList::Searching | CastList::NoneFound
+            );
         let public = {
             let mut host = self.remote.borrow_mut();
             if !shows {
@@ -1257,10 +1262,12 @@ mod tests {
         let same_network = "No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers.";
         let firewall = "No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).";
 
+        app.main.set_airplay_none_found(false);
+        app.main.set_airplay_searching(true);
         app.poll_remote();
         assert!(
             app.remote.borrow().hint_watch.is_some(),
-            "read while it shows"
+            "read from the start of the search"
         );
         for profiles in [vec![Category::Private], vec![Category::Domain], vec![]] {
             *fake.0.lock().unwrap() = profiles.clone();
@@ -1291,8 +1298,10 @@ mod tests {
             "No speakers found. On a Public network, Windows Firewall can block AudioSync."
         );
 
-        // No note, no reading: the advice starts over the next time.
+        // No search and no note, no reading: the advice starts over next time.
         app.main.set_airplay_none_found(false);
+        app.main.set_airplay_searching(false);
+        app.main.set_cast_list(CastList::Quiet);
         app.poll_remote();
         assert!(app.remote.borrow().hint_watch.is_none());
         assert!(!strings.get_public_network());
