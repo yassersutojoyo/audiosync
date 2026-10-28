@@ -130,8 +130,13 @@ fn same_exe(a: &Path, b: &Path) -> bool {
     normal(a) == normal(b)
 }
 
-/// Reads the startup entry for `exe` from `store`.
-pub fn status(store: &dyn StartupStore, exe: Option<&Path>) -> Status {
+/// Reads the startup entry for `exe` from `store`; `exists` says whether a
+/// listed exe is there.
+pub fn status(
+    store: &dyn StartupStore,
+    exe: Option<&Path>,
+    exists: &mut dyn FnMut(&Path) -> bool,
+) -> Status {
     let Some(command) = store.run_value() else {
         return Status::Off;
     };
@@ -143,7 +148,8 @@ pub fn status(store: &dyn StartupStore, exe: Option<&Path>) -> Status {
     }
     match (store.command_exe(&command), exe) {
         (Some(listed), Some(exe)) if store.same_exe(&listed, exe) => Status::On,
-        (Some(listed), _) if !store.exe_exists(&listed) => Status::Missing,
+        // A relative name is looked up by Windows, not in our working folder.
+        (Some(listed), _) if listed.is_absolute() && !exists(&listed) => Status::Missing,
         _ => Status::Elsewhere,
     }
 }
@@ -215,18 +221,35 @@ pub struct LaunchAtLogin {
     exe: Option<PathBuf>,
     status: Status,
     notice: Option<Notice>,
+    /// The listed exe last looked for and whether it was there, so the
+    /// readings every few seconds don't touch the disk.
+    checked: Option<(PathBuf, bool)>,
 }
 
 impl LaunchAtLogin {
     /// `exe` is this program's path, `None` when Windows didn't say.
     pub fn new(store: Box<dyn StartupStore>, exe: Option<PathBuf>) -> LaunchAtLogin {
-        let status = status(store.as_ref(), exe.as_deref());
-        LaunchAtLogin {
+        let mut login = LaunchAtLogin {
             store,
             exe,
-            status,
+            status: Status::Off,
             notice: None,
-        }
+            checked: None,
+        };
+        login.status = login.read();
+        login
+    }
+
+    fn read(&mut self) -> Status {
+        let (store, checked) = (self.store.as_ref(), &mut self.checked);
+        status(store, self.exe.as_deref(), &mut |listed| match checked {
+            Some((path, there)) if path == listed => *there,
+            _ => {
+                checked
+                    .insert((listed.to_owned(), store.exe_exists(listed)))
+                    .1
+            }
+        })
     }
 
     pub fn status(&self) -> Status {
@@ -253,7 +276,7 @@ impl LaunchAtLogin {
     /// Reads the entry again; returns whether what the windows show changed.
     /// A notice whose cause went (the user fixed it in Settings) goes too.
     pub fn reread(&mut self) -> bool {
-        let new = status(self.store.as_ref(), self.exe.as_deref());
+        let new = self.read();
         let mut changed = new != self.status;
         self.status = new;
         if self
@@ -288,7 +311,7 @@ impl LaunchAtLogin {
                 Ok(()) => None,
             }
         };
-        self.status = status(self.store.as_ref(), self.exe.as_deref());
+        self.status = self.read();
         let message = message.or_else(|| {
             (on && self.status == Status::TurnedOffInSettings).then(|| {
                 outcome.open_startup_settings = true;
@@ -647,6 +670,13 @@ mod tests {
         assert!(!login.is_on());
         assert!(!login.reread());
         assert_eq!(store.entry().run.as_deref(), Some(gone));
+
+        login.set(true, time);
+        assert_eq!(
+            store.entry().run.as_deref(),
+            Some(run_command(&exe()).as_str())
+        );
+        assert_eq!(login.status(), Status::On);
     }
 
     #[test]
