@@ -17,6 +17,8 @@ struct AppSettings: Equatable {
     enum Keys {
         /// `AudioSource.defaultsValue` (S12): "" or missing is the whole system.
         static let source = "audioSourceBundleID"
+        /// The last mix's `AudioSource.defaultsValue` (S336).
+        static let lastMix = "lastAppMix"
         /// App IDs (`NativeAirPlayID`) of the AirPlay speakers that are on, as an array.
         static let enabledAirPlay = "enabledAirPlayIds"
         /// Device UIDs of the local speakers that are on, as an array.
@@ -170,6 +172,8 @@ struct AppSettings: Equatable {
     static func load(_ read: (String) -> Any?) -> AppSettings {
         var s = AppSettings()
         s.source = AudioSource(defaultsValue: read(Keys.source) as? String)
+        let lastMix = AudioSource(defaultsValue: read(Keys.lastMix) as? String)
+        if case .mix = lastMix { s.lastMix = lastMix }
         s.enabledAirPlay = ids(read(Keys.enabledAirPlay))
         s.enabledLocal = ids(read(Keys.enabledLocal))
         s.autoConnect = ids(read(Keys.autoConnect))
@@ -399,6 +403,8 @@ struct SettingsStore {
     }
 
     func save(source: AudioSource) { write(source.defaultsValue, Keys.source) }
+
+    func save(lastMix: AudioSource?) { write(lastMix?.defaultsValue, Keys.lastMix) }
 
     /// A set of IDs, sorted so the stored array doesn't churn.
     func save(ids: Set<String>, forKey key: String) { write(ids.sorted(), key) }

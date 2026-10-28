@@ -684,6 +684,13 @@ pub struct Settings {
         deserialize_with = "or_default"
     )]
     pub source_mix: Option<SavedMix>,
+    /// The last mix the source was, which the source menu offers again
+    /// while another source plays (S336).
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "or_default"
+    )]
+    pub last_mix: Option<SavedMix>,
     /// The master volume slider position, 0 to 100.
     #[serde(deserialize_with = "number_or_nan")]
     pub master_volume: f64,
@@ -863,6 +870,7 @@ impl Default for Settings {
             input_device: None,
             input_pairs: BTreeMap::new(),
             source_mix: None,
+            last_mix: None,
             master_volume: DEFAULT_MASTER_POSITION,
             outputs: BTreeMap::new(),
             airplay: BTreeMap::new(),
@@ -1077,7 +1085,7 @@ impl Settings {
         } else {
             (MIN_OFFSET_MS, MAX_OFFSET_MS)
         };
-        let source_mix = self.source_mix.and_then(|mix| {
+        let clean_mix = |mix: SavedMix| {
             let mut apps: Vec<SavedMixApp> = Vec::new();
             for app in mix.apps {
                 if usable_id(&app.executable)
@@ -1096,7 +1104,9 @@ impl Settings {
                 mode: mix.mode,
                 apps,
             })
-        });
+        };
+        let source_mix = self.source_mix.and_then(clean_mix);
+        let last_mix = self.last_mix.and_then(clean_mix);
         Settings {
             version: VERSION,
             source,
@@ -1110,6 +1120,7 @@ impl Settings {
                 .take(MAX_ENTRIES)
                 .collect(),
             source_mix,
+            last_mix,
             master_volume: sanitize_position(self.master_volume).unwrap_or(DEFAULT_MASTER_POSITION),
             outputs: clamp_speakers(self.outputs, output_delays, false),
             airplay: clamp_speakers(self.airplay, (0.0, MAX_AIRPLAY_DELAY_MS), true),
@@ -1296,6 +1307,7 @@ fn unreadable_fields(text: &str) -> Vec<&'static str> {
         ("input_device", reads::<Option<SavedInput>>),
         ("input_pairs", Value::is_object),
         ("source_mix", reads::<Option<SavedMix>>),
+        ("last_mix", reads::<Option<SavedMix>>),
         ("master_volume", Value::is_number),
         ("outputs", Value::is_object),
         ("airplay", Value::is_object),

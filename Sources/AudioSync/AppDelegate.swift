@@ -98,7 +98,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var rememberedMixMode: AppMixMode = .only
 
     var audioSource: AudioSource {
-        didSet { if audioSource != oldValue { store.save(source: audioSource) } }
+        didSet {
+            guard audioSource != oldValue else { return }
+            store.save(source: audioSource)
+            lastMix = SourceMix.lastMix(after: audioSource, previous: lastMix)
+        }
+    }
+    /// What the source picker offers again once the source moves off a mix (S336).
+    var lastMix: AudioSource? {
+        didSet { if lastMix != oldValue { store.save(lastMix: lastMix) } }
     }
     /// AirPlay speakers the user wants on, by app ID (`NativeAirPlayID`).
     var enabledAirPlay: Set<String> {
@@ -313,6 +321,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         freshInstall = !LaunchAutoConnect.skipped && !PermissionAsks.usedBefore { readStore($0) != nil }
         let saved = store.load().atLaunch(holdingSpeakersOff: LaunchAutoConnect.skipped)
         audioSource = saved.source
+        let lastMix = SourceMix.lastMix(after: saved.source, previous: saved.lastMix)
+        self.lastMix = lastMix
+        if lastMix != saved.lastMix { store.save(lastMix: lastMix) }   // a mix saved before S336 kept no last mix
         // A hidden speaker is never switched on, not even by the saved on-state.
         enabledAirPlay = saved.enabledAirPlay.filter { !saved.hiddenSpeakers.contains(SpeakerKey.make(id: $0, airplay: true)) }
         enabledLocal = saved.enabledLocal.filter { !saved.hiddenSpeakers.contains(SpeakerKey.make(id: $0, airplay: false)) }

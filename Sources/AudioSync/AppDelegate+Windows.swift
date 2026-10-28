@@ -571,7 +571,8 @@ extension AppDelegate {
         let entries = SourceList.entries(systemName: text.sourceSystem,
                                          apps: running.map { (bundleID: $0.bundleID, name: $0.name) },
                                          inputs: inputs, chosen: audioSource,
-                                         chosenAppName: SourceApps.name(for:), mixName: text.sourceMixName)
+                                         chosenAppName: SourceApps.name(for:), mixName: text.sourceMixName,
+                                         lastMix: lastMix)
         let icons = Dictionary(running.compactMap { app in app.icon.map { (app.bundleID, $0) } },
                                uniquingKeysWith: { first, _ in first })
         let sources = entries.map { entry -> AppModel.Source in

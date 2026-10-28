@@ -493,7 +493,9 @@ enum SourceList {
     }
 
     /// The whole system first, then the apps by name, then the input devices
-    /// in Core Audio's order. The chosen app stays listed while it isn't
+    /// in Core Audio's order. A mix is listed under the whole system: the
+    /// chosen one, else `lastMix`, so it can be picked again (S336). The
+    /// chosen app stays listed while it isn't
     /// running (its name comes from `chosenAppName`), so the picker still
     /// says what will be captured; a chosen input device that is unplugged
     /// is not listed. Devices without a UID can't be chosen and are skipped,
@@ -507,9 +509,11 @@ enum SourceList {
                         mixName: (AppMixMode, [String]) -> String = { $1.joined(separator: ", ") },
                         lastMix: AudioSource? = nil) -> [Entry] {
         var mixEntry: [Entry] = []
-        if case .mix(let mode, let ids) = chosen {
+        var mix = lastMix
+        if case .mix = chosen { mix = chosen }
+        if let mix, case .mix(let mode, let ids) = mix {
             let names = ids.map { id in apps.first { $0.bundleID == id }?.name ?? chosenAppName(id) }
-            mixEntry = [Entry(id: chosen.defaultsValue, name: mixName(mode, names), isInput: false)]
+            mixEntry = [Entry(id: mix.defaultsValue, name: mixName(mode, names), isInput: false)]
         }
         var appEntries = apps.map { Entry(id: $0.bundleID, name: $0.name, isInput: false) }
         if case .app(let bundleID) = chosen, !appEntries.contains(where: { $0.id == bundleID }) {

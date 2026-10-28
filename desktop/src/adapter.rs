@@ -434,6 +434,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     chosen: Chosen,
     /// The mode the several-apps list shows while no mix is chosen.
     mix_mode: MixMode,
+    /// The last mix the source was, offered again while another source
+    /// plays (S336).
+    last_mix: Option<SavedMix>,
     /// The endpoint IDs of the last listing, to tell which outputs appeared.
     listed: BTreeSet<String>,
     /// The last name of every output listed, for a notice about one that is
@@ -647,6 +650,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }],
             chosen: Chosen::WholeSystem,
             mix_mode: MixMode::Only,
+            last_mix: None,
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
             kinds: BTreeMap::new(),
@@ -844,6 +848,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 },
             },
         };
+        // A stored mix that narrows to one app or none is no mix to offer.
+        self.last_mix = saved
+            .last_mix
+            .clone()
+            .filter(|mix| matches!(mix_choice(mix.mode, mix.apps.clone()), Chosen::Mix { .. }));
+        self.keep_last_mix();
         self.view = ViewSettings {
             show_virtual_devices: saved.show_virtual_devices,
             appearance: saved.appearance,
@@ -943,6 +953,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 }),
                 _ => None,
             },
+            last_mix: self.last_mix.clone(),
             master_volume: self.audio.master_volume(),
             outputs,
             airplay,
@@ -1629,6 +1640,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .log(|| format!("source chosen: {} ({})", picked.shown_name(), picked.key()));
         self.note_switch_from();
         self.chosen = picked;
+        self.keep_last_mix();
         self.notices
             .clear(&[NoticeSubject::Source, NoticeSubject::Capture]);
         // A start ends the running session by itself and keeps the AirPlay
@@ -1694,6 +1706,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
         }
         self.chosen = from.chosen;
+        self.keep_last_mix();
         self.post(NoticeSubject::Source, message);
     }
 
@@ -3799,8 +3812,30 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .extend(subject.endpoints.into_iter().map(|(id, _)| id));
     }
 
-    /// The sources as the UI lists them: what is listed, and the chosen app
-    /// after them while it isn't running, so the choice still shows.
+    /// Keeps the chosen source as the last mix when it is one (S336).
+    fn keep_last_mix(&mut self) {
+        if let Chosen::Mix { mode, apps } = &self.chosen {
+            self.last_mix = Some(SavedMix {
+                mode: *mode,
+                apps: apps.clone(),
+            });
+        }
+    }
+
+    /// The last mix, as a source to pick again, while no mix is chosen (S336).
+    fn offered_mix(&self) -> Option<Chosen> {
+        if matches!(self.chosen, Chosen::Mix { .. }) {
+            return None;
+        }
+        self.last_mix.as_ref().map(|mix| Chosen::Mix {
+            mode: mix.mode,
+            apps: mix.apps.clone(),
+        })
+    }
+
+    /// The sources as the UI lists them: what is listed, then the chosen
+    /// source while it isn't (an app that isn't running, a mix) and the last
+    /// mix while another source plays (S336), so each still shows.
     fn source_rows(&self) -> Vec<Source> {
         let mut rows: Vec<Source> = self
             .sources
@@ -3817,9 +3852,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 channels: source.channels,
             })
             .collect();
-        let chosen = self.chosen.key();
-        if !rows.iter().any(|row| row.id == chosen) {
-            let kind = match self.chosen {
+        for unlisted in std::iter::once(self.chosen.clone()).chain(self.offered_mix()) {
+            let chosen = unlisted.key();
+            if rows.iter().any(|row| row.id == chosen) {
+                continue;
+            }
+            let kind = match unlisted {
                 Chosen::Input { .. } => SourceKind::Input,
                 Chosen::Mix {
                     mode: MixMode::AllExcept,
@@ -3828,7 +3866,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 _ => SourceKind::App,
             };
             // The UI puts its own words around the apps "all except" leaves out.
-            let name = match &self.chosen {
+            let name = match &unlisted {
                 Chosen::Mix { apps, .. } => mix_names(apps).join(", "),
                 chosen => chosen.shown_name(),
             };
@@ -4139,6 +4177,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             .iter()
             .find(|source| source_key(source) == id)
             .map(Chosen::from_source)
+            .or_else(|| self.offered_mix().filter(|mix| mix.key() == id))
         else {
             return;
         };
