@@ -10871,6 +10871,29 @@ do {
           worst.joined(separator: "; "))
 }
 
+// MARK: No separator runs into the zone box's edge (ZoneLayout.linesBelowRows)
+do {
+    func lines(box: Bool, note: Bool, cast: Bool) -> String {
+        let l = ZoneLayout.linesBelowRows(zoneBox: box, note: note, castAdd: cast)
+        return "\(l.note) \(l.castAdd)"
+    }
+    check(lines(box: true, note: true, cast: false) == "false false",
+          "zone box separators: the note right under a zone box gets no line", lines(box: true, note: true, cast: false))
+    check(lines(box: true, note: false, cast: true) == "false false",
+          "zone box separators: Add by address right under a zone box gets no line", lines(box: true, note: false, cast: true))
+    check(lines(box: true, note: true, cast: true) == "false true",
+          "zone box separators: under a zone box, only the line between the note and Add by address stays",
+          lines(box: true, note: true, cast: true))
+    check(lines(box: false, note: true, cast: true) == "true true",
+          "zone box separators: without a zone box, the note and Add by address keep their lines",
+          lines(box: false, note: true, cast: true))
+    check(lines(box: false, note: true, cast: false) == "true false",
+          "zone box separators: without a zone box, a lone note keeps its line", lines(box: false, note: true, cast: false))
+    check(lines(box: false, note: false, cast: true) == "false true",
+          "zone box separators: without a zone box, a lone Add by address keeps its line",
+          lines(box: false, note: false, cast: true))
+}
+
 // MARK: About panel shows the version without the build number (AboutPanel.options)
 do {
     let options = AboutPanel.options(credits: NSAttributedString(string: "credits"), copyright: "copyright",

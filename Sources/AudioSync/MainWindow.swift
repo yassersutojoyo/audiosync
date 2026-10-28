@@ -403,15 +403,18 @@ struct MainView: View {
                         AirPlayDelayRow(model: model)
                     }
                     if !zoned.isEmpty { zonedRows(zoned, scroll: scroll) }
-                    if connected && problem == nil && !listsNone, let note = model.networkNote {
+                    let note = connected && problem == nil && !listsNone ? model.networkNote : nil
+                    let lines = ZoneLayout.linesBelowRows(zoneBox: !zoned.isEmpty, note: note != nil,
+                                                          castAdd: connected && model.castCanAdd)
+                    if let note {
                         // Say where AirPlay or the Google Cast search stands, under the rows.
-                        Divider()
+                        if lines.note { Divider() }
                         // The note leaves the network advice to the hint, so show it unless it is above.
                         emptyNote(note, hint: hasAirPlay && localNetworkHint == .denied ? nil : hint,
                                   under: zoned.isEmpty ? speakers : [])
                     }
                     if connected && model.castCanAdd {
-                        Divider()
+                        if lines.castAdd { Divider() }
                         Button(model.text.castAddByAddress) { model.castAddShown = true }
                             .controlSize(.small)
                             .help(model.text.castAddBody)
