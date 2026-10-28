@@ -241,12 +241,12 @@ pub fn falls_back_to_flac(codec: Codec, error: &MediaError) -> bool {
 
 /// Connects, retrying while `selected` stays true: after 1 s, then doubling
 /// up to 30 s (C80). `on_failure` hears each failure with the wait before
-/// the next attempt.
+/// the next attempt. None once it is deselected.
 pub fn connect_retrying(
     addresses: &[SocketAddr],
     selected: &AtomicBool,
     on_failure: impl FnMut(ConnectError, Duration),
-) -> Result<CastClient, Option<ConnectError>> {
+) -> Option<CastClient> {
     connect_retrying_with(|| addresses.to_vec(), selected, on_failure)
 }
 
@@ -256,22 +256,22 @@ pub fn connect_retrying_with(
     mut addresses: impl FnMut() -> Vec<SocketAddr>,
     selected: &AtomicBool,
     mut on_failure: impl FnMut(ConnectError, Duration),
-) -> Result<CastClient, Option<ConnectError>> {
+) -> Option<CastClient> {
     let mut backoff = Backoff::new();
     loop {
         if !selected.load(Ordering::SeqCst) {
-            return Err(None);
+            return None;
         }
         match CastClient::connect_while(&addresses(), RequestIds::random(), selected) {
-            Ok(client) => return Ok(client),
-            Err(_) if !selected.load(Ordering::SeqCst) => return Err(None),
+            Ok(client) => return Some(client),
+            Err(_) if !selected.load(Ordering::SeqCst) => return None,
             Err(error) => {
                 let wait = backoff.next_wait();
                 on_failure(error, wait);
                 let until = Instant::now() + wait;
                 while Instant::now() < until {
                     if !selected.load(Ordering::SeqCst) {
-                        return Err(None);
+                        return None;
                     }
                     thread::sleep(SLICE.min(until.saturating_duration_since(Instant::now())));
                 }
@@ -388,13 +388,8 @@ impl CastSession {
             Some(records) => connect_retrying_with(|| records.get().group, &selected, on_failure),
             None => connect_retrying(&config.addresses, &selected, on_failure),
         };
-        let mut client = match connected {
-            Ok(client) => client,
-            Err(error) => {
-                return Err(SessionError::Connect(
-                    error.unwrap_or(ConnectError::NoAddress),
-                ));
-            }
+        let Some(mut client) = connected else {
+            return Err(SessionError::Connect(ConnectError::NoAddress));
         };
         if group.is_some() {
             client.request_members();
@@ -912,15 +907,14 @@ impl CastSession {
         self.client.disconnect();
         while self.client.poll_event().is_some() {}
         self.client = match self.reconnect() {
-            Ok(mut client) => {
+            Some(mut client) => {
                 client.set_selected(Arc::clone(&self.selected));
                 if self.group.is_some() {
                     client.request_members();
                 }
                 client
             }
-            Err(None) => return self.end(SessionEnd::Deselected),
-            Err(Some(error)) => return self.end(SessionEnd::Failed(error.into())),
+            None => return self.end(SessionEnd::Deselected),
         };
         if let Some(event) = self
             .fingerprints
@@ -985,22 +979,22 @@ impl CastSession {
     /// Connects again, spaced by [`ReconnectPacer`] while the device stays
     /// selected (C81). A group is resolved afresh before every attempt: its
     /// leader may have handed over (C90, C97).
-    fn reconnect(&mut self) -> Result<CastClient, Option<ConnectError>> {
+    fn reconnect(&mut self) -> Option<CastClient> {
         if self.announced.swap(false, Ordering::SeqCst) {
             self.pacer.announced();
         }
         let mut wait = self.pacer.next_wait(Instant::now());
         loop {
             if !self.pause(wait) {
-                return Err(None);
+                return None;
             }
             let addresses = match &self.group {
                 Some(records) => records.get().group,
                 None => self.addresses.clone(),
             };
             match CastClient::connect_while(&addresses, RequestIds::random(), &self.selected) {
-                Ok(client) => return Ok(client),
-                Err(_) if !self.selected.load(Ordering::SeqCst) => return Err(None),
+                Ok(client) => return Some(client),
+                Err(_) if !self.selected.load(Ordering::SeqCst) => return None,
                 Err(error) => {
                     wait = self.pacer.next_wait(Instant::now());
                     self.report(SessionEvent::ConnectFailed {

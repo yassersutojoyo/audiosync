@@ -494,7 +494,7 @@ fn connect_retries_wait_1_s_then_double_while_the_device_stays_selected() {
             selected.store(false, Ordering::SeqCst);
         }
     });
-    assert!(matches!(result, Err(None)), "deselected ends the retries");
+    assert!(result.is_none(), "deselected ends the retries");
     assert_eq!(
         waits,
         [
