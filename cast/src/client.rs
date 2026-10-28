@@ -493,6 +493,11 @@ impl CastClient {
         result
     }
 
+    /// The level still waiting for its interval (C70), taken off the channel.
+    pub fn take_queued_volume(&mut self) -> Option<f64> {
+        self.channel.take_queued_volume()
+    }
+
     /// Mutes or unmutes the device (C65).
     pub fn set_muted(&mut self, muted: bool) -> Result<(), VolumeError> {
         let result = self.channel.set_muted(muted);

@@ -441,6 +441,12 @@ impl Channel {
         Ok(level)
     }
 
+    /// Takes the level still waiting for its interval, for the channel
+    /// that replaces this one (C70, C81).
+    pub fn take_queued_volume(&mut self) -> Option<f64> {
+        self.volume_queued.take()
+    }
+
     fn volume_check(&self) -> Result<&ReceiverStatus, VolumeError> {
         if !matches!(self.phase, Phase::Ready | Phase::Running) {
             return Err(VolumeError::NotReady);
