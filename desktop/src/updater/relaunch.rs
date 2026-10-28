@@ -18,7 +18,7 @@ use windows::Win32::System::Threading::{
 use windows::core::PCWSTR;
 
 pub const MARKER: &str = "--relaunched-from";
-pub const WAIT: Duration = Duration::from_secs(10);
+pub const WAIT: Duration = crate::single_instance::RELAUNCH_WAIT;
 /// How long the old process waits for the new one's start signal: a first
 /// start from a cold disk plus Defender's scan of a new file (spec S314).
 pub const START_WAIT: Duration = Duration::from_secs(15);

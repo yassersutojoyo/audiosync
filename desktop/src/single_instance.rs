@@ -44,7 +44,7 @@ pub const ANSWER_WAIT: Duration = Duration::from_secs(2);
 /// How long a second launch whose request went unanswered keeps trying to
 /// become the first copy, counted from the launch: a quitting copy holds the
 /// mutex through its teardown, up to 9 s with the updater's quit waits, so
-/// this is S303's 10 s rather than the Mac's 5.5 s.
+/// this is S303's 10 s (the updater's relaunch wait), not the Mac's 5.5 s.
 pub const RELAUNCH_WAIT: Duration = Duration::from_secs(10);
 
 /// How often a second launch checks whether the running copy has gone.
