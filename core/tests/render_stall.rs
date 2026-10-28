@@ -4,8 +4,7 @@
 //! each output's device plays on without buffers from us, so its output
 //! timeline steps by the callbacks it missed. The two rarely lose the same
 //! time, and the difference, inside the dead band, was kept for good: a
-//! Bluetooth speaker stayed audibly late against the other outputs. Here the
-//! output comes back first, while the capture's newest stamp is still stale.
+//! Bluetooth speaker stayed audibly late against the other outputs.
 //!
 //! The capture writes a ramp in stamped 512-frame blocks at 48 kHz; the
 //! output asks for 512 device frames at 44.1 kHz per callback, on time, and
@@ -26,9 +25,6 @@ const SECOND: u128 = 48_000 * 44_100;
 const BLOCK: usize = 512;
 const CALLBACK: usize = 512;
 const STALL_AT_S: u128 = 5;
-const CAPTURE_GAP_MS: u128 = 260;
-/// The output's IO cycle comes back 20 ms before the capture's.
-const OUTPUT_GAP_MS: u128 = 240;
 const SECONDS: u128 = 30;
 /// Delays from this many s on are judged against those before the stall.
 const RECOVERED_S: f64 = 20.0;
@@ -45,16 +41,17 @@ fn write(writer: &mut RingWriter, first: u64, at: u128) {
 }
 
 /// The output's capture-to-output delay at each open callback's last frame,
-/// in ms, with the time it was played at in s.
-fn run() -> Vec<(f64, f64)> {
+/// in ms, with the time it was played at in s, when the stall stops the
+/// capture for `capture_gap_ms` and the output for `output_gap_ms`.
+fn run(capture_gap_ms: u128, output_gap_ms: u128) -> Vec<(f64, f64)> {
     let ring = Ring::for_rate(RATE).unwrap();
     let mut writer = ring.writer().unwrap();
     let gain = Arc::new(SharedGain::new(1.0));
     let write_period = BLOCK as u128 * SECOND / u128::from(RATE);
     let callback_period = CALLBACK as u128 * SECOND / u128::from(DEVICE_RATE);
     let stall_at = STALL_AT_S * SECOND;
-    let capture_back = stall_at + CAPTURE_GAP_MS * SECOND / 1000;
-    let output_back = stall_at + OUTPUT_GAP_MS * SECOND / 1000;
+    let capture_back = stall_at + capture_gap_ms * SECOND / 1000;
+    let output_back = stall_at + output_gap_ms * SECOND / 1000;
     let mut written = 0u64;
     for _ in 0..RATE as usize / BLOCK {
         write(&mut writer, written, 0);
@@ -105,10 +102,9 @@ fn run() -> Vec<(f64, f64)> {
     delays
 }
 
-// covers: S207
-#[test]
-fn after_a_stall_of_the_whole_process_the_output_returns_to_its_delay() {
-    let delays = run();
+/// The largest offset, in ms, from [`RECOVERED_S`] on, from the mean delay
+/// before the stall.
+fn worst_offset(delays: &[(f64, f64)]) -> f64 {
     let before: Vec<f64> = delays
         .iter()
         .filter(|&&(at, _)| at < STALL_AT_S as f64)
@@ -118,15 +114,26 @@ fn after_a_stall_of_the_whole_process_the_output_returns_to_its_delay() {
     let after: Vec<f64> = delays
         .iter()
         .filter(|&&(at, _)| at >= RECOVERED_S)
-        .map(|&(_, d)| d)
+        .map(|&(_, d)| d - at_delay)
         .collect();
     assert!(!before.is_empty() && !after.is_empty());
-    let worst = after
-        .iter()
-        .map(|d| d - at_delay)
-        .fold(0.0f64, |w, off| if off.abs() > w.abs() { off } else { w });
-    assert!(
-        worst.abs() <= 2.0,
-        "off its delay before the stall by up to {worst:.2} ms from {RECOVERED_S} s on"
-    );
+    after
+        .into_iter()
+        .fold(0.0f64, |w, off| if off.abs() > w.abs() { off } else { w })
+}
+
+// covers: S207
+#[test]
+fn after_a_stall_of_the_whole_process_the_output_returns_to_its_delay() {
+    // The output comes back 20 ms before the capture, while the capture's
+    // newest stamp is still stale.
+    let worst = worst_offset(&run(260, 240));
+    assert!(worst.abs() <= 2.0, "off its delay by up to {worst:.2} ms");
+}
+
+// covers: S207
+#[test]
+fn an_output_back_after_the_capture_is_trimmed_back_to_its_delay() {
+    let worst = worst_offset(&run(240, 260));
+    assert!(worst.abs() <= 2.0, "off its delay by up to {worst:.2} ms");
 }

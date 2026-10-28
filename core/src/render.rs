@@ -876,6 +876,8 @@ pub struct Renderer {
     start_lead_fixed: bool,
     /// A delay went to the reader; closed until the read that applies it.
     awaiting_resync: bool,
+    /// The trim found the newest stamp stale and no fresh one since.
+    capture_stalled: bool,
     /// A held correction waits for the fade-out; closed until the first
     /// read after it (S188).
     correction_due: bool,
@@ -1004,6 +1006,7 @@ impl Renderer {
             anchor_late_ns: 0,
             start_lead_fixed: false,
             awaiting_resync: false,
+            capture_stalled: false,
             correction_due: false,
             frames_after_fade: None,
             tracking: RESTART,
@@ -1432,7 +1435,8 @@ impl Renderer {
     /// goes on as `next` says (S207). Returns the trim it asks for, in
     /// capture frames: positive to slow the converter, negative to speed it
     /// up, 0 for none. Restarts the tracking when the newest stamp is
-    /// stale; a callback without a usable stamp changes nothing.
+    /// stale, and re-anchors the reader at the first fresh one after it;
+    /// a callback without a usable stamp changes nothing.
     fn follow(&mut self, now: u64, frames: usize, need: usize, next: &NextRead) -> i64 {
         // Before the floor forms Jt is 0, so a late callback's fill would
         // hold its whole lateness and raise the reference (S207, S209).
@@ -1447,6 +1451,13 @@ impl Renderer {
         let rate = u64::from(self.capture_rate.max(1));
         if now.saturating_sub(stamp.time_ns) > self.stale_stamp_ns() {
             self.tracking = RESTART;
+            self.capture_stalled = true;
+            return 0;
+        }
+        // The stall moved the capture and this output by different amounts,
+        // which a reference measured from here would keep for good.
+        if std::mem::take(&mut self.capture_stalled) && self.stop == Stop::None {
+            self.ask_reader_delay();
             return 0;
         }
         // Ŵ - P: the W of the stamp, plus the capture frames of the time
@@ -2328,18 +2339,20 @@ mod tests {
         };
         assert!((average - reference).abs() <= 1.0, "{average} {reference}");
         // A callback 150 ms after the newest stamp: the capture stalled, and
-        // the tracking measures anew once it writes again.
+        // the tracking measures anew once it writes again, after the reader
+        // re-anchors at its delay.
         s.now += 150_000_000;
         s.renderer.render_at(&mut s.out, s.now);
         assert_eq!(s.renderer.tracking, RESTART);
         s.step(60);
         assert!(matches!(s.renderer.tracking, Tracking::Following { .. }));
+        assert_eq!(s.control.counters().resyncs, 1);
         // Held back by 100 ms, beyond its lead and the dead band: the delay
         // change re-anchors it, and it is tracked again from there. On a
         // clock in step nothing is trimmed.
         s.control.set_delay_frames(4800);
         s.step(100);
-        assert_eq!(s.control.counters().resyncs, 1);
+        assert_eq!(s.control.counters().resyncs, 2);
         let Tracking::Following { reference, .. } = s.renderer.tracking else {
             panic!("not following: {:?}", s.renderer.tracking);
         };
