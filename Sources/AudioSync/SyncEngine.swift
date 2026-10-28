@@ -83,6 +83,12 @@ final class StreamEngine {
     /// Each attached output's token; a re-attach under the same UID is a new
     /// renderer whose counters start at 0.
     private var attachTokens = AttachTokens()
+    /// The running session's capture watch (S335), its 0.5 s timer, what a
+    /// reopen opens and the last try's error.
+    private var flowWatch = CaptureFlowWatch()
+    private var flowTimer: DispatchSourceTimer?
+    private var opened: (source: AudioSource, inputPair: Int)?
+    private var reopenError: SourceCapture.CaptureError?
 
     init() {
         capture.onInterrupted = { [weak self] reason in self?.handleInterruption(reason) }
@@ -94,6 +100,7 @@ final class StreamEngine {
         retirement.finishAll()
         fadeTimer?.cancel()
         statusTimer?.cancel()
+        flowTimer?.cancel()
     }
 
     /// Some frame this session captured was not silent; false while stopped.
@@ -157,6 +164,7 @@ final class StreamEngine {
         try capture.start(source: source, parts: parts, inputPair: inputPair, rebuild: rebuild)
         self.parts = parts
         isRunning = true
+        startFlowWatch(source: source, inputPair: inputPair)
         DebugTrace.log("[AudioSync] session started: \(source) at \(capture.sampleRate) Hz")
         if DebugTrace.enabled {
             DispatchQueue.global(qos: .utility).async { DebugTrace.log("[AudioSync] network: \(WiFiNote.current())") }
@@ -231,6 +239,7 @@ final class StreamEngine {
         }
         holdCalibrationTime(false)
         stopStatusLine()
+        stopFlowWatch()
         isRunning = false
         self.parts = nil
         let leaving = renderers.keys.sorted().compactMap { uid in renderers[uid].map { (uid: uid, renderer: $0) } }
@@ -287,6 +296,10 @@ final class StreamEngine {
     /// tell the host, which rebuilds it or reports the lost source.
     private func handleInterruption(_ reason: SourceCapture.Interruption) {
         guard isRunning else { return }
+        if case .sourceLost(.aggregateDeviceFailed) = reason {
+            follow(flowWatch.report(.aggregateDied, at: ProcessInfo.processInfo.systemUptime))
+            return
+        }
         stop()
         onInterrupted?(reason)
     }
@@ -310,6 +323,90 @@ final class StreamEngine {
         }
         timer.resume()
         fadeTimer = timer
+    }
+
+    // MARK: - Capture watch
+
+    /// Core Audio's service restarted (S335): every object the session held
+    /// died with it, so each output is dropped without a fade, to be attached
+    /// again by UID at the next sync, and the capture counts as stopped at once.
+    func serviceRestarted() {
+        guard isRunning else { return }
+        for (uid, renderer) in renderers.sorted(by: { $0.key < $1.key }) { handleOutputLost(uid, renderer) }
+        follow(flowWatch.report(.serviceRestarted, at: ProcessInfo.processInfo.systemUptime))
+    }
+
+    private func startFlowWatch(source: AudioSource, inputPair: Int) {
+        stopFlowWatch()
+        flowWatch = CaptureFlowWatch()
+        opened = (source, inputPair)
+        reopenError = nil
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + .milliseconds(500), repeating: .milliseconds(500), leeway: .milliseconds(50))
+        timer.setEventHandler { [weak self] in
+            guard let self, self.isRunning else { return }
+            // S335 D3: a Now Playing gate for app and mix sources would go here, should a quiet tap stop calling back.
+            self.follow(self.flowWatch.tick(callbacks: self.capture.counts?.callbacks, reading: self.capture.isReading,
+                                            at: ProcessInfo.processInfo.systemUptime))
+        }
+        timer.resume()
+        flowTimer = timer
+    }
+
+    private func stopFlowWatch() {
+        flowTimer?.cancel()
+        flowTimer = nil
+        opened = nil
+    }
+
+    private func follow(_ step: CaptureFlowWatch.Step) {
+        switch step {
+        case .none:
+            return
+        case .stopped(let sign):
+            capture.halt()
+            DebugTrace.log("[AudioSync] capture stopped delivering (\(sign.description)); "
+                           + "opening the capture again while the outputs and speakers play on")
+        case .tryOpen(let number):
+            reopenCapture(try: number)
+        case .kept(let number):
+            DebugTrace.log("[AudioSync] capture reopen try \(number) of \(CaptureFlowWatch.tries) kept")
+        case .giveUp:
+            DebugTrace.log("[AudioSync] capture reopen: all \(CaptureFlowWatch.tries) tries failed")
+            stopForLostCapture(reopenError ?? .aggregateDeviceFailed(kAudioHardwareNotRunningError))
+        }
+    }
+
+    /// Opens only the capture again, into the session's parts: every output
+    /// keeps its renderer and hold-back and the senders stay fed (S335).
+    private func reopenCapture(try number: Int) {
+        guard let parts, let opened else { return }
+        let rate = capture.sampleRate
+        do {
+            try capture.reopen(source: opened.source, parts: parts, inputPair: opened.inputPair)
+        } catch {
+            let failure = error as? SourceCapture.CaptureError ?? .tapNotCreated(kAudioHardwareUnspecifiedError)
+            DebugTrace.log("[AudioSync] capture reopen try \(number) of \(CaptureFlowWatch.tries) failed: \(failure)")
+            reopenError = failure
+            guard CaptureFlowWatch.retries(after: failure) else {
+                stopForLostCapture(failure)
+                return
+            }
+            follow(flowWatch.failed(at: ProcessInfo.processInfo.systemUptime))
+            return
+        }
+        DebugTrace.log("[AudioSync] capture reopen try \(number) of \(CaptureFlowWatch.tries): "
+                       + "open at \(capture.sampleRate) Hz")
+        if CaptureRate.needsRestart(current: rate, reported: capture.sampleRate) {
+            DebugTrace.log("[AudioSync] capture rate changed: \(rate) → \(capture.sampleRate) Hz")
+            stop()
+            onInterrupted?(.formatChanged)
+        }
+    }
+
+    private func stopForLostCapture(_ error: SourceCapture.CaptureError) {
+        stop()
+        onInterrupted?(.sourceLost(error))
     }
 
     // MARK: - Local outputs

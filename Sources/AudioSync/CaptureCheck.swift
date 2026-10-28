@@ -94,6 +94,15 @@ struct CaptureFlowWatch {
         case noCallback(TimeInterval)
         case serviceRestarted
         case aggregateDied
+
+        /// For the debug log.
+        var description: String {
+            switch self {
+            case .noCallback(let seconds): return "no callback for \((seconds * 10).rounded() / 10) s"
+            case .serviceRestarted: return "Core Audio's service restarted"
+            case .aggregateDied: return "the aggregate device is no longer alive"
+            }
+        }
     }
 
     enum Step: Equatable {
@@ -108,20 +117,94 @@ struct CaptureFlowWatch {
         case giveUp
     }
 
+    private enum Phase: Equatable {
+        case watching
+        /// The capture is closed; try `next` is due at uptime `at`.
+        case waiting(next: Int, at: TimeInterval)
+        case trial(Int, since: TimeInterval)
+    }
+
+    private var phase = Phase.watching
+    private var lastCount: UInt64?
+    /// When the count last moved; nil until this capture's first callback.
+    private var movedAt: TimeInterval?
+
     /// `callbacks` is nil while the capture has no IOProc; `reading` is false
     /// while an app tap waits for an audio process, which is no stop.
-    mutating func tick(callbacks: UInt64?, reading: Bool, at uptime: TimeInterval) -> Step { .none }
+    mutating func tick(callbacks: UInt64?, reading: Bool, at uptime: TimeInterval) -> Step {
+        if case .waiting(let next, let due) = phase {
+            guard uptime >= due else { return .none }
+            phase = .trial(next, since: uptime)
+            forgetCount()
+            return .tryOpen(next)
+        }
+        guard reading else {
+            forgetCount()
+            if case .trial(let number, _) = phase {
+                phase = .watching
+                return .kept(number)
+            }
+            return .none
+        }
+        if let callbacks {
+            // A reopened capture counts from 0 again, so any change is a callback.
+            let moved = lastCount.map { callbacks != $0 } ?? (callbacks > 0)
+            lastCount = callbacks
+            if moved { movedAt = uptime }
+        }
+        switch phase {
+        case .waiting:
+            return .none
+        case .watching:
+            guard let movedAt, uptime - movedAt >= Self.stallSpan else { return .none }
+            return stop(.noCallback(uptime - movedAt), at: uptime)
+        case .trial(let number, let since):
+            let quietSince = movedAt ?? since
+            if uptime - quietSince >= Self.stallSpan { return stop(.noCallback(uptime - quietSince), at: uptime) }
+            guard movedAt != nil, uptime - since >= Self.trialSpan else { return .none }
+            phase = .watching
+            return .kept(number)
+        }
+    }
 
     /// A stop the host was told of: Core Audio's service restarted, or the
     /// tap's aggregate device died.
-    mutating func report(_ sign: Sign, at uptime: TimeInterval) -> Step { .none }
+    mutating func report(_ sign: Sign, at uptime: TimeInterval) -> Step {
+        if case .waiting = phase { return .none }
+        return stop(sign, at: uptime)
+    }
 
     /// The try `tick` asked for could not open the capture.
-    mutating func failed(at uptime: TimeInterval) -> Step { .none }
+    mutating func failed(at uptime: TimeInterval) -> Step {
+        guard case .trial = phase else { return .none }
+        return stop(.noCallback(0), at: uptime) == .giveUp ? .giveUp : .none
+    }
 
     /// Whether a try that threw `error` leaves room for the next one: an app
     /// that quit (S142, S164) and an input device that left keep their own handling.
-    static func retries(after error: SourceCapture.CaptureError) -> Bool { false }
+    static func retries(after error: SourceCapture.CaptureError) -> Bool {
+        switch error {
+        case .appNotRunning, .inputNotFound, .inputHandsFree, .inputDisconnected: return false
+        case .ownProcessUnknown, .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted: return true
+        }
+    }
+
+    private mutating func stop(_ sign: Sign, at uptime: TimeInterval) -> Step {
+        var next = 1
+        if case .trial(let number, _) = phase { next = number + 1 }
+        forgetCount()
+        guard next <= Self.tries else {
+            phase = .watching
+            return .giveUp
+        }
+        phase = .waiting(next: next, at: uptime + Self.trySpacing)
+        return .stopped(sign)
+    }
+
+    private mutating func forgetCount() {
+        lastCount = nil
+        movedAt = nil
+    }
 }
 
 /// The capture's sample rate changed under a running session: the tap's format

@@ -571,6 +571,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             self?.devicesChanged()
         }
         if status != noErr { DebugTrace.log("[AudioSync] device list listener not added: \(status)") }
+        observeServiceRestart()
+    }
+
+    /// Core Audio's server restarted (S335): every device object is new, and
+    /// a running session lost its capture and its outputs' IO with it.
+    private func observeServiceRestart() {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyServiceRestarted,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address,
+                                                         DispatchQueue.main) { [weak self] _, _ in
+            guard let self else { return }
+            DebugTrace.log("[AudioSync] Core Audio's service restarted"
+                           + (self.engine.isRunning ? "; the session reopens its capture and outputs" : ""))
+            self.engine.serviceRestarted()
+            self.devicesChanged()
+        }
+        if status != noErr { DebugTrace.log("[AudioSync] service restart listener not added: \(status)") }
     }
 
     /// Devices change in bursts (a dock, the capture's own aggregate device):
