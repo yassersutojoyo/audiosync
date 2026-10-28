@@ -116,7 +116,7 @@ enum CastProblem: Equatable {
 }
 
 enum CastError: Equatable {
-    case connect, launch, media, noFetch, stream, noSession, volumeFixed, volume, artwork
+    case connect, launch, media, noFetch, stream, noSession, volumeFixed, volume, artwork, `internal`
     case other(Int32)
 
     init?(_ code: Int32) {
@@ -131,6 +131,7 @@ enum CastError: Equatable {
         case ASC_CAST_ERROR_VOLUME_FIXED: self = .volumeFixed
         case ASC_CAST_ERROR_VOLUME: self = .volume
         case ASC_CAST_ERROR_ARTWORK: self = .artwork
+        case ASC_CAST_ERROR_INTERNAL: self = .internal
         default: self = .other(code)
         }
     }
@@ -154,7 +155,7 @@ enum CastEnd: Equatable {
         case .failed(.connect): return .notResponding
         case .failed(.launch), .failed(.media): return .refused
         case .failed(.noFetch): return .blocked
-        case .failed(.stream): return .connectionLost
+        case .failed(.stream), .failed(.internal): return .connectionLost
         case .failed: return .notResponding
         }
     }
@@ -310,6 +311,11 @@ extension CastDeviceChange {
     }
 }
 
+/// The device the user selected, or none, as the sender is told of it (C108).
+struct CastSelection: Equatable {
+    let id: String?
+}
+
 /// Why `asc_cast_start` refused, as a notice.
 enum CastRefusal {
     static func problem(_ code: Int32) -> CastProblem {
@@ -395,6 +401,8 @@ struct CastModel {
     private(set) var devices: [String: CastDevice] = [:]
     /// The one device the user turned on.
     private(set) var enabled: String?
+    /// The selection the sender was last told of; nil until it heard one.
+    private var namedSelection: CastSelection?
     /// The current session; its events are the only ones that count.
     private(set) var attempt: Attempt?
     /// A start sent to the sender whose attempt number hasn't come back yet.
@@ -584,6 +592,15 @@ struct CastModel {
         return attempt?.status == .playing ? .unknown : .notReported
     }
 
+    /// The selection to name to the sender, nil while it already knows it:
+    /// the list's cap keeps the selected device even while nothing plays (C108).
+    mutating func selectionToName() -> CastSelection? {
+        let current = CastSelection(id: enabled)
+        guard namedSelection != current else { return nil }
+        namedSelection = current
+        return current
+    }
+
     /// `asc_cast_start`'s answer for `id`: its attempt number, 0 when it
     /// refused with `refusal`. A refused device goes off.
     mutating func started(_ id: String, attempt number: UInt64, refusal: Int32) -> CastOutcome {
@@ -615,6 +632,7 @@ struct CastModel {
             starting = nil
             enabled = nil
             members = nil
+            namedSelection = nil
             return .senderFailed(wasOn: wasOn)
         default: break
         }

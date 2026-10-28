@@ -8350,6 +8350,26 @@ do {
             && CastEnd.failed(nil).problem == .notResponding
             && CastEnd.stopped.problem == nil && CastEnd.deselected.problem == nil,
           "cast: each way a session ends maps to its notice, or none")
+    check(CastEnd.failed(CastError(ASC_CAST_ERROR_INTERNAL)).problem == .connectionLost,
+          "cast: a fault inside the sender reads as a lost connection, as on Windows (C107)")
+
+    // C108: the sender hears the selection at its start and at every change, played or not.
+    var naming = CastModel()
+    naming.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
+    let firstNamed = naming.selectionToName()
+    let unchanged = naming.selectionToName()
+    _ = naming.turnOn(den)
+    let selectedNamed = naming.selectionToName()
+    let selectedAgain = naming.selectionToName()
+    _ = naming.turnOff(den)
+    let deselectedNamed = naming.selectionToName()
+    _ = naming.apply(.failed(detail: ""))
+    let afterFailure = naming.selectionToName()
+    check(firstNamed == CastSelection(id: nil) && unchanged == nil
+            && selectedNamed == CastSelection(id: den) && selectedAgain == nil
+            && deselectedNamed == CastSelection(id: nil)
+            && afterFailure == CastSelection(id: nil),
+          "cast: the selection is named to the sender once at start and again only when it changes (C108)")
 
     var failed = m
     check(failed.apply(.failed(detail: "")) == .senderFailed(wasOn: kitchen) && failed.enabled == nil && failed.rows.isEmpty

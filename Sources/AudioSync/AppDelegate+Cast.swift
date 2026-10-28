@@ -43,7 +43,10 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] Cast: the sender started, but multicast DNS couldn't browse")
             castModel.discovery = .failed
         }
-        if running { addStoredCastAddresses(sender) }
+        if running {
+            nameCastSelection(to: sender)
+            addStoredCastAddresses(sender)
+        }
         pushModel()
     }
 
@@ -127,6 +130,7 @@ extension AppDelegate {
     /// device that is on is listed and streaming is on.
     func syncCast() {
         guard let sender = castSender else { return }
+        nameCastSelection(to: sender)
         switch castModel.plan(streaming: engine.isRunning) {
         case .none:
             return
@@ -146,6 +150,12 @@ extension AppDelegate {
                 self.castFollow()
             }
         }
+    }
+
+    /// A selected speaker that isn't playing would otherwise be the first a
+    /// flood of announced devices pushes out of the sender's list (C108).
+    private func nameCastSelection(to sender: CastSender) {
+        if let selection = castModel.selectionToName() { sender.setSelected(selection.id) }
     }
 
     // MARK: - What the user does
