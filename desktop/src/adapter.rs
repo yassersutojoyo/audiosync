@@ -12108,6 +12108,64 @@ mod tests {
         );
     }
 
+    // covers: C105
+    #[test]
+    fn a_web_remote_volume_for_an_idle_cast_speaker_is_set_at_its_first_status() {
+        let (mut adapter, fake) = cast_adapter();
+        let command = audiosync_remote::Command::Speaker {
+            id: cc(CAST_KITCHEN),
+            change: audiosync_remote::SpeakerChange {
+                volume: Some(30.0),
+                ..Default::default()
+            },
+        };
+        let actions = crate::remote::actions(&command, &adapter.snapshot(), |_| true);
+        assert_eq!(
+            actions,
+            Ok(vec![crate::remote::Action::Volume {
+                id: cc(CAST_KITCHEN),
+                volume: 30.0
+            }])
+        );
+        adapter.set_speaker_volume(&cc(CAST_KITCHEN), 30.0);
+        assert_eq!(speaker_of(&adapter, &cc(CAST_KITCHEN)).volume, 30.0);
+
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        cast_first_status(&mut adapter, &fake, 0.8);
+        assert_eq!(fake.state().volumes, [0.3]);
+        assert_eq!(speaker_of(&adapter, &cc(CAST_KITCHEN)).volume, 30.0);
+    }
+
+    // covers: C105, S252
+    #[test]
+    fn a_recalled_cast_volume_is_set_at_the_speakers_first_status() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[(cc(CAST_KITCHEN), Some(30.0))])],
+            ..Settings::default()
+        });
+        adapter.recall_preset("preset:1");
+        assert_eq!(speaker_of(&adapter, &cc(CAST_KITCHEN)).volume, 30.0);
+
+        cast_first_status(&mut adapter, &fake, 0.8);
+        // Master × own: 0.7 × 0.3.
+        let level = *fake.state().volumes.last().expect("a Cast volume");
+        assert!((level - 0.21).abs() < 1e-9, "{level}");
+        assert_eq!(speaker_of(&adapter, &cc(CAST_KITCHEN)).volume, 30.0);
+    }
+
+    fn cast_first_status(adapter: &mut AudioAdapter<MockBackend>, fake: &FakeCast, level: f64) {
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: cast_device(CAST_KITCHEN),
+            event: SessionEvent::Volume(audiosync_cast::status::DeviceVolume {
+                level,
+                ..Default::default()
+            }),
+        });
+        adapter.poll();
+    }
+
     fn cast_ended(attempt: u64, end: SessionEnd) -> HostEvent {
         HostEvent::Ended {
             attempt: AttemptId(attempt),
