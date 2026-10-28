@@ -7069,6 +7069,47 @@ pub mod tests {
         );
     }
 
+    // covers: S290
+    #[test]
+    fn a_speaker_remote_leaves_a_speaker_muted_by_a_calibration_muted() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let study = device(2, "Study", OPEN_TXT);
+        let (k, s) = (id_of(&kitchen), id_of(&study));
+        fake.appear(&kitchen);
+        fake.appear(&study);
+        airplay.poll();
+        airplay.set_enabled(&k, true).unwrap();
+        airplay.set_enabled(&s, true).unwrap();
+        airplay.set_streaming(true);
+        airplay.set_volume(&s, 50.0);
+        airplay.poll();
+        fake.take_calls();
+        airplay.set_calibration_solo(Some(&k));
+        remote(
+            &fake,
+            &study,
+            RemoteCommand::DeviceVolume(Volume::Db(-20.0)),
+        );
+        airplay.poll();
+        let last = fake
+            .take_calls()
+            .into_iter()
+            .rev()
+            .find_map(|call| match call {
+                Call::Volume(id, volume) if id == s => Some(volume),
+                _ => None,
+            });
+        assert_eq!(last, Some(Volume::Muted));
+        let study_volume = airplay
+            .speakers()
+            .into_iter()
+            .find(|info| info.id == s)
+            .map(|info| info.volume);
+        assert_eq!(study_volume, Some(50.0));
+    }
+
     #[test]
     fn the_cast_hold_back_comes_on_top_of_each_speakers_own_delay() {
         let fake = FakeAirPlay::new();
