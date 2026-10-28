@@ -3549,4 +3549,67 @@ mod tests {
             .and_then(|active| active.session.remote_addr());
         assert_eq!(remote, Some(SocketAddr::new(v4, 5000)));
     }
+
+    // A receiver that restarts on a new port after the short retries are
+    // used up: discovery listing it again starts a session at once instead
+    // of after the 30 s wait.
+    // covers: P142
+    #[test]
+    fn a_speaker_waiting_to_retry_starts_at_once_when_discovery_lists_it_again() {
+        use crate::discovery::{ScopedAddr, ServiceKind, ServiceRecord};
+        use std::net::{IpAddr, SocketAddr};
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency);
+        let ip: IpAddr = "192.0.2.59".parse().expect("an address");
+        let record = |port| ServiceRecord {
+            kind: ServiceKind::Raop,
+            instance: "0123456789AB@Kitchen".to_owned(),
+            host: "kitchen.local".to_owned(),
+            port,
+            txt: vec![b"cn=0,1".to_vec(), b"et=0".to_vec()],
+            addresses: vec![ScopedAddr::new(ip)],
+        };
+        let changes = driver.directory.apply(BrowseEvent::Resolved(record(5000)));
+        driver.report_changes(changes);
+        let device = driver.directory.devices().next().cloned().expect("listed");
+        let key = device.key.clone();
+        driver.add_speaker(
+            device,
+            SpeakerOptions::new(Volume::Db(-20.0)),
+            Arc::new(SpeakerCounters::default()),
+            now,
+        );
+        let mut failed_at = now;
+        let mut retry_at = now;
+        for attempt in 1..=6 {
+            assert_eq!(
+                driver.next_output(&key),
+                Some(Output::Connect(SocketAddr::new(ip, 5000))),
+                "attempt {attempt}"
+            );
+            failed_at = retry_at;
+            driver.on_failed(&key, SessionError::new(ErrorKind::Unreachable), failed_at);
+            let Phase::Waiting(at) = driver.speakers[&key].phase else {
+                panic!("attempt {attempt} is not retried");
+            };
+            retry_at = at;
+            if attempt < 6 {
+                driver.run_timers(retry_at);
+            }
+        }
+        assert_eq!(retry_at - failed_at, Duration::from_secs(30));
+
+        let changes = driver.directory.apply(BrowseEvent::Resolved(record(5001)));
+        driver.report_changes(changes);
+        driver.run_timers(failed_at + Duration::from_secs(1));
+        assert_eq!(
+            driver.next_output(&key),
+            Some(Output::Connect(SocketAddr::new(ip, 5001)))
+        );
+    }
 }
