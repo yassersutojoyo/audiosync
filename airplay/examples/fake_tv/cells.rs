@@ -198,6 +198,27 @@ pub fn d1(switch_ons: usize, prompts: usize, started: usize, done: usize, playin
     Cell::new("D1", status, value)
 }
 
+/// D1.once, a PIN the first time only: one PIN prompt and one PIN pairing
+/// for the first switch-on, and every switch-on plays on what it stored.
+pub fn d1_once(
+    switch_ons: usize,
+    prompts: usize,
+    started: usize,
+    done: usize,
+    playing: usize,
+) -> Cell {
+    let value = format!(
+        "{switch_ons} switch-ons: {prompts} PIN prompts, {started} PIN pairings started, {done} done, {playing} playing"
+    );
+    let status =
+        if switch_ons >= 2 && [prompts, started, done] == [1, 1, 1] && playing == switch_ons {
+            Status::Pass
+        } else {
+            Status::Fail
+        };
+    Cell::new("D1.once", status, value)
+}
+
 /// What one add of the password television led to, counted from the add on.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PasswordStep {
