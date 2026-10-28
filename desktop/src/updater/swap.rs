@@ -517,12 +517,30 @@ mod tests {
             let _ = io::Read::read_to_end(&mut io::stdin(), &mut Vec::new());
             return;
         }
+        // The copy is as big as the test binary; it goes even when the test
+        // fails, after its process, which locks the image, has ended.
+        struct RunningCopy {
+            dir: PathBuf,
+            child: Option<std::process::Child>,
+        }
+        impl Drop for RunningCopy {
+            fn drop(&mut self) {
+                if let Some(mut child) = self.child.take() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                let _ = std::fs::remove_dir_all(&self.dir);
+            }
+        }
         // A private running copy: the shared target folder's own test binary
         // is also run, relinked and renamed by other cargo processes.
-        let dir = test_dir("running-rename");
-        let running = dir.join(EXE_NAME);
+        let mut copy = RunningCopy {
+            dir: test_dir("running-rename"),
+            child: None,
+        };
+        let running = copy.dir.join(EXE_NAME);
         std::fs::copy(std::env::current_exe().unwrap(), &running).unwrap();
-        let mut child = std::process::Command::new(&running)
+        let child = std::process::Command::new(&running)
             .args([
                 "--exact",
                 "updater::swap::tests::the_running_test_binary_can_be_renamed_aside_and_back",
@@ -533,6 +551,7 @@ mod tests {
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("the copy starts");
+        let child = copy.child.insert(child);
         let aside = running.with_extension("exe.renamed-aside");
         let there = RealFiles.rename(&running, &aside);
         let back = there
