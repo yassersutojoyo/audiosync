@@ -11865,6 +11865,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A folder in place of the settings file at launch (another program
+    /// holds it), with the user's settings, master 64, waiting in `held`.
+    fn launch_with_settings_held(name: &str) -> (AudioAdapter<MockBackend>, PathBuf, PathBuf) {
+        let dir = test_dir(name);
+        let path = dir.join(settings::FILE_NAME);
+        let users = Settings {
+            master_volume: 64.0,
+            ..Settings::default()
+        };
+        std::fs::write(dir.join("held"), users.to_json()).expect("written");
+        std::fs::create_dir(&path).expect("the folder is made");
+        (launch(launch_audio(), &path), dir, path)
+    }
+
+    // covers: S212
+    #[test]
+    fn a_settings_file_held_at_launch_is_applied_once_it_can_be_read() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held");
+        assert_eq!(adapter.snapshot().master_volume, 100.0, "the defaults");
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(dir.join("held"), &path).expect("moved back");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().master_volume, 64.0);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert!(crate::data_folder::copies_kept_aside(&dir, "settings.ignored").is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
+    fn a_change_while_the_settings_file_is_held_never_saves_the_defaults_over_it() {
+        let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-change");
+        adapter.set_speaker_volume(&key(SPEAKERS), 30.0);
+        adapter.poll();
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(dir.join("held"), &path).expect("moved back");
+        adapter.set_speaker_volume(&key(SPEAKERS), 40.0);
+        adapter.poll();
+        adapter.poll();
+        assert_eq!(adapter.snapshot().master_volume, 64.0);
+        assert_eq!(SettingsFile::at(path).load().0.master_volume, 64.0);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// The adapter over AirPlay with the pairings in `path`, and the fake
     /// sender behind it.
     fn launch_with_pairings(path: &std::path::Path) -> (AudioAdapter<MockBackend>, FakeAirPlay) {
