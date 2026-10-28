@@ -17,6 +17,7 @@ mod loopback;
 mod media;
 mod media_sessions;
 mod microphone;
+mod power;
 mod processes;
 mod routing;
 mod volume;
@@ -34,7 +35,7 @@ use audiosync_core::volume::SharedGain;
 use super::backend::BackendError;
 use super::calibration::{Microphone, MicrophoneError};
 use super::capture::{CaptureTarget, Feeds};
-use super::controller::{Controller, Driver};
+use super::controller::{Controller, Driver, PowerNotice};
 use super::outputs::{Endpoint, EndpointReading, Listing, RenderFormat};
 use super::process::ProcessTable;
 use super::routing::{EndpointAudio, EndpointVolume};
@@ -49,6 +50,7 @@ pub struct WasapiDriver {
     /// from the first call on.
     volumes: volume::Volumes,
     own_pid: u32,
+    power: power::PowerWatch,
 }
 
 impl WasapiDriver {
@@ -58,6 +60,7 @@ impl WasapiDriver {
             watcher: devices::DeviceWatcher::start()?,
             volumes: volume::Volumes::default(),
             own_pid: std::process::id(),
+            power: power::PowerWatch::start(),
         })
     }
 }
@@ -88,6 +91,10 @@ impl Driver for WasapiDriver {
 
     fn format_notices(&mut self) -> Vec<String> {
         self.watcher.take_format_changes()
+    }
+
+    fn power_notices(&mut self) -> Vec<PowerNotice> {
+        self.power.take()
     }
 
     fn output_format(&mut self, id: &str) -> Result<RenderFormat, BackendError> {

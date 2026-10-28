@@ -22,6 +22,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, SystemTime};
 
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::reader::Reader;
@@ -31,7 +32,9 @@ use audiosync_core::volume::SharedGain;
 
 use super::backend::{BackendError, OutputKind};
 use super::capture::{CAPTURE_ATTEMPTS, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode};
-use super::controller::{CaptureHandle, CaptureState, Controller, Driver, RendererHandle};
+use super::controller::{
+    CaptureHandle, CaptureState, Controller, Driver, PowerNotice, RendererHandle,
+};
 use super::outputs::{
     DeviceTraits, Endpoint, EndpointProperties, EndpointReading, Listing, RenderFormat,
     StreamSetup, list_endpoints,
@@ -322,6 +325,14 @@ pub struct MockDriver {
     renderers_started: Vec<String>,
     /// Every capture start asked for, refused ones included.
     capture_attempts: usize,
+    /// Windows' suspend and resume notices not yet taken.
+    power_notices: Vec<PowerNotice>,
+    /// The system clock: it stands still between polls unless a test moves
+    /// it, as across a sleep.
+    wall_clock: SystemTime,
+    /// How far the system clock moves while an output start that doesn't
+    /// answer holds the caller.
+    hang_cost: Duration,
     /// The endpoint ID of every output start asked for, refused ones
     /// included.
     renderer_attempts: Vec<String>,
@@ -379,6 +390,9 @@ impl MockDriver {
             renderers_started: Vec::new(),
             capture_attempts: 0,
             renderer_attempts: Vec::new(),
+            power_notices: Vec::new(),
+            wall_clock: SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000),
+            hang_cost: Duration::ZERO,
         }
     }
 
@@ -586,6 +600,14 @@ impl Driver for MockDriver {
         std::mem::take(&mut self.format_notices)
     }
 
+    fn power_notices(&mut self) -> Vec<PowerNotice> {
+        std::mem::take(&mut self.power_notices)
+    }
+
+    fn wall_clock(&self) -> SystemTime {
+        self.wall_clock
+    }
+
     fn output_format(&mut self, id: &str) -> Result<RenderFormat, BackendError> {
         if !self.is_connected(id) {
             return Err(BackendError::DeviceGone);
@@ -751,6 +773,9 @@ impl Driver for MockDriver {
             return Err(BackendError::DeviceGone);
         }
         if let Some(error) = self.output_errors.get(&endpoint.id) {
+            if *error == BackendError::NotResponding {
+                self.wall_clock += self.hang_cost;
+            }
             return Err(error.clone());
         }
         self.renderers
@@ -1114,6 +1139,23 @@ impl Controller<MockDriver> {
     /// Makes only the next capture start fail with `error`.
     pub fn refuse_next_capture(&mut self, error: BackendError) {
         self.driver_mut().next_capture_error = Some(error);
+    }
+
+    /// Windows tells of a suspend or a resume, as the next poll finds out.
+    pub fn notify_power(&mut self, notice: PowerNotice) {
+        self.driver_mut().power_notices.push(notice);
+    }
+
+    /// The system clock moves on by `span` before the next poll, as when the
+    /// PC sleeps that long.
+    pub fn pass_wall_time(&mut self, span: Duration) {
+        self.driver_mut().wall_clock += span;
+    }
+
+    /// Makes each output start that doesn't answer hold the caller for
+    /// `span` of wall time.
+    pub fn hang_output_starts_for(&mut self, span: Duration) {
+        self.driver_mut().hang_cost = span;
     }
 
     /// Makes the running capture fail with `error`.
