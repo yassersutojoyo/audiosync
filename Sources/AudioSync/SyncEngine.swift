@@ -398,7 +398,7 @@ final class StreamEngine {
         timer.setEventHandler { [weak self] in
             guard let self, self.isRunning else { return }
             // S335 D3: a Now Playing gate for app and mix sources would go here, should a quiet tap stop calling back.
-            self.follow(self.flowWatch.tick(callbacks: self.capture.counts?.callbacks, reading: self.capture.isReading,
+            self.follow(self.flowWatch.tick(callbacks: self.capture.counts?.callbacks, reading: self.capture.isReading, playingReadAt: nil,
                                             at: ProcessInfo.processInfo.systemUptime))
         }
         timer.resume()

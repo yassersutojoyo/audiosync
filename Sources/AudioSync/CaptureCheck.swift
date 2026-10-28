@@ -131,7 +131,7 @@ struct CaptureFlowWatch {
 
     /// `callbacks` is nil while the capture has no IOProc; `reading` is false
     /// while an app tap waits for an audio process, which is no stop.
-    mutating func tick(callbacks: UInt64?, reading: Bool, at uptime: TimeInterval) -> Step {
+    mutating func tick(callbacks: UInt64?, reading: Bool, playingReadAt: TimeInterval?, at uptime: TimeInterval) -> Step {
         if case .waiting(let next, let due) = phase {
             guard uptime >= due else { return .none }
             phase = .trial(next, since: uptime)
