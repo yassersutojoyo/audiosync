@@ -3499,13 +3499,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 }
             }
             // Its stream stalled twice in a row while its device stays
-            // listed (S326): it stays on and is opened again every ten
-            // seconds, and the notice clears once a stream plays.
-            BackendEvent::OutputStalled { id } => {
+            // listed (S326), or its listed device refused to open for 30 s
+            // (S331): it stays on and is opened again, and the notice clears
+            // once a stream plays.
+            BackendEvent::OutputStalled { id } | BackendEvent::OutputRefused { id } => {
                 let speaker = self.output_name(&id);
                 self.post(speaker_subject(&id), NoticeMessage::SpeakerLost { speaker });
             }
-            BackendEvent::OutputRefused { .. } => {}
             BackendEvent::OutputPlaysAgain { id } => {
                 self.clear_if(speaker_subject(&id), |message| {
                     matches!(message, NoticeMessage::SpeakerLost { .. })

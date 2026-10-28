@@ -521,8 +521,8 @@ pub enum BackendEvent {
         id: String,
     },
     /// An output reported stalled has played five seconds since it was
-    /// opened again, or no longer waits: it was switched off or streaming
-    /// stopped.
+    /// opened again, or one reported refused plays, or either no longer
+    /// waits: it was switched off, failed, or streaming stopped.
     OutputPlaysAgain {
         /// The endpoint ID.
         id: String,
