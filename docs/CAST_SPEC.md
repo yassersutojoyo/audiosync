@@ -251,6 +251,7 @@ The sender's tests run against a fake receiver in the same process: a TLS server
 | group_volume | C100 | `SET_VOLUME` goes to the group's `receiver-0`; the control follows the group's reported level; nothing goes to a member |
 | group_offset | C101, C102 | the offset is stored under the group's `id`; a member's offset never seeds the group's, nor the reverse |
 | offset_never_corrected | C77 | `BUFFERING`, a `currentTime` far off and a queue the sender did not load change neither the stored offset nor anything else in the device memory, and bring no reload and no message of their own (`queue_state_and_current_time_never_change_the_offset_or_reload` on the fake device) |
+| a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops | C64, C75, C79 | a fake device that reads at half real time: the queue never passes its 2 s cap and drops once full, the audio is all sent, queued or counted as dropped except what the 1 s ring holds, the drift only grows, a restart is offered exactly while the drift is over 250 ms, and no new `LOAD` or restart follows (`cast/tests/fake_cells.rs`) |
 | hardware_latency | C74 to C76 | *hardware*: G7, G8 and G9 |
 | hardware_groups | C89 to C103 | *hardware*: G1 |
 
