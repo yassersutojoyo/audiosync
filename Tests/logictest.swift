@@ -10754,6 +10754,11 @@ do {
     check(lines(box: false, note: true, cast: true) == "true true",
           "zone box separators: without a zone box, the note and Add by address keep their lines",
           lines(box: false, note: true, cast: true))
+    check(lines(box: false, note: true, cast: false) == "true false",
+          "zone box separators: without a zone box, a lone note keeps its line", lines(box: false, note: true, cast: false))
+    check(lines(box: false, note: false, cast: true) == "false true",
+          "zone box separators: without a zone box, a lone Add by address keeps its line",
+          lines(box: false, note: false, cast: true))
 }
 
 // MARK: About panel shows the version without the build number (AboutPanel.options)
