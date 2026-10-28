@@ -9234,32 +9234,6 @@ mod tests {
     }
 
     #[test]
-    fn a_retrying_speaker_whose_receiver_is_gone_is_named_by_no_notice() {
-        let (mut adapter, fake, kitchen, _) = airplay_adapter();
-        adapter.set_speaker_enabled(&ap(&kitchen), true);
-        fake.state(&kitchen, AirPlayState::Playing);
-        adapter.poll();
-        fake.fail(&kitchen, ErrorKind::Unreachable);
-        adapter.poll();
-        assert_eq!(messages(&adapter).len(), 1);
-        fake.gone(&kitchen);
-        adapter.poll();
-        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_none());
-        let left = messages(&adapter);
-        assert!(
-            left.is_empty(),
-            "the gone speaker's notice stayed: {left:?}"
-        );
-        fake.fail(&kitchen, ErrorKind::Unreachable);
-        adapter.poll();
-        let raised = messages(&adapter);
-        assert!(
-            raised.is_empty(),
-            "a late retry raised a notice: {raised:?}"
-        );
-    }
-
-    #[test]
     fn a_retrying_airplay_speaker_row_says_reconnecting_until_it_plays() {
         let reconnecting = SpeakerState::Waiting(ui_model::Waiting::Reconnecting);
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
@@ -9408,6 +9382,44 @@ mod tests {
         adapter.poll();
         assert_eq!(state_of(&adapter, &ap(&kitchen)), off_network);
         assert!(messages(&adapter).is_empty());
+    }
+
+    // Mac sitting 28 Oct: a receiver quit mid-stream lost its row instead
+    // of waiting off the network.
+    // covers: P215, S222
+    #[test]
+    fn a_speaker_whose_receiver_is_gone_mid_stream_keeps_its_row_and_its_place_in_the_sender_off_the_network()
+     {
+        let off_network = SpeakerState::Waiting(ui_model::Waiting::NotOnNetwork);
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        fake.gone(&kitchen);
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        fake.state(&kitchen, AirPlayState::Unannounced);
+        adapter.poll();
+        let calls = fake.take_calls();
+        assert!(
+            !calls.iter().any(|call| matches!(call, Call::Remove(_))),
+            "it left the sender: {calls:?}"
+        );
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), off_network);
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
+        assert_eq!(adapter.snapshot().active_speakers(), 1, "Streaming to 1");
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+
+        fake.appear(&kitchen);
+        adapter.poll();
+        let calls = fake.take_calls();
+        assert!(
+            !calls.iter().any(|call| matches!(call, Call::Add { .. })),
+            "it joined the sender anew: {calls:?}"
+        );
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
     }
 
     #[test]

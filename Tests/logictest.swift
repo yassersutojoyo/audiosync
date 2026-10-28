@@ -2527,8 +2527,8 @@ do {
     check(model.apply(.error(id: "A1", .connectionLost, retryMs: 1000, detail: "Lost")) == nil
             && model.apply(.state(id: "A1", .retrying, retryMs: 1000)) == .playingChanged("native:A1", playing: false),
           "native airplay: a lost speaker the sender retries stays on")
-    check(!model.rows(enabled: []).contains("native:A1") && model.soundingIDs.isEmpty,
-          "EC12 native airplay: gone and not playing, it leaves the list and holds nothing back")
+    check(model.rows(enabled: []).contains("native:A1") && model.soundingIDs.isEmpty,
+          "EC12 native airplay: gone and not playing, it keeps its row while in the sender and holds nothing back")
     check(model.apply(.error(id: "A1", .notResponding, retryMs: nil, detail: "Unreachable")) == .turnOff("native:A1", .unreachable)
             && model.apply(.error(id: "A1", .pairingRequired, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsCode)
             && model.apply(.error(id: "A1", .wrongPassword, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsPassword)
@@ -2542,8 +2542,8 @@ do {
             && model.apply(.error(id: "A1", .notResponding, retryMs: nil, detail: "")) == nil,
           "native airplay: events of a removed speaker are passed over")
 
-    // S222: a receiver powered off mid-stream loses its row about 40 s
-    // later, and the sender must stop retrying it then.
+    // S222: a receiver powered off mid-stream keeps its row once
+    // discovery withdraws it; the sender stops retrying it then (P215).
     let kitchenOn: Set<String> = ["native:K1"]
     var withdrawn = NativeAirPlayModel()
     withdrawn.apply(.appeared(receiver("K1", "Kitchen", .available)))
@@ -2554,13 +2554,9 @@ do {
     let beforeGone = withdrawn.plan(streaming: true, enabled: kitchenOn)
     withdrawn.apply(.gone(id: "K1", name: "Kitchen"))
     let afterGone = withdrawn.plan(streaming: true, enabled: kitchenOn)
-    check(beforeGone.isEmpty && afterGone.remove == ["K1"] && afterGone.add.isEmpty && afterGone.turnOff.isEmpty,
-          "native airplay: a retrying speaker whose receiver is gone leaves the sender and stays on",
+    check(beforeGone.isEmpty && afterGone.isEmpty && withdrawn.plan(streaming: true, enabled: []).remove == ["K1"],
+          "native airplay: a retrying speaker whose receiver is gone stays in the sender until switched off",
           "before \(beforeGone), after \(afterGone)")
-    let switchedOff = withdrawn.plan(streaming: true, enabled: [])
-    check(afterGone.gone == ["K1"] && switchedOff.remove == ["K1"] && switchedOff.gone.isEmpty,
-          "native airplay: a retrying speaker whose receiver is gone is named by no notice",
-          "after \(afterGone), switched off \(switchedOff)")
     withdrawn.removed("K1")
     check(withdrawn.apply(.state(id: "K1", .retrying, retryMs: 1000)) == nil
             && withdrawn.plan(streaming: true, enabled: kitchenOn).isEmpty,
@@ -2578,9 +2574,31 @@ do {
     _ = lapsed.apply(.error(id: "K1", .connectionLost, retryMs: 1000, detail: "Lost"))
     _ = lapsed.apply(.state(id: "K1", .retrying, retryMs: 1000))
     let lost = lapsed.plan(streaming: true, enabled: kitchenOn)
-    check(playingOn.isEmpty && lost.remove == ["K1"] && lost.gone == ["K1"] && lost.turnOff.isEmpty,
-          "native airplay: a speaker playing on after its announcement lapsed leaves the sender once it is lost",
+    check(playingOn.isEmpty && lost.isEmpty,
+          "native airplay: a speaker playing on after its announcement lapsed stays in the sender once it is lost",
           "playing \(playingOn), lost \(lost)")
+
+    // Mac sitting 28 Oct: a receiver quit mid-stream lost its row instead
+    // of waiting off the network (P215).
+    let studyOn: Set<String> = ["native:Q1"]
+    var quit = NativeAirPlayModel()
+    quit.apply(.appeared(receiver("Q1", "Study", .available)))
+    quit.added("Q1")
+    _ = quit.apply(.state(id: "Q1", .playing, retryMs: nil))
+    quit.apply(.gone(id: "Q1", name: "Study"))
+    _ = quit.apply(.error(id: "Q1", .notResponding, retryMs: 1000, detail: "Unreachable"))
+    _ = quit.apply(.state(id: "Q1", .retrying, retryMs: 1000))
+    let quitLost = quit.plan(streaming: true, enabled: studyOn)
+    let offNetwork = quit.apply(.state(id: "Q1", .unannounced, retryMs: nil))
+    let quitAway = quit.plan(streaming: true, enabled: studyOn)
+    check(quitLost.isEmpty && quitAway.isEmpty && offNetwork == .unannouncedChanged("native:Q1")
+            && quit.rows(enabled: studyOn) == ["native:Q1"] && quit.isUnannounced("Q1"),
+          "native airplay: a speaker whose receiver is gone mid-stream keeps its row and its place in the sender, off the network",
+          "lost \(quitLost), unannounced \(quitAway), rows \(quit.rows(enabled: studyOn))")
+    quit.apply(.appeared(receiver("Q1", "Study", .available)))
+    check(quit.plan(streaming: true, enabled: studyOn).isEmpty
+            && quit.apply(.state(id: "Q1", .playing, retryMs: nil)) == .playingChanged("native:Q1", playing: true),
+          "native airplay: a speaker off the network plays again once announced, without joining the sender anew")
 
     // P169, S285: a 17th AirPlay 2 speaker waits for a place, switched on,
     // and the sender starts it once one of the others stops.
