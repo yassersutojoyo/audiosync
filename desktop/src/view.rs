@@ -319,8 +319,10 @@ enum Announcement {
 /// are not news.
 #[derive(Debug, Default)]
 struct NoticeAnnouncer {
-    /// The newest notice id seen so far; `None` until the first refresh.
-    seen: Option<u64>,
+    /// The ids listed at the last refresh, oldest posted first; `None`
+    /// until the first refresh. The view's own notices have fixed ids far
+    /// above the backend's, so an id says nothing about post order.
+    posted: Option<Vec<u64>>,
     /// The subject and title of each notice listed at the last refresh.
     listed: Vec<(String, SharedString)>,
     /// The subject of the notice last said, until it leaves the list.
@@ -328,22 +330,33 @@ struct NoticeAnnouncer {
 }
 
 impl NoticeAnnouncer {
-    /// What to announce for `notices`. Ids only grow, so a notice with a
-    /// higher id than any seen was posted since the last refresh.
+    /// The listed notices' ids, oldest posted first.
+    fn posted(&self) -> &[u64] {
+        self.posted.as_deref().unwrap_or_default()
+    }
+
+    /// What to announce for `notices`. A notice whose id wasn't listed at
+    /// the last refresh was posted since.
     fn next(&mut self, notices: &[Listed]) -> Announcement {
         let repeats = |n: &Listed| {
             self.listed
                 .iter()
                 .any(|(subject, title)| *subject == n.subject && *title == n.title)
         };
-        let fresh = self.seen.and_then(|seen| {
-            notices
-                .iter()
-                .filter(|n| n.id > seen && !repeats(n))
-                .max_by_key(|n| n.id)
-        });
-        let top = notices.iter().map(|n| n.id).max().unwrap_or(0);
-        self.seen = Some(self.seen.map_or(top, |seen| seen.max(top)));
+        let known = self.posted.take();
+        let mut new: Vec<&Listed> = notices
+            .iter()
+            .filter(|n| !known.as_ref().is_some_and(|ids| ids.contains(&n.id)))
+            .collect();
+        new.sort_by_key(|n| n.id);
+        let fresh = known
+            .is_some()
+            .then(|| new.iter().rev().find(|n| !repeats(n)).copied())
+            .flatten();
+        let mut posted = known.unwrap_or_default();
+        posted.retain(|id| notices.iter().any(|n| n.id == *id));
+        posted.extend(new.iter().map(|n| n.id));
+        self.posted = Some(posted);
         self.listed = notices
             .iter()
             .map(|n| (n.subject.clone(), n.title.clone()))
@@ -1043,6 +1056,12 @@ impl App {
         state.notices.extend(self.remote_public_notice());
         state.notices.extend(self.updater_notice());
         state
+    }
+
+    /// The listed notices' ids, oldest posted first, for [`tray_tooltip`].
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn notices_posted(&self) -> Vec<u64> {
+        self.notice_announcer.borrow().posted().to_vec()
     }
 
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -4158,11 +4177,16 @@ fn clear_announcement(main: &slint::Weak<MainWindow>, flyout: &slint::Weak<TrayF
 
 /// The tray icon's tooltip: AudioSync and its status, then the newest
 /// notice's title on a second line while there is a notice, so Narrator
-/// reads it on the tray icon even with every window closed.
+/// reads it on the tray icon even with every window closed. `posted` is
+/// [`App::notices_posted`]; notices missing from it go by id.
 #[cfg(any(windows, target_os = "linux", test))]
-pub fn tray_tooltip(strings: &Strings<'_>, state: &AppState) -> String {
+pub fn tray_tooltip(strings: &Strings<'_>, state: &AppState, posted: &[u64]) -> String {
     let speakers = count(state.active_speakers());
-    let text = match state.notices.iter().max_by_key(|n| n.id) {
+    let newest = state
+        .notices
+        .iter()
+        .max_by_key(|n| (posted.iter().position(|id| *id == n.id), n.id));
+    let text = match newest {
         Some(notice) => strings.invoke_tray_tooltip_notice(
             state.running,
             speakers,
@@ -6892,7 +6916,7 @@ mod tests {
         app.main.invoke_sync_toggled("local:desk".into());
         // As if the second notice came with the keystroke.
         *app.notice_announcer.borrow_mut() = NoticeAnnouncer {
-            seen: Some(1),
+            posted: Some(vec![1]),
             ..NoticeAnnouncer::default()
         };
         app.main
@@ -11314,7 +11338,7 @@ mod tests {
             announcer.next(&listed);
             state.notices = notices.to_vec();
         }
-        tray_tooltip(strings, &state)
+        tray_tooltip(strings, &state, announcer.posted())
     }
 
     /// The tooltip names the notice posted last, also when an older one has
@@ -11340,7 +11364,14 @@ mod tests {
         );
         let capture = notice(1, "source", NoticeMessage::CaptureLost);
         let title = notice_title(&strings, &NoticeMessage::CaptureLost);
-        let tooltip = tooltip_after(&strings, &[&[], &[airplay2.clone()], &[capture, airplay2]]);
+        let tooltip = tooltip_after(
+            &strings,
+            &[
+                &[],
+                std::slice::from_ref(&airplay2),
+                &[capture, airplay2.clone()],
+            ],
+        );
         assert!(tooltip.ends_with(&format!("Notice: {title}")), "{tooltip}");
     }
 
@@ -11375,7 +11406,7 @@ mod tests {
         let said = strings.invoke_notice_announcement(title);
         // As if only the first notice had been there at launch.
         let only_the_first = || NoticeAnnouncer {
-            seen: Some(1),
+            posted: Some(vec![1]),
             ..NoticeAnnouncer::default()
         };
         *app.notice_announcer.borrow_mut() = only_the_first();
@@ -11419,18 +11450,18 @@ mod tests {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
         let plain = strings.invoke_tray_tooltip(false, 0).to_string();
-        assert_eq!(tray_tooltip(&strings, &backend.snapshot()), plain);
+        assert_eq!(tray_tooltip(&strings, &backend.snapshot(), &[]), plain);
 
         backend.post("source", NoticeMessage::CaptureLost, "09.40");
         backend.post("start", NoticeMessage::NoSpeaker, "09.41");
         let title = notice_title(&strings, &NoticeMessage::NoSpeaker);
         assert_eq!(
-            tray_tooltip(&strings, &backend.snapshot()),
+            tray_tooltip(&strings, &backend.snapshot(), &[]),
             format!("{plain}\nNotice: {title}")
         );
 
         backend.dismiss_all_notices();
-        assert_eq!(tray_tooltip(&strings, &backend.snapshot()), plain);
+        assert_eq!(tray_tooltip(&strings, &backend.snapshot(), &[]), plain);
 
         backend.post(
             "speaker",
@@ -11439,7 +11470,7 @@ mod tests {
             },
             "09.42",
         );
-        let long = tray_tooltip(&strings, &backend.snapshot());
+        let long = tray_tooltip(&strings, &backend.snapshot(), &[]);
         assert!(long.encode_utf16().count() <= 127, "{long}");
         assert!(long.ends_with('…'), "{long}");
         assert!(long.starts_with(&format!("{plain}\nNotice: Kitchen")));

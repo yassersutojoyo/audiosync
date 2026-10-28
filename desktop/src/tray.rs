@@ -162,7 +162,7 @@ impl Tray {
         let choice = IconChoice::current(state.running);
         let icon = TrayIconBuilder::new()
             .with_icon(load_icon(choice)?)
-            .with_tooltip(view::tray_tooltip(&strings, &state))
+            .with_tooltip(view::tray_tooltip(&strings, &state, &app.notices_posted()))
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
             .build()
@@ -240,9 +240,11 @@ impl Tray {
             return;
         };
         let strings = app.strings();
-        let _ = self
-            .icon
-            .set_tooltip(Some(view::tray_tooltip(&strings, state)));
+        let _ = self.icon.set_tooltip(Some(view::tray_tooltip(
+            &strings,
+            state,
+            &app.notices_posted(),
+        )));
         self.toggle_item.set_text(if state.running {
             strings.get_menu_turn_streaming_off()
         } else {
