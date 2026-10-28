@@ -825,12 +825,10 @@ impl LoopbackLane {
     }
 }
 
-/// How a mix lane reads a failed `IAudioClient::Start` on `target`.
-fn lane_start_error(_target: &CaptureTarget, code: HRESULT) -> BackendError {
-    system_error(
-        "IAudioClient::Start",
-        &windows::core::Error::from_hresult(code),
-    )
+/// How a mix lane reads a failed `IAudioClient::Start` on `target`: as the
+/// single-app capture does (S333).
+fn lane_start_error(target: &CaptureTarget, code: HRESULT) -> BackendError {
+    capture_error(target, "IAudioClient::Start", code)
 }
 
 impl Drop for LoopbackLane {
