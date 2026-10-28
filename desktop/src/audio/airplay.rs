@@ -8447,7 +8447,7 @@ pub mod tests {
         row_level(info.device_level)
     }
 
-    // covers: S289, S290
+    // covers: S290
     #[test]
     fn the_row_shows_the_device_level_rounded_down() {
         let fake = FakeAirPlay::new();
