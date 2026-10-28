@@ -933,6 +933,50 @@ fn device_volume_changes_never_touch_the_samples() {
     device.join();
 }
 
+// covers: C70, C81
+#[test]
+fn a_level_waiting_for_its_interval_reaches_the_device_after_a_reconnect() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    let mut landed = false;
+    for (attempt, last) in [0.3, 0.5, 0.7].into_iter().enumerate() {
+        let first = Instant::now();
+        session.set_volume(last - 0.1).expect("sent");
+        session.set_volume(last).expect("waits for the interval");
+        device.send(Command::DropConnection);
+        assert!(device.wait_for_hangup(HANG_GUARD));
+        // Past the interval the old channel sends the level itself before it reads the drop.
+        let in_time = first.elapsed() < Duration::from_millis(80);
+        run_until(&mut session, Duration::from_secs(10), |event| {
+            matches!(event, SessionEvent::Recovered { .. })
+        });
+        if !in_time {
+            continue;
+        }
+        let last_sent = |device: &FakeDevice| {
+            device
+                .payloads(NS_RECEIVER, "SET_VOLUME")
+                .last()
+                .map(|payload| payload["volume"]["level"].clone())
+        };
+        let until = Instant::now() + Duration::from_secs(3);
+        while last_sent(&device) != Some(json!(last)) {
+            assert!(
+                Instant::now() < until,
+                "the level waiting at the drop never reached the device: {:?}",
+                device.payloads(NS_RECEIVER, "SET_VOLUME")
+            );
+            session.run_for(Duration::from_millis(50));
+        }
+        assert_eq!(device.connection_count() as usize, attempt + 2);
+        landed = true;
+        break;
+    }
+    assert!(landed, "no drop landed inside the 100 ms interval");
+    session.stop();
+    device.join();
+}
+
 // covers: C25, C81
 #[test]
 fn an_oversized_frame_from_the_device_is_a_fault_the_session_recovers_from() {
