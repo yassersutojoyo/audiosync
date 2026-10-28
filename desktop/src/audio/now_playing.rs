@@ -1031,6 +1031,87 @@ mod tests {
         );
     }
 
+    fn stopped(app_id: &str, title: &str) -> Track {
+        let mut stopped = track(app_id, title, false, Some(COVER));
+        stopped.session.paused = false;
+        stopped
+    }
+
+    fn whole_system_label() -> Option<TrackFields> {
+        fields("Title label", "Whole system label", "Album label")
+    }
+
+    // covers: S218
+    #[test]
+    fn whole_system_the_player_that_played_last_keeps_its_paused_track() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(track("Spotify.exe", "Song", true, Some(COVER))));
+        info.sync(Some(&whole_system()), start);
+
+        reader.read(Some(track("Spotify.exe", "Song", false, Some(COVER))));
+        let later = start + POLL_INTERVAL;
+        assert_eq!(info.sync(Some(&whole_system()), later), None, "it stays");
+        let cast = info.cast_track(later).expect("read");
+        assert_eq!(cast.metadata.title.as_deref(), Some("Song"), "Cast too");
+    }
+
+    // covers: S218
+    #[test]
+    fn whole_system_another_player_that_plays_takes_over_from_a_paused_one() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(track("Spotify.exe", "Song", true, Some(COVER))));
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(track("Spotify.exe", "Song", false, Some(COVER))));
+        info.sync(Some(&whole_system()), start);
+
+        reader.read(Some(track("Chrome", "Video", true, Some(COVER))));
+        let sent = info.sync(Some(&whole_system()), start).expect("Chrome");
+        assert_eq!(sent.track, fields("Video", "Video artist", "Video album"));
+        reader.read(Some(track("Spotify.exe", "Song", false, Some(COVER))));
+        let sent = info.sync(Some(&whole_system()), start).expect("labels");
+        assert_eq!(sent.track, whole_system_label(), "Spotify didn't play last");
+    }
+
+    // covers: S218
+    #[test]
+    fn whole_system_a_paused_track_goes_when_its_player_quits_stops_or_the_source_changes() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        let play_then_pause = |info: &mut TrackInfo| {
+            info.sync(Some(&whole_system()), start);
+            reader.read(Some(track("Spotify.exe", "Song", true, Some(COVER))));
+            info.sync(Some(&whole_system()), start);
+            reader.read(Some(track("Spotify.exe", "Song", false, Some(COVER))));
+            info.sync(Some(&whole_system()), start);
+        };
+
+        play_then_pause(&mut info);
+        reader.read(None);
+        let sent = info.sync(Some(&whole_system()), start).expect("quit");
+        assert_eq!(sent.track, whole_system_label());
+        reader.read(Some(track("Spotify.exe", "Song", false, Some(COVER))));
+        assert_eq!(info.sync(Some(&whole_system()), start), None, "forgotten");
+
+        play_then_pause(&mut info);
+        reader.read(Some(stopped("Spotify.exe", "Song")));
+        let sent = info.sync(Some(&whole_system()), start).expect("stopped");
+        assert_eq!(sent.track, whole_system_label());
+
+        play_then_pause(&mut info);
+        info.sync(Some(&app("chrome.exe", "Chrome")), start);
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(track("Spotify.exe", "Song", false, Some(COVER))));
+        let sent = info.sync(Some(&whole_system()), start).expect("new source");
+        assert_eq!(sent.track, whole_system_label());
+    }
+
     #[test]
     fn with_no_track_the_source_name_stands_in_for_the_artist() {
         let shown = decide(None, &app("player.exe", "Player"), &labels());
