@@ -658,7 +658,7 @@ pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
     }
     let install_dir = install_dir()?;
     let arch = Arch::own();
-    let running = Version::parse(env!("CARGO_PKG_VERSION"))?;
+    let running = running_version(env!("CARGO_PKG_VERSION"), &log)?;
     let system = crate::platform::windows_version()
         .map(|v| Version::from_parts(&[v.major.into(), v.minor.into(), v.build.into()]))
         .unwrap_or_else(|| Version::from_parts(&[10, 0, 22000]));
@@ -683,6 +683,10 @@ pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
         start_wait: relaunch::START_WAIT,
         pause: Arc::new(files::Pause::real()),
     }))
+}
+
+fn running_version(text: &str, _log: &DebugLog) -> Option<Version> {
+    Version::parse(text)
 }
 
 #[cfg(test)]
@@ -913,6 +917,34 @@ pub mod tests {
             std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../Info.plist"))
                 .expect("Info.plist is readable");
         assert!(plist.contains(&format!("<string>{FEED_URL}</string>")));
+    }
+
+    // covers: S296
+    #[test]
+    fn the_exe_version_is_the_mac_release_version() {
+        let plist =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../Info.plist"))
+                .expect("Info.plist is readable");
+        let short = plist
+            .split("<key>CFBundleShortVersionString</key>")
+            .nth(1)
+            .and_then(|rest| rest.split("<string>").nth(1))
+            .and_then(|rest| rest.split("</string>").next());
+        assert_eq!(short, Some(env!("CARGO_PKG_VERSION")));
+    }
+
+    // covers: S309
+    #[test]
+    fn a_version_the_updater_cannot_compare_is_logged() {
+        let path = crate::debug_log::test_dir("updater-version").join("log.txt");
+        let log = DebugLog::new(Some(path.clone()));
+        assert!(running_version("0.8.0", &log).is_some());
+        assert!(running_version("0.8.0-beta.1", &log).is_none());
+        assert!(log.flush(crate::debug_log::TEST_FLUSH));
+        assert_eq!(
+            crate::debug_log::read_messages(&path),
+            ["updater: off: this exe's version \"0.8.0-beta.1\" is not dotted numbers"]
+        );
     }
 
     // covers: S305, S302

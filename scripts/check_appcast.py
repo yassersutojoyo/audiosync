@@ -48,6 +48,7 @@ import contextlib
 import io
 import json
 import os
+import struct
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -323,6 +324,25 @@ def write_zip(path, files):
             archive.writestr(name, data)
 
 
+def version_node(key, value=None, children=()):
+    """A VS_VERSIONINFO node as the resource compiler lays it out; a str value is text."""
+    text = isinstance(value, str)
+    data = (value + "\0").encode("utf-16-le") if text else value or b""
+    key_bytes = (key + "\0").encode("utf-16-le")
+    node = key_bytes + bytes(-(6 + len(key_bytes)) % 4) + data
+    for child in children:
+        node += bytes(-(6 + len(node)) % 4) + child
+    return struct.pack("<HHH", 6 + len(node), len(data) // 2 if text else len(data), text) + node
+
+
+def fake_exe(version="0.8.0", release=True):
+    strings = [version_node("ProductName", "AudioSync"), version_node("ProductVersion", version)]
+    if release:
+        strings.append(version_node("AudioSyncReleaseBuild", "1"))
+    table = version_node("StringFileInfo", children=[version_node("040904B0", children=strings)])
+    return b"MZ\0\0" + version_node("VS_VERSION_INFO", bytes(52), [table])
+
+
 def write_appcast(path, items):
     body = "".join(
         "<item><title>{v}</title>"
@@ -366,9 +386,15 @@ def self_test():
         nested = os.path.join(folder, "nested", "AudioSync-0.8.0-windows-arm64.zip")
         os.mkdir(os.path.dirname(nested))
         write_zip(mac, {"AudioSync.app/Contents/Info.plist": "plist"})
-        windows = {"audiosync.exe": "MZ", "THIRD-PARTY-NOTICES.txt": "notices"}
+        windows = {"audiosync.exe": fake_exe(), "THIRD-PARTY-NOTICES.txt": "notices"}
         write_zip(x64, windows)
-        write_zip(arm, {**windows, "audiosync.exe": "MZ arm"})
+        write_zip(arm, {**windows, "audiosync.exe": fake_exe() + b"arm"})
+        exes = {}
+        for case, exe in (("old", fake_exe("0.7.1")), ("unmarked", fake_exe(release=False)),
+                          ("plain", b"MZ")):
+            exes[case] = os.path.join(folder, case, "AudioSync-0.8.0-windows-x64.zip")
+            os.mkdir(os.path.dirname(exes[case]))
+            write_zip(exes[case], {**windows, "audiosync.exe": exe})
         write_zip(extra, {**windows, "readme.txt": "x"})
         write_zip(nested, {"audiosync/audiosync.exe": "MZ", "THIRD-PARTY-NOTICES.txt": "n"})
 
@@ -430,6 +456,11 @@ def self_test():
         run("zip with an extra file", good(), [mac, x64, extra], "readme.txt")
         run("zip with the exe in a folder", good()[:2] + [fixture_item(nested,
             os_attr="windows-arm64")], [mac, x64, nested], "audiosync/audiosync.exe")
+        for case, want in (("old", "ProductVersion '0.7.1'; expected '0.8.0'"),
+                           ("unmarked", "not a release build"),
+                           ("plain", "ProductVersion None")):
+            run(f"{case} audiosync.exe", good()[:1] + [fixture_item(exes[case], os_attr="windows-x64")]
+                + good()[2:], [mac, exes[case], arm], want)
         two_enclosures = os.path.join(folder, "two enclosures.xml")
         write_appcast(two_enclosures, good())
         with open(two_enclosures, encoding="utf-8") as f:
