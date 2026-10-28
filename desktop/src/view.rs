@@ -7146,6 +7146,30 @@ mod tests {
     }
 
     #[test]
+    fn the_code_notes_carry_the_macs_tooltips() {
+        let app = app_over(MockBackend::new());
+        let strings = app.main.global::<Strings>();
+        let help = |a, every_time, state| {
+            strings
+                .invoke_speaker_availability_help(a, every_time, state)
+                .to_string()
+        };
+        let every_time = "This speaker asks for a code each time it connects, so \
+                          auto-connect leaves it off. AudioSync asks you for the code \
+                          when you turn the speaker on.";
+        assert_eq!(help(Availability::NeedsCode, true, RowState::Off), every_time);
+        assert_eq!(help(Availability::Open, true, RowState::Off), every_time);
+        assert_eq!(
+            help(Availability::NeedsCode, false, RowState::Off),
+            "This speaker asks for a PIN or password. AudioSync asks you for it when you \
+             turn the speaker on."
+        );
+        // No note, no tooltip.
+        assert_eq!(help(Availability::Open, true, RowState::Playing), "");
+        assert_eq!(help(Availability::Pairing, false, RowState::Off), "");
+    }
+
+    #[test]
     fn hide_speaker_takes_the_row_out_and_hidden_speakers_brings_it_back() {
         let app = app_over(MockBackend::new());
         let strings = app.main.global::<Strings>();
