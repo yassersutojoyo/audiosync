@@ -9926,6 +9926,29 @@ mod tests {
     }
 
     #[test]
+    fn reopening_add_by_address_during_a_check_drops_the_old_answer() {
+        let app = app_over(MockBackend::new());
+        let speakers = app.snapshot().speakers.len();
+        let window = app.cast_address_dialog.window();
+        let held = MOCK_CAST_HOLD
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        app.main.invoke_cast_add_address_requested();
+        type_text(window, "speaker.held");
+        press(window, Key::Return);
+        assert!(app.cast_address_dialog.get_checking());
+
+        app.ask_cast_address();
+        drop(held);
+        settle_cast_check(&app);
+        std::thread::sleep(Duration::from_millis(200));
+        draw_frames();
+        assert!(window.is_visible(), "the reopened dialog stays open");
+        assert!(app.snapshot().speaker("cc:speaker.held").is_none());
+        assert_eq!(app.snapshot().speakers.len(), speakers);
+    }
+
+    #[test]
     fn escape_on_the_add_by_address_dialog_cancels_from_the_field_or_a_button() {
         for tabs in [0, 1, 2] {
             let app = app_over(MockBackend::new());
@@ -10052,6 +10075,31 @@ mod tests {
         let state = app.snapshot();
         assert_eq!(state.equalizer.preamp_db, 0.0);
         assert_eq!(eq_window.get_preset_index(), 0, "Reset reads Flat");
+    }
+
+    #[test]
+    fn a_curve_deleted_while_its_rename_is_open_renames_no_other_curve() {
+        let app = app_over(MockBackend::new());
+        let eq_window = &app.equalizer;
+        let presets = eq::PRESETS.len();
+        for (gain, name) in [(1.0, "A"), (2.0, "B"), (3.0, "C")] {
+            eq_window.invoke_gain_changed(0, gain);
+            eq_window.invoke_save_curve();
+            app.zone_dialog.invoke_confirmed(name.into());
+        }
+        eq_window.invoke_preset_selected(presets as i32 + 1);
+        assert_eq!(eq_window.get_preset_index(), presets as i32 + 1, "B");
+
+        eq_window.invoke_rename_curve();
+        eq_window.invoke_delete_curve();
+        app.zone_dialog.invoke_confirmed("X".into());
+        let names: Vec<String> = app
+            .snapshot()
+            .equalizer_curves
+            .into_iter()
+            .map(|curve| curve.name)
+            .collect();
+        assert_eq!(names, ["A", "C"]);
     }
 
     #[test]
