@@ -544,9 +544,11 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// launch (no AirPlay sender): their saved settings stay as they are.
     airplay_unrestored: BTreeSet<String>,
     /// The settings whose last save failed; its notice was posted then,
-    /// once until a save works again. They are tried again after a change
-    /// or at quit, never at every poll.
+    /// once until a save works again. They are tried again after a change,
+    /// every [`SAVE_RETRY_POLLS`] polls and at quit.
     unsaved: Option<Settings>,
+    /// Polls left until [`AudioAdapter::unsaved`] is tried again.
+    save_retry_wait: u32,
     /// An output listing worked at least once, so an empty list means
     /// Windows has no active output.
     outputs_known: bool,
@@ -700,6 +702,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             must_save: false,
             airplay_unrestored: BTreeSet::new(),
             unsaved: None,
+            save_retry_wait: 0,
             outputs_known: false,
             no_output_noticed: false,
             ahead_noticed: None,
@@ -1044,20 +1047,31 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Writes the settings file if anything changed since it was last read
-    /// or written. A failed write is logged and tried again at the next
-    /// change or at quit; the settings stay in effect for this run, and the
-    /// user is told once, until a save works again and clears that notice.
-    /// A file
-    /// ignored at launch that the save kept aside is told once too, with the
-    /// copy's name. Nothing is written while an older file's delays wait for
-    /// their migration. Returns whether the notices changed.
+    /// or written. A failed write is logged once and tried again at the next
+    /// change, every [`SAVE_RETRY_POLLS`] polls and at quit; the settings
+    /// stay in effect for this run, and the user is told once, until a save
+    /// works again or the settings go back to the saved ones. A file ignored
+    /// at launch that the save kept aside is told once too, with the copy's
+    /// name. Nothing is written while an older file's delays wait for their
+    /// migration. Returns whether the notices changed.
     fn persist(&mut self) -> bool {
         if self.delays_to_migrate || self.auto_connect_skipped {
             return false;
         }
         let current = self.current_settings();
-        if (current == self.saved || self.unsaved.as_ref() == Some(&current)) && !self.must_save {
+        if current == self.saved && !self.must_save {
+            if self.unsaved.take().is_some() {
+                self.notices.clear(&[NoticeSubject::SettingsFile]);
+                return true;
+            }
             return false;
+        }
+        let retry = self.unsaved.as_ref() == Some(&current);
+        if retry && !self.must_save {
+            self.save_retry_wait = self.save_retry_wait.saturating_sub(1);
+            if self.save_retry_wait > 0 {
+                return false;
+            }
         }
         self.must_save = false;
         let saved = self.settings_file.save(&current);
@@ -1075,11 +1089,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             Ok(_) => {}
             Err(error) => {
-                self.log.log(|| {
-                    format!(
-                        "settings: couldn't be saved ({error}); they last until AudioSync quits"
-                    )
-                });
+                if !retry {
+                    self.log.log(|| {
+                        format!(
+                            "settings: couldn't be saved ({error}); they last until AudioSync quits"
+                        )
+                    });
+                }
                 if notices_changed {
                     self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
                 }
@@ -1087,6 +1103,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         if failed {
             self.unsaved = Some(current);
+            self.save_retry_wait = SAVE_RETRY_POLLS;
         } else {
             self.saved = current;
             self.unsaved = None;
