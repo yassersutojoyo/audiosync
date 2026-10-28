@@ -1,13 +1,13 @@
 //! Cells of the Cast PC pass record that a fake device can reach: device
-//! behaviors the spec leaves open (CAST_SPEC G1 e, G3, G4, G8, G11, G12), each played
-//! by the fake in the forms a real device may take, plus the volume and mute
-//! changed on the device. Each passing cell prints `CELL <id> <measured>`
-//! under `--nocapture`.
+//! behaviors the spec leaves open (CAST_SPEC G1 e, G3, G4, G7, G8, G11,
+//! G12), each played by the fake in the forms a real device may take, plus
+//! the volume and mute changed on the device. Each passing cell prints
+//! `CELL <id> <measured>` under `--nocapture`.
 
 mod common;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -18,7 +18,7 @@ use audiosync_cast::discovery::{
 use audiosync_cast::group::GroupRecords;
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::{DEFAULT_MEDIA_RECEIVER, NS_MEDIA, NS_RECEIVER, PLATFORM};
-use audiosync_cast::session::{CastSession, SessionConfig, SessionEvent};
+use audiosync_cast::session::{CastSession, Diagnostics, SessionConfig, SessionEvent};
 use common::{Behavior, Command, FakeDevice, app, json_message};
 use serde_json::{Value, json};
 
@@ -31,6 +31,14 @@ fn cell(id: &str, measured: &str) {
 struct Feed {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    /// Frames handed to the ring, refused ones included.
+    frames: Arc<AtomicU64>,
+}
+
+impl Feed {
+    fn seconds(&self) -> f64 {
+        self.frames.load(Ordering::SeqCst) as f64 / 48_000.0
+    }
 }
 
 impl Drop for Feed {
@@ -46,12 +54,15 @@ impl Drop for Feed {
 fn feed(writer: AudioWriter) -> Feed {
     let stop = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&stop);
+    let frames = Arc::new(AtomicU64::new(0));
+    let count = Arc::clone(&frames);
     let thread = thread::spawn(move || {
         let block = vec![9i16; 960];
         let start = Instant::now();
         let mut written = 0u32;
         while !flag.load(Ordering::SeqCst) {
             writer.write_i16(&block);
+            count.fetch_add(480, Ordering::SeqCst);
             written += 1;
             let next = start + Duration::from_millis(10) * written;
             thread::sleep(next.saturating_duration_since(Instant::now()));
@@ -60,6 +71,7 @@ fn feed(writer: AudioWriter) -> Feed {
     Feed {
         stop,
         thread: Some(thread),
+        frames,
     }
 }
 
@@ -393,6 +405,132 @@ fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
     cell(
         "C19",
         "30 statuses, currentTime absent/0/backwards/1e9/negative/text/null: no reload, no drift",
+    );
+}
+
+// covers: C75
+#[test]
+fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops() {
+    const PACE: f64 = 0.5;
+    const WAV_BYTES_PER_SECOND: f64 = 192_000.0;
+    let device = FakeDevice::start(Behavior {
+        read_pace: Some(PACE),
+        ..Behavior::default()
+    });
+    let (mut session, feed) = start(&device);
+    let started = Instant::now();
+    // Seconds since start, the line, the audio the device has read and the
+    // audio the feed made.
+    let mut lines: Vec<(f64, Diagnostics, f64, f64)> = Vec::new();
+    let mut seen = Vec::new();
+    let cap = Duration::from_secs(2);
+    let full = cap - Duration::from_millis(40);
+    // The loopback socket buffers fill before the sender's queue starts to,
+    // and their size differs per system (Linux took 28 s on CI). The run goes
+    // on 5 s past the full queue and the first offer, so a late automatic
+    // restart is caught.
+    let until = started + Duration::from_secs(75);
+    let mut settled: Option<Instant> = None;
+    while settled.is_none_or(|at| at.elapsed() < Duration::from_secs(5)) {
+        assert!(
+            Instant::now() < until,
+            "no full queue and offer in 75 s: {lines:?}"
+        );
+        session.run_for(Duration::from_millis(50));
+        while let Some(event) = session.poll_event() {
+            if let SessionEvent::Diagnostics(line) = &event {
+                let read = device.bytes_read() as f64 / WAV_BYTES_PER_SECOND;
+                let at = started.elapsed().as_secs_f64();
+                lines.push((at, line.clone(), read, feed.seconds()));
+            }
+            seen.push(event);
+        }
+        if settled.is_none()
+            && lines.iter().any(|(_, line, _, _)| line.queued >= full)
+            && lines.iter().any(|(_, line, _, _)| line.resync_offered)
+        {
+            settled = Some(Instant::now());
+        }
+    }
+    for (_, line, _, _) in &lines {
+        assert!(line.queued <= cap, "{line:?}");
+        assert_eq!(
+            line.resync_offered,
+            line.drift > Duration::from_millis(250),
+            "{line:?}"
+        );
+    }
+    // Everything the feed made, plus the silence sent when it ran late, is
+    // sent, queued or dropped and counted (C64, C79); only the ring between
+    // them, 1 s at most, may hold some back. Checked on totals, not rates:
+    // TCP flow control releases the socket in bursts whose size depends on
+    // the system (on Linux CI, sent stood still for 6 s once its buffers
+    // filled), and a starved feed catches up in bursts too.
+    let accounted = |line: &Diagnostics| {
+        (line.sent + line.queued).as_secs_f64()
+            + (line.frames_dropped as f64 - line.underrun_frames as f64) / 48_000.0
+    };
+    let first = &lines[0];
+    for sample in &lines {
+        let missing = (sample.3 - first.3) - (accounted(&sample.1) - accounted(&first.1));
+        assert!(
+            (-1.15..=1.15).contains(&missing),
+            "{missing} s unaccounted at {} s: {lines:?}",
+            sample.0
+        );
+    }
+
+    // A stalled feed or pump also drops ring backlog (C64), so the queue
+    // reaching its cap marks where the overflow drops begin.
+    let filled = lines
+        .iter()
+        .position(|(_, line, _, _)| line.queued >= full)
+        .expect("a full queue");
+    let dropping = &lines[filled..];
+    assert!(dropping.len() >= 4, "{lines:?}");
+    let last = &dropping[dropping.len() - 1];
+    assert!(
+        last.1.frames_dropped > dropping[0].1.frames_dropped,
+        "{lines:?}"
+    );
+    assert!(
+        dropping
+            .windows(2)
+            .all(|pair| pair[1].1.drift >= pair[0].1.drift),
+        "the drift went down: {lines:?}"
+    );
+    let per_second = |from: &(f64, Diagnostics, f64, f64), to: &(f64, Diagnostics, f64, f64)| {
+        ((to.3 - to.2) - (from.3 - from.2)) / (to.0 - from.0)
+    };
+    let growth = per_second(first, &lines[filled]);
+    let overflow = per_second(&lines[filled], last);
+    let reading = (last.2 - first.2) / (last.0 - first.0);
+    assert!(
+        (PACE - 0.05..=PACE + 0.05).contains(&reading),
+        "{reading} s/s read: {lines:?}"
+    );
+
+    // Resync stays the user's: no new LOAD, no restart of any kind (C79).
+    assert_eq!(device.payloads(NS_MEDIA, "LOAD").len(), 1);
+    assert!(
+        !seen.iter().any(|event| matches!(
+            event,
+            SessionEvent::Ended(_) | SessionEvent::Recovering(_) | SessionEvent::Reloaded
+        )),
+        "{seen:?}"
+    );
+    session.stop();
+    device.join();
+    let offered_at = lines
+        .iter()
+        .find(|(_, line, _, _)| line.resync_offered)
+        .map_or(0.0, |(at, _, _, _)| *at);
+    cell(
+        "C75",
+        &format!(
+            "read at {reading:.2} s/s: audio piles up +{growth:.2} s/s, queue full at {:.1} s, then +{overflow:.2} s/s with drops, resync offered at {offered_at:.1} s, drops counted, 1 LOAD",
+            lines[filled].0
+        ),
     );
 }
 
