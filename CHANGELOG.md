@@ -101,6 +101,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A Google Cast speaker that reconnects keeps the volume it had, and a volume change made just as it reconnects still reaches it. On the Mac and on Windows.
 - On Windows, when another program holds your settings file while AudioSync starts, AudioSync reads it once it's free and uses it, starting the speakers you set to connect automatically. Before, it kept the defaults and could later save them over your settings.
 - On Windows, when Windows audio stops answering while AudioSync reads a speaker's format, the window no longer freezes. AudioSync gives up on that read after 5 seconds.
+- On Windows, after AirPlay stops and starts again, a speaker set to ask for a code every time asks for a new one. Before, it showed as ready with a code that no longer worked.
 - In the Linux preview, an input with more than two channels offers every channel pair, as on Windows, a device with more than 64 channels plays or captures on its first 64 instead of stopping, and notice times show your local time instead of UTC.
 
 ## [0.7.1] - 2026-10-27
