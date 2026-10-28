@@ -6185,6 +6185,47 @@ mod tests {
         );
     }
 
+    // covers: S331, S326
+    #[test]
+    fn a_stalled_output_that_opens_after_a_refusal_keeps_its_notice_until_five_seconds_of_play() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        poll_quietly(&mut backend, 4);
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputStalled {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+        // Its reopen is refused for 30 s, then it opens.
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        poll_quietly(&mut backend, STALL_RETRY_POLLS + REFUSED_NOTICE_POLLS - 1);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputRefused {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+        backend.fail_output(HEADPHONES, None);
+        poll_quietly(&mut backend, BUSY_RETRY_POLLS);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        // A stall within five seconds of that open finds the notice still up.
+        poll_quietly(&mut backend, 1);
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        assert!(backend.poll().is_empty(), "told once");
+        poll_quietly(&mut backend, STALL_RETRY_POLLS);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        poll_quietly(&mut backend, RESTART_TRIAL_POLLS - 1);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputPlaysAgain {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+    }
+
     #[test]
     fn the_session_ends_when_the_captured_app_quits() {
         let mut backend = backend();
