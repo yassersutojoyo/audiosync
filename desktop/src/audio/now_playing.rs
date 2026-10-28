@@ -1235,6 +1235,27 @@ mod tests {
 
     // covers: S218
     #[test]
+    fn an_app_paused_when_chosen_keeps_its_track_until_the_third_empty_reading() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        let spotify = app("Spotify.exe", "Spotify");
+        info.sync(Some(&spotify), start);
+        reader.read(Some(track("Spotify.exe", "Song", false, Some(COVER))));
+        let sent = info.sync(Some(&spotify), start).expect("paused track");
+        assert_eq!(sent.track, fields("Song", "Song artist", "Song album"));
+
+        for _ in 1..DROP_AFTER {
+            reader.read(None);
+            assert_eq!(info.sync(Some(&spotify), start), None, "it stays");
+        }
+        reader.read(None);
+        let sent = info.sync(Some(&spotify), start).expect("dropped");
+        assert_eq!(sent.track, fields("Title label", "Spotify", "Album label"));
+    }
+
+    // covers: S218
+    #[test]
     fn the_reader_learns_which_app_played_last_until_the_source_changes() {
         let reader = FakeReader::with_icon(ICON);
         let mut info = track_info(&reader);
