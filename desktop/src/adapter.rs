@@ -11617,6 +11617,35 @@ mod tests {
     }
 
     #[test]
+    fn a_change_whose_save_failed_is_saved_at_quit_without_retrying_every_poll() {
+        let dir = test_dir("adapter-settings-retry-at-quit");
+        let path = dir.join(settings::FILE_NAME);
+        // A folder where the temporary file goes, as when another process
+        // holds the file during the rename.
+        let blocked = crate::data_folder::temporary_path(&path);
+        std::fs::create_dir(&blocked).expect("blocked");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let file = SettingsFile::at(path.clone());
+        let mut adapter =
+            AudioAdapter::with_settings(launch_audio(), || "09.41".to_owned(), log.clone(), file);
+        adapter.set_master_volume(64.0);
+        adapter.poll();
+        adapter.poll();
+        adapter.poll();
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.save_settings();
+        assert_eq!(SettingsFile::at(path.clone()).load().0.master_volume, 64.0);
+        assert!(log.flush(TEST_FLUSH));
+        let messages = read_messages(&dir.join(FILE_NAME));
+        let failures = messages
+            .iter()
+            .filter(|message| message.contains("settings: couldn't be saved"))
+            .count();
+        assert_eq!(failures, 1, "one attempt per change, not per poll");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn a_pairing_that_cant_be_saved_gets_a_notice_until_a_write_works() {
         use crate::audio::pairings::tests::sealer;
         let dir = test_dir("adapter-pairings-unsaved");
