@@ -1693,7 +1693,14 @@ impl Ap2Session {
                 Kind::TeardownSession => self.finish(),
                 Kind::TeardownStream => self.stream_torn_down = true,
                 Kind::StreamSetup if response.is_success() => self.record_stream(&response),
-                Kind::SessionSetup if response.is_success() => self.set_up = true,
+                Kind::SessionSetup if response.is_success() => {
+                    self.set_up = true;
+                    self.session_header = response
+                        .headers
+                        .get("Session")
+                        .and_then(rtsp::session_id)
+                        .map(str::to_owned);
+                }
                 Kind::SessionSetup => self.finish(),
                 _ => {}
             }
