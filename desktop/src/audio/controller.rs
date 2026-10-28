@@ -6043,6 +6043,170 @@ mod tests {
         assert!(backend.policy().settings(HEADPHONES).enabled, "it stays on");
     }
 
+    const BUDS: &str = "buds";
+
+    /// Lists Bluetooth earbuds after the first read and switches them on one
+    /// poll later, which starts them while a session runs.
+    fn fresh_buds(backend: &mut MockBackend) {
+        backend.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        backend.poll();
+        backend.poll();
+        backend.set_output_enabled(BUDS, true).unwrap();
+    }
+
+    fn starts_of(backend: &MockBackend, id: &str) -> usize {
+        backend
+            .driver()
+            .renderers_started()
+            .iter()
+            .filter(|started| *started == id)
+            .count()
+    }
+
+    // covers: S325
+    #[test]
+    fn a_bluetooth_output_that_starts_within_3_s_of_being_listed_restarts_once_2_s_later() {
+        let (mut backend, log, dir) = logged_backend("controller-fresh-link");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fresh_buds(&mut backend);
+        assert_eq!(starts_of(&backend, BUDS), 1);
+        poll_quietly(&mut backend, 3);
+        assert_eq!(backend.driver().renderers_faded(), 0, "not before 2 s");
+        poll_quietly(&mut backend, 1);
+        assert_eq!(
+            backend.driver().renderers_faded(),
+            1,
+            "it fades out 2 s after its start"
+        );
+        // The mock plays a fade at once; then it rests 1 s.
+        for _ in 0..2 {
+            poll_quietly(&mut backend, 1);
+            assert_eq!(starts_of(&backend, BUDS), 1, "it rests");
+        }
+        poll_quietly(&mut backend, 1);
+        assert_eq!(starts_of(&backend, BUDS), 2, "then starts again");
+        assert_eq!(playing(&backend), [BUDS, HEADPHONES, SPEAKERS]);
+        poll_quietly(&mut backend, 20);
+        assert_eq!(starts_of(&backend, BUDS), 2, "once");
+        assert_eq!(backend.driver().renderers_faded(), 1);
+        assert_eq!(
+            backend.driver().renderers_started().len(),
+            4,
+            "the others play on"
+        );
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "output \"Buds\" (buds) started: ",
+                "output \"Buds\" (buds): its Bluetooth link came up 0.5 s before this start; \
+                 it restarts once 2 s from now",
+                "output \"Buds\" (buds) restarts: its Bluetooth link was new when it started",
+                "output \"Buds\" (buds) started: ",
+                "output \"Buds\" (buds): it plays as is: its Bluetooth link isn't new",
+            ],
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S325
+    #[test]
+    fn a_bluetooth_output_listed_at_launch_or_after_4_s_starts_as_is() {
+        let mut at_launch = MockBackend::empty();
+        at_launch.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        at_launch.set_output_enabled(BUDS, true).unwrap();
+        at_launch.list_outputs().unwrap();
+        at_launch.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut at_launch, 20);
+        assert_eq!(at_launch.driver().renderers_started(), [BUDS]);
+        assert_eq!(at_launch.driver().renderers_faded(), 0);
+
+        let mut later = backend();
+        later.start(&SourceId::WholeSystem).unwrap();
+        later.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        later.poll();
+        poll_quietly(&mut later, 8);
+        later.set_output_enabled(BUDS, true).unwrap();
+        poll_quietly(&mut later, 20);
+        assert_eq!(starts_of(&later, BUDS), 1);
+        assert_eq!(later.driver().renderers_faded(), 0);
+    }
+
+    // covers: S325
+    #[test]
+    fn a_wired_output_that_just_appeared_starts_as_is() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.connect_output_as(USB_OUTPUT, "USB DAC", OutputKind::Usb);
+        backend.poll();
+        backend.poll();
+        backend.set_output_enabled(USB_OUTPUT, true).unwrap();
+        poll_quietly(&mut backend, 20);
+        assert_eq!(starts_of(&backend, USB_OUTPUT), 1);
+        assert_eq!(backend.driver().renderers_faded(), 0);
+    }
+
+    // covers: S325, S177
+    #[test]
+    fn a_fresh_link_restart_never_moves_another_outputs_hold_back() {
+        let mut backend = MockBackend::empty();
+        backend.connect_output_as(BUILT_IN, "Speakers", OutputKind::BuiltIn);
+        backend.connect_output_as(USB, "USB Speaker", OutputKind::Usb);
+        backend.set_output_enabled(BUILT_IN, true).unwrap();
+        backend.set_output_enabled(USB, true).unwrap();
+        backend.set_output_delay(USB, 150.0);
+        backend.set_output_delay(BUDS, -250.0);
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fresh_buds(&mut backend);
+        let others = |backend: &MockBackend| {
+            [BUILT_IN, USB].map(|id| {
+                (
+                    backend.policy().hold_back_ms(id),
+                    delay_frames(backend, id) / 48,
+                )
+            })
+        };
+        assert_eq!(others(&backend), [(250.0, 250), (400.0, 400)]);
+        for _ in 0..30 {
+            poll_quietly(&mut backend, 1);
+            assert_eq!(others(&backend), [(250.0, 250), (400.0, 400)]);
+        }
+        assert_eq!(starts_of(&backend, BUDS), 2, "it restarted");
+        assert_eq!(delay_frames(&backend, BUDS), 0);
+    }
+
+    // covers: S325
+    #[test]
+    fn switching_it_off_or_ending_the_session_cancels_the_restart() {
+        // Switched off before its restart, it stays off; on again, it plays
+        // as is.
+        let mut switched = backend();
+        switched.start(&SourceId::WholeSystem).unwrap();
+        fresh_buds(&mut switched);
+        poll_quietly(&mut switched, 2);
+        switched.set_output_enabled(BUDS, false).unwrap();
+        poll_quietly(&mut switched, 20);
+        assert_eq!(starts_of(&switched, BUDS), 1);
+        switched.set_output_enabled(BUDS, true).unwrap();
+        poll_quietly(&mut switched, 20);
+        assert_eq!(starts_of(&switched, BUDS), 2, "no restart");
+        assert_eq!(switched.driver().renderers_faded(), 1, "the switch-off");
+
+        // A session that ends while the restart's fade plays leaves nothing
+        // behind: the next session starts the output at once, as is.
+        let mut ended = backend();
+        ended.start(&SourceId::WholeSystem).unwrap();
+        fresh_buds(&mut ended);
+        poll_quietly(&mut ended, 4);
+        assert_eq!(ended.driver().renderers_faded(), 1, "the restart's fade");
+        ended.stop();
+        poll_quietly(&mut ended, 1);
+        ended.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(starts_of(&ended, BUDS), 2, "started with the session");
+        poll_quietly(&mut ended, 20);
+        assert_eq!(starts_of(&ended, BUDS), 2);
+    }
+
     fn microphone(backend: &mut MockBackend) -> SourceId {
         backend.connect_input("mic", "Microphone", "USB");
         SourceId::Input {
