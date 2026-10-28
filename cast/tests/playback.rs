@@ -474,6 +474,47 @@ fn a_dead_channel_reconnects_and_reuses_or_relaunches_the_app() {
     device.join();
 }
 
+// covers: C81
+#[test]
+fn after_a_drop_only_an_idle_device_is_relaunched_on() {
+    let other_app = json!({"appId": "233637DE", "sessionId": "other-1", "transportId": "other-1"});
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    device.send(Command::SetApps(vec![other_app]));
+    device.send(Command::DropConnection);
+    let seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(
+            event,
+            SessionEvent::Ended(_) | SessionEvent::Recovered { .. }
+        )
+    });
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Ended(SessionEnd::TakenOver))),
+        "{seen:?}"
+    );
+    assert_eq!(
+        count(&device, NS_RECEIVER, "LAUNCH"),
+        1,
+        "no LAUNCH after the drop"
+    );
+    device.join();
+
+    let backdrop = json!({
+        "appId": "E8C28D3C", "sessionId": "idle-1", "transportId": "idle-1", "isIdleScreen": true,
+    });
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    device.send(Command::SetApps(vec![backdrop]));
+    device.send(Command::DropConnection);
+    run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { relaunched: true })
+    });
+    assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 2);
+    session.stop();
+    device.join();
+}
+
 // covers: C80
 #[test]
 fn connect_retries_wait_1_s_then_double_while_the_device_stays_selected() {
