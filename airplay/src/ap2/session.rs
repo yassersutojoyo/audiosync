@@ -634,9 +634,13 @@ impl Ap2Session {
         self.remote
     }
 
-    /// The addresses the session connects to, in order (P17).
-    pub fn addresses(&self) -> &[SocketAddr] {
-        &self.config.addresses
+    /// Whether discovery listing `listed` starts the session again: it
+    /// hasn't connected and `listed` has an address it lacks (P228).
+    pub fn restarts_on(&self, listed: &[SocketAddr]) -> bool {
+        self.state == Ap2State::Connecting
+            && listed
+                .iter()
+                .any(|address| !self.config.addresses.contains(address))
     }
 
     /// The `shk` the stream SETUP carries (P156).

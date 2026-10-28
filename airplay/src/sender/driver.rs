@@ -3400,25 +3400,35 @@ mod tests {
         driver.report_changes(changes);
         let device = driver.directory.devices().next().cloned().expect("listed");
         let key = device.key.clone();
+        let counters = Arc::new(SpeakerCounters::default());
         driver.add_speaker(
             device,
             SpeakerOptions::new(Volume::Db(-20.0)),
-            Arc::new(SpeakerCounters::default()),
+            Arc::clone(&counters),
             now,
         );
         assert_eq!(
             driver.next_ap2_output(&key),
             Some(Ap2Output::Connect(SocketAddr::new(v6, 7000)))
         );
+        let mut relist = |addresses: &[IpAddr]| {
+            let changes = driver
+                .directory
+                .apply(BrowseEvent::Resolved(record(addresses)));
+            driver.report_changes(changes);
+            driver.run_timers(Instant::now() + Duration::from_secs(1));
+            driver.next_ap2_output(&key)
+        };
 
-        let changes = driver
-            .directory
-            .apply(BrowseEvent::Resolved(record(&[v4, v6])));
-        driver.report_changes(changes);
-        driver.run_timers(Instant::now() + Duration::from_secs(1));
+        // A refresh with the same addresses leaves it connecting.
+        assert_eq!(relist(&[v6]), None);
         assert_eq!(
-            driver.next_ap2_output(&key),
+            relist(&[v4, v6]),
             Some(Ap2Output::Connect(SocketAddr::new(v4, 7000)))
         );
+        // Neither does a refresh that lists fewer.
+        assert_eq!(relist(&[v4]), None);
+        // The new session's connect is the same start, counted once.
+        assert_eq!(counters.connect_starts(), 1);
     }
 }

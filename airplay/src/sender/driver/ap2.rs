@@ -824,13 +824,9 @@ impl Driver {
         let Phase::Ap2(active) = &speaker.phase else {
             return;
         };
-        let tried = active.session.addresses();
-        if active.session.state() != Ap2State::Connecting
-            || speaker
-                .device
-                .airplay_socket_addrs()
-                .iter()
-                .all(|address| tried.contains(address))
+        if !active
+            .session
+            .restarts_on(&speaker.device.airplay_socket_addrs())
         {
             return;
         }
