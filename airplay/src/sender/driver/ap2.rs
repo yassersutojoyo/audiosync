@@ -90,6 +90,8 @@ pub(super) struct Ap2Active {
     pub(super) ptp_served: bool,
     /// The session SETUP answer settled the session on NTP (P205).
     pub(super) ntp_chosen: bool,
+    /// The P179 restart entry it started with, which a P228 restart keeps.
+    ptp_restart: Option<Option<bool>>,
 }
 
 impl Ap2Active {
@@ -290,6 +292,7 @@ impl Driver {
             ptp_configured,
             ptp_served: false,
             ntp_chosen: false,
+            ptp_restart: restart,
         }));
         self.sessions.insert(session_key, key.clone());
         self.sessions.insert(events_key, key.clone());
@@ -831,6 +834,9 @@ impl Driver {
             return;
         }
         let kind = speaker.started_as;
+        if let Some(restart) = active.ptp_restart {
+            self.ptp_restart.insert(key.clone(), restart);
+        }
         self.end_session(key, Phase::Idle);
         if let Some(speaker) = self.speakers.get_mut(key) {
             speaker.restarting = true;

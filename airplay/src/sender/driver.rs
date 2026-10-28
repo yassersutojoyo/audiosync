@@ -1950,6 +1950,7 @@ impl Driver {
             let held = self.speakers.get_mut(key).is_some_and(|speaker| {
                 let held = speaker.holds_ap2();
                 speaker.ap2_retry = false;
+                speaker.restarting = false;
                 held
             });
             self.unannounce(key);
