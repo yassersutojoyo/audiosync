@@ -2168,6 +2168,13 @@ do {
     check(AppTapFollow.candidates([9, 3, 9, 42], own: 42) == [3, 9] && AppTapFollow.candidates([3], own: nil) == [3],
           "app tap: AudioSync's own process is never tapped, even when the app launched it")
 
+    // covers: S13 (every tap mutes what it taps and is private to AudioSync)
+    let tapSetup = CATapDescription(stereoMixdownOfProcesses: [])
+    SourceCapture.configureTap(tapSetup)
+    check(tapSetup.muteBehavior == .muted && tapSetup.isPrivate,
+          "app tap: every tap mutes the app it taps, and only AudioSync sees it",
+          "mute \(tapSetup.muteBehavior.rawValue), private \(tapSetup.isPrivate)")
+
     // covers: S13 (a retap keeps the app muted throughout)
     // Moving the tap to new processes: the steps it takes, in order. "old"
     // is the running capture, which mutes the app until it is closed.
@@ -10691,6 +10698,45 @@ do {
     check(worstChip >= 4.5 && worstSecondary >= 4.5,
           "zone look: the chip's text and a member's secondary text keep 4.5:1 in the zone box, both themes",
           String(format: "chip %.2f, secondary %.2f", worstChip, worstSecondary))
+}
+
+// MARK: The Presets card's colors in light and dark (MainWindow.swift PresetsCard)
+do {
+    // covers: S268 (the Mac host)
+    let window = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let card = window.components(separatedBy: "private struct PresetsCard").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(card.contains("Brand.tealText") && card.contains("Brand.secondaryText")
+            && !card.contains("Color(") && !card.contains("NSColor("),
+          "presets: the card's colors are brand tokens, never a literal color")
+
+    // The card's fill is the system control background, which the brand surfaces stand for.
+    func luminance(_ c: BrandRGB) -> Double {
+        func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear(c.red) + 0.7152 * linear(c.green) + 0.0722 * linear(c.blue)
+    }
+    func contrast(_ a: BrandRGB, _ b: BrandRGB) -> Double {
+        let (x, y) = (luminance(a), luminance(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+    func over(_ ink: Double, _ alpha: Double, _ below: BrandRGB) -> BrandRGB {
+        BrandRGB(red: ink * alpha + below.red * (1 - alpha), green: ink * alpha + below.green * (1 - alpha),
+                 blue: ink * alpha + below.blue * (1 - alpha))
+    }
+    var worst: [String] = []
+    for (name, dark, cards) in [("light", false, [BrandTokens.Light.surface]),
+                                ("dark", true, [BrandTokens.Dark.background, BrandTokens.Dark.surface])] {
+        let teal = dark ? BrandTokens.Dark.tealText : BrandTokens.Light.tealText
+        for fill in cards {
+            let secondary = over(dark ? 1 : 0, BrandTokens.Opacity.secondaryText, fill)
+            let ratios = (contrast(teal, fill), contrast(secondary, fill))
+            if min(ratios.0, ratios.1) < 4.5 {
+                worst.append(String(format: "%@: teal %.2f, secondary %.2f", name, ratios.0, ratios.1))
+            }
+        }
+    }
+    check(worst.isEmpty, "presets: the teal marks and the empty-state text reach 4.5:1 in light and dark",
+          worst.joined(separator: "; "))
 }
 
 // MARK: About panel shows the version without the build number (AboutPanel.options)
