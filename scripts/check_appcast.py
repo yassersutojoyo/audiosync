@@ -547,6 +547,15 @@ def self_test():
                            {"assets": [{"name": n, "size": 1} for n in listed]}))
         against_assets("assets one name per line", good(), names + other_assets, None,
                        use_file=lambda listed: "\n".join(listed) + "\n")
+        sizes = {os.path.basename(path): os.path.getsize(path) for path in everything}
+        against_assets("attached sizes match the lengths", good(), names + other_assets, None,
+                       use_file=lambda listed: json.dumps(
+                           {"assets": [{"name": n, "size": sizes.get(n, 1)} for n in listed]}))
+        against_assets("an attached zip whose size is not its length", good(), names + other_assets,
+                       f"the attached {arm_name} is {sizes[arm_name] + 1} bytes",
+                       use_file=lambda listed: json.dumps(
+                           {"assets": [{"name": n, "size": sizes.get(n, 1) + (n == arm_name)}
+                                       for n in listed]}))
     for failure in failures:
         print(f"self-test: {failure}", file=sys.stderr)
     print(f"self-test: {cases} cases, {len(failures)} failure(s)")
