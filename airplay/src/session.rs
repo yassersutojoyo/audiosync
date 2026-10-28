@@ -384,6 +384,7 @@ pub struct Session {
     pending_read_volume: bool,
     pending_flush: Option<(u16, u32)>,
     /// A delay FLUSH waits for this session (P100): no other request starts.
+    /// Once set, every way out ends in a FLUSH, or the session stays silent.
     flush_wanted: bool,
     metadata_queue: VecDeque<Queued>,
     /// P185: an AirPlay 1 session sends the small image.

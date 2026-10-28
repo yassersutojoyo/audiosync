@@ -759,6 +759,36 @@ fn delay_changes_behind_a_request_in_flight_give_one_flush() {
     }
 }
 
+// covers: P100
+#[test]
+fn a_delay_flush_holds_the_speaker_until_its_answer() {
+    let mut rig = Rig::with_host();
+    let moved = rig.add(speaker(1, Codec::Alac));
+    rig.run_for(Duration::from_secs(3));
+    rig.busy = true;
+    rig.stream
+        .set_delay(moved, Duration::from_millis(200), rig.now);
+    rig.run_for(Duration::from_millis(300));
+    rig.stream.apply_delay(moved, rig.now);
+    rig.drain();
+    assert_eq!(flushes(&rig, moved).len(), 1);
+    let applied = rig.t();
+    rig.run_for(Duration::from_millis(500));
+    assert!(rig.of(moved).iter().all(|sent| sent.at < applied));
+    assert!(rig.stream.waits_for_flush(moved));
+
+    rig.stream.flush_answered(moved);
+    let answered = rig.t();
+    rig.run_for(Duration::from_millis(500));
+    let audio = rig.audio(moved);
+    let resumed = audio
+        .iter()
+        .find(|a| a.at >= answered)
+        .expect("audio after the answer");
+    assert!(resumed.header.marker);
+    assert_eq!(resumed.header.seq, flushes(&rig, moved)[0].0);
+}
+
 // covers: P103
 #[test]
 fn join_mid_stream() {

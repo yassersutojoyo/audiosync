@@ -426,6 +426,7 @@ pub struct Ap2Session {
     flush_point: (u16, u32),
     flush_pending: bool,
     /// A delay FLUSH waits for this session (P100): no other request starts.
+    /// Once set, every way out ends in a FLUSH, or the session stays silent.
     flush_wanted: bool,
     /// Unreachable UDP sends in a row (P141).
     udp_failures: u8,
