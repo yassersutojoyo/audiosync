@@ -347,6 +347,8 @@ pub struct MemoryEntry {
     pub approval: Option<Vec<u8>>,
     /// Writes and removals fail, as when a policy locks the key.
     pub refuse_writes: bool,
+    /// The exe the Run value names is gone from the disk.
+    pub listed_exe_gone: bool,
 }
 
 #[cfg(any(not(any(windows, target_os = "linux")), test))]
@@ -619,6 +621,18 @@ mod tests {
             Some(run_command(&exe()).as_str())
         );
         assert_eq!(login.status(), Status::On);
+    }
+
+    #[test]
+    fn a_run_value_whose_exe_is_gone_shows_off_and_is_left_as_it_is() {
+        let gone = r#""D:\Old\audiosync.exe" --background"#;
+        let (store, mut login) = setup(|e| {
+            e.run = Some(gone.to_owned());
+            e.listed_exe_gone = true;
+        });
+        assert!(!login.is_on());
+        assert!(!login.reread());
+        assert_eq!(store.entry().run.as_deref(), Some(gone));
     }
 
     #[test]
