@@ -1115,6 +1115,21 @@ mod tests {
         );
     }
 
+    // covers: C70
+    #[test]
+    fn a_full_queue_never_drops_a_volume_report() {
+        let mut events: VecDeque<SessionEvent> =
+            (0..MAX_SESSION_EVENTS - 1).map(|_| failure()).collect();
+        events.insert(5, SessionEvent::Volume(DeviceVolume::default()));
+        make_room(&mut events);
+        assert_eq!(events.len(), MAX_SESSION_EVENTS - 1);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, SessionEvent::Volume(_)))
+        );
+    }
+
     #[test]
     fn rebuffering_makes_room_like_the_hosts_routine_events() {
         let mut events: VecDeque<SessionEvent> =

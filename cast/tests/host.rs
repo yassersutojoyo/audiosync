@@ -756,6 +756,54 @@ fn held_events_do_not_hold_back_a_later_recovery() {
     assert!(host.shutdown());
 }
 
+// covers: C70
+#[test]
+fn a_volume_change_while_the_host_falls_behind_still_reaches_it() {
+    let device = FakeDevice::start(Behavior::default());
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let (_feed, reader) = ring();
+    host.start(target(A, &device), 48_000, Metadata::default(), reader)
+        .expect("starts");
+    wait_for(&host, Duration::from_secs(10), started(A));
+    // Each fails at once and fills the outbox while the host doesn't poll.
+    for _ in 0..MAX_HOST_EVENTS + 16 {
+        host.set_volume(f64::NAN);
+    }
+    thread::sleep(Duration::from_millis(500));
+    for level in [0.6, 0.7] {
+        device.send(Command::Send(json_message(
+            PLATFORM,
+            "*",
+            NS_RECEIVER,
+            json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {
+                "volume": {"level": level, "muted": false, "controlType": "attenuation", "stepInterval": 0.05},
+            }}),
+        )));
+        thread::sleep(Duration::from_millis(500));
+    }
+    let events = wait_for(&host, Duration::from_secs(5), |event| {
+        matches!(
+            event,
+            HostEvent::Session { event: SessionEvent::Volume(volume), .. }
+                if (volume.level - 0.7).abs() < 1e-9
+        )
+    });
+    let levels: Vec<f64> = events
+        .iter()
+        .filter_map(|event| match event {
+            HostEvent::Session {
+                event: SessionEvent::Volume(volume),
+                ..
+            } => Some(volume.level),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(levels, [0.7], "the newer level replaces the waiting one");
+    host.stop();
+    wait_for(&host, Duration::from_secs(3), ended(A));
+    assert!(host.shutdown());
+}
+
 // covers: C81
 #[test]
 fn reconnects_are_spaced_and_an_announcement_cuts_the_wait_short() {
