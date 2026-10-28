@@ -7649,6 +7649,42 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    /// Sets the AirPlay `features` the receiver `id` announced.
+    fn announce_features(handle: *mut AscAirPlay, id: &str, features: u64) {
+        let listed = inside(handle).listed.get_mut(id).expect("listed");
+        let txt = listed
+            .device
+            .airplay_txt
+            .get_or_insert_with(Default::default);
+        txt.features = Some(audiosync_airplay::discovery::Features(features));
+    }
+
+    // covers: S291
+    #[test]
+    fn the_recorded_television_features_take_its_grid_without_a_make() {
+        let id = "02005E005415";
+        let mut handle = listing(vec![raop(id, "Television", OPEN)]);
+        let c_id = c_string(id);
+        let key = speaker_key(0x15);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        // The television traced on 2026-10-25 announced these features and
+        // no manufacturer; it keeps row 49 (−15.3 dB) as −15.6: the echo.
+        announce_features(handle, id, 0x038B_CB46_007F_8AD0);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 49.0)) };
+        read_back(handle, &key, -15.6);
+        assert!(volume_events(handle).is_empty());
+        // Other features and no make: the row rule alone, so −15.6 after
+        // row 47 (−15.9 dB) is one press up, level 48.
+        announce_features(handle, id, 0x0001_0040_0000_0000);
+        // SAFETY: as above.
+        unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 47.0)) };
+        read_back(handle, &key, -15.6);
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 48.0)]);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     // covers: S276
     #[test]
     fn a_device_volume_while_the_slider_is_dragged_is_ignored() {

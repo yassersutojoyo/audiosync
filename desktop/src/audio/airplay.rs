@@ -8260,6 +8260,42 @@ pub mod tests {
         assert_eq!(own(&airplay), 52.0);
     }
 
+    /// Sets the AirPlay `features` the receiver `id` announced.
+    fn announce_features(airplay: &mut AirPlaySpeakers, id: &str, features: u64) {
+        let listed = airplay.listed.get_mut(id).expect("listed");
+        let txt = listed
+            .info
+            .device
+            .airplay_txt
+            .get_or_insert_with(Default::default);
+        txt.features = Some(audiosync_airplay::discovery::Features(features));
+    }
+
+    // covers: S291
+    #[test]
+    fn the_recorded_television_features_take_its_grid_without_a_make() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        // The television traced on 2026-10-25 announced these features and
+        // no manufacturer; it keeps row 49 (−15.3 dB) as −15.6: the echo.
+        announce_features(&mut airplay, &id, 0x038B_CB46_007F_8AD0);
+        airplay.set_volume(&id, 49.0);
+        airplay.poll();
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -15.6);
+        airplay.poll();
+        assert_eq!(own(&airplay), 49.0);
+        // Other features and no make: the row rule alone, so −15.6 after
+        // row 47 (−15.9 dB) is one press up, level 48.
+        announce_features(&mut airplay, &id, 0x0001_0040_0000_0000);
+        airplay.set_volume(&id, 47.0);
+        airplay.poll();
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -15.6);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(own(&airplay), 48.0);
+    }
+
     // covers: S271
     #[test]
     fn a_read_back_while_the_slider_is_dragged_is_ignored() {
