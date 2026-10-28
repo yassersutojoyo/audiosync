@@ -6608,6 +6608,51 @@ do {
           "output stall: a refused start that followed no stall is switched off as before; 5 s of play or a switch-off ends a stall",
           "\(String(describing: unstalled)) \(playing) \(settled) \(other.tracked)")
 }
+// covers: S334, S335 (a Mac sitting on 2026-10-28: both watches fired between the will-sleep notice and the sleep)
+do {
+    typealias R = OutputStallWatch.Reading
+    var outputs = OutputStallWatch()
+    var capture = CaptureFlowWatch()
+    var frames: Int64 = 0
+    var stalls: [Double] = []
+    var steps: [CaptureFlowWatch.Step] = []
+    func tick(_ now: Double) {
+        if !outputs.check(["A": R(attach: 1, frames: frames)], nowS: now).isEmpty { stalls.append(now) }
+        steps.append(capture.tick(callbacks: UInt64(frames / 512), reading: true, playingReadAt: now, at: now))
+    }
+    // Both flow until the will-sleep notice at 10; nothing moves after it while uptime runs on until the
+    // Mac sleeps at 16, then the clock stands still; the wake comes at 16 and nothing moves after it either.
+    for n in 0...20 {
+        frames += 512
+        tick(0.5 * Double(n))
+    }
+    outputs.pause()
+    capture.pause()
+    for n in 21...32 { tick(0.5 * Double(n)) }
+    let asleepStalls = stalls
+    let asleepSteps = steps.filter { $0 != .none }
+    outputs.resume(nowS: 16)
+    capture.resume(at: 16)
+    steps = []
+    for n in 33...36 { tick(0.5 * Double(n)) }
+    check(asleepStalls.isEmpty && asleepSteps.isEmpty && stalls == [18.0]
+            && steps.filter({ $0 != .none }) == [.stopped(.noCallback(2))] && steps.last == .stopped(.noCallback(2)),
+          "output stall and capture watch: neither fires from the will-sleep notice to the wake, and both count 2 s from the wake",
+          "asleep \(asleepStalls) \(asleepSteps), awake \(stalls) \(steps)")
+
+    // A service restart during the sleep still closes the capture; its first try comes 1 s after the wake.
+    var restarted = CaptureFlowWatch()
+    _ = restarted.tick(callbacks: 10, reading: true, playingReadAt: 0, at: 0)
+    restarted.pause()
+    let stop = restarted.report(.serviceRestarted, at: 0.5)
+    let held = (2...20).map { restarted.tick(callbacks: nil, reading: false, playingReadAt: nil, at: 0.5 * Double($0)) }
+    restarted.resume(at: 10)
+    let early = restarted.tick(callbacks: nil, reading: false, playingReadAt: nil, at: 10.5)
+    let first = restarted.tick(callbacks: nil, reading: false, playingReadAt: nil, at: 11)
+    check(stop == .stopped(.serviceRestarted) && held.allSatisfy { $0 == .none } && early == .none && first == .tryOpen(1),
+          "capture watch: a service restart during the sleep still closes the capture, and its first try comes 1 s after the wake",
+          "\(stop) \(held.filter { $0 != .none }) \(early) \(first)")
+}
 
 // MARK: Output format: a device whose rate or channels change under a running output (OutputFormatWatch.swift, S330)
 // covers: S330 (the Mac host's reopen decision and its debug line)

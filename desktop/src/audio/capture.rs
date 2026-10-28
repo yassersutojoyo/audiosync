@@ -2303,6 +2303,7 @@ mod tests {
         assert_eq!(gaps.idle(start + 20 * HNS_PER_MS), 0);
     }
 
+    // covers: S332
     #[test]
     fn a_jump_or_a_discontinuity_gets_silence_for_the_time_between() {
         let mut gaps = GapFill::new(SESSION_RATE);

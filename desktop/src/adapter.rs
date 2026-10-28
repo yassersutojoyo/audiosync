@@ -6622,6 +6622,7 @@ mod tests {
         adapter.poll();
     }
 
+    // covers: S162
     #[test]
     fn a_speaker_on_that_wasnt_listed_since_launch_doesnt_count_as_on() {
         let mut audio = MockBackend::empty();
@@ -12212,7 +12213,7 @@ mod tests {
         ended_as_a_change(&mut adapter);
     }
 
-    // covers: S240
+    // covers: S240, S255
     #[test]
     fn deleting_the_measured_zone_ends_the_run() {
         let mut adapter = zone_adapter(&["bluetooth", "tv"]);
