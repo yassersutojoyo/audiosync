@@ -52,6 +52,10 @@ final class StreamEngine {
     /// halted and detached; the speaker stays on.
     var onOutputGone: ((String, OutputLoss) -> Void)?
 
+    /// When Now Playing last read the captured source as playing, nil while
+    /// it shows it paused or can't read it (S335 D3).
+    var sourcePlayingReadAt: (() -> TimeInterval?)?
+
     /// The core's volume curve, for the host's gain arithmetic (S70, S71).
     let gainCurve = CoreGainCurve()
 
@@ -397,8 +401,8 @@ final class StreamEngine {
         timer.schedule(deadline: .now() + .milliseconds(500), repeating: .milliseconds(500), leeway: .milliseconds(50))
         timer.setEventHandler { [weak self] in
             guard let self, self.isRunning else { return }
-            // S335 D3: a Now Playing gate for app and mix sources would go here, should a quiet tap stop calling back.
-            self.follow(self.flowWatch.tick(callbacks: self.capture.counts?.callbacks, reading: self.capture.isReading, playingReadAt: nil,
+            self.follow(self.flowWatch.tick(callbacks: self.capture.counts?.callbacks, reading: self.capture.isReading,
+                                            playingReadAt: self.sourcePlayingReadAt?(),
                                             at: ProcessInfo.processInfo.systemUptime))
         }
         timer.resume()

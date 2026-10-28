@@ -81,7 +81,8 @@ struct CaptureWatch {
 
 /// A running session's capture, watched from its first callback until the
 /// session ends (S335). Fed on the main queue every 0.5 s with the capture's
-/// callback count and the uptime clock, which stands still while the Mac sleeps.
+/// callback count, Now Playing's latest reading and the uptime clock, which
+/// stands still while the Mac sleeps.
 struct CaptureFlowWatch {
     /// Seconds without a callback that make a stopped capture, the span S326 and S334 give an output.
     static let stallSpan: TimeInterval = 2
@@ -128,10 +129,17 @@ struct CaptureFlowWatch {
     private var lastCount: UInt64?
     /// When the count last moved; nil until this capture's first callback.
     private var movedAt: TimeInterval?
+    /// The first reading of Now Playing's current stretch showing the source playing.
+    private var playingSince: TimeInterval?
 
     /// `callbacks` is nil while the capture has no IOProc; `reading` is false
     /// while an app tap waits for an audio process, which is no stop.
+    /// `playingReadAt` is when Now Playing last read the captured source as
+    /// playing, nil while it shows it paused or can't read it: a tap of a
+    /// paused source calls back nothing (S335 D3), so only a source known to
+    /// play can be missing callbacks.
     mutating func tick(callbacks: UInt64?, reading: Bool, playingReadAt: TimeInterval?, at uptime: TimeInterval) -> Step {
+        playingSince = playingReadAt.map { playingSince ?? $0 }
         if case .waiting(let next, let due) = phase {
             guard uptime >= due else { return .none }
             phase = .trial(next, since: uptime)
@@ -156,15 +164,27 @@ struct CaptureFlowWatch {
         case .waiting:
             return .none
         case .watching:
-            guard let movedAt, uptime - movedAt >= Self.stallSpan else { return .none }
+            guard let movedAt, quietWhilePlaying(since: movedAt, readAt: playingReadAt) else { return .none }
             return stop(.noCallback(uptime - movedAt), at: uptime)
         case .trial(let number, let since):
-            let quietSince = movedAt ?? since
-            if uptime - quietSince >= Self.stallSpan { return stop(.noCallback(uptime - quietSince), at: uptime) }
-            guard movedAt != nil, uptime - since >= Self.trialSpan else { return .none }
+            let lastHeard = movedAt ?? since
+            if quietWhilePlaying(since: lastHeard, readAt: playingReadAt) {
+                return stop(.noCallback(uptime - lastHeard), at: uptime)
+            }
+            guard uptime - since >= Self.trialSpan else { return .none }
             phase = .watching
+            // Watched from its opening, so a reopened tap that never calls back while the source plays still counts.
+            if movedAt == nil { movedAt = since }
             return .kept(number)
         }
+    }
+
+    /// A reading taken `stallSpan` after the last callback, and after the
+    /// source was first seen playing, still shows it playing: Now Playing
+    /// reads every 2 s, so a pause it hasn't read yet never counts.
+    private func quietWhilePlaying(since lastHeard: TimeInterval, readAt: TimeInterval?) -> Bool {
+        guard let readAt, let playingSince else { return false }
+        return readAt - max(lastHeard, playingSince) >= Self.stallSpan
     }
 
     /// A stop the host was told of: Core Audio's service restarted, or the

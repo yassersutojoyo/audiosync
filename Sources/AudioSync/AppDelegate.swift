@@ -425,6 +425,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             }
             self.devicesChanged()
         }
+        engine.sourcePlayingReadAt = { [weak self] in self?.sourcePlayingReading()?.position?.readAt }
         engine.onAppQuit = { [weak self] bundleID, pids in
             self?.appQuit(bundleID: bundleID, pids: pids, seenByCapture: true)
         }

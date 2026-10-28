@@ -444,7 +444,7 @@ extension AppDelegate {
     /// Now Playing's latest reading when it reports the selected source as
     /// playing. Only Spotify and Music are known; for any other app or an
     /// input device this is nil.
-    private func sourcePlayingReading() -> NowPlayingMonitor.Track? {
+    func sourcePlayingReading() -> NowPlayingMonitor.Track? {
         // Only a live reading counts: the monitor polls while the window is
         // open or AirPlay receivers show the track, and a stopped monitor
         // keeps its last (possibly stale) track.
