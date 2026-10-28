@@ -974,6 +974,43 @@ pub mod tests {
         assert_eq!(temp_folders(&f.env), ["Other-folder"]);
     }
 
+    /// A fetch whose download starts only after another copy of the app,
+    /// the same user in another session, ran its launch cleanup.
+    struct SweptMidDownload {
+        inner: Arc<MemoryFetch>,
+        install_dir: PathBuf,
+        temp_root: PathBuf,
+    }
+
+    impl Fetch for SweptMidDownload {
+        fn get(&self, url: &str, kind: Kind, sink: &mut fetch::Sink<'_>) -> Result<(), FetchError> {
+            if kind == Kind::Download {
+                remove_leftovers(&self.install_dir, &self.temp_root, &DebugLog::default());
+            }
+            self.inner.get(url, kind, sink)
+        }
+    }
+
+    // covers: S304
+    #[test]
+    fn another_sessions_cleanup_leaves_a_running_download_alone() {
+        let mut f = fixture(
+            "other-session",
+            false,
+            Arc::new(RealFiles),
+            DebugLog::default(),
+        );
+        f.env.fetch = Arc::new(SweptMidDownload {
+            inner: f.fetch.clone(),
+            install_dir: f.env.install_dir.clone(),
+            temp_root: f.env.temp_root.clone(),
+        });
+        let update = update_of(&f.env);
+        let done = run(&f.env, &update);
+        assert!(matches!(done, Installed::Done(_)), "{done:?}");
+        assert!(temp_folders(&f.env).is_empty());
+    }
+
     // covers: S305
     #[test]
     fn the_launch_check_runs_once_a_day_and_a_failed_check_stores_no_time() {
