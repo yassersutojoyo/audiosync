@@ -1884,23 +1884,26 @@ final class FakeConsentCheck {
         return answer
     }
 }
-// Readings every 2 s through the real bounded check; the prompt is answered at 4 s, System Settings changes it at 60 s.
-func consentSettingsChange(request: AutomationConsent.Permission, settings: AutomationConsent.Permission) -> [AutomationConsent.Step] {
+// Readings every 2 s through the real bounded check; the explanation is read at `explainedAt`, the prompt
+// answered 4 s later and System Settings changes the answer 60 s later.
+func consentSettingsChange(request: AutomationConsent.Permission, settings: AutomationConsent.Permission,
+                           explainedAt: Double = 0) -> [AutomationConsent.Step] {
     let mac = FakeConsentCheck()
     let queue = DispatchQueue(label: "consent-check-test")
     let checks = ConsentChecks(queue: queue, bound: 0.02, check: mac.check)
     var consent = AutomationConsent()
     var steps: [AutomationConsent.Step] = []
-    for tick in 0...40 {
+    for tick in 0...(Int(explainedAt) / 2 + 40) {
         let now = 2 * Double(tick)
-        if now == 4, let token = consentAsk(steps[0]) {
+        if now == explainedAt + 4, let token = steps.lazy.compactMap(consentAsk).first {
             mac.decide(request)
             consent.ended(token, at: now)
             queue.sync { checks.requestAnswered(consentSpotify, request, at: now) }
         }
-        if now == 60 { mac.decide(settings) }
+        if now == explainedAt + 60 { mac.decide(settings) }
         let permission = queue.sync { checks.permission(consentSpotify, at: now) }
-        steps.append(consent.step(consentSpotify, running: true, permission: permission, mayAsk: true, at: now))
+        steps.append(consent.step(consentSpotify, running: true, permission: permission,
+                                  mayAsk: now >= explainedAt, at: now))
     }
     return steps
 }
@@ -1911,6 +1914,14 @@ do {
             && denyThenAllow.last == .read && allowThenRevoke[2] == .read && allowThenRevoke.last == .refused,
           "automation consent: a check that never answers counts as undecided, and after the request's answer a change in System Settings is followed both ways",
           "\(denyThenAllow) \(allowThenRevoke)")
+}
+do {
+    // The explanation stays unread for 200 s, long enough for 3 stuck checks, before the prompt is answered.
+    let denyThenAllow = consentSettingsChange(request: .denied, settings: .allowed, explainedAt: 200)
+    let allowThenRevoke = consentSettingsChange(request: .allowed, settings: .denied, explainedAt: 200)
+    check(denyThenAllow[..<100].allSatisfy { $0 == .hold } && denyThenAllow.last == .read && allowThenRevoke.last == .refused,
+          "automation consent: after 3 stuck checks, a decision and a later change in System Settings are still followed both ways",
+          "\(denyThenAllow.suffix(41)) \(allowThenRevoke.suffix(41))")
 }
 do {
     // Never decided and never answering, for 200 s before the explanation was read.
