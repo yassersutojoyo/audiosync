@@ -11900,8 +11900,8 @@ mod tests {
     }
 
     /// A folder in place of the settings file at launch (another program
-    /// holds it), with the user's settings, master 64 and the player as the
-    /// source, waiting in `held`.
+    /// holds it), with the user's settings, master 64, the player as the
+    /// source and the speakers on with auto-connect, waiting in `held`.
     fn launch_with_settings_held(name: &str) -> (AudioAdapter<MockBackend>, PathBuf, PathBuf) {
         let dir = test_dir(name);
         let path = dir.join(settings::FILE_NAME);
@@ -11911,6 +11911,14 @@ mod tests {
                 executable: "player.exe".to_owned(),
                 name: "Player".to_owned(),
             },
+            outputs: BTreeMap::from([(
+                SPEAKERS.to_owned(),
+                SavedSpeaker {
+                    enabled: true,
+                    ..SavedSpeaker::default()
+                },
+            )]),
+            auto_connect: BTreeSet::from([key(SPEAKERS)]),
             ..Settings::default()
         };
         std::fs::write(dir.join("held"), users.to_json()).expect("written");
@@ -11935,6 +11943,13 @@ mod tests {
             "{:?}",
             adapter.chosen
         );
+        assert_eq!(
+            adapter.audio.running_source(),
+            Some(SourceId::App {
+                root_pid: PLAYER_PID
+            }),
+            "the auto-connect speakers start streaming, as at launch"
+        );
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
         assert!(crate::data_folder::copies_kept_aside(&dir, "settings.ignored").is_empty());
         let _ = std::fs::remove_dir_all(dir);
@@ -11942,7 +11957,7 @@ mod tests {
 
     // covers: S212
     #[test]
-    fn a_session_running_when_held_settings_are_read_keeps_its_source() {
+    fn a_session_running_when_held_settings_are_read_moves_to_their_source() {
         use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
         let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-running");
         turn_on(&mut adapter, SPEAKERS);
@@ -11953,7 +11968,12 @@ mod tests {
             adapter.poll();
         }
         assert_eq!(adapter.snapshot().master_volume, 64.0);
-        assert_eq!(adapter.chosen, Chosen::WholeSystem);
+        assert_eq!(
+            adapter.audio.running_source(),
+            Some(SourceId::App {
+                root_pid: PLAYER_PID
+            })
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
