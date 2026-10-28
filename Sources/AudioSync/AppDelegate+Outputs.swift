@@ -371,14 +371,17 @@ extension AppDelegate {
     /// `provided` is a device list the caller has just read; without one the
     /// devices are read here. A speaker whose renderer won't start is switched
     /// off and gets a notice, plus an alert when `origin` is the user.
-    func syncLocalOutputs(available provided: [AudioDevices.Device]? = nil, origin: StartOrigin = .user) {
+    /// `formatReopens` start again because their device's format changed
+    /// (S330), never as a stall's reopen, even inside its trial.
+    func syncLocalOutputs(available provided: [AudioDevices.Device]? = nil, origin: StartOrigin = .user,
+                          formatReopens: Set<String> = []) {
         let listing = provided ?? devices.allOutputDevices()
         noteLocalDeviceList(listing)   // the reference follows the list, streaming or not
         guard engine.isRunning else { return }   // stopped: startEngine syncs them once it runs
 
         let now = ProcessInfo.processInfo.systemUptime
         stallRetry.settle(enabled: enabledLocal, nowS: now)
-        let afterStall = stallRetry.tracked
+        let afterStall = stallRetry.afterStall(formatReopens: formatReopens)
         let applied = LocalOutputSync.apply(enabled: enabledLocal.subtracting(freshLinks.held)
                                                 .subtracting(stallRetry.held(nowS: now)), listing: listing,
                                             to: engine,
@@ -391,6 +394,9 @@ extension AppDelegate {
             if afterStall.contains(uid) {
                 stallRetry.started(uid, nowS: now)
                 DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) reopened after a stall, "
+                    + "hold-back \(Int(holdBack.rounded())) ms")
+            } else if formatReopens.contains(uid) {
+                DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) reopened in its device's new format, "
                     + "hold-back \(Int(holdBack.rounded())) ms")
             }
         }
