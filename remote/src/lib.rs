@@ -16,8 +16,9 @@
 //! app's state on its own.
 //!
 //! The connection is plain HTTP, so the server guards the control channel
-//! itself: only private, link-local and loopback peers, and IPv6 peers in
-//! this machine's own /64, get an answer, the
+//! itself: only private, link-local, loopback and carrier-grade NAT
+//! (100.64/10) peers, and IPv6 peers in this machine's own /64, get an
+//! answer, the
 //! `Host` header must name this machine ([`net`]), every `POST` needs a
 //! matching `Origin` and a JSON body, and every API route but pairing needs
 //! the device token that a single-use 6-digit pairing code buys
