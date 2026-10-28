@@ -21,6 +21,7 @@ use crate::channel::{Channel, Event, STOP_STEP_TIMEOUT};
 use crate::discovery::{CastDevice, DeviceId, DeviceKind};
 use crate::error::{ConnectError, EndReason, LaunchError};
 use crate::framing::{FrameReader, encode_frame};
+use crate::group::MultizoneMessage;
 use crate::ids::RequestIds;
 use crate::media::{LoadRequest, MediaError, VolumeError};
 use crate::status::{AppSession, ReceiverStatus};
@@ -35,7 +36,8 @@ const READ_SLICE: Duration = Duration::from_millis(50);
 /// How often a TLS handshake waiting on the device looks again.
 const HANDSHAKE_POLL: Duration = Duration::from_millis(5);
 /// Events kept for a host that doesn't poll: beyond this, the oldest
-/// status and drop reports go first; launch results and the end are kept.
+/// status and drop reports go first, then group messages and stall reports
+/// (C110); launch and load results and the end are kept.
 pub const MAX_EVENTS: usize = 64;
 /// The most addresses one connect tries (C109).
 pub const MAX_CONNECT_ADDRESSES: usize = 8;
@@ -523,7 +525,7 @@ impl CastClient {
     }
 
     /// The next event the channel reported. A host that doesn't poll loses
-    /// the oldest status and drop reports beyond [`MAX_EVENTS`].
+    /// the oldest droppable reports beyond [`MAX_EVENTS`] (C110).
     pub fn poll_event(&mut self) -> Option<Event> {
         self.events.pop_front().map(|(_, event)| event)
     }
@@ -636,18 +638,99 @@ impl CastClient {
     }
 }
 
-/// Queues an event for the owner, keeping the queue to [`MAX_EVENTS`].
+/// Queues an event for the owner, keeping the queue to [`MAX_EVENTS`]
+/// whatever the kinds in it (C110).
 fn queue_event(events: &mut VecDeque<(u64, Event)>, event: (u64, Event)) {
     events.push_back(event);
-    if events.len() > MAX_EVENTS {
-        let routine = events.iter().position(|(_, event)| {
+    if events.len() <= MAX_EVENTS {
+        return;
+    }
+    let routine = events.iter().position(|(_, event)| {
+        matches!(
+            event,
+            Event::Status(_)
+                | Event::Dropped(_)
+                | Event::MediaStatus(_)
+                | Event::Multizone(MultizoneMessage::Other(_))
+        )
+    });
+    let oldest = routine.or_else(|| moot_membership(events)).or_else(|| {
+        events.iter().position(|(_, event)| {
             matches!(
                 event,
-                Event::Status(_) | Event::Dropped(_) | Event::MediaStatus(_)
+                Event::Rebuffering | Event::Resumed | Event::Multizone(_)
+            )
+        })
+    });
+    if let Some(index) = oldest {
+        events.remove(index);
+    }
+}
+
+/// The oldest multizone membership message a later one makes moot: a later
+/// `MULTIZONE_STATUS` replaces the whole list, and a later message about the
+/// same member replaces what this one said about it.
+fn moot_membership(events: &VecDeque<(u64, Event)>) -> Option<usize> {
+    let last_status = events
+        .iter()
+        .rposition(|(_, event)| matches!(event, Event::Multizone(MultizoneMessage::Status(_))));
+    if let Some(last) = last_status {
+        let before = events.iter().take(last).position(|(_, event)| {
+            matches!(
+                event,
+                Event::Multizone(
+                    MultizoneMessage::Status(_)
+                        | MultizoneMessage::Upsert(_)
+                        | MultizoneMessage::Removed(_)
+                )
             )
         });
-        if let Some(index) = routine {
-            events.remove(index);
+        if before.is_some() {
+            return before;
+        }
+    }
+    // Parsed once: the scan compares every pair.
+    let named: Vec<Option<MemberName<'_>>> = events
+        .iter()
+        .map(|(_, event)| MemberName::of(event))
+        .collect();
+    named.iter().enumerate().find_map(|(index, member)| {
+        let member = member.as_ref()?;
+        named[index + 1..]
+            .iter()
+            .flatten()
+            .any(|later| member.same(later))
+            .then_some(index)
+    })
+}
+
+/// The `deviceId` a `DEVICE_ADDED`, `DEVICE_UPDATED` or `DEVICE_REMOVED`
+/// names.
+struct MemberName<'a> {
+    text: &'a str,
+    id: Option<DeviceId>,
+}
+
+impl<'a> MemberName<'a> {
+    fn of(event: &'a Event) -> Option<MemberName<'a>> {
+        let text = match event {
+            Event::Multizone(MultizoneMessage::Upsert(member)) => &member.device_id,
+            Event::Multizone(MultizoneMessage::Removed(device_id)) => device_id,
+            _ => return None,
+        };
+        Some(MemberName {
+            text,
+            id: DeviceId::parse(text),
+        })
+    }
+
+    /// Compared as [`GroupMember::is`] does (C95).
+    ///
+    /// [`GroupMember::is`]: crate::group::GroupMember::is
+    fn same(&self, other: &MemberName<'_>) -> bool {
+        match (self.id, other.id) {
+            (Some(mine), Some(theirs)) => mine == theirs,
+            _ => self.text.eq_ignore_ascii_case(other.text),
         }
     }
 }
@@ -655,7 +738,7 @@ fn queue_event(events: &mut VecDeque<(u64, Event)>, event: (u64, Event)) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::group::{GroupMember, MultizoneMessage};
+    use crate::group::GroupMember;
     use std::net::{Shutdown, TcpListener};
     use std::thread;
 
