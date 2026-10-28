@@ -480,6 +480,8 @@ struct SessionTally: Equatable {
         var number = 0
         /// The output's attach token (`AttachTokens`).
         var attach: UInt64 = 0
+        /// Device frames its render callback handed the device, silence included (S334).
+        var frames: Int64 = 0
         var starvedRenders: Int64 = 0
         var starvedFrames: Int64 = 0
         var driftSkips: Int64 = 0
