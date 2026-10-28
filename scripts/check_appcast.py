@@ -147,7 +147,7 @@ def windows_zip_problems(path, version):
         return [f"{path}: holds {got}; expected exactly {want} at the top level"]
     try:
         strings = version_strings(exe)
-    except (struct.error, UnicodeDecodeError):
+    except (struct.error, UnicodeDecodeError, RecursionError):
         strings = {}
     problems = []
     # An older exe in a newer zip would be offered this update again after every install.
@@ -435,8 +435,12 @@ def self_test():
         write_zip(x64, windows)
         write_zip(arm, {**windows, "audiosync.exe": fake_exe() + b"arm"})
         exes = {}
+        deep = version_node("a")
+        for _ in range(4000):
+            deep = version_node("a", children=[deep])
         for case, exe in (("old", fake_exe("0.7.1")), ("unmarked", fake_exe(release=False)),
-                          ("plain", b"MZ")):
+                          ("plain", b"MZ"),
+                          ("deep", b"MZ\0\0" + version_node("VS_VERSION_INFO", bytes(52), [deep]))):
             exes[case] = os.path.join(folder, case, "AudioSync-0.8.0-windows-x64.zip")
             os.mkdir(os.path.dirname(exes[case]))
             write_zip(exes[case], {**windows, "audiosync.exe": exe})
@@ -503,7 +507,8 @@ def self_test():
             os_attr="windows-arm64")], [mac, x64, nested], "audiosync/audiosync.exe")
         for case, want in (("old", "ProductVersion '0.7.1'; expected '0.8.0'"),
                            ("unmarked", "not a release build"),
-                           ("plain", "ProductVersion None")):
+                           ("plain", "ProductVersion None"),
+                           ("deep", "ProductVersion None")):
             run(f"{case} audiosync.exe", good()[:1] + [fixture_item(exes[case], os_attr="windows-x64")]
                 + good()[2:], [mac, exes[case], arm], want)
         two_enclosures = os.path.join(folder, "two enclosures.xml")

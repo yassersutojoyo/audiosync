@@ -1097,7 +1097,12 @@ pub mod tests {
     // covers: S302, S306
     #[test]
     fn a_failed_install_reports_and_try_again_retries() {
-        let (mut updater, _) = updater("try-again");
+        let mut f = fixture("try-again", false, Arc::new(RealFiles), DebugLog::default());
+        // The held file below would otherwise sleep the real S315 backoff, 7.75 s.
+        f.env.pause = Arc::new(files::Pause::counted(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(1))
+        }));
+        let mut updater = Updater::new(f.env);
         updater.check(Trigger::Manual);
         updater.wait();
         let exe = updater.env.install_dir.join(archive::EXE_NAME);
