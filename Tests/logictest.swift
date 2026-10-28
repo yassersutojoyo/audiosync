@@ -7622,6 +7622,8 @@ do {
         check(!defers((500, t0), (501, t0)) && defers((501, t0), (500, t0))
                 && !defers((500, nil), (501, t0)) && defers((501, t0), (500, nil)),
               "second launch: with equal or unknown launch times, the lower PID stays and only the other leaves")
+        check(defers((99_000, t0), (300, nil)) != defers((300, t0 + 1), (99_000, t0)),
+              "second launch: two copies that see each other's start differently still leave exactly one running")
         check(defers((500, t0), (501, t0 + 1), finished: true),
               "second launch: a copy that finished launching is asked to show its window, whatever its PID")
     }

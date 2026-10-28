@@ -922,6 +922,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | second launch: a copy that is quitting doesn't answer, so the new one waits for it | S111, S215 |
 | second launch: of two copies launching together, the one launched first stays and only the other leaves, even after a PID wrap | S215 |
 | second launch: with equal or unknown launch times, the lower PID stays and only the other leaves | S215 |
+| second launch: two copies that see each other's start differently still leave exactly one running | S215 |
 | second launch: a copy that finished launching is asked to show its window, whatever its PID | S215 |
 | cast model: when discovery stops, a speaker added by address stays listed, as the sender keeps it | S338 |
 | cast model: when discovery stops, a speaker that is on with no session goes off with its row, so nothing keeps streaming for it and another one can go on | S338 |
