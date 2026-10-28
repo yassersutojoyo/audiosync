@@ -441,11 +441,14 @@ fn steps_move_by_the_step_interval_from_the_reported_level() {
         "a quick second step builds on the first"
     );
     channel.tick(start + VOLUME_INTERVAL);
-    assert_eq!(sent(&mut channel).len(), 2);
+    let out = sent(&mut channel);
+    assert_eq!(out.len(), 2);
+    // The answer to the last level, rounded by the device.
+    let last_id = out[1].2["requestId"].as_u64().expect("id");
     channel.handle(
         start,
         status(
-            0,
+            u32::try_from(last_id).expect("id"),
             vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")],
             json!({"level": 0.65, "stepInterval": 0.1}),
         ),

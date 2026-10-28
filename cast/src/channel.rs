@@ -17,7 +17,7 @@ use crate::media::{
 use crate::message::{
     self, BROADCAST, CastMessage, DEFAULT_MEDIA_RECEIVER, Namespace, PLATFORM, PayloadError, SENDER,
 };
-use crate::status::{AppSession, ControlType, DeviceVolume, ReceiverStatus};
+use crate::status::{AppSession, ControlType, DeviceVolume, ReceiverStatus, answers_level};
 
 /// How long the first `RECEIVER_STATUS` may take (C33).
 pub const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -183,8 +183,9 @@ pub struct Channel {
     /// The level a drag asked for inside [`VOLUME_INTERVAL`]; the latest
     /// wins (C70).
     volume_queued: Option<f64>,
-    /// The level last sent, until the next `RECEIVER_STATUS` reports one.
-    volume_unconfirmed: Option<f64>,
+    /// The request id and level last sent, until a `RECEIVER_STATUS`
+    /// answers that request or reports that level.
+    volume_unconfirmed: Option<(u32, f64)>,
     /// The volume the previous channel to the device knew, for a first
     /// status that leaves it out (C37).
     assumed_volume: Option<DeviceVolume>,
@@ -438,7 +439,7 @@ impl Channel {
         // Steps pressed faster than the device reports build on each other.
         let base = self
             .volume_queued
-            .or(self.volume_unconfirmed)
+            .or(self.volume_unconfirmed.map(|(_, level)| level))
             .unwrap_or(status.volume.level);
         let level = if up { base + step } else { base - step }.clamp(0.0, 1.0);
         self.set_volume(now, level)?;
@@ -454,7 +455,8 @@ impl Channel {
     /// Takes the level still waiting for its interval, or else the one sent
     /// and not yet answered, for the channel that replaces this one (C70, C81).
     pub fn take_unanswered_volume(&mut self) -> Option<f64> {
-        self.volume_queued.take().or(self.volume_unconfirmed.take())
+        let unconfirmed = self.volume_unconfirmed.take().map(|(_, level)| level);
+        self.volume_queued.take().or(unconfirmed)
     }
 
     fn volume_check(&self) -> Result<&ReceiverStatus, VolumeError> {
@@ -471,12 +473,12 @@ impl Channel {
     fn send_level(&mut self, now: Instant, level: f64) {
         self.volume_sent = Some(now);
         self.volume_queued = None;
-        self.volume_unconfirmed = Some(level);
-        self.send_request(
+        let id = self.send_request(
             PLATFORM,
             Namespace::Receiver,
             json!({"type": "SET_VOLUME", "volume": {"level": level}}),
         );
+        self.volume_unconfirmed = Some((id, level));
     }
 
     /// Tears the session down (C44, C87): media `STOP` for the sender's
@@ -912,8 +914,13 @@ impl Channel {
             // control that turned fixed meanwhile (C68).
             self.volume_queued = None;
         }
+        // The answer to an older level leaves the newer one unanswered (C70).
+        if self.volume_unconfirmed.is_some_and(|(request, level)| {
+            request == id || answers_level(level, status.volume.level)
+        }) {
+            self.volume_unconfirmed = None;
+        }
         self.status = Some(status.clone());
-        self.volume_unconfirmed = None;
         self.events.push_back(Event::Status(status.clone()));
         match self.phase {
             Phase::AwaitingStatus => {
