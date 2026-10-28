@@ -426,7 +426,7 @@ pub fn launch_check(automatic: bool, last: Option<u64>, now: u64) -> LaunchCheck
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::updater::archive::tests::{fake_exe, zip_of};
+    use crate::updater::archive::tests::{fake_exe, fake_exe_reporting, zip_of};
     use crate::updater::fetch::tests::MemoryFetch;
     use crate::updater::files::{LOCK_RETRIES, RealFiles, Sink};
     use crate::updater::signature::test_key;
@@ -782,6 +782,66 @@ pub mod tests {
                 .unwrap()
                 .ends_with(b"new exe")
         );
+    }
+
+    /// Offers `exe` as 0.9.0 in a zip signed with a new throwaway key.
+    fn offer(env: &mut Env, exe: &[u8]) {
+        let zip = zip_of(&[(archive::EXE_NAME, exe)]);
+        let key = test_key::new();
+        let signed = test_key::sign(&key, &zip);
+        let mut fetch = MemoryFetch::default();
+        fetch.files.insert(
+            FEED.to_owned(),
+            appcast_with("windows-x64", zip.len(), &signed).into_bytes(),
+        );
+        fetch.files.insert(ZIP_URL.to_owned(), zip);
+        env.fetch = Arc::new(fetch);
+        env.key = key.verifying_key();
+    }
+
+    // covers: S300
+    #[test]
+    fn an_exe_reporting_another_version_than_offered_is_refused() {
+        for (case, exe, running) in [
+            ("older", fake_exe_reporting([0, 7, 0, 0], b"0.7.0"), "0.8.0"),
+            (
+                "none",
+                fake_exe(Arch::X64.pe_machine(), b"no version"),
+                "0.8.0",
+            ),
+            (
+                "not newer",
+                fake_exe_reporting([0, 9, 0, 0], b"0.9.0"),
+                "0.9.0",
+            ),
+        ] {
+            let mut f = fixture(
+                &format!("version-{case}"),
+                false,
+                Arc::new(RealFiles),
+                DebugLog::default(),
+            );
+            offer(&mut f.env, &exe);
+            let update = update_of(&f.env);
+            f.env.running = Version::parse(running).unwrap();
+            assert_eq!(run(&f.env, &update), Installed::BrokenDownload, "{case}");
+            assert_eq!(
+                fs::read(f.env.install_dir.join(archive::EXE_NAME)).unwrap(),
+                b"old exe",
+                "{case}"
+            );
+            assert!(temp_folders(&f.env).is_empty(), "{case}");
+        }
+
+        let mut f = fixture(
+            "version-offered",
+            false,
+            Arc::new(RealFiles),
+            DebugLog::default(),
+        );
+        offer(&mut f.env, &fake_exe_reporting([0, 9, 0, 0], b"0.9.0"));
+        let update = update_of(&f.env);
+        assert!(matches!(run(&f.env, &update), Installed::Done(_)));
     }
 
     // covers: S297, S306

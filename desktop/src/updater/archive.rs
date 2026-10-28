@@ -155,6 +155,32 @@ pub mod tests {
         bytes
     }
 
+    /// An x64 PE image whose version resource reports `version` as its
+    /// product version, laid out as the resource compiler writes it.
+    pub fn fake_exe_reporting(version: [u16; 4], marker: &[u8]) -> Vec<u8> {
+        let mut bytes = fake_exe(Arch::X64.pe_machine(), b"");
+        bytes.extend([0u8; 6]);
+        bytes.extend(
+            "VS_VERSION_INFO\0"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes),
+        );
+        bytes.resize(bytes.len().next_multiple_of(4), 0);
+        let pair = |high: u16, low: u16| ((u32::from(high) << 16) | u32::from(low)).to_le_bytes();
+        for word in [
+            0xFEEF_04BD_u32.to_le_bytes(),
+            0x0001_0000_u32.to_le_bytes(),
+            pair(version[0], version[1]),
+            pair(version[2], version[3]),
+            pair(version[0], version[1]),
+            pair(version[2], version[3]),
+        ] {
+            bytes.extend(word);
+        }
+        bytes.extend_from_slice(marker);
+        bytes
+    }
+
     pub fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
         let mut writer = zip::ZipWriter::new(io::Cursor::new(Vec::new()));
         for (name, data) in entries {
