@@ -75,8 +75,8 @@ enum DialogPurpose {
     RenamePreset(String),
     /// Save Curve in the equalizer.
     SaveCurve,
-    /// Rename in the equalizer, for the saved curve at this index.
-    RenameCurve(usize),
+    /// Rename in the equalizer, for the saved curve of this name.
+    RenameCurve(String),
 }
 
 /// Where a name is edited: a speaker's full row (in its section or under
@@ -3727,7 +3727,7 @@ impl App {
         let name = state.equalizer_curves[index].name.as_str();
         let strings = self.strings();
         let dialog = &self.zone_dialog;
-        *self.dialog_purpose.borrow_mut() = DialogPurpose::RenameCurve(index);
+        *self.dialog_purpose.borrow_mut() = DialogPurpose::RenameCurve(name.to_owned());
         dialog.set_heading(strings.get_rename_curve_title());
         dialog.set_message(strings.invoke_rename_message(name.into()));
         dialog.set_placeholder(strings.get_curve_name_field_label());
@@ -3975,8 +3975,11 @@ impl App {
                     );
                 }
             }
-            DialogPurpose::RenameCurve(index) => {
+            DialogPurpose::RenameCurve(old) => {
                 let mut curves = self.snapshot().equalizer_curves;
+                let Some(index) = curves.iter().position(|curve| curve.name == old) else {
+                    return;
+                };
                 if eq::rename_curve(&mut curves, index, name) {
                     self.update(|b| b.set_equalizer_curves(curves));
                 } else if let Some(taken) = eq::curve_name(name) {

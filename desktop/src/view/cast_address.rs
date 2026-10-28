@@ -48,6 +48,7 @@ impl App {
     /// Speakers > Add by Address…, or the link under the note that no
     /// Google Cast speaker was found.
     pub(super) fn ask_cast_address(&self) {
+        self.stop_cast_check();
         let dialog = &self.cast_address_dialog;
         dialog.set_address(SharedString::new());
         dialog.set_error(SharedString::new());
