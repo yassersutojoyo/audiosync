@@ -13074,6 +13074,17 @@ mod tests {
         assert_eq!(adapter.presets[1].id, "preset:3");
     }
 
+    // covers: S245, S252
+    #[test]
+    fn an_older_files_preset_keeps_a_deleted_zones_id_from_a_new_zone() {
+        let mut evening = saved_preset(&[(key(SPEAKERS), None)]);
+        evening.zones[0].id = "zone:2".to_owned();
+        let mut adapter = preset_adapter(vec![evening]);
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.new_zone_with(&key(HEADPHONES), "Porch");
+        assert_eq!(adapter.snapshot().zones[1].id, "zone:3");
+    }
+
     // covers: S245, S251
     #[test]
     fn a_settings_file_without_the_id_counters_gives_ids_above_every_stored_one() {
