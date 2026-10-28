@@ -257,8 +257,8 @@ final class NowPlayingMonitor {
     private var artworkCache: [String: NSImage] = [:]   // "bundleID|title|album" → image
     private var denied: Set<String> = []                 // players refusing our Apple Events
     private lazy var consent: AutomationConsent = {
-        let consent = AutomationConsent(queue: self.scripts) { app, done in
-            DispatchQueue.global(qos: .userInitiated).async { done(NowPlayingMonitor.sendConsentEvent(app)) }
+        let consent = AutomationConsent(queue: self.scripts) { app, mayPrompt, done in
+            DispatchQueue.global(qos: .userInitiated).async { done(NowPlayingMonitor.sendConsentEvent(app, mayPrompt: mayPrompt)) }
         }
         consent.onVerdict = { [weak self] app, verdict in
             DebugTrace.log("Now Playing: AudioSync's control of \(app) is \(verdict)")
@@ -401,8 +401,9 @@ final class NowPlayingMonitor {
         !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
     }
 
-    /// Gets the player's name, waiting up to `AutomationConsent.sendTimeout` for the user to answer macOS's prompt.
-    private static func sendConsentEvent(_ bundleID: String) -> Int {
+    /// Gets the player's name. `mayPrompt`: waits up to `AutomationConsent.sendTimeout` for the user to answer
+    /// macOS's prompt; otherwise macOS answers -1744 instead of prompting.
+    private static func sendConsentEvent(_ bundleID: String, mayPrompt: Bool) -> Int {
         let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
         let event = NSAppleEventDescriptor(eventClass: AEEventClass(kAECoreSuite), eventID: AEEventID(kAEGetData),
                                            targetDescriptor: target, returnID: AEReturnID(kAutoGenerateReturnID),
@@ -414,7 +415,10 @@ final class NowPlayingMonitor {
         name.setDescriptor(NSAppleEventDescriptor.null(), forKeyword: AEKeyword(keyAEContainer))
         event.setParam(name, forKeyword: AEKeyword(keyDirectObject))
         do {
-            let reply = try event.sendEvent(options: [.waitForReply, .canInteract], timeout: AutomationConsent.sendTimeout)
+            // 0x20000: kAEDoNotPromptForUserConsent.
+            let quiet: NSAppleEventDescriptor.SendOptions = [.waitForReply, .neverInteract, NSAppleEventDescriptor.SendOptions(rawValue: 0x0002_0000)]
+            let reply = try event.sendEvent(options: mayPrompt ? [.waitForReply, .canInteract] : quiet,
+                                            timeout: mayPrompt ? AutomationConsent.sendTimeout : AutomationConsent.quietTimeout)
             return Int(reply.paramDescriptor(forKeyword: AEKeyword(keyErrorNumber))?.int32Value ?? 0)
         } catch {
             return (error as NSError).code
@@ -553,29 +557,41 @@ final class AutomationConsent {
 
     /// How long the send waits for an answer: macOS takes its prompt down when the send times out.
     static let sendTimeout: TimeInterval = 300
+    /// The same for a send that can't prompt, which holds back a prompting one for that player.
+    static let quietTimeout: TimeInterval = 2
 
     /// `queue`: a player's verdict changed.
     var onVerdict: ((String, Verdict) -> Void)?
 
     private let queue: DispatchQueue
-    private let send: (String, @escaping (Int) -> Void) -> Void
+    private let send: (String, Bool, @escaping (Int) -> Void) -> Void
     private var verdicts: [String: Verdict] = [:]
     private var sending: Set<String> = []
 
-    /// `send` must not block `queue`; it reports 0 or the Apple Event Manager's error.
-    init(queue: DispatchQueue, send: @escaping (String, @escaping (Int) -> Void) -> Void) {
+    /// `send(app, mayPrompt, done)` must not block `queue`; it reports 0 or the Apple Event Manager's error.
+    init(queue: DispatchQueue, send: @escaping (String, Bool, @escaping (Int) -> Void) -> Void) {
         self.queue = queue
         self.send = send
     }
 
-    /// `queue` only. A player not yet allowed gets the send, unless its last one is still out.
+    /// `queue` only. A player not yet allowed gets the send, unless its last one is still out;
+    /// it may prompt only once the user has read the explanation (`mayAsk`).
     func step(_ app: String, running: Bool, mayAsk: Bool) -> Step {
         guard running else { return .wait }
         let verdict = verdicts[app] ?? .undecided
         if verdict == .allowed { return .read }
-        if verdict == .undecided, !mayAsk { return .hold }
-        if !sending.contains(app) { start(app) }
-        return verdict == .denied ? .refused : .wait
+        if !sending.contains(app) { start(app, mayPrompt: mayAsk) }
+        return verdict == .denied ? .refused : mayAsk ? .wait : .hold
+    }
+
+    /// Any reply but a refusal proves the event got through; these never reached the player.
+    static func verdict(code: Int) -> Verdict {
+        switch code {
+        case NowPlayingMonitor.notPermitted: return .denied
+        // Not running, gone, timed out, no interaction allowed, consent needed, or no event built.
+        case -600, -609, -1712, -1713, -1744, -1: return .undecided
+        default: return .allowed
+        }
     }
 
     /// `queue` only. What a reading or command to an allowed `app` returned, 0 for success.
@@ -592,14 +608,14 @@ final class AutomationConsent {
     /// `queue` only.
     func mayCommand(_ app: String) -> Bool { verdicts[app] == .allowed }
 
-    private func start(_ app: String) {
+    private func start(_ app: String, mayPrompt: Bool) {
         if verdicts[app] == nil { DebugTrace.log("Now Playing: sending \(app) one Apple event that waits for macOS's answer") }
         sending.insert(app)
-        send(app) { [weak self] code in
+        send(app, mayPrompt) { [weak self] code in
             guard let self else { return }
             self.queue.async {
                 self.sending.remove(app)
-                self.set(app, code == 0 ? .allowed : code == NowPlayingMonitor.notPermitted ? .denied : .undecided)
+                self.set(app, Self.verdict(code: code))
             }
         }
     }
