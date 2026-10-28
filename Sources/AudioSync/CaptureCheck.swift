@@ -131,6 +131,7 @@ struct CaptureFlowWatch {
     private var movedAt: TimeInterval?
     /// The first reading of Now Playing's current stretch showing the source playing.
     private var playingSince: TimeInterval?
+    private var paused = false
 
     /// `callbacks` is nil while the capture has no IOProc; `reading` is false
     /// while an app tap waits for an audio process, which is no stop.
@@ -139,6 +140,7 @@ struct CaptureFlowWatch {
     /// paused source calls back nothing (S335 D3), so only a source known to
     /// play can be missing callbacks.
     mutating func tick(callbacks: UInt64?, reading: Bool, playingReadAt: TimeInterval?, at uptime: TimeInterval) -> Step {
+        guard !paused else { return .none }
         playingSince = playingReadAt.map { playingSince ?? $0 }
         if case .waiting(let next, let due) = phase {
             guard uptime >= due else { return .none }
@@ -192,6 +194,24 @@ struct CaptureFlowWatch {
     mutating func report(_ sign: Sign, at uptime: TimeInterval) -> Step {
         if case .waiting = phase { return .none }
         return stop(sign, at: uptime)
+    }
+
+    /// From the Mac's will-sleep notice to its wake `tick` asks for nothing:
+    /// uptime still runs between the notice and the sleep itself. A stop the
+    /// host is told of still closes the capture.
+    mutating func pause() {
+        paused = true
+    }
+
+    /// At the wake: the 2 s, a try's 1 s spacing and its 5 s trial start over at `uptime`.
+    mutating func resume(at uptime: TimeInterval) {
+        paused = false
+        if movedAt != nil { movedAt = uptime }
+        switch phase {
+        case .watching: break
+        case .waiting(let next, _): phase = .waiting(next: next, at: uptime + Self.trySpacing)
+        case .trial(let number, _): phase = .trial(number, since: uptime)
+        }
     }
 
     /// The try `tick` asked for could not open the capture.
