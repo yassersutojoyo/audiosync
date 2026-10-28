@@ -153,6 +153,9 @@ protocol LocalOutputEngine: AnyObject {
     /// Stops the renderers of `uids` together, so they fade out at once and
     /// cost one wait (S186).
     func detachOutputs(uids: [String])
+    /// As `detachOutputs(uids:)`; with `keepingLeads`, each output's start
+    /// lead keeps counting in the session lead while it restarts (S328).
+    func detachOutputs(uids: [String], keepingLeads: Bool)
     /// Sets the linear gain of the renderer of `uid`.
     func setGain(uid: String, g: Double)
 }
@@ -161,6 +164,11 @@ extension LocalOutputEngine {
     /// One `detachOutput` per UID, for an engine without fades.
     func detachOutputs(uids: [String]) {
         for uid in uids { detachOutput(uid: uid) }
+    }
+
+    /// `detachOutputs(uids:)`, for an engine that holds no start leads.
+    func detachOutputs(uids: [String], keepingLeads: Bool) {
+        detachOutputs(uids: uids)
     }
 }
 
@@ -212,7 +220,7 @@ extension LocalOutputSync {
         if !steps.restart.isEmpty {   // off the dead device ID first, so the attach below starts them again (EC1)
             DebugTrace.log("[AudioSync] local output(s) on a new device ID, restarting: "
                 + steps.restart.joined(separator: ", "))
-            engine.detachOutputs(uids: steps.restart)
+            engine.detachOutputs(uids: steps.restart, keepingLeads: true)
             applied.restarted = steps.restart
         }
         for uid in steps.attach {
