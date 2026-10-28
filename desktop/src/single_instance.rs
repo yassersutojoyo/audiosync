@@ -42,9 +42,10 @@ const ANSWER_NAME: windows::core::PCWSTR =
 pub const ANSWER_WAIT: Duration = Duration::from_secs(2);
 
 /// How long a second launch whose request went unanswered keeps trying to
-/// become the first copy, counted from the launch: a copy that is quitting
-/// stops answering, and its teardown takes a few seconds. As on the Mac.
-pub const RELAUNCH_WAIT: Duration = Duration::from_millis(5500);
+/// become the first copy, counted from the launch: a quitting copy holds the
+/// mutex through its teardown, up to 9 s with the updater's quit waits, so
+/// this is S303's 10 s rather than the Mac's 5.5 s.
+pub const RELAUNCH_WAIT: Duration = Duration::from_secs(10);
 
 /// How often a second launch checks whether the running copy has gone.
 pub const RELAUNCH_POLL: Duration = Duration::from_millis(250);
@@ -439,13 +440,12 @@ mod tests {
         let (_, first, tries, ended) = run_second_launch(HandOver::NoAnswer, ANSWER_WAIT, None);
         assert_eq!(first, None);
         assert_eq!(ended, RELAUNCH_WAIT);
-        // Polled every 250 ms from 2 s to 5.5 s, the last try at 5.5 s.
-        assert_eq!(tries, 15);
+        // Polled every 250 ms from 2 s to 10 s, the last try at 10 s.
+        assert_eq!(tries, 33);
     }
 
     #[test]
-    fn the_relaunch_wait_matches_the_mac() {
-        assert_eq!(RELAUNCH_WAIT, Duration::from_millis(5500));
+    fn the_relaunch_poll_matches_the_mac() {
         assert_eq!(RELAUNCH_POLL, Duration::from_millis(250));
     }
 
