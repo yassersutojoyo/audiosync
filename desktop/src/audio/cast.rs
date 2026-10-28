@@ -932,6 +932,7 @@ impl CastSpeakers {
             name,
             group,
             address,
+            offline: !self.entry(id).is_some_and(|entry| entry.online),
             enabled: self.enabled == Some(id),
             volume: (level * 100.0).clamp(0.0, 100.0),
             muted: reported.is_some_and(|volume| volume.muted),

@@ -438,18 +438,20 @@ mod tests {
         static STUCK: StuckThreads = StuckThreads::new();
         let (answer, hung) = mpsc::channel::<()>();
         let (unregistered, done) = mpsc::channel();
-        let watcher = DeviceWatcher::start_with(TIMEOUT, &STUCK, move |_changed, stop, ready| {
-            if ready.ok(()) {
-                // SAFETY: waits on an event that outlives this thread's use
-                // of it.
-                unsafe { WaitForSingleObject(stop.raw(), INFINITE) };
-                // Unregistering the listener hangs until Windows audio
-                // answers.
-                let _ = hung.recv();
-                let _ = unregistered.send(());
-            }
-        })
-        .expect("it starts");
+        let mut watcher =
+            DeviceWatcher::start_with(READY_TIMEOUT, &STUCK, move |_changed, stop, ready| {
+                if ready.ok(()) {
+                    // SAFETY: waits on an event that outlives this thread's use
+                    // of it.
+                    unsafe { WaitForSingleObject(stop.raw(), INFINITE) };
+                    // Unregistering the listener hangs until Windows audio
+                    // answers.
+                    let _ = hung.recv();
+                    let _ = unregistered.send(());
+                }
+            })
+            .expect("it starts");
+        watcher.thread.set_timeout(TIMEOUT);
         let answers = thread::spawn(move || {
             thread::sleep(HANG);
             drop(answer);

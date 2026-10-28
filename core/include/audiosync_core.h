@@ -951,6 +951,10 @@ uint64_t asc_renderer_floor_drop_ns(const AscRenderer *renderer);
    frames (S229); 0 without output times or for a NULL handle. */
 uint64_t asc_renderer_time_steps(const AscRenderer *renderer);
 
+/* Any thread: the times the reader re-anchored at its delay after a stall
+   (S207); 0 for a NULL handle. */
+uint64_t asc_renderer_stall_reanchors(const AscRenderer *renderer);
+
 /* ---- Delay helpers ------------------------------------------------------- */
 
 /*

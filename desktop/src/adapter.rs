@@ -2114,7 +2114,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     kind,
                     listed: listed.is_some() && !keep_off.contains(text),
                     on,
-                    busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
+                    busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id))
+                        || listed
+                            .and_then(|speaker| speaker.cast.as_ref())
+                            .is_some_and(|cast| cast.offline),
                     needs_airplay2: listed.is_none() && self.needs_airplay2(&key),
                     in_target: matches!(&key, SpeakerKey::AirPlay(id)
                         if self.audio.airplay_holding_target(id).is_some()),
@@ -2186,7 +2189,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     && !keep_off.contains(&member.key),
                 hidden: hidden.is_some(),
                 on: listed.is_some_and(|speaker| speaker.enabled),
-                busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
+                busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id))
+                    || listed
+                        .and_then(|speaker| speaker.cast.as_ref())
+                        .is_some_and(|cast| cast.offline),
                 needs_airplay2: listed.is_none() && hidden.is_none() && self.needs_airplay2(&key),
                 in_target,
                 fixed_volume: listed
@@ -2497,6 +2503,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     members: group.members,
                 }),
                 added_by_address: speaker.address.is_some(),
+                offline: speaker.offline,
             }),
             group: None,
             mic_left_out: None,
@@ -4412,6 +4419,15 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         cast_address::remove(&mut self.cast_addresses, &address);
         self.audio.remove_cast_address(&address);
         self.take_events();
+        // Hidden rows are left out of the snapshot, so ask the sender.
+        let listed = self
+            .audio
+            .cast_speakers()
+            .into_iter()
+            .any(|speaker| Some(speaker.id.as_str()) == cast_id(id));
+        if !listed {
+            self.remove_from_zone(id);
+        }
         self.stop_if_idle();
     }
 
@@ -9218,32 +9234,6 @@ mod tests {
     }
 
     #[test]
-    fn a_retrying_speaker_whose_receiver_is_gone_is_named_by_no_notice() {
-        let (mut adapter, fake, kitchen, _) = airplay_adapter();
-        adapter.set_speaker_enabled(&ap(&kitchen), true);
-        fake.state(&kitchen, AirPlayState::Playing);
-        adapter.poll();
-        fake.fail(&kitchen, ErrorKind::Unreachable);
-        adapter.poll();
-        assert_eq!(messages(&adapter).len(), 1);
-        fake.gone(&kitchen);
-        adapter.poll();
-        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_none());
-        let left = messages(&adapter);
-        assert!(
-            left.is_empty(),
-            "the gone speaker's notice stayed: {left:?}"
-        );
-        fake.fail(&kitchen, ErrorKind::Unreachable);
-        adapter.poll();
-        let raised = messages(&adapter);
-        assert!(
-            raised.is_empty(),
-            "a late retry raised a notice: {raised:?}"
-        );
-    }
-
-    #[test]
     fn a_retrying_airplay_speaker_row_says_reconnecting_until_it_plays() {
         let reconnecting = SpeakerState::Waiting(ui_model::Waiting::Reconnecting);
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
@@ -9392,6 +9382,44 @@ mod tests {
         adapter.poll();
         assert_eq!(state_of(&adapter, &ap(&kitchen)), off_network);
         assert!(messages(&adapter).is_empty());
+    }
+
+    // Mac sitting 28 Oct: a receiver quit mid-stream lost its row instead
+    // of waiting off the network.
+    // covers: P215, S222
+    #[test]
+    fn a_speaker_whose_receiver_is_gone_mid_stream_keeps_its_row_and_its_place_in_the_sender_off_the_network()
+     {
+        let off_network = SpeakerState::Waiting(ui_model::Waiting::NotOnNetwork);
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        fake.gone(&kitchen);
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        fake.state(&kitchen, AirPlayState::Unannounced);
+        adapter.poll();
+        let calls = fake.take_calls();
+        assert!(
+            !calls.iter().any(|call| matches!(call, Call::Remove(_))),
+            "it left the sender: {calls:?}"
+        );
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), off_network);
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
+        assert_eq!(adapter.snapshot().active_speakers(), 1, "Streaming to 1");
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+
+        fake.appear(&kitchen);
+        adapter.poll();
+        let calls = fake.take_calls();
+        assert!(
+            !calls.iter().any(|call| matches!(call, Call::Add { .. })),
+            "it joined the sender anew: {calls:?}"
+        );
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
     }
 
     #[test]
@@ -11913,6 +11941,115 @@ mod tests {
         let row = speaker_of(&adapter, &cc_address("192.0.2.20:8010"));
         assert_eq!(row.name, "192.0.2.20:8010");
         assert!(row.cast.as_ref().is_some_and(|cast| cast.added_by_address));
+    }
+
+    // covers: S245
+    #[test]
+    fn removing_a_speaker_added_by_address_takes_it_out_of_its_zone() {
+        let (mut adapter, _fake) = cast_adapter();
+        let id = cc_address("192.0.2.20");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), id.clone()])],
+            ..Settings::default()
+        });
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.20"), Ok(()));
+        adapter.remove_cast_address(&id);
+        assert_eq!(
+            adapter.current_settings().speaker_zones[0].members,
+            [key(SPEAKERS)]
+        );
+    }
+
+    // covers: S245
+    #[test]
+    fn a_hidden_device_a_browse_found_keeps_its_zone_when_its_address_is_removed() {
+        let (mut adapter, fake) = cast_adapter();
+        let den = "00112233445566778899aabbccddeeff";
+        fake.announce_at(
+            den,
+            "Den",
+            DEVICE_PORT,
+            std::net::Ipv4Addr::new(192, 0, 2, 31),
+        );
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), cc(den)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        adapter.hide_speaker(&cc(den), "Google Cast");
+        adapter.remove_cast_address(&cc(den));
+        assert_eq!(
+            adapter.current_settings().speaker_zones[0].members,
+            [key(SPEAKERS), cc(den)]
+        );
+    }
+
+    // covers: S246
+    #[test]
+    fn only_this_speaker_on_an_offline_cast_row_changes_nothing() {
+        let (mut adapter, _fake) = cast_adapter();
+        let id = cc_address("192.0.2.20");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), id.clone()])],
+            ..Settings::default()
+        });
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.20"), Ok(()));
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        adapter.poll();
+
+        adapter.only_this_speaker(&id);
+        assert!(enabled(&adapter, SPEAKERS), "the others stay on");
+        assert!(
+            !speaker_of(&adapter, &id).enabled,
+            "the offline row stays off"
+        );
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_click_passes_over_an_offline_cast_member() {
+        let (mut adapter, _fake) = cast_adapter();
+        let id = cc_address("192.0.2.20");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![id.clone(), cc(CAST_KITCHEN)])],
+            ..Settings::default()
+        });
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.20"), Ok(()));
+        adapter.poll();
+
+        adapter.toggle_zone("zone:1");
+        let state = adapter.snapshot();
+        assert!(!state.speaker(&id).unwrap().enabled, "it can't start now");
+        assert!(state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+    }
+
+    // covers: S246, S252
+    #[test]
+    fn a_recall_leaves_an_offline_cast_member_off_as_busy() {
+        let (mut adapter, _fake) = cast_adapter();
+        let id = cc_address("192.0.2.20");
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[(key(SPEAKERS), None), (id.clone(), None)])],
+            ..Settings::default()
+        });
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.20"), Ok(()));
+        adapter.poll();
+
+        adapter.recall_preset("preset:1");
+        assert!(!speaker_of(&adapter, &id).enabled);
+        assert_eq!(
+            preset_notices(&adapter),
+            [left_off_notice(
+                "Evening",
+                &[("192.0.2.20", PresetLeftOff::Busy)]
+            )]
+        );
     }
 
     fn cast_ended(attempt: u64, end: SessionEnd) -> HostEvent {

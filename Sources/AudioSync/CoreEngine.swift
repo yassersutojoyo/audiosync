@@ -394,6 +394,8 @@ final class CoreRenderer {
     /// anchor's, in ms, and its steps in the device's output times (S229).
     var floorDropMs: Double { Double(asc_renderer_floor_drop_ns(handle)) / 1_000_000 }
     var timeSteps: Int64 { Int64(clamping: asc_renderer_time_steps(handle)) }
+    /// Any thread: the re-anchors at its delay after a stall (S207).
+    var stallReanchors: UInt64 { asc_renderer_stall_reanchors(handle) }
 }
 
 /// A lost speaker's start lead, still counted in the session lead until this

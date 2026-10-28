@@ -5472,7 +5472,12 @@ mod tests {
         /// The windows the headless platform made on this thread.
         static HEADLESS_WINDOWS: RefCell<Vec<Weak<MinimalSoftwareWindow>>> =
             RefCell::default();
+        /// Slint's time on this thread once the test holds its clock.
+        static HELD_CLOCK: Cell<Option<Duration>> = const { Cell::new(None) };
     }
+
+    static CLOCK_START: std::sync::LazyLock<std::time::Instant> =
+        std::sync::LazyLock::new(std::time::Instant::now);
 
     impl slint::platform::Platform for Headless {
         fn create_window_adapter(
@@ -5482,6 +5487,24 @@ mod tests {
             HEADLESS_WINDOWS.with(|windows| windows.borrow_mut().push(Rc::downgrade(&window)));
             Ok(window)
         }
+
+        fn duration_since_start(&self) -> Duration {
+            HELD_CLOCK
+                .with(Cell::get)
+                .unwrap_or_else(|| CLOCK_START.elapsed())
+        }
+    }
+
+    /// Stops Slint's clock on this thread for the rest of the test: the
+    /// double-click timers then see two clicks as one double-click however
+    /// long a loaded machine takes between them.
+    fn hold_clock() {
+        HELD_CLOCK.with(|clock| clock.set(Some(CLOCK_START.elapsed())));
+    }
+
+    /// Moves the clock [`hold_clock`] stopped on by `by`.
+    fn advance_clock(by: Duration) {
+        HELD_CLOCK.with(|clock| clock.set(clock.get().map(|now| now + by)));
     }
 
     /// Draws a frame of every headless window, as the event loop would after
@@ -7358,6 +7381,7 @@ mod tests {
 
     #[test]
     fn a_double_click_on_a_name_renames_and_a_single_one_is_a_click_on_the_row() {
+        hold_clock();
         let app = app_over(MockBackend::new());
         draw_frames();
         let window = app.main.window();
@@ -7368,7 +7392,7 @@ mod tests {
             row_of(&app, "local:desk").renaming,
             "the double-click renames"
         );
-        std::thread::sleep(std::time::Duration::from_millis(600));
+        advance_clock(Duration::from_millis(600));
         draw_frames();
         assert!(
             app.ui.borrow().sync_open.is_empty(),
@@ -7383,7 +7407,7 @@ mod tests {
             app.ui.borrow().sync_open.is_empty(),
             "one click waits for a second"
         );
-        std::thread::sleep(std::time::Duration::from_millis(600));
+        advance_clock(Duration::from_millis(600));
         draw_frames();
         assert!(
             app.ui.borrow().sync_open.contains("local:desk"),
@@ -7393,6 +7417,7 @@ mod tests {
 
     #[test]
     fn a_click_on_a_name_waits_the_systems_double_click_time() {
+        hold_clock();
         let app = app_over(MockBackend::new());
         let field = app.main.global::<NameField>();
         assert_eq!(
@@ -7406,7 +7431,7 @@ mod tests {
 
         field.set_double_click(150);
         click(window, x, y);
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        advance_clock(Duration::from_millis(250));
         draw_frames();
         assert!(
             app.ui.borrow().sync_open.contains("local:desk"),
@@ -7415,11 +7440,10 @@ mod tests {
 
         app.main.invoke_sync_toggled("local:desk".into());
         assert!(app.ui.borrow().sync_open.is_empty());
-        // 700 ms is past Slint's fixed 500 ms; the 3 s setting leaves a slow
-        // runner more than 2 s before the second click lands.
+        // 700 ms is past Slint's fixed 500 ms.
         field.set_double_click(3000);
         click(window, x, y);
-        std::thread::sleep(std::time::Duration::from_millis(700));
+        advance_clock(Duration::from_millis(700));
         draw_frames();
         click(window, x, y);
         assert!(
@@ -7489,6 +7513,7 @@ mod tests {
 
     #[test]
     fn a_double_click_on_a_zone_name_renames_it_in_its_header_and_a_single_one_folds_it() {
+        hold_clock();
         let app = app_over(MockBackend::zones_preview());
         draw_frames();
         let window = app.main.window();
@@ -7508,7 +7533,7 @@ mod tests {
         }
         press(window, Key::Return);
         assert_eq!(zone_name(&app, "zone:living"), "Den");
-        std::thread::sleep(std::time::Duration::from_millis(600));
+        advance_clock(Duration::from_millis(600));
         draw_frames();
         assert!(
             !app.ui.borrow().collapsed.contains("zone:living"),
@@ -7530,7 +7555,7 @@ mod tests {
             !app.ui.borrow().collapsed.contains("zone:living"),
             "one click waits for a second"
         );
-        std::thread::sleep(std::time::Duration::from_millis(600));
+        advance_clock(Duration::from_millis(600));
         draw_frames();
         assert!(
             app.ui.borrow().collapsed.contains("zone:living"),
@@ -7540,6 +7565,7 @@ mod tests {
 
     #[test]
     fn a_double_click_on_an_in_zones_name_renames_the_speaker_in_that_row() {
+        hold_clock();
         let app = app_over(MockBackend::zones_preview());
         draw_frames();
         let window = app.main.window();
@@ -7748,6 +7774,7 @@ mod tests {
             volume_step: 1.0,
             group: None,
             added_by_address: false,
+            offline: false,
         });
         backend.add_speaker(speaker);
         let app = app_over(backend);
@@ -8219,6 +8246,7 @@ mod tests {
             )),
             group: None,
             added_by_address: false,
+            offline: false,
         });
         let row = speaker_item(&state, &speaker, true, false, None);
         assert_eq!(row.kind, SpeakerKind::Cast);
@@ -8283,6 +8311,7 @@ mod tests {
             volume_step: 1.0,
             group: None,
             added_by_address: false,
+            offline: false,
         });
         let row = speaker_item(&state, &speaker, true, false, None);
         // The slider's `enabled` and the hint in widgets.slint key off this flag.
@@ -8313,6 +8342,7 @@ mod tests {
             volume_step: 1.0,
             group: group(ui_model::CastMembers::NotReported),
             added_by_address: false,
+            offline: false,
         });
         let row = speaker_item(&state, &speaker, true, false, None);
         assert!(row.cast && row.cast_group);

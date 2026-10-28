@@ -511,17 +511,9 @@ mod tests {
 
     // covers: S301
     #[test]
-    fn the_running_test_binary_can_be_renamed_aside_and_back() {
-        const HOLD: &str = "AUDIOSYNC_SWAP_TEST_HOLD";
-        const READY: &str = "running-copy-ready";
-        if std::env::var_os(HOLD).is_some() {
-            let mut out = io::stdout();
-            let _ = writeln!(out, "{READY}").and_then(|()| out.flush());
-            let _ = io::Read::read_to_end(&mut io::stdin(), &mut Vec::new());
-            return;
-        }
-        // The copy is as big as the test binary; it goes even when the test
-        // fails, after its process, which locks the image, has ended.
+    fn a_running_exe_can_be_renamed_aside_and_back() {
+        // The copy goes even when the test fails, after its process, which
+        // locks the image, has ended.
         struct RunningCopy {
             dir: PathBuf,
             child: Option<std::process::Child>,
@@ -535,33 +527,23 @@ mod tests {
                 let _ = std::fs::remove_dir_all(&self.dir);
             }
         }
-        // A private running copy: the shared target folder's own test binary
-        // is also run, relinked and renamed by other cargo processes.
+        // Not a copy of this test binary: in the shared target folder other
+        // worktrees' cargo deletes and relinks it while the suite runs. Sort
+        // runs until its input ends, so it is alive through both renames.
         let mut copy = RunningCopy {
             dir: test_dir("running-rename"),
             child: None,
         };
         let running = copy.dir.join(EXE_NAME);
-        std::fs::copy(std::env::current_exe().unwrap(), &running).unwrap();
+        let windows = PathBuf::from(std::env::var_os("SystemRoot").expect("Windows' folder"));
+        std::fs::copy(windows.join(r"System32\sort.exe"), &running).unwrap();
         let child = std::process::Command::new(&running)
-            .args([
-                "--exact",
-                "updater::swap::tests::the_running_test_binary_can_be_renamed_aside_and_back",
-            ])
-            .env(HOLD, "1")
             .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("the copy starts");
         let child = copy.child.insert(child);
-        // A renamed test would run nothing and leave a dead image to rename.
-        let out = io::BufReader::new(child.stdout.take().unwrap());
-        let mut lines = io::BufRead::lines(out);
-        let ready = lines
-            .by_ref()
-            .any(|line| line.is_ok_and(|line| line == READY));
-        assert!(ready, "the copy runs this test and holds");
         let aside = running.with_extension("exe.renamed-aside");
         let there = RealFiles.rename(&running, &aside);
         let back = there
@@ -569,7 +551,6 @@ mod tests {
             .ok()
             .map(|_| RealFiles.rename(&aside, &running));
         drop(child.stdin.take());
-        lines.for_each(drop);
         let exit = child.wait().expect("the copy exits");
         there.expect("a running image renames aside");
         back.unwrap().expect("and back");

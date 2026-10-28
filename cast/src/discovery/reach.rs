@@ -1,6 +1,6 @@
 //! Whether a device added by address answers (C18). No record vouches for
-//! such a device, so a TCP connect to its address decides whether the list
-//! shows it online. Each check runs on a thread of its own and
+//! such a device, so a TLS handshake with its address decides whether the
+//! list shows it online. Each check runs on a thread of its own and
 //! [`Reachability::poll`] only drains their results, so it never blocks.
 
 use std::net::{SocketAddr, TcpStream};
@@ -9,19 +9,30 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{DeviceKey, DeviceList, ListEvent};
+use crate::client::tls_connector;
 
 /// How long a finished check waits for the next one.
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(15);
-/// How long a check waits for the device to accept the connection.
+/// How long a check waits for the device to accept the connection, and
+/// then for each step of the handshake.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Tries to reach `address`; it may block up to its own timeout.
 pub type Probe = fn(SocketAddr) -> bool;
 
-/// The live check: the device accepts a TCP connection, which is closed
-/// again at once without a byte sent (C9).
+/// The live check: the device completes a TLS handshake (C20, C21), and the
+/// connection is closed again at once. A TCP accept alone may come from a
+/// proxy or filter on the path with no device behind it.
 pub fn connects(address: SocketAddr) -> bool {
-    TcpStream::connect_timeout(&address, CONNECT_TIMEOUT).is_ok()
+    let Ok(tcp) = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) else {
+        return false;
+    };
+    let Ok(connector) = tls_connector() else {
+        return false;
+    };
+    tcp.set_read_timeout(Some(CONNECT_TIMEOUT)).is_ok()
+        && tcp.set_write_timeout(Some(CONNECT_TIMEOUT)).is_ok()
+        && connector.connect(&address.ip().to_string(), tcp).is_ok()
 }
 
 /// A finished check: the address, whether it was reached, and the

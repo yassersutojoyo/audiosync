@@ -298,6 +298,11 @@ struct Speaker {
     next_start: StartKind,
     /// Reported Connecting while it waited for its turn (P224).
     told_connecting: bool,
+    /// How its last start queued, which a P228 restart queues as again.
+    started_as: StartKind,
+    /// A P228 restart waits for its turn: its connect is the start it
+    /// replaces, not counted again.
+    restarting: bool,
 }
 
 impl Speaker {
@@ -323,6 +328,8 @@ impl Speaker {
             target,
             next_start: StartKind::Host,
             told_connecting: false,
+            started_as: StartKind::Host,
+            restarting: false,
         }
     }
 
@@ -1189,6 +1196,7 @@ impl Driver {
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
+        speaker.restarting = false;
         match std::mem::replace(&mut speaker.phase, phase) {
             Phase::Active(active) => {
                 self.sessions.remove(&active.key);
@@ -1942,6 +1950,7 @@ impl Driver {
             let held = self.speakers.get_mut(key).is_some_and(|speaker| {
                 let held = speaker.holds_ap2();
                 speaker.ap2_retry = false;
+                speaker.restarting = false;
                 held
             });
             self.unannounce(key);
@@ -1950,6 +1959,9 @@ impl Driver {
                 self.wake_ap2_waiter(now);
             }
             return false;
+        }
+        if let Some(speaker) = self.speakers.get_mut(key) {
+            speaker.started_as = kind;
         }
         let ap2 = self.plans_ap2(key);
         let kind = if ap2 && self.held.contains_key(key) {
@@ -1973,6 +1985,13 @@ impl Driver {
     /// that ends before connecting leaves the turn to the next (P222).
     fn take_turns(&mut self, now: Instant) {
         while let Some((turn, kind)) = self.connects.pop(now) {
+            let restarting = match &turn {
+                Turn::Session(key) => self
+                    .speakers
+                    .get_mut(key)
+                    .is_some_and(|speaker| std::mem::take(&mut speaker.restarting)),
+                Turn::Pairing(_) => false,
+            };
             let connecting = match &turn {
                 Turn::Session(key) => self.begin_session(key, now),
                 Turn::Pairing(key) => self.begin_pairing(key, now),
@@ -1981,6 +2000,7 @@ impl Driver {
                 self.connects.connected(now);
                 if let Turn::Session(key) = &turn
                     && let Some(speaker) = self.speakers.get(key)
+                    && !restarting
                 {
                     speaker.counters.count_connect_start(now);
                 }
@@ -2000,6 +2020,7 @@ impl Driver {
             speaker.ap2_waiting = false;
             speaker.ptp_waiting = false;
             speaker.ap2_retry = false;
+            speaker.restarting = false;
             held
         });
         self.open_session(key, now);
@@ -2412,6 +2433,7 @@ impl Driver {
                         speaker.device = (*device).clone();
                     }
                     let key = device.key.clone();
+                    self.restart_unconnected(&key, Instant::now());
                     // A receiver that restarted or changed its settings may
                     // answer AirPlay 1 differently when it comes back (P218).
                     if device.raop.is_none() {
@@ -3298,6 +3320,8 @@ mod tests {
                 target: None,
                 next_start: StartKind::Host,
                 told_connecting: false,
+                started_as: StartKind::Host,
+                restarting: false,
             },
         );
 
@@ -3354,5 +3378,159 @@ mod tests {
         });
         assert!(failed);
         drop(listener);
+    }
+
+    // An AirPlay 2 only receiver first listed with its IPv6 address alone:
+    // the session still connecting there starts again on the IPv4 address
+    // discovery adds, instead of waiting out the connect timeout.
+    // covers: P228
+    #[test]
+    fn a_connecting_airplay2_session_starts_again_on_an_address_discovery_adds() {
+        use crate::ap2::Ap2Output;
+        use crate::discovery::{DeviceId, ScopedAddr, ServiceKind, ServiceRecord};
+        use std::net::{IpAddr, SocketAddr};
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency).with_airplay2(
+            true,
+            false,
+            Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
+        );
+        let id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 0x55]);
+        let v6: IpAddr = "2001:db8::55".parse().expect("an address");
+        let v4: IpAddr = "192.0.2.55".parse().expect("an address");
+        let record = |addresses: &[IpAddr]| ServiceRecord {
+            kind: ServiceKind::AirPlay,
+            instance: "Test TV".to_owned(),
+            host: "speaker.local".to_owned(),
+            port: 7000,
+            txt: [
+                "features=0x0,0x10040".to_owned(),
+                "flags=0x4".to_owned(),
+                "model=Speaker1,1".to_owned(),
+                format!("deviceid={id}"),
+            ]
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
+            addresses: addresses.iter().copied().map(ScopedAddr::new).collect(),
+        };
+        let changes = driver.directory.apply(BrowseEvent::Resolved(record(&[v6])));
+        driver.report_changes(changes);
+        let device = driver.directory.devices().next().cloned().expect("listed");
+        let key = device.key.clone();
+        let counters = Arc::new(SpeakerCounters::default());
+        // It starts as a P179 restart on NTP only, which its own restart keeps.
+        driver.ptp_restart.insert(key.clone(), None);
+        driver.add_speaker(
+            device,
+            SpeakerOptions::new(Volume::Db(-20.0)),
+            Arc::clone(&counters),
+            now,
+        );
+        assert_eq!(
+            driver.next_ap2_output(&key),
+            Some(Ap2Output::Connect(SocketAddr::new(v6, 7000)))
+        );
+        let mut relist = |addresses: &[IpAddr]| {
+            let changes = driver
+                .directory
+                .apply(BrowseEvent::Resolved(record(addresses)));
+            driver.report_changes(changes);
+            driver.run_timers(Instant::now() + Duration::from_secs(1));
+            driver.next_ap2_output(&key)
+        };
+
+        // A refresh with the same addresses leaves it connecting.
+        assert_eq!(relist(&[v6]), None);
+        assert_eq!(
+            relist(&[v4, v6]),
+            Some(Ap2Output::Connect(SocketAddr::new(v4, 7000)))
+        );
+        // Neither does a refresh that lists fewer.
+        assert_eq!(relist(&[v4]), None);
+        // The new session's connect is the same start, counted once.
+        assert_eq!(counters.connect_starts(), 1);
+        assert!(driver.ptp_excluded.contains(&key));
+    }
+
+    // A RAOP receiver first listed with its IPv6 address alone: the AirPlay
+    // 1 session still connecting there starts again on the IPv4 address
+    // discovery adds; once connected, a new address leaves it alone.
+    // covers: P228
+    #[test]
+    fn a_connecting_airplay1_session_starts_again_on_an_address_discovery_adds() {
+        use crate::discovery::{ScopedAddr, ServiceKind, ServiceRecord};
+        use crate::session::Connection;
+        use std::net::{IpAddr, SocketAddr};
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency);
+        let v6: IpAddr = "2001:db8::56".parse().expect("an address");
+        let v4: IpAddr = "192.0.2.56".parse().expect("an address");
+        let other: IpAddr = "192.0.2.57".parse().expect("an address");
+        let record = |addresses: &[IpAddr]| ServiceRecord {
+            kind: ServiceKind::Raop,
+            instance: "0123456789AB@Living Room".to_owned(),
+            host: "living.local".to_owned(),
+            port: 5000,
+            txt: vec![b"cn=0,1".to_vec(), b"et=0".to_vec()],
+            addresses: addresses.iter().copied().map(ScopedAddr::new).collect(),
+        };
+        let changes = driver.directory.apply(BrowseEvent::Resolved(record(&[v6])));
+        driver.report_changes(changes);
+        let device = driver.directory.devices().next().cloned().expect("listed");
+        let key = device.key.clone();
+        let counters = Arc::new(SpeakerCounters::default());
+        driver.add_speaker(
+            device,
+            SpeakerOptions::new(Volume::Db(-20.0)),
+            Arc::clone(&counters),
+            now,
+        );
+        assert_eq!(
+            driver.next_output(&key),
+            Some(Output::Connect(SocketAddr::new(v6, 5000)))
+        );
+        let relist = |driver: &mut Driver, addresses: &[IpAddr]| {
+            let changes = driver
+                .directory
+                .apply(BrowseEvent::Resolved(record(addresses)));
+            driver.report_changes(changes);
+            driver.run_timers(Instant::now() + Duration::from_secs(1));
+            driver.next_output(&key)
+        };
+
+        // A refresh with the same addresses leaves it connecting.
+        assert_eq!(relist(&mut driver, &[v6]), None);
+        assert_eq!(
+            relist(&mut driver, &[v4, v6]),
+            Some(Output::Connect(SocketAddr::new(v4, 5000)))
+        );
+        // Neither does a refresh that lists fewer.
+        assert_eq!(relist(&mut driver, &[v4]), None);
+        // The new session's connect is the same start, counted once.
+        assert_eq!(counters.connect_starts(), 1);
+
+        let connection = Connection {
+            local: v4,
+            control_port: 1,
+            timing_port: 2,
+        };
+        let active = driver.active(&key).expect("an AirPlay 1 session");
+        active.session.handle_connected(connection, now);
+        relist(&mut driver, &[v4, other]);
+        let remote = driver
+            .active(&key)
+            .and_then(|active| active.session.remote_addr());
+        assert_eq!(remote, Some(SocketAddr::new(v4, 5000)));
     }
 }

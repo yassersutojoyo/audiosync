@@ -371,6 +371,8 @@ pub struct Session {
     attempt: usize,
     attempt_started: Instant,
     connected: Option<Connected>,
+    /// A connection opened once; the reconnect of P58 never clears it (P228).
+    was_connected: bool,
     parser: Parser,
     next_cseq: u32,
     in_flight: Option<InFlight>,
@@ -412,6 +414,7 @@ impl Session {
             attempt: 0,
             attempt_started: now,
             connected: None,
+            was_connected: false,
             parser: Parser::new(),
             next_cseq: 0,
             in_flight: None,
@@ -471,6 +474,15 @@ impl Session {
     /// of the session's UDP traffic goes there (P17).
     pub fn remote_addr(&self) -> Option<SocketAddr> {
         self.connected.map(|c| c.remote)
+    }
+
+    /// Whether discovery listing `listed` starts the session again: it
+    /// hasn't connected and `listed` has an address it lacks (P228).
+    pub fn restarts_on(&self, listed: &[SocketAddr]) -> bool {
+        !self.was_connected
+            && listed
+                .iter()
+                .any(|address| !self.config.addresses.contains(address))
     }
 
     /// The connection's local address and UDP ports, once connected.
@@ -562,6 +574,7 @@ impl Session {
             return;
         };
         self.connected = Some(Connected { remote, connection });
+        self.was_connected = true;
         match self.config.verifier.as_mut() {
             Some(verifier) => {
                 let body = verifier.first_request();
