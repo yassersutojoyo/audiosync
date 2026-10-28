@@ -189,6 +189,7 @@ pub(super) fn start(
 /// The format an output on the endpoint `id` would open in now: its
 /// current mix format, as [`open_stream`] reads it (S330).
 pub(super) fn current_format(id: &str) -> Result<RenderFormat, BackendError> {
+    let _apartment = Apartment::enter()?;
     let client = activate(id)?;
     // SAFETY: a call on the client made above; ComMemory frees the format
     // after its last use.

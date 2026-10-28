@@ -3528,7 +3528,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     matches!(message, NoticeMessage::SpeakerBusy { .. })
                 });
             }
-            BackendEvent::CaptureBusy | BackendEvent::CaptureFree => {}
+            // Streaming stays on while another app holds the input (S333).
+            // The existing capture notice stands in until the maintainer
+            // approves a busy-specific text.
+            BackendEvent::CaptureBusy => {
+                self.post(NoticeSubject::Source, NoticeMessage::CaptureFailed);
+            }
+            BackendEvent::CaptureFree => {
+                self.clear_if(NoticeSubject::Source, |message| {
+                    matches!(message, NoticeMessage::CaptureFailed)
+                });
+            }
             BackendEvent::Stopped { reason } => {
                 let message = match reason {
                     StopReason::SourceQuit => {

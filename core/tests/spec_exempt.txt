@@ -138,3 +138,5 @@ S325 Hosts only: the Mac host restarting a Bluetooth output once when it starts 
 S326 Hosts only: the Windows output thread ending a stream that takes no frame for 2 s after it took frames once and the controller reopening it; the Windows tests named in the clause check it.
 S327 Hosts only: the Windows host checking every 2 s for an app source it can't watch; the Windows tests will check it (tests named in the clause, to come).
 S329 Hosts only: the Windows host reopening only the capture after DeviceGone; the Windows tests named in the clause check it.
+S330 Hosts only: the Windows host reopening an output in its new format when Windows invalidates its stream under it; the Windows tests named in the clause check it.
+S333 Hosts only: the Windows capture reading an input another app holds as busy and the controller retrying it every 3 s; the Windows tests named in the clause check it.

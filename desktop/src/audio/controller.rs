@@ -1398,8 +1398,13 @@ impl<D: Driver> Controller<D> {
             outputs,
             capture,
             ring,
+            reopen,
             ..
         } = session;
+        // A capture told busy no longer waits (S333).
+        if reopen.is_some_and(|reopen| reopen.busy_since.is_some()) {
+            self.pending.push(BackendEvent::CaptureFree);
+        }
         let mut outputs: Vec<Playing<D::Renderer>> = outputs.into_values().collect();
         for playing in &mut outputs {
             playing.handle.request_stop();
@@ -1676,14 +1681,15 @@ impl<D: Driver> Controller<D> {
     /// The same poll's [`Self::sync_outputs`] opens it again in the new
     /// format at its current hold-back, and as it takes part throughout, no
     /// other output is re-timed. A notice whose device still reports the
-    /// stream's format changes nothing. Returns whether a session said its
-    /// stream was disconnected, which may mean its device went away.
-    fn drop_reformatted_outputs(&mut self) -> bool {
+    /// stream's format changes nothing. Returns the outputs it ended: like
+    /// one that stopped by itself, one whose device went away with its
+    /// session is lost (S68).
+    fn drop_reformatted_outputs(&mut self) -> Vec<String> {
         let noticed = self.driver.format_notices();
         let Some(session) = self.session.as_ref() else {
-            return false;
+            return Vec::new();
         };
-        let mut disconnected = false;
+        let mut dropped = Vec::new();
         let marked: Vec<(String, bool, Option<RenderFormat>)> = session
             .outputs
             .iter()
@@ -1701,7 +1707,6 @@ impl<D: Driver> Controller<D> {
             if !invalidated && !changed {
                 continue;
             }
-            disconnected |= invalidated;
             if let Some(session) = self.session.as_mut() {
                 drop(session.outputs.remove(&id));
             }
@@ -1721,8 +1726,9 @@ impl<D: Driver> Controller<D> {
                     )
                 }
             });
+            dropped.push(id);
         }
-        disconnected
+        dropped
     }
 
     /// Counts a poll of play for each reopened output that stalled (S326):
@@ -1895,6 +1901,7 @@ impl<D: Driver> Controller<D> {
                             since.elapsed().as_secs_f64()
                         )
                     });
+                    self.pending.push(BackendEvent::CaptureFree);
                 }
                 self.log
                     .log(|| "the capture runs again; the outputs played on".to_owned());
@@ -1907,6 +1914,7 @@ impl<D: Driver> Controller<D> {
                              while the outputs play on."
                         )
                     });
+                    self.pending.push(BackendEvent::CaptureBusy);
                 }
                 if let Some(session) = self.session.as_mut() {
                     session.reopen = Some(CaptureReopen {
@@ -3251,11 +3259,11 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 }
             }
         }
-        let disconnected = self.drop_reformatted_outputs();
+        ended.extend(self.drop_reformatted_outputs());
 
         // A stopped output may mean a device went away before its
         // notification arrived, so the list is read again then too.
-        self.refresh_if_needed(!ended.is_empty() || stalled_again || disconnected);
+        self.refresh_if_needed(!ended.is_empty() || stalled_again);
         // An output whose device is no longer listed is lost too, whether or
         // not its stream noticed, and so is one that couldn't play while its
         // device was still listed.
