@@ -664,7 +664,7 @@ final class OutputRenderer: FadingOutput {
     /// device whose format didn't change compares equal.
     private static func deviceFormat(_ device: AudioObjectID) -> OutputDeviceFormat? {
         guard let rate = deviceNominalRate(device) else { return nil }
-        let channels = HALProperty.channelCount(of: device, in: kAudioObjectPropertyScopeOutput)
+        let channels = AudioDevices.channelCount(of: device, in: kAudioObjectPropertyScopeOutput)
         return channels > 0 ? OutputDeviceFormat(rate: rate, channels: channels) : nil
     }
 
