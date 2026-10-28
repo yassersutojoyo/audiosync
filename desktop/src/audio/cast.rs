@@ -2448,6 +2448,21 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 30.0);
     }
 
+    // covers: C70, C104 (the sender paces a drag after the host recorded it)
+    #[test]
+    fn the_answer_to_the_first_level_of_a_fast_drag_is_not_read_as_a_change() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 1.0);
+        for position in (40..100).rev() {
+            cast.set_volume(KITCHEN, f64::from(position));
+        }
+        report(&fake, &mut cast, 0.99);
+        report(&fake, &mut cast, 0.4);
+        assert_eq!(shown(&cast, KITCHEN), 40.0);
+    }
+
     #[test]
     fn the_capture_feeds_the_current_session() {
         let (fake, mut cast) = listed();
