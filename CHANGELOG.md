@@ -24,6 +24,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On the Mac, the line under a speaker list's In zones box no longer runs into the box's rounded corners. The text under the box now follows it without a line.
 - On Windows, when the app you play from runs as administrator and quits or restarts, AudioSync now notices within about 2 seconds and stops or switches to the whole system, as your setting says, with the usual notice. Before, streaming went on in silence.
 - On Windows, when the PC wakes from sleep while AudioSync streams and Windows audio is slow to come back, AudioSync keeps trying to capture for up to a minute after the wake. Before, it stopped streaming after about 5 seconds of tries. A speaker Windows was refusing to open when the PC went to sleep gets its full 30 seconds again after the wake. It hasn't been tried on a real sleep and wake yet.
 - A speaker that drops off for a moment, such as a Bluetooth speaker losing its link, no longer makes your other speakers skip and then go silent while it reconnects. For 10 seconds after it disappears, the others keep their timing, so only that speaker has a gap. If it's still gone after 10 seconds, the others adjust once. On the Mac and on Windows.
