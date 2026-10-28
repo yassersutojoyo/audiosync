@@ -2,6 +2,7 @@
 // Run all tests with: Tests/run-tests.sh
 import Foundation
 import AppKit
+import AudioToolbox
 import CAudioSyncCore
 import CoreAudio
 import CoreServices
@@ -7079,6 +7080,8 @@ do {
         /// The UIDs given a new gain after their attach, in call order.
         var regained: [String] = []
         let refusal: Error
+        /// An error of its own for some of `refusing`, in place of `refusal`.
+        var errors: [String: Error] = [:]
         init(active: [String], refusing: Set<String>, refusal: Error = NSError(domain: "logictest", code: -1)) {
             activeOutputUIDs = active
             self.refusing = refusing
@@ -7086,7 +7089,7 @@ do {
         }
         func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {
             tried.append(uid)
-            if refusing.contains(uid) { throw refusal }
+            if refusing.contains(uid) { throw errors[uid] ?? refusal }
             activeOutputUIDs.append(uid)
             deviceIDs[uid] = device
             delays[uid] = delayMs
@@ -7188,6 +7191,72 @@ do {
             && LocalOutputSync.sharedRefusedRate([]) == nil,
           "S36 start failure: one alert gives the rate only when every failure it names was refused for it",
           "\(String(describing: LocalOutputSync.sharedRefusedRate(mixedFailures)))")
+
+    // covers: S331 (Mac: a listed device that refuses the start stays on; a hard error still switches it off, S69)
+    let rebuilt = RefusingEngine(active: [], refusing: ["usb", "bt"],
+                                 refusal: OutputRenderer.StartFailure.deviceDidNotStart(OSStatus(kAudioHardwareBadDeviceError)))
+    let refusedOnly = LocalOutputSync.apply(enabled: ["usb", "bt"], listing: [usb, bt], to: rebuilt,
+                                            holdBacks: [:], gain: { _ in 1 })
+    let refusedReport = LocalOutputSync.report(refusedOnly.failures, enabled: ["usb", "bt"], origin: .user)
+    check(refusedOnly.failures.map(\.uid) == ["bt", "usb"] && refusedReport == nil,
+          "S331 refused start: a listed device that refuses the start stays on, with no alert and no notice",
+          "\(String(describing: refusedReport))")
+    let mixedEngine = RefusingEngine(active: [], refusing: ["usb", "bt"],
+                                     refusal: OutputRenderer.StartFailure.formatRefused(OSStatus(kAudioUnitErr_FormatNotSupported)))
+    mixedEngine.errors["bt"] = OutputRenderer.StartFailure.deviceNotBound(OSStatus(kAudioUnitErr_InvalidPropertyValue))
+    let mixedStart = LocalOutputSync.apply(enabled: ["usb", "bt", "tv"], listing: [usb, bt], to: mixedEngine,
+                                           holdBacks: [:], gain: { _ in 1 })
+    let mixedReport = LocalOutputSync.report(mixedStart.failures, enabled: ["usb", "bt", "tv"], origin: .user)
+    check(mixedReport?.enabled == ["bt", "tv"] && mixedReport?.alertNames == ["USB DAC"]
+            && mixedReport?.notices.map(\.uid) == ["usb"],
+          "S331 refused start: next to a refusal, a hard error at the start is still switched off at once with its alert",
+          "\(String(describing: mixedReport))")
+    check(refusedOnly.failures.allSatisfy { $0.refusal?.contains("!dev") == true }
+            && mixedStart.failures.first(where: { $0.uid == "usb" })?.refusal == nil,
+          "S331 refused start: a refusal carries the device's answer for the debug log, a hard error none",
+          "\(refusedOnly.failures)")
+    typealias SF = OutputRenderer.StartFailure
+    let refusalKinds: [SF] = [.deviceNotBound(OSStatus(kAudioUnitErr_InvalidPropertyValue)),
+                              .deviceDidNotStart(OSStatus(kAudioHardwareBadDeviceError)),
+                              .unitNotInitialized(OSStatus(kAudioHardwareBadObjectError)),
+                              .formatRefused(OSStatus(kAudioHardwareBadStreamError)),
+                              .deviceDidNotStart(OSStatus(kAudioHardwareNotRunningError)),
+                              .deviceDidNotStart(OSStatus(kAudioDevicePermissionsError))]
+    let hardKinds: [SF] = [.halUnitMissing, .coreUnavailable, .captureRateTooHigh(384_000),
+                           .formatRefused(OSStatus(kAudioUnitErr_FormatNotSupported)),
+                           .formatRefused(OSStatus(kAudioDeviceUnsupportedFormatError)),
+                           .deviceDidNotStart(OSStatus(kAudioHardwareUnspecifiedError)),
+                           .unitNotCreated(OSStatus(kAudioHardwareIllegalOperationError))]
+    check(refusalKinds.allSatisfy(\.isRefusal) && !hardKinds.contains(where: \.isRefusal),
+          "S331 refused start: a device gone, rebuilt, not running or held in hog mode refuses; a format or any other error is hard")
+
+    var refusals = OutputRefusalRetry()
+    let firstRefusal = refusals.refused("bt", nowS: 100)
+    let heldBeforeTry = refusals.held(nowS: 102.9)
+    let heldAtTry = refusals.held(nowS: 103.1)
+    let quietRefusal = refusals.refused("bt", nowS: 103.1)
+    let before30 = refusals.refused("bt", nowS: 129.9)
+    let at30 = refusals.refused("bt", nowS: 130)
+    let after30 = refusals.refused("bt", nowS: 133.1)
+    let refusedFor = refusals.started("bt", nowS: 134)
+    let neverRefused = refusals.started("usb", nowS: 134)
+    check(firstRefusal == OutputRefusalRetry.Step(retryAtS: 103, tell: .refused) && heldBeforeTry == ["bt"]
+            && heldAtTry.isEmpty && quietRefusal.tell == nil && approx(quietRefusal.retryAtS, 106.1, 1e-9)
+            && before30.tell == nil && at30 == OutputRefusalRetry.Step(retryAtS: 133, tell: .lost) && after30.tell == nil
+            && refusedFor == 34 && neverRefused == nil && refusals.held(nowS: 134).isEmpty,
+          "S331 refused start: tried again every 3 s, told at the first refusal and once past 30 s; a start ends the tries",
+          "\(firstRefusal) \(quietRefusal) \(before30) \(at30) \(after30) \(String(describing: refusedFor))")
+    _ = refusals.refused("bt", nowS: 200)
+    refusals.settle(enabled: ["usb"], listed: ["usb", "bt"])
+    check(refusals.held(nowS: 200).isEmpty && refusals.started("bt", nowS: 201) == nil,
+          "S331 refused start: switching the speaker off ends its tries")
+    _ = refusals.refused("bt", nowS: 300)
+    refusals.settle(enabled: ["bt"], listed: ["usb"])
+    let backAfterLeaving = refusals.refused("bt", nowS: 340)
+    let notYetLost = refusals.refused("bt", nowS: 369.9)
+    check(backAfterLeaving == OutputRefusalRetry.Step(retryAtS: 343, tell: .refused) && notYetLost.tell == nil,
+          "S331 refused start: a refused device that leaves the list and comes back starts a fresh 30 s, not counted as lost",
+          "\(backAfterLeaving) \(notYetLost)")
 
     // covers: S72
     // S72: a master change gives each running local speaker its gain again;

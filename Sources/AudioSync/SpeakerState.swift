@@ -173,6 +173,9 @@ extension LocalOutputSync {
         /// The session's capture rate (Hz) when the core refused it as too
         /// high for the ring; nil for any other failure.
         var refusedCaptureRate: Double? = nil
+        /// What the device said when it refused the start while still listed
+        /// (S331), for the debug log; nil for a hard failure (S69).
+        var refusal: String? = nil
     }
 
     /// What one sync did to the engine.
@@ -220,10 +223,15 @@ extension LocalOutputSync {
                 applied.attached[uid] = holdBack
                 applied.devices[uid] = device.id
             } catch let startError {
-                DebugTrace.log("[AudioSync] local output \(uid) failed to start: \(startError)")
                 var failure = Failure(uid: uid, deviceName: device.name)
-                if case .captureRateTooHigh(let rate)? = startError as? OutputRenderer.StartFailure {
+                let known = startError as? OutputRenderer.StartFailure
+                if case .captureRateTooHigh(let rate)? = known {
                     failure.refusedCaptureRate = rate
+                }
+                if known?.isRefusal == true {
+                    failure.refusal = String(describing: startError)   // the host logs it once, not every 3 s
+                } else {
+                    DebugTrace.log("[AudioSync] local output \(uid) failed to start: \(startError)")
                 }
                 applied.failures.append(failure)
             }
@@ -251,14 +259,16 @@ extension LocalOutputSync {
         var notices: [Failure]
     }
 
-    /// nil when every attach started: nothing to report. Otherwise the app
-    /// applies the report, then stops streaming if no speaker is left on
+    /// nil when no attach failed hard: nothing to report, since a refused one
+    /// stays on and is tried again (S331). Otherwise the app applies the
+    /// report, then stops streaming if no speaker is left on
     /// (`StreamingPolicy.isIdle`): the failed one may have been the only one.
     static func report(_ failures: [Failure], enabled: Set<String>, origin: StartOrigin) -> FailureReport? {
-        guard !failures.isEmpty else { return nil }
-        return FailureReport(enabled: enabled.subtracting(failures.map(\.uid)),
-                             alertNames: origin == .user ? failures.map(\.deviceName) : nil,
-                             notices: failures)
+        let hard = failures.filter { $0.refusal == nil }
+        guard !hard.isEmpty else { return nil }
+        return FailureReport(enabled: enabled.subtracting(hard.map(\.uid)),
+                             alertNames: origin == .user ? hard.map(\.deviceName) : nil,
+                             notices: hard)
     }
 
     /// A master change (S72): every running renderer gets its gain again, as
