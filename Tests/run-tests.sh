@@ -200,12 +200,14 @@ else
 fi
 
 echo "▶ the engine's callbacks start on the main queue"
-# covers: S113 (onInterrupted comes from the capture's listeners and timers, onOutputGone from a renderer's alive listener)
+# covers: S113 (onInterrupted comes from the capture's listeners and timers, onOutputGone from a renderer's alive and format listeners)
 # No suite can make a device vanish without hardware, so this checks the
 # queues those callbacks start on; the logic suite checks the control calls.
 main_sources=$(grep -hE 'AudioObjectAddPropertyListenerBlock\(|makeTimerSource\(' \
   "$SRC/ProcessTapCapture.swift" "$SRC/SyncEngine.swift")
 alive_listener=$(awk '/func installDeviceAliveListener/ { f = 1 } f { print } f && /^    }$/ { exit }' \
+  "$SRC/OutputRenderer.swift")
+format_listener=$(awk '/func installFormatListener/ { f = 1 } f { print } f && /^    }$/ { exit }' \
   "$SRC/OutputRenderer.swift")
 workspace_hop=$(grep -A1 'NSWorkspace\.shared\.observe' "$SRC/ProcessTapCapture.swift" || true)
 if [ "$(grep -c . <<< "$main_sources")" -lt 3 ] \
@@ -214,6 +216,9 @@ if [ "$(grep -c . <<< "$main_sources")" -lt 3 ] \
     || [ "$(grep -c 'onOutputGone?(' "$SRC/SyncEngine.swift")" -ne 1 ] \
     || ! grep -q 'self\.onDeviceGone?()' <<< "$alive_listener" \
     || ! grep -q 'AudioObjectAddPropertyListenerBlock(device, &address, DispatchQueue\.main, block)' <<< "$alive_listener" \
+    || ! grep -q 'self\.onFormatChanged?(old, new)' <<< "$format_listener" \
+    || ! grep -q 'DispatchQueue\.main\.asyncAfter' <<< "$format_listener" \
+    || ! grep -q 'AudioObjectAddPropertyListenerBlock(device, &address, DispatchQueue\.main, block)' <<< "$format_listener" \
     || ! grep -q 'DispatchQueue\.main\.async' <<< "$workspace_hop"; then
   echo "FAIL: a source of onInterrupted or onOutputGone no longer starts on the main queue"
   status=1

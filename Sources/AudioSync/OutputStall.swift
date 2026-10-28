@@ -130,7 +130,7 @@ struct OutputStallRetry {
     /// The outputs a sync starts again after a stall; `formatReopens` are
     /// starting again because their device's format changed (S330).
     func afterStall(formatReopens: Set<String>) -> Set<String> {
-        tracked
+        tracked.subtracting(formatReopens)
     }
 
     mutating func stalled(_ uid: String, nowS: Double) -> Step {

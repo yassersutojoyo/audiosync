@@ -427,7 +427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             switch loss {
             case .formatChanged:
                 // Its device stays listed: it starts again now, in the new format (S330).
-                self.syncLocalOutputs(origin: .automatic)
+                self.syncLocalOutputs(origin: .automatic, formatReopens: [lostUID])
             case .stalled:
                 self.outputStalled(lostUID)
                 self.devicesChanged()
