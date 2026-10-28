@@ -135,6 +135,6 @@ S315 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Wi
 S316 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
 S323 Hosts only: the Windows app registers the AirPlay driver thread with MMCSS through the sender's setup function and notes a refusal once; the Windows tests check it.
 S325 Hosts only: the Mac host restarting a Bluetooth output once when it starts on a link that just came up; the Mac logic suite checks it.
-S326 Hosts only: the Windows output thread ending a stream that takes no frame for 2 s and the controller reopening it; the Windows tests will check it (tests named in the clause, to come).
+S326 Hosts only: the Windows output thread ending a stream that takes no frame for 2 s after it took frames once and the controller reopening it; the Windows tests will check it (tests named in the clause, to come).
 S327 Hosts only: the Windows host checking every 2 s for an app source it can't watch; the Windows tests will check it (tests named in the clause, to come).
 S329 Hosts only: the Windows host reopening only the capture after DeviceGone; the Windows tests will check it (tests named in the clause, to come).
