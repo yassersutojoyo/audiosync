@@ -2492,6 +2492,35 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 52.0);
     }
 
+    // covers: C70, C104 (a drag of 60 levels, 100 ms pacing, 400 ms echoes)
+    #[test]
+    fn a_long_fast_drag_ends_on_the_last_level_once_its_echoes_arrive() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.2);
+        let moves: Vec<(u32, f64)> = (0..60)
+            .map(|i| (i * 1000 / 59, f64::from(21 + i)))
+            .collect();
+        let mut position = 20.0;
+        let mut on_wire = 20.0;
+        let mut echoes = Vec::new();
+        for now in 0..=1400 {
+            if let Some(&(_, next)) = moves.iter().find(|(at, _)| *at == now) {
+                cast.set_volume(KITCHEN, next);
+                position = next;
+            }
+            if now % 100 == 0 && position != on_wire {
+                on_wire = position;
+                echoes.push((now + 400, position / 100.0));
+            }
+            for &(_, level) in echoes.iter().filter(|(at, _)| *at == now) {
+                report(&fake, &mut cast, level);
+            }
+        }
+        assert_eq!(shown(&cast, KITCHEN), 80.0);
+    }
+
     // covers: C70, C104, C105 (nothing is sent before the first status)
     #[test]
     fn a_level_set_before_the_first_status_never_swallows_a_later_change_from_elsewhere() {
