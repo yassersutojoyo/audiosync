@@ -254,10 +254,13 @@ struct CaptureFlowWatch {
         paused = true
     }
 
-    /// At the wake: the 2 s, a try's 1 s spacing and its 5 s trial start over at `uptime`.
+    /// At the wake: the 2 s, a try's 1 s spacing and its 5 s trial start over
+    /// at `uptime`, and the 6 s grace with Now Playing's next readings.
     mutating func resume(at uptime: TimeInterval) {
         paused = false
         if movedAt != nil { movedAt = uptime }
+        lastPosition = nil
+        movingSince = nil
         switch phase {
         case .watching: break
         case .waiting(let next, _): phase = .waiting(next: next, at: uptime + Self.trySpacing)

@@ -6708,10 +6708,24 @@ do {
     capture.resume(at: 16)
     steps = []
     for n in 33...36 { tick(0.5 * Double(n)) }
-    check(asleepStalls.isEmpty && asleepSteps.isEmpty && stalls == [18.0]
-            && steps.filter({ $0 != .none }) == [.stopped(.noCallback(2))] && steps.last == .stopped(.noCallback(2)),
-          "output stall and capture watch: neither fires from the will-sleep notice to the wake, and both count 2 s from the wake",
+    check(asleepStalls.isEmpty && asleepSteps.isEmpty && stalls == [18.0] && steps.allSatisfy({ $0 == .none }),
+          "output stall and capture watch: neither fires from the will-sleep notice to the wake; an output counts 2 s from the wake, the capture its 6 s grace",
           "asleep \(asleepStalls) \(asleepSteps), awake \(stalls) \(steps)")
+
+    // Spotify moved on before the sleep; after the wake the tap is slow to call back again.
+    var slow = CaptureFlowWatch()
+    var wokeSteps: [(at: Double, step: CaptureFlowWatch.Step)] = []
+    for n in 0...20 { _ = slow.tick(callbacks: UInt64(n * 10), reading: true, source: moving(0.5 * Double(n)), at: 0.5 * Double(n)) }
+    slow.pause()
+    slow.resume(at: 16)
+    for n in 33...48 {
+        let now = 0.5 * Double(n)
+        let step = slow.tick(callbacks: 200, reading: true, source: moving((now / 2).rounded(.down) * 2), at: now)
+        if step != .none { wokeSteps.append((now, step)) }
+    }
+    check(wokeSteps.count == 1 && wokeSteps.first?.at == 24 && wokeSteps.first?.step == .stopped(.noCallback(8)),
+          "capture watch: the 6 s grace starts over at the wake, so a tap slow to resume isn't stopped 2 s after it",
+          "\(wokeSteps)")
 
     // A service restart during the sleep still closes the capture; its first try comes 1 s after the wake.
     var restarted = CaptureFlowWatch()
