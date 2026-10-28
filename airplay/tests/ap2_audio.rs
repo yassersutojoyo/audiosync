@@ -21,6 +21,7 @@ use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, Warning};
+use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::ptp::{PtpPorts, PtpService, PtpTransmit, clock_identity};
 use audiosync_airplay::rtp::{RESEND_PREFIX_BYTES, ResendRequest};
 use audiosync_airplay::sdp::Codec;
@@ -1346,6 +1347,7 @@ fn launch(
     let key = speaker.key.clone();
     let mut with_store = options();
     with_store.timing = stored;
+    with_store.homekit_credentials = Some(known_to(server));
     sender.add_speaker(speaker.clone(), with_store);
     assert!(
         events
@@ -1369,6 +1371,21 @@ fn launch(
         })
         .collect();
     (timings, events.of(&key))
+}
+
+/// Credentials the fake holds, so a launch skips the transient SRP, which an
+/// unoptimized build on a loaded machine stretches past its 10 s deadline.
+fn known_to(server: &Ap2Server) -> HomeKitCredentials {
+    let id = "00000000-0000-4000-8000-000000000217";
+    let seed = [0x17; 32];
+    let mut fake = server.fake();
+    let public = ed25519_dalek::SigningKey::from_bytes(&seed)
+        .verifying_key()
+        .to_bytes();
+    fake.hap.paired.push((id.as_bytes().to_vec(), public));
+    let receiver = fake.hap.public_key();
+    let blob = [&[1][..], id.as_bytes(), &seed, &receiver, &fake.hap.id].concat();
+    HomeKitCredentials::from_bytes(&blob).expect("credentials")
 }
 
 /// The last entry the sender handed the host to keep.
