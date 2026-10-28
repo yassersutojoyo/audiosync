@@ -343,8 +343,9 @@ struct Session<D: Driver> {
     /// The capture; `None` while one lost with Windows audio is opened
     /// again (S329), the outputs playing silence meanwhile.
     capture: Option<D::Capture>,
-    /// The capture's way the session started with: one opened again in
-    /// another rate or channel count starts the session again (S20).
+    /// How the session's first capture delivered its audio: one opened
+    /// again at another rate or channel count starts the session again
+    /// (S20).
     started_as: Option<CaptureAttempt>,
     /// The reopen of a lost capture, while one waits.
     reopen: Option<CaptureReopen>,
