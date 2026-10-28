@@ -5663,6 +5663,83 @@ mod tests {
         );
     }
 
+    fn offers(adapter: &AudioAdapter<MockBackend>, id: &str) -> bool {
+        adapter.snapshot().sources.iter().any(|row| row.id == id)
+    }
+
+    // covers: S336
+    #[test]
+    fn the_last_mix_is_offered_only_while_one_of_its_apps_runs() {
+        let mut adapter = adapter_with_a_mix();
+        adapter.select_source("system");
+        adapter.audio.quit_app(PLAYER_PID);
+        adapter.audio.quit_app(3000);
+        adapter.refresh_sources();
+        assert!(!offers(&adapter, LAST_MIX), "none of its apps runs");
+        adapter.select_source(LAST_MIX);
+        assert_eq!(
+            adapter.snapshot().source_id,
+            "system",
+            "nor can it be picked"
+        );
+
+        adapter.audio.add_app(3100, "browser.exe");
+        adapter.refresh_sources();
+        assert!(offers(&adapter, LAST_MIX), "back once one of its apps runs");
+
+        // "All except" captures every other app, so it stays on offer.
+        adapter.select_source(LAST_MIX);
+        adapter.set_mix_all_except(true);
+        let except = "mix:except:player.exe,browser.exe";
+        assert_eq!(adapter.snapshot().source_id, except);
+        adapter.select_source("system");
+        adapter.audio.quit_app(3100);
+        adapter.refresh_sources();
+        assert!(offers(&adapter, except));
+    }
+
+    // covers: S336
+    #[test]
+    fn a_stored_last_mix_that_is_no_mix_reads_back_as_none() {
+        let dir = test_dir("adapter-last-mix-stored");
+        let path = dir.join(settings::FILE_NAME);
+        let two = r#"{"mode":"only","apps":[{"executable":"player.exe","name":"Player"},{"executable":"browser.exe","name":"Browser"}]}"#;
+        let stored = [
+            (two, true),
+            (
+                r#"{"mode":"only","apps":[{"executable":"player.exe","name":"Player"}]}"#,
+                false,
+            ),
+            (r#"{"mode":"only","apps":[]}"#, false),
+            (r#""apps:player.exe,browser.exe""#, false),
+            (
+                r#"{"mode":"sideways","apps":[{"executable":"player.exe"},{"executable":"browser.exe"}]}"#,
+                false,
+            ),
+        ];
+        for (last_mix, offered) in stored {
+            SettingsFile::at(path.clone())
+                .save(&Settings::default())
+                .unwrap();
+            let mut file: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            file["last_mix"] = serde_json::from_str(last_mix).unwrap();
+            std::fs::write(&path, file.to_string()).unwrap();
+
+            let mut audio = MockBackend::empty();
+            audio.add_app(PLAYER_PID, "player.exe");
+            let mut adapter = launch(audio, &path);
+            adapter.refresh_sources();
+            assert_eq!(offers(&adapter, LAST_MIX), offered, "{last_mix}");
+            assert_eq!(
+                adapter.current_settings().last_mix.is_some(),
+                offered,
+                "{last_mix}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn input_devices_are_listed_after_the_apps_and_can_be_streamed() {
         let mut adapter = adapter();

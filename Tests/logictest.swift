@@ -283,6 +283,14 @@ do {
     check(listed(except, last: both).map(\.id) == ["", except.defaultsValue, music]
             && listed(.system, last: .app(bundleID: music)).map(\.id) == ["", music],
           "last mix: one mix entry only, the chosen one while a mix plays, and never one for a plain app")
+    func noneRunning(_ chosen: AudioSource, last: AudioSource) -> [String] {
+        SourceList.entries(systemName: "All System Audio", apps: [], inputs: [], chosen: chosen,
+                           chosenAppName: { $0 }, lastMix: last).map(\.id)
+    }
+    check(noneRunning(.system, last: both) == [""]
+            && noneRunning(.system, last: except) == ["", except.defaultsValue]
+            && noneRunning(both, last: both) == ["", both.defaultsValue],
+          "last mix: an \"only these\" mix is offered only while one of its apps runs, \"all except\" always, a chosen mix always")
     let page = RemoteSource(pickerID: away[1].id, name: away[1].name)
     check(RemoteSource.pickerID(page.id) == both.defaultsValue && page.kind == .app,
           "last mix: the Web Remote lists the entry and its pick reaches the picker")
@@ -5591,6 +5599,19 @@ do {
           "settings: a set of speakers is stored as a sorted list")
     store.save(source: .system)
     check(stored.values[Keys.source] as? String == "", "settings: the whole system is stored as an empty source (S12)")
+    // covers: S336
+    let savedMix = AudioSource.mixed(.only, bundleIDs: ["com.apple.Music", "com.apple.Safari"])
+    store.save(lastMix: savedMix)
+    check(store.load().lastMix == savedMix, "settings: the last mix reads back from the store (S336)")
+    let notMixes: [Any] = ["com.apple.Music", "apps:com.apple.Music", "apps:", "input:mic", 42, ["apps:a,b"]]
+    let readBack = notMixes.map { value -> AudioSource? in
+        stored.values[Keys.lastMix] = value
+        return store.load().lastMix
+    }
+    check(readBack.allSatisfy { $0 == nil },
+          "settings: a stored last mix that is one app, none or garbled reads back as none (S336)", "\(readBack)")
+    store.save(lastMix: nil)
+    check(stored.values[Keys.lastMix] == nil, "settings: no last mix leaves no stored value (S336)")
 
     stored.values = [Keys.master: Double.nan,
                      Keys.localVolumes: ["a": 150.0, "b": -5.0, "c": Double.nan, "d": "loud", "e": 42] as [String: Any],
