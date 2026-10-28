@@ -56,8 +56,8 @@ use audiosync_cast::host::{
 use audiosync_cast::media::{MediaError, Metadata};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
 use audiosync_cast::status::{
-    ControlType, DeviceVolume, NO_ZONE_LEVEL, answers_level, answers_volume, device_level,
-    own_level, start_own_level,
+    ControlType, DeviceVolume, NO_ZONE_LEVEL, answers_volume, device_level, own_level,
+    start_own_level,
 };
 use audiosync_core::fade::Fade;
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
@@ -1371,7 +1371,11 @@ impl CastSpeakers {
             self.pending.push(BackendEvent::CastChanged);
         }
         let allowed = device_level(self.master, zone, own);
-        if first && !answers_level(allowed, level) {
+        let at_level = self
+            .volumes
+            .get(&device)
+            .is_some_and(|volume| answers_volume(allowed, volume));
+        if first && !at_level {
             self.log.log(|| {
                 format!(
                     "Cast: {} reports level {level:.2} at the start, set to {allowed:.2}",
