@@ -907,7 +907,9 @@ impl GapFill {
     /// Where a packet whose position Windows gave as `position` starts:
     /// right after the last frame written when Windows flags that position
     /// as wrong (`AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR`). `None`: nothing to
-    /// go by, so the caller counts it as captured just now.
+    /// go by, so the caller counts it as captured just now; a flagged first
+    /// packet gets that only from [`GapFill::new`], while a tracker from
+    /// [`GapFill::started`] places it at the open or the idle fill's end.
     pub fn packet_start(&self, position: u64, timestamp_error: bool) -> Option<u64> {
         if timestamp_error {
             return self.end();
