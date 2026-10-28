@@ -756,6 +756,53 @@ fn held_events_do_not_hold_back_a_later_recovery() {
     assert!(host.shutdown());
 }
 
+// covers: C81
+#[test]
+fn reconnects_are_spaced_and_an_announcement_cuts_the_wait_short() {
+    let device = FakeDevice::start(Behavior::default());
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let (_feed, reader) = ring();
+    host.start(target(A, &device), 48_000, Metadata::default(), reader)
+        .expect("starts");
+    wait_for(&host, Duration::from_secs(10), started(A));
+    let recovered = |event: &HostEvent| {
+        matches!(
+            event,
+            HostEvent::Session {
+                event: SessionEvent::Recovered { .. },
+                ..
+            }
+        )
+    };
+    device.send(Command::DropConnection);
+    wait_for(&host, Duration::from_secs(10), recovered);
+    assert_eq!(device.connection_count(), 2, "the first one at once");
+
+    let dropped = Instant::now();
+    device.send(Command::DropConnection);
+    wait_for(&host, Duration::from_secs(10), recovered);
+    assert!(
+        dropped.elapsed() >= Duration::from_secs(1),
+        "the next one waits 1 s: {:?}",
+        dropped.elapsed()
+    );
+
+    // The one after waits 2 s, unless the device announces itself.
+    let dropped = Instant::now();
+    device.send(Command::DropConnection);
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(device.connection_count(), 3, "still waiting");
+    host.announced(A);
+    while device.connection_count() < 4 && dropped.elapsed() < Duration::from_millis(1_500) {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(device.connection_count(), 4, "{:?}", dropped.elapsed());
+    wait_for(&host, Duration::from_secs(10), recovered);
+    host.stop();
+    wait_for(&host, Duration::from_secs(3), ended(A));
+    assert!(host.shutdown());
+}
+
 // Partly C80: a start that begins while events are held still reports its
 // connect retries once the host polls again, after the held events.
 #[test]

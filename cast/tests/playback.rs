@@ -803,10 +803,9 @@ fn a_resumed_app_without_its_media_reloads_once() {
 // covers: C55, C81
 #[test]
 fn a_recovery_on_another_local_address_streams_from_that_address() {
-    let device = FakeDevice::start(Behavior {
-        on_media_status: OnMediaStatus::Empty,
-        ..Behavior::default()
-    });
+    // The media still plays after the reconnect: only the new address
+    // brings the second LOAD.
+    let device = FakeDevice::start(Behavior::default());
     let (writer, reader) = audio_ring(48_000);
     let _feed = feed(writer, 9);
     let mut config = config(&device);
