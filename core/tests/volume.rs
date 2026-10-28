@@ -13,7 +13,7 @@ use proptest::prelude::*;
 mod airplay_device_level {
     use audiosync_core::volume::{
         ReadBack, device_level, device_level_for_db, level_set_on_speaker, own_for_device_level,
-        row_level, row_move,
+        row_level, row_move, set_grid_db,
     };
 
     /// The row a speaker at own volume `own` shows through `zone` and `master`.
@@ -274,20 +274,25 @@ mod airplay_device_level {
     // covers: S291
     #[test]
     fn the_first_reading_near_a_level_sent_is_its_echo_and_the_baseline() {
+        let samsung = set_grid_db(Some("Samsung"));
+        assert_eq!(samsung, Some(0.6));
         let mut read = ReadBack::default();
         read.sent(-23.7);
         assert_eq!(read.echo_of(), Some(-23.7));
-        // The 0.6 dB grid keeps level 21 (−23.7) as −24: the baseline, no change.
-        assert!(!read.set_on_speaker(-24.0));
+        // Its 0.6 dB grid keeps level 21 (−23.7) as −24: the baseline, no change.
+        assert!(!read.set_on_speaker(-24.0, samsung));
         assert_eq!(read.echo_of(), None);
-        assert!(!read.set_on_speaker(-24.03));
-        assert!(!read.set_on_speaker(f64::NAN));
+        assert!(!read.set_on_speaker(-24.03, samsung));
+        assert!(!read.set_on_speaker(f64::NAN, samsung));
         // One remote press away from the baseline is a change and the new baseline.
-        assert!(read.set_on_speaker(-23.7));
-        assert!(!read.set_on_speaker(-23.7));
+        assert!(read.set_on_speaker(-23.7, samsung));
+        assert!(!read.set_on_speaker(-23.7, samsung));
         // More than 0.5 dB from a level just sent is a change at once.
         read.sent(-24.0);
-        assert!(read.set_on_speaker(-23.4));
+        assert!(read.set_on_speaker(-23.4, samsung));
+        // Level 49 sent as −15.3 and kept as −15.6 on the grid: its echo.
+        read.sent(-15.3);
+        assert!(!read.set_on_speaker(-15.6, samsung));
     }
 
     // covers: S291
@@ -295,17 +300,21 @@ mod airplay_device_level {
     fn one_step_inside_the_echo_window_is_a_change_on_the_speaker() {
         let mut read = ReadBack::default();
         // The row at 50 sent −15 dB; the remote pressed down once before the
-        // first read holds level 49.
+        // first read holds level 49, on any receiver.
         read.sent(-15.0);
-        assert!(read.set_on_speaker(-15.3));
-        assert!(!read.set_on_speaker(-15.3));
+        assert!(read.set_on_speaker(-15.3, None));
+        assert!(!read.set_on_speaker(-15.3, None));
+        read.sent(-15.0);
+        assert!(read.set_on_speaker(-15.3, Some(0.6)));
         // A reading on the row sent is still its echo.
         read.sent(-15.0);
-        assert!(!read.set_on_speaker(-14.98));
-        // A receiver that keeps row 49 (−15.3) exactly: one press up to −15 dB
-        // is a change, though −15 lies on a 0.6 dB grid.
+        assert!(!read.set_on_speaker(-14.98, None));
+        // A receiver not measured to round keeps row 49 (−15.3) exactly: one
+        // press up to −15 dB is a change, though −15 lies on a 0.6 dB grid.
+        assert_eq!(set_grid_db(Some("Apple Inc.")), None);
+        assert_eq!(set_grid_db(None), None);
         read.sent(-15.3);
-        assert!(read.set_on_speaker(-15.0));
+        assert!(read.set_on_speaker(-15.0, None));
     }
 }
 

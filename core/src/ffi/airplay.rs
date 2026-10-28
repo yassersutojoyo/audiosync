@@ -107,7 +107,7 @@ use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
 use crate::volume::{
     NO_ZONE_POSITION, ReadBack, RowMove, device_level, device_level_for_db, is_echo_of,
-    level_on_speaker, level_set_on_speaker, row_move, sanitize_own,
+    level_on_speaker, level_set_on_speaker, row_move, sanitize_own, set_grid_db,
 };
 
 /// What a receiver event reports ([`AscAirPlayReceiver::event`]): discovery
@@ -553,6 +553,7 @@ impl Added {
         if self.target.is_some() {
             return self.set_volume(sender, volume);
         }
+        let volume = if self.silenced { Volume::Muted } else { volume };
         self.level = device_level_for_db(volume.wire_db()).unwrap_or(0.0);
         sender.keep_volume(&self.key, volume);
     }
@@ -1223,6 +1224,12 @@ impl AscAirPlay {
         }
     }
 
+    /// The grid receiver `id` keeps a level sent on, by its make (S291).
+    fn set_grid(&self, id: &str) -> Option<f64> {
+        let txt = self.listed.get(id)?.device.airplay_txt.as_ref()?;
+        set_grid_db(txt.manufacturer.as_deref())
+    }
+
     /// The added speaker or target that `id` reports for: itself, or the
     /// target it is a member of.
     fn reporting_for(&self, id: &str) -> Option<String> {
@@ -1247,11 +1254,12 @@ impl AscAirPlay {
         };
         let master = self.master;
         let zone = zone_in(&self.zones, &owner);
+        let grid = self.set_grid(id);
         let Some(added) = self.added.get_mut(&owner) else {
             return;
         };
         let asked = std::mem::take(&mut added.reading);
-        if !asked || added.dragging || !added.read_back.set_on_speaker(db) {
+        if !asked || added.dragging || !added.read_back.set_on_speaker(db, grid) {
             return;
         }
         let Some(RowMove {
@@ -1365,7 +1373,7 @@ impl AscAirPlay {
                 device_volume(own.level)
             }
             .wire_db();
-            own.echo = recent && is_echo_of(db, sent);
+            own.echo = recent && is_echo_of(db, sent, self.set_grid(row));
             own.reported = device_level_for_db(db);
         }
         own
@@ -8189,7 +8197,10 @@ mod tests {
             let mut own = 0.0;
             let mut handle = on_television(&receiver, &id, master, own);
             let listed = inside(handle).listed.get_mut(&id).expect("listed");
-            let txt = listed.device.airplay_txt.get_or_insert_with(Default::default);
+            let txt = listed
+                .device
+                .airplay_txt
+                .get_or_insert_with(Default::default);
             txt.manufacturer = Some("Samsung".to_owned());
             lands(&receiver, -144.0);
             let mut measured = Vec::new();

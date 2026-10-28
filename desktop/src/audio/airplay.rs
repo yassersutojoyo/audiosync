@@ -98,7 +98,7 @@ use audiosync_core::resample::Resampler;
 use audiosync_core::volume::{
     DEFAULT_LOCAL_POSITION, NO_ZONE_POSITION, ReadBack, device_level, device_level_for_db,
     is_echo_of, level_on_speaker, level_set_on_speaker, own_for_device_level, row_move,
-    sanitize_own, sanitize_position,
+    sanitize_own, sanitize_position, set_grid_db,
 };
 
 use super::SESSION_RATE;
@@ -2927,7 +2927,7 @@ impl AirPlaySpeakers {
                 _ => device_volume(own.level),
             }
             .wire_db();
-            own.echo = added.read.recent(now) && is_echo_of(db, has);
+            own.echo = added.read.recent(now) && is_echo_of(db, has, self.set_grid(row));
             own.reported = device_level_for_db(db);
         }
         own
@@ -2971,6 +2971,12 @@ impl AirPlaySpeakers {
         true
     }
 
+    /// The grid speaker `id` keeps a level sent on, by its make (S291).
+    fn set_grid(&self, id: &str) -> Option<f64> {
+        let txt = self.listed.get(id)?.device().airplay_txt.as_ref()?;
+        set_grid_db(txt.manufacturer.as_deref())
+    }
+
     /// The added row `id` reports for: itself, or the target it's a member
     /// of.
     fn row_of(&self, id: &str) -> Option<String> {
@@ -2995,13 +3001,14 @@ impl AirPlaySpeakers {
         let (zone, master) = (self.zone(&row), self.master);
         let own = self.settings(&row).volume;
         let shown = self.device_level_of(&row);
+        let grid = self.set_grid(id);
         let Some(added) = self.added.get_mut(&row) else {
             return false;
         };
         if !added.read.answered() || added.read.held(Instant::now()) || solo {
             return false;
         }
-        if !added.read.echo.set_on_speaker(db) {
+        if !added.read.echo.set_on_speaker(db, grid) {
             return false;
         }
         let Some(moved) = level_set_on_speaker(db, own, shown, zone, master) else {
@@ -8101,7 +8108,11 @@ pub mod tests {
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
         let listed = airplay.listed.get_mut(&id).expect("listed");
-        let txt = listed.info.device.airplay_txt.get_or_insert_with(Default::default);
+        let txt = listed
+            .info
+            .device
+            .airplay_txt
+            .get_or_insert_with(Default::default);
         txt.manufacturer = Some("Samsung".to_owned());
         remote(&fake, &kitchen, RemoteCommand::VolumeUp);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);

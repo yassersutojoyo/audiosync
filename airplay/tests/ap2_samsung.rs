@@ -326,10 +326,10 @@ fn a_level_set_on_the_tv_shows_within_a_second_of_reads_and_none_go_once_stopped
 }
 
 // Part of P184 with S291 (docs/ENGINE_SPEC.md): the sender reports every
-// level read, and the host takes the first report on the row of a level it
-// sent, or on its 0.6 dB grid point, as that level's echo. Each set here goes out while a read is in
-// flight, so the answer to that read, the older level, must be dropped:
-// every report after the set lies within 0.5 dB of it and on its echo.
+// level read, and the host takes the first report after a set to a Samsung,
+// on the row sent or its 0.6 dB grid point, as that level's echo. Each set
+// goes out while a read is in flight, so the answer to that read, the older
+// level, must be dropped: every report after the set is its grid point.
 // covers: P184
 #[test]
 fn the_echo_of_a_level_sent_on_the_grid_is_never_a_change_made_on_the_tv() {
