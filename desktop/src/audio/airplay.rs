@@ -8927,6 +8927,7 @@ pub mod tests {
         assert!(fake.take_reads().is_empty());
     }
 
+    // covers: S291
     #[test]
     fn a_pair_reads_through_its_leader_and_keeps_the_level_in_the_sender() {
         let fake = FakeAirPlay::new();

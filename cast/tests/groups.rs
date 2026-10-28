@@ -588,14 +588,17 @@ fn the_group_volume_goes_to_the_groups_platform_only() {
 fn a_groups_offset_is_its_own() {
     let group = DeviceId::parse(GROUP).expect("uuid");
     let member = DeviceId::parse(MEMBER).expect("uuid");
+    let unset = DeviceId::parse(OTHER_MEMBER).expect("uuid");
     let mut memory = DeviceMemory::default();
     memory.set_offset(member, Duration::from_millis(1_800));
     assert_eq!(memory.offset(&group), None, "not seeded from a member");
     memory.set_offset(group, Duration::from_millis(2_400));
     assert_eq!(memory.offset(&member), Some(Duration::from_millis(1_800)));
+    assert_eq!(memory.offset(&unset), None, "not seeded from the group");
     let stored = DeviceMemory::from_json(&memory.to_json());
     assert_eq!(stored.offset(&group), Some(Duration::from_millis(2_400)));
     assert_eq!(stored.offset(&member), Some(Duration::from_millis(1_800)));
+    assert_eq!(stored.offset(&unset), None);
 }
 
 // covers: C103
