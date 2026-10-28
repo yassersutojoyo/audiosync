@@ -345,13 +345,7 @@ fn on_tray_event(event: TrayIconEvent) {
             if app.flyout.window().is_visible() {
                 app.hide_flyout();
             } else if !just_closed {
-                let icon = Bounds {
-                    x: rect.position.x,
-                    y: rect.position.y,
-                    width: f64::from(rect.size.width),
-                    height: f64::from(rect.size.height),
-                };
-                show_flyout(&app, icon);
+                show_flyout(&app, icon_bounds(rect));
             }
         }
         #[cfg(target_os = "linux")]
@@ -392,6 +386,82 @@ fn on_menu_event(id: MenuId) {
     } else if id == MenuIds::EXIT {
         let _ = slint::quit_event_loop();
     }
+}
+
+#[cfg(windows)]
+fn icon_bounds(rect: tray_icon::Rect) -> Bounds {
+    Bounds {
+        x: rect.position.x,
+        y: rect.position.y,
+        width: f64::from(rect.size.width),
+        height: f64::from(rect.size.height),
+    }
+}
+
+/// What the flyout preview does, in order: after how many milliseconds,
+/// and which step. The first wait leaves the taskbar time to place the icon.
+#[cfg(windows)]
+const PREVIEW_OPEN: [(u64, PreviewStep); 1] = [(1500, PreviewStep::Open)];
+
+/// Opens and closes it as a click, a second click and Escape would; 90 ms
+/// is about a third into the slide.
+#[cfg(windows)]
+const PREVIEW_CYCLE: [(u64, PreviewStep); 9] = [
+    (1500, PreviewStep::Open),
+    (1500, PreviewStep::Click),
+    (600, PreviewStep::Open),
+    (90, PreviewStep::Click),
+    (600, PreviewStep::Open),
+    (1500, PreviewStep::Escape),
+    (600, PreviewStep::Open),
+    (90, PreviewStep::Escape),
+    (600, PreviewStep::Open),
+];
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug)]
+enum PreviewStep {
+    Open,
+    /// Closes it the way a click on the icon does while it is open.
+    Click,
+    /// Closes it the way Escape does.
+    Escape,
+}
+
+/// With the debug log on (`AUDIOSYNC_PREVIEW_FLYOUT`): opens the flyout at
+/// the icon without a click, or with `cycle` opens and closes it several
+/// times, twice mid-slide, and leaves it open, to watch its motion.
+#[cfg(windows)]
+pub fn preview_flyout(tray: &Rc<Tray>, cycle: bool, log: crate::debug_log::DebugLog) {
+    let steps: &'static [(u64, PreviewStep)] = if cycle { &PREVIEW_CYCLE } else { &PREVIEW_OPEN };
+    preview_next(Rc::downgrade(tray), steps, log);
+}
+
+#[cfg(windows)]
+fn preview_next(
+    tray: Weak<Tray>,
+    steps: &'static [(u64, PreviewStep)],
+    log: crate::debug_log::DebugLog,
+) {
+    let Some(&(after, step)) = steps.first() else {
+        return;
+    };
+    slint::Timer::single_shot(Duration::from_millis(after), move || {
+        let (Some(tray), Some(app)) = (tray.upgrade(), APP.with(|cell| cell.borrow().upgrade()))
+        else {
+            return;
+        };
+        log.log(|| format!("tray flyout preview: {step:?}"));
+        match step {
+            PreviewStep::Open => match tray.icon.rect() {
+                Some(rect) => show_flyout(&app, icon_bounds(rect)),
+                None => log.log(|| "tray flyout preview: no icon position".to_owned()),
+            },
+            PreviewStep::Click => app.hide_flyout(),
+            PreviewStep::Escape => app.flyout.invoke_close_requested(),
+        }
+        preview_next(Rc::downgrade(&tray), &steps[1..], log);
+    });
 }
 
 /// Opens the flyout next to the icon, inside the work area of the icon's

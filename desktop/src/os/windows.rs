@@ -61,6 +61,11 @@ impl super::claim::Listen for single_instance::Instance {
     }
 }
 
+/// With the debug log on, `open` here opens the tray flyout shortly after
+/// launch, and `cycle` opens and closes it a few times, to watch its motion
+/// without a click (`tray::preview_flyout`).
+const PREVIEW_FLYOUT_VAR: &str = "AUDIOSYNC_PREVIEW_FLYOUT";
+
 /// The notification-area icon; it stays until it is dropped.
 pub type Tray = Rc<tray::Tray>;
 
@@ -71,6 +76,13 @@ pub fn create_tray(app: &Rc<App>, log: &DebugLog) -> Option<Tray> {
         Ok(tray) => {
             log.log(|| "tray icon: shown".to_owned());
             app.set_tray_available(true);
+            if log.enabled()
+                && let Ok(mode) = std::env::var(PREVIEW_FLYOUT_VAR)
+                && (mode == "open" || mode == "cycle")
+            {
+                log.log(|| format!("tray flyout: {mode} preview ({PREVIEW_FLYOUT_VAR})"));
+                tray::preview_flyout(&tray, mode == "cycle", log.clone());
+            }
             Some(tray)
         }
         Err(error) => {
