@@ -1958,7 +1958,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Adds a zone named `typed` (S150) holding `members`, each leaving the
     /// zone that held it; returns its name.
     fn add_zone(&mut self, typed: &str, members: &[String]) -> String {
+        // An older build left deleted zones' IDs in the presets.
+        let in_presets = self.presets.iter().flat_map(|preset| &preset.zones);
         let ids = self.zones.list().iter().map(|zone| zone.id.as_str());
+        let ids = ids.chain(in_presets.map(|zone| zone.id.as_str()));
         self.last_zone_id = ui_model::next_id("zone:", ids, self.last_zone_id);
         let id = format!("zone:{}", self.last_zone_id);
         let name = self
