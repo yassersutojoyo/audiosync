@@ -1622,7 +1622,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// streaming, capture starts again from the new one (S141, S163).
     fn choose(&mut self, picked: Chosen) {
         if picked.key() == self.chosen.key() {
-            self.clear_switch_failed();
+            self.clear_source_notice_if_running();
             return;
         }
         self.log
@@ -3401,12 +3401,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
-    /// The notice of a switch that couldn't start goes when streaming stops
-    /// or the user picks a source or pair, the one playing included.
+    /// The notice of a switch that couldn't start goes when streaming stops.
     fn clear_switch_failed(&mut self) {
         self.clear_if(NoticeSubject::Source, |message| {
             matches!(message, NoticeMessage::SwitchFailed { .. })
         });
+    }
+
+    /// Picking the source or pair already in use answers its notice while
+    /// streaming; while stopped the notice says why streaming stopped (S163).
+    /// While streaming a capture notice means another app still holds the
+    /// input (S333), which no pick answers.
+    fn clear_source_notice_if_running(&mut self) {
+        if self.running() {
+            self.clear_if(NoticeSubject::Source, |message| {
+                !matches!(message, NoticeMessage::CaptureFailed)
+            });
+        }
     }
 
     /// Starts streaming when a speaker was switched on while nothing streams
@@ -4195,7 +4206,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             return;
         };
         if self.chosen_input_pair() == pair {
-            self.clear_switch_failed();
+            self.clear_source_notice_if_running();
             return;
         }
         let (endpoint_id, name) = (endpoint_id.clone(), name.clone());
@@ -4215,7 +4226,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             self.input_pairs.insert(endpoint_id.clone(), pair);
         }
         self.audio.set_input_pair(&endpoint_id, pair);
-        self.notices.clear(&[NoticeSubject::Capture]);
+        self.notices
+            .clear(&[NoticeSubject::Source, NoticeSubject::Capture]);
         let switch = source_switch(self.running());
         let started = switch
             .start
@@ -10148,6 +10160,139 @@ mod tests {
             input_pair_captures(&adapter).last(),
             Some(&(MIC.to_owned(), 1))
         );
+    }
+
+    // covers: S163
+    #[test]
+    fn picking_the_whole_system_again_after_the_app_quit_clears_the_switch_notice() {
+        let mut adapter = adapter();
+        adapter.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.poll();
+        adapter.poll();
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::SourceSwitched {
+                source: "Player".into()
+            }]
+        );
+
+        adapter.select_source("system");
+        assert!(messages(&adapter).is_empty());
+        assert!(adapter.snapshot().running, "streaming goes on");
+        assert_eq!(captures(&adapter).len(), 2, "with no capture restart");
+    }
+
+    // covers: S163
+    #[test]
+    fn another_channel_pair_while_stopped_clears_the_notice_of_why_the_input_stopped() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Interface (USB Audio)", "USB");
+        adapter.audio.set_input_channels(MIC, 4);
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.audio.disconnect_input(MIC);
+        for _ in 0..20 {
+            adapter.poll();
+        }
+        let unplugged = NoticeMessage::InputDisconnected {
+            source: "Interface (USB Audio)".to_owned(),
+        };
+        assert_eq!(messages(&adapter), std::slice::from_ref(&unplugged));
+
+        adapter.select_input_pair(0);
+        assert_eq!(
+            messages(&adapter),
+            [unplugged],
+            "the pair already chosen keeps the notice of why streaming stopped"
+        );
+
+        adapter.select_input_pair(1);
+        assert!(messages(&adapter).is_empty());
+        assert!(!adapter.snapshot().running, "streaming stays stopped");
+    }
+
+    // covers: S163
+    #[test]
+    fn picking_the_playing_input_again_keeps_the_busy_input_notice() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Interface (USB Audio)", "USB");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.audio.fail_capture(BackendError::DeviceGone);
+        adapter
+            .audio
+            .refuse_captures(Some(BackendError::DeviceBusy));
+        for _ in 0..20 {
+            adapter.poll();
+        }
+        assert!(adapter.snapshot().running, "the outputs play on");
+        assert_eq!(messages(&adapter), [NoticeMessage::CaptureFailed]);
+
+        adapter.select_source(&mic());
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::CaptureFailed],
+            "another app still holds the input (S333)"
+        );
+        assert!(adapter.snapshot().running);
+    }
+
+    // covers: S163
+    #[test]
+    fn picking_the_stopped_source_again_keeps_the_notice_that_its_app_quit() {
+        let mut adapter = adapter();
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.poll();
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        let quit = || NoticeMessage::SourceQuit {
+            source: "Player".into(),
+        };
+        assert_eq!(messages(&adapter), [quit()]);
+
+        adapter.select_source(&player());
+        assert_eq!(messages(&adapter), [quit()]);
+    }
+
+    // covers: S163
+    #[test]
+    fn picking_the_playing_source_again_keeps_the_speaker_and_pairing_notices() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::UnsupportedFormat));
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.poll();
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        fake.pairing(
+            &tv,
+            PairingEvent::Failed {
+                error: SessionError::new(ErrorKind::Unreachable),
+                wrong_pin: false,
+            },
+        );
+        adapter.poll();
+        assert!(adapter.snapshot().running);
+        let shown = messages(&adapter);
+        assert_eq!(shown.len(), 2, "{shown:?}");
+
+        adapter.select_source("system");
+        assert_eq!(messages(&adapter), shown);
     }
 
     #[test]
