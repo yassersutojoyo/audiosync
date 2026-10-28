@@ -126,7 +126,7 @@ pub const MAX_LOGGED_TEXT: usize = 96;
 pub const MAX_HEX_RUN: usize = 8;
 
 impl FetchHeaders {
-    fn parse<'a>(lines: impl Iterator<Item = &'a str>) -> FetchHeaders {
+    pub(crate) fn parse<'a>(lines: impl Iterator<Item = &'a str>) -> FetchHeaders {
         let mut headers = FetchHeaders::default();
         for line in lines {
             let Some((name, value)) = line.split_once(':') else {
@@ -155,7 +155,7 @@ impl FetchHeaders {
     }
 
     /// Scrubs `token` before capping, so a cut never leaves part of it.
-    fn for_log(mut self, token: &str) -> FetchHeaders {
+    pub(crate) fn for_log(mut self, token: &str) -> FetchHeaders {
         let scrub = |text: &mut String, is_range: bool| {
             *text = replace_ignoring_case(&percent_decoded(text), token, "<token>");
             if has_hex_run(text) && !(is_range && is_byte_range(text)) {
