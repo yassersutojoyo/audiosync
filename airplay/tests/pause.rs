@@ -9,11 +9,12 @@ use std::time::{Duration, Instant};
 use audiosync_airplay::audio::FRAMES_PER_PACKET;
 use audiosync_airplay::discovery::DeviceKey;
 use audiosync_airplay::error::Warning;
+use audiosync_airplay::metadata::Artwork;
 use audiosync_airplay::rtp::ResendRequest;
 use audiosync_airplay::rtsp::Method;
 use audiosync_airplay::sdp::Codec;
 use audiosync_airplay::sender::{
-    Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
+    NowPlaying, Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
 };
 use audiosync_airplay::stream::{PacketKind, SpeakerCounters, SpeakerId, StreamEvent};
 use audiosync_airplay::volume::Volume;
@@ -386,6 +387,63 @@ fn a_resume_waits_for_the_pause_flush_behind_a_delay_flush() {
     );
     assert_eq!(seq, held);
     assert!(marker);
+    sender.shutdown();
+}
+
+// Part of P100: a delay change made while artwork is in flight applies when
+// its FLUSH goes out, so no packet under the new delay reaches the receiver
+// before that FLUSH, which a receiver emptying its buffer would drop.
+#[test]
+fn a_delay_change_behind_artwork_sends_nothing_new_before_its_flush() {
+    const ARTWORK: Duration = Duration::from_millis(1500);
+    let _serial = serial();
+    let receiver = NetReceiver::start(Behavior::default());
+    let (sender, _host, _events, key) = play(&receiver, 1);
+    receiver
+        .behavior()
+        .answer_delay
+        .insert("SET_PARAMETER".to_owned(), ARTWORK);
+    sender
+        .set_now_playing(NowPlaying {
+            artwork: Some(Artwork::single(vec![
+                0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0xFF, 0xD9,
+            ])),
+            ..NowPlaying::default()
+        })
+        .expect("valid artwork");
+    sender.set_delay(&key, Duration::from_millis(200));
+    assert!(wait_until(LONG, || receiver.log().count("FLUSH") == 1));
+    let held = flush_seq(&receiver, 0);
+    assert!(wait_until(LONG, || {
+        receiver
+            .log()
+            .audio
+            .iter()
+            .any(|packet| !before(packet.header.seq, held))
+    }));
+    let log = receiver.log();
+    let at = |method: Method, kind: Option<&str>| {
+        log.requests
+            .iter()
+            .find(|(_, request)| {
+                request.method == method
+                    && kind.is_none_or(|kind| request.headers.get("Content-Type") == Some(kind))
+            })
+            .map(|(at, _)| *at)
+            .expect("request")
+    };
+    let flushed = at(Method::Flush, None);
+    assert!(flushed >= at(Method::SetParameter, Some("image/jpeg")) + ARTWORK);
+    let early: Vec<u16> = log
+        .audio
+        .iter()
+        .filter(|packet| !before(packet.header.seq, held) && packet.at < flushed)
+        .map(|packet| packet.header.seq)
+        .collect();
+    assert!(
+        early.is_empty(),
+        "before the FLUSH naming {held}: {early:?}"
+    );
     sender.shutdown();
 }
 
