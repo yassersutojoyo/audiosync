@@ -643,7 +643,10 @@ fn a_load_reply_without_a_media_session_waits_for_this_loads_own_status() {
         .expect("loads");
     sent(&mut channel);
     channel.handle(start, empty_reply(102));
-    channel.handle(start, with_content(1, "http://192.0.2.10:1/other.wav", "IDLE"));
+    channel.handle(
+        start,
+        with_content(1, "http://192.0.2.10:1/other.wav", "IDLE"),
+    );
     channel.handle(start, with_content(2, URL, "PLAYING"));
     let seen = events(&mut channel);
     assert!(

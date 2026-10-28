@@ -590,9 +590,11 @@ fn a_status_missing_its_applications_or_volume_keeps_what_was_known() {
     );
     channel.handle(
         start,
-        receiver_status(json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {
-            "applications": [app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")],
-        }})),
+        receiver_status(
+            json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {
+                "applications": [app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")],
+            }}),
+        ),
     );
     let seen = events(&mut channel);
     assert!(!channel.is_ended(), "{seen:?}");
