@@ -133,7 +133,7 @@ extension AppDelegate {
                 // pairing still under way for it is no longer needed.
                 if let receiver = NativeAirPlayID.receiver(id) { nativeAirPlay?.cancelPairing(receiver) }
             }
-            refreshNativeRows()   // a lapsed receiver that stops playing leaves the list; chosen may flip
+            refreshNativeRows()   // a lapsed receiver that stops playing keeps its row but stops holding locals back
         case .turnOff(let id, let reason):
             turnOffNativeSpeaker(id, reason: reason, origin: .automatic)
         case .latencyChanged:
