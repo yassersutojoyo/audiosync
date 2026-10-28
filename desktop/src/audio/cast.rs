@@ -56,8 +56,8 @@ use audiosync_cast::host::{
 use audiosync_cast::media::{MediaError, Metadata};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
 use audiosync_cast::status::{
-    ControlType, DeviceVolume, NO_ZONE_LEVEL, answers_level, device_level, own_level,
-    start_own_level,
+    ControlType, DeviceVolume, NO_ZONE_LEVEL, answers_level, answers_volume, device_level,
+    own_level, start_own_level,
 };
 use audiosync_core::fade::Fade;
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
@@ -1307,7 +1307,7 @@ impl CastSpeakers {
         if reported.is_some_and(|volume| volume.control_type == ControlType::Fixed) {
             return;
         }
-        if reported.is_some_and(|volume| answers_level(level, volume.level)) {
+        if reported.is_some_and(|volume| answers_volume(level, volume)) {
             // The device reports only changes, so this level gets no answer,
             // and the latest level sent replaces whatever was still in flight.
             self.unanswered.clear();
@@ -1347,7 +1347,7 @@ impl CastSpeakers {
         let answered = self
             .unanswered
             .iter()
-            .position(|&sent| answers_level(sent, level));
+            .position(|&sent| answers_volume(sent, &volume));
         if let Some(index) = answered {
             self.unanswered.drain(..=index);
         }
