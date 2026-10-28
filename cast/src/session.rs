@@ -934,6 +934,22 @@ impl CastSession {
         {
             self.report(event);
         }
+        // The stream URL names the local address of the channel (C55); one
+        // on the old address may be out of reach, so the stream loads again.
+        let local_ip = self.client.local_address().ip();
+        let rebound = local_ip != self.server.address().ip();
+        if rebound {
+            if let Err(error) = self.server.rebind(local_ip) {
+                return self.end(SessionEnd::Failed(error.into()));
+            }
+            self.load.url = self.server.url();
+            if !self.load.metadata.images.is_empty()
+                && let Some(url) = self.server.artwork_url()
+            {
+                self.load.metadata.images = vec![url];
+            }
+        }
+        let reload = reload || rebound;
         let resumed = if reload {
             self.client.resume(&self.app, None, &self.load.url)
         } else {
