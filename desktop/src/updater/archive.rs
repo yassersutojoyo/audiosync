@@ -3,7 +3,6 @@
 use std::io::{self, Read};
 
 use super::appcast::Arch;
-use super::files::{is_blocked, is_disk_full};
 use super::version::Version;
 
 pub const EXE_NAME: &str = "audiosync.exe";
@@ -19,9 +18,6 @@ pub enum ArchiveError {
     TooBig,
     /// The exe isn't a PE image for this machine.
     WrongMachine,
-    DiskFull,
-    /// Windows security removed or blocked a file (spec S315).
-    Blocked,
     Io(io::Error),
 }
 
@@ -34,8 +30,6 @@ impl std::fmt::Display for ArchiveError {
             ArchiveError::TwoExes => write!(f, "two {EXE_NAME} entries"),
             ArchiveError::TooBig => write!(f, "over {MAX_UNPACKED} bytes unpacked"),
             ArchiveError::WrongMachine => write!(f, "an exe for another machine"),
-            ArchiveError::DiskFull => write!(f, "the disk is full"),
-            ArchiveError::Blocked => write!(f, "blocked by Windows security"),
             ArchiveError::Io(error) => write!(f, "{error}"),
         }
     }
@@ -43,13 +37,7 @@ impl std::fmt::Display for ArchiveError {
 
 impl From<io::Error> for ArchiveError {
     fn from(error: io::Error) -> ArchiveError {
-        if is_disk_full(&error) {
-            ArchiveError::DiskFull
-        } else if is_blocked(&error) {
-            ArchiveError::Blocked
-        } else {
-            ArchiveError::Io(error)
-        }
+        ArchiveError::Io(error)
     }
 }
 
@@ -218,10 +206,6 @@ pub mod tests {
         writer.finish().expect("the zip finishes").into_inner()
     }
 
-    fn unpack_bytes(zip: &[u8]) -> Result<Unpacked, ArchiveError> {
-        unpack(zip, Arch::X64)
-    }
-
     // covers: S300
     #[test]
     fn zip_entries_with_folders_dot_dot_or_drive_letters_are_refused() {
@@ -237,7 +221,7 @@ pub mod tests {
             "folder/",
         ] {
             let zip = zip_of(&[("audiosync.exe", &exe), (bad, b"x")]);
-            let result = unpack_bytes(&zip);
+            let result = unpack(&zip, Arch::X64);
             assert!(
                 matches!(result, Err(ArchiveError::BadName(_))),
                 "{bad:?}: {result:?}"
@@ -250,17 +234,17 @@ pub mod tests {
     // covers: S300
     #[test]
     fn a_zip_without_audiosync_exe_or_with_an_exe_for_the_other_machine_is_refused() {
-        let result = unpack_bytes(&zip_of(&[(NOTICES_NAME, b"n")]));
+        let result = unpack(&zip_of(&[(NOTICES_NAME, b"n")]), Arch::X64);
         assert!(matches!(result, Err(ArchiveError::NoExe)), "{result:?}");
 
         let arm = fake_exe(Arch::Arm64.pe_machine(), b"");
-        let result = unpack_bytes(&zip_of(&[(EXE_NAME, &arm)]));
+        let result = unpack(&zip_of(&[(EXE_NAME, &arm)]), Arch::X64);
         assert!(
             matches!(result, Err(ArchiveError::WrongMachine)),
             "{result:?}"
         );
 
-        let result = unpack_bytes(&zip_of(&[(EXE_NAME, b"plain text")]));
+        let result = unpack(&zip_of(&[(EXE_NAME, b"plain text")]), Arch::X64);
         assert!(
             matches!(result, Err(ArchiveError::WrongMachine)),
             "{result:?}"
@@ -268,10 +252,10 @@ pub mod tests {
 
         let x64 = fake_exe(Arch::X64.pe_machine(), b"");
         let two = zip_of(&[(EXE_NAME, &x64), ("AudioSync.EXE", &x64)]);
-        let result = unpack_bytes(&two);
+        let result = unpack(&two, Arch::X64);
         assert!(matches!(result, Err(ArchiveError::TwoExes)), "{result:?}");
 
-        let result = unpack_bytes(b"PK but not really");
+        let result = unpack(b"PK but not really", Arch::X64);
         assert!(
             matches!(result, Err(ArchiveError::NotAZip(_))),
             "{result:?}"
@@ -282,7 +266,7 @@ pub mod tests {
             (NOTICES_NAME, b"n"),
             ("extra.txt", b"skip"),
         ]);
-        let unpacked = unpack_bytes(&good).expect("a good zip unpacks");
+        let unpacked = unpack(&good, Arch::X64).expect("a good zip unpacks");
         assert_eq!(unpacked.exe, x64);
         assert_eq!(unpacked.notices.as_deref(), Some(&b"n"[..]));
     }

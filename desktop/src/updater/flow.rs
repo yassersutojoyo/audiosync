@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use ed25519_dalek::VerifyingKey;
 
 use super::appcast::{self, Arch, Update};
-use super::archive::{self, ArchiveError};
+use super::archive;
 use super::fetch::{self, Fetch, FetchError, Kind};
 use super::files::{Files, Pause, Retrying, is_blocked, is_disk_full, is_locked};
 use super::relaunch::Launch;
@@ -170,6 +170,11 @@ pub fn install(
         }
     };
     let held = hold(&dir);
+    if let Err(error) = &held {
+        env.log.log(|| {
+            format!("updater: the temp folder can't be held, another copy may delete it ({error})")
+        });
+    }
     let outcome = install_in(env, update, &dir, progress, cancel);
     drop(held);
     let removed = fs::remove_dir_all(&dir);
@@ -338,8 +343,6 @@ fn install_in(
     });
     let unpacked = match unpacked {
         Ok(unpacked) => unpacked,
-        Err(ArchiveError::DiskFull) => return Installed::DiskFull,
-        Err(ArchiveError::Blocked) => return Installed::Blocked,
         Err(_) => return Installed::BrokenDownload,
     };
     // The signature covers the bytes only, not the version the appcast names.
