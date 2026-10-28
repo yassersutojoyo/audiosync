@@ -13,6 +13,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::json;
+use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::auth::{
     self, DeviceFile, Limits, LoadProblem, PairOutcome, Pairing, Snapshot, TokenStore,
@@ -131,7 +132,6 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             port: DEFAULT_PORT,
-            // IPv6 first: where it is dual-stack the IPv4 bind then fails and is skipped.
             listen: vec![
                 IpAddr::V6(Ipv6Addr::UNSPECIFIED),
                 IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -545,17 +545,38 @@ impl fmt::Debug for RemoteServer {
     }
 }
 
+fn bind(address: SocketAddr) -> io::Result<TcpListener> {
+    let socket = Socket::new(
+        Domain::for_address(address),
+        Type::STREAM,
+        Some(Protocol::TCP),
+    )?;
+    if address.is_ipv6() {
+        // Each family on its own socket, so another app on either one is seen on every OS.
+        socket.set_only_v6(true)?;
+    }
+    // As std's bind does: a restart may reuse a port in TIME_WAIT; on Windows it would allow theft.
+    #[cfg(not(windows))]
+    socket.set_reuse_address(true)?;
+    socket.bind(&address.into())?;
+    socket.listen(128)?;
+    Ok(socket.into())
+}
+
 fn bind_all(config: &Config) -> Result<(Vec<TcpListener>, u16), RemoteError> {
     let mut listeners = Vec::new();
     let mut port = config.port;
     let mut first_error = None;
     for address in &config.listen {
-        match TcpListener::bind((*address, port)) {
+        match bind((*address, port).into()) {
             Ok(listener) => {
                 let bound = listener.local_addr().map_err(RemoteError::Bind)?;
                 listener.set_nonblocking(true).map_err(RemoteError::Bind)?;
                 port = bound.port();
                 listeners.push(listener);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+                return Err(RemoteError::Bind(error));
             }
             Err(error) => {
                 first_error.get_or_insert(error);
