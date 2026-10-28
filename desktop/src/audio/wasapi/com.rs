@@ -446,6 +446,14 @@ impl Worker {
             let _ = thread.join();
         }
     }
+
+    /// Waits `timeout` for the thread's end from now on: a test starts the
+    /// thread with [`READY_TIMEOUT`], so a loaded machine can't fail the
+    /// start, then shortens the wait for the end it tests.
+    #[cfg(test)]
+    pub(super) fn set_timeout(&mut self, timeout: Duration) {
+        self.timeout = timeout;
+    }
 }
 
 impl Drop for Worker {
@@ -719,12 +727,14 @@ mod tests {
         timeout: Duration,
         hung: mpsc::Receiver<()>,
     ) -> Worker {
-        let (worker, ()) = spawn_worker_within("audiosync-test", timeout, stuck, move |ready| {
+        let start = timeout.max(READY_TIMEOUT);
+        let (mut worker, ()) = spawn_worker_within("audiosync-test", start, stuck, move |ready| {
             if ready.ok(()) {
                 let _ = hung.recv();
             }
         })
         .expect("it starts");
+        worker.set_timeout(timeout);
         worker
     }
 
