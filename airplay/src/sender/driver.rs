@@ -3423,6 +3423,8 @@ mod tests {
         let device = driver.directory.devices().next().cloned().expect("listed");
         let key = device.key.clone();
         let counters = Arc::new(SpeakerCounters::default());
+        // It starts as a P179 restart on NTP only, which its own restart keeps.
+        driver.ptp_restart.insert(key.clone(), None);
         driver.add_speaker(
             device,
             SpeakerOptions::new(Volume::Db(-20.0)),
@@ -3452,5 +3454,6 @@ mod tests {
         assert_eq!(relist(&[v4]), None);
         // The new session's connect is the same start, counted once.
         assert_eq!(counters.connect_starts(), 1);
+        assert!(driver.ptp_excluded.contains(&key));
     }
 }
