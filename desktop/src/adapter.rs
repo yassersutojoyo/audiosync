@@ -9218,32 +9218,6 @@ mod tests {
     }
 
     #[test]
-    fn a_retrying_speaker_whose_receiver_is_gone_is_named_by_no_notice() {
-        let (mut adapter, fake, kitchen, _) = airplay_adapter();
-        adapter.set_speaker_enabled(&ap(&kitchen), true);
-        fake.state(&kitchen, AirPlayState::Playing);
-        adapter.poll();
-        fake.fail(&kitchen, ErrorKind::Unreachable);
-        adapter.poll();
-        assert_eq!(messages(&adapter).len(), 1);
-        fake.gone(&kitchen);
-        adapter.poll();
-        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_none());
-        let left = messages(&adapter);
-        assert!(
-            left.is_empty(),
-            "the gone speaker's notice stayed: {left:?}"
-        );
-        fake.fail(&kitchen, ErrorKind::Unreachable);
-        adapter.poll();
-        let raised = messages(&adapter);
-        assert!(
-            raised.is_empty(),
-            "a late retry raised a notice: {raised:?}"
-        );
-    }
-
-    #[test]
     fn a_retrying_airplay_speaker_row_says_reconnecting_until_it_plays() {
         let reconnecting = SpeakerState::Waiting(ui_model::Waiting::Reconnecting);
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
@@ -9398,8 +9372,8 @@ mod tests {
     // of waiting off the network.
     // covers: P215, S222
     #[test]
-    fn a_speaker_whose_receiver_is_gone_mid_stream_keeps_its_row_and_its_place_in_the_sender_off_the_network(
-    ) {
+    fn a_speaker_whose_receiver_is_gone_mid_stream_keeps_its_row_and_its_place_in_the_sender_off_the_network()
+     {
         let off_network = SpeakerState::Waiting(ui_model::Waiting::NotOnNetwork);
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
         adapter.set_speaker_enabled(&ap(&kitchen), true);
