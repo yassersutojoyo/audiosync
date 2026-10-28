@@ -942,6 +942,9 @@ fn ap2_a_pair_sends_every_member_the_same_full_stereo_audio() {
 #[test]
 fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     const ANSWER: Duration = Duration::from_millis(800);
+    // Feedback answered this late goes out every third interval, as on a
+    // runner too loaded to keep the 2 s rhythm.
+    const SLOW_FEEDBACK: Duration = Duration::from_millis(4_200);
     let _serial = serial();
     let udp = Udp::bind();
     let server = Ap2Server::start(udp.fake(FakeAp2::new()));
@@ -966,6 +969,10 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     );
 
     // Paused for a while: no audio, the feedback goes on.
+    server
+        .fake()
+        .pause
+        .insert("POST /feedback".to_owned(), SLOW_FEEDBACK);
     let feedback = count(&server, "POST /feedback");
     sender.pause();
     let paused = Instant::now();
@@ -991,6 +998,7 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
 
     // A delay FLUSH in flight when the pause comes: only the pause FLUSH's
     // answer, about 2 ANSWER after the pause, lets the audio out.
+    server.fake().pause.remove("POST /feedback");
     server.fake().pause.insert("FLUSH".to_owned(), ANSWER);
     let flushes = server.fake().flushes_seen.clone();
     sender.set_delay(&key, Duration::from_millis(200));
