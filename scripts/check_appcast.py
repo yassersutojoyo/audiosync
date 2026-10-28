@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Checks a release appcast.xml against docs/ENGINE_SPEC.md S311.
 
-The appcast must hold exactly one Mac item, plus one item each for
-windows-x64 and windows-arm64 when Windows zips are given, and no Windows
-item when none are. Every item has one enclosure with a sparkle:edSignature,
+The appcast must hold exactly one Mac item and one item each for
+windows-x64 and windows-arm64; with --mac-only it must hold the Mac item and
+no Windows item, and refuses Windows zips. A release is taken to carry
+Windows unless --mac-only says otherwise, so a forgotten Windows zip fails
+here instead of leaving Windows users without the update. Every item has one enclosure with a sparkle:edSignature,
 a url ending in releases/download/v<version>/<zip name> and a length; every
 item carries the release's sparkle:shortVersionString and one shared
 sparkle:version. Each zip given must match its item's url name and length,
@@ -26,14 +28,15 @@ on Windows-looking zips in a folder that aren't named as the script expects.
 among them needs an appcast item whose sparkle:os matches the zip, and every
 item's zip must be among them. The names come as arguments (paths count by
 file name) or, with --assets-file, from a file holding the output of
-`gh release view TAG --json assets` or one name per line.
+`gh release view TAG --json assets` or one name per line. It also wants a
+Mac item and, without --mac-only, an item for each Windows architecture.
 
 Usage:
-    scripts/check_appcast.py APPCAST VERSION [ZIP...]
+    scripts/check_appcast.py [--mac-only] APPCAST VERSION [ZIP...]
     scripts/check_appcast.py APPCAST VERSION ZIP... --add ZIP SIGNATURE [--add ZIP SIGNATURE]
     scripts/check_appcast.py --strays FOLDER VERSION
-    scripts/check_appcast.py --assets APPCAST VERSION NAME...
-    scripts/check_appcast.py --assets APPCAST VERSION --assets-file FILE
+    scripts/check_appcast.py --assets [--mac-only] APPCAST VERSION NAME...
+    scripts/check_appcast.py --assets [--mac-only] APPCAST VERSION --assets-file FILE
     scripts/check_appcast.py --self-test
 """
 
@@ -52,6 +55,7 @@ from xml.sax.saxutils import escape, quoteattr
 SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 WINDOWS_ARCHES = ("windows-x64", "windows-arm64")
 MAC_OS = ("", "macos")
+MAC_ONLY_HINT = "pass --mac-only for a release without Windows"
 WINDOWS_ZIP_FILES = {"audiosync.exe", "THIRD-PARTY-NOTICES.txt"}
 ED25519_SIGNATURE_BYTES = 64
 
@@ -108,7 +112,7 @@ def windows_zip_problems(path):
     return [f"{path}: holds {got}; expected exactly {want} at the top level"]
 
 
-def check(appcast, version, zips):
+def check(appcast, version, zips, mac_only=False):
     """One line per way the appcast and zips break S311; empty when they pass."""
     version = version[1:] if version.startswith("v") else version
     try:
@@ -124,10 +128,12 @@ def check(appcast, version, zips):
             continue
         zip_by_os[os_name] = path
         if os_name != "macos":
-            problems += windows_zip_problems(path)
-    given_windows = [arch for arch in WINDOWS_ARCHES if arch in zip_by_os]
-    if given_windows:
-        problems += [f"no {arch} zip given next to the other Windows zip"
+            if mac_only:
+                problems.append(f"{path}: a Windows zip, but --mac-only says the release has none")
+            else:
+                problems += windows_zip_problems(path)
+    if zips and not mac_only:
+        problems += [f"no {arch} zip given ({MAC_ONLY_HINT})"
                      for arch in WINDOWS_ARCHES if arch not in zip_by_os]
 
     items_by_os = {}
@@ -187,9 +193,9 @@ def check(appcast, version, zips):
         problems.append(f"{macs} Mac items; expected 1")
     for arch in WINDOWS_ARCHES:
         count = len(items_by_os.get(arch, []))
-        want = 1 if given_windows else 0
+        want = 0 if mac_only else 1
         if count != want:
-            reason = "with Windows zips given" if given_windows else "without Windows zips"
+            reason = "with --mac-only" if mac_only else f"({MAC_ONLY_HINT})"
             problems.append(f"{count} {arch} items; expected {want} {reason}")
     return problems
 
@@ -209,8 +215,9 @@ def read_asset_names(path):
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-def asset_problems(appcast, version, assets):
-    """One line per release zip without an appcast item, and per item whose zip is not attached."""
+def asset_problems(appcast, version, assets, mac_only=False):
+    """One line per release zip without an appcast item, per item whose zip is not attached,
+    and per OS the release must reach that has no item."""
     version = version[1:] if version.startswith("v") else version
     try:
         root = ET.parse(appcast).getroot()
@@ -218,6 +225,7 @@ def asset_problems(appcast, version, assets):
         return [f"{appcast}: not a readable appcast ({error})"]
     url_prefix = f"releases/download/v{version}/"
     item_zips = set()
+    item_oses = set()
     problems = []
     for number, item in enumerate(root.iter("item"), 1):
         for enclosure in item.findall("enclosure"):
@@ -232,6 +240,10 @@ def asset_problems(appcast, version, assets):
             # The Windows updater picks an enclosure by sparkle:os alone, never by its url.
             os_name = enclosure.get(sparkle("os"), "")
             os_name = "macos" if os_name in MAC_OS else os_name
+            item_oses.add(os_name)
+            if mac_only and os_name in WINDOWS_ARCHES:
+                problems.append(f"item {number}: a {os_name} item, but --mac-only says the "
+                                f"release has none")
             if os_name != zip_os(name):
                 problems.append(f"item {number}: {name} with sparkle:os {os_name!r}; "
                                 f"expected {zip_os(name)!r}")
@@ -239,6 +251,11 @@ def asset_problems(appcast, version, assets):
         if name.endswith(".zip") and name not in item_zips:
             problems.append(f"{name} is attached but has no appcast item, so "
                             f"{'Windows' if zip_os(name) != 'macos' else 'Mac'} users never see this release")
+    if "macos" not in item_oses:
+        problems.append("no Mac item in the appcast, so Mac users never see this release")
+    if not mac_only:
+        problems += [f"no {arch} item in the appcast, so Windows users never see this release "
+                     f"({MAC_ONLY_HINT})" for arch in WINDOWS_ARCHES if arch not in item_oses]
     return problems
 
 
@@ -352,12 +369,12 @@ def self_test():
                     fixture_item(x64, os_attr="windows-x64"),
                     fixture_item(arm, os_attr="windows-arm64")]
 
-        def run(name, items, zips, want, version="0.8.0"):
+        def run(name, items, zips, want, version="0.8.0", mac_only=False):
             nonlocal cases
             cases += 1
             appcast = os.path.join(folder, f"{name}.xml")
             write_appcast(appcast, items)
-            got = check(appcast, version, zips)
+            got = check(appcast, version, zips, mac_only)
             if want is None:
                 if got:
                     failures.append(f"{name}: expected a pass, got {got}")
@@ -367,13 +384,15 @@ def self_test():
         everything = [mac, x64, arm]
         run("full release", good(), everything, None)
         run("tag form of the version", good(), everything, None, version="v0.8.0")
-        run("Mac only, no zips", good()[:1], [], None)
-        run("Mac only, Mac zip", good()[:1], [mac], None)
+        run("Mac only, no zips", good()[:1], [], None, mac_only=True)
+        run("Mac only, Mac zip", good()[:1], [mac], None, mac_only=True)
         run("Mac-only appcast without --mac-only", good()[:1], [mac], "0 windows-x64 items; expected 1")
         run("Mac-only appcast, no zips, without --mac-only", good()[:1], [], "0 windows-arm64 items; expected 1")
         run("macos named on the Mac item",
             [fixture_item(mac, os_attr="macos")] + good()[1:], everything, None)
-        run("Windows items without Windows zips", good(), [mac], "expected 0 without")
+        run("Windows items with --mac-only", good(), [mac], "expected 0 with --mac-only", mac_only=True)
+        run("a Windows zip with --mac-only", good()[:1], [mac, x64], "--mac-only says", mac_only=True)
+        run("Windows items, Mac zip only", good(), [mac], "no windows-x64 zip given")
         run("an arch item missing", good()[:2], everything, "0 windows-arm64 items")
         run("only one Windows zip", good()[:2], [mac, x64], "no windows-arm64 zip")
         run("two Mac items", good() + good()[:1], everything, "2 Mac items")
@@ -465,12 +484,12 @@ def self_test():
             if got != want:
                 failures.append(f"--strays on {name}: exit {got}, expected {want}")
 
-        def against_assets(name, items, assets, want, use_file=None):
+        def against_assets(name, items, assets, want, use_file=None, mac_only=False):
             nonlocal cases
             cases += 1
             appcast = os.path.join(folder, f"{name}.xml")
             write_appcast(appcast, items)
-            argv = ["--assets", appcast, "0.8.0"]
+            argv = ["--assets", appcast, "0.8.0"] + (["--mac-only"] if mac_only else [])
             if use_file is None:
                 argv += assets
             else:
@@ -494,7 +513,11 @@ def self_test():
         other_assets = ["AudioSync-0.8.0.dmg", "SHA256SUMS.txt", "appcast.xml"]
         x64_name, arm_name = names[1], names[2]
         against_assets("assets of a full release", good(), names + other_assets, None)
-        against_assets("assets of a Mac-only release", good()[:1], names[:1] + other_assets, None)
+        against_assets("assets of a Mac-only release", good()[:1], names[:1] + other_assets, None,
+                       mac_only=True)
+        against_assets("Windows items with --mac-only", good(), names + other_assets,
+                       "a windows-x64 item, but --mac-only", mac_only=True)
+        against_assets("no Mac item", good()[1:], names[1:] + other_assets, "no Mac item")
         against_assets("Mac-only assets without --mac-only", good()[:1], names[:1] + other_assets,
                        "no windows-x64 item")
         against_assets("Windows zips attached, appcast Mac-only", good()[:1], names + other_assets,
@@ -544,13 +567,15 @@ def main(argv):
                         help="fail on Windows-looking zips in FOLDER that aren't named for VERSION")
     parser.add_argument("--assets", action="store_true",
                         help="compare the release's asset names (instead of ZIPs) with the appcast items")
+    parser.add_argument("--mac-only", action="store_true",
+                        help="the release has no Windows zips: want the Mac item only")
     parser.add_argument("--assets-file", metavar="FILE",
                         help="with --assets: read the names from FILE (gh release view --json "
                              "assets output, or one per line; - is stdin)")
     parser.add_argument("appcast", nargs="?", help="the release's appcast.xml")
     parser.add_argument("version", nargs="?", help="the release version, such as 0.8.0 or v0.8.0")
     parser.add_argument("zips", nargs="*", help="the release's zips (Mac and Windows)")
-    args = parser.parse_args(argv)
+    args = parser.parse_intermixed_args(argv)
     if args.self_test:
         return self_test()
     if args.strays:
@@ -577,11 +602,13 @@ def main(argv):
                 return 1
         if not names:
             parser.error("--assets needs the asset names, as arguments or with --assets-file")
-        problems = asset_problems(args.appcast, args.version, set(names))
+        problems = asset_problems(args.appcast, args.version, set(names), args.mac_only)
         for problem in problems:
             print(problem)
         return 1 if problems else 0
     if args.add:
+        if args.mac_only:
+            parser.error("--add writes Windows items; it takes no --mac-only")
         try:
             with open(args.appcast, encoding="utf-8") as f:
                 text = add_windows(f.read(), args.version, [tuple(pair) for pair in args.add])
@@ -590,7 +617,7 @@ def main(argv):
             return 1
         with open(args.appcast, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
-    problems = check(args.appcast, args.version, args.zips)
+    problems = check(args.appcast, args.version, args.zips, args.mac_only)
     for problem in problems:
         print(problem)
     return 1 if problems else 0
