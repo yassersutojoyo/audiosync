@@ -1299,6 +1299,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | local delay: a new AirPlay delay re-times the local speakers | S177, S178 |
 | local delay: a late speaker switched on or off re-times the running others | S177 |
 | local delay: editing the lowest offset re-times the others | S177 |
+| local delay: an output lost for one poll keeps the others' hold-backs | S177, S328 |
 | AirPlay delay: the native sender's field shows L + A, follows a new L and an edit stores the difference | S178, S181 |
 | migration: a setup tuned for AirPlay sounds the same with AirPlay | S179 |
 | migration: the reference's old delay becomes the AirPlay delay | S179 |
@@ -1521,6 +1522,10 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | hold_backs_through_the_c_interface_match_the_rust_ones | S172, S176 |
 | offsets_and_airplay_settings_are_sanitized | S175, S178 |
 | the_mac_migration_through_the_c_interface_matches_the_rust_one | S179 |
+| a_lost_output_keeps_its_offset_and_lead_for_10_s | S176, S208, S328 |
+| a_lost_output_listed_again_within_10_s_moves_no_hold_back | S177, S328 |
+| a_lost_output_still_missing_after_10_s_retimes_once | S177, S328 |
+| switching_off_a_lost_output_retimes_at_once | S177, S328 |
 
 ### local delay model: Windows (`cargo test` in `desktop/`)
 
@@ -1552,6 +1557,7 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | the_sync_hint_names_the_reference_and_says_which_way_to_move_a_value (`desktop/src/view.rs`) | S181 |
 | a_delay_that_is_not_a_signed_whole_number_applies_nothing_and_shows_the_stored_value (`desktop/src/view.rs`) | S181 |
 | a_paste_holding_anything_but_a_signed_whole_number_is_blocked_whole (`desktop/src/view.rs`) | S181 |
+| a_bluetooth_output_unlisted_for_one_poll_leaves_the_built_in_delay_unchanged (`desktop/src/audio/controller.rs`) | S177, S328 |
 
 ### local delay model: Mac
 
@@ -2203,7 +2209,7 @@ The release side:
 | a_windows_wake_that_comes_after_the_buffer_ran_dry_moves_no_output_and_corrects_no_drift (`core/tests/timing_matrix.rs`) | S207, S324 |
 | a_windows_endpoint_whose_wakes_jitter_by_up_to_3_ms_makes_no_start_step (`core/tests/render_start.rs`) | S324 |
 
-### Pro Audio threads, stalled outputs and capture loss: Windows (`cargo test` in `desktop/`)
+### Pro Audio threads, stalled outputs, capture loss, format changes, busy inputs and unwatched apps: Windows (`cargo test` in `desktop/`)
 
 | Test | Clauses |
 |---|---|
@@ -2219,6 +2225,19 @@ The release side:
 | a_capture_reopen_waits_while_the_lost_capture_still_holds_the_ring (`desktop/src/audio/controller.rs`) | S329 |
 | a_capture_back_in_another_format_restarts_the_session (`desktop/src/audio/controller.rs`) | S329 |
 | a_capture_that_fails_its_last_try_stops_as_before (`desktop/src/audio/controller.rs`) | S21, S329 |
+| a_format_notice_for_a_playing_output_reopens_it_in_the_new_format_in_the_same_poll (`desktop/src/audio/controller.rs`) | S330 |
+| a_format_notice_that_changes_nothing_leaves_the_output_playing (`desktop/src/audio/controller.rs`) | S330 |
+| a_format_reopen_never_moves_another_outputs_hold_back (`desktop/src/audio/controller.rs`) | S177, S330 |
+| a_session_disconnected_with_its_device_unplugged_is_lost (`desktop/src/audio/controller.rs`) | S68, S330 |
+| an_input_held_exclusively_is_busy_at_initialize_and_at_start (`desktop/src/audio/wasapi/loopback.rs`) | S333 |
+| an_input_blocked_by_privacy_settings_stays_microphone_blocked (`desktop/src/audio/wasapi/loopback.rs`) | S141, S333 |
+| a_capture_start_on_a_busy_input_fails_with_the_busy_reason (`desktop/src/audio/controller.rs`) | S333 |
+| a_lost_capture_whose_input_is_busy_keeps_trying_every_3_s (`desktop/src/audio/controller.rs`) | S329, S333 |
+| a_busy_capture_is_told_free_when_streaming_stops (`desktop/src/audio/controller.rs`) | S333 |
+| a_lost_capture_whose_input_is_busy_shows_the_capture_notice_until_it_runs (`desktop/src/adapter.rs`) | S333 |
+| an_unwatched_app_that_leaves_the_process_list_quits_the_source_within_one_check (`desktop/src/audio/controller.rs`) | S327 |
+| an_unwatched_app_whose_process_id_returns_with_another_start_time_counts_as_quit (`desktop/src/audio/controller.rs`) | S327 |
+| an_unwatched_app_that_restarts_gets_the_same_quit_handling_as_a_watched_one (`desktop/src/audio/controller.rs`) | S227, S327 |
 
 ## 19. Windows updater
 
