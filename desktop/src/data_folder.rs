@@ -169,8 +169,11 @@ pub fn choose(
     base: impl FnOnce() -> Option<PathBuf>,
     package_local: impl FnOnce() -> Option<PathBuf>,
 ) -> Option<PathBuf> {
-    let _ = (identity, package_local);
-    base().map(|base| base.join(FOLDER_NAME))
+    if identity.is_packaged() {
+        package_local()
+    } else {
+        base().map(|base| base.join(FOLDER_NAME))
+    }
 }
 
 /// A new file at `path` for writing; an error when anything is there,

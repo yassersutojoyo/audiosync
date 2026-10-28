@@ -349,8 +349,11 @@ pub enum StoreKind {
 
 #[cfg(any(windows, test))]
 pub fn store_kind(identity: &crate::package::Identity) -> StoreKind {
-    let _ = identity;
-    StoreKind::RunKey
+    if identity.is_packaged() {
+        StoreKind::StartupTask
+    } else {
+        StoreKind::RunKey
+    }
 }
 
 /// A packaged run's store until the startup task is wired: it reads as off

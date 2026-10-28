@@ -52,15 +52,16 @@ pub struct DebugLog {
 
 impl DebugLog {
     /// The log the environment asks for when `AUDIOSYNC_DEBUG` is `1`,
-    /// nothing otherwise: `audiosync-debug.log` in the temporary folder, or
-    /// on Linux `debug.log` in the state folder (the temporary folder only
-    /// when that can't be made, which the log's first line then says).
+    /// nothing otherwise: `audiosync-debug.log` in the temporary folder (in
+    /// the package's local cache for a packaged run), or on Linux
+    /// `debug.log` in the state folder (the temporary folder only when that
+    /// can't be made, which the log's first line then says).
     /// A `relaunched` start keeps what the file holds (spec S309).
     pub fn from_env(relaunched: bool) -> DebugLog {
-        let (path, warning) = env_path();
+        let (path, first) = env_path();
         let log = DebugLog::at_launch(path, relaunched);
-        if let Some(warning) = warning {
-            log.log(|| warning);
+        if let Some(first) = first {
+            log.log(|| first);
         }
         log
     }
@@ -209,12 +210,22 @@ pub fn env_skips_auto_connect() -> bool {
     )
 }
 
-/// Where the environment asks for the log, and a line to start it with
-/// when it can't go where it should.
+/// Where the environment asks for the log, and the line a launch starts it
+/// with: the package identity, and for a packaged run the log's folder
+/// (`crate::package::log_line`).
 #[cfg(not(target_os = "linux"))]
 fn env_path() -> (Option<PathBuf>, Option<String>) {
+    use crate::package;
     let setting = std::env::var_os(ENV_VAR);
-    (log_path(setting.as_deref(), &std::env::temp_dir()), None)
+    if setting.as_deref() != Some(OsStr::new("1")) {
+        return (None, None);
+    }
+    let identity = package::current();
+    let folder = package::log_folder(identity, std::env::temp_dir, package::local_cache_folder);
+    let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let line = package::log_line(identity, folder.as_deref(), local_app_data.as_deref());
+    let path = folder.and_then(|folder| log_path(setting.as_deref(), &folder));
+    (path, Some(line))
 }
 
 /// On Linux the log lives in the state folder, which outlasts a sign-out

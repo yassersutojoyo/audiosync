@@ -665,7 +665,10 @@ pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
 /// Whether the updater runs: in a release build only, and never from a
 /// package, whose files Windows keeps read-only and checks for tampering.
 fn runs(release: bool, identity: &crate::package::Identity, log: &DebugLog) -> bool {
-    let _ = (identity, log);
+    if let Some(name) = identity.full_name() {
+        log.log(|| format!("updater: off, packaged as {name}"));
+        return false;
+    }
     release
 }
 

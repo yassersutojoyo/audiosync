@@ -46,8 +46,11 @@ pub enum Answer {
 }
 
 pub fn answer(code: u32) -> Answer {
-    let _ = code;
-    Answer::Unpackaged
+    match code {
+        ERROR_SUCCESS | ERROR_INSUFFICIENT_BUFFER => Answer::Packaged,
+        APPMODEL_ERROR_NO_PACKAGE => Answer::Unpackaged,
+        other => Answer::Other(other),
+    }
 }
 
 /// `GetCurrentPackageFullName`, so tests can answer for Windows.
@@ -148,8 +151,11 @@ pub fn log_folder(
     temp: impl FnOnce() -> PathBuf,
     local_cache: impl FnOnce() -> Option<PathBuf>,
 ) -> Option<PathBuf> {
-    let _ = (identity, local_cache);
-    Some(temp())
+    if identity.is_packaged() {
+        local_cache()
+    } else {
+        Some(temp())
+    }
 }
 
 /// The log's first line. The folder is named relative to `%LOCALAPPDATA%`,
@@ -162,9 +168,15 @@ pub fn log_line(
 ) -> String {
     match identity {
         Identity::Unpackaged => "package: none".to_owned(),
-        _ => {
-            let _ = (folder.map(|folder| shown_folder(folder, local_app_data)),);
-            "package: none".to_owned()
+        Identity::Unexpected(code) => {
+            format!("package: none (GetCurrentPackageFullName returned {code})")
+        }
+        Identity::Packaged(name) => {
+            let shown = folder.map(|folder| shown_folder(folder, local_app_data));
+            format!(
+                "package: {name}; debug log folder: {}",
+                shown.unwrap_or_default()
+            )
         }
     }
 }

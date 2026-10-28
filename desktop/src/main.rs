@@ -51,6 +51,10 @@ mod network_profile;
 mod now_playing_card;
 mod os;
 mod os_version;
+#[cfg_attr(
+    not(windows),
+    expect(dead_code, reason = "only a Windows build runs from a package")
+)]
 mod package;
 mod placement;
 mod platform;
