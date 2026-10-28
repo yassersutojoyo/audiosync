@@ -1867,6 +1867,47 @@ do {
           "automation consent: a player whose permission macOS can't tell yet is not read",
           "\(early) \(String(describing: decided))")
 }
+do {
+    // Spotify's no-prompt check never answers (measured on a Mac, 2026-10-28); the user allows its prompt at 10 s.
+    var consent = AutomationConsent()
+    var checks = 0, reads = 0
+    var asks: [Int] = []
+    var answered = false
+    for tick in 0...20 {
+        let now = 2 * Double(tick)
+        if !answered, now >= 10, let token = asks.first {
+            consent.ended(token, at: now, answer: .allowed)
+            answered = true
+        }
+        let permission: AutomationConsent.Permission
+        if let cached = consent.startCheck(consentSpotify) {
+            permission = cached
+        } else {
+            checks += 1
+            permission = consent.timedOut(consentSpotify)
+        }
+        let step = consent.step(consentSpotify, running: true, permission: permission, mayAsk: true, at: now)
+        if let token = consentAsk(step) { asks.append(token) }
+        if step == .read { reads += 1 }
+    }
+    check(checks == 1 && asks.count == 1 && reads == 16,
+          "automation consent: a check that never answers counts as undecided, starts no second check, and the one request's Allow lets the player be read",
+          "\(checks) \(asks) \(reads)")
+}
+do {
+    // Before the explanation was read a timed-out check holds; its late answer lets the next check start.
+    var consent = AutomationConsent()
+    let first = consent.startCheck(consentSpotify)
+    let held = consent.step(consentSpotify, running: true, permission: consent.timedOut(consentSpotify), mayAsk: false, at: 0)
+    let whileOut = consent.startCheck(consentSpotify)
+    consent.checked(consentSpotify, .denied)
+    let afterAnswer = consent.startCheck(consentSpotify)
+    let other = consent.startCheck(consentMusic)
+    check(first == nil && held == .hold && whileOut == .undecided && afterAnswer == nil && other == nil
+            && !consent.mayCommand(consentSpotify, permission: whileOut ?? .allowed),
+          "automation consent: a timed-out check holds before the explanation, and its late answer lets the next check start",
+          "\(String(describing: first)) \(held) \(String(describing: whileOut)) \(String(describing: afterAnswer))")
+}
 check(AutomationConsent.permission(status: 0) == .allowed && AutomationConsent.permission(status: -1743) == .denied
         && AutomationConsent.permission(status: -1744) == .undecided && AutomationConsent.permission(status: -600) == .unknown,
       "automation consent: macOS's answers read as allowed, denied, undecided, and anything else as unknown")
