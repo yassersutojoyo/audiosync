@@ -221,10 +221,11 @@ jobs:
           rustc --version
 
       - name: Build
-        # Only a push to main marks the exe as a release build, the one kind
-        # whose updater checks (docs/ENGINE_SPEC.md S293); branch builds stay unmarked.
+        # Only a push to main or to a release/ branch marks the exe as a release
+        # build, the one kind whose updater checks (docs/ENGINE_SPEC.md S293);
+        # other branch builds stay unmarked.
         env:
-          AUDIOSYNC_RELEASE_BUILD: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '1' || '' }}
+          AUDIOSYNC_RELEASE_BUILD: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) && '1' || '' }}
         run: cargo build --locked --release --target ${{ matrix.target }}
 
       - name: The executable carries the manifest and the version information
