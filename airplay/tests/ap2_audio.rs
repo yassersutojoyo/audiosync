@@ -1073,18 +1073,25 @@ fn ap2_ptp_session() {
     assert!(!ports_free(local), "the PTP ports are held under PTP");
 
     // Announce, Sync and Follow_Up reach the receiver's ports, from the
-    // sender's ports 319 and 320 (here the test's own), by unicast.
-    udp.general.take();
-    udp.event.take();
-    std::thread::sleep(Duration::from_millis(1_000));
-    let (general, event) = (udp.general.take(), udp.event.take());
+    // sender's ports 319 and 320 (here the test's own), by unicast. The
+    // window starts at an Announce and is shorter than their 1 s period, as
+    // when a loaded sender sends the next one late.
     let kinds = |got: &[(Instant, SocketAddr, Vec<u8>)], kind: u8| {
         got.iter().filter(|(_, _, b)| b[0] & 0x0F == kind).count()
     };
+    assert!(
+        udp.general
+            .wait_for(|(_, _, b)| b[0] & 0x0F == 0xB)
+            .is_some()
+    );
+    udp.general.take();
+    udp.event.take();
+    std::thread::sleep(Duration::from_millis(900));
+    let (general, event) = (udp.general.take(), udp.event.take());
     assert!(kinds(&general, 0xB) >= 1, "Announce");
     assert!(
         kinds(&general, 0x8) >= 6,
-        "Follow_Up x{} in 1 s",
+        "Follow_Up x{} in 0.9 s",
         kinds(&general, 0x8)
     );
     assert!((6..=10).contains(&kinds(&event, 0x0)), "Sync");
