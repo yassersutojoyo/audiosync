@@ -636,7 +636,18 @@ impl TrackInfo {
                 }
             };
             reader.played_last(self.last_played.as_deref());
-            if reading.track.is_some() || self.last_played.is_none() {
+            // An app paused when it was chosen never played, yet its paused track counts too.
+            let held = self
+                .reading
+                .as_ref()
+                .and_then(|reading| reading.track.as_ref())
+                .is_some_and(|track| {
+                    track.session.paused
+                        && counts(track, &source.follow, self.last_played.as_deref())
+                });
+            if reading.track.is_some()
+                || self.last_played.is_none() && (!held || self.idle_readings == 0)
+            {
                 self.reading = Some(reading);
             }
         }
