@@ -11968,6 +11968,28 @@ mod tests {
         );
     }
 
+    // covers: S246
+    #[test]
+    fn only_this_speaker_on_an_offline_cast_row_changes_nothing() {
+        let (mut adapter, _fake) = cast_adapter();
+        let id = cc_address("192.0.2.20");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), id.clone()])],
+            ..Settings::default()
+        });
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.20"), Ok(()));
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        adapter.poll();
+
+        adapter.only_this_speaker(&id);
+        assert!(enabled(&adapter, SPEAKERS), "the others stay on");
+        assert!(
+            !speaker_of(&adapter, &id).enabled,
+            "the offline row stays off"
+        );
+    }
+
     fn cast_ended(attempt: u64, end: SessionEnd) -> HostEvent {
         HostEvent::Ended {
             attempt: AttemptId(attempt),
