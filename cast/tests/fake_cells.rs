@@ -33,11 +33,22 @@ struct Feed {
     thread: Option<JoinHandle<()>>,
     /// Frames handed to the ring, refused ones included.
     frames: Arc<AtomicU64>,
+    /// Frames written more than [`LATE`] past their slot: a starved feed
+    /// catching up, which the sender may drop as ring backlog (C64).
+    late: Arc<AtomicU64>,
 }
+
+/// How late a block may be written before the pump plays silence for it
+/// and the catch-up may be dropped as ring backlog.
+const LATE: Duration = Duration::from_millis(100);
 
 impl Feed {
     fn seconds(&self) -> f64 {
         self.frames.load(Ordering::SeqCst) as f64 / 48_000.0
+    }
+
+    fn late_frames(&self) -> u64 {
+        self.late.load(Ordering::SeqCst)
     }
 }
 
@@ -56,11 +67,17 @@ fn feed(writer: AudioWriter) -> Feed {
     let flag = Arc::clone(&stop);
     let frames = Arc::new(AtomicU64::new(0));
     let count = Arc::clone(&frames);
+    let late = Arc::new(AtomicU64::new(0));
+    let late_count = Arc::clone(&late);
     let thread = thread::spawn(move || {
         let block = vec![9i16; 960];
         let start = Instant::now();
         let mut written = 0u32;
         while !flag.load(Ordering::SeqCst) {
+            let slot = start + Duration::from_millis(10) * written;
+            if slot.elapsed() > LATE {
+                late_count.fetch_add(480, Ordering::SeqCst);
+            }
             writer.write_i16(&block);
             count.fetch_add(480, Ordering::SeqCst);
             written += 1;
@@ -72,6 +89,7 @@ fn feed(writer: AudioWriter) -> Feed {
         stop,
         thread: Some(thread),
         frames,
+        late,
     }
 }
 
@@ -360,7 +378,7 @@ fn playing_at(current_time: Option<Value>) -> Command {
 #[test]
 fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
     let device = FakeDevice::start(Behavior::default());
-    let (mut session, _feed) = start(&device);
+    let (mut session, feed) = start(&device);
     let variants = [
         None,
         Some(json!(0.0)),
@@ -395,16 +413,34 @@ fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
         "{seen:?}"
     );
     let diagnostics = session.diagnostics();
+    let late = feed.late_frames();
     assert_eq!(diagnostics.current_time, Some(42.25));
-    assert_eq!(diagnostics.drift, Duration::ZERO);
-    assert!(!diagnostics.resync_offered);
+    // Drift is dropped audio plus time stalled (C79), and no status here
+    // stalls. A feed thread starved on a loaded machine catches up past the
+    // ring backlog and drops some (up to 0.9 s seen under 16 busy loops), so
+    // drops may only cover audio the feed wrote late; on time, none.
+    assert_eq!(diagnostics.rebuffers, 0);
+    assert!(
+        diagnostics.frames_dropped <= late,
+        "{late} late: {diagnostics:?}"
+    );
+    assert_eq!(
+        diagnostics.drift,
+        Duration::from_secs_f64(diagnostics.frames_dropped as f64 / 48_000.0),
+        "{diagnostics:?}"
+    );
+    assert_eq!(
+        diagnostics.resync_offered,
+        diagnostics.drift > Duration::from_millis(250),
+        "{diagnostics:?}"
+    );
     assert_eq!(device.payloads(NS_MEDIA, "LOAD").len(), 1);
     assert_eq!(device.connection_count(), 1);
     session.stop();
     device.join();
     cell(
         "C19",
-        "30 statuses, currentTime absent/0/backwards/1e9/negative/text/null: no reload, no drift",
+        "30 statuses, currentTime absent/0/backwards/1e9/negative/text/null: no reload, no drift from currentTime",
     );
 }
 
@@ -504,6 +540,14 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
     };
     let growth = per_second(first, &lines[filled]);
     let overflow = per_second(&lines[filled], last);
+    // The feed runs in real time and the device reads at PACE, so audio made
+    // but not yet read grows at 1 - PACE. Both totals are counted outside the
+    // socket, so TCP bursts do not move them; the margin covers a feed that
+    // runs late and catches up.
+    assert!(
+        (1.0 - PACE - 0.15..=1.0 - PACE + 0.15).contains(&growth),
+        "{growth} s/s piled up before the queue filled: {lines:?}"
+    );
     let reading = (last.2 - first.2) / (last.0 - first.0);
     assert!(
         (PACE - 0.05..=PACE + 0.05).contains(&reading),
