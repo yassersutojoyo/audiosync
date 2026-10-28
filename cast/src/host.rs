@@ -300,6 +300,9 @@ struct Shared {
     /// Set before the quit command is sent: teardowns from then on keep to
     /// C88's budget.
     quitting: Arc<AtomicBool>,
+    /// Makes the worker panic once while it handles the next start.
+    #[cfg(test)]
+    panic_in_start: AtomicBool,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -378,6 +381,8 @@ impl CastHost {
             active: Mutex::new(None),
             memory: Mutex::new(memory),
             quitting: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            panic_in_start: AtomicBool::new(false),
         });
         let worker = {
             let shared = Arc::clone(&shared);
@@ -759,6 +764,10 @@ impl Worker {
         selected: Arc<AtomicBool>,
     ) {
         let device = target.id;
+        #[cfg(test)]
+        if self.shared.panic_in_start.swap(false, Ordering::SeqCst) {
+            panic!("a test panic in the Cast worker");
+        }
         if !selected.load(Ordering::SeqCst) {
             return self.ended(attempt, device, SessionEnd::Deselected);
         }
@@ -907,5 +916,76 @@ impl Worker {
             device,
             end,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::audio_ring;
+
+    fn target(byte: u8) -> CastTarget {
+        CastTarget {
+            id: DeviceId([byte; 16]),
+            addresses: Vec::new(),
+            group: None,
+        }
+    }
+
+    fn start(host: &mut CastHost, byte: u8) -> Result<AttemptId, StartRefused> {
+        let (_writer, reader) = audio_ring(48_000);
+        host.start(target(byte), 48_000, Metadata::default(), reader)
+    }
+
+    fn attempt_of(event: &HostEvent) -> Option<AttemptId> {
+        match event {
+            HostEvent::Session { attempt, .. }
+            | HostEvent::Started { attempt, .. }
+            | HostEvent::Ended { attempt, .. } => Some(*attempt),
+            _ => None,
+        }
+    }
+
+    fn next_of(host: &CastHost, attempt: AttemptId) -> HostEvent {
+        let until = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < until {
+            while let Some(event) = host.poll_event() {
+                if attempt_of(&event) == Some(attempt) {
+                    return event;
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        panic!("no event of {attempt:?}");
+    }
+
+    // covers: C107
+    #[test]
+    fn a_panic_in_the_worker_ends_the_attempt_and_the_next_start_runs() {
+        let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+        host.shared.panic_in_start.store(true, Ordering::SeqCst);
+        let first = start(&mut host, 1).expect("starts");
+        let end = next_of(&host, first);
+        assert!(
+            matches!(
+                end,
+                HostEvent::Ended {
+                    end: SessionEnd::Failed(_),
+                    ..
+                }
+            ),
+            "{end:?}"
+        );
+        assert!(host.is_running());
+        assert_eq!(host.playing(), None);
+        let second = start(&mut host, 2).expect("the slot is free again");
+        let mut event = next_of(&host, second);
+        if !matches!(event, HostEvent::Ended { .. }) {
+            host.stop();
+            while !matches!(event, HostEvent::Ended { .. }) {
+                event = next_of(&host, second);
+            }
+        }
+        assert!(host.shutdown());
     }
 }
