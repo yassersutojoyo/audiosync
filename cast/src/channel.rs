@@ -478,7 +478,10 @@ impl Channel {
             Namespace::Receiver,
             json!({"type": "SET_VOLUME", "volume": {"level": level}}),
         );
-        self.volume_unconfirmed = Some((id, level));
+        // A device reports only changes, so the level it already has gets no answer (C104).
+        let current = self.status.as_ref().map(|status| status.volume.level);
+        self.volume_unconfirmed =
+            (!current.is_some_and(|current| answers_level(level, current))).then_some((id, level));
     }
 
     /// Tears the session down (C44, C87): media `STOP` for the sender's

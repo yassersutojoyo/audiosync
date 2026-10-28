@@ -443,7 +443,6 @@ fn steps_move_by_the_step_interval_from_the_reported_level() {
     channel.tick(start + VOLUME_INTERVAL);
     let out = sent(&mut channel);
     assert_eq!(out.len(), 2);
-    // The answer to the last level, rounded by the device.
     let last_id = out[1].2["requestId"].as_u64().expect("id");
     channel.handle(
         start,
