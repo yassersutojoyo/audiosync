@@ -5197,7 +5197,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         // Before the backend drops and the Cast host shuts down, so the last
         // offset change is kept even when its event was never polled.
         self.save_cast_memory();
-        self.unsaved.is_none()
+        // A run that writes nothing (no file, delays to migrate, no auto-connect) keeps changes unsaved.
+        self.settings_file.path().is_some() && self.current_settings() == self.saved
     }
 
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
