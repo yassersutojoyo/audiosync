@@ -318,6 +318,8 @@ pub struct CastRow {
     /// The user added it by address (spec C18): its row says so, and its
     /// menu removes it.
     pub added_by_address: bool,
+    /// Nothing vouches for it now, so it can't start (spec C17, C18).
+    pub offline: bool,
 }
 
 /// A Google Cast group and what its row knows of its members.
@@ -1312,13 +1314,15 @@ impl AppState {
     /// that is on goes off. Another Cast member goes off before it comes on,
     /// since one Cast speaker plays at a time; the rest after, so streaming
     /// never stops in between. A hidden member is left alone, and nobody
-    /// leaves the zone.
+    /// leaves the zone. An offline Cast member that is off switches nothing:
+    /// the others would go off for nothing.
     pub fn only_this_steps(&self, id: &str) -> Vec<(String, bool)> {
         let (Some(zone), Some(this)) = (self.zone_of(id), self.speaker(id)) else {
             return Vec::new();
         };
         let hidden = |key: &str| self.hidden.iter().any(|hidden| hidden.id == key);
-        if hidden(id) {
+        let offline = this.cast.as_ref().is_some_and(|cast| cast.offline);
+        if hidden(id) || (offline && !this.enabled) {
             return Vec::new();
         }
         let (cast, rest): (Vec<&Speaker>, Vec<&Speaker>) = self
@@ -2107,6 +2111,7 @@ impl MockBackend {
                 volume_step: 1.0,
                 group: None,
                 added_by_address: false,
+                offline: false,
             }),
             ..template
         };
@@ -2559,6 +2564,7 @@ impl Backend for MockBackend {
                     volume_step: 1.0,
                     group: None,
                     added_by_address: true,
+                    offline: false,
                 }),
                 group: None,
                 mic_left_out: None,
@@ -3235,6 +3241,35 @@ mod tests {
             state.only_this_steps("local:speakers"),
             [("cc:attic".to_owned(), false)],
             "already on: only the others switch"
+        );
+    }
+
+    // covers: S246
+    #[test]
+    fn only_this_speaker_on_an_offline_cast_member_that_is_on_still_switches_the_others() {
+        let mut backend = MockBackend::new();
+        let template = backend.snapshot().speakers[2].clone();
+        backend.add_speaker(Speaker {
+            id: "cc:den".into(),
+            name: "Den".into(),
+            kind: SpeakerKind::Cast,
+            enabled: true,
+            cast: Some(CastRow {
+                state: CastState::Playing,
+                muted: false,
+                volume_fixed: false,
+                volume_step: 1.0,
+                group: None,
+                added_by_address: true,
+                offline: true,
+            }),
+            ..template
+        });
+        backend.add_zone("zone:a", "Living", &["cc:den", "local:speakers"]);
+        backend.set_speaker_enabled("local:speakers", true);
+        assert_eq!(
+            backend.snapshot().only_this_steps("cc:den"),
+            [("local:speakers".to_owned(), false)]
         );
     }
 

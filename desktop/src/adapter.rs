@@ -2114,7 +2114,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     kind,
                     listed: listed.is_some() && !keep_off.contains(text),
                     on,
-                    busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
+                    busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id))
+                        || listed
+                            .and_then(|speaker| speaker.cast.as_ref())
+                            .is_some_and(|cast| cast.offline),
                     needs_airplay2: listed.is_none() && self.needs_airplay2(&key),
                     in_target: matches!(&key, SpeakerKey::AirPlay(id)
                         if self.audio.airplay_holding_target(id).is_some()),
@@ -2186,7 +2189,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     && !keep_off.contains(&member.key),
                 hidden: hidden.is_some(),
                 on: listed.is_some_and(|speaker| speaker.enabled),
-                busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
+                busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id))
+                    || listed
+                        .and_then(|speaker| speaker.cast.as_ref())
+                        .is_some_and(|cast| cast.offline),
                 needs_airplay2: listed.is_none() && hidden.is_none() && self.needs_airplay2(&key),
                 in_target,
                 fixed_volume: listed
@@ -2497,6 +2503,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     members: group.members,
                 }),
                 added_by_address: speaker.address.is_some(),
+                offline: speaker.offline,
             }),
             group: None,
             mic_left_out: None,
@@ -11965,6 +11972,71 @@ mod tests {
         assert_eq!(
             adapter.current_settings().speaker_zones[0].members,
             [key(SPEAKERS), cc(den)]
+        );
+    }
+
+    // covers: S246
+    #[test]
+    fn only_this_speaker_on_an_offline_cast_row_changes_nothing() {
+        let (mut adapter, _fake) = cast_adapter();
+        let id = cc_address("192.0.2.20");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), id.clone()])],
+            ..Settings::default()
+        });
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.20"), Ok(()));
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        adapter.poll();
+
+        adapter.only_this_speaker(&id);
+        assert!(enabled(&adapter, SPEAKERS), "the others stay on");
+        assert!(
+            !speaker_of(&adapter, &id).enabled,
+            "the offline row stays off"
+        );
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_click_passes_over_an_offline_cast_member() {
+        let (mut adapter, _fake) = cast_adapter();
+        let id = cc_address("192.0.2.20");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![id.clone(), cc(CAST_KITCHEN)])],
+            ..Settings::default()
+        });
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.20"), Ok(()));
+        adapter.poll();
+
+        adapter.toggle_zone("zone:1");
+        let state = adapter.snapshot();
+        assert!(!state.speaker(&id).unwrap().enabled, "it can't start now");
+        assert!(state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+    }
+
+    // covers: S246, S252
+    #[test]
+    fn a_recall_leaves_an_offline_cast_member_off_as_busy() {
+        let (mut adapter, _fake) = cast_adapter();
+        let id = cc_address("192.0.2.20");
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[(key(SPEAKERS), None), (id.clone(), None)])],
+            ..Settings::default()
+        });
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.20"), Ok(()));
+        adapter.poll();
+
+        adapter.recall_preset("preset:1");
+        assert!(!speaker_of(&adapter, &id).enabled);
+        assert_eq!(
+            preset_notices(&adapter),
+            [left_off_notice(
+                "Evening",
+                &[("192.0.2.20", PresetLeftOff::Busy)]
+            )]
         );
     }
 
