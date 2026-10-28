@@ -286,6 +286,8 @@ pub struct MockDriver {
     capture_setup: CaptureAttempt,
     /// The processes that can't be opened to wait for their exit.
     unwatchable: BTreeSet<u32>,
+    /// The creation time of the process started last.
+    last_created: u64,
     capture: Option<Arc<Mutex<CaptureLink>>>,
     /// Every output started that hasn't ended by itself.
     renderers: Vec<RendererLink>,
@@ -346,6 +348,7 @@ impl MockDriver {
             next_capture_error: None,
             capture_setup: CAPTURE_ATTEMPTS[0],
             unwatchable: BTreeSet::new(),
+            last_created: 0,
             capture: None,
             renderers: Vec::new(),
             active_sessions: BTreeMap::new(),
@@ -789,13 +792,16 @@ impl Controller<MockDriver> {
 
     fn add_process(&mut self, pid: u32, parent_pid: u32, executable: &str, audio: bool) {
         let driver = self.driver_mut();
+        // A process started after one that quit is still a later one.
         let created = driver
             .processes
             .iter()
             .filter_map(|process| process.created)
+            .chain([driver.last_created])
             .max()
             .unwrap_or(0)
             + 1;
+        driver.last_created = created;
         driver.processes.retain(|process| process.pid != pid);
         driver.processes.push(ProcessEntry {
             pid,

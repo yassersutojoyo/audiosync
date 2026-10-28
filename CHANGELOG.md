@@ -23,6 +23,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On Windows, when the app you play from runs as administrator and quits or restarts, AudioSync now notices within about 2 seconds and stops or switches to the whole system, as your setting says, with the usual notice. Before, streaming went on in silence.
 - A device on the network announcing a flood of fake Google Cast speakers no longer grows the speaker list without end: it keeps up to 128, and the speaker you play to stays listed. If something goes wrong inside AudioSync's Google Cast sender, the speaker stops with an error on its row and can be started again, instead of Google Cast going quiet until AudioSync restarts. On the Mac and on Windows.
 - A damaged entry in the AirPlay 2 timing cache now costs only that speaker, which goes back to its first-connect timing check, instead of the whole cache. On Windows, a saved Google Cast speakers file that AudioSync can't read is kept as a copy next to it before AudioSync first saves over it, so the delays and formats in it aren't lost.
 - A Google Cast speaker added by address that doesn't answer, for example because it's switched off, no longer counts as online, and it plays once it answers again. AudioSync checks it every 15 seconds. On the Mac and on Windows.
