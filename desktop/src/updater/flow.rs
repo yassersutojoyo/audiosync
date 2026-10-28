@@ -287,7 +287,6 @@ fn install_in(
             if good { "verified" } else { "is bad" }
         )
     });
-    drop(bytes);
     if !good {
         return Installed::BadSignature;
     }
@@ -295,7 +294,8 @@ fn install_in(
         return Installed::Cancelled;
     }
 
-    let unpacked = archive::unpack(&zip, dir, env.arch, &files);
+    let unpacked = archive::unpack(&bytes, env.arch);
+    drop(bytes);
     env.log.log(|| match &unpacked {
         Ok(unpacked) => format!(
             "updater: unpacked {}{}",
@@ -864,11 +864,7 @@ pub mod tests {
                 RealFiles.rename(from, to)
             }
         }
-        for (at, case) in [
-            ("update.zip", "download"),
-            ("audiosync.exe", "unpack"),
-            ("audiosync.exe.new", "copy"),
-        ] {
+        for (at, case) in [("update.zip", "download"), ("audiosync.exe.new", "copy")] {
             let f = fixture(
                 &format!("disk-full-{case}"),
                 false,
@@ -1047,8 +1043,8 @@ pub mod tests {
         }
     }
 
-    /// Real files, except that the swap's open of the unpacked exe finds it
-    /// held without sharing by another handle until `release` is sent.
+    /// Real files, except that the read of the download after it is written
+    /// finds it held without sharing by another handle until `release` is sent.
     struct Held {
         release: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
         held: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -1065,20 +1061,7 @@ pub mod tests {
             RealFiles.rename(from, to)
         }
         fn open(&self, path: &Path) -> io::Result<fs::File> {
-            let in_temp = path
-                .parent()
-                .and_then(Path::file_name)
-                .is_some_and(|dir| dir.to_string_lossy().starts_with(TEMP_PREFIX));
-            let swapping = path
-                .parent()
-                .and_then(Path::parent)
-                .and_then(Path::parent)
-                .is_some_and(|root| root.join("install").join("audiosync.exe.new").exists());
-            if in_temp
-                && swapping
-                && path
-                    .file_name()
-                    .is_some_and(|name| name == archive::EXE_NAME)
+            if path.file_name().is_some_and(|name| name == "update.zip")
                 && let Some(release) = self.release.lock().unwrap().take()
             {
                 use std::os::windows::fs::OpenOptionsExt;
@@ -1086,7 +1069,7 @@ pub mod tests {
                     .read(true)
                     .share_mode(0)
                     .open(path)
-                    .expect("the test holds the unpacked exe");
+                    .expect("the test holds the download");
                 *self.held.lock().unwrap() = Some(std::thread::spawn(move || {
                     let _ = release.recv();
                     drop(holder);

@@ -74,14 +74,14 @@ pub struct Swapped(Vec<Progress>);
 /// Installs `exe` (and `notices`) into `dir` in place of the running files.
 pub fn swap(
     dir: &Path,
-    exe: &Path,
-    notices: Option<&Path>,
+    exe: &[u8],
+    notices: Option<&[u8]>,
     files: &dyn Files,
     log: &mut StepLog,
 ) -> Result<Swapped, SwapError> {
     let mut done: Vec<Progress> = Vec::new();
     let mut parts = vec![(EXE_NAME, exe)];
-    parts.extend(notices.map(|path| (NOTICES_NAME, path)));
+    parts.extend(notices.map(|bytes| (NOTICES_NAME, bytes)));
     for (name, source) in parts {
         let pair = Pair::new(dir, name);
         let mut progress = Progress {
@@ -107,7 +107,7 @@ fn logged<T>(log: &mut StepLog, what: String, result: io::Result<T>) -> io::Resu
 fn swap_one(
     pair: &Pair,
     name: &str,
-    source: &Path,
+    source: &[u8],
     files: &dyn Files,
     log: &mut StepLog,
     progress: &mut Progress,
@@ -135,24 +135,9 @@ fn swap_one(
             });
         }
     };
-    // The unpacked file gone before this step was removed by Windows security.
-    let opened = logged(
-        log,
-        format!("1: open the unpacked {name}"),
-        files.open(source),
-    );
-    let mut source = opened.map_err(|error| {
-        if is_blocked(&error) || error.kind() == io::ErrorKind::NotFound {
-            SwapError::Blocked
-        } else {
-            SwapError::Failed {
-                step: "open",
-                code: code(&error),
-            }
-        }
-    })?;
-    let copied = io::copy(&mut source, &mut out)
-        .and_then(|_| out.flush())
+    let copied = out
+        .write_all(source)
+        .and_then(|()| out.flush())
         .and_then(|()| out.sync());
     drop(out);
     if let Err(error) = logged(log, format!("1: copy into {name}.new"), copied) {
@@ -326,19 +311,14 @@ mod tests {
         }
     }
 
-    /// An install folder with the old exe and notices, and a new exe and
-    /// notices next to it in a staging folder.
-    fn install(name: &str) -> (PathBuf, PathBuf, PathBuf) {
-        let dir = test_dir(name);
-        let install = dir.join("install");
-        let staging = dir.join("staging");
+    /// An install folder with the old exe and notices, and the new exe and
+    /// notices.
+    fn install(name: &str) -> (PathBuf, &'static [u8], &'static [u8]) {
+        let install = test_dir(name).join("install");
         std::fs::create_dir_all(&install).unwrap();
-        std::fs::create_dir_all(&staging).unwrap();
         std::fs::write(install.join(EXE_NAME), b"old exe").unwrap();
         std::fs::write(install.join(NOTICES_NAME), b"old notices").unwrap();
-        std::fs::write(staging.join(EXE_NAME), b"new exe").unwrap();
-        std::fs::write(staging.join(NOTICES_NAME), b"new notices").unwrap();
-        (install, staging.join(EXE_NAME), staging.join(NOTICES_NAME))
+        (install, b"new exe", b"new notices")
     }
 
     fn read(path: PathBuf) -> String {
@@ -360,7 +340,7 @@ mod tests {
         let (dir, exe, notices) = install("swap-ok");
         std::fs::write(dir.join("audiosync.exe.bak"), b"older").unwrap();
         let mut log = StepLog::new();
-        swap(&dir, &exe, Some(&notices), &RealFiles, &mut log).expect("the swap works");
+        swap(&dir, exe, Some(notices), &RealFiles, &mut log).expect("the swap works");
         assert_eq!(read(dir.join(EXE_NAME)), "new exe");
         assert_eq!(read(dir.join("audiosync.exe.bak")), "old exe");
         assert_eq!(read(dir.join(NOTICES_NAME)), "new notices");
@@ -374,7 +354,7 @@ mod tests {
         let (dir, exe, _) = install("leftover-new");
         std::fs::write(dir.join("audiosync.exe.new"), b"stale").unwrap();
         let mut log = StepLog::new();
-        swap(&dir, &exe, None, &RealFiles, &mut log).expect("the swap works");
+        swap(&dir, exe, None, &RealFiles, &mut log).expect("the swap works");
         assert_eq!(read(dir.join(EXE_NAME)), "new exe");
         assert!(!dir.join("audiosync.exe.new").exists());
 
@@ -386,7 +366,7 @@ mod tests {
                 .then(|| io::Error::from(io::ErrorKind::AlreadyExists))
         });
         assert_eq!(
-            swap(&dir, &exe, None, &files, &mut log),
+            swap(&dir, exe, None, &files, &mut log),
             Err(SwapError::InUse)
         );
         assert_eq!(read(dir.join(EXE_NAME)), "old exe");
@@ -400,7 +380,7 @@ mod tests {
             (op == "rename" && file_name(path) == EXE_NAME).then(|| io::Error::from_raw_os_error(5))
         });
         let mut log = StepLog::new();
-        let result = swap(&dir, &exe, Some(&notices), &files, &mut log);
+        let result = swap(&dir, exe, Some(notices), &files, &mut log);
         // The rename back targets audiosync.exe too, which this double
         // refuses, so the restore names the .bak.
         assert_eq!(
@@ -420,7 +400,7 @@ mod tests {
                 && !refused.swap(true, std::sync::atomic::Ordering::SeqCst))
             .then(|| io::Error::from_raw_os_error(5))
         });
-        let result = swap(&dir, &exe, Some(&notices), &files, &mut log);
+        let result = swap(&dir, exe, Some(notices), &files, &mut log);
         assert_eq!(
             result,
             Err(SwapError::Failed {
@@ -443,7 +423,7 @@ mod tests {
         });
         let mut log = StepLog::new();
         assert_eq!(
-            swap(&dir, &exe, None, &files, &mut log),
+            swap(&dir, exe, None, &files, &mut log),
             Err(SwapError::ReadOnly)
         );
         assert_eq!(names(&dir), [NOTICES_NAME, EXE_NAME]);
@@ -463,7 +443,7 @@ mod tests {
             .unwrap();
         let mut log = StepLog::new();
         assert_eq!(
-            swap(&dir, &exe, None, &RealFiles, &mut log),
+            swap(&dir, exe, None, &RealFiles, &mut log),
             Err(SwapError::InUse)
         );
         assert_eq!(read(dir.join(EXE_NAME)), "old exe");
@@ -503,7 +483,7 @@ mod tests {
         let (dir, exe, _) = install("swap-disk-full-copy");
         let mut log = StepLog::new();
         assert_eq!(
-            swap(&dir, &exe, None, &FullDisk, &mut log),
+            swap(&dir, exe, None, &FullDisk, &mut log),
             Err(SwapError::DiskFull)
         );
         assert_eq!(names(&dir), [NOTICES_NAME, EXE_NAME]);
@@ -584,7 +564,7 @@ mod tests {
             refused.then(|| io::Error::from_raw_os_error(5))
         });
         let mut log = StepLog::new();
-        let result = swap(&dir, &exe, Some(&notices), &files, &mut log);
+        let result = swap(&dir, exe, Some(notices), &files, &mut log);
         assert_eq!(
             result,
             Err(SwapError::RestoreFailed {
@@ -600,7 +580,7 @@ mod tests {
             (op == "rename" && file_name(path) == NOTICES_NAME)
                 .then(|| io::Error::from_raw_os_error(5))
         });
-        let result = swap(&dir, &exe, Some(&notices), &files, &mut log);
+        let result = swap(&dir, exe, Some(notices), &files, &mut log);
         assert_eq!(
             result,
             Err(SwapError::RestoreFailed {
@@ -614,7 +594,7 @@ mod tests {
     fn a_failed_relaunch_restores_the_bak() {
         let (dir, exe, notices) = install("relaunch-failed");
         let mut log = StepLog::new();
-        let swapped = swap(&dir, &exe, Some(&notices), &RealFiles, &mut log).unwrap();
+        let swapped = swap(&dir, exe, Some(notices), &RealFiles, &mut log).unwrap();
         undo_completed(&dir, &swapped, &RealFiles, &mut log).expect("the undo works");
         assert_eq!(read(dir.join(EXE_NAME)), "old exe");
         assert_eq!(read(dir.join(NOTICES_NAME)), "old notices");
