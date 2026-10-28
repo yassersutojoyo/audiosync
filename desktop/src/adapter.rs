@@ -3505,6 +3505,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 let speaker = self.output_name(&id);
                 self.post(speaker_subject(&id), NoticeMessage::SpeakerLost { speaker });
             }
+            BackendEvent::OutputRefused { .. } => {}
             BackendEvent::OutputPlaysAgain { id } => {
                 self.clear_if(speaker_subject(&id), |message| {
                     matches!(message, NoticeMessage::SpeakerLost { .. })
@@ -6555,6 +6556,35 @@ mod tests {
         for _ in 0..10 {
             adapter.poll();
         }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    // covers: S331
+    #[test]
+    fn a_speaker_windows_keeps_refusing_shows_the_lost_notice_until_it_plays() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().end_renderer(SPEAKERS);
+        adapter
+            .audio_mut()
+            .fail_output(SPEAKERS, Some(BackendError::DeviceGone));
+        for _ in 0..60 {
+            adapter.poll();
+        }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        adapter.poll();
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "Speakers".into(),
+        };
+        assert_eq!(messages(&adapter), [lost]);
+        assert!(enabled(&adapter, SPEAKERS), "it stays on");
+
+        // It answers at the try three seconds on, and the notice goes.
+        adapter.audio_mut().fail_output(SPEAKERS, None);
+        for _ in 0..6 {
+            adapter.poll();
+        }
+        assert_eq!(playing(&adapter), [SPEAKERS]);
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
 

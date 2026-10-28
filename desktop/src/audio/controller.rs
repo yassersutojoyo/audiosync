@@ -144,7 +144,7 @@ const STALL_RETRY_POLLS: u32 = 20;
 /// while it rebuilds the endpoint after a wake, say) is tried at every poll
 /// for this many polls, about thirty seconds at the UI's two polls a second;
 /// still refused then, it counts as a start that failed (S69).
-const REFUSED_GIVE_UP_POLLS: u32 = 60;
+const REFUSED_NOTICE_POLLS: u32 = 60;
 
 /// A capture that started again counts as working once it has run this many
 /// polls (about five seconds); a loss before then means the restart failed,
@@ -680,7 +680,7 @@ pub struct Controller<D: Driver> {
     hung: BTreeSet<String>,
     /// The outputs on whose listed device refuses to open as if it were
     /// gone, each with the polls left before that counts as a start that
-    /// failed ([`REFUSED_GIVE_UP_POLLS`]).
+    /// failed ([`REFUSED_NOTICE_POLLS`]).
     refused: BTreeMap<String, u32>,
     /// The outputs whose stream stalled and hasn't played five seconds
     /// since (S326).
@@ -1250,7 +1250,7 @@ impl<D: Driver> Controller<D> {
     /// connected ones. Returns the outputs that couldn't start; they are
     /// turned off (S69). One whose device is gone stays on and is tried
     /// again at the next poll, for about thirty seconds while its device is
-    /// still listed ([`REFUSED_GIVE_UP_POLLS`]); one whose device another
+    /// still listed ([`REFUSED_NOTICE_POLLS`]); one whose device another
     /// app holds stays on and is tried again every few seconds
     /// ([`BUSY_RETRY_POLLS`]). Once a start doesn't answer in time, which
     /// held the UI thread for the whole wait, the starts left in the pass
@@ -1419,7 +1419,7 @@ impl<D: Driver> Controller<D> {
                     let left = *self
                         .refused
                         .entry(endpoint.id.clone())
-                        .or_insert(REFUSED_GIVE_UP_POLLS);
+                        .or_insert(REFUSED_NOTICE_POLLS);
                     if left == 0 {
                         self.log.log(|| {
                             format!(
@@ -2257,7 +2257,7 @@ impl<D: Driver> Controller<D> {
             }
         }
         for left in self.refused.values_mut() {
-            *left = REFUSED_GIVE_UP_POLLS;
+            *left = REFUSED_NOTICE_POLLS;
         }
         // A sleep whose suspend notice went missing cancels them here.
         self.cancel_fresh_restarts_for_sleep();
@@ -4490,6 +4490,12 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
                 label(names, id)
             )
         }
+        BackendEvent::OutputRefused { id } => {
+            format!(
+                "output {} refused to open for about thirty seconds",
+                label(names, id)
+            )
+        }
         BackendEvent::OutputPlaysAgain { id } => {
             format!("output {} no longer counts as stalled", label(names, id))
         }
@@ -5781,30 +5787,113 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
-    #[test]
-    fn an_output_whose_listed_device_keeps_refusing_to_open_is_turned_off_after_a_while() {
-        let mut backend = backend();
-        // Windows still lists it but keeps refusing to open it, as after a
-        // wake while it rebuilds the endpoint, only for good.
+    /// Refuses `HEADPHONES` as if its device were gone until its first 30 s
+    /// are up and the notice is out, and returns its tries so far.
+    fn refuse_for_30_s(backend: &mut MockBackend) -> usize {
         backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
         backend.start(&SourceId::WholeSystem).unwrap();
-        poll_quietly(&mut backend, REFUSED_GIVE_UP_POLLS - 1);
+        poll_quietly(backend, REFUSED_NOTICE_POLLS - 1);
         assert!(backend.policy().settings(HEADPHONES).enabled);
         let tries = backend.driver().renderer_attempts(HEADPHONES);
-        assert_eq!(tries, REFUSED_GIVE_UP_POLLS as usize, "a try at every poll");
-        // About thirty seconds on, it is a start that failed (S69): turned
-        // off, with the notice, and no longer tried.
+        assert_eq!(tries, REFUSED_NOTICE_POLLS as usize, "a try at every poll");
         assert_eq!(
             backend.poll(),
-            [BackendEvent::OutputFailed {
+            [BackendEvent::OutputRefused {
                 id: HEADPHONES.to_owned(),
-                error: BackendError::DeviceGone,
             }]
+        );
+        backend.driver().renderer_attempts(HEADPHONES)
+    }
+
+    // covers: S331
+    #[test]
+    fn an_output_whose_listed_device_keeps_refusing_stays_on_and_is_tried_every_3_s() {
+        let mut backend = backend();
+        let tries = refuse_for_30_s(&mut backend);
+        assert!(backend.policy().settings(HEADPHONES).enabled, "it stays on");
+        for round in 1..=3 {
+            poll_quietly(&mut backend, BUSY_RETRY_POLLS - 1);
+            assert_eq!(
+                backend.driver().renderer_attempts(HEADPHONES),
+                tries + round - 1
+            );
+            poll_quietly(&mut backend, 1);
+            assert_eq!(
+                backend.driver().renderer_attempts(HEADPHONES),
+                tries + round
+            );
+        }
+        // It opens at its next try: the notice clears and it plays.
+        backend.fail_output(HEADPHONES, None);
+        poll_quietly(&mut backend, BUSY_RETRY_POLLS - 1);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputPlaysAgain {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        poll_quietly(&mut backend, 2 * BUSY_RETRY_POLLS);
+    }
+
+    // covers: S331, S326
+    #[test]
+    fn a_refused_try_that_doesnt_answer_waits_10_s_and_the_next_refusal_3_s() {
+        let mut backend = backend();
+        let tries = refuse_for_30_s(&mut backend);
+        backend.fail_output(HEADPHONES, Some(BackendError::NotResponding));
+        poll_quietly(&mut backend, BUSY_RETRY_POLLS);
+        assert_eq!(backend.driver().renderer_attempts(HEADPHONES), tries + 1);
+        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        poll_quietly(&mut backend, STALL_RETRY_POLLS - 1);
+        assert_eq!(backend.driver().renderer_attempts(HEADPHONES), tries + 1);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(backend.driver().renderer_attempts(HEADPHONES), tries + 2);
+        poll_quietly(&mut backend, BUSY_RETRY_POLLS - 1);
+        assert_eq!(backend.driver().renderer_attempts(HEADPHONES), tries + 2);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(backend.driver().renderer_attempts(HEADPHONES), tries + 3);
+        assert!(backend.policy().settings(HEADPHONES).enabled);
+    }
+
+    // covers: S331, S69
+    #[test]
+    fn a_refused_output_that_then_fails_hard_is_turned_off_at_once() {
+        let mut backend = backend();
+        let tries = refuse_for_30_s(&mut backend);
+        backend.fail_output(HEADPHONES, Some(BackendError::UnsupportedFormat));
+        poll_quietly(&mut backend, BUSY_RETRY_POLLS - 1);
+        assert_eq!(
+            backend.poll(),
+            [
+                BackendEvent::OutputPlaysAgain {
+                    id: HEADPHONES.to_owned(),
+                },
+                BackendEvent::OutputFailed {
+                    id: HEADPHONES.to_owned(),
+                    error: BackendError::UnsupportedFormat,
+                },
+            ]
         );
         assert!(!backend.policy().settings(HEADPHONES).enabled);
         poll_quietly(&mut backend, STALL_RETRY_POLLS);
         assert_eq!(backend.driver().renderer_attempts(HEADPHONES), tries + 1);
-        assert_eq!(playing(&backend), [SPEAKERS]);
+    }
+
+    // covers: S331
+    #[test]
+    fn switching_off_a_refused_output_ends_its_tries_and_its_notice() {
+        let mut backend = backend();
+        let tries = refuse_for_30_s(&mut backend);
+        assert_eq!(backend.set_output_enabled(HEADPHONES, false), Ok(()));
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputPlaysAgain {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+        poll_quietly(&mut backend, 3 * BUSY_RETRY_POLLS);
+        assert_eq!(backend.driver().renderer_attempts(HEADPHONES), tries);
     }
 
     #[test]
@@ -5812,7 +5901,7 @@ mod tests {
         let mut backend = backend();
         backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
         backend.start(&SourceId::WholeSystem).unwrap();
-        poll_quietly(&mut backend, REFUSED_GIVE_UP_POLLS - 2);
+        poll_quietly(&mut backend, REFUSED_NOTICE_POLLS - 2);
         // It opens after all, and plays.
         backend.fail_output(HEADPHONES, None);
         poll_quietly(&mut backend, 1);
@@ -5825,7 +5914,7 @@ mod tests {
             id: HEADPHONES.to_owned(),
         };
         assert_eq!(backend.poll(), [lost]);
-        poll_quietly(&mut backend, REFUSED_GIVE_UP_POLLS - 1);
+        poll_quietly(&mut backend, REFUSED_NOTICE_POLLS - 1);
         assert!(backend.policy().settings(HEADPHONES).enabled);
     }
 
@@ -6655,15 +6744,14 @@ mod tests {
         let mut refused = backend();
         refused.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
         refused.start(&SourceId::WholeSystem).unwrap();
-        poll_quietly(&mut refused, REFUSED_GIVE_UP_POLLS - 2);
+        poll_quietly(&mut refused, REFUSED_NOTICE_POLLS - 2);
         sleep_two_hours(&mut refused);
-        poll_quietly(&mut refused, REFUSED_GIVE_UP_POLLS - 1);
+        poll_quietly(&mut refused, REFUSED_NOTICE_POLLS - 1);
         assert!(refused.policy().settings(HEADPHONES).enabled);
         assert_eq!(
             refused.poll(),
-            [BackendEvent::OutputFailed {
+            [BackendEvent::OutputRefused {
                 id: HEADPHONES.to_owned(),
-                error: BackendError::DeviceGone,
             }]
         );
 
