@@ -505,6 +505,83 @@ fn a_group_without_addresses_keeps_retrying_until_its_records_list_one() {
     leader.join();
 }
 
+// covers: C81
+#[test]
+#[allow(clippy::result_large_err)]
+fn a_playing_group_resolved_with_no_addresses_keeps_reconnecting_until_announced() {
+    let old_leader = FakeDevice::start(Behavior {
+        members: Some(members_json()),
+        ..Behavior::default()
+    });
+    let new_leader = FakeDevice::start(Behavior {
+        members: Some(members_json()),
+        ..Behavior::default()
+    });
+    let (mut session, records, _feed) = start_group(&old_leader);
+    let announced = Arc::new(AtomicBool::new(false));
+    session.set_announcements(Arc::clone(&announced));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink_seen = Arc::clone(&seen);
+    let sink_records = records.clone();
+    let address = new_leader.address;
+    let mut failures = 0;
+    session.set_recovery_sink(Box::new(move |event| {
+        if matches!(event, SessionEvent::ConnectFailed { .. }) {
+            failures += 1;
+            if failures == 3 {
+                sink_records.set_group(vec![address]);
+                announced.store(true, Ordering::SeqCst);
+            }
+        }
+        sink_seen.lock().unwrap().push((Instant::now(), event));
+        Ok(())
+    }));
+    records.set_group(Vec::new());
+    assert_eq!(records.get().group, [old_leader.address], "keeps the last");
+    old_leader.join();
+    let until = Instant::now() + Duration::from_secs(30);
+    let recovered = |seen: &[(Instant, SessionEvent)]| {
+        seen.iter()
+            .any(|(_, event)| matches!(event, SessionEvent::Recovered { .. }))
+    };
+    while !recovered(&seen.lock().unwrap()) && Instant::now() < until {
+        session.run_for(Duration::from_millis(50));
+    }
+    let seen = seen.lock().unwrap();
+    let start = seen
+        .iter()
+        .position(|(_, event)| matches!(event, SessionEvent::Recovering(_)))
+        .unwrap_or_else(|| panic!("shows it reconnecting: {seen:?}"));
+    let failed: Vec<(Instant, Duration)> = seen[start..]
+        .iter()
+        .filter_map(|(at, event)| match event {
+            SessionEvent::ConnectFailed { retry_in, .. } => Some((*at, *retry_in)),
+            _ => None,
+        })
+        .collect();
+    let waits: Vec<Duration> = failed.iter().map(|(_, wait)| *wait).collect();
+    assert_eq!(
+        waits,
+        [1, 2, 4].map(Duration::from_secs),
+        "the pacer spaces them: {seen:?}"
+    );
+    assert!(failed[1].0 - failed[0].0 >= Duration::from_secs(1));
+    assert!(failed[2].0 - failed[1].0 >= Duration::from_secs(2));
+    let (back_at, _) = seen[start..]
+        .iter()
+        .find(|(_, event)| matches!(event, SessionEvent::Recovered { .. }))
+        .unwrap_or_else(|| panic!("reconnects once the group is announced: {seen:?}"));
+    let after = *back_at - failed[2].0;
+    assert!(
+        after < Duration::from_secs(2),
+        "not the 4 s wait: {after:?}"
+    );
+    assert_eq!(new_leader.connection_count(), 1);
+    drop(seen);
+    session.stop();
+    new_leader.join();
+}
+
 // covers: C98
 #[test]
 fn a_membership_change_that_stops_the_group_ends_it_as_taken_over() {
