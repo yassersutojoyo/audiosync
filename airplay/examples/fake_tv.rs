@@ -12,6 +12,9 @@
 //!     [--code <digits>] [--password <text>] [--summary]
 //! ```
 //!
+//! `FAKE_TV_LATENCY_US` set to whole microseconds adds that output latency
+//! to its `/info` answer; unset or empty, it reports none.
+//!
 //! Two copies run side by side when each has its own `--deviceid`, since a
 //! sender keys a speaker by it; a copy with another id also gets its own
 //! default name and mDNS host, and the port is free (0, printed at start)
@@ -262,22 +265,36 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let latency_var = std::env::var_os(television::LATENCY_VAR);
+    let latency_us = match television::latency_from(
+        latency_var
+            .as_deref()
+            .map(|v| v.to_string_lossy())
+            .as_deref(),
+    ) {
+        Ok(latency_us) => latency_us,
+        Err(error) => {
+            eprintln!("fake_tv: {error}");
+            return ExitCode::from(2);
+        }
+    };
     let start = Instant::now();
     let ip = if options.on_network {
         Ipv4Addr::UNSPECIFIED
     } else {
         Ipv4Addr::LOCALHOST
     };
-    let server = Ap2Server::start_at(
-        SocketAddr::new(IpAddr::V4(ip), options.port),
-        television(
-            &options.name,
-            options.pin,
-            &options.code,
-            0,
-            options.device_id,
-        ),
+    let mut fake = television(
+        &options.name,
+        options.pin,
+        &options.code,
+        0,
+        options.device_id,
     );
+    if let Some(micros) = latency_us {
+        television::report_latency(&mut fake, micros);
+    }
+    let server = Ap2Server::start_at(SocketAddr::new(IpAddr::V4(ip), options.port), fake);
     let port = server.address.port();
     let advertised = if options.on_network {
         match advertise(&options, port) {
@@ -321,6 +338,13 @@ fn main() -> ExitCode {
             stamp(start),
             options.code
         ),
+    }
+    if let Some(micros) = latency_us {
+        println!(
+            "{} latency: /info reports outputLatencyMicros {micros} ({})",
+            stamp(start),
+            television::LATENCY_VAR
+        );
     }
     println!(
         "{} stdin: vol <dB> moves the level, quit stops",
