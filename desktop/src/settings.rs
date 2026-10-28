@@ -1366,7 +1366,7 @@ impl fmt::Display for Loaded {
             Loaded::Ignored(reason) => write!(
                 f,
                 "ignored: {reason}; the defaults apply, and it is kept aside before a new \
-                 file replaces it"
+                 file replaces it, or applied once it can be read"
             ),
         }
     }

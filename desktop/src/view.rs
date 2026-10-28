@@ -1172,6 +1172,12 @@ impl App {
     /// Lets the backend take in what happened on its own, and shows it.
     fn poll(&self) {
         let changed = self.backend.borrow_mut().poll();
+        if self.backend.borrow_mut().take_view_restored() {
+            // The sender keeps the AirPlay 2 path it started with.
+            let airplay2_at_launch = self.ui.borrow().airplay2_at_launch;
+            self.restore_view();
+            self.ui.borrow_mut().airplay2_at_launch = airplay2_at_launch;
+        }
         if changed {
             self.refresh();
         } else if self.sync_now_playing() {

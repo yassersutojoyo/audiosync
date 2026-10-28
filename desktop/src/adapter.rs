@@ -540,6 +540,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// Save the settings at the next chance even if they look unchanged:
     /// the file is in an older format.
     must_save: bool,
+    /// The window settings were replaced by a file read after launch, and
+    /// the window hasn't shown them yet.
+    view_restored: bool,
     /// AirPlay speakers saved as on that the backend couldn't switch on at
     /// launch (no AirPlay sender): their saved settings stay as they are.
     airplay_unrestored: BTreeSet<String>,
@@ -700,6 +703,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 settings::Loaded::Read { version, .. } if version < settings::OFFSETS_VERSION
             ),
             must_save: false,
+            view_restored: false,
             airplay_unrestored: BTreeSet::new(),
             unsaved: None,
             save_retry_wait: 0,
@@ -1024,7 +1028,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Takes in the settings of the file ignored at launch, now that it
-    /// reads as settings, as if read at launch (S212). Returns true.
+    /// reads as settings, as if read at launch (S212), except what is
+    /// already running: a session's source, and the AirPlay 2 path the
+    /// sender started with. The window shows them again. Returns true.
     fn restore_read_late(&mut self, (saved, loaded): (Settings, settings::Loaded)) -> bool {
         self.log
             .log(|| format!("settings: the file ignored at launch can be read now, {loaded}"));
@@ -1032,7 +1038,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
             loaded,
             settings::Loaded::Read { version, .. } if version < settings::OFFSETS_VERSION
         );
+        let running_source = self.running().then(|| self.chosen.clone());
+        let airplay2_at_launch = self.airplay2_at_launch;
         self.restore(saved);
+        self.airplay2_at_launch = airplay2_at_launch;
+        if let Some(chosen) = running_source {
+            self.chosen = chosen;
+        }
+        self.view_restored = true;
         true
     }
 
@@ -5131,6 +5144,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
 
     fn view_settings(&self) -> ViewSettings {
         self.view.clone()
+    }
+
+    fn take_view_restored(&mut self) -> bool {
+        std::mem::take(&mut self.view_restored)
     }
 
     fn airplay2_auto(&self) -> bool {

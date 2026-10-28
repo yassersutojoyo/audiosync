@@ -1613,6 +1613,13 @@ pub trait Backend {
         ViewSettings::default()
     }
 
+    /// Whether [`Backend::view_settings`] were replaced since the last call
+    /// by a settings file read after launch (S212): the UI shows them again,
+    /// as at launch, so its next save doesn't send the old ones back.
+    fn take_view_restored(&mut self) -> bool {
+        false
+    }
+
     /// Whether AirPlay 2 is automatic per receiver for this launch (spec
     /// S312); the AirPlay 2 item then reads Prefer AirPlay 2 (S313).
     fn airplay2_auto(&self) -> bool {
@@ -1791,6 +1798,7 @@ pub struct MockBackend {
     /// Window settings the next poll takes in, as a settings file read
     /// after launch brings them.
     pub late_view: std::rc::Rc<std::cell::RefCell<Option<ViewSettings>>>,
+    view_restored: bool,
     /// The speaker that asks for its password once it is turned on.
     password_on: Option<String>,
 }
@@ -1964,6 +1972,7 @@ impl MockBackend {
             play_pauses: std::rc::Rc::default(),
             airplay_delays: std::rc::Rc::default(),
             late_view: std::rc::Rc::default(),
+            view_restored: false,
             password_on: None,
         }
     }
@@ -2262,7 +2271,12 @@ impl Backend for MockBackend {
             return false;
         };
         self.view = view;
+        self.view_restored = true;
         true
+    }
+
+    fn take_view_restored(&mut self) -> bool {
+        std::mem::take(&mut self.view_restored)
     }
 
     fn play_pause_pressed(&mut self, app: &str, playing: bool) {
