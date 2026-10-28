@@ -1752,10 +1752,10 @@ final class ConsentHarness {
     let queue = DispatchQueue(label: "consent-test")
     var verdicts: [String] = []
     private var out: [String: [(Int) -> Void]] = [:]
-    private var counts: [String: Int] = [:]
+    private var prompts: [String: [Bool]] = [:]
     lazy var consent: AutomationConsent = {
-        let consent = AutomationConsent(queue: self.queue) { [unowned self] app, done in
-            self.counts[app, default: 0] += 1
+        let consent = AutomationConsent(queue: self.queue) { [unowned self] app, mayPrompt, done in
+            self.prompts[app, default: []].append(mayPrompt)
             self.out[app, default: []].append(done)
         }
         consent.onVerdict = { [unowned self] app, verdict in
@@ -1763,7 +1763,8 @@ final class ConsentHarness {
         }
         return consent
     }()
-    func calls(_ app: String) -> Int { queue.sync { counts[app] ?? 0 } }
+    func calls(_ app: String) -> Int { queue.sync { prompts[app]?.count ?? 0 } }
+    func mayPrompt(_ app: String) -> [Bool] { queue.sync { prompts[app] ?? [] } }
     func step(_ app: String, mayAsk: Bool = true) -> AutomationConsent.Step {
         queue.sync { consent.step(app, running: true, mayAsk: mayAsk) }
     }
@@ -1827,18 +1828,37 @@ do {
 do {
     // A send that times out or finds the player gone leaves it undecided; the next is sent only after it returned.
     let h = ConsentHarness()
-    let held = (0..<5).map { _ in h.step(consentSpotify, mayAsk: false) }
-    let heldCalls = h.calls(consentSpotify)
     var steps: [AutomationConsent.Step] = []
     for code in [-1712, -600, 0] {
         steps.append(h.step(consentSpotify))
         h.answer(consentSpotify, code)
     }
     steps.append(h.step(consentSpotify))
-    check(held.allSatisfy { $0 == .hold } && heldCalls == 0 && h.calls(consentSpotify) == 3
-            && steps == [.wait, .wait, .wait, .read],
-          "automation consent: nothing is sent before the explanation was read, and a timeout or a missing player sends again later",
-          "\(heldCalls) \(h.calls(consentSpotify)) \(steps)")
+    check(h.calls(consentSpotify) == 3 && steps == [.wait, .wait, .wait, .read],
+          "automation consent: a timeout or a missing player sends again later",
+          "\(h.calls(consentSpotify)) \(steps)")
+}
+do {
+    // Before the explanation was read: only events that can't prompt, one at a time; -1744 keeps holding, a reply reads.
+    let h = ConsentHarness()
+    let held = (0..<5).map { _ in h.step(consentSpotify, mayAsk: false) }
+    h.answer(consentSpotify, -1744)
+    let stillHeld = h.step(consentSpotify, mayAsk: false)
+    h.answer(consentSpotify, 0)
+    let allowed = h.step(consentSpotify, mayAsk: false)
+    check(held.allSatisfy { $0 == .hold } && stillHeld == .hold && allowed == .read && h.mayPrompt(consentSpotify) == [false, false],
+          "automation consent: before the explanation was read, a player already allowed is read through an event that can't prompt",
+          "\(Set(held.map { "\($0)" })) \(stillHeld) \(allowed) \(h.mayPrompt(consentSpotify))")
+}
+do {
+    // The player answers the event with an error of its own (-1728): the event got through.
+    let h = ConsentHarness()
+    _ = h.step(consentSpotify)
+    h.answer(consentSpotify, -1728)
+    let after = h.step(consentSpotify)
+    check(after == .read && h.calls(consentSpotify) == 1 && h.mayPrompt(consentSpotify) == [true],
+          "automation consent: any reply but -1743 counts as allowed, so it isn't sent again every reading",
+          "\(after) \(h.calls(consentSpotify))")
 }
 do {
     // Allowed, then `tccutil reset`: the next 2 s reading times out, so the long send goes out instead of more readings.
