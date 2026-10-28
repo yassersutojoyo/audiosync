@@ -266,7 +266,6 @@ impl HostEvent {
                 event,
                 SessionEvent::Diagnostics(_)
                     | SessionEvent::Stream(_)
-                    | SessionEvent::Volume(_)
                     | SessionEvent::Rebuffering
                     | SessionEvent::GroupMessage(_)
             ),
@@ -583,8 +582,8 @@ impl CastHost {
     }
 
     /// The next event. At most [`MAX_HOST_EVENTS`] wait; beyond that,
-    /// routine ones (diagnostics, volume, stream log, failed commands) are
-    /// dropped, never `Started`, `Ended` or `MemoryChanged`.
+    /// routine ones (diagnostics, stream log, failed commands) are dropped,
+    /// never `Started`, `Ended`, `MemoryChanged` or the latest volume.
     pub fn poll_event(&self) -> Option<HostEvent> {
         self.events.try_recv().ok()
     }
@@ -690,10 +689,22 @@ impl Worker {
             }
             return;
         }
+        // A level is reported once (C70): a newer one replaces it, nothing else pushes it out.
+        if let HostEvent::Session {
+            device,
+            event: SessionEvent::Volume(_),
+            ..
+        } = &event
+        {
+            let device = *device;
+            held.retain(|held| {
+                !matches!(held, HostEvent::Session { device: d, event: SessionEvent::Volume(_), .. } if *d == device)
+            });
+        }
         if held.len() >= MAX_HOST_EVENTS {
-            let oldest_session = held
-                .iter()
-                .position(|held| matches!(held, HostEvent::Session { .. }));
+            let oldest_session = held.iter().position(|held| {
+                matches!(held, HostEvent::Session { event, .. } if !matches!(event, SessionEvent::Volume(_)))
+            });
             if let Some(index) = oldest_session {
                 held.remove(index);
             }

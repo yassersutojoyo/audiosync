@@ -698,6 +698,11 @@ impl CastSession {
     }
 
     fn report(&mut self, event: SessionEvent) {
+        // A level is reported once (C70): a newer one replaces it, a full queue never drops it.
+        if matches!(event, SessionEvent::Volume(_)) {
+            self.events
+                .retain(|queued| !matches!(queued, SessionEvent::Volume(_)));
+        }
         make_room(&mut self.events);
         self.events.push_back(event);
         if self.recovering {
@@ -1039,7 +1044,6 @@ fn make_room(events: &mut VecDeque<SessionEvent>) {
             event,
             SessionEvent::Diagnostics(_)
                 | SessionEvent::Stream(_)
-                | SessionEvent::Volume(_)
                 | SessionEvent::Rebuffering
                 | SessionEvent::GroupMessage(_)
         )
