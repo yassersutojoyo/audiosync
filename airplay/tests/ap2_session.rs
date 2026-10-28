@@ -5,10 +5,13 @@
 
 mod common;
 
-use std::time::Duration;
+use std::net::SocketAddr;
+use std::time::{Duration, Instant};
 
 use audiosync_airplay::ap2::framing::{Framing, MAX_FRAME_PLAINTEXT, frame_nonce};
-use audiosync_airplay::ap2::{Ap2Event, PtpPeer, StreamPorts, Timing};
+use audiosync_airplay::ap2::{
+    Ap2Event, Ap2Output, Ap2Session, Ap2State, PtpPeer, StreamPorts, Timing,
+};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::rtsp::{Method, Request};
 use audiosync_airplay::secret::Secret;
@@ -17,9 +20,9 @@ use plist::Value;
 
 use common::ap2::{
     Ap2Rig, DATA_PORT, EVENT_PORT, FakeAp2, FakeFraming, RECEIVER_CONTROL_PORT, STREAM_ID,
-    ap2_config, dict, int, plist, read_dict, read_value, request_key,
+    TestEntropy, ap2_config, dict, int, plist, read_dict, read_value, request_key,
 };
-use common::{CONTROL_PORT, RECEIVER, SENDER, TIMING_PORT, ids};
+use common::{CONTROL_PORT, RECEIVER, SENDER, TIMING_PORT, connection, ids};
 
 const SECRET: [u8; 32] = [7; 32];
 
@@ -1153,4 +1156,43 @@ fn a_refused_remembered_ptp_runs_the_ntp_first_order_once() {
         timings,
         [Some(text("PTP")), Some(text("NTP")), Some(text("PTP"))]
     );
+}
+
+// A pair-setup retry takes a session that connected back to Connecting: an
+// address discovery adds then leaves it in place.
+// covers: P228
+#[test]
+fn a_session_back_to_connecting_for_a_pairing_retry_doesnt_start_again() {
+    let mut fake = FakeAp2::new();
+    fake.hap.hash_padded = true;
+    fake.hap.zero_led_b = 1;
+    let config = ap2_config();
+    let first = config.addresses[0];
+    let added = SocketAddr::new("2001:db8::55".parse().expect("an address"), first.port());
+    let now = Instant::now();
+    let session = Ap2Session::new(config, ids(), Box::new(TestEntropy(1)), now);
+    let mut rig = Ap2Rig::with_session(session, fake, now);
+    assert!(rig.session.restarts_on(&[first, added]));
+    assert!(!rig.session.restarts_on(&[first]));
+
+    let mut connects = 0;
+    while let Some(output) = rig.session.poll_output() {
+        match output {
+            Ap2Output::Connect(_) if connects == 1 => break,
+            Ap2Output::Connect(_) => {
+                connects += 1;
+                rig.fake.connect();
+                rig.session.handle_connected(connection(SENDER), rig.now);
+            }
+            Ap2Output::Send(bytes) => {
+                let answer = rig.fake.feed(&bytes);
+                if !answer.is_empty() {
+                    rig.session.handle_input(&answer, rig.now);
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(rig.session.state(), Ap2State::Connecting);
+    assert!(!rig.session.restarts_on(&[first, added]));
 }

@@ -90,6 +90,8 @@ pub(super) struct Ap2Active {
     pub(super) ptp_served: bool,
     /// The session SETUP answer settled the session on NTP (P205).
     pub(super) ntp_chosen: bool,
+    /// The P179 restart entry it started with, which a P228 restart keeps.
+    ptp_restart: Option<Option<bool>>,
 }
 
 impl Ap2Active {
@@ -290,6 +292,7 @@ impl Driver {
             ptp_configured,
             ptp_served: false,
             ntp_chosen: false,
+            ptp_restart: restart,
         }));
         self.sessions.insert(session_key, key.clone());
         self.sessions.insert(events_key, key.clone());
@@ -813,6 +816,40 @@ impl Driver {
             speaker.ap2_retry = true;
             speaker.wait_until(now + PTP_PORTS_POLL, StartKind::Host);
         }
+    }
+
+    /// A session that hasn't connected and lacks an address discovery now
+    /// lists starts again on the current addresses (P228).
+    pub(super) fn restart_unconnected(&mut self, key: &DeviceKey, now: Instant) {
+        let Some(speaker) = self.speakers.get(key) else {
+            return;
+        };
+        let restart = match &speaker.phase {
+            Phase::Ap2(active)
+                if active
+                    .session
+                    .restarts_on(&speaker.device.airplay_socket_addrs()) =>
+            {
+                active.ptp_restart
+            }
+            Phase::Active(active)
+                if active
+                    .session
+                    .restarts_on(&speaker.device.connect_socket_addrs()) =>
+            {
+                None
+            }
+            _ => return,
+        };
+        let kind = speaker.started_as;
+        if let Some(restart) = restart {
+            self.ptp_restart.insert(key.clone(), restart);
+        }
+        self.end_session(key, Phase::Idle);
+        if let Some(speaker) = self.speakers.get_mut(key) {
+            speaker.restarting = true;
+        }
+        self.start_session(key, kind, now);
     }
 
     /// Closes, without a TEARDOWN, a session that took PTP over an address
