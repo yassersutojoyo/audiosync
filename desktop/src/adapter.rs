@@ -10136,7 +10136,7 @@ mod tests {
 
     // covers: S163
     #[test]
-    fn picking_the_playing_input_again_clears_the_busy_input_notice() {
+    fn picking_the_playing_input_again_keeps_the_busy_input_notice() {
         let mut adapter = adapter();
         adapter
             .audio
@@ -10155,8 +10155,61 @@ mod tests {
         assert_eq!(messages(&adapter), [NoticeMessage::CaptureFailed]);
 
         adapter.select_source(&mic());
-        assert!(messages(&adapter).is_empty());
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::CaptureFailed],
+            "another app still holds the input (S333)"
+        );
         assert!(adapter.snapshot().running);
+    }
+
+    // covers: S163
+    #[test]
+    fn picking_the_stopped_source_again_keeps_the_notice_that_its_app_quit() {
+        let mut adapter = adapter();
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.poll();
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        let quit = || NoticeMessage::SourceQuit {
+            source: "Player".into(),
+        };
+        assert_eq!(messages(&adapter), [quit()]);
+
+        adapter.select_source(&player());
+        assert_eq!(messages(&adapter), [quit()]);
+    }
+
+    // covers: S163
+    #[test]
+    fn picking_the_playing_source_again_keeps_the_speaker_and_pairing_notices() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::UnsupportedFormat));
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.poll();
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        fake.pairing(
+            &tv,
+            PairingEvent::Failed {
+                error: SessionError::new(ErrorKind::Unreachable),
+                wrong_pin: false,
+            },
+        );
+        adapter.poll();
+        assert!(adapter.snapshot().running);
+        let shown = messages(&adapter);
+        assert_eq!(shown.len(), 2, "{shown:?}");
+
+        adapter.select_source("system");
+        assert_eq!(messages(&adapter), shown);
     }
 
     #[test]
