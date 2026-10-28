@@ -12,6 +12,8 @@ final class InputLevel: ObservableObject {
     @Published private(set) var shown = false
     private var timer: Timer?
 
+    var isPolling: Bool { timer?.isValid == true }
+
     /// The level as VoiceOver reads it, in steps of 10 percent (the core's
     /// rule, shared with the Windows app).
     var spokenPercent: Int { Int(asc_meter_spoken_percent(level)) }
@@ -46,6 +48,9 @@ final class InputLevel: ObservableObject {
         RunLoop.main.add(poll, forMode: .common)
         timer = poll
     }
+
+    /// Whether the main window, the meter's only place, is on screen.
+    func setVisible(_ visible: Bool) {}
 }
 
 /// The note under the source while an input device plays and an AirPlay

@@ -810,11 +810,11 @@ struct UIStrings {
     /// A device's name, or a placeholder when Core Audio can't read it.
     func deviceName(_ name: String) -> String { name.isEmpty ? unknownDevice : name }
 
-    /// `refusedCaptureRate`: the capture rate (Hz) when that was the reason;
-    /// `count`: how many speakers `names` lists.
-    func outputCouldNotStart(names: String, count: Int = 1, refusedCaptureRate: Double? = nil) -> String {
-        let deviceName = names.isEmpty ? unknownDevice : names
-        let one = count <= 1
+    /// `refusedCaptureRate`: the capture rate (Hz) when that was the reason.
+    func outputCouldNotStart(names: [String], refusedCaptureRate: Double? = nil) -> String {
+        let shown = names.joined(separator: ", ")
+        let deviceName = shown.isEmpty ? unknownDevice : shown
+        let one = names.count <= 1
         let first = "\(deviceName) couldn't start, so " + (one ? "it's off. " : "they're off. ")
         let again = one ? "turn the speaker on again." : "turn the speakers on again."
         guard let rate = refusedCaptureRate else {

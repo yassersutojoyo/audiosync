@@ -292,6 +292,14 @@ enum ZoneLayout {
         speakers.filter { zoned.contains(key($0)) }
     }
 
+    /// H11: the speaker whose switch takes the focus once `hidden`'s row in
+    /// `section` goes: the next row's, else the previous row's.
+    static func focusAfterHiding<T>(_ hidden: String, in section: [T], key: (T) -> String,
+                                    zoned: Set<String>) -> T? {
+        guard let at = section.firstIndex(where: { key($0) == hidden }) else { return nil }
+        return at + 1 < section.count ? section[at + 1] : (at > 0 ? section[at - 1] : nil)
+    }
+
     /// Whether the note and the Add by address button under a section's rows
     /// each get a separator above them. The zone box has its own edge, so a
     /// full-width line right under it would run past its rounded corners.

@@ -5172,6 +5172,11 @@ do {
     check(ZoneLayout.zoned(["lc:built-in", "lc:usb", "ap:native:den", "cc:kitchen"], key: { $0 }, zoned: zoned)
             == ["lc:usb", "ap:native:den"],
           "zones: a zone member keeps a compact row in its own section, in the section's order")
+    let hideRows = ["lc:a", "lc:usb", "lc:c"]
+    check(ZoneLayout.focusAfterHiding("lc:a", in: hideRows, key: { $0 }, zoned: zoned) == "lc:c",
+          "zones: hiding a speaker moves the focus to the next row the window shows, past a zone member")
+    check(ZoneLayout.focusAfterHiding("lc:c", in: hideRows, key: { $0 }, zoned: zoned) == "lc:a",
+          "zones: hiding the last row moves the focus to the previous row the window shows, past a zone member")
 
     func onlyThis(_ key: String, _ members: [ZoneLayout.Member]) -> [String] {
         ZoneLayout.onlyThis(key, members: members).map { "\($0.key) \($0.on ? "on" : "off")" }
@@ -7341,9 +7346,9 @@ do {
                            refusal: OutputRenderer.StartFailure.captureRateTooHigh(352_800)),
         holdBacks: [:], gain: { _ in 1 })
     let strings = UIStrings()
-    let generic = strings.outputCouldNotStart(names: "USB DAC")
-    let rateText = strings.outputCouldNotStart(names: "USB DAC", refusedCaptureRate: 352_800)
-    let rateText384 = strings.outputCouldNotStart(names: "USB DAC", refusedCaptureRate: 384_000)
+    let generic = strings.outputCouldNotStart(names: ["USB DAC"])
+    let rateText = strings.outputCouldNotStart(names: ["USB DAC"], refusedCaptureRate: 352_800)
+    let rateText384 = strings.outputCouldNotStart(names: ["USB DAC"], refusedCaptureRate: 384_000)
     check(tooFast.failures == [F(uid: "usb", deviceName: "USB DAC", refusedCaptureRate: 352_800)]
             && applied.failures.allSatisfy { $0.refusedCaptureRate == nil },
           "S36 start failure: a refused capture rate comes back with the failure, any other failure without one",
@@ -7352,8 +7357,11 @@ do {
             && rateText.contains("Audio MIDI Setup") && !rateText.contains("exclusively")
             && rateText384.contains("384 kHz") && generic.contains("exclusively")
             && generic.hasPrefix("USB DAC couldn't start, so it's off.")
-            && strings.outputCouldNotStart(names: "USB DAC, Den", count: 2).contains("so they're off"),
+            && strings.outputCouldNotStart(names: ["USB DAC", "Den"]).contains("so they're off"),
           "S36 start failure: the text names the capture rate, the 192 kHz limit and Audio MIDI Setup", rateText)
+    let threeFailed = strings.outputCouldNotStart(names: ["Kitchen", "Den", "Office"])
+    check(threeFailed.hasPrefix("Kitchen, Den and Office couldn't start, so they're off."),
+          "S36 start failure: the alert lists the speakers as the rest of the app does", threeFailed)
     check(OutputRenderer.StartFailure.captureRateTooHigh(384_000).description.contains("384000 Hz"),
           "S36 start failure: the debug log names the refused rate")
     let rateFailures = [F(uid: "usb", deviceName: "USB DAC", refusedCaptureRate: 384_000),
@@ -10470,6 +10478,13 @@ do {
           "input level: VoiceOver hears it in steps of 10 percent")
     check(UIStrings(locale: Locale(identifier: "en_US")).inputLevelValue(40) == "40%",
           "input level: VoiceOver reads a percent")
+    let unseen = InputLevel()
+    unseen.follow { 0.5 }
+    unseen.setVisible(false)
+    check(!unseen.isPolling, "input level: no polling while the main window is closed")
+    unseen.setVisible(true)
+    check(unseen.isPolling && unseen.shown, "input level: polling starts again once the main window shows")
+    unseen.setVisible(false)
 
     func luminance(_ c: BrandRGB) -> Double {
         func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
