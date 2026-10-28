@@ -800,16 +800,17 @@ impl LoopbackLane {
         frequency: i64,
         counters: &Arc<CaptureCounters>,
     ) -> Result<Box<Opened<LoopbackLane>>, BackendError> {
-        let stream = open_stream(&CaptureTarget::Loopback(Activation {
+        let target = CaptureTarget::Loopback(Activation {
             mode: LoopbackMode::IncludeTree,
             target_pid: pid,
-        }))?;
+        });
+        let stream = open_stream(&target)?;
         let format = stream.format;
         let input = LaneInput::new(format)?;
         // SAFETY: starts the stream initialized above; dropping the lane
         // stops it.
         unsafe { stream.client.Start() }
-            .map_err(|error| system_error("IAudioClient::Start", &error))?;
+            .map_err(|error| lane_start_error(&target, error.code()))?;
         Ok(Box::new(Opened {
             pid,
             stream: LoopbackLane {
@@ -822,6 +823,14 @@ impl LoopbackLane {
             rate: format.rate,
         }))
     }
+}
+
+/// How a mix lane reads a failed `IAudioClient::Start` on `target`.
+fn lane_start_error(_target: &CaptureTarget, code: HRESULT) -> BackendError {
+    system_error(
+        "IAudioClient::Start",
+        &windows::core::Error::from_hresult(code),
+    )
 }
 
 impl Drop for LoopbackLane {
@@ -1316,6 +1325,20 @@ mod tests {
                 "IAudioClient::Initialize",
                 AUDCLNT_E_DEVICE_INVALIDATED
             ),
+            BackendError::DeviceGone
+        );
+    }
+
+    // covers: S333
+    #[test]
+    fn a_mix_lane_whose_device_went_away_is_gone_at_start() {
+        use windows::Win32::Media::Audio::AUDCLNT_E_DEVICE_INVALIDATED;
+        let lane = CaptureTarget::Loopback(Activation {
+            mode: LoopbackMode::IncludeTree,
+            target_pid: 4,
+        });
+        assert_eq!(
+            lane_start_error(&lane, AUDCLNT_E_DEVICE_INVALIDATED),
             BackendError::DeviceGone
         );
     }
