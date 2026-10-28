@@ -186,6 +186,14 @@ pub trait CaptureHandle {
     fn glitches(&self) -> CaptureGlitches {
         CaptureGlitches::default()
     }
+
+    /// The Windows error code with which the captured app's process refused
+    /// to be opened for a wait (an app running as administrator, say): the
+    /// capture then can't tell that the app quit (S327). `None` while it
+    /// watches its app, and for any other capture.
+    fn watch_refused(&self) -> Option<i32> {
+        None
+    }
 }
 
 /// A running output. Dropping it stops the output at once and waits for its
@@ -362,6 +370,24 @@ struct Session<D: Driver> {
     waits_for_feed: MissingFeeds,
     /// The session lead last written to the debug log, in capture frames.
     logged_lead: Option<i64>,
+    /// The captured app, when its capture can't watch it for its exit.
+    unwatched: Option<UnwatchedApp>,
+}
+
+/// A single app captured whose process Windows won't open for a wait (an
+/// app running as administrator, say): the host checks every
+/// [`MIX_FOLLOW_INTERVAL`] that it still runs (S327).
+#[derive(Clone)]
+struct UnwatchedApp {
+    pid: u32,
+    /// Its start time as the capture started, when it could be read: a
+    /// process ID reused by another process has another one.
+    created: Option<u64>,
+    /// Its executable as the capture started, when it was listed: a process
+    /// ID reused by another app is told by it even without start times.
+    executable: Option<String>,
+    /// When the last check ran; `None` before the first.
+    checked: Option<Instant>,
 }
 
 /// The reopen of a capture lost because Windows audio restarted or its
@@ -1731,6 +1757,7 @@ impl<D: Driver> Controller<D> {
             return;
         };
         drop(session.capture.take());
+        session.unwatched = None;
         session.reopen = Some(CaptureReopen {
             wait: RESTART_DELAY_POLLS,
             tries_left: RESTART_TRIES - 1,
@@ -1797,8 +1824,10 @@ impl<D: Driver> Controller<D> {
                     }
                     return;
                 }
+                let unwatched = self.unwatched_app(&target, &capture);
                 if let Some(session) = self.session.as_mut() {
                     session.capture = Some(capture);
+                    session.unwatched = unwatched;
                     session.target = target;
                     session.equalizer = equalizer;
                     session.waits_for_feed = waits_for_feed;
@@ -2081,6 +2110,7 @@ impl<D: Driver> Controller<D> {
         let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
         let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
         let (capture, equalizer, waits_for_feed) = self.open_capture(&target, writer)?;
+        let unwatched = self.unwatched_app(&target, &capture);
         self.log.log(|| self.policy.describe_lead());
         self.session = Some(Session {
             source: source.clone(),
@@ -2094,6 +2124,7 @@ impl<D: Driver> Controller<D> {
             trial_polls: 0,
             waits_for_feed,
             logged_lead: None,
+            unwatched,
         });
         self.refresh_if_needed(false);
         let failures = self.sync_outputs();
@@ -2154,6 +2185,85 @@ impl<D: Driver> Controller<D> {
         }
         self.sessions_started += 1;
         Ok((capture, equalizer, waits_for_feed))
+    }
+
+    /// The app `capture` takes in, when it is a single app whose process
+    /// can't be waited for (S327), with its start time read now; `None` for
+    /// any other capture.
+    fn unwatched_app(
+        &mut self,
+        target: &CaptureTarget,
+        capture: &D::Capture,
+    ) -> Option<UnwatchedApp> {
+        let CaptureTarget::Loopback(activation) = target else {
+            return None;
+        };
+        if activation.mode != LoopbackMode::IncludeTree {
+            return None;
+        }
+        let code = capture.watch_refused()?;
+        let pid = activation.target_pid;
+        self.log.log(|| {
+            format!(
+                "the captured app (process {pid}) can't be watched for its exit (error \
+                 {code:#010x}): AudioSync checks every 2 s that it still runs"
+            )
+        });
+        let entry = self
+            .driver
+            .processes()
+            .ok()
+            .and_then(|processes| processes.get(pid).cloned());
+        Some(UnwatchedApp {
+            pid,
+            created: entry.as_ref().and_then(|entry| entry.created),
+            executable: entry.map(|entry| entry.executable),
+            checked: None,
+        })
+    }
+
+    /// Whether the running session's unwatched app quit, checked every
+    /// [`MIX_FOLLOW_INTERVAL`] (S327): its process ID is no longer listed, or
+    /// is listed with another executable or start time. A start time that
+    /// can't be read either time doesn't count as another, and a list that
+    /// can't be read waits for the next check.
+    fn unwatched_app_quit(&mut self, now: Instant) -> bool {
+        let Some(app) = self
+            .session
+            .as_mut()
+            .and_then(|session| session.unwatched.as_mut())
+        else {
+            return false;
+        };
+        if app
+            .checked
+            .is_some_and(|last| now.saturating_duration_since(last) < MIX_FOLLOW_INTERVAL)
+        {
+            return false;
+        }
+        app.checked = Some(now);
+        let app = app.clone();
+        let Ok(processes) = self.driver.processes() else {
+            return false;
+        };
+        let runs = processes.get(app.pid).is_some_and(|entry| {
+            app.executable
+                .as_deref()
+                .is_none_or(|executable| executable.eq_ignore_ascii_case(&entry.executable))
+                && match (app.created, entry.created) {
+                    (Some(then), Some(now)) => then == now,
+                    _ => true,
+                }
+        });
+        if !runs {
+            self.log.log(|| {
+                format!(
+                    "the check found the captured app (process {}) gone",
+                    app.pid
+                )
+            });
+        }
+        !runs
     }
 
     /// For a session of several apps, every [`MIX_FOLLOW_INTERVAL`]: when
@@ -3057,6 +3167,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 Some(CaptureState::SourceQuit) => Some(StopReason::SourceQuit),
                 Some(CaptureState::Failed(error)) => Some(StopReason::CaptureFailed(error)),
             },
+        };
+        let stop_reason = match stop_reason {
+            None if !lost && self.unwatched_app_quit(Instant::now()) => {
+                Some(StopReason::SourceQuit)
+            }
+            other => other,
         };
         let quit_source = match stop_reason {
             Some(StopReason::SourceQuit) => self.session.as_ref().map(|s| s.source.clone()),
@@ -5284,6 +5400,163 @@ mod tests {
         for _ in 0..count {
             let events = backend.poll();
             assert!(events.is_empty(), "{events:?}");
+        }
+    }
+
+    /// Starts capturing the player, which Windows won't let AudioSync wait
+    /// for when `refused`.
+    fn start_player(backend: &mut MockBackend, refused: bool) {
+        if refused {
+            backend.refuse_watch(PLAYER_PID);
+        }
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+    }
+
+    // covers: S327
+    #[test]
+    fn an_unwatched_app_that_leaves_the_process_list_quits_the_source_within_one_check() {
+        let mut backend = backend();
+        start_player(&mut backend, true);
+        backend.quit_app(PLAYER_PID);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+        assert_eq!(backend.running_source(), None);
+        assert!(playing(&backend).is_empty());
+    }
+
+    // covers: S327
+    #[test]
+    fn an_unwatched_app_whose_process_id_returns_with_another_start_time_counts_as_quit() {
+        let mut backend = backend();
+        start_player(&mut backend, true);
+        backend.quit_app(PLAYER_PID);
+        backend.add_app(PLAYER_PID, "player.exe");
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+        // The next start captures the app's new process from the stored
+        // source.
+        start_player(&mut backend, false);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert_eq!(
+            backend.running_source(),
+            Some(SourceId::App {
+                root_pid: PLAYER_PID
+            })
+        );
+    }
+
+    // covers: S327
+    #[test]
+    fn an_unwatched_app_streams_on_while_it_runs_and_is_checked_every_two_seconds() {
+        let mut backend = backend();
+        start_player(&mut backend, true);
+        poll_quietly(&mut backend, 3);
+        backend.quit_app(PLAYER_PID);
+        let last_check = |backend: &mut MockBackend, at: Option<Instant>| {
+            backend
+                .session
+                .as_mut()
+                .and_then(|session| session.unwatched.as_mut())
+                .expect("the app is checked")
+                .checked = at;
+        };
+        last_check(&mut backend, Some(Instant::now()));
+        poll_quietly(&mut backend, 1);
+        last_check(
+            &mut backend,
+            Instant::now().checked_sub(MIX_FOLLOW_INTERVAL),
+        );
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+    }
+
+    // covers: S327
+    #[test]
+    fn only_a_single_app_that_refused_a_watch_is_checked() {
+        let checked = |source: SourceId, refused: bool| {
+            let mut backend = backend();
+            if refused {
+                backend.refuse_watch(PLAYER_PID);
+            }
+            backend.start(&source).unwrap();
+            backend
+                .session
+                .as_ref()
+                .is_some_and(|session| session.unwatched.is_some())
+        };
+        let app = SourceId::App {
+            root_pid: PLAYER_PID,
+        };
+        assert!(checked(app.clone(), true));
+        assert!(!checked(app, false), "a watched app");
+        assert!(!checked(SourceId::WholeSystem, true), "the whole system");
+        let mix = SourceId::Apps {
+            root_pids: vec![PLAYER_PID],
+            executables: vec!["player.exe".to_owned()],
+        };
+        assert!(!checked(mix, true), "a mix");
+    }
+
+    // covers: S327
+    #[test]
+    fn an_unwatched_app_whose_process_id_another_app_took_counts_as_quit_without_a_start_time() {
+        let mut backend = backend();
+        start_player(&mut backend, true);
+        backend.hide_start_time(PLAYER_PID);
+        poll_quietly(&mut backend, 1);
+        backend.quit_app(PLAYER_PID);
+        backend.add_app(PLAYER_PID, "other.exe");
+        backend.hide_start_time(PLAYER_PID);
+        backend
+            .session
+            .as_mut()
+            .and_then(|session| session.unwatched.as_mut())
+            .expect("the app is checked")
+            .checked = None;
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+    }
+
+    // covers: S327
+    #[test]
+    fn an_unwatched_app_that_restarts_gets_the_same_quit_handling_as_a_watched_one() {
+        for setting in [WhenSourceQuits::Stop, WhenSourceQuits::SwitchToSystem] {
+            let outcome = |refused: bool| {
+                let mut backend = backend();
+                backend.set_when_source_quits(setting);
+                start_player(&mut backend, refused);
+                backend.quit_app(PLAYER_PID);
+                backend.add_app(PLAYER_PID + 1, "player.exe");
+                let events = backend.poll();
+                poll_quietly(&mut backend, 2);
+                (
+                    events,
+                    backend.running_source(),
+                    backend.driver().captures_started().to_vec(),
+                    playing(&backend),
+                )
+            };
+            assert_eq!(outcome(true), outcome(false), "{setting:?}");
         }
     }
 

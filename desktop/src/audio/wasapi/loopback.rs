@@ -58,7 +58,7 @@ use super::com::{
     wave_format,
 };
 use super::devices::enumerator;
-use super::processes::ProcessWatch;
+use super::processes::{ProcessWatch, Watch};
 use crate::audio::SESSION_RATE;
 use crate::audio::backend::{BackendError, TIMED_OUT};
 use crate::audio::capture::{
@@ -100,6 +100,8 @@ pub struct LoopbackCapture {
     /// The captured apps, to notice when they quit; empty when one can't be
     /// watched or the capture isn't of apps.
     sources: Vec<ProcessWatch>,
+    /// The error the single app captured refused a watch with (S327).
+    watch_refused: Option<i32>,
     /// What a mix shares with its threads, to follow its apps while it
     /// runs.
     mix: Option<Arc<MixShare>>,
@@ -156,6 +158,10 @@ impl CaptureHandle for LoopbackCapture {
     fn glitches(&self) -> CaptureGlitches {
         self.counters.glitches()
     }
+
+    fn watch_refused(&self) -> Option<i32> {
+        self.watch_refused
+    }
 }
 
 #[cfg(test)]
@@ -182,12 +188,17 @@ pub(super) fn start(
     feeds: Feeds,
 ) -> Result<LoopbackCapture, BackendError> {
     let input = matches!(target, CaptureTarget::Input { .. });
+    let mut watch_refused = None;
     let (sources, call) = match &target {
         CaptureTarget::Loopback(activation) => (
             match activation.mode {
-                LoopbackMode::IncludeTree => ProcessWatch::open(activation.target_pid)?
-                    .into_iter()
-                    .collect(),
+                LoopbackMode::IncludeTree => match ProcessWatch::open(activation.target_pid)? {
+                    Watch::Watching(watch) => vec![watch],
+                    Watch::Refused(code) => {
+                        watch_refused = Some(code.0);
+                        Vec::new()
+                    }
+                },
                 LoopbackMode::ExcludeTree => Vec::new(),
             },
             "process loopback capture",
@@ -239,6 +250,7 @@ pub(super) fn start(
         counters,
         thread,
         sources,
+        watch_refused,
         mix,
         mix_pids,
         setup,
@@ -261,9 +273,9 @@ fn watch_all(activations: &[Activation]) -> Vec<ProcessWatch> {
     let mut watches = Vec::with_capacity(activations.len());
     for activation in activations {
         match ProcessWatch::open(activation.target_pid) {
-            Ok(Some(watch)) => watches.push(watch),
+            Ok(Watch::Watching(watch)) => watches.push(watch),
             Err(_) => {}
-            Ok(None) => return Vec::new(),
+            Ok(Watch::Refused(_)) => return Vec::new(),
         }
     }
     watches
@@ -793,7 +805,7 @@ impl LoopbackLane {
             pid,
             stream: LoopbackLane {
                 stream,
-                watch: ProcessWatch::open(pid).ok().flatten(),
+                watch: ProcessWatch::open(pid).ok().and_then(Watch::watching),
                 frequency,
                 counters: Arc::clone(counters),
             },
@@ -1241,6 +1253,7 @@ mod tests {
             counters: Arc::new(CaptureCounters::default()),
             thread,
             sources: Vec::new(),
+            watch_refused: None,
             mix: None,
             mix_pids: Vec::new(),
             setup: CAPTURE_ATTEMPTS[0],

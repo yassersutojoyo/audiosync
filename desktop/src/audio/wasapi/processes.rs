@@ -152,11 +152,28 @@ const NO_SUCH_PROCESS: HRESULT = HRESULT::from_win32(ERROR_INVALID_PARAMETER.0);
 /// A process watched for its exit.
 pub struct ProcessWatch(Handle);
 
+/// What asking to watch a running process gave.
+pub(super) enum Watch {
+    Watching(ProcessWatch),
+    /// It runs but refused to be opened for a wait, with this error (an app
+    /// running as administrator, say), so its exit goes unnoticed.
+    Refused(HRESULT),
+}
+
+impl Watch {
+    /// The watch, unless the process refused one.
+    pub(super) fn watching(self) -> Option<ProcessWatch> {
+        match self {
+            Watch::Watching(watch) => Some(watch),
+            Watch::Refused(_) => None,
+        }
+    }
+}
+
 impl ProcessWatch {
     /// Starts watching process `pid`. Returns [`BackendError::SourceGone`]
-    /// when it doesn't run, and `None` when it runs but can't be opened (an
-    /// app running as administrator, say), so its exit goes unnoticed.
-    pub(super) fn open(pid: u32) -> Result<Option<ProcessWatch>, BackendError> {
+    /// when it doesn't run.
+    pub(super) fn open(pid: u32) -> Result<Watch, BackendError> {
         // SAFETY: opens the process with the right to wait for it only; the
         // handle is owned by the watch.
         match unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) } {
@@ -165,11 +182,11 @@ impl ProcessWatch {
                 if watch.has_exited() {
                     Err(BackendError::SourceGone)
                 } else {
-                    Ok(Some(watch))
+                    Ok(Watch::Watching(watch))
                 }
             }
             Err(error) if error.code() == NO_SUCH_PROCESS => Err(BackendError::SourceGone),
-            Err(_) => Ok(None),
+            Err(error) => Ok(Watch::Refused(error.code())),
         }
     }
 
