@@ -1264,7 +1264,7 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && ui.pair.hidden && events === null && !streamReplaced) {
     failures = 0;
     connect();
-  } else if (document.visibilityState === "visible" && events !== null && (events.readyState !== EventSource.OPEN || streamStale())) {
+  } else if (document.visibilityState === "visible" && events !== null && streamStale()) {
     stopStream();
     checkAccess();
   }

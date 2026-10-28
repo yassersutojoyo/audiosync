@@ -1341,8 +1341,9 @@ fn preset(request: &Request, id: Option<String>, shared: &Shared) -> Answer {
 
 /// The event stream (HTML Living Standard §9.2): the current snapshot at
 /// once, then each new revision once, a `ping` event when it has been quiet
-/// for a heartbeat, so the page can tell a dead stream. It ends when the server stops, the device is forgotten
-/// or the device opens a stream too many, which sends a last `replaced` event.
+/// for a heartbeat, so the page can tell a dead stream. It ends when the
+/// server stops, the device is forgotten or the device opens a stream too
+/// many, which sends a last `replaced` event.
 fn stream_events(stream: TcpStream, token: &str, shared: &Shared) {
     let id = shared.open_stream(token);
     send_events(stream, token, id, shared);
