@@ -4021,10 +4021,6 @@ fn describe_capture_start(
     )
 }
 
-/// The log line of an output that started: the output as [`label`] names
-/// it, how its stream is set up, its hold-back in ms, its volume slider
-/// position, the gain it plays at and, for a Bluetooth output, what its
-/// start lead adds in capture frames (S230).
 /// What a Bluetooth output's start decided of its link (S325): `age` is the
 /// polls since its endpoint appeared, `None` for one listed at launch or
 /// whose appearance an earlier start used up.
@@ -4046,6 +4042,10 @@ fn describe_fresh_link(output: &str, age: Option<u64>, fresh: bool) -> String {
     }
 }
 
+/// The log line of an output that started: the output as [`label`] names
+/// it, how its stream is set up, its hold-back in ms, its volume slider
+/// position, the gain it plays at and, for a Bluetooth output, what its
+/// start lead adds in capture frames (S230).
 fn describe_output_start(
     label: &str,
     setup: Option<StreamSetup>,
