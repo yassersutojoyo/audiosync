@@ -1453,6 +1453,12 @@ impl<D: Driver> Controller<D> {
                 // Still listed and refused about thirty seconds on, it gets
                 // the notice and a try every few seconds (S331).
                 Err(BackendError::DeviceGone) => {
+                    // The other app let go, but the device doesn't open yet.
+                    if self.busy.remove(&endpoint.id).is_some() {
+                        self.pending.push(BackendEvent::OutputFree {
+                            id: endpoint.id.clone(),
+                        });
+                    }
                     let refusal =
                         self.refused
                             .entry(endpoint.id.clone())
@@ -1493,6 +1499,11 @@ impl<D: Driver> Controller<D> {
                 // stays on, and is tried again a few seconds later, since
                 // each try may hold the UI thread that long.
                 Err(BackendError::NotResponding) => {
+                    if self.busy.remove(&endpoint.id).is_some() {
+                        self.pending.push(BackendEvent::OutputFree {
+                            id: endpoint.id.clone(),
+                        });
+                    }
                     held = true;
                     self.unplayable.insert(endpoint.id.clone());
                     self.stalled.insert(endpoint.id.clone(), STALL_RETRY_POLLS);
