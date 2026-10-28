@@ -5582,6 +5582,58 @@ do {
           "local delay: editing the lowest offset re-times the others",
           "\(LocalDelay.retimes(applied: withBT, holdBacks: holds([r, usb, bt], offsets: edited)))")
 
+    // covers: S328 (a speaker whose device leaves the list for a moment)
+    let on: Set<String> = [r, usb, bt]
+    func flapped(at lostAt: Double = 5) -> LocalBriefLoss {
+        var flap = LocalBriefLoss()
+        flap.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
+        flap.noteListing([r, usb], enabled: on, reference: r, now: lostAt)
+        return flap
+    }
+    var flap = flapped()
+    let duringLoss = holds([r, usb] + flap.held.sorted())
+    let runningOthers = withBT.filter { $0.key != bt }
+    flap.noteListing([r, usb, bt], enabled: on, reference: r, now: 6)
+    check(duringLoss == withBT && LocalDelay.retimes(applied: runningOthers, holdBacks: duringLoss).isEmpty
+            && flap.held.isEmpty && LocalDelay.retimes(applied: runningOthers, holdBacks: holds([r, usb, bt])).isEmpty,
+          "local delay: an output lost for one poll keeps the others' hold-backs", "\(duringLoss)")
+    flap = flapped()
+    let early = flap.expire(now: 14.9), nextEnd = flap.nextExpiry
+    let ended = flap.expire(now: 15), again = flap.expire(now: 16)
+    let afterLoss = holds([r, usb] + flap.held.sorted())
+    check(LocalBriefLoss.holdSeconds == 10 && !early && nextEnd == 15 && ended && !again && flap.nextExpiry == nil
+            && LocalDelay.retimes(applied: runningOthers, holdBacks: afterLoss) == [r: 0, usb: 150],
+          "local delay: an output still lost after 10 s re-times the others once", "\(afterLoss)")
+    flap = flapped()
+    let offHeld = flap.switchedOff(bt), offListed = flap.switchedOff(usb)
+    check(offHeld && !offListed && flap.held.isEmpty,
+          "local delay: a lost output switched off re-times the others at once")
+    flap = flapped()
+    flap.restart()
+    var lostReference = LocalBriefLoss()
+    lostReference.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
+    lostReference.noteListing([usb, bt], enabled: on, reference: nil, now: 5)
+    var offFirst = LocalBriefLoss()
+    offFirst.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
+    offFirst.noteListing([r, usb], enabled: [r, usb], reference: r, now: 5)
+    check(flap.held.isEmpty && lostReference.held.isEmpty && offFirst.held.isEmpty && flapped().held == [bt],
+          "local delay: a session restart, a lost reference or a speaker already off holds nothing")
+    flap = flapped()
+    flap.followSwitches(from: on, to: [r, usb])
+    flap.followSwitches(from: [r, usb], to: on)
+    flap.noteListing([r, usb], enabled: on, reference: r, now: 6)
+    check(flap.held.isEmpty,
+          "local delay: a lost output switched off and on again within 10 s while still missing isn't held again",
+          "\(flap.held)")
+    let lostBT = flapped()
+    func keeps(listed: Bool, published: Bool, now: Double = 8) -> Bool {
+        lostBT.keepsLead(of: bt, lostAt: 5, now: now, listed: listed, enabled: true, isReference: false,
+                         publishedAgain: published)
+    }
+    check(keeps(listed: false, published: false) && keeps(listed: true, published: false)
+            && !keeps(listed: true, published: true) && !keeps(listed: false, published: false, now: 15),
+          "local delay: a lost output's start lead counts until its new renderer publishes one, 10 s at most")
+
     // covers: S178, S181 (the AirPlay delay field)
     var native = AirPlayDelay(adjustmentMs: 250)
     let shown = native.latencyMs(senderMs: 1750)
@@ -8434,6 +8486,26 @@ do {
             && CastEnd.failed(nil).problem == .notResponding
             && CastEnd.stopped.problem == nil && CastEnd.deselected.problem == nil,
           "cast: each way a session ends maps to its notice, or none")
+    check(CastEnd.failed(CastError(ASC_CAST_ERROR_INTERNAL)).problem == .connectionLost,
+          "cast: a fault inside the sender reads as a lost connection, as on Windows (C107)")
+
+    // C108: the sender hears the selection at its start and at every change, played or not.
+    var naming = CastModel()
+    naming.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
+    let firstNamed = naming.selectionToName()
+    let unchanged = naming.selectionToName()
+    _ = naming.turnOn(den)
+    let selectedNamed = naming.selectionToName()
+    let selectedAgain = naming.selectionToName()
+    _ = naming.turnOff(den)
+    let deselectedNamed = naming.selectionToName()
+    _ = naming.apply(.failed(detail: ""))
+    let afterFailure = naming.selectionToName()
+    check(firstNamed == CastSelection(id: nil) && unchanged == nil
+            && selectedNamed == CastSelection(id: den) && selectedAgain == nil
+            && deselectedNamed == CastSelection(id: nil)
+            && afterFailure == CastSelection(id: nil),
+          "cast: the selection is named to the sender once at start and again only when it changes (C108)")
 
     var failed = m
     check(failed.apply(.failed(detail: "")) == .senderFailed(wasOn: kitchen) && failed.enabled == nil && failed.rows.isEmpty

@@ -199,6 +199,14 @@ final class CastSender {
         return true
     }
 
+    /// Names the device the user selected, or none with nil (C108).
+    func setSelected(_ id: String?) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            _ = asc_cast_set_selected(handle, id)
+        }
+    }
+
     /// Stores the user's offset for `id` and writes the memory.
     func setOffset(_ id: String, ms: Double) {
         queue.async { [weak self] in

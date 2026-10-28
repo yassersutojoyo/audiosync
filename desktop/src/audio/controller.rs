@@ -56,7 +56,8 @@ use std::time::{Duration, Instant};
 
 use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
-use audiosync_core::policy::delay::native_airplay_latency_ms;
+use audiosync_core::lead::HeldLead;
+use audiosync_core::policy::delay::{BRIEF_LOSS_HOLD, native_airplay_latency_ms};
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::source_quit::{
     SourceQuitAction, SourceQuitWatch, Streaming, WhenSourceQuits,
@@ -86,7 +87,8 @@ use super::now_playing::{Follow, SharedLabels, TrackInfo, TrackReader, TrackSour
 #[cfg(test)]
 use super::outputs::OutputParams;
 use super::outputs::{
-    AirPlay, Endpoint, EndpointReading, Listing, ListingNote, OutputPolicy, StreamSetup,
+    AirPlay, Endpoint, EndpointReading, Listing, ListingNote, OutputPolicy, RenderFormat,
+    StreamSetup,
 };
 use super::pairings::PairingStore;
 use super::process::ProcessTable;
@@ -149,6 +151,12 @@ const REFUSED_GIVE_UP_POLLS: u32 = 60;
 /// and streaming stops. After it, the next loss is restarted again.
 const RESTART_TRIAL_POLLS: u32 = 10;
 
+/// A held start lead (S328) of an output whose device is still listed, so
+/// one that stopped by itself and starts again, ends this many polls after
+/// its renderer stopped at the latest: [`BRIEF_LOSS_HOLD`] in UI polls.
+const BRIEF_LOSS_POLLS: u32 =
+    (BRIEF_LOSS_HOLD.as_millis() / super::outputs::POLL_PERIOD.as_millis()) as u32;
+
 /// How a running capture is doing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CaptureState {
@@ -185,6 +193,14 @@ pub trait CaptureHandle {
     /// line; zero for a capture that doesn't count them.
     fn glitches(&self) -> CaptureGlitches {
         CaptureGlitches::default()
+    }
+
+    /// The Windows error code with which the captured app's process refused
+    /// to be opened for a wait (an app running as administrator, say): the
+    /// capture then can't tell that the app quit (S327). `None` while it
+    /// watches its app, and for any other capture.
+    fn watch_refused(&self) -> Option<i32> {
+        None
     }
 }
 
@@ -223,6 +239,13 @@ pub trait RendererHandle {
     fn stall(&self) -> Option<Stall> {
         None
     }
+
+    /// Whether Windows said its stream was disconnected because its format
+    /// changed or its device went away (S330), which the render thread may
+    /// only notice at its next wait.
+    fn invalidated(&self) -> bool {
+        false
+    }
 }
 
 /// The platform calls the backend makes.
@@ -248,6 +271,19 @@ pub trait Driver {
 
     /// Whether outputs may have changed since the last call.
     fn outputs_changed(&mut self) -> bool;
+
+    /// The render endpoints whose device format Windows said changed since
+    /// the last call, each once (S330). Windows may say so for other
+    /// reasons too.
+    fn format_notices(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// The format an output on the endpoint `id` would open in now, from its
+    /// device's current mix format (S330).
+    fn output_format(&mut self, _id: &str) -> Result<RenderFormat, BackendError> {
+        Err(BackendError::UnsupportedFormat)
+    }
 
     /// A snapshot of the active render endpoints for the double-audio check
     /// ([`routing`](super::routing)): each one's name, whether it is the
@@ -362,6 +398,48 @@ struct Session<D: Driver> {
     waits_for_feed: MissingFeeds,
     /// The session lead last written to the debug log, in capture frames.
     logged_lead: Option<i64>,
+    /// The captured app, when its capture can't watch it for its exit.
+    unwatched: Option<UnwatchedApp>,
+    /// The start leads of switched-on outputs whose renderers stopped as
+    /// their devices went away, still counted in the session lead (S328).
+    held_leads: BTreeMap<String, LostLead>,
+}
+
+/// A single app captured whose process Windows won't open for a wait (an
+/// app running as administrator, say): the host checks every
+/// [`MIX_FOLLOW_INTERVAL`] that it still runs (S327).
+#[derive(Clone)]
+struct UnwatchedApp {
+    pid: u32,
+    /// Its start time as the capture started, when it could be read: a
+    /// process ID reused by another process has another one.
+    created: Option<u64>,
+    /// Its executable as the capture started, when it was listed: a process
+    /// ID reused by another app is told by it even without start times.
+    executable: Option<String>,
+    /// When the last check ran; `None` before the first.
+    checked: Option<Instant>,
+}
+
+/// The start lead of an output whose renderer stopped while it stays on.
+struct LostLead {
+    lead: HeldLead,
+    /// Polls left while its device is listed ([`BRIEF_LOSS_POLLS`]).
+    polls_left: u32,
+}
+
+/// Keeps the start lead of output `id`'s renderer counting after it stops,
+/// when the output stays switched on (S328).
+fn keep_lead(held: &mut BTreeMap<String, LostLead>, id: &str, control: &RendererControl) {
+    if let Some(lead) = control.hold_lead() {
+        held.insert(
+            id.to_owned(),
+            LostLead {
+                lead,
+                polls_left: BRIEF_LOSS_POLLS,
+            },
+        );
+    }
 }
 
 /// The reopen of a capture lost because Windows audio restarted or its
@@ -372,6 +450,9 @@ struct CaptureReopen {
     wait: u32,
     /// The tries left after that one ([`RESTART_TRIES`]).
     tries_left: u32,
+    /// When a try first found the input held by another app; busy answers
+    /// take no try (S333).
+    busy_since: Option<Instant>,
 }
 
 /// An output whose stream stalled (S326), until its reopened stream has
@@ -1084,6 +1165,7 @@ impl<D: Driver> Controller<D> {
                 continue;
             };
             let why = if self.policy.settings(id).enabled {
+                keep_lead(&mut session.held_leads, id, &playing.control);
                 drop(playing);
                 "its device isn't listed"
             } else {
@@ -1308,11 +1390,13 @@ impl<D: Driver> Controller<D> {
             .filter(|id| !present.iter().any(|endpoint| endpoint.id == **id))
             .cloned()
             .collect();
-        let stopped: Vec<Playing<D::Renderer>> = unlisted
-            .iter()
-            .filter_map(|id| session.outputs.remove(id))
-            .collect();
-        drop(stopped);
+        for id in &unlisted {
+            if let Some(playing) = session.outputs.remove(id)
+                && self.policy.settings(id).enabled
+            {
+                keep_lead(&mut session.held_leads, id, &playing.control);
+            }
+        }
         for id in &unlisted {
             self.log.log(|| {
                 format!(
@@ -1374,8 +1458,13 @@ impl<D: Driver> Controller<D> {
             outputs,
             capture,
             ring,
+            reopen,
             ..
         } = session;
+        // A capture told busy no longer waits (S333).
+        if reopen.is_some_and(|reopen| reopen.busy_since.is_some()) {
+            self.pending.push(BackendEvent::CaptureFree);
+        }
         let mut outputs: Vec<Playing<D::Renderer>> = outputs.into_values().collect();
         for playing in &mut outputs {
             playing.handle.request_stop();
@@ -1543,12 +1632,47 @@ impl<D: Driver> Controller<D> {
         true
     }
 
+    /// Lets go of the held start leads (S328) of the outputs that no longer
+    /// count: one whose device is listed once its new renderer published its
+    /// own lead or [`BRIEF_LOSS_POLLS`] went by, one whose device is missing
+    /// once the policy stops counting it, and one switched off or the
+    /// reference at once. `polled` counts a poll.
+    fn release_held_leads(&mut self, polled: bool) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let policy = &self.policy;
+        let present = &self.present;
+        let outputs = &session.outputs;
+        session.held_leads.retain(|id, held| {
+            if polled {
+                held.polls_left = held.polls_left.saturating_sub(1);
+            }
+            if !policy.settings(id).enabled {
+                return false;
+            }
+            if !present.iter().any(|endpoint| endpoint.id == *id) {
+                return policy.counts_while_lost(id);
+            }
+            policy.reference() != Some(id.as_str())
+                && held.polls_left > 0
+                && !outputs
+                    .get(id)
+                    .is_some_and(|playing| playing.control.start_lead_frames().is_some())
+        });
+    }
+
     /// Gives every playing output its current hold-back, after the outputs
     /// taking part, an offset, the reference, the AirPlay condition or L
     /// changed (S177): an increase inserts that much silence, a decrease
     /// skips forward, and an output whose hold-back is unchanged gets no
     /// call.
     fn retime(&self) {
+        if let Some(session) = &self.session {
+            for (id, held) in &session.held_leads {
+                held.lead.set_hold_back(self.policy.params(id).delay_frames);
+            }
+        }
         for id in self.playing_ids() {
             if self.apply_delay(&id) {
                 self.log.log(|| {
@@ -1646,6 +1770,62 @@ impl<D: Driver> Controller<D> {
         true
     }
 
+    /// Ends at once, without a fade, the stream of each playing output that
+    /// Windows invalidated under it (S330): its audio session said so, or
+    /// its device now reports another format than the stream opened in.
+    /// The same poll's [`Self::sync_outputs`] opens it again in the new
+    /// format at its current hold-back, and as it takes part throughout, no
+    /// other output is re-timed. A notice whose device still reports the
+    /// stream's format changes nothing. Returns the outputs it ended: like
+    /// one that stopped by itself, one whose device went away with its
+    /// session is lost (S68).
+    fn drop_reformatted_outputs(&mut self) -> Vec<String> {
+        let noticed = self.driver.format_notices();
+        let Some(session) = self.session.as_ref() else {
+            return Vec::new();
+        };
+        let mut dropped = Vec::new();
+        let marked: Vec<(String, bool, Option<RenderFormat>)> = session
+            .outputs
+            .iter()
+            .filter_map(|(id, playing)| {
+                let invalidated = playing.handle.invalidated();
+                (invalidated || noticed.contains(id)).then(|| {
+                    let opened = playing.handle.setup().map(|setup| setup.format);
+                    (id.clone(), invalidated, opened)
+                })
+            })
+            .collect();
+        for (id, invalidated, opened) in marked {
+            let now = self.driver.output_format(&id).ok();
+            let changed = matches!((opened, now), (Some(opened), Some(now)) if opened != now);
+            if !invalidated && !changed {
+                continue;
+            }
+            if let Some(session) = self.session.as_mut() {
+                drop(session.outputs.remove(&id));
+            }
+            // Written once the old stream is released (S126).
+            self.log.log(|| {
+                let (opened, now) = (describe_format(opened), describe_format(now));
+                let output = label(&self.names, &id);
+                if changed {
+                    format!(
+                        "output {output}: its format changed from {opened} to {now}; it opens \
+                         again in the new format"
+                    )
+                } else {
+                    format!(
+                        "output {output}: Windows disconnected its stream, opened in {opened}; \
+                         it opens again in {now}"
+                    )
+                }
+            });
+            dropped.push(id);
+        }
+        dropped
+    }
+
     /// Counts a poll of play for each reopened output that stalled (S326):
     /// once one has played [`RESTART_TRIAL_POLLS`], its stall is over, and
     /// a notice about it clears.
@@ -1731,9 +1911,11 @@ impl<D: Driver> Controller<D> {
             return;
         };
         drop(session.capture.take());
+        session.unwatched = None;
         session.reopen = Some(CaptureReopen {
             wait: RESTART_DELAY_POLLS,
             tries_left: RESTART_TRIES - 1,
+            busy_since: None,
         });
         self.log.log(|| {
             "the capture was lost: Windows audio restarted or its device went away; it opens \
@@ -1748,7 +1930,9 @@ impl<D: Driver> Controller<D> {
     /// another rate or channel count, the session starts again (S20). A
     /// failed try waits for the next while tries are left and it may work
     /// later; after the last, streaming stops (S21), unless the captured app
-    /// quit and the setting moves to the whole system (S227).
+    /// quit and the setting moves to the whole system (S227). An input that
+    /// another app holds takes no try: it is tried every
+    /// [`BUSY_RETRY_POLLS`] for as long as it stays held (S333).
     fn reopen_capture_when_due(&mut self) {
         let Some(session) = self.session.as_mut() else {
             return;
@@ -1761,6 +1945,7 @@ impl<D: Driver> Controller<D> {
             return;
         }
         let tries_left = reopen.tries_left;
+        let busy_since = reopen.busy_since;
         let source = session.source.clone();
         let ring = Arc::clone(&session.ring);
         let started_as = session.started_as;
@@ -1797,25 +1982,56 @@ impl<D: Driver> Controller<D> {
                     }
                     return;
                 }
+                let unwatched = self.unwatched_app(&target, &capture);
                 if let Some(session) = self.session.as_mut() {
                     session.capture = Some(capture);
+                    session.unwatched = unwatched;
                     session.target = target;
                     session.equalizer = equalizer;
                     session.waits_for_feed = waits_for_feed;
                     session.reopen = None;
                     session.trial_polls = RESTART_TRIAL_POLLS;
                 }
+                if let Some(since) = busy_since {
+                    self.log.log(|| {
+                        format!(
+                            "the other app let go of the input after {:.1} s",
+                            since.elapsed().as_secs_f64()
+                        )
+                    });
+                    self.pending.push(BackendEvent::CaptureFree);
+                }
                 self.log
                     .log(|| "the capture runs again; the outputs played on".to_owned());
+            }
+            Err(error @ BackendError::DeviceBusy) => {
+                if busy_since.is_none() {
+                    self.log.log(|| {
+                        format!(
+                            "the capture couldn't open again: {error} It tries again every 3 s \
+                             while the outputs play on."
+                        )
+                    });
+                    self.pending.push(BackendEvent::CaptureBusy);
+                }
+                if let Some(session) = self.session.as_mut() {
+                    session.reopen = Some(CaptureReopen {
+                        wait: BUSY_RETRY_POLLS,
+                        tries_left,
+                        busy_since: Some(busy_since.unwrap_or_else(Instant::now)),
+                    });
+                }
             }
             Err(error) if tries_left > 0 && (writer_held || may_start_later(&error)) => {
                 self.log.log(|| {
                     if writer_held {
-                        "the capture couldn't open again yet: the lost capture still holds the                          ring. It tries again in a moment."
+                        "the capture couldn't open again yet: the lost capture still holds the \
+                         ring. It tries again in a moment."
                             .to_owned()
                     } else {
                         format!(
-                            "the capture couldn't open again yet: {error} It tries again in a                              moment."
+                            "the capture couldn't open again yet: {error} It tries again in a \
+                             moment."
                         )
                     }
                 });
@@ -1823,6 +2039,7 @@ impl<D: Driver> Controller<D> {
                     session.reopen = Some(CaptureReopen {
                         wait: RESTART_DELAY_POLLS,
                         tries_left: tries_left - 1,
+                        busy_since,
                     });
                 }
             }
@@ -2081,7 +2298,9 @@ impl<D: Driver> Controller<D> {
         let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
         let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
         let (capture, equalizer, waits_for_feed) = self.open_capture(&target, writer)?;
+        let unwatched = self.unwatched_app(&target, &capture);
         self.log.log(|| self.policy.describe_lead());
+        self.policy.end_brief_losses();
         self.session = Some(Session {
             source: source.clone(),
             target,
@@ -2094,6 +2313,8 @@ impl<D: Driver> Controller<D> {
             trial_polls: 0,
             waits_for_feed,
             logged_lead: None,
+            unwatched,
+            held_leads: BTreeMap::new(),
         });
         self.refresh_if_needed(false);
         let failures = self.sync_outputs();
@@ -2154,6 +2375,85 @@ impl<D: Driver> Controller<D> {
         }
         self.sessions_started += 1;
         Ok((capture, equalizer, waits_for_feed))
+    }
+
+    /// The app `capture` takes in, when it is a single app whose process
+    /// can't be waited for (S327), with its start time read now; `None` for
+    /// any other capture.
+    fn unwatched_app(
+        &mut self,
+        target: &CaptureTarget,
+        capture: &D::Capture,
+    ) -> Option<UnwatchedApp> {
+        let CaptureTarget::Loopback(activation) = target else {
+            return None;
+        };
+        if activation.mode != LoopbackMode::IncludeTree {
+            return None;
+        }
+        let code = capture.watch_refused()?;
+        let pid = activation.target_pid;
+        self.log.log(|| {
+            format!(
+                "the captured app (process {pid}) can't be watched for its exit (error \
+                 {code:#010x}): AudioSync checks every 2 s that it still runs"
+            )
+        });
+        let entry = self
+            .driver
+            .processes()
+            .ok()
+            .and_then(|processes| processes.get(pid).cloned());
+        Some(UnwatchedApp {
+            pid,
+            created: entry.as_ref().and_then(|entry| entry.created),
+            executable: entry.map(|entry| entry.executable),
+            checked: None,
+        })
+    }
+
+    /// Whether the running session's unwatched app quit, checked every
+    /// [`MIX_FOLLOW_INTERVAL`] (S327): its process ID is no longer listed, or
+    /// is listed with another executable or start time. A start time that
+    /// can't be read either time doesn't count as another, and a list that
+    /// can't be read waits for the next check.
+    fn unwatched_app_quit(&mut self, now: Instant) -> bool {
+        let Some(app) = self
+            .session
+            .as_mut()
+            .and_then(|session| session.unwatched.as_mut())
+        else {
+            return false;
+        };
+        if app
+            .checked
+            .is_some_and(|last| now.saturating_duration_since(last) < MIX_FOLLOW_INTERVAL)
+        {
+            return false;
+        }
+        app.checked = Some(now);
+        let app = app.clone();
+        let Ok(processes) = self.driver.processes() else {
+            return false;
+        };
+        let runs = processes.get(app.pid).is_some_and(|entry| {
+            app.executable
+                .as_deref()
+                .is_none_or(|executable| executable.eq_ignore_ascii_case(&entry.executable))
+                && match (app.created, entry.created) {
+                    (Some(then), Some(now)) => then == now,
+                    _ => true,
+                }
+        });
+        if !runs {
+            self.log.log(|| {
+                format!(
+                    "the check found the captured app (process {}) gone",
+                    app.pid
+                )
+            });
+        }
+        !runs
     }
 
     /// For a session of several apps, every [`MIX_FOLLOW_INTERVAL`]: when
@@ -2535,6 +2835,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
                     .push(BackendEvent::OutputFailed { id: failed, error });
             }
         }
+        self.release_held_leads(false);
         self.retime();
         // An output that couldn't start was turned off again.
         self.follow_device_volumes();
@@ -3022,6 +3323,11 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
         self.tick_stall_trials();
         self.device_volumes.tick();
+        if self.policy.tick() {
+            self.log.log(|| {
+                "a lost output's 10 s are up: it no longer counts for the others' delays".to_owned()
+            });
+        }
         self.log_session_lead();
         self.log_clock_queues();
         // Outputs that faded out stop, and then an ended session's capture;
@@ -3057,6 +3363,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 Some(CaptureState::SourceQuit) => Some(StopReason::SourceQuit),
                 Some(CaptureState::Failed(error)) => Some(StopReason::CaptureFailed(error)),
             },
+        };
+        let stop_reason = match stop_reason {
+            None if !lost && self.unwatched_app_quit(Instant::now()) => {
+                Some(StopReason::SourceQuit)
+            }
+            other => other,
         };
         let quit_source = match stop_reason {
             Some(StopReason::SourceQuit) => self.session.as_ref().map(|s| s.source.clone()),
@@ -3118,8 +3430,13 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 .map(|(id, playing)| (id.clone(), playing.handle.stall()))
                 .collect();
             // Released before the log says why they ended (S126).
-            for (id, _) in &stopped {
-                drop(session.outputs.remove(id));
+            for (id, stall) in &stopped {
+                if let Some(playing) = session.outputs.remove(id)
+                    && stall.is_none()
+                    && self.policy.settings(id).enabled
+                {
+                    keep_lead(&mut session.held_leads, id, &playing.control);
+                }
             }
         }
         let mut ended = Vec::new();
@@ -3140,6 +3457,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 }
             }
         }
+        ended.extend(self.drop_reformatted_outputs());
 
         // A stopped output may mean a device went away before its
         // notification arrived, so the list is read again then too.
@@ -3150,6 +3468,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         ended.extend(self.stop_unlisted_outputs());
         ended.extend(self.forget_unlisted_unplayable());
         let failures = self.sync_outputs();
+        self.release_held_leads(true);
         // An output that left or joined moves the others (S177).
         self.retime();
         for id in ended {
@@ -3462,9 +3781,21 @@ fn describe_stream(setup: Option<StreamSetup>) -> String {
     };
     let buffer_ms = f64::from(setup.buffer_frames) * 1_000.0 / f64::from(format.rate.max(1));
     format!(
-        "{} Hz, {} ch (mask 0x{:x}), {samples}; buffer {} frames ({buffer_ms:.1} ms)",
-        format.rate, format.channels, format.channel_mask, setup.buffer_frames
+        "{}, {samples}; buffer {} frames ({buffer_ms:.1} ms)",
+        describe_format(Some(format)),
+        setup.buffer_frames
     )
+}
+
+/// An output's rate, channels and channel mask, as the log shows them.
+fn describe_format(format: Option<RenderFormat>) -> String {
+    match format {
+        Some(format) => format!(
+            "{} Hz, {} ch (mask 0x{:x})",
+            format.rate, format.channels, format.channel_mask
+        ),
+        None => "a format not known".to_owned(),
+    }
 }
 
 /// The log line of a capture that started: what it captures, the format
@@ -3683,6 +4014,8 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::OutputFree { id } => {
             format!("output {} no longer waits for its device", label(names, id))
         }
+        BackendEvent::CaptureBusy => "capture busy: another app holds its input".to_owned(),
+        BackendEvent::CaptureFree => "the capture no longer waits for its input".to_owned(),
         BackendEvent::OutputStalled { id } => {
             format!(
                 "output {} stalled again soon after a reopen",
@@ -5287,6 +5620,163 @@ mod tests {
         }
     }
 
+    /// Starts capturing the player, which Windows won't let AudioSync wait
+    /// for when `refused`.
+    fn start_player(backend: &mut MockBackend, refused: bool) {
+        if refused {
+            backend.refuse_watch(PLAYER_PID);
+        }
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+    }
+
+    // covers: S327
+    #[test]
+    fn an_unwatched_app_that_leaves_the_process_list_quits_the_source_within_one_check() {
+        let mut backend = backend();
+        start_player(&mut backend, true);
+        backend.quit_app(PLAYER_PID);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+        assert_eq!(backend.running_source(), None);
+        assert!(playing(&backend).is_empty());
+    }
+
+    // covers: S327
+    #[test]
+    fn an_unwatched_app_whose_process_id_returns_with_another_start_time_counts_as_quit() {
+        let mut backend = backend();
+        start_player(&mut backend, true);
+        backend.quit_app(PLAYER_PID);
+        backend.add_app(PLAYER_PID, "player.exe");
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+        // The next start captures the app's new process from the stored
+        // source.
+        start_player(&mut backend, false);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert_eq!(
+            backend.running_source(),
+            Some(SourceId::App {
+                root_pid: PLAYER_PID
+            })
+        );
+    }
+
+    // covers: S327
+    #[test]
+    fn an_unwatched_app_streams_on_while_it_runs_and_is_checked_every_two_seconds() {
+        let mut backend = backend();
+        start_player(&mut backend, true);
+        poll_quietly(&mut backend, 3);
+        backend.quit_app(PLAYER_PID);
+        let last_check = |backend: &mut MockBackend, at: Option<Instant>| {
+            backend
+                .session
+                .as_mut()
+                .and_then(|session| session.unwatched.as_mut())
+                .expect("the app is checked")
+                .checked = at;
+        };
+        last_check(&mut backend, Some(Instant::now()));
+        poll_quietly(&mut backend, 1);
+        last_check(
+            &mut backend,
+            Instant::now().checked_sub(MIX_FOLLOW_INTERVAL),
+        );
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+    }
+
+    // covers: S327
+    #[test]
+    fn only_a_single_app_that_refused_a_watch_is_checked() {
+        let checked = |source: SourceId, refused: bool| {
+            let mut backend = backend();
+            if refused {
+                backend.refuse_watch(PLAYER_PID);
+            }
+            backend.start(&source).unwrap();
+            backend
+                .session
+                .as_ref()
+                .is_some_and(|session| session.unwatched.is_some())
+        };
+        let app = SourceId::App {
+            root_pid: PLAYER_PID,
+        };
+        assert!(checked(app.clone(), true));
+        assert!(!checked(app, false), "a watched app");
+        assert!(!checked(SourceId::WholeSystem, true), "the whole system");
+        let mix = SourceId::Apps {
+            root_pids: vec![PLAYER_PID],
+            executables: vec!["player.exe".to_owned()],
+        };
+        assert!(!checked(mix, true), "a mix");
+    }
+
+    // covers: S327
+    #[test]
+    fn an_unwatched_app_whose_process_id_another_app_took_counts_as_quit_without_a_start_time() {
+        let mut backend = backend();
+        start_player(&mut backend, true);
+        backend.hide_start_time(PLAYER_PID);
+        poll_quietly(&mut backend, 1);
+        backend.quit_app(PLAYER_PID);
+        backend.add_app(PLAYER_PID, "other.exe");
+        backend.hide_start_time(PLAYER_PID);
+        backend
+            .session
+            .as_mut()
+            .and_then(|session| session.unwatched.as_mut())
+            .expect("the app is checked")
+            .checked = None;
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+    }
+
+    // covers: S327
+    #[test]
+    fn an_unwatched_app_that_restarts_gets_the_same_quit_handling_as_a_watched_one() {
+        for setting in [WhenSourceQuits::Stop, WhenSourceQuits::SwitchToSystem] {
+            let outcome = |refused: bool| {
+                let mut backend = backend();
+                backend.set_when_source_quits(setting);
+                start_player(&mut backend, refused);
+                backend.quit_app(PLAYER_PID);
+                backend.add_app(PLAYER_PID + 1, "player.exe");
+                let events = backend.poll();
+                poll_quietly(&mut backend, 2);
+                (
+                    events,
+                    backend.running_source(),
+                    backend.driver().captures_started().to_vec(),
+                    playing(&backend),
+                )
+            };
+            assert_eq!(outcome(true), outcome(false), "{setting:?}");
+        }
+    }
+
     #[test]
     fn a_capture_lost_to_a_windows_audio_restart_starts_again_a_moment_later() {
         let mut backend = backend();
@@ -5458,6 +5948,192 @@ mod tests {
         assert_eq!(backend.driver().capture_attempts(), 1 + 5);
         assert_eq!(backend.running_source(), None);
         assert!(playing(&backend).is_empty());
+    }
+
+    const AT_44_1: RenderFormat = RenderFormat {
+        rate: 44_100,
+        ..crate::audio::mock::MOCK_STREAM.format
+    };
+
+    // covers: S330
+    #[test]
+    fn a_format_notice_for_a_playing_output_reopens_it_in_the_new_format_in_the_same_poll() {
+        let (mut backend, log, dir) = logged_backend("controller-format-notice");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.change_output_format(HEADPHONES, AT_44_1);
+        assert!(backend.poll().is_empty(), "no notice");
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES],
+            "only that output opens again"
+        );
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(backend.playing_format(HEADPHONES), Some(AT_44_1));
+        assert!(
+            backend.driver().renderers_faded() == 0,
+            "an invalidated stream has no fade to play"
+        );
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "output \"Headphones\" (headphones): its format changed from 48000 Hz, 2 ch (mask \
+                 0x3) to 44100 Hz, 2 ch (mask 0x3); it opens again in the new format",
+                "output \"Headphones\" (headphones) started: 44100 Hz",
+            ],
+        );
+        poll_quietly(&mut backend, 2);
+        assert_eq!(backend.driver().renderers_started().len(), 3);
+    }
+
+    // covers: S330
+    #[test]
+    fn a_format_notice_that_changes_nothing_leaves_the_output_playing() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.notify_output_format(HEADPHONES);
+        poll_quietly(&mut backend, 2);
+        assert_eq!(backend.driver().renderers_started(), [HEADPHONES, SPEAKERS]);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S330, S177
+    #[test]
+    fn a_format_reopen_never_moves_another_outputs_hold_back() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let hold_backs = |backend: &MockBackend| {
+            [HEADPHONES, SPEAKERS].map(|id| backend.policy().hold_back_ms(id))
+        };
+        let before = hold_backs(&backend);
+        // A Bluetooth headset moving to its hands-free profile: its session
+        // says so before the render thread notices, in the same format here.
+        backend.disconnect_session(HEADPHONES);
+        assert!(backend.poll().is_empty(), "no notice");
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES]
+        );
+        assert_eq!(hold_backs(&backend), before);
+        backend.change_output_format(SPEAKERS, AT_44_1);
+        assert!(backend.poll().is_empty(), "no notice");
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES, SPEAKERS]
+        );
+        assert_eq!(hold_backs(&backend), before);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S330, S68
+    #[test]
+    fn a_session_disconnected_with_its_device_unplugged_is_lost() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        // Its session says so before its render thread notices.
+        backend.disconnect_session(HEADPHONES);
+        backend.disconnect_output_unnoticed(HEADPHONES);
+        let events = backend.poll();
+        assert!(
+            events.contains(&BackendEvent::OutputLost {
+                id: HEADPHONES.to_owned(),
+            }),
+            "{events:?}"
+        );
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        assert!(backend.policy().settings(HEADPHONES).enabled, "it stays on");
+    }
+
+    fn microphone(backend: &mut MockBackend) -> SourceId {
+        backend.connect_input("mic", "Microphone", "USB");
+        SourceId::Input {
+            endpoint_id: "mic".to_owned(),
+        }
+    }
+
+    // covers: S333
+    #[test]
+    fn a_capture_start_on_a_busy_input_fails_with_the_busy_reason() {
+        let mut backend = backend();
+        let source = microphone(&mut backend);
+        backend.refuse_captures(Some(BackendError::DeviceBusy));
+        assert_eq!(backend.start(&source), Err(BackendError::DeviceBusy));
+        assert_eq!(backend.running_source(), None);
+        assert!(playing(&backend).is_empty());
+    }
+
+    // covers: S333, S329
+    #[test]
+    fn a_lost_capture_whose_input_is_busy_keeps_trying_every_3_s() {
+        let mut backend = backend();
+        let source = microphone(&mut backend);
+        backend.start(&source).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceBusy));
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::CaptureBusy],
+            "the first busy answer is told"
+        );
+        // Then about 40 s of busy answers, told no more: far past the 5
+        // tries of a lost capture.
+        let busy_tries = 13;
+        poll_quietly(&mut backend, busy_tries * BUSY_RETRY_POLLS);
+        assert_eq!(
+            backend.driver().capture_attempts(),
+            2 + busy_tries as usize,
+            "one try every BUSY_RETRY_POLLS"
+        );
+        assert_eq!(backend.running_source(), Some(source));
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        backend.refuse_captures(None);
+        poll_quietly(&mut backend, BUSY_RETRY_POLLS - 1);
+        assert_eq!(backend.poll(), [BackendEvent::CaptureFree]);
+        assert!(backend.driver().capture_running());
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S333
+    #[test]
+    fn a_busy_capture_is_told_free_when_streaming_stops() {
+        let mut backend = backend();
+        let source = microphone(&mut backend);
+        backend.start(&source).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceBusy));
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.poll(), [BackendEvent::CaptureBusy]);
+        backend.stop();
+        assert_eq!(backend.poll(), [BackendEvent::CaptureFree]);
+    }
+
+    // covers: S333, S329
+    #[test]
+    fn a_busy_input_that_goes_away_gets_the_usual_tries() {
+        let mut backend = backend();
+        let source = microphone(&mut backend);
+        backend.start(&source).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceBusy));
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.poll(), [BackendEvent::CaptureBusy]);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        // The busy answer took none of the 5 tries.
+        poll_quietly(
+            &mut backend,
+            BUSY_RETRY_POLLS + (RESTART_TRIES - 1) * RESTART_DELAY_POLLS - 1,
+        );
+        assert_eq!(
+            backend.poll(),
+            [
+                BackendEvent::CaptureFree,
+                BackendEvent::Stopped {
+                    reason: StopReason::CaptureFailed(BackendError::DeviceGone),
+                }
+            ]
+        );
+        assert_eq!(backend.driver().capture_attempts(), 1 + 1 + 5);
+        assert_eq!(backend.running_source(), None);
     }
 
     #[test]
@@ -6744,14 +7420,76 @@ mod tests {
         assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
         backend.set_output_enabled(BLUETOOTH, false).unwrap();
         assert_eq!(held(&backend), [Some(0), Some(150), None]);
-        // A device that goes away leaves too, and joins again when it's back.
+        // A device that goes away leaves too once 10 s have passed (S328),
+        // and joins again when it's back.
         backend.set_output_enabled(BLUETOOTH, true).unwrap();
         backend.disconnect_output(BLUETOOTH);
         backend.poll();
+        poll_quietly(&mut backend, 20);
         assert_eq!(held(&backend), [Some(0), Some(150), None]);
         backend.connect_output_as(BLUETOOTH, "Earbuds", OutputKind::Bluetooth);
         backend.poll();
         assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+    }
+
+    // covers: S328
+    #[test]
+    fn a_bluetooth_output_unlisted_for_one_poll_leaves_the_built_in_delay_unchanged() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+        backend.disconnect_output(BLUETOOTH);
+        backend.poll();
+        assert_eq!(held(&backend), [Some(250), Some(400), None]);
+        assert!(backend.policy().settings(BLUETOOTH).enabled);
+        backend.connect_output_as(BLUETOOTH, "Earbuds", OutputKind::Bluetooth);
+        backend.poll();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+        // Lost as its stream fails before the listing drops it: the same.
+        backend.disconnect_output_unnoticed(BLUETOOTH);
+        backend.end_renderer(BLUETOOTH);
+        backend.poll();
+        assert_eq!(held(&backend), [Some(250), Some(400), None]);
+    }
+
+    // covers: S328
+    #[test]
+    fn a_bluetooth_output_still_unlisted_after_10_s_retimes_the_others_once() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.disconnect_output(BLUETOOTH);
+        backend.poll();
+        // 10 s after the poll that found it gone, at the UI's two polls a second.
+        poll_quietly(&mut backend, 19);
+        assert_eq!(held(&backend), [Some(250), Some(400), None]);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(held(&backend), [Some(0), Some(150), None]);
+        backend.connect_output_as(BLUETOOTH, "Earbuds", OutputKind::Bluetooth);
+        backend.poll();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+    }
+
+    // covers: S328
+    #[test]
+    fn a_lost_bluetooth_output_switched_off_retimes_the_others_at_once() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.disconnect_output(BLUETOOTH);
+        backend.poll();
+        backend.set_output_enabled(BLUETOOTH, false).unwrap();
+        assert_eq!(held(&backend), [Some(0), Some(150), None]);
+    }
+
+    // covers: S328
+    #[test]
+    fn a_session_restart_counts_only_the_outputs_listed_then() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.disconnect_output(BLUETOOTH);
+        backend.poll();
+        backend.stop();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(held(&backend), [Some(0), Some(150), None]);
     }
 
     #[test]

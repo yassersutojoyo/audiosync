@@ -66,6 +66,10 @@ final class StreamEngine {
     private var calibrationFill: CalibrationFill?
     /// The renderers of the running local outputs, by device UID.
     private var renderers: [String: OutputRenderer] = [:]
+    /// The start leads of speakers whose devices went away, still counted in
+    /// the session lead, with the uptime of the loss (S328). The host lets
+    /// them go; a stop ends them all.
+    private var heldLeads: [String: (lead: CoreHeldLead, since: Double)] = [:]
     /// The latest equalizer settings, for the running session and the next ones.
     private var equalizerSettings = Equalizer.Settings()
     /// Outputs fading out before they stop, and the stop that waits for them.
@@ -115,6 +119,25 @@ final class StreamEngine {
     /// The UIDs of the outputs that have a renderer, sorted; outputs fading
     /// out on their way out aren't among them.
     var activeOutputUIDs: [String] { renderers.keys.sorted() }
+
+    /// The speakers whose start leads are held (S328), with the uptime each
+    /// was lost at.
+    var heldLeadTimes: [String: Double] { heldLeads.mapValues { $0.since } }
+
+    /// Whether output `uid` plays again with a renderer that has published
+    /// its start lead (S328).
+    func publishedLead(uid: String) -> Bool { renderers[uid]?.publishedLead ?? false }
+
+    /// The hold-back the host now counts for lost speaker `uid` (S328).
+    func setHeldLeadDelay(uid: String, ms: Double) {
+        heldLeads[uid]?.lead.setHoldBack(ms: ms)
+    }
+
+    /// Lost speaker `uid`'s start lead no longer counts (S328).
+    func releaseHeldLead(uid: String) {
+        guard heldLeads.removeValue(forKey: uid) != nil else { return }
+        DebugTrace.log("[AudioSync] output \(uid): its start lead no longer counts")
+    }
 
     /// New equalizer settings: the running session takes them at its next
     /// block (S31), and every later session starts with them.
@@ -288,6 +311,7 @@ final class StreamEngine {
         let leaving = renderers.keys.sorted().compactMap { uid in renderers[uid].map { (uid: uid, renderer: $0) } }
         let bluetooth = bluetoothOutputs
         renderers = [:]
+        heldLeads = [:]
         let capture = self.capture
         let inputs = Self.inputsFadedCheck(ring: parts.ring, captureRate: capture.sampleRate)
         DebugTrace.log("[AudioSync] session stopping: \(leaving.count) output(s) and the AirPlay inputs fade out")
@@ -473,6 +497,9 @@ final class StreamEngine {
     /// after the renderer is released.
     private func handleOutputLost(_ uid: String, _ renderer: OutputRenderer, _ loss: OutputLoss) {
         renderer.onDeviceGone = nil
+        if renderers[uid] === renderer, let lead = renderer.holdLead() {
+            heldLeads[uid] = (lead, ProcessInfo.processInfo.systemUptime)
+        }
         retirement.stopLost(renderer)
         watchFades()
         guard renderers[uid] === renderer else { return }

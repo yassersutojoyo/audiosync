@@ -23,6 +23,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On Windows, when the app you play from runs as administrator and quits or restarts, AudioSync now notices within about 2 seconds and stops or switches to the whole system, as your setting says, with the usual notice. Before, streaming went on in silence.
+- A speaker that drops off for a moment, such as a Bluetooth speaker losing its link, no longer makes your other speakers skip and then go silent while it reconnects. For 10 seconds after it disappears, the others keep their timing, so only that speaker has a gap. If it's still gone after 10 seconds, the others adjust once. On the Mac and on Windows.
 - A device on the network announcing a flood of fake Google Cast speakers no longer grows the speaker list without end: it keeps up to 128, and the speaker you play to stays listed. If something goes wrong inside AudioSync's Google Cast sender, the speaker stops with an error on its row and can be started again, instead of Google Cast going quiet until AudioSync restarts. On the Mac and on Windows.
 - A damaged entry in the AirPlay 2 timing cache now costs only that speaker, which goes back to its first-connect timing check, instead of the whole cache.
 - On Windows, a saved Google Cast speakers file that AudioSync can't read is kept as a copy next to it before AudioSync first saves over it, so the delays and formats in it aren't lost.
@@ -56,6 +58,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, Narrator reads a zone speaker's note, such as "Stayed off, since one Cast speaker plays at a time", from its button in the main window, as it already did under In zones and in the tray panel. Before, it read only "Turn On".
 - On Windows, a local speaker that goes silent because Windows stops taking its sound, while its row still says it plays, now starts again on its own within 3 seconds after it went quiet. If it goes silent again within 5 seconds, AudioSync says the speaker was lost, keeps it on and tries it every 10 seconds; the notice goes once it has played 5 seconds. The other speakers keep playing in step.
 - On Windows, when Windows audio restarts or the captured device drops out for a moment, only the capture starts again. Your speakers keep playing, silent for that moment, and AirPlay and Google Cast speakers stay connected, instead of every speaker stopping and starting again.
+- On Windows, a speaker whose format changes while it plays, for example after you change its sample rate in the Sound settings or when a Bluetooth headset switches to its hands-free mode, plays again in the new format within about half a second. Before, it could stay silent for up to a second and a half. The other speakers keep their timing.
+- On Windows, when another app takes the input device you're streaming for itself (exclusive mode), your speakers stay on and AudioSync tries the input again every 3 seconds until that app lets go. Meanwhile the notice says AudioSync couldn't capture audio from the source, and it clears once the input plays again. Before, streaming stopped after about 5 seconds with a notice that the capture was lost.
 
 ## [0.7.1] - 2026-10-27
 
