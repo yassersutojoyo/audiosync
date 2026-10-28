@@ -529,8 +529,9 @@ impl Shared {
     fn deliver(&self, command: &Command) -> bool {
         match lock(&self.sink).as_ref() {
             Some(sink) => {
-                sink(command);
+                // Before the sink: the app may publish from its own thread before sink returns.
                 lock(&self.published).commanded = true;
+                sink(command);
                 true
             }
             None => false,
