@@ -11998,6 +11998,36 @@ mod tests {
 
     // covers: S212
     #[test]
+    fn a_running_session_keeps_its_capture_when_held_settings_name_an_app_that_isnt_running() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-absent");
+        let held = dir.join("held");
+        let mut users = SettingsFile::at(held.clone()).load().0;
+        users.source = SavedSource::App {
+            executable: "gone.exe".to_owned(),
+            name: "Gone".to_owned(),
+        };
+        std::fs::write(&held, users.to_json()).expect("written");
+        turn_on(&mut adapter, SPEAKERS);
+        assert_eq!(adapter.audio.running_source(), Some(SourceId::WholeSystem));
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(&held, &path).expect("moved back");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().master_volume, 64.0, "read");
+        assert_eq!(adapter.audio.running_source(), Some(SourceId::WholeSystem));
+        assert!(
+            matches!(&adapter.chosen, Chosen::App { executable, .. } if executable == "gone.exe"),
+            "{:?}",
+            adapter.chosen
+        );
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
     fn held_settings_read_later_start_nothing_for_a_speaker_on_without_auto_connect() {
         use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
         let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-no-auto");
