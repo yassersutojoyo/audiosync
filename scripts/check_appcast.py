@@ -11,7 +11,9 @@ releases/download/v<version>/<zip name> and a length; every
 item carries the release's sparkle:shortVersionString and one shared
 sparkle:version. Each zip given must match its item's url name and length,
 and each Windows zip must hold exactly audiosync.exe and
-THIRD-PARTY-NOTICES.txt at its top level. A zip whose name has windows-x64
+THIRD-PARTY-NOTICES.txt at its top level, with an audiosync.exe whose
+version information names VERSION as its ProductVersion and marks it as a
+release build (AudioSyncReleaseBuild 1). A zip whose name has windows-x64
 or windows-arm64 in it is that architecture's; any other zip is the Mac's.
 
 It does not verify signatures: it only checks that sparkle:edSignature is a
@@ -102,17 +104,60 @@ def stray_zips(folder, version):
                   if name.endswith(".zip") and "windows" in name.lower() and name not in wanted)
 
 
-def windows_zip_problems(path):
+def version_strings(exe):
+    """The text values of the VS_VERSIONINFO resource in an exe's bytes, by name
+    (Microsoft Learn, VS_VERSIONINFO, StringFileInfo and String)."""
+    start = exe.find("VS_VERSION_INFO\0".encode("utf-16-le")) - 6
+    if start < 0:
+        return {}
+    blob = exe[start:start + struct.unpack_from("<H", exe, start)[0]]
+    strings = {}
+
+    def walk(at, end):
+        while at + 6 <= end:
+            length, value_length, text = struct.unpack_from("<HHH", blob, at)
+            if length < 6:
+                return
+            key_end = at + 6
+            while key_end + 2 <= len(blob) and blob[key_end:key_end + 2] != b"\0\0":
+                key_end += 2
+            value = (key_end + 5) & ~3
+            # A text value's length counts UTF-16 units, any other value's bytes.
+            size = value_length * 2 if text else value_length
+            if text and value_length:
+                strings[blob[at + 6:key_end].decode("utf-16-le")] = \
+                    blob[value:value + size].decode("utf-16-le").rstrip("\0")
+            walk((value + size + 3) & ~3, min(at + length, end))
+            at = (at + length + 3) & ~3
+
+    walk(0, len(blob))
+    return strings
+
+
+def windows_zip_problems(path, version):
     try:
         with zipfile.ZipFile(path) as archive:
             names = set(archive.namelist())
+            exe = archive.read("audiosync.exe") if names == WINDOWS_ZIP_FILES else None
     except (OSError, zipfile.BadZipFile) as error:
         return [f"{path}: not a readable zip ({error})"]
-    if names == WINDOWS_ZIP_FILES:
-        return []
-    want = ", ".join(sorted(WINDOWS_ZIP_FILES))
-    got = ", ".join(sorted(names)) or "nothing"
-    return [f"{path}: holds {got}; expected exactly {want} at the top level"]
+    if exe is None:
+        want = ", ".join(sorted(WINDOWS_ZIP_FILES))
+        got = ", ".join(sorted(names)) or "nothing"
+        return [f"{path}: holds {got}; expected exactly {want} at the top level"]
+    try:
+        strings = version_strings(exe)
+    except (struct.error, UnicodeDecodeError):
+        strings = {}
+    problems = []
+    # An older exe in a newer zip would be offered this update again after every install.
+    if strings.get("ProductVersion") != version:
+        problems.append(f"{path}: audiosync.exe has ProductVersion "
+                        f"{strings.get('ProductVersion')!r}; expected {version!r}")
+    if strings.get("AudioSyncReleaseBuild") != "1":
+        problems.append(f"{path}: audiosync.exe is not a release build, so it never checks for "
+                        "updates: take it from the CI run of the push to release/x.y.z (RELEASE.md)")
+    return problems
 
 
 def check(appcast, version, zips, mac_only=False):
@@ -134,7 +179,7 @@ def check(appcast, version, zips, mac_only=False):
             if mac_only:
                 problems.append(f"{path}: a Windows zip, but --mac-only says the release has none")
             else:
-                problems += windows_zip_problems(path)
+                problems += windows_zip_problems(path, version)
     if zips and not mac_only:
         problems += [f"no {arch} zip given ({MAC_ONLY_HINT})"
                      for arch in WINDOWS_ARCHES if arch not in zip_by_os]

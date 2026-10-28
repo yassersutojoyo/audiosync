@@ -685,8 +685,12 @@ pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
     }))
 }
 
-fn running_version(text: &str, _log: &DebugLog) -> Option<Version> {
-    Version::parse(text)
+fn running_version(text: &str, log: &DebugLog) -> Option<Version> {
+    let version = Version::parse(text);
+    if version.is_none() {
+        log.log(|| format!("updater: off: this exe's version {text:?} is not dotted numbers"));
+    }
+    version
 }
 
 #[cfg(test)]
