@@ -451,10 +451,10 @@ impl Channel {
         self.assumed_volume = volume;
     }
 
-    /// Takes the level still waiting for its interval, for the channel
-    /// that replaces this one (C70, C81).
-    pub fn take_queued_volume(&mut self) -> Option<f64> {
-        self.volume_queued.take()
+    /// Takes the level still waiting for its interval, or else the one sent
+    /// and not yet answered, for the channel that replaces this one (C70, C81).
+    pub fn take_unanswered_volume(&mut self) -> Option<f64> {
+        self.volume_queued.take().or(self.volume_unconfirmed.take())
     }
 
     fn volume_check(&self) -> Result<&ReceiverStatus, VolumeError> {

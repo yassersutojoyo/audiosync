@@ -647,7 +647,7 @@ fn a_level_sent_but_unanswered_goes_to_the_next_channel() {
     channel.tick(start + Duration::from_millis(100));
     // Sent into a channel that then went silent, with no status to answer it.
     channel.end(EndReason::Silent);
-    assert_eq!(channel.take_queued_volume(), Some(0.5));
+    assert_eq!(channel.take_unanswered_volume(), Some(0.5));
 }
 
 // covers: C44

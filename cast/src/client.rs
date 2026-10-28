@@ -497,9 +497,10 @@ impl CastClient {
         result
     }
 
-    /// The level still waiting for its interval (C70), taken off the channel.
-    pub fn take_queued_volume(&mut self) -> Option<f64> {
-        self.channel.take_queued_volume()
+    /// The level still waiting for its interval or for its answer (C70),
+    /// taken off the channel.
+    pub fn take_unanswered_volume(&mut self) -> Option<f64> {
+        self.channel.take_unanswered_volume()
     }
 
     /// Mutes or unmutes the device (C65).

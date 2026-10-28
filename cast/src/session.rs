@@ -908,8 +908,8 @@ impl CastSession {
     fn recover_now(&mut self, reason: EndReason, reload: bool) {
         self.report(SessionEvent::Recovering(reason));
         self.playing = false;
-        // A drag's last level the dead channel never sent goes on the new one.
-        let queued = self.client.take_queued_volume();
+        // A level the dead channel never sent, or sent with no answer, goes on the new one.
+        let queued = self.client.take_unanswered_volume();
         // One connection per device at a time.
         self.client.disconnect();
         while self.client.poll_event().is_some() {}
