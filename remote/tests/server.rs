@@ -822,6 +822,32 @@ fn a_device_keeps_two_event_streams_and_a_third_ends_the_oldest() {
     }
 }
 
+#[test]
+fn a_reloaded_page_does_not_end_the_devices_other_live_stream() {
+    let remote = start("stream-reload");
+    let token = pair(&remote);
+    remote.server.publish(sample());
+    let mut kept = Events::open(&remote, &token);
+    kept.read_until(|events| !events.revisions().is_empty());
+    let mut reloaded = Events::open(&remote, &token);
+    reloaded.read_until(|events| !events.revisions().is_empty());
+    drop(reloaded);
+    let mut fresh = Events::open(&remote, &token);
+    fresh.read_until(|events| !events.revisions().is_empty());
+    assert!(
+        kept.read_for(Duration::from_secs(1)),
+        "the live stream was ended"
+    );
+    assert!(!kept.data.contains("event: replaced"), "{:?}", kept.data);
+    let mut state = sample();
+    state.master_volume = 5.0;
+    remote.server.publish(state);
+    for events in [&mut kept, &mut fresh] {
+        events.read_until(|events| events.revisions().len() >= 2);
+        assert_eq!(events.revisions(), [1, 2]);
+    }
+}
+
 fn idle_connection(remote: &Remote) -> TcpStream {
     TcpStream::connect((Ipv4Addr::LOCALHOST, remote.server.port())).unwrap()
 }
