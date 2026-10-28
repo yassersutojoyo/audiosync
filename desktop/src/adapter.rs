@@ -11936,6 +11936,27 @@ mod tests {
         );
     }
 
+    // covers: S245
+    #[test]
+    fn a_hidden_device_a_browse_found_keeps_its_zone_when_its_address_is_removed() {
+        let (mut adapter, fake) = cast_adapter();
+        let den = "00112233445566778899aabbccddeeff";
+        fake.announce_at(den, "Den", DEVICE_PORT, std::net::Ipv4Addr::new(192, 0, 2, 31));
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), cc(den)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        adapter.hide_speaker(&cc(den), "Google Cast");
+        adapter.remove_cast_address(&cc(den));
+        assert_eq!(
+            adapter.current_settings().speaker_zones[0].members,
+            [key(SPEAKERS), cc(den)]
+        );
+    }
+
     fn cast_ended(attempt: u64, end: SessionEnd) -> HostEvent {
         HostEvent::Ended {
             attempt: AttemptId(attempt),
