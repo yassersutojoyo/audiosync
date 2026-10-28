@@ -34,9 +34,9 @@ _SPEC = re.compile(r"docs/[^/]+_SPEC\.md")
 
 
 # Left out: desktop/src/windows_strings.txt (app text, tested in desktop/src/contrast.rs)
-# and brand/fonts/OFL.txt (the font's license, kept verbatim).
+# and the license texts kept verbatim (brand/fonts/OFL.txt, desktop/linux/RUNTIME-NOTICES.txt).
 def in_scope(path):
-    if path.startswith(("site/", "remote/page/")) or path == "desktop/linux/RUNTIME-NOTICES.txt":
+    if path.startswith(("site/", "remote/page/")):
         return True
     return path.endswith(".md") and not _SPEC.fullmatch(path)
 
@@ -90,7 +90,7 @@ def self_test():
         "core/README.md": True,
         "brand/README.md": True,
         "remote/page/index.html": True,
-        "desktop/linux/RUNTIME-NOTICES.txt": True,
+        "desktop/linux/RUNTIME-NOTICES.txt": False,
         "desktop/src/windows_strings.txt": False,
         "brand/fonts/OFL.txt": False,
         "Sources/AudioSync/Localization.swift": False,
