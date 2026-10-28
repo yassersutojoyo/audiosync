@@ -538,9 +538,10 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// AirPlay speakers saved as on that the backend couldn't switch on at
     /// launch (no AirPlay sender): their saved settings stay as they are.
     airplay_unrestored: BTreeSet<String>,
-    /// The last save of the settings file failed; its notice was posted
-    /// then, once until a save works again.
-    settings_unsaved: bool,
+    /// The settings whose last save failed; its notice was posted then,
+    /// once until a save works again. They are tried again after a change
+    /// or at quit, never at every poll.
+    unsaved: Option<Settings>,
     /// An output listing worked at least once, so an empty list means
     /// Windows has no active output.
     outputs_known: bool,
@@ -693,7 +694,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             ),
             must_save: false,
             airplay_unrestored: BTreeSet::new(),
-            settings_unsaved: false,
+            unsaved: None,
             outputs_known: false,
             no_output_noticed: false,
             ahead_noticed: None,
@@ -1039,8 +1040,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Writes the settings file if anything changed since it was last read
     /// or written. A failed write is logged and tried again at the next
-    /// change; the settings stay in effect for this run, and the user is
-    /// told once, until a save works again and clears that notice. A file
+    /// change or at quit; the settings stay in effect for this run, and the
+    /// user is told once, until a save works again and clears that notice.
+    /// A file
     /// ignored at launch that the save kept aside is told once too, with the
     /// copy's name. Nothing is written while an older file's delays wait for
     /// their migration. Returns whether the notices changed.
@@ -1049,16 +1051,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
             return false;
         }
         let current = self.current_settings();
-        if current == self.saved && !self.must_save {
+        if (current == self.saved || self.unsaved.as_ref() == Some(&current)) && !self.must_save {
             return false;
         }
         self.must_save = false;
         let saved = self.settings_file.save(&current);
-        let mut notices_changed = saved.is_ok() == self.settings_unsaved;
-        if saved.is_ok() && self.settings_unsaved {
+        let mut notices_changed = saved.is_ok() == self.unsaved.is_some();
+        if saved.is_ok() && self.unsaved.is_some() {
             self.notices.clear(&[NoticeSubject::SettingsFile]);
         }
-        self.settings_unsaved = saved.is_err();
+        let failed = saved.is_err();
         match saved {
             Ok(kept) if self.settings_file.path().is_some() => {
                 if let Some(kept) = kept {
@@ -1078,7 +1080,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 }
             }
         }
-        self.saved = current;
+        if failed {
+            self.unsaved = Some(current);
+        } else {
+            self.saved = current;
+            self.unsaved = None;
+        }
         notices_changed
     }
 
@@ -5096,6 +5103,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn save_settings(&mut self) {
+        self.must_save |= self.unsaved.is_some();
         let _ = self.persist();
         // Before the backend drops and the Cast host shuts down, so the last
         // offset change is kept even when its event was never polled.
