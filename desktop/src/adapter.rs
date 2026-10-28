@@ -503,6 +503,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The speaker presets (spec S251), the overlapping groups among them
     /// once (S254).
     presets: Vec<Preset>,
+    /// The highest zone and preset ID numbers given out (spec S245, S251).
+    last_zone_id: u64,
+    last_preset_id: u64,
     /// What the preset notice says (spec S265).
     preset_notice: Option<PresetNoticeCause>,
     /// The members the latest recall switched on, while they start.
@@ -673,6 +676,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             groups: Vec::new(),
             zones: Zones::default(),
             presets: Vec::new(),
+            last_zone_id: 0,
+            last_preset_id: 0,
             preset_notice: None,
             recall_watch: None,
             gate: AutoStartGate::default(),
@@ -807,6 +812,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             member_names: zone.member_names.clone(),
         }));
         self.presets = presets::from_stored(saved.speaker_presets.iter().map(SavedPreset::preset));
+        self.last_zone_id = saved.last_zone_id;
+        self.last_preset_id = saved.last_preset_id;
         self.push_zone_volumes();
         self.equalizer = saved.equalizer.settings();
         self.audio.set_equalizer(self.equalizer);
@@ -965,6 +972,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .map(SavedPreset::from)
                 .collect(),
             speaker_presets_migrated: true,
+            last_zone_id: self.last_zone_id,
+            last_preset_id: self.last_preset_id,
             equalizer: SavedEqualizer::from(self.equalizer),
             equalizer_curves: self.equalizer_curves.iter().map(SavedCurve::from).collect(),
             show_virtual_devices: self.view.show_virtual_devices,
@@ -1949,14 +1958,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Adds a zone named `typed` (S150) holding `members`, each leaving the
     /// zone that held it; returns its name.
     fn add_zone(&mut self, typed: &str, members: &[String]) -> String {
-        let next = self
-            .zones
-            .list()
-            .iter()
-            .filter_map(|zone| zone.id.strip_prefix("zone:")?.parse::<u64>().ok())
-            .max()
-            .map_or(1, |last| last.saturating_add(1));
-        let id = format!("zone:{next}");
+        let ids = self.zones.list().iter().map(|zone| zone.id.as_str());
+        self.last_zone_id = ui_model::next_id("zone:", ids, self.last_zone_id);
+        let id = format!("zone:{}", self.last_zone_id);
         let name = self
             .zones
             .new_zone(&id, typed, |n| format!("Zone {n}"))
@@ -4578,6 +4582,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
 
     fn delete_zone(&mut self, id: &str) {
         if self.zones.delete(id) {
+            for preset in &mut self.presets {
+                preset.zones.retain(|zone| zone.id != id);
+            }
             self.log.log(|| format!("zone {id} deleted"));
             self.push_zone_volumes();
         }
@@ -4631,8 +4638,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         if self.presets.len() >= ui_model::MAX_PRESETS {
             return Err(PresetError::Full);
         }
-        let id = ui_model::new_preset_id(&self.presets);
-        let preset = self.capture_preset(&id, name)?;
+        let ids = self.presets.iter().map(|preset| preset.id.as_str());
+        let n = ui_model::next_id("preset:", ids, self.last_preset_id);
+        let preset = self.capture_preset(&format!("preset:{n}"), name)?;
+        self.last_preset_id = n;
         self.log.log(|| {
             format!(
                 "preset \"{}\" saved with {} speaker(s)",

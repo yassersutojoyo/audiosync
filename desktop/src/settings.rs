@@ -729,6 +729,12 @@ pub struct Settings {
     /// S254). A file without it has not been migrated; the defaults have.
     #[serde(default, deserialize_with = "bool_or_true")]
     pub speaker_presets_migrated: bool,
+    /// The highest zone and preset ID numbers given out, so a deleted one's
+    /// ID is never given again (spec S245, S251); 0 in an older file.
+    #[serde(deserialize_with = "or_default")]
+    pub last_zone_id: u64,
+    #[serde(deserialize_with = "or_default")]
+    pub last_preset_id: u64,
     /// Unreadable settings give the defaults (S212).
     #[serde(deserialize_with = "or_default")]
     pub equalizer: SavedEqualizer,
@@ -874,6 +880,8 @@ impl Default for Settings {
             speaker_zones_migrated: true,
             speaker_presets: Vec::new(),
             speaker_presets_migrated: true,
+            last_zone_id: 0,
+            last_preset_id: 0,
             equalizer: SavedEqualizer::default(),
             equalizer_curves: Vec::new(),
             show_virtual_devices: false,
@@ -1134,6 +1142,8 @@ impl Settings {
             speaker_zones_migrated: self.speaker_zones_migrated,
             speaker_presets,
             speaker_presets_migrated: self.speaker_presets_migrated,
+            last_zone_id: self.last_zone_id,
+            last_preset_id: self.last_preset_id,
             equalizer: SavedEqualizer::from(self.equalizer.settings()),
             equalizer_curves: clamp_curves(&self.equalizer_curves)
                 .iter()
@@ -1305,6 +1315,8 @@ fn unreadable_fields(text: &str) -> Vec<&'static str> {
         ("groups", Value::is_array),
         ("speaker_zones", Value::is_array),
         ("speaker_presets", Value::is_array),
+        ("last_zone_id", Value::is_u64),
+        ("last_preset_id", Value::is_u64),
         ("equalizer", reads::<SavedEqualizer>),
         ("equalizer_curves", Value::is_array),
         ("show_virtual_devices", Value::is_boolean),
