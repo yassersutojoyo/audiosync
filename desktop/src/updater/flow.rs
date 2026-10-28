@@ -1046,6 +1046,49 @@ pub mod tests {
         assert!(temp_folders(&f.env).is_empty());
     }
 
+    /// Real files, except that the swap's rename of the running exe aside
+    /// (step 3) comes after another session's launch cleanup.
+    struct SweptMidSwap;
+
+    impl Files for SweptMidSwap {
+        fn create(&self, path: &Path, exclusive: bool) -> io::Result<Box<dyn Sink>> {
+            RealFiles.create(path, exclusive)
+        }
+        fn remove(&self, path: &Path) -> io::Result<()> {
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            if to
+                .file_name()
+                .is_some_and(|name| name == "audiosync.exe.bak")
+                && let Some(install_dir) = from.parent()
+                && let Some(root) = install_dir.parent()
+            {
+                remove_leftovers(install_dir, &root.join("temp"), &DebugLog::default());
+            }
+            RealFiles.rename(from, to)
+        }
+    }
+
+    // covers: S304
+    #[test]
+    fn another_sessions_cleanup_leaves_a_running_swap_alone() {
+        let f = fixture(
+            "other-session-swap",
+            false,
+            Arc::new(SweptMidSwap),
+            DebugLog::default(),
+        );
+        let update = update_of(&f.env);
+        let done = run(&f.env, &update);
+        assert!(matches!(done, Installed::Done(_)), "{done:?}");
+        assert!(
+            fs::read(f.env.install_dir.join(archive::EXE_NAME))
+                .unwrap()
+                .ends_with(b"new exe")
+        );
+    }
+
     // covers: S305
     #[test]
     fn the_launch_check_runs_once_a_day_and_a_failed_check_stores_no_time() {
