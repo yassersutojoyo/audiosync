@@ -20,6 +20,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A zone's menu item now says Rename…, as a speaker's does, and a zone name is cut to 60 characters with line breaks turned into spaces, as a speaker name is. On the Mac and on Windows.
 - On the Mac, the notice for an AirPlay speaker turned off because it asks for a code now says whether it needs a PIN or a password, as on Windows.
 - On Windows, AudioSync registers its AirPlay sending with Windows as audio work (the Pro Audio task), as it already did for its local outputs.
+- On the Mac, AudioSync's AirPlay sender now asks macOS for a higher priority, as it already does on Windows.
 
 ### Fixed
 
