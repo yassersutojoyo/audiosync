@@ -28,7 +28,8 @@ use crate::ap2::PinPairing;
 use crate::audio::SAMPLE_RATE;
 use crate::connects::{ConnectQueue, StartKind};
 use crate::discovery::{
-    BrowseEvent, Browser, Device, DeviceKey, Directory, DirectoryEvent, ProtocolPath,
+    BrowseEvent, Browser, Device, DeviceKey, Directory, DirectoryEvent, Endpoint, ProtocolPath,
+    ScopedAddr,
 };
 use crate::error::{ErrorKind, SessionError, UnsupportedReason, UserReason, Warning};
 use crate::homekit::{HomeKitCredentials, SrpDone, SrpWork};
@@ -303,6 +304,9 @@ struct Speaker {
     /// A P228 restart waits for its turn: its connect is the start it
     /// replaces, not counted again.
     restarting: bool,
+    /// Its retry waits out a back-off the receiver asked for (P154), which
+    /// discovery listing it again doesn't cut short (P142).
+    receiver_wait: bool,
 }
 
 impl Speaker {
@@ -330,6 +334,7 @@ impl Speaker {
             told_connecting: false,
             started_as: StartKind::Host,
             restarting: false,
+            receiver_wait: false,
         }
     }
 
@@ -349,6 +354,20 @@ impl Speaker {
         self.phase = Phase::Waiting(at);
         self.next_start = kind;
     }
+}
+
+/// Whether a session would connect or set up differently on `new` than on
+/// `old`: another address, port or TXT key the sender reads (P142).
+fn connects_differently(old: &Device, new: &Device) -> bool {
+    fn at(service: &Option<Endpoint>) -> Option<(u16, &[ScopedAddr])> {
+        service
+            .as_ref()
+            .map(|service| (service.port, service.addresses.as_slice()))
+    }
+    at(&old.raop) != at(&new.raop)
+        || at(&old.airplay) != at(&new.airplay)
+        || old.raop_txt != new.raop_txt
+        || old.airplay_txt != new.airplay_txt
 }
 
 pub(crate) struct Driver {
@@ -1326,6 +1345,7 @@ impl Driver {
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
+        speaker.receiver_wait = false;
         let retry_at = if closing {
             None
         } else if alac_retry || path_switch {
@@ -1333,6 +1353,7 @@ impl Driver {
         } else if settling {
             speaker.backoff.on_failure(ErrorKind::Lost, now)
         } else if let Some(wait) = error.retry_after {
+            speaker.receiver_wait = true;
             Some(speaker.backoff.on_receiver_state(wait, now))
         } else {
             speaker.backoff.on_failure(error.kind, now)
@@ -2261,6 +2282,7 @@ impl Driver {
         let retry_at = speaker.backoff.on_failure(error.kind, now);
         speaker.phase = retry_at.map_or(Phase::Failed, Phase::Waiting);
         speaker.next_start = StartKind::Retry;
+        speaker.receiver_wait = false;
         let reason = error.kind.user_reason();
         self.emit_speaker(
             key,
@@ -2298,15 +2320,18 @@ impl Driver {
                 || (self.directory.seen(key) && self.directory.device(key).is_none()))
     }
 
-    /// Discovery listed an unannounced speaker, or one waiting to retry,
-    /// again: a session starts now, the first of a fresh schedule, unless
-    /// the records still leave it unannounced (P215, P142).
-    fn announced(&mut self, key: &DeviceKey, now: Instant) {
+    /// Discovery listed an unannounced speaker again, or one waiting to
+    /// retry on records that `changed`: a session starts now, the first of a
+    /// fresh schedule, unless the records still leave it unannounced (P215,
+    /// P142). A back-off the receiver asked for still holds (P154).
+    fn announced(&mut self, key: &DeviceKey, changed: bool, now: Instant) {
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
-        let retry =
-            matches!(speaker.phase, Phase::Waiting(_)) && speaker.next_start == StartKind::Retry;
+        let retry = changed
+            && !speaker.receiver_wait
+            && matches!(speaker.phase, Phase::Waiting(_))
+            && speaker.next_start == StartKind::Retry;
         if !(retry || matches!(speaker.phase, Phase::Unannounced)) || self.stopping.is_some() {
             return;
         }
@@ -2431,7 +2456,9 @@ impl Driver {
                 DirectoryEvent::Updated(device) => {
                     // The next session uses the new records; a running one
                     // is untouched (P18, P19).
+                    let mut changed = false;
                     if let Some(speaker) = self.speakers.get_mut(&device.key) {
+                        changed = connects_differently(&speaker.device, &device);
                         speaker.device = (*device).clone();
                     }
                     let key = device.key.clone();
@@ -2451,7 +2478,7 @@ impl Driver {
                         ReceiverEvent::Changed(info)
                     };
                     self.emit(SenderEvent::Receiver(event));
-                    self.announced(&key, Instant::now());
+                    self.announced(&key, changed, Instant::now());
                 }
                 DirectoryEvent::Removed(key) => {
                     self.forget_outcome(&key, "its services went away");
@@ -3326,6 +3353,7 @@ mod tests {
                 told_connecting: false,
                 started_as: StartKind::Host,
                 restarting: false,
+                receiver_wait: false,
             },
         );
 
