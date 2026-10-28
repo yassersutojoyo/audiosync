@@ -5300,7 +5300,11 @@ mod tests {
     // covers: S329
     #[test]
     fn a_capture_device_gone_reopens_only_the_capture_and_keeps_every_output_running() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
         let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
         let fake = FakeAirPlay::new();
         let clock = SenderClock::new(Instant::now());
         let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
@@ -5311,9 +5315,23 @@ mod tests {
         fake.appear(&kitchen);
         backend.poll();
         backend.set_airplay_enabled(&id, true).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
         backend.start(&SourceId::WholeSystem).unwrap();
         let ring = backend.driver().capture_ring().expect("a ring");
+        assert!(backend.driver().capture_feeds_cast());
         fake.take_calls();
+        // The Cast speaker's join reports itself; nothing else may.
+        let poll_quietly = |backend: &mut MockBackend, count: u32| {
+            for _ in 0..count {
+                let events = backend.poll();
+                assert!(
+                    events
+                        .iter()
+                        .all(|event| matches!(event, BackendEvent::CastChanged)),
+                    "{events:?}"
+                );
+            }
+        };
 
         backend.fail_capture(BackendError::DeviceGone);
         poll_quietly(&mut backend, 1);
@@ -5331,6 +5349,12 @@ mod tests {
             "the ring's timeline goes on"
         );
         assert!(backend.driver().capture_feeds_airplay());
+        assert!(!feed.is_free(), "the new capture holds the AirPlay feed");
+        assert!(
+            backend.driver().capture_feeds_cast(),
+            "and feeds the Cast speaker"
+        );
+        assert_eq!(cast.state().stops, 0, "the Cast speaker stays connected");
         assert_eq!(
             backend.driver().renderers_started(),
             [HEADPHONES, SPEAKERS],
@@ -5346,6 +5370,27 @@ mod tests {
             "the AirPlay speaker stays in the stream: {calls:?}"
         );
         assert_eq!(backend.enabled_airplay(), [id]);
+    }
+
+    // covers: S329
+    #[test]
+    fn a_capture_reopen_waits_while_the_lost_capture_still_holds_the_ring() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let ring = backend.driver().capture_ring().expect("a ring");
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        // The lost capture's thread, let go while Windows audio hangs, still
+        // holds the ring's writer at the first try.
+        let held = ring.writer().expect("the mock capture let it go");
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().captures_started().len(), 1);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        drop(held);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_running());
     }
 
     // covers: S329

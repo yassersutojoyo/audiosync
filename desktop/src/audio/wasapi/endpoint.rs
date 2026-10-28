@@ -661,6 +661,21 @@ mod tests {
         );
     }
 
+    // covers: S326
+    #[test]
+    fn a_stream_that_takes_frames_is_never_stalled_by_a_clock_that_sticks() {
+        let start = Instant::now();
+        let mut watch = StallWatch::default();
+        // The clock moves once, then a driver's position sticks while every
+        // wake still finds a period taken.
+        let stuck = u64::from(PERIOD);
+        assert_eq!(watch.observe(at(start, 0), BUFFER, BUFFER, Some(0)), None);
+        for ms in (10..10_000).step_by(10) {
+            let stall = watch.observe(at(start, ms), BUFFER - PERIOD, BUFFER, Some(stuck));
+            assert_eq!(stall, None, "{ms} ms");
+        }
+    }
+
     #[test]
     fn a_render_thread_that_hangs_stopping_its_stream_doesnt_hold_quitting() {
         static STUCK: StuckThreads = StuckThreads::new();
