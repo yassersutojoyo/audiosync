@@ -650,6 +650,41 @@ fn a_level_sent_but_unanswered_goes_to_the_next_channel() {
     assert_eq!(channel.take_unanswered_volume(), Some(0.5));
 }
 
+// covers: C69, C70
+#[test]
+fn the_answer_to_an_older_level_keeps_the_newer_one_unanswered() {
+    let start = Instant::now();
+    let mut channel = running(start);
+    let receiver_status = |id: u64, level: f64| {
+        json_message(
+            PLATFORM,
+            SENDER,
+            NS_RECEIVER,
+            json!({"type": "RECEIVER_STATUS", "requestId": id, "status": {"volume": {"level": level, "stepInterval": 0.05}}}),
+        )
+    };
+    channel.handle(start, receiver_status(0, 0.25));
+    assert_eq!(channel.step_volume(start, true), Ok(0.3));
+    assert_eq!(channel.step_volume(start, true), Ok(0.35));
+    let later = start + Duration::from_millis(100);
+    channel.tick(later);
+    let levels: Vec<(u64, f64)> = sent(&mut channel)
+        .iter()
+        .filter(|(_, _, payload)| payload["type"] == "SET_VOLUME")
+        .map(|(_, _, payload)| {
+            (
+                payload["requestId"].as_u64().expect("id"),
+                payload["volume"]["level"].as_f64().expect("level"),
+            )
+        })
+        .collect();
+    assert_eq!(levels.len(), 2, "{levels:?}");
+    let (first_id, first_level) = levels[0];
+    channel.handle(later, receiver_status(first_id, first_level));
+    let step = channel.step_volume(later, true).expect("step");
+    assert!((step - 0.4).abs() < 1e-9, "the step builds on 0.35: {step}");
+}
+
 // covers: C44
 #[test]
 fn stop_sends_receiver_stop_with_the_session_then_closes_both_endpoints() {
