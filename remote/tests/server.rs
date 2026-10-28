@@ -792,6 +792,28 @@ fn the_event_stream_delivers_each_revision_once_and_heartbeats() {
 }
 
 #[test]
+fn a_snapshot_after_a_command_streams_even_when_nothing_changed() {
+    let remote = start("refused-command");
+    let token = pair(&remote);
+    remote.server.publish(sample());
+    let mut events = Events::open(&remote, &token);
+    events.read_until(|events| !events.revisions().is_empty());
+    let reply = post(&remote, "/api/master", Some(&token), "{\"volume\": 60}");
+    assert_eq!(reply.status, 202);
+    // The app refused the change: its next snapshot is the one before.
+    remote.server.publish(sample());
+    events.read_until(|events| events.revisions().len() >= 2);
+    assert_eq!(events.revisions(), [1, 2]);
+    remote.server.publish(sample());
+    assert!(events.read_for(Duration::from_millis(300)));
+    assert_eq!(
+        events.revisions(),
+        [1, 2],
+        "a snapshot with no command between streamed"
+    );
+}
+
+#[test]
 fn a_device_keeps_two_event_streams_and_a_third_ends_the_oldest() {
     let remote = start("streams");
     let token = pair(&remote);
