@@ -221,6 +221,18 @@ struct LocalBriefLoss: Equatable {
         return lostAt.count != before
     }
 
+    /// The switched-on speakers went from `old` to `new`: each one switched
+    /// off stops counting at once, also when it is switched on again before
+    /// its device is back.
+    mutating func followSwitches(from old: Set<String>, to new: Set<String>) {}
+
+    /// Whether the start lead held for lost speaker `uid` (lost at `lostAt`)
+    /// still counts at `now`.
+    func keepsLead(of uid: String, lostAt: Double, now: Double, listed: Bool, enabled: Bool, isReference: Bool,
+                   publishedAgain: Bool) -> Bool {
+        enabled && !isReference && (listed || held.contains(uid)) && now - lostAt < Self.holdSeconds
+    }
+
     /// A session restart (S20): no speaker is held any longer, and the new
     /// session counts only the devices listed then.
     mutating func restart() { lostAt = [:] }

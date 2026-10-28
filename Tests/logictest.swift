@@ -5618,6 +5618,21 @@ do {
     offFirst.noteListing([r, usb], enabled: [r, usb], reference: r, now: 5)
     check(flap.held.isEmpty && lostReference.held.isEmpty && offFirst.held.isEmpty && flapped().held == [bt],
           "local delay: a session restart, a lost reference or a speaker already off holds nothing")
+    flap = flapped()
+    flap.followSwitches(from: on, to: [r, usb])
+    flap.followSwitches(from: [r, usb], to: on)
+    flap.noteListing([r, usb], enabled: on, reference: r, now: 6)
+    check(flap.held.isEmpty,
+          "local delay: a lost output switched off and on again within 10 s while still missing isn't held again",
+          "\(flap.held)")
+    let lostBT = flapped()
+    func keeps(listed: Bool, published: Bool, now: Double = 8) -> Bool {
+        lostBT.keepsLead(of: bt, lostAt: 5, now: now, listed: listed, enabled: true, isReference: false,
+                         publishedAgain: published)
+    }
+    check(keeps(listed: false, published: false) && keeps(listed: true, published: false)
+            && !keeps(listed: true, published: true) && !keeps(listed: false, published: false, now: 15),
+          "local delay: a lost output's start lead counts until its new renderer publishes one, 10 s at most")
 
     // covers: S178, S181 (the AirPlay delay field)
     var native = AirPlayDelay(adjustmentMs: 250)
