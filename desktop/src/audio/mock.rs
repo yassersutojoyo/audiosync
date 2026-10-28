@@ -821,6 +821,15 @@ impl Controller<MockDriver> {
         self.driver_mut().unwatchable.insert(pid);
     }
 
+    /// Makes the creation time of process `pid` one that can't be read.
+    pub fn hide_start_time(&mut self, pid: u32) {
+        for process in &mut self.driver_mut().processes {
+            if process.pid == pid {
+                process.created = None;
+            }
+        }
+    }
+
     /// Quits a process. A capture of its tree reports that its source quit,
     /// unless it couldn't watch it.
     pub fn quit_app(&mut self, pid: u32) {

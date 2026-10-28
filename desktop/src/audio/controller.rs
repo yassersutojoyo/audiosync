@@ -5508,6 +5508,30 @@ mod tests {
 
     // covers: S327
     #[test]
+    fn an_unwatched_app_whose_process_id_another_app_took_counts_as_quit_without_a_start_time() {
+        let mut backend = backend();
+        start_player(&mut backend, true);
+        backend.hide_start_time(PLAYER_PID);
+        poll_quietly(&mut backend, 1);
+        backend.quit_app(PLAYER_PID);
+        backend.add_app(PLAYER_PID, "other.exe");
+        backend.hide_start_time(PLAYER_PID);
+        backend
+            .session
+            .as_mut()
+            .and_then(|session| session.unwatched.as_mut())
+            .expect("the app is checked")
+            .checked = None;
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+    }
+
+    // covers: S327
+    #[test]
     fn an_unwatched_app_that_restarts_gets_the_same_quit_handling_as_a_watched_one() {
         for setting in [WhenSourceQuits::Stop, WhenSourceQuits::SwitchToSystem] {
             let outcome = |refused: bool| {
