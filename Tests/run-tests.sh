@@ -292,7 +292,6 @@ if [ "$macos" = 0 ]; then
     MINGW* | MSYS* | CYGWIN*)
       # Same shared target and touch as scripts/pc_test.sh, so worktrees don't each fill the disk.
       main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
-      unset AUDIOSYNC_LAN_TESTS
       export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$main/windows/target}"
       export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}"
       export CARGO_INCREMENTAL=0
