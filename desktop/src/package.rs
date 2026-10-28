@@ -29,13 +29,18 @@ impl Identity {
         matches!(self, Identity::Packaged(_))
     }
 
+    /// The full name as the log shows it, [`UNNAMED`] when Windows
+    /// confirmed identity without handing the name over.
     pub fn full_name(&self) -> Option<&str> {
         match self {
+            Identity::Packaged(name) if name.is_empty() => Some(UNNAMED),
             Identity::Packaged(name) => Some(name),
             Identity::Unpackaged | Identity::Unexpected(_) => None,
         }
     }
 }
+
+pub const UNNAMED: &str = "unnamed package (Windows gave no full name)";
 
 /// What the first, zero-length call's return code says.
 #[derive(Debug, PartialEq, Eq)]
@@ -171,7 +176,8 @@ pub fn log_line(
         Identity::Unexpected(code) => {
             format!("package: none (GetCurrentPackageFullName returned {code})")
         }
-        Identity::Packaged(name) => {
+        Identity::Packaged(_) => {
+            let name = identity.full_name().unwrap_or(UNNAMED);
             let shown = folder.map(|folder| shown_folder(folder, local_app_data));
             format!(
                 "package: {name}; debug log folder: {}",
