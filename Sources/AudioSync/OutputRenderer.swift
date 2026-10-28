@@ -39,6 +39,8 @@ final class OutputRenderer: FadingOutput {
         case callbackNotInstalled(OSStatus)
         case unitNotInitialized(OSStatus)
         case deviceDidNotStart(OSStatus)
+        /// A step failed with this status while another process held the device in hog mode.
+        case deviceHogged(OSStatus)
         /// The core could not make this output's renderer.
         case coreUnavailable
         /// The ring holds 24 s only up to `EngineParts.highestCaptureRate`,
@@ -56,6 +58,7 @@ final class OutputRenderer: FadingOutput {
             case .callbackNotInstalled(let status): return "the render callback could not be installed (\(Self.text(status)))"
             case .unitNotInitialized(let status): return "the output unit could not be initialized (\(Self.text(status)))"
             case .deviceDidNotStart(let status): return "the output unit did not start on the device (\(Self.text(status)))"
+            case .deviceHogged(let status): return "another process holds the device in hog mode (\(Self.text(status)))"
             case .coreUnavailable: return "the audio core could not make this output's renderer"
             case .captureRateTooHigh(let rate):
                 return "the audio core refused the \(Int(rate.rounded())) Hz capture rate: "
@@ -73,6 +76,8 @@ final class OutputRenderer: FadingOutput {
                  .formatRefused(let status), .callbackNotInstalled(let status), .unitNotInitialized(let status),
                  .deviceDidNotStart(let status):
                 return Self.refusals.contains(status)
+            case .deviceHogged:
+                return true
             case .halUnitMissing, .coreUnavailable, .captureRateTooHigh:
                 return false
             }
@@ -83,9 +88,20 @@ final class OutputRenderer: FadingOutput {
             OSStatus(kAudioHardwareBadDeviceError), OSStatus(kAudioHardwareBadObjectError),
             OSStatus(kAudioHardwareBadStreamError), OSStatus(kAudioHardwareNotRunningError),
             OSStatus(kAudioDevicePermissionsError), OSStatus(kAudioUnitErr_InvalidPropertyValue),
-            // Measured: the HAL output unit's start on a device another process hogs returns 35, EAGAIN in sys/errno.h.
-            OSStatus(EAGAIN),
         ]
+
+        /// `failure` as `deviceHogged` when it is 35 (EAGAIN in sys/errno.h), which the HAL output unit
+        /// returned for a device another process hogged (measured), and `hogOwner` is another process.
+        static func hogChecked(_ failure: StartFailure, hogOwner: pid_t?, ownPID: pid_t) -> StartFailure {
+            guard let hogOwner, hogOwner != ownPID else { return failure }
+            switch failure {
+            case .outputNotEnabled(let status), .deviceNotBound(let status), .formatRefused(let status),
+                 .callbackNotInstalled(let status), .unitNotInitialized(let status), .deviceDidNotStart(let status):
+                return status == OSStatus(EAGAIN) ? .deviceHogged(status) : failure
+            default:
+                return failure
+            }
+        }
 
         /// The status, and its four-character code when all four bytes are printable.
         private static func text(_ status: OSStatus) -> String {
@@ -255,7 +271,8 @@ final class OutputRenderer: FadingOutput {
             guard startStatus == noErr else { throw StartFailure.deviceDidNotStart(startStatus) }
         } catch let failure {
             Self.tearDown(fresh, started: false, initialized: initialized)
-            throw failure
+            guard let known = failure as? StartFailure else { throw failure }
+            throw StartFailure.hogChecked(known, hogOwner: Self.hogOwner(device), ownPID: getpid())
         }
         halUnit = fresh
         renderRate = started.rate
