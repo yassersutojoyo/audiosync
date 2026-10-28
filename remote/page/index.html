@@ -324,6 +324,8 @@ const TEXT = {
 
 const RETRY_STEPS_MS = [1000, 2000, 5000, 10000];
 const SEND_EVERY_MS = 100;
+// The server answers once the change is queued, not applied; snapshots from that gap still carry the old value.
+const SETTLE_MS = 1000;
 const DELAY_STEP_MS = 10;
 // A switch restarts the capture; past this the app has dropped or refused the pick.
 const SWITCH_WAIT_MS = 5000;
@@ -596,6 +598,7 @@ function sender(send, onFail) {
   let pending = null;
   let sentValue = null;
   let inFlight = false;
+  let settleUntil = 0;
   const fire = () => {
     window.clearTimeout(timer);
     timer = null;
@@ -610,11 +613,14 @@ function sender(send, onFail) {
     sentValue = value;
     lastSent = Date.now();
     inFlight = true;
+    settleUntil = Infinity;
     send(value).then(() => {
       inFlight = false;
+      settleUntil = Math.min(settleUntil, Date.now() + SETTLE_MS);
       fire();
     }, (problem) => {
       inFlight = false;
+      settleUntil = 0;
       onFail(problem, pending === null);
       fire();
     });
@@ -625,7 +631,10 @@ function sender(send, onFail) {
       pending = value;
       if (timer === null) { fire(); }
     },
-    busy() { return inFlight || pending !== null; },
+    busy(reported) {
+      if (reported === sentValue) { settleUntil = 0; }
+      return inFlight || pending !== null || Date.now() < settleUntil;
+    },
   };
 }
 
@@ -640,7 +649,7 @@ function rangeControl(input, output, read, write, onFail) {
     if (settled && !held) { control.show(read()); }
   });
   const control = {
-    held: () => held || send.busy(),
+    held: (reported) => held || send.busy(Math.round(reported)),
     show(value) {
       input.value = String(Math.round(value));
       showPercent(Math.round(value));
@@ -839,10 +848,10 @@ function updateRow(row, speaker) {
   row.notice.hidden = !reason;
   if (!speaker.available) { showError(row.error, ""); return; }
 
-  if (!row.powerSender.busy()) { row.power.checked = speaker.on; }
-  if (!row.volumeControl.held()) { row.volumeControl.show(speaker.volume); }
+  if (!row.powerSender.busy(speaker.on)) { row.power.checked = speaker.on; }
+  if (!row.volumeControl.held(speaker.volume)) { row.volumeControl.show(speaker.volume); }
   const editing = document.activeElement === row.delay;
-  if (!row.delaySender.busy() && !editing) { showDelay(row, speaker.delay_ms); }
+  if (!row.delaySender.busy(speaker.delay_ms) && !editing) { showDelay(row, speaker.delay_ms); }
 }
 
 // Removing the focused card drops focus to the page top; move it to the next card, else the previous one, else the title.
@@ -950,7 +959,7 @@ function updateZone(row, zone, speakers) {
   const names = zone.members.map((id) => speakers.get(id)).filter(Boolean);
   row.members.textContent = names.join(", ");
   row.members.hidden = names.length === 0;
-  if (!row.volumeControl.held()) { row.volumeControl.show(zone.volume); }
+  if (!row.volumeControl.held(zone.volume)) { row.volumeControl.show(zone.volume); }
 }
 
 function renderZones(next) {
@@ -1145,7 +1154,7 @@ function render(next) {
     ui.playingDetail.textContent = playing && playing.source ? playing.source : "";
   }
   ui.playingDetail.hidden = ui.playingDetail.textContent === "";
-  if (!masterControl.held()) { masterControl.show(next.master.volume); }
+  if (!masterControl.held(next.master.volume)) { masterControl.show(next.master.volume); }
   showSources(next);
 
   const order = Array.from(ui.speakers.children);
