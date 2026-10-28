@@ -298,6 +298,8 @@ pub struct MockDriver {
     output_formats: BTreeMap<String, RenderFormat>,
     /// The outputs whose device format Windows said changed, not yet taken.
     format_notices: Vec<String>,
+    /// Whether the format reads don't answer in time.
+    formats_hang: bool,
     capture_error: Option<BackendError>,
     /// The error only the next capture start fails with.
     next_capture_error: Option<BackendError>,
@@ -373,6 +375,7 @@ impl MockDriver {
             output_errors: BTreeMap::new(),
             output_formats: BTreeMap::new(),
             format_notices: Vec::new(),
+            formats_hang: false,
             capture_error: None,
             next_capture_error: None,
             capture_setup: CAPTURE_ATTEMPTS[0],
@@ -609,6 +612,9 @@ impl Driver for MockDriver {
     }
 
     fn output_format(&mut self, id: &str) -> Result<RenderFormat, BackendError> {
+        if self.formats_hang {
+            return Err(BackendError::NotResponding);
+        }
         if !self.is_connected(id) {
             return Err(BackendError::DeviceGone);
         }
@@ -1098,6 +1104,11 @@ impl Controller<MockDriver> {
         let driver = self.driver_mut();
         driver.output_formats.insert(id.to_owned(), format);
         driver.format_notices.push(id.to_owned());
+    }
+
+    /// Windows audio stops answering the output format reads in time.
+    pub fn hang_output_formats(&mut self) {
+        self.driver_mut().formats_hang = true;
     }
 
     /// Windows says output `id`'s device format changed while it didn't.

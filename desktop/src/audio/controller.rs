@@ -6934,6 +6934,28 @@ mod tests {
 
     // covers: S330
     #[test]
+    fn a_format_read_that_doesnt_answer_logs_a_line_and_the_output_opens_again() {
+        let (mut backend, log, dir) = logged_backend("controller-format-hang");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.hang_output_formats();
+        backend.disconnect_session(HEADPHONES);
+        assert!(backend.poll().is_empty(), "no notice");
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES]
+        );
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "output \"Headphones\" (headphones): Windows audio didn't answer its format read \
+                 in time",
+                "output \"Headphones\" (headphones): Windows disconnected its stream",
+            ],
+        );
+    }
+
+    // covers: S330
+    #[test]
     fn a_format_notice_that_changes_nothing_leaves_the_output_playing() {
         let mut backend = backend();
         backend.start(&SourceId::WholeSystem).unwrap();

@@ -2849,6 +2849,7 @@ The release side:
 | a_format_notice_that_changes_nothing_leaves_the_output_playing (`desktop/src/audio/controller.rs`) | S330 |
 | a_format_read_that_hangs_answers_in_time_and_starts_no_second_read (`desktop/src/audio/wasapi/endpoint.rs`) | S330 |
 | a_format_read_that_hangs_answers_every_other_output_at_once (`desktop/src/audio/wasapi/endpoint.rs`) | S330 |
+| a_format_read_that_doesnt_answer_logs_a_line_and_the_output_opens_again (`desktop/src/audio/controller.rs`) | S330 |
 | a_format_reopen_never_moves_another_outputs_hold_back (`desktop/src/audio/controller.rs`) | S177, S330 |
 | a_session_disconnected_with_its_device_unplugged_is_lost (`desktop/src/audio/controller.rs`) | S68, S330 |
 | an_input_held_exclusively_is_busy_at_initialize_and_at_start (`desktop/src/audio/wasapi/loopback.rs`) | S333 |
