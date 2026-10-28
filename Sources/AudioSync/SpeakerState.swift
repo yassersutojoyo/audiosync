@@ -165,11 +165,6 @@ extension LocalOutputEngine {
     func detachOutputs(uids: [String]) {
         for uid in uids { detachOutput(uid: uid) }
     }
-
-    /// `detachOutputs(uids:)`, for an engine that holds no start leads.
-    func detachOutputs(uids: [String], keepingLeads: Bool) {
-        detachOutputs(uids: uids)
-    }
 }
 
 extension LocalOutputSync {

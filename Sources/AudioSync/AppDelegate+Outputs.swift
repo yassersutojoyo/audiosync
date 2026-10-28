@@ -248,12 +248,8 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] a lost speaker's 10 s are up: it no longer counts for the others' delays")
         }
         retimeLocalOutputs()
-        let held = engine.heldLeadTimes
-        // A speaker playing again lets its held lead go once its renderer publishes one.
-        let replaying = held.keys.contains { engine.activeOutputUIDs.contains($0) } ? [now + 0.5] : []
-        let due = ([briefLoss.nextExpiry].compactMap { $0 } + replaying
-            + held.values.map { $0 + LocalBriefLoss.holdSeconds }).min()
-        guard let due else { return }
+        guard let due = briefLoss.nextCheck(now: now, held: engine.heldLeadTimes,
+                                            playing: engine.activeOutputUIDs) else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, due - now) + 0.05) { [weak self] in
             self?.checkBriefLosses()
         }
@@ -434,6 +430,7 @@ extension AppDelegate {
         let report = LocalOutputSync.report(failures, enabled: enabledLocal, origin: origin)
         if let report { enabledLocal = report.enabled }
         retimeLocalOutputs()   // a joined, left or failed output can move the others' hold-back (S177)
+        if !applied.restarted.isEmpty { checkBriefLosses() }   // their held start leads go once due (S328)
 
         guard let report else { return }
         if report.alertNames != nil {   // the failures' names, for a click of the user's
@@ -526,6 +523,7 @@ extension AppDelegate {
                 guard let self else { return }
                 self.freshLinks.release(uid: uid)
                 self.syncLocalOutputs(origin: .automatic)
+                self.checkBriefLosses()   // its held start lead goes once due (S328)
             }
         }
     }

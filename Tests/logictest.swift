@@ -7282,6 +7282,7 @@ do {
             removed.append(uid)
             activeOutputUIDs.removeAll { $0 == uid }
         }
+        func detachOutputs(uids: [String], keepingLeads: Bool) { for uid in uids { detachOutput(uid: uid) } }
         func setGain(uid: String, g: Double) {
             regained.append(uid)
             gains[uid] = g
@@ -7473,6 +7474,7 @@ do {
         func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {}
         func detachOutput(uid: String) { calls.append([uid]) }
         func detachOutputs(uids: [String]) { calls.append(uids) }
+        func detachOutputs(uids: [String], keepingLeads: Bool) { calls.append(uids) }
         func setGain(uid: String, g: Double) {}
     }
     let batching = BatchingEngine()
@@ -7586,6 +7588,7 @@ do {
             note("detach \(uids)")
             activeOutputUIDs.removeAll { uids.contains($0) }
         }
+        func detachOutputs(uids: [String], keepingLeads: Bool) { detachOutputs(uids: uids) }
         func setGain(uid: String, g: Double) { note("gain \(uid) \(g)") }
     }
     let usb = AudioDevices.Device(id: 52, name: "USB DAC", uid: "usb", transport: kAudioDeviceTransportTypeUSB)
