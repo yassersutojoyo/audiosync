@@ -499,7 +499,7 @@ fn a_group_without_addresses_keeps_retrying_until_its_records_list_one() {
         failures.push((matches!(error, ConnectError::NoAddress), wait));
         records.set_group(vec![leader.address]);
     });
-    let mut session = session.expect("plays once the records list an address");
+    let session = session.expect("plays once the records list an address");
     assert_eq!(failures, [(true, Duration::from_secs(1))]);
     session.stop();
     leader.join();

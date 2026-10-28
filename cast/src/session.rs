@@ -241,7 +241,7 @@ pub fn falls_back_to_flac(codec: Codec, error: &MediaError) -> bool {
 
 /// Connects, retrying while `selected` stays true: after 1 s, then doubling
 /// up to 30 s (C80). `on_failure` hears each failure with the wait before
-/// the next attempt. Errors no retry can fix return at once.
+/// the next attempt.
 pub fn connect_retrying(
     addresses: &[SocketAddr],
     selected: &AtomicBool,
@@ -265,9 +265,6 @@ pub fn connect_retrying_with(
         match CastClient::connect_while(&addresses(), RequestIds::random(), selected) {
             Ok(client) => return Ok(client),
             Err(_) if !selected.load(Ordering::SeqCst) => return Err(None),
-            Err(error @ ConnectError::NoAddress) => {
-                return Err(Some(error));
-            }
             Err(error) => {
                 let wait = backoff.next_wait();
                 on_failure(error, wait);
@@ -1004,7 +1001,6 @@ impl CastSession {
             match CastClient::connect_while(&addresses, RequestIds::random(), &self.selected) {
                 Ok(client) => return Ok(client),
                 Err(_) if !self.selected.load(Ordering::SeqCst) => return Err(None),
-                Err(error @ ConnectError::NoAddress) => return Err(Some(error)),
                 Err(error) => {
                     wait = self.pacer.next_wait(Instant::now());
                     self.report(SessionEvent::ConnectFailed {
