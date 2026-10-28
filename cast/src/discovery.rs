@@ -250,6 +250,9 @@ fn ordered(addresses: &[IpAddr]) -> Vec<IpAddr> {
     list
 }
 
+/// The most devices the list holds (C108).
+pub const MAX_DEVICES: usize = 128;
+
 /// How the host's list names a device (C16, C18).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DeviceKey {
@@ -303,11 +306,18 @@ pub struct DeviceList {
     /// How many times a session opened or closed on each device added by
     /// address.
     session_changes: Vec<(SocketAddr, u64)>,
+    /// The device the user selected, which the cap never drops (C108).
+    kept: Option<DeviceKey>,
 }
 
 impl DeviceList {
     pub fn new() -> DeviceList {
         DeviceList::default()
+    }
+
+    /// Names the device the user selected, `None` when none is.
+    pub fn set_kept(&mut self, key: Option<DeviceKey>) {
+        self.kept = key;
     }
 
     pub fn entries(&self) -> &[Entry] {
