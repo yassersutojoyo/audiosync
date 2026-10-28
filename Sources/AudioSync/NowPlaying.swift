@@ -599,6 +599,11 @@ struct AutomationConsent {
         }
     }
 
+    /// Whether a play, pause or skip command may go to `app`.
+    func mayCommand(_ app: String, permission: Permission) -> Bool {
+        true
+    }
+
     /// Consent request `token` returned; one a quit already ended changes nothing.
     mutating func ended(_ token: Int, at now: TimeInterval) {
         guard pending?.token == token else { return }

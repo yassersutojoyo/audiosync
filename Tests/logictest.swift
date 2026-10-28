@@ -1843,6 +1843,30 @@ do {
     check(asks == [0, 12, 24, 36, 48], "automation consent: a request that returns undecided is not repeated within 10 s",
           "\(asks)")
 }
+do {
+    // A window button or a speaker's remote press: only an allowed player with no request pending gets it.
+    var consent = AutomationConsent()
+    let undecided = consent.mayCommand(consentSpotify, permission: .undecided)
+    let unknown = consent.mayCommand(consentSpotify, permission: .unknown)
+    let denied = consent.mayCommand(consentSpotify, permission: .denied)
+    _ = consent.step(consentSpotify, running: true, permission: .undecided, mayAsk: true, at: 0)
+    let pending = consent.mayCommand(consentSpotify, permission: .allowed)
+    let other = consent.mayCommand(consentMusic, permission: .allowed)
+    check(!undecided && !unknown && !denied && !pending && other,
+          "automation consent: a play, pause or skip command never goes to a player macOS hasn't allowed",
+          "\(undecided) \(unknown) \(denied) \(pending) \(other)")
+}
+do {
+    // Just launched, macOS can't tell yet (-600): the player is neither read nor asked about until it can.
+    var consent = AutomationConsent()
+    let early = (0..<3).map {
+        consent.step(consentSpotify, running: true, permission: .unknown, mayAsk: true, at: 2 * Double($0))
+    }
+    let decided = consentAsk(consent.step(consentSpotify, running: true, permission: .undecided, mayAsk: true, at: 6))
+    check(early.allSatisfy { $0 == .wait } && decided != nil,
+          "automation consent: a player whose permission macOS can't tell yet is not read",
+          "\(early) \(String(describing: decided))")
+}
 check(AutomationConsent.permission(status: 0) == .allowed && AutomationConsent.permission(status: -1743) == .denied
         && AutomationConsent.permission(status: -1744) == .undecided && AutomationConsent.permission(status: -600) == .unknown,
       "automation consent: macOS's answers read as allowed, denied, undecided, and anything else as unknown")
