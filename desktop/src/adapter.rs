@@ -11763,6 +11763,29 @@ mod tests {
 
     // covers: S212
     #[test]
+    fn the_last_save_of_a_run_that_saves_nothing_never_tells_saved() {
+        let dir = test_dir("adapter-settings-last-save-skipped");
+        let path = dir.join(settings::FILE_NAME);
+        let file = SettingsFile::at(path.clone());
+        let mut adapter = AudioAdapter::launched(
+            launch_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+            file,
+            true,
+        );
+        adapter.set_master_volume(64.0);
+        adapter.poll();
+        assert!(
+            !adapter.save_settings(),
+            "a run without auto-connect saves nothing"
+        );
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
     fn a_change_whose_save_failed_is_saved_later_without_another_change() {
         let dir = test_dir("adapter-settings-retry-on-polls");
         let path = dir.join(settings::FILE_NAME);

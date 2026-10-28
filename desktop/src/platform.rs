@@ -970,7 +970,8 @@ mod tests {
         use std::rc::Rc;
         use windows::Win32::Foundation::{HWND, WPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{
-            DestroyWindow, SendMessageW, WM_ENDSESSION, WM_QUERYENDSESSION,
+            DestroyWindow, GA_PARENT, GetAncestor, GetDesktopWindow, SendMessageW, WM_ENDSESSION,
+            WM_QUERYENDSESSION,
         };
 
         let runs = Rc::new(Cell::new(0));
@@ -981,6 +982,8 @@ mod tests {
         // SAFETY: the window belongs to this thread, so each SendMessageW
         // runs its procedure right here.
         unsafe {
+            // A message-only window, which the broadcast misses, has the message root as parent.
+            assert_eq!(GetAncestor(hwnd, GA_PARENT), GetDesktopWindow());
             let query = SendMessageW(hwnd, WM_QUERYENDSESSION, None, None);
             assert_ne!(query.0, 0, "the session may end");
             SendMessageW(hwnd, WM_ENDSESSION, Some(WPARAM(0)), None);
