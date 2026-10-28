@@ -66,6 +66,7 @@ extension AppDelegate {
             midRebuild = true
         }
         var outcome = CaptureSwitch.Outcome.switched
+        stallRetry.reset()
         do {
             try engine.start(source: audioSource, inputPair: currentInputPair, rebuild: rebuild)
         } catch {
