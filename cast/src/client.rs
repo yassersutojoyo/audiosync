@@ -590,19 +590,8 @@ impl CastClient {
             if let Event::Ended(reason) = &event {
                 self.ended.get_or_insert_with(|| reason.clone());
             }
-            self.events.push_back((self.next_event, event));
+            queue_event(&mut self.events, (self.next_event, event));
             self.next_event += 1;
-            if self.events.len() > MAX_EVENTS {
-                let routine = self.events.iter().position(|(_, event)| {
-                    matches!(
-                        event,
-                        Event::Status(_) | Event::Dropped(_) | Event::MediaStatus(_)
-                    )
-                });
-                if let Some(index) = routine {
-                    self.events.remove(index);
-                }
-            }
         }
     }
 
@@ -647,11 +636,74 @@ impl CastClient {
     }
 }
 
+/// Queues an event for the owner, keeping the queue to [`MAX_EVENTS`].
+fn queue_event(events: &mut VecDeque<(u64, Event)>, event: (u64, Event)) {
+    events.push_back(event);
+    if events.len() > MAX_EVENTS {
+        let routine = events.iter().position(|(_, event)| {
+            matches!(
+                event,
+                Event::Status(_) | Event::Dropped(_) | Event::MediaStatus(_)
+            )
+        });
+        if let Some(index) = routine {
+            events.remove(index);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::group::{GroupMember, MultizoneMessage};
     use std::net::{Shutdown, TcpListener};
     use std::thread;
+
+    fn upsert(device_id: &str) -> Event {
+        Event::Multizone(MultizoneMessage::Upsert(GroupMember {
+            device_id: device_id.to_owned(),
+            id: None,
+            name: None,
+        }))
+    }
+
+    fn names(event: &Event, device_id: &str) -> bool {
+        matches!(event, Event::Multizone(MultizoneMessage::Upsert(member)) if member.device_id == device_id)
+    }
+
+    // covers: C110
+    #[test]
+    fn the_event_queue_stays_at_its_cap_whatever_the_kind() {
+        let mut events = VecDeque::new();
+        queue_event(
+            &mut events,
+            (
+                0,
+                Event::Loaded {
+                    media_session_id: 1,
+                },
+            ),
+        );
+        queue_event(&mut events, (1, upsert("kitchen")));
+        for n in 0..1000 {
+            let member = if n % 2 == 0 { "attic" } else { "hall" };
+            queue_event(&mut events, (n + 2, upsert(member)));
+        }
+        assert!(events.len() <= MAX_EVENTS, "{} queued", events.len());
+        assert!(matches!(events[0].1, Event::Loaded { .. }));
+        assert!(events.iter().any(|(_, event)| names(event, "kitchen")));
+        assert!(events.iter().any(|(_, event)| names(event, "attic")));
+        let (last, newest) = events.back().expect("queued");
+        assert_eq!(*last, 1001);
+        assert!(names(newest, "hall"));
+
+        let mut events = VecDeque::new();
+        for n in 0..1000 {
+            queue_event(&mut events, (n, upsert(&format!("member {n}"))));
+        }
+        assert!(events.len() <= MAX_EVENTS, "{} queued", events.len());
+        assert_eq!(events.back().map(|(n, _)| *n), Some(999));
+    }
 
     const SLICE: Duration = Duration::from_millis(20);
 
