@@ -657,7 +657,11 @@ fn reconnects_to_a_receiver_that_keeps_closing_are_spaced_out() {
     let mut pacer = ReconnectPacer::default();
     let attempts = reconnects_within(&mut pacer, start, Duration::from_secs(10));
     assert!(attempts.len() <= 4, "{} reconnects in 10 s", attempts.len());
-    assert_eq!(gaps_in_seconds(&attempts), [1, 2, 4], "at once, then 1, 2, 4 s");
+    assert_eq!(
+        gaps_in_seconds(&attempts),
+        [1, 2, 4],
+        "at once, then 1, 2, 4 s"
+    );
     let later = gaps_in_seconds(&reconnects_within(
         &mut pacer,
         start,
@@ -687,5 +691,9 @@ fn an_announcement_of_the_receiver_retries_at_once_and_starts_the_spacing_over()
     assert!(pacer.next_wait(now) > Duration::ZERO, "spaced before");
     pacer.announced();
     assert_eq!(pacer.next_wait(now), Duration::ZERO, "at once");
-    assert_eq!(pacer.next_wait(now), Duration::from_secs(1), "from the start");
+    assert_eq!(
+        pacer.next_wait(now),
+        Duration::from_secs(1),
+        "from the start"
+    );
 }

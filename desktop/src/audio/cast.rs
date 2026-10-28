@@ -407,6 +407,8 @@ pub trait CastLink: Send {
     fn memory(&self) -> DeviceMemory;
     fn poll_event(&mut self) -> Option<HostEvent>;
     fn poll_browse(&mut self) -> Option<BrowseEvent>;
+    /// The device announced itself: a reconnect to it goes at once (C81).
+    fn announced(&mut self, device: DeviceId);
     fn discovery(&self) -> CastDiscovery;
     /// Tears down whatever runs within C88's budget; the one call that
     /// waits. Returns whether it finished in time.
@@ -491,6 +493,10 @@ impl CastLink for HostLink {
 
     fn poll_browse(&mut self) -> Option<BrowseEvent> {
         self.browser.as_mut()?.poll_event()
+    }
+
+    fn announced(&mut self, device: DeviceId) {
+        self.host.announced(device);
     }
 
     fn discovery(&self) -> CastDiscovery {
@@ -1461,6 +1467,12 @@ impl CastSpeakers {
                 change => {
                     self.log.log(|| format!("Cast discovery: {change:?}"));
                     if let ListEvent::Added(DeviceKey::Id(id))
+                    | ListEvent::Updated(DeviceKey::Id(id)) = change
+                        && let Some(link) = self.link.as_mut()
+                    {
+                        link.announced(id);
+                    }
+                    if let ListEvent::Added(DeviceKey::Id(id))
                     | ListEvent::Displaced {
                         added: DeviceKey::Id(id),
                         ..
@@ -1858,6 +1870,8 @@ pub mod tests {
         fn poll_browse(&mut self) -> Option<BrowseEvent> {
             self.state().browse.pop_front()
         }
+
+        fn announced(&mut self, _device: DeviceId) {}
 
         fn discovery(&self) -> CastDiscovery {
             CastDiscovery::Browsing

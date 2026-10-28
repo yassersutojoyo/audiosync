@@ -723,6 +723,9 @@ impl AscCast {
     }
 
     fn listed(&mut self, event: ListEvent) {
+        if let ListEvent::Added(DeviceKey::Id(id)) | ListEvent::Updated(DeviceKey::Id(id)) = event {
+            self.host.announced(id);
+        }
         match event {
             ListEvent::Added(key) => {
                 self.change(CAST_APPEARED, key);

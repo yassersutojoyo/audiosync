@@ -15,7 +15,7 @@ use crate::audio::{AudioReader, Codec, StreamFormat};
 use crate::channel::{Event, PlaybackEnd};
 use crate::client::{CastClient, Fingerprint, FingerprintBook, FingerprintChange, QUIT_BUDGET};
 use crate::discovery::DeviceId;
-use crate::error::{Backoff, ConnectError, EndReason, LaunchError};
+use crate::error::{Backoff, ConnectError, EndReason, LaunchError, ReconnectPacer};
 use crate::group::{GroupMember, GroupRecords, MemberList, MultizoneMessage};
 use crate::ids::RequestIds;
 use crate::media::{
@@ -320,6 +320,9 @@ pub struct CastSession {
     members: MemberList,
     group_types_logged: LoggedTypes,
     fingerprints: Option<Fingerprints>,
+    pacer: ReconnectPacer,
+    /// Set by the host when the device announces itself (C81).
+    announced: Arc<AtomicBool>,
 }
 
 /// The most multizone types logged in one session, and the longest a
@@ -479,6 +482,8 @@ impl CastSession {
             members: MemberList::new(),
             group_types_logged: LoggedTypes::default(),
             fingerprints: None,
+            pacer: ReconnectPacer::default(),
+            announced: Arc::new(AtomicBool::new(false)),
         };
         if let Err(error) = session.load_with_fallback() {
             session.teardown(teardown_budget(&session.quitting));
@@ -641,6 +646,12 @@ impl CastSession {
     /// `Ended` always waits for `poll_event`.
     pub fn set_recovery_sink(&mut self, sink: EventSink) {
         self.recovery_sink = Some(sink);
+    }
+
+    /// The flag the host sets when the device announces itself: a
+    /// reconnect waiting for its turn goes at once (C81).
+    pub fn set_announcements(&mut self, announced: Arc<AtomicBool>) {
+        self.announced = announced;
     }
 
     /// Drives the session for `duration`: the channel, recovery and the
@@ -886,7 +897,7 @@ impl CastSession {
     }
 
     /// C81: one reconnect at once; the running app is picked back up, or
-    /// launched and loaded again. A failed reconnect retries as C80 while
+    /// launched and loaded again. Reconnects are spaced by the pacer while
     /// the device stays selected. `reload` loads the stream again even when
     /// the app still runs, after a playback error (C86).
     fn recover(&mut self, reason: EndReason, reload: bool) {
@@ -900,26 +911,13 @@ impl CastSession {
     fn recover_now(&mut self, reason: EndReason, reload: bool) {
         self.report(SessionEvent::Recovering(reason));
         self.playing = false;
-        // One connection per device at a time; the first attempt of the
-        // C80 loop is the reconnect at once.
+        // One connection per device at a time.
         self.client.disconnect();
         while self.client.poll_event().is_some() {}
-        let addresses = self.addresses.clone();
-        let selected = Arc::clone(&self.selected);
-        let group = self.group.clone();
-        let on_failure = |error, retry_in| {
-            self.report(SessionEvent::ConnectFailed { error, retry_in });
-        };
-        // A group is resolved afresh: its leader may have handed over (C90,
-        // C97).
-        let result = match &group {
-            Some(records) => connect_retrying_with(|| records.get().group, &selected, on_failure),
-            None => connect_retrying(&addresses, &selected, on_failure),
-        };
-        self.client = match result {
+        self.client = match self.reconnect() {
             Ok(mut client) => {
                 client.set_selected(Arc::clone(&self.selected));
-                if group.is_some() {
+                if self.group.is_some() {
                     client.request_members();
                 }
                 client
@@ -976,10 +974,62 @@ impl CastSession {
             }
         };
         match result {
-            Ok(relaunched) => self.report(SessionEvent::Recovered { relaunched }),
+            Ok(relaunched) => {
+                self.pacer.connected(Instant::now());
+                self.report(SessionEvent::Recovered { relaunched });
+            }
             Err(_) if !self.selected.load(Ordering::SeqCst) => self.end(SessionEnd::Deselected),
             Err(error) => self.end(SessionEnd::Failed(error)),
         }
+    }
+}
+
+impl CastSession {
+    /// Connects again, spaced by [`ReconnectPacer`] while the device stays
+    /// selected (C81). A group is resolved afresh before every attempt: its
+    /// leader may have handed over (C90, C97).
+    fn reconnect(&mut self) -> Result<CastClient, Option<ConnectError>> {
+        if self.announced.swap(false, Ordering::SeqCst) {
+            self.pacer.announced();
+        }
+        let mut wait = self.pacer.next_wait(Instant::now());
+        loop {
+            if !self.pause(wait) {
+                return Err(None);
+            }
+            let addresses = match &self.group {
+                Some(records) => records.get().group,
+                None => self.addresses.clone(),
+            };
+            match CastClient::connect_while(&addresses, RequestIds::random(), &self.selected) {
+                Ok(client) => return Ok(client),
+                Err(_) if !self.selected.load(Ordering::SeqCst) => return Err(None),
+                Err(error @ ConnectError::NoAddress) => return Err(Some(error)),
+                Err(error) => {
+                    wait = self.pacer.next_wait(Instant::now());
+                    self.report(SessionEvent::ConnectFailed {
+                        error,
+                        retry_in: wait,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Waits `wait`, or less when the device announces itself; false once
+    /// it is deselected.
+    fn pause(&mut self, wait: Duration) -> bool {
+        let until = Instant::now() + wait;
+        while Instant::now() < until && self.selected.load(Ordering::SeqCst) {
+            if self.announced.swap(false, Ordering::SeqCst) {
+                self.pacer.announced();
+                // This attempt is the one at once.
+                self.pacer.next_wait(Instant::now());
+                break;
+            }
+            thread::sleep(SLICE.min(until.saturating_duration_since(Instant::now())));
+        }
+        self.selected.load(Ordering::SeqCst)
     }
 }
 

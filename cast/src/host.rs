@@ -285,6 +285,7 @@ enum Command {
         artwork: Option<Vec<u8>>,
         reader: AudioReader,
         selected: Arc<AtomicBool>,
+        announced: Arc<AtomicBool>,
     },
     Stop,
     SetVolume(f64),
@@ -300,6 +301,7 @@ struct Active {
     attempt: AttemptId,
     device: DeviceId,
     selected: Arc<AtomicBool>,
+    announced: Arc<AtomicBool>,
 }
 
 struct Shared {
@@ -465,6 +467,7 @@ impl CastHost {
         let codec = lock(&self.shared.memory).format(&target.id);
         let format = StreamFormat::new(codec, rate).ok_or(StartRefused::Rate(rate))?;
         let selected = Arc::new(AtomicBool::new(true));
+        let announced = Arc::new(AtomicBool::new(false));
         let attempt = AttemptId(self.next_attempt);
         {
             let mut active = lock(&self.shared.active);
@@ -477,6 +480,7 @@ impl CastHost {
                 attempt,
                 device: target.id,
                 selected: Arc::clone(&selected),
+                announced: Arc::clone(&announced),
             });
         }
         self.next_attempt += 1;
@@ -488,6 +492,7 @@ impl CastHost {
             artwork,
             reader,
             selected,
+            announced,
         };
         if self.commands.send(command).is_err() {
             self.shared.release(attempt);
@@ -518,6 +523,16 @@ impl CastHost {
     pub fn stop(&self) {
         self.deselect();
         let _ = self.commands.send(Command::Stop);
+    }
+
+    /// `device` announced itself on the network: a session reconnecting to
+    /// it retries at once and spaces its reconnects from the start (C81).
+    pub fn announced(&self, device: DeviceId) {
+        if let Some(active) = lock(&self.shared.active).as_ref()
+            && active.device == device
+        {
+            active.announced.store(true, Ordering::SeqCst);
+        }
     }
 
     fn deselect(&self) {
@@ -759,13 +774,14 @@ impl Worker {
                 artwork,
                 reader,
                 selected,
+                announced,
             } => self.start(
                 attempt,
                 target,
                 format,
                 (metadata, artwork),
                 reader,
-                selected,
+                (selected, announced),
             ),
             Command::Stop => self.stop_running(),
             Command::SetVolume(level) => {
@@ -821,7 +837,7 @@ impl Worker {
         format: StreamFormat,
         (metadata, artwork): (Metadata, Option<Vec<u8>>),
         reader: AudioReader,
-        selected: Arc<AtomicBool>,
+        (selected, announced): (Arc<AtomicBool>, Arc<AtomicBool>),
     ) {
         let device = target.id;
         self.in_hand = Some((attempt, device));
@@ -871,6 +887,7 @@ impl Worker {
         match result {
             Ok(mut session) => {
                 session.set_recovery_sink(self.recovery_sink(attempt, device));
+                session.set_announcements(announced);
                 let format = session.format();
                 if lock(&self.shared.memory).remember_format(device, format.codec()) {
                     self.emit(HostEvent::MemoryChanged);
