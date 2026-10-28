@@ -2318,6 +2318,26 @@ mod tests {
         );
     }
 
+    // covers: S332
+    #[test]
+    fn an_idle_wake_two_hours_on_writes_21_s_and_keeps_pace_from_now() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        gaps.packet(0, 480, false);
+        assert_eq!(gaps.idle(50 * HNS_PER_MS), 1_440);
+        // The PC slept two hours: the first wake after it writes 21 s.
+        let woke = 2 * 3_600_000 * HNS_PER_MS;
+        assert_eq!(gaps.idle(woke), 21 * 48_000);
+        // Then only the time since, with nothing for the rest of the gap.
+        assert_eq!(gaps.idle(woke + 10 * HNS_PER_MS), 480);
+        assert_eq!(gaps.idle(woke + 30 * HNS_PER_MS), 960);
+        // The silence ends 10 ms before the last wake: a packet from there
+        // on follows it with no gap.
+        assert_eq!(
+            gaps.packet(woke + 20 * HNS_PER_MS, 480, false),
+            (0, 0, false)
+        );
+    }
+
     #[test]
     fn the_counters_see_each_discontinuity_and_the_silence_a_jump_puts_in() {
         let mut gaps = GapFill::new(SESSION_RATE);

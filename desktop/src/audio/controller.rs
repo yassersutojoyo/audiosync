@@ -52,7 +52,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
@@ -248,6 +248,15 @@ pub trait RendererHandle {
     }
 }
 
+/// What Windows said of its sleep (S332).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PowerNotice {
+    /// The PC is about to sleep.
+    Suspend,
+    /// The PC woke.
+    Resume,
+}
+
 /// The platform calls the backend makes.
 pub trait Driver {
     /// A running capture.
@@ -277,6 +286,17 @@ pub trait Driver {
     /// reasons too.
     fn format_notices(&mut self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// Windows' suspend and resume notices since the last call, in the order
+    /// they came (S332).
+    fn power_notices(&mut self) -> Vec<PowerNotice> {
+        Vec::new()
+    }
+
+    /// The system clock, which counts the time the PC sleeps (S332).
+    fn wall_clock(&self) -> SystemTime {
+        SystemTime::now()
     }
 
     /// The format an output on the endpoint `id` would open in now, from its
@@ -5948,6 +5968,204 @@ mod tests {
         assert_eq!(backend.driver().capture_attempts(), 1 + 5);
         assert_eq!(backend.running_source(), None);
         assert!(playing(&backend).is_empty());
+    }
+
+    /// The UI polls in `seconds`.
+    fn polls_in(seconds: u64) -> u32 {
+        let polls = Duration::from_secs(seconds).as_millis()
+            / super::super::outputs::POLL_PERIOD.as_millis();
+        u32::try_from(polls).expect("a test's span")
+    }
+
+    /// The PC sleeps two hours while the session runs: Windows tells of the
+    /// suspend before and of the resume after.
+    fn sleep_two_hours(backend: &mut MockBackend) {
+        backend.notify_power(PowerNotice::Suspend);
+        poll_quietly(backend, 1);
+        backend.pass_wall_time(Duration::from_secs(2 * 3600));
+        backend.notify_power(PowerNotice::Resume);
+    }
+
+    /// Polls, expecting no event, until the capture was tried once more, at
+    /// most `polls` times.
+    fn poll_until_tried(backend: &mut MockBackend, polls: u32) {
+        let goal = backend.driver().capture_attempts() + 1;
+        for _ in 0..polls {
+            poll_quietly(backend, 1);
+            if backend.driver().capture_attempts() >= goal {
+                return;
+            }
+        }
+        panic!("not tried again within {polls} polls");
+    }
+
+    /// Sets when the running session's unwatched app was last checked.
+    fn set_app_checked(backend: &mut MockBackend, at: Option<Instant>) {
+        backend
+            .session
+            .as_mut()
+            .and_then(|session| session.unwatched.as_mut())
+            .expect("the app is checked")
+            .checked = at;
+    }
+
+    // covers: S332
+    #[test]
+    fn a_capture_lost_after_a_resume_keeps_trying_until_60_s_after_it() {
+        let (mut backend, log, dir) = logged_backend("controller-resume-notice");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        sleep_two_hours(&mut backend);
+        // Windows audio isn't back yet: every try fails for 40 s.
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        poll_quietly(&mut backend, polls_in(40));
+        assert_eq!(
+            backend.running_source(),
+            Some(SourceId::WholeSystem),
+            "streaming stays on"
+        );
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        let tries = backend.driver().capture_attempts();
+        assert!(
+            tries >= (polls_in(40) / RESTART_DELAY_POLLS) as usize,
+            "tried at the usual spacing: {tries} tries"
+        );
+        // A try that doesn't answer in time waits 10 s for the next one.
+        backend.refuse_captures(None);
+        backend.refuse_next_capture(BackendError::NotResponding);
+        poll_until_tried(&mut backend, RESTART_DELAY_POLLS);
+        let tries = backend.driver().capture_attempts();
+        assert!(!backend.driver().capture_running());
+        poll_quietly(&mut backend, STALL_RETRY_POLLS - 1);
+        assert_eq!(backend.driver().capture_attempts(), tries, "not yet");
+        poll_quietly(&mut backend, 1);
+        assert!(backend.driver().capture_running(), "it plays again");
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "the PC is going to sleep",
+                "the PC woke after 7200 s asleep, as Windows' resume notice said",
+            ],
+        );
+    }
+
+    // covers: S332, S329, S21
+    #[test]
+    fn a_capture_still_failing_60_s_after_a_resume_stops_as_before() {
+        let (mut backend, log, dir) = logged_backend("controller-resume-window");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        sleep_two_hours(&mut backend);
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        poll_quietly(&mut backend, polls_in(60) - 1);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+        // The first try that fails once the window has ended stops streaming
+        // with the notice of a capture that couldn't start.
+        let mut events = Vec::new();
+        for _ in 0..2 * RESTART_DELAY_POLLS {
+            events.extend(backend.poll());
+        }
+        assert_eq!(
+            events,
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(BackendError::DeviceGone),
+            }]
+        );
+        assert_eq!(backend.running_source(), None);
+        assert!(playing(&backend).is_empty());
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "the PC woke after",
+                "the 60 s after the wake are over: the capture is still being opened again",
+                "the capture couldn't open again: ",
+            ],
+        );
+    }
+
+    // covers: S332
+    #[test]
+    fn a_poll_10_s_of_wall_time_after_the_last_counts_as_a_resume() {
+        // Polls 9 s apart are a slow UI, not a sleep: the tries of S329.
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        let mut events = Vec::new();
+        for _ in 0..=RESTART_TRIES * RESTART_DELAY_POLLS {
+            backend.pass_wall_time(Duration::from_secs(9));
+            events.extend(backend.poll());
+        }
+        assert_eq!(
+            events,
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(BackendError::DeviceGone),
+            }]
+        );
+
+        // Without a notice, a poll more than 10 s after the last one counts
+        // as a resume: the lost capture gets the resume window.
+        let (mut backend, log, dir) = logged_backend("controller-resume-clock");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut backend, 1);
+        backend.pass_wall_time(Duration::from_secs(11));
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        poll_quietly(&mut backend, polls_in(30));
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+        backend.refuse_captures(None);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert!(backend.driver().capture_running());
+        assert_in_order(
+            &logged(&log, &dir),
+            &["the PC woke after 11 s asleep, as the clock showed"],
+        );
+    }
+
+    // covers: S332, S331, S327
+    #[test]
+    fn a_refusal_or_an_app_check_never_counts_the_time_asleep() {
+        // Refused for all but the last poll of its 30 s before the sleep: at
+        // the resume, it gets its whole 30 s again.
+        let mut refused = backend();
+        refused.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        refused.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut refused, REFUSED_GIVE_UP_POLLS - 2);
+        sleep_two_hours(&mut refused);
+        poll_quietly(&mut refused, REFUSED_GIVE_UP_POLLS - 1);
+        assert!(refused.policy().settings(HEADPHONES).enabled);
+        assert_eq!(
+            refused.poll(),
+            [BackendEvent::OutputFailed {
+                id: HEADPHONES.to_owned(),
+                error: BackendError::DeviceGone,
+            }]
+        );
+
+        // An unwatched app's check, due as the PC slept, comes a whole
+        // interval after the resume.
+        let mut watched = backend();
+        start_player(&mut watched, true);
+        poll_quietly(&mut watched, 1);
+        sleep_two_hours(&mut watched);
+        watched.quit_app(PLAYER_PID);
+        set_app_checked(
+            &mut watched,
+            Instant::now().checked_sub(MIX_FOLLOW_INTERVAL),
+        );
+        poll_quietly(&mut watched, 1);
+        set_app_checked(
+            &mut watched,
+            Instant::now().checked_sub(MIX_FOLLOW_INTERVAL),
+        );
+        assert_eq!(
+            watched.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
     }
 
     const AT_44_1: RenderFormat = RenderFormat {

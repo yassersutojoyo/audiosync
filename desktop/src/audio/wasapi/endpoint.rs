@@ -803,6 +803,34 @@ mod tests {
         }
     }
 
+    // covers: S332, S326
+    #[test]
+    fn a_wake_hours_after_the_last_read_starts_the_stall_span_over() {
+        let start = Instant::now();
+        let mut watch = StallWatch::default();
+        for ms in (0..1_000).step_by(10) {
+            let stall = watch.observe(at(start, ms), BUFFER - PERIOD, BUFFER, None);
+            assert_eq!(stall, None);
+        }
+        // The PC sleeps two hours in a wait; at the first read after the
+        // wake the device hasn't taken a frame yet.
+        let woke = 2 * 3_600_000;
+        for ms in (woke..woke + 2_000).step_by(500) {
+            assert_eq!(
+                watch.observe(at(start, ms), BUFFER, BUFFER, None),
+                None,
+                "{ms} ms"
+            );
+        }
+        assert_eq!(
+            watch.observe(at(start, woke + 2_000), BUFFER, BUFFER, None),
+            Some(Stall {
+                span: Duration::from_secs(2),
+                sign: StallSign::FullPadding,
+            })
+        );
+    }
+
     #[test]
     fn a_render_thread_that_hangs_stopping_its_stream_doesnt_hold_quitting() {
         static STUCK: StuckThreads = StuckThreads::new();
