@@ -2,6 +2,7 @@
 // Run all tests with: Tests/run-tests.sh
 import Foundation
 import AppKit
+import AudioToolbox
 import CAudioSyncCore
 import CoreAudio
 import CoreServices
@@ -6992,6 +6993,8 @@ do {
         /// The UIDs given a new gain after their attach, in call order.
         var regained: [String] = []
         let refusal: Error
+        /// An error of its own for some of `refusing`, in place of `refusal`.
+        var errors: [String: Error] = [:]
         init(active: [String], refusing: Set<String>, refusal: Error = NSError(domain: "logictest", code: -1)) {
             activeOutputUIDs = active
             self.refusing = refusing
@@ -6999,7 +7002,7 @@ do {
         }
         func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {
             tried.append(uid)
-            if refusing.contains(uid) { throw refusal }
+            if refusing.contains(uid) { throw errors[uid] ?? refusal }
             activeOutputUIDs.append(uid)
             deviceIDs[uid] = device
             delays[uid] = delayMs
@@ -7101,6 +7104,26 @@ do {
             && LocalOutputSync.sharedRefusedRate([]) == nil,
           "S36 start failure: one alert gives the rate only when every failure it names was refused for it",
           "\(String(describing: LocalOutputSync.sharedRefusedRate(mixedFailures)))")
+
+    // covers: S331 (Mac: a listed device that refuses the start stays on; a hard error still switches it off, S69)
+    let rebuilt = RefusingEngine(active: [], refusing: ["usb", "bt"],
+                                 refusal: OutputRenderer.StartFailure.deviceDidNotStart(OSStatus(kAudioHardwareBadDeviceError)))
+    let refusedOnly = LocalOutputSync.apply(enabled: ["usb", "bt"], listing: [usb, bt], to: rebuilt,
+                                            holdBacks: [:], gain: { _ in 1 })
+    let refusedReport = LocalOutputSync.report(refusedOnly.failures, enabled: ["usb", "bt"], origin: .user)
+    check(refusedOnly.failures.map(\.uid) == ["bt", "usb"] && refusedReport == nil,
+          "S331 refused start: a listed device that refuses the start stays on, with no alert and no notice",
+          "\(String(describing: refusedReport))")
+    let mixedEngine = RefusingEngine(active: [], refusing: ["usb", "bt"],
+                                     refusal: OutputRenderer.StartFailure.formatRefused(OSStatus(kAudioUnitErr_FormatNotSupported)))
+    mixedEngine.errors["bt"] = OutputRenderer.StartFailure.deviceNotBound(OSStatus(kAudioOutputUnitErr_InvalidDevice))
+    let mixedStart = LocalOutputSync.apply(enabled: ["usb", "bt", "tv"], listing: [usb, bt], to: mixedEngine,
+                                           holdBacks: [:], gain: { _ in 1 })
+    let mixedReport = LocalOutputSync.report(mixedStart.failures, enabled: ["usb", "bt", "tv"], origin: .user)
+    check(mixedReport?.enabled == ["bt", "tv"] && mixedReport?.alertNames == ["USB DAC"]
+            && mixedReport?.notices.map(\.uid) == ["usb"],
+          "S331 refused start: next to a refusal, a hard error at the start is still switched off at once with its alert",
+          "\(String(describing: mixedReport))")
 
     // covers: S72
     // S72: a master change gives each running local speaker its gain again;
