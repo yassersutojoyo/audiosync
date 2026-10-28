@@ -51,6 +51,7 @@ mod network_profile;
 mod now_playing_card;
 mod os;
 mod os_version;
+mod package;
 mod placement;
 mod platform;
 mod remote;

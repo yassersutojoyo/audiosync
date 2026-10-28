@@ -152,7 +152,25 @@ fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// not exist yet.
 #[cfg(os_backend)]
 pub fn folder() -> Option<PathBuf> {
-    crate::os::data_base().map(|base| base.join(FOLDER_NAME))
+    choose(
+        crate::package::current(),
+        crate::os::data_base,
+        crate::package::local_folder,
+    )
+}
+
+/// The data folder for `identity`. Packaged, only the package's local
+/// folder as Windows names it: a file that already exists in the real
+/// `%LOCALAPPDATA%` would be opened there while the atomic write's new file
+/// lands in the package's copy. Unpackaged, [`FOLDER_NAME`] in `base`.
+#[cfg(os_backend)]
+pub fn choose(
+    identity: &crate::package::Identity,
+    base: impl FnOnce() -> Option<PathBuf>,
+    package_local: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    let _ = (identity, package_local);
+    base().map(|base| base.join(FOLDER_NAME))
 }
 
 /// A new file at `path` for writing; an error when anything is there,
@@ -242,6 +260,25 @@ pub fn copies_kept_aside(folder: &Path, stem: &str) -> Vec<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::debug_log::test_dir;
+
+    #[cfg(os_backend)]
+    #[test]
+    fn a_packaged_run_keeps_its_data_in_the_package_and_never_asks_for_the_base() {
+        use crate::package::Identity;
+        let local = PathBuf::from("package-local");
+        let packaged = Identity::Packaged("AudioSync_0.9.0.0_x64__abcdefghjkmnp".to_owned());
+        let base = || -> Option<PathBuf> { panic!("the unpackaged base is not asked") };
+        assert_eq!(choose(&packaged, base, || Some(local.clone())), Some(local));
+        assert_eq!(choose(&packaged, base, || None), None);
+        for unpackaged in [Identity::Unpackaged, Identity::Unexpected(87)] {
+            let folder = choose(
+                &unpackaged,
+                || Some(PathBuf::from("base")),
+                || panic!("the package folder is not asked"),
+            );
+            assert_eq!(folder, Some(PathBuf::from("base").join(FOLDER_NAME)));
+        }
+    }
 
     #[test]
     fn a_write_replaces_the_whole_file_and_leaves_no_temporary_file() {

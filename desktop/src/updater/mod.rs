@@ -653,7 +653,33 @@ pub fn install_dir() -> Option<PathBuf> {
 
 /// The updater of this exe, or `None` when it doesn't update itself.
 pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
-    if !enabled() {
+    for_exe(
+        log,
+        enabled(),
+        crate::package::current(),
+        install_dir,
+        std::env::temp_dir(),
+    )
+}
+
+/// Whether the updater runs: in a release build only, and never from a
+/// package, whose files Windows keeps read-only and checks for tampering.
+fn runs(release: bool, identity: &crate::package::Identity, log: &DebugLog) -> bool {
+    let _ = (identity, log);
+    release
+}
+
+/// The updater for a release flag and package identity. The leftover sweep
+/// runs only past the gate: a packaged run leaves the unpackaged copy's
+/// `.new` files and update folders alone.
+fn for_exe(
+    log: DebugLog,
+    release: bool,
+    identity: &crate::package::Identity,
+    install_dir: impl FnOnce() -> Option<PathBuf>,
+    temp_root: PathBuf,
+) -> Option<Updater> {
+    if !runs(release, identity, &log) {
         return None;
     }
     let install_dir = install_dir()?;
@@ -662,7 +688,6 @@ pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
     let system = crate::platform::windows_version()
         .map(|v| Version::from_parts(&[v.major.into(), v.minor.into(), v.build.into()]))
         .unwrap_or_else(|| Version::from_parts(&[10, 0, 22000]));
-    let temp_root = std::env::temp_dir();
     flow::remove_leftovers(&install_dir, &temp_root, &log);
     Some(Updater::new(Env {
         feed: FEED_URL.to_owned(),
@@ -913,6 +938,65 @@ pub mod tests {
             std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../Info.plist"))
                 .expect("Info.plist is readable");
         assert!(plist.contains(&format!("<string>{FEED_URL}</string>")));
+    }
+
+    #[test]
+    fn a_packaged_release_build_never_updates_or_sweeps() {
+        use crate::package::Identity;
+        let name = "AudioSync_0.9.0.0_x64__abcdefghjkmnp";
+        let packaged = Identity::Packaged(name.to_owned());
+        let seed = |dir: &Path| {
+            let install = dir.join("install");
+            let temp = dir.join("temp");
+            std::fs::create_dir_all(&install).unwrap();
+            std::fs::write(install.join("audiosync.exe.new"), b"x").unwrap();
+            std::fs::create_dir_all(temp.join("AudioSync-update-abc")).unwrap();
+            (install, temp)
+        };
+
+        let dir = test_dir("packaged-off");
+        let (install, temp) = seed(&dir);
+        let path = dir.join("debug.log");
+        let log = DebugLog::new(Some(path.clone()));
+        assert!(!runs(true, &packaged, &log));
+        let built = for_exe(
+            log.clone(),
+            true,
+            &packaged,
+            || Some(install.clone()),
+            temp.clone(),
+        );
+        assert!(built.is_none());
+        assert!(
+            install.join("audiosync.exe.new").exists(),
+            "the sweep didn't run"
+        );
+        assert!(
+            temp.join("AudioSync-update-abc").exists(),
+            "the sweep didn't run"
+        );
+        assert!(log.flush(crate::debug_log::TEST_FLUSH));
+        let lines = crate::debug_log::read_messages(&path);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("updater: off") && line.contains(name)),
+            "{lines:?}"
+        );
+
+        assert!(!runs(false, &Identity::Unpackaged, &DebugLog::default()));
+        assert!(runs(true, &Identity::Unpackaged, &DebugLog::default()));
+        let dir = test_dir("unpackaged-on");
+        let (install, temp) = seed(&dir);
+        let built = for_exe(
+            DebugLog::default(),
+            true,
+            &Identity::Unpackaged,
+            || Some(install.clone()),
+            temp.clone(),
+        );
+        assert!(built.is_some());
+        assert!(!install.join("audiosync.exe.new").exists(), "the sweep ran");
     }
 
     // covers: S305

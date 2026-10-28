@@ -322,7 +322,10 @@ fn settled(message: &NoticeMessage, status: Status) -> bool {
 pub fn system_store() -> Box<dyn StartupStore> {
     #[cfg(all(windows, not(test)))]
     {
-        Box::new(registry::RegistryStore)
+        match store_kind(crate::package::current()) {
+            StoreKind::RunKey => Box::new(registry::RegistryStore),
+            StoreKind::StartupTask => Box::new(PackagedStore),
+        }
     }
     #[cfg(all(target_os = "linux", not(test)))]
     {
@@ -331,6 +334,46 @@ pub fn system_store() -> Box<dyn StartupStore> {
     #[cfg(any(not(any(windows, target_os = "linux")), test))]
     {
         Box::new(MemoryStore::default())
+    }
+}
+
+/// Where the option lives for a process with this package identity.
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreKind {
+    RunKey,
+    /// The package's startup task. A packaged app's HKCU writes land in a
+    /// private per-package hive, so a Run value it wrote would start nothing.
+    StartupTask,
+}
+
+#[cfg(any(windows, test))]
+pub fn store_kind(identity: &crate::package::Identity) -> StoreKind {
+    let _ = identity;
+    StoreKind::RunKey
+}
+
+/// A packaged run's store until the startup task is wired: it reads as off
+/// and refuses every change, so the Run key is never read or written.
+#[cfg(any(windows, test))]
+pub struct PackagedStore;
+
+#[cfg(any(windows, test))]
+impl StartupStore for PackagedStore {
+    fn run_value(&self) -> Option<String> {
+        None
+    }
+
+    fn set_run_value(&mut self, _command: &str) -> Result<(), String> {
+        Err("this packaged build has no startup task yet".to_owned())
+    }
+
+    fn remove_run_value(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn approval(&self) -> Option<Vec<u8>> {
+        None
     }
 }
 
@@ -542,6 +585,28 @@ mod tests {
         );
         assert_eq!(command_exe("  "), None);
         assert_eq!(command_exe(r#""""#), None);
+    }
+
+    #[test]
+    fn a_packaged_run_never_uses_the_run_key() {
+        use crate::package::Identity;
+        let packaged = Identity::Packaged("AudioSync_0.9.0.0_x64__abcdefghjkmnp".to_owned());
+        assert_eq!(store_kind(&packaged), StoreKind::StartupTask);
+        assert_eq!(store_kind(&Identity::Unpackaged), StoreKind::RunKey);
+        assert_eq!(store_kind(&Identity::Unexpected(87)), StoreKind::RunKey);
+    }
+
+    #[test]
+    fn the_packaged_store_reads_off_and_turning_it_on_fails_with_a_notice() {
+        let mut login = LaunchAtLogin::new(Box::new(PackagedStore), Some(exe()));
+        assert_eq!(login.status(), Status::Off);
+        let outcome = login.set(true, time);
+        assert!(outcome.error.is_some());
+        assert!(!login.is_on());
+        assert!(login.notice().is_some());
+        let outcome = login.set(false, time);
+        assert_eq!(outcome.error, None);
+        assert!(!login.is_on());
     }
 
     #[test]

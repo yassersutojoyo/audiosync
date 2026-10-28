@@ -65,6 +65,9 @@ windows = { version = "0.62", features = [
     "Foundation_Collections",
     "Graphics_Imaging",
     "Media_Control",
+    # Package identity and the package's app data folders, for an MSIX
+    # build (src/package.rs).
+    "Storage_Search",
     "Storage_Streams",
     "Wdk_System_SystemServices",
     "Win32_Devices_FunctionDiscovery",
@@ -91,6 +94,7 @@ windows = { version = "0.62", features = [
     "Win32_Security_Cryptography",
     # MoveFileExW with write-through: the updater's swap (src/updater/files.rs).
     "Win32_Storage_FileSystem",
+    "Win32_Storage_Packaging_Appx",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Diagnostics_ToolHelp",
