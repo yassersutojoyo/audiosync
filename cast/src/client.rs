@@ -246,8 +246,9 @@ impl CastClient {
         self.flush();
     }
 
-    /// Tries each address in turn (IPv4 first, C16) and returns once the
-    /// first `RECEIVER_STATUS` arrived (C33).
+    /// Tries each address in turn (IPv4 first, C16), at most
+    /// [`MAX_CONNECT_ADDRESSES`] of them (C109), and returns once the first
+    /// `RECEIVER_STATUS` arrived (C33).
     pub fn connect(addresses: &[SocketAddr], ids: RequestIds) -> Result<CastClient, ConnectError> {
         CastClient::connect_while(addresses, ids, &AtomicBool::new(true))
     }
@@ -260,8 +261,15 @@ impl CastClient {
         ids: RequestIds,
         selected: &AtomicBool,
     ) -> Result<CastClient, ConnectError> {
-        let mut ordered = addresses.to_vec();
+        let mut ordered: Vec<SocketAddr> = Vec::new();
+        for &address in addresses {
+            if !ordered.contains(&address) {
+                ordered.push(address);
+            }
+        }
         ordered.sort_by_key(SocketAddr::is_ipv6);
+        // Each address may take a TCP and a TLS timeout of its own (C109).
+        ordered.truncate(MAX_CONNECT_ADDRESSES);
         // The first error is the one reported: it belongs to the preferred
         // address, usually IPv4.
         let mut first = None;
