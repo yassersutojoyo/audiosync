@@ -394,11 +394,8 @@ struct NativeAirPlayPlan: Equatable {
 
     /// Switched on, listed as able to play, and not in the sender yet.
     var add: [String] = []
-    /// In the sender, but switched off, or streaming stopped, or in `gone`.
+    /// In the sender, but switched off, or streaming stopped.
     var remove: [String] = []
-    /// In the sender and on, but its receiver is gone and it doesn't play:
-    /// it leaves, stays on, and no notice names it (S222).
-    var gone: [String] = []
     /// Switched on but asking for what this sender can't give yet.
     var turnOff: [TurnOff] = []
     /// Switched-on members of a switched-on target: they play as part of
@@ -580,13 +577,13 @@ struct NativeAirPlayModel {
     mutating func forgetPassword(_ id: String) { passwords.remove(id) }
 
     /// The speaker list's rows, as app IDs: every receiver it shows
-    /// (`NativeReceiver.access`), and any that still plays while its
-    /// announcement lapsed; by name, then ID. A target in the sender stays
+    /// (`NativeReceiver.access`), and any in the sender whose announcement
+    /// lapsed; by name, then ID. A target in the sender stays
     /// until switched off, and a member it holds shows as part of it
     /// (P176). `enabled`: the switched-on app IDs.
     func rows(enabled: Set<String>) -> [String] {
         var ids = Set(receivers.values.filter { $0.access != nil }.map(\.id))
-        ids.formUnion(states.keys.filter { isPlaying($0) || NativeTarget.kind($0) != nil })
+        ids.formUnion(states.keys.filter { isPlaying($0) || receivers[$0] == nil || NativeTarget.kind($0) != nil })
         ids = ids.filter { holdingTarget($0, on: enabled.contains(NativeAirPlayID.app($0))) == nil }
         return ids.sorted { a, b in
             let (x, y) = ((names[a] ?? a).lowercased(), (names[b] ?? b).lowercased())
@@ -902,12 +899,11 @@ struct NativeAirPlayModel {
     /// a PIN or a password waits while the user's attempt pairs or prompts,
     /// and is turned off otherwise (auto-connect and restored switches never
     /// pair or prompt); a speaker in the sender stays while it is on and
-    /// listed or playing, as the sender keeps trying to reach it, and one
-    /// whose receiver is gone and that doesn't play leaves but stays on (a
-    /// target keeps its row while in the sender, P176); everything leaves
-    /// when streaming stops. A switched-on receiver that isn't listed, or is
-    /// listed as unable to play in another way (which can be a moment's
-    /// flicker while its records lapse), waits, and so does one that just
+    /// listed or not, as the sender keeps trying to reach it or waits until
+    /// it is announced again (P215); everything leaves when streaming
+    /// stops. A switched-on receiver that isn't listed, or is listed as
+    /// unable to play in another way (which can be a moment's flicker
+    /// while its records lapse), waits, and so does one that just
     /// paired while the sender's new listing of it is still on its way.
     func plan(streaming: Bool, enabled: Set<String>) -> NativeAirPlayPlan {
         let wanted = Set(enabled.compactMap(NativeAirPlayID.receiver))
@@ -916,10 +912,7 @@ struct NativeAirPlayModel {
             memberOf[id].map { wanted.contains($0) && (receivers[$0] != nil || states[$0] != nil) } ?? false
         }
         plan.release = released.sorted()
-        plan.gone = states.keys.filter { streaming && wanted.contains($0) && !released.contains($0) && goneUnplayed($0) }.sorted()
-        plan.remove = states.keys.filter {
-            !streaming || !wanted.contains($0) || released.contains($0) || plan.gone.contains($0)
-        }.sorted()
+        plan.remove = states.keys.filter { !streaming || !wanted.contains($0) || released.contains($0) }.sorted()
         guard streaming else { return plan }
         for id in wanted.sorted() where states[id] == nil && !released.contains(id) {
             // A target waits while a member's password prompt is open.
@@ -944,13 +937,6 @@ struct NativeAirPlayModel {
             }
         }
         return plan
-    }
-
-    /// Whether the speaker `id` in the sender has no row: discovery no
-    /// longer lists it and it doesn't play (S222).
-    func goneUnplayed(_ id: String) -> Bool {
-        guard let state = states[id], NativeTarget.kind(id) == nil else { return false }
-        return receivers[id] == nil && state != .playing
     }
 
     /// The app added a speaker to the sender.
