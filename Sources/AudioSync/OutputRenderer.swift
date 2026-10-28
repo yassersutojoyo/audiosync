@@ -83,6 +83,8 @@ final class OutputRenderer: FadingOutput {
             OSStatus(kAudioHardwareBadDeviceError), OSStatus(kAudioHardwareBadObjectError),
             OSStatus(kAudioHardwareBadStreamError), OSStatus(kAudioHardwareNotRunningError),
             OSStatus(kAudioDevicePermissionsError), OSStatus(kAudioUnitErr_InvalidPropertyValue),
+            // Measured: the HAL output unit's start on a device another process hogs returns 35, EAGAIN in sys/errno.h.
+            OSStatus(EAGAIN),
         ]
 
         /// The status, and its four-character code when all four bytes are printable.
@@ -234,6 +236,10 @@ final class OutputRenderer: FadingOutput {
     /// without a fade. Throws the step that failed and leaves nothing running.
     func start(on device: AudioObjectID, captureRate: Double, delayMs: Double) throws {
         halt()
+        // A hogged device holds the start on the main thread for seconds (measured 7.5 s) before refusing it.
+        if case .hogMode = OutputStallSign.read(hogOwner: Self.hogOwner(device), ownPID: getpid(), running: nil) {
+            throw StartFailure.deviceDidNotStart(OSStatus(kAudioDevicePermissionsError))
+        }
         let fresh = try Self.makeUnit()
         let bluetooth = BluetoothIOBuffer.isBluetooth(
             transport: Self.uint32(device, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal) ?? 0)
@@ -595,14 +601,19 @@ final class OutputRenderer: FadingOutput {
     func deviceState() -> (hogOwner: pid_t?, running: Bool?) {
         let device = startedDevice
         guard device != AudioObjectID(kAudioObjectUnknown) else { return (nil, nil) }
+        let running = Self.uint32(device, kAudioDevicePropertyDeviceIsRunning, kAudioObjectPropertyScopeGlobal)
+        return (Self.hogOwner(device), running.map { $0 != 0 })
+    }
+
+    /// The process holding `device` in hog mode; nil for none or unreadable.
+    private static func hogOwner(_ device: AudioObjectID) -> pid_t? {
         var hogAddress = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyHogMode,
                                                     mScope: kAudioObjectPropertyScopeGlobal,
                                                     mElement: kAudioObjectPropertyElementMain)
         var owner: pid_t = -1
         var hogSize = UInt32(MemoryLayout<pid_t>.size)
         let hogStatus = AudioObjectGetPropertyData(device, &hogAddress, 0, nil, &hogSize, &owner)
-        let running = Self.uint32(device, kAudioDevicePropertyDeviceIsRunning, kAudioObjectPropertyScopeGlobal)
-        return (hogStatus == noErr && owner > 0 ? owner : nil, running.map { $0 != 0 })
+        return hogStatus == noErr && owner > 0 ? owner : nil
     }
 
     /// The host found the render callback stopped; the coming `halt` says so.
