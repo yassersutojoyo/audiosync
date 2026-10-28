@@ -6013,6 +6013,43 @@ mod tests {
         );
     }
 
+    // covers: S144
+    #[test]
+    fn all_speakers_off_then_one_on_starts_a_new_session_with_the_saved_settings() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.set_speaker_volume(&key(SPEAKERS), 30.0);
+        adapter.set_speaker_delay(&key(SPEAKERS), 120.0);
+        adapter.set_speaker_volume(&key(HEADPHONES), 60.0);
+        adapter.set_master_volume(50.0);
+        adapter.audio_mut().feed_capture(480);
+        let old_ring = adapter.audio.driver().capture_ring().unwrap();
+        let captures = adapter.audio.driver().captures_started().len();
+
+        adapter.set_speaker_enabled(&key(SPEAKERS), false);
+        adapter.set_speaker_enabled(&key(HEADPHONES), false);
+        assert!(!adapter.snapshot().running, "the last one off stops it");
+        assert!(adapter.audio.running_source().is_none());
+        assert!(playing(&adapter).is_empty());
+
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+        assert_eq!(
+            adapter.audio.driver().captures_started().len(),
+            captures + 1
+        );
+        let ring = adapter.audio.driver().capture_ring().unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&old_ring, &ring), "a fresh ring");
+        assert_eq!(ring.frames_written(), 0);
+        turn_on(&mut adapter, HEADPHONES);
+        let speakers = adapter.audio.playing_params(SPEAKERS).unwrap();
+        assert_eq!(speakers.delay_frames, 5_760, "120 ms at 48 kHz");
+        assert_eq!(speakers.gain, output_gain(30.0, 50.0) as f32);
+        let headphones = adapter.audio.playing_params(HEADPHONES).unwrap();
+        assert_eq!(headphones.gain, output_gain(60.0, 50.0) as f32);
+    }
+
     // covers: S112 (the controller's equivalents: start, stop, the running source, frames captured,
     // attach and detach, gain, delay, the equalizer, a lost output and both interruption kinds)
     #[test]
