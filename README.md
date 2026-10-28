@@ -112,6 +112,13 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 
 A Windows 11 version (x64 and ARM64) is out as a preview since 0.7.1, with the same Rust engine and its own AirPlay sender. The zips are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. CI builds it too, and [desktop/README.md](desktop/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on the Mac, there in the File menu), it asks for AirPlay passwords, and it hasn't been tried on a real speaker yet.
 
+<!-- Draft for the Store release: nothing ships it yet. The release that publishes the Store version moves this passage out of the comment, here under "Windows".
+
+### Switching to the Store version
+
+The Store version keeps its own settings, so it starts fresh: your speakers, delays and volumes aren't carried over, and an Apple TV asks for its PIN once more. If you keep the download version too, turn off Launch at Sign-In in its tray menu first, or uninstall it, so only one AudioSync starts when you sign in.
+-->
+
 ## Linux
 
 There's a Linux preview too, built from the same code as the Windows app. Not released yet. CI builds an x86_64 AppImage (glibc 2.39 or newer, PipeWire from your system), and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#the-linux-build-and-its-appimage) has the details. It captures the whole system or one app through PipeWire and plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on Windows) and to your local PipeWire outputs. Like the Windows build, it hasn't been tried on a real speaker yet. It sits in the tray when your desktop has a StatusNotifier host, and runs as a plain window when it doesn't. Its data lives in `$XDG_DATA_HOME/audiosync`, launch at login is an XDG autostart entry, and now playing comes from MPRIS players.
