@@ -99,9 +99,12 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, when macOS's network discovery stops, a Google Cast speaker that was on but no longer listed goes off, so another speaker can play. Before, it stayed on with nothing playing. Two copies of AudioSync opened at the same moment no longer both quit; one of them stays.
 - On the Mac, a saved equalizer preamp or band gain beyond 12 dB either way loads at the nearest limit.
 - A Google Cast speaker that reconnects keeps the volume it had, and a volume change made just as it reconnects still reaches it. On the Mac and on Windows.
-- On Windows, when another program holds your settings file while AudioSync starts, AudioSync reads it once it's free and uses it, starting the speakers you set to connect automatically. Before, it kept the defaults and could later save them over your settings.
+- On Windows, when another program holds your settings file while AudioSync starts, AudioSync reads it once it's free and uses it, starting the speakers you set to connect automatically. Before, it kept the defaults and could later save them over your settings. If you're already streaming by then, it switches to the saved source app only when that app is running; otherwise what you started keeps playing.
 - On Windows, when Windows audio stops answering while AudioSync reads a speaker's format, the window no longer freezes. AudioSync gives up on that read after 5 seconds.
 - On Windows, after AirPlay stops and starts again, a speaker set to ask for a code every time asks for a new one. Before, it showed as ready with a code that no longer worked.
+- A Google Cast speaker that rounds its volume to its own steps gets a volume you set only once, and the next volume step goes on from the level the speaker shows. On Windows, the speaker's rounded answer no longer reads as a change made on the speaker itself. On the Mac and on Windows.
+- On Windows, Launch at Sign-In shows off when the startup entry points to an AudioSync that was moved or deleted, since that entry starts nothing. Turning the option on points it at this copy.
+- On Windows, each release's download is checked to carry that release's version before it's published, so an update can't install an older version again.
 - In the Linux preview, an input with more than two channels offers every channel pair, as on Windows, a device with more than 64 channels plays or captures on its first 64 instead of stopping, and notice times show your local time instead of UTC.
 
 ## [0.7.1] - 2026-10-27
