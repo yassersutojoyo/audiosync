@@ -383,6 +383,8 @@ let failures = 0;
 let lost = false;
 let streamed = false;
 let streamReplaced = false;
+// A check still out would answer after a reconnect and start yet another one.
+let checking = false;
 let focusAfterPair = false;
 let snapshot = null;
 let calibrating = false;
@@ -553,13 +555,14 @@ function connect() {
 }
 
 function checkAccess() {
+  checking = true;
   fetch("/api/state", { cache: "no-store", credentials: "same-origin" }).then((response) => {
     if (response.status === 401) {
       unpairedByApp();
     } else if (response.ok) {
       retryLater(TEXT.noUpdates);
     } else {
-      response.json().then((answer) => answer, () => ({})).then((answer) => {
+      return response.json().then((answer) => answer, () => ({})).then((answer) => {
         if (response.status === 403) {
           setLost(true, answer.message || TEXT.unreachable);
         } else if (answer.error === "busy") {
@@ -571,7 +574,7 @@ function checkAccess() {
         }
       });
     }
-  }, () => retryLater(TEXT.lost));
+  }, () => retryLater(TEXT.lost)).finally(() => { checking = false; });
 }
 
 function unpairedByApp() {
@@ -1261,7 +1264,7 @@ ui.unpair.addEventListener("click", () => {
 });
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && ui.pair.hidden && events === null && !streamReplaced) {
+  if (document.visibilityState === "visible" && ui.pair.hidden && events === null && !streamReplaced && !checking) {
     failures = 0;
     connect();
   } else if (document.visibilityState === "visible" && events !== null && streamStale()) {
