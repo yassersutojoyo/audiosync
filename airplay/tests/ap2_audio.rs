@@ -995,7 +995,7 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     let flushes = server.fake().flushes_seen.clone();
     sender.set_delay(&key, Duration::from_millis(200));
     // A delay FLUSH still queued behind another request would merge with
-    // the pause FLUSH, so the pause waits until the speaker holds it.
+    // the pause FLUSH, so the pause waits until the speaker has read it.
     assert!(wait_until(LONG, || flushes.load(Ordering::SeqCst) == 3));
     udp.data.take();
     sender.pause();
