@@ -274,8 +274,10 @@ mod airplay_device_level {
     // covers: S291
     #[test]
     fn the_first_reading_near_a_level_sent_is_its_echo_and_the_baseline() {
-        let samsung = set_grid_db(Some("Samsung"));
+        let samsung = set_grid_db(Some("Samsung"), None);
         assert_eq!(samsung, Some(0.6));
+        // The traced television's features select it with no manufacturer.
+        assert_eq!(set_grid_db(None, Some(0x038B_CB46_007F_8AD0)), Some(0.6));
         let mut read = ReadBack::default();
         read.sent(-23.7);
         assert_eq!(read.echo_of(), Some(-23.7));
@@ -311,8 +313,9 @@ mod airplay_device_level {
         assert!(!read.set_on_speaker(-14.98, None));
         // A receiver not measured to round keeps row 49 (−15.3) exactly: one
         // press up to −15 dB is a change, though −15 lies on a 0.6 dB grid.
-        assert_eq!(set_grid_db(Some("Apple Inc.")), None);
-        assert_eq!(set_grid_db(None), None);
+        assert_eq!(set_grid_db(Some("Apple Inc."), None), None);
+        assert_eq!(set_grid_db(None, Some(0x0001_0040_0000_0000)), None);
+        assert_eq!(set_grid_db(None, None), None);
         read.sent(-15.3);
         assert!(read.set_on_speaker(-15.0, None));
     }

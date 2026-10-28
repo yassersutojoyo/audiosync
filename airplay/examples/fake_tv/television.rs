@@ -11,8 +11,11 @@ use crate::common::ap2::{FakeAp2, dict, int, plist, read_dict};
 
 /// Bits 38 (CoreUtils pairing) and 48 (transient pairing): AirPlay 2 capable.
 pub const FEATURES_HIGH: u64 = 0x1_0040;
-/// Bits 15 to 17 (artwork, progress, text): track info reaches it. The
-/// traced television sets none, so only the cells profile has them.
+/// The `features` the traced television announced (UT5500, 2026-10-25),
+/// which the host keeps its 0.6 dB volume grid by (S291).
+pub const TRACED_FEATURES: u64 = 0x038B_CB46_007F_8AD0;
+/// Bits 15 to 17 (artwork, progress, text): track info reaches it. The TXT
+/// carries them in the traced features; `/info` only in the cells profile.
 pub const FEATURES_METADATA: u64 = 0x3_8000;
 /// The label of its own mDNS host name, in the `.local.` domain.
 pub const HOST_LABEL: &str = "audiosync-test-tv";
@@ -90,11 +93,15 @@ pub fn parse_device_id(text: &str) -> Result<[u8; 6], String> {
         })
 }
 
-/// The `_airplay._tcp` TXT entries it advertises, with `features_low` as
-/// the low word of its features.
+/// The `_airplay._tcp` TXT entries it advertises: the traced television's
+/// features, with `features_low` added to their low word.
 pub fn txt(pin: Pin, features_low: u64, id: [u8; 6]) -> Vec<(&'static str, String)> {
+    let features = TRACED_FEATURES | features_low;
     vec![
-        ("features", format!("{features_low:#x},{FEATURES_HIGH:#x}")),
+        (
+            "features",
+            format!("{:#x},{:#x}", features & 0xFFFF_FFFF, features >> 32),
+        ),
         ("flags", format!("{:#x}", status_flags(pin))),
         ("model", MODEL.to_owned()),
         ("deviceid", device_id_text(id)),

@@ -234,19 +234,22 @@ pub fn level_on_speaker(
     }
 }
 
-/// Receivers measured to keep a level sent on a coarser grid, by the start
-/// of the `manufacturer` they announce, lowercase, and the grid in dB (S291).
-/// Only the television of 2026-10-25, whose model string wasn't recorded.
-const SET_GRIDS: [(&str, f64); 1] = [("samsung", 0.6)];
+/// Receivers measured to keep a level sent on a coarser grid, by the
+/// `features` they announce (both words) or the start of their
+/// `manufacturer`, lowercase, and the grid in dB (S291). Only the UT5500
+/// television of 2026-10-25, whose TXT manufacturer and model weren't recorded.
+const SET_GRIDS: [(u64, &str, f64); 1] = [(0x038B_CB46_007F_8AD0, "samsung", 0.6)];
 
-/// The grid a receiver announcing `manufacturer` keeps a level sent on;
-/// none for a receiver not measured to round (S291).
-pub fn set_grid_db(manufacturer: Option<&str>) -> Option<f64> {
-    let manufacturer = manufacturer?.to_ascii_lowercase();
+/// The grid a receiver announcing `manufacturer` and `features` keeps a
+/// level sent on; none for a receiver not measured to round (S291).
+pub fn set_grid_db(manufacturer: Option<&str>, features: Option<u64>) -> Option<f64> {
+    let make = manufacturer.map(str::to_ascii_lowercase);
     SET_GRIDS
         .iter()
-        .find(|(make, _)| manufacturer.starts_with(make))
-        .map(|&(_, grid)| grid)
+        .find(|&&(bits, prefix, _)| {
+            features == Some(bits) || make.as_deref().is_some_and(|make| make.starts_with(prefix))
+        })
+        .map(|&(_, _, grid)| grid)
 }
 
 /// Whether reading `db` is the speaker's echo of `sent_db` (S291, S276): on

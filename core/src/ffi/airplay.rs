@@ -1227,7 +1227,7 @@ impl AscAirPlay {
     /// The grid receiver `id` keeps a level sent on, by its make (S291).
     fn set_grid(&self, id: &str) -> Option<f64> {
         let txt = self.listed.get(id)?.device.airplay_txt.as_ref()?;
-        set_grid_db(txt.manufacturer.as_deref())
+        set_grid_db(txt.manufacturer.as_deref(), txt.features.map(|bits| bits.0))
     }
 
     /// The added speaker or target that `id` reports for: itself, or the
