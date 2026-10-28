@@ -169,6 +169,8 @@ impl TrackReader for MediaSessionReader {
             self.shared.wake.notify_all();
         }
     }
+
+    fn played_last(&mut self, _app_id: Option<&str>) {}
 }
 
 impl Drop for MediaSessionReader {
@@ -299,7 +301,7 @@ fn run<L: SessionList>(
         // The receivers' reading goes out first, so a thumbnail only the
         // card needs never holds it back.
         if let Some(follow) = &track {
-            let track = reader.track(&mut listing, follow, log);
+            let track = reader.track(&mut listing, follow, None, log);
             let mut state = shared.lock();
             if state.track_generation == track_generation {
                 state.track_reading = Some(Reading { track });
@@ -388,6 +390,7 @@ impl<L: SessionList> Reader<L> {
         &mut self,
         listing: &mut Listing<L::Session>,
         follow: &Follow,
+        _played_last: Option<&str>,
         log: &DebugLog,
     ) -> Option<Track> {
         let index = self.sessions.pick(&listing.listed, follow);
@@ -743,7 +746,7 @@ mod tests {
     fn poll(reader: &mut Reader<Fake>) -> (Option<Track>, Option<CardTrack>) {
         let log = DebugLog::default();
         let mut listing = reader.listing(&log);
-        let track = reader.track(&mut listing, &Follow::AnyApp, &log);
+        let track = reader.track(&mut listing, &Follow::AnyApp, None, &log);
         let card = reader.card(&mut listing, &Follow::AnyApp, &log);
         (track, card)
     }
@@ -798,6 +801,30 @@ mod tests {
         }
         assert!(started.elapsed() < APP_WAIT, "later polls don't wait");
         assert_eq!(counts.thumbnails(), 1);
+    }
+
+    // covers: S218
+    #[test]
+    fn with_none_playing_the_app_that_played_last_is_read_or_none() {
+        let paused = |app_id: &str, title: &str| MediaSession {
+            app_id: app_id.to_owned(),
+            title: title.to_owned(),
+            playing: false,
+            paused: true,
+            ..playing()
+        };
+        let (mut fake, _) = fake(Thumbnail::Image);
+        fake.sessions = vec![paused("Chrome", "Video"), paused("Spotify.exe", "Song")];
+        let mut reader = Reader::new(fake);
+        let log = DebugLog::default();
+        let mut read = |played_last: Option<&str>| {
+            let mut listing = reader.listing(&log);
+            let track = reader.track(&mut listing, &Follow::AnyApp, played_last, &log);
+            track.map(|track| track.session.title)
+        };
+        assert_eq!(read(Some("Spotify.exe")).as_deref(), Some("Song"));
+        assert_eq!(read(None).as_deref(), Some("Video"));
+        assert_eq!(read(Some("Vlc.exe")), None, "it quit");
     }
 
     #[test]
