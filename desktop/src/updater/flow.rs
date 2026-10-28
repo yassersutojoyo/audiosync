@@ -728,6 +728,62 @@ pub mod tests {
         assert!(temp_folders(&f.env).is_empty());
     }
 
+    /// Real files, except that every open in the temp folder after the first
+    /// finds the file replaced by an unsigned one, as another process of the
+    /// same user could replace it.
+    struct Planter {
+        opened: std::sync::Mutex<u32>,
+    }
+
+    impl Files for Planter {
+        fn create(&self, path: &Path, exclusive: bool) -> io::Result<Box<dyn Sink>> {
+            RealFiles.create(path, exclusive)
+        }
+        fn remove(&self, path: &Path) -> io::Result<()> {
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            RealFiles.rename(from, to)
+        }
+        fn open(&self, path: &Path) -> io::Result<fs::File> {
+            let in_temp = path
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|dir| dir.to_string_lossy().starts_with(TEMP_PREFIX));
+            let mut opened = self.opened.lock().unwrap();
+            if in_temp && *opened > 0 {
+                let planted = fake_exe(Arch::X64.pe_machine(), b"planted exe");
+                if path.file_name().is_some_and(|name| name == "update.zip") {
+                    fs::write(path, zip_of(&[(archive::EXE_NAME, &planted)]))?;
+                } else {
+                    fs::write(path, planted)?;
+                }
+            }
+            *opened += u32::from(in_temp);
+            fs::File::open(path)
+        }
+    }
+
+    // covers: S299, S300
+    #[test]
+    fn only_the_verified_bytes_are_unpacked_and_installed() {
+        let f = fixture(
+            "planted",
+            false,
+            Arc::new(Planter {
+                opened: std::sync::Mutex::new(0),
+            }),
+            DebugLog::default(),
+        );
+        let update = update_of(&f.env);
+        assert!(matches!(run(&f.env, &update), Installed::Done(_)));
+        assert!(
+            fs::read(f.env.install_dir.join(archive::EXE_NAME))
+                .unwrap()
+                .ends_with(b"new exe")
+        );
+    }
+
     // covers: S297, S306
     #[test]
     fn nothing_downloads_before_the_click() {
