@@ -4,6 +4,7 @@
 
 mod common;
 
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -552,6 +553,19 @@ fn a_device_that_moves_during_recovery_is_reconnected_at_its_new_address() {
     );
     assert_eq!(moved.connection_count(), 1);
     assert!(!moved.fetches().is_empty(), "the new address is served");
+
+    // The allowlist follows the entry: the address it dropped gets 403.
+    let elsewhere = SocketAddr::new(IpAddr::from([127, 0, 0, 2]), moved.address.port());
+    records.set_group(vec![elsewhere]);
+    let loads = moved.payloads(NS_MEDIA, "LOAD");
+    let url = loads[0]["media"]["contentId"]
+        .as_str()
+        .expect("the stream URL");
+    let (address, path) = http::split_url(url).expect("url");
+    let request = format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n");
+    let mut old = http::request(address, &request).expect("connects");
+    let (head, _) = http::read_response(&mut old, Duration::ZERO);
+    assert_eq!(http::status(&head), 403);
     session.stop();
     moved.join();
 }
