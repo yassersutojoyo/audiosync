@@ -2943,6 +2943,9 @@ impl AirPlaySpeakers {
     /// DeviceVolume is a change made on the speaker, any other command a row
     /// move (S290). Returns whether the speaker list changed.
     fn remote_move(&mut self, row: &str, to: f64, on_speaker: bool, now: Instant) -> bool {
+        if on_speaker && matches!(self.calibration_solo.as_deref(), Some(solo) if solo != row) {
+            return false;
+        }
         let (zone, master) = (self.zone(row), self.master);
         let own = self.settings(row).volume;
         let moved = if on_speaker {
