@@ -5510,6 +5510,120 @@ mod tests {
         );
     }
 
+    const LAST_MIX: &str = "mix:only:player.exe,browser.exe";
+
+    /// The player and a browser checked as a mix, with a microphone listed.
+    fn adapter_with_a_mix() -> AudioAdapter<MockBackend> {
+        let mut adapter = adapter();
+        adapter.audio.add_app(3000, "browser.exe");
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        adapter.refresh_sources();
+        adapter.toggle_mix_app("player.exe");
+        adapter.toggle_mix_app("browser.exe");
+        assert_eq!(adapter.snapshot().source_id, LAST_MIX);
+        adapter
+    }
+
+    fn rows(state: &AppState) -> Vec<(String, String, SourceKind)> {
+        state
+            .sources
+            .iter()
+            .map(|source| (source.id.clone(), source.name.clone(), source.kind))
+            .collect()
+    }
+
+    // covers: S336
+    #[test]
+    fn a_mix_left_for_another_source_stays_offered_and_picking_it_brings_the_same_apps_back() {
+        let mut adapter = adapter_with_a_mix();
+        let chosen = rows(&adapter.snapshot());
+        adapter.select_source("system");
+        let state = adapter.snapshot();
+        assert_eq!(state.source_id, "system");
+        assert_eq!(
+            rows(&state),
+            chosen,
+            "the mix keeps its row, place and name while another source plays"
+        );
+        assert!(
+            state.mix_apps.iter().all(|app| !app.checked),
+            "the several-apps list checks only what is captured: {:?}",
+            state.mix_apps
+        );
+
+        let pick = audiosync_remote::Command::Source {
+            id: LAST_MIX.to_owned(),
+        };
+        assert_eq!(
+            crate::remote::actions(&pick, &state, |_| true),
+            Ok(vec![crate::remote::Action::Source {
+                id: LAST_MIX.to_owned()
+            }]),
+            "the Web Remote can pick it"
+        );
+
+        adapter.select_source(LAST_MIX);
+        let state = adapter.snapshot();
+        assert_eq!(state.source_id, LAST_MIX);
+        assert_eq!(rows(&state), chosen);
+        let mut checked: Vec<&str> = state
+            .mix_apps
+            .iter()
+            .filter(|app| app.checked)
+            .map(|app| app.id.as_str())
+            .collect();
+        checked.sort_unstable();
+        assert_eq!(checked, ["browser.exe", "player.exe"]);
+
+        // A newer mix replaces it; one app left is no mix and replaces nothing.
+        adapter.set_mix_all_except(true);
+        adapter.toggle_mix_app("browser.exe");
+        let except = "mix:except:player.exe";
+        assert_eq!(adapter.snapshot().source_id, except);
+        adapter.set_mix_all_except(false);
+        assert!(adapter.snapshot().source_id.starts_with("app:"));
+        let mixes: Vec<String> = rows(&adapter.snapshot())
+            .into_iter()
+            .map(|(id, ..)| id)
+            .filter(|id| id.starts_with("mix:"))
+            .collect();
+        assert_eq!(mixes, [except], "one mix row, the newest");
+    }
+
+    // covers: S336
+    #[test]
+    fn the_last_mix_is_offered_again_after_a_restart() {
+        let mut adapter = adapter_with_a_mix();
+        adapter.select_source(&mic());
+        let saved = adapter.current_settings();
+
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.add_app(PLAYER_PID, "player.exe");
+        audio.connect_input(MIC, "Microphone (USB Audio)", "USB");
+        let mut restored = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        restored.restore(saved);
+        restored.refresh_sources();
+        let state = restored.snapshot();
+        assert_eq!(state.source_id, mic());
+        let at = |id: &str| state.sources.iter().position(|row| row.id == id);
+        let mix = at(LAST_MIX).expect("the last mix is offered after a restart");
+        let (app, input) = (at(&player()).expect("listed"), at(&mic()).expect("listed"));
+        assert!(
+            app < mix && mix < input,
+            "after the apps, before the inputs"
+        );
+
+        restored.select_source(LAST_MIX);
+        assert_eq!(
+            restored.snapshot().source_id,
+            LAST_MIX,
+            "browser.exe isn't running, and stays in the mix"
+        );
+    }
+
     #[test]
     fn input_devices_are_listed_after_the_apps_and_can_be_streamed() {
         let mut adapter = adapter();

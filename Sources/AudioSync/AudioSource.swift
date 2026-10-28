@@ -104,6 +104,11 @@ enum SourceMix {
                         ownBundleID: String? = nil) -> AudioSource {
         AudioSource.mixed(mode, bundleIDs: checked(source, mode: current), ownBundleID: ownBundleID)
     }
+
+    /// The last mix once the source is `source` (S336).
+    static func lastMix(after source: AudioSource, previous: AudioSource?) -> AudioSource? {
+        previous
+    }
 }
 
 // MARK: - Stored form

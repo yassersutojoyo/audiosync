@@ -504,7 +504,8 @@ enum SourceList {
                         inputs: [Input],
                         chosen: AudioSource,
                         chosenAppName: (String) -> String,
-                        mixName: (AppMixMode, [String]) -> String = { $1.joined(separator: ", ") }) -> [Entry] {
+                        mixName: (AppMixMode, [String]) -> String = { $1.joined(separator: ", ") },
+                        lastMix: AudioSource? = nil) -> [Entry] {
         var mixEntry: [Entry] = []
         if case .mix(let mode, let ids) = chosen {
             let names = ids.map { id in apps.first { $0.bundleID == id }?.name ?? chosenAppName(id) }

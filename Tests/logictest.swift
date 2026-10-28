@@ -256,6 +256,44 @@ do {
     check(offered.map(\.id) == [music, safari], "mix: a checked app that isn't running stays in the menu to be unchecked")
 }
 
+// MARK: The last mix stays on offer
+// covers: S336
+do {
+    let music = "com.apple.Music", safari = "com.apple.Safari"
+    let both = AudioSource.mixed(.only, bundleIDs: [music, safari])
+    let except = AudioSource.mixed(.allExcept, bundleIDs: [music])
+    check(SourceMix.lastMix(after: both, previous: nil) == both
+            && SourceMix.lastMix(after: .system, previous: both) == both
+            && SourceMix.lastMix(after: .input(uid: "mic"), previous: both) == both
+            && SourceMix.lastMix(after: .app(bundleID: music), previous: both) == both
+            && SourceMix.lastMix(after: except, previous: both) == except
+            && SourceMix.lastMix(after: .system, previous: nil) == nil,
+          "last mix: kept while another source plays, replaced only by a newer mix")
+
+    func listed(_ chosen: AudioSource, last: AudioSource?) -> [SourceList.Entry] {
+        SourceList.entries(systemName: "All System Audio", apps: [(bundleID: music, name: "Music")], inputs: [],
+                           chosen: chosen, chosenAppName: { _ in "Safari" }, mixName: { $1.joined(separator: " + ") },
+                           lastMix: last)
+    }
+    let away = listed(.system, last: both)
+    check(away == listed(both, last: both) && away.map(\.id) == ["", both.defaultsValue, music]
+            && AudioSource(defaultsValue: away[1].id) == both && away[1].name == "Music + Safari",
+          "last mix: the picker keeps the mix's entry, place and name after a switch away, and picking it brings the same apps back",
+          "\(away)")
+    check(listed(except, last: both).map(\.id) == ["", except.defaultsValue, music]
+            && listed(.system, last: .app(bundleID: music)).map(\.id) == ["", music],
+          "last mix: one mix entry only, the chosen one while a mix plays, and never one for a plain app")
+    let page = RemoteSource(pickerID: away[1].id, name: away[1].name)
+    check(RemoteSource.pickerID(page.id) == both.defaultsValue && page.kind == .app,
+          "last mix: the Web Remote lists the entry and its pick reaches the picker")
+    check(AppSettings.load { $0 == "lastAppMix" ? both.defaultsValue : nil }.lastMix == both
+            && AppSettings.load { $0 == "lastAppMix" ? except.defaultsValue : nil }.lastMix == except
+            && AppSettings.load { $0 == "lastAppMix" ? music : nil }.lastMix == nil
+            && AppSettings.load { $0 == "lastAppMix" ? "apps:" : nil }.lastMix == nil
+            && AppSettings.load { _ in nil }.lastMix == nil,
+          "last mix: kept across launches, and a stored value that is no mix reads as none")
+}
+
 // MARK: Source apps — display names and the picker's app list
 check(SourceApps.displayName(running: "Music", installed: "Apple Music", bundleID: "com.apple.Music") == "Music",
       "source apps: a running app's name comes first")

@@ -113,6 +113,8 @@ struct AppSettings: Equatable {
     static let maxDelayMs: Double = 20_000
 
     var source = AudioSource.system
+    /// The last mix the source was (S336); nil until there was one.
+    var lastMix: AudioSource?
     var enabledAirPlay: Set<String> = []
     var enabledLocal: Set<String> = []
     var master = AppSettings.defaultMaster
