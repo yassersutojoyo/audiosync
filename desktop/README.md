@@ -21,7 +21,7 @@ shortcuts.
 
 ## Trying the preview exe
 
-There's no Windows release yet, so for now you build it yourself (below).
+The zips are on the Releases page since 0.7.1, or build it yourself (below).
 It's a single exe with no installer: put it in a folder of its own, keep the
 `THIRD-PARTY-NOTICES.txt` you write for it (below) next to it, and run it.
 
