@@ -5845,6 +5845,24 @@ mod tests {
         );
     }
 
+    // covers: S212
+    #[test]
+    fn window_settings_read_after_launch_show_and_survive_a_quit() {
+        let backend = MockBackend::new();
+        let late_view = backend.late_view.clone();
+        let app = app_over(backend);
+        let file = ViewSettings {
+            appearance: ui_model::Appearance::Dark,
+            show_virtual_devices: true,
+            ..ViewSettings::default()
+        };
+        *late_view.borrow_mut() = Some(file.clone());
+        app.poll();
+        assert_eq!(app.main.get_appearance(), crate::Appearance::Dark);
+        app.save_settings();
+        assert_eq!(app.backend.borrow().view_settings(), file);
+    }
+
     #[test]
     fn the_main_window_keeps_a_virtual_output_listed_after_it_is_turned_off() {
         let mut backend = MockBackend::new();

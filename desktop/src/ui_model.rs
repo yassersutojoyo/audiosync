@@ -1788,6 +1788,9 @@ pub struct MockBackend {
     pub play_pauses: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Each AirPlay delay applied, as asked.
     pub airplay_delays: std::rc::Rc<std::cell::RefCell<Vec<f64>>>,
+    /// Window settings the next poll takes in, as a settings file read
+    /// after launch brings them.
+    pub late_view: std::rc::Rc<std::cell::RefCell<Option<ViewSettings>>>,
     /// The speaker that asks for its password once it is turned on.
     password_on: Option<String>,
 }
@@ -1960,6 +1963,7 @@ impl MockBackend {
             preset_notice: None,
             play_pauses: std::rc::Rc::default(),
             airplay_delays: std::rc::Rc::default(),
+            late_view: std::rc::Rc::default(),
             password_on: None,
         }
     }
@@ -2253,6 +2257,14 @@ fn add_zone(zones: &mut Zones, id: &str, name: &str, members: &[&str]) {
 
 #[cfg(any(test, feature = "mock-backend"))]
 impl Backend for MockBackend {
+    fn poll(&mut self) -> bool {
+        let Some(view) = self.late_view.borrow_mut().take() else {
+            return false;
+        };
+        self.view = view;
+        true
+    }
+
     fn play_pause_pressed(&mut self, app: &str, playing: bool) {
         self.play_pauses
             .borrow_mut()

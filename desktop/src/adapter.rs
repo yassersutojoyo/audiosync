@@ -11883,12 +11883,17 @@ mod tests {
     }
 
     /// A folder in place of the settings file at launch (another program
-    /// holds it), with the user's settings, master 64, waiting in `held`.
+    /// holds it), with the user's settings, master 64 and the player as the
+    /// source, waiting in `held`.
     fn launch_with_settings_held(name: &str) -> (AudioAdapter<MockBackend>, PathBuf, PathBuf) {
         let dir = test_dir(name);
         let path = dir.join(settings::FILE_NAME);
         let users = Settings {
             master_volume: 64.0,
+            source: SavedSource::App {
+                executable: "player.exe".to_owned(),
+                name: "Player".to_owned(),
+            },
             ..Settings::default()
         };
         std::fs::write(dir.join("held"), users.to_json()).expect("written");
@@ -11908,8 +11913,30 @@ mod tests {
             adapter.poll();
         }
         assert_eq!(adapter.snapshot().master_volume, 64.0);
+        assert!(
+            matches!(adapter.chosen, Chosen::App { .. }),
+            "{:?}",
+            adapter.chosen
+        );
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
         assert!(crate::data_folder::copies_kept_aside(&dir, "settings.ignored").is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
+    fn a_session_running_when_held_settings_are_read_keeps_its_source() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-running");
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.running());
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(dir.join("held"), &path).expect("moved back");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().master_volume, 64.0);
+        assert_eq!(adapter.chosen, Chosen::WholeSystem);
         let _ = std::fs::remove_dir_all(dir);
     }
 
