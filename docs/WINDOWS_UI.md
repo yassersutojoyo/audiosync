@@ -138,6 +138,7 @@ one, with a notice that names it.
 | Ctrl+N | New zone from the speakers that are on |
 | F5 | Refresh devices |
 | Ctrl+E | Equalizer |
+| Ctrl+1 to Ctrl+9 | Recall the first nine presets (View > Presets) |
 | Ctrl+W | Close the window (AudioSync stays in the tray); in the equalizer, the AudioSync Guide, the double-audio guide, Web Remote or About, close that window; in a dialog, cancel it as Escape does |
 | Ctrl+Q | Exit AudioSync, from the main window, the equalizer, either Guide, Web Remote or About |
 | F1 | AudioSync Guide |
