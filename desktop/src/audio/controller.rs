@@ -4655,6 +4655,7 @@ mod tests {
     use crate::audio::backend::OutputKind;
     use crate::audio::capture::Activation;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::audio::now_playing::DROP_AFTER;
     use crate::audio::now_playing::fake::{FakeReader, shared_labels, track};
     use crate::audio::outputs::{EndpointProperties, EndpointReading};
     use crate::audio::render::StallSign;
@@ -9047,6 +9048,11 @@ mod tests {
         backend.poll();
         assert!(now_playing_sent(&fake).is_empty(), "nothing changed");
 
+        for _ in 1..DROP_AFTER {
+            reader.read(None);
+            backend.poll();
+            assert!(now_playing_sent(&fake).is_empty(), "the paused track stays");
+        }
         reader.read(None);
         backend.poll();
         let sent = now_playing_sent(&fake);
