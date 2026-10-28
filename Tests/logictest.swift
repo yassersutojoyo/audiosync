@@ -1744,19 +1744,44 @@ do {
 }
 
 // MARK: Capture watch: a capture that stops calling back is opened again, the capture only
+/// Now Playing's reading at `uptime` of a source playing with its position moving on with the clock.
+func moving(_ uptime: Double) -> CaptureFlowWatch.Source {
+    .nowPlaying(NowPlayingMonitor.Position(elapsed: uptime, length: 10_000, readAt: uptime, playing: true))
+}
+/// Drives a watch for a session capturing `source` every 0.5 s up to 30 s, with Now Playing read every
+/// 2 s as `track` says and callbacks until `callbacksUntil`; returns the first step that asks for anything.
+func firstCaptureWatchStep(_ source: AudioSource, callbacksUntil: Double = 10,
+                           track: (Double) -> NowPlayingMonitor.Track?) -> (at: Double, step: CaptureFlowWatch.Step)? {
+    var watch = CaptureFlowWatch()
+    for tick in 0...60 {
+        let uptime = 0.5 * Double(tick)
+        let watched = CaptureFlowWatch.source(source, reading: track((uptime / 2).rounded(.down) * 2))
+        let step = watch.tick(callbacks: UInt64(min(uptime, callbacksUntil) * 100), reading: true, source: watched, at: uptime)
+        if step != .none { return (uptime, step) }
+    }
+    return nil
+}
+/// A player's reading taken at `readAt`: playing, with its position moving on unless `frozen` or `positionless`.
+func playerReading(_ bundleID: String, at readAt: Double, frozen: Bool = false,
+                   positionless: Bool = false) -> NowPlayingMonitor.Track {
+    let position = NowPlayingMonitor.Position(elapsed: frozen ? 30 : 30 + readAt, length: 240, readAt: readAt, playing: true)
+    return NowPlayingMonitor.Track(bundleID: bundleID, appName: "Player", title: "Song", artist: "Band", album: "Record",
+                                   isPlaying: true, artwork: nil, position: positionless ? nil : position)
+}
 // covers: S335 (the 2 s span while Now Playing reads the source playing, the service restart and a quiet source, through the main queue's 0.5 s ticks)
 do {
-    // Callbacks at 0 and 0.5 s, then none while the source plays: 2 s after the last one the capture counts as stopped.
+    // Callbacks until 100.5 s, then none while the source plays: 2 s after the last one the capture counts as stopped.
     var watch = CaptureFlowWatch()
     var steps: [CaptureFlowWatch.Step] = []
-    for (uptime, count) in [(100.0, 4 as UInt64), (100.5, 9), (101, 9), (101.5, 9), (102, 9), (102.5, 9)] {
-        steps.append(watch.tick(callbacks: count, reading: true, playingReadAt: uptime, at: uptime))
+    for tick in 0...17 {
+        let uptime = 94 + 0.5 * Double(tick)
+        steps.append(watch.tick(callbacks: UInt64(min(tick, 13) * 5), reading: true, source: moving(uptime), at: uptime))
     }
     let stall = steps.dropLast().allSatisfy { $0 == .none } && steps.last == .stopped(.noCallback(2))
 
     // A service restart stops a capture that flows, at once.
     var restarted = CaptureFlowWatch()
-    _ = restarted.tick(callbacks: 3, reading: true, playingReadAt: nil, at: 10)
+    _ = restarted.tick(callbacks: 3, reading: true, source: .nowPlaying(nil), at: 10)
     let atOnce = restarted.report(.serviceRestarted, at: 10.2) == .stopped(.serviceRestarted)
 
     // A tap stops calling back when its source goes quiet: with Now Playing showing
@@ -1766,8 +1791,8 @@ do {
     var quietSteps: [CaptureFlowWatch.Step] = []
     for tick in 0..<40 {
         let uptime = 50 + 0.5 * Double(tick)
-        quietSteps.append(quietened.tick(callbacks: UInt64(min(tick, 4) * 47), reading: true, playingReadAt: nil, at: uptime))
-        quietSteps.append(never.tick(callbacks: 0, reading: true, playingReadAt: uptime, at: uptime))
+        quietSteps.append(quietened.tick(callbacks: UInt64(min(tick, 4) * 47), reading: true, source: .nowPlaying(nil), at: uptime))
+        quietSteps.append(never.tick(callbacks: 0, reading: true, source: moving(uptime), at: uptime))
     }
     let quiet = quietSteps.allSatisfy { $0 == .none }
     check(stall && atOnce && quiet,
@@ -1778,23 +1803,22 @@ do {
 do {
     // Spotify plays until 3 s, then pauses; Now Playing reads it every 2 s, so it
     // still shows playing until its reading at 4 s.
-    func playingReadAt(_ uptime: Double) -> Double? {
+    func reading(_ uptime: Double) -> CaptureFlowWatch.Source {
         let readAt = (uptime / 2).rounded(.down) * 2
-        return readAt < 3 ? readAt : nil
+        return readAt < 3 ? moving(readAt) : .nowPlaying(nil)
     }
     var watch = CaptureFlowWatch()
     var steps: [CaptureFlowWatch.Step] = []
     for tick in 0...120 {
         let uptime = 0.5 * Double(tick)
-        steps.append(watch.tick(callbacks: UInt64(min(tick, 6) * 10), reading: true, playingReadAt: playingReadAt(uptime),
-                                at: uptime))
+        steps.append(watch.tick(callbacks: UInt64(min(tick, 6) * 10), reading: true, source: reading(uptime), at: uptime))
     }
     // A service restart while paused: the reopened tap calls back nothing, and its try is kept all the same.
     var restarted = CaptureFlowWatch()
-    _ = restarted.tick(callbacks: 10, reading: true, playingReadAt: nil, at: 0)
+    _ = restarted.tick(callbacks: 10, reading: true, source: .nowPlaying(nil), at: 0)
     var afterRestart = [restarted.report(.serviceRestarted, at: 0)]
     for tick in 1...120 {
-        afterRestart.append(restarted.tick(callbacks: 0, reading: true, playingReadAt: nil, at: 0.5 * Double(tick)))
+        afterRestart.append(restarted.tick(callbacks: 0, reading: true, source: .nowPlaying(nil), at: 0.5 * Double(tick)))
     }
     check(steps.allSatisfy { $0 == .none }
             && afterRestart.filter { $0 != .none } == [.stopped(.serviceRestarted), .tryOpen(1), .kept(1)],
@@ -1804,31 +1828,31 @@ do {
 // covers: S335 (5 tries 1 s apart, a try kept after 5 s, the last failed try stops the session)
 do {
     var watch = CaptureFlowWatch()
-    _ = watch.tick(callbacks: 1, reading: true, playingReadAt: 0, at: 0)
+    _ = watch.tick(callbacks: 1, reading: true, source: moving(0), at: 0)
     let stop = watch.report(.aggregateDied, at: 0.5)
-    let early = watch.tick(callbacks: nil, reading: false, playingReadAt: 1, at: 1)
-    let first = watch.tick(callbacks: nil, reading: false, playingReadAt: 1.5, at: 1.5)
+    let early = watch.tick(callbacks: nil, reading: false, source: moving(1), at: 1)
+    let first = watch.tick(callbacks: nil, reading: false, source: moving(1.5), at: 1.5)
     // The reopened capture's counter starts again at 0.
     var trial: [CaptureFlowWatch.Step] = []
     for tick in 1...10 {
         let uptime = 1.5 + 0.5 * Double(tick)
-        trial.append(watch.tick(callbacks: UInt64(tick * 10), reading: true, playingReadAt: uptime, at: uptime))
+        trial.append(watch.tick(callbacks: UInt64(tick * 10), reading: true, source: moving(uptime), at: uptime))
     }
     check(stop == .stopped(.aggregateDied) && early == .none && first == .tryOpen(1)
             && trial.dropLast().allSatisfy { $0 == .none } && trial.last == .kept(1),
           "capture watch: the first try comes 1 s after the stop and is kept once it delivered for 5 s",
           "\(stop) \(early) \(first) \(trial)")
-    let again = watch.tick(callbacks: 100, reading: true, playingReadAt: 8.5, at: 8.5)
+    let again = watch.tick(callbacks: 100, reading: true, source: moving(8.5), at: 8.5)
     check(again == .stopped(.noCallback(2)), "capture watch: a kept capture is watched on until the session ends", "\(again)")
 
     // Every try fails while the source plays: two that can't open, three that open and never call back.
     var failing = CaptureFlowWatch()
-    _ = failing.tick(callbacks: 1, reading: true, playingReadAt: 0, at: 0)
+    _ = failing.tick(callbacks: 1, reading: true, source: moving(0), at: 0)
     var seen = [failing.report(.serviceRestarted, at: 0)]
     var now = 0.0
     while now < 60, seen.last != .giveUp {
         now += 0.5
-        let step = failing.tick(callbacks: 0, reading: true, playingReadAt: now, at: now)
+        let step = failing.tick(callbacks: 0, reading: true, source: moving(now), at: now)
         seen.append(step)
         if case .tryOpen(let n) = step, n <= 2 { seen.append(failing.failed(at: now)) }
     }
@@ -1838,15 +1862,15 @@ do {
 
     // A stop the host is told of while the capture is already closed asks for nothing more.
     var closed = CaptureFlowWatch()
-    _ = closed.tick(callbacks: 1, reading: true, playingReadAt: nil, at: 0)
+    _ = closed.tick(callbacks: 1, reading: true, source: .nowPlaying(nil), at: 0)
     _ = closed.report(.aggregateDied, at: 0)
     check(closed.report(.serviceRestarted, at: 0.2) == .none,
           "capture watch: a second stop while the capture is closed changes nothing")
 
     // An app tap waiting for an audio process has no IOProc by design.
     var waiting = CaptureFlowWatch()
-    _ = waiting.tick(callbacks: 5, reading: true, playingReadAt: 0, at: 0)
-    let idle = (1...20).map { waiting.tick(callbacks: 5, reading: false, playingReadAt: 0.5 * Double($0), at: 0.5 * Double($0)) }
+    _ = waiting.tick(callbacks: 5, reading: true, source: moving(0), at: 0)
+    let idle = (1...20).map { waiting.tick(callbacks: 5, reading: false, source: moving(0.5 * Double($0)), at: 0.5 * Double($0)) }
     check(idle.allSatisfy { $0 == .none }, "capture watch: an app tap waiting for an audio process is never a stop")
 
     check(CaptureFlowWatch.retries(after: .aggregateDeviceFailed(kAudioHardwareBadDeviceError))
@@ -1855,6 +1879,55 @@ do {
             && !CaptureFlowWatch.retries(after: .inputNotFound("input"))
             && !CaptureFlowWatch.retries(after: .inputHandsFree("input")),
           "capture watch: an app that quit or an input device that left ends the tries at once")
+}
+
+// covers: S335 (a system source is never stopped for missing callbacks)
+do {
+    let first = firstCaptureWatchStep(.system) { playerReading("com.spotify.client", at: $0) }
+    check(first == nil, "capture watch: a system source is never stopped for missing callbacks, even while Spotify plays",
+          "\(String(describing: first))")
+}
+// covers: S335 (an input device source: its callback count works on its own)
+do {
+    let stopped = firstCaptureWatchStep(.input(uid: "line-in")) { _ in nil }
+    let neverCalled = firstCaptureWatchStep(.input(uid: "line-in"), callbacksUntil: 0) { _ in nil }
+    check(stopped?.at == 12 && stopped?.step == .stopped(.noCallback(2)) && neverCalled == nil,
+          "capture watch: an input device source with no callback for 2 s after the first is stopped, with no Now Playing reading",
+          "\(String(describing: stopped)) \(String(describing: neverCalled))")
+}
+// covers: S335, S18 (the 6 s grace: read as playing with the position moving)
+do {
+    // Spotify reads playing from 0 s, its position moving between the readings at 0 and 2 s; the tap calls back until 1 s.
+    let first = firstCaptureWatchStep(.app(bundleID: "com.spotify.client"), callbacksUntil: 1) {
+        playerReading("com.spotify.client", at: $0)
+    }
+    check(first?.at == 8 && first?.step == .stopped(.noCallback(7)),
+          "capture watch: missing callbacks count only once the source has read playing with its position moving for 6 s",
+          "\(String(describing: first))")
+}
+// covers: S335 (a position that stands still while the state says playing)
+do {
+    let first = firstCaptureWatchStep(.app(bundleID: "com.spotify.client")) {
+        playerReading("com.spotify.client", at: $0, frozen: true)
+    }
+    check(first == nil, "capture watch: a source read as playing with its position standing still is never stopped",
+          "\(String(describing: first))")
+}
+// covers: S335 (a source of several apps)
+do {
+    let spotify = "com.spotify.client", music = "com.apple.Music"
+    let mix = AudioSource.mix(.only, bundleIDs: [spotify, music])
+    let runs = [
+        firstCaptureWatchStep(mix) { playerReading(spotify, at: $0) },
+        firstCaptureWatchStep(.mix(.allExcept, bundleIDs: [music])) { playerReading(spotify, at: $0) },
+        firstCaptureWatchStep(mix) { playerReading(spotify, at: $0, frozen: true) },
+        firstCaptureWatchStep(mix) { playerReading(spotify, at: $0, positionless: true) },
+        firstCaptureWatchStep(mix) { playerReading("com.example.player", at: $0) },
+    ]
+    let stops = runs.prefix(2).allSatisfy { $0?.at == 12 && $0?.step == .stopped(.noCallback(2)) }
+    check(stops && runs.dropFirst(2).allSatisfy { $0 == nil },
+          "capture watch: a source of several apps counts only while one of its apps plays with its position moving",
+          runs.map { String(describing: $0) }.joined(separator: ", "))
 }
 
 // MARK: Calibration fill: a quiet tap still carries the test signal (CalibrationTap.swift)
@@ -6625,7 +6698,7 @@ do {
     var steps: [CaptureFlowWatch.Step] = []
     func tick(_ now: Double) {
         if !outputs.check(["A": R(attach: 1, frames: frames)], nowS: now).isEmpty { stalls.append(now) }
-        steps.append(capture.tick(callbacks: UInt64(frames / 512), reading: true, playingReadAt: now, at: now))
+        steps.append(capture.tick(callbacks: UInt64(frames / 512), reading: true, source: moving(now), at: now))
     }
     // Both flow until the will-sleep notice at 10; nothing moves after it while uptime runs on until the
     // Mac sleeps at 16, then the clock stands still; the wake comes at 16 and nothing moves after it either.
@@ -6642,20 +6715,34 @@ do {
     capture.resume(at: 16)
     steps = []
     for n in 33...36 { tick(0.5 * Double(n)) }
-    check(asleepStalls.isEmpty && asleepSteps.isEmpty && stalls == [18.0]
-            && steps.filter({ $0 != .none }) == [.stopped(.noCallback(2))] && steps.last == .stopped(.noCallback(2)),
-          "output stall and capture watch: neither fires from the will-sleep notice to the wake, and both count 2 s from the wake",
+    check(asleepStalls.isEmpty && asleepSteps.isEmpty && stalls == [18.0] && steps.allSatisfy({ $0 == .none }),
+          "output stall and capture watch: neither fires from the will-sleep notice to the wake; an output counts 2 s from the wake, the capture its 6 s grace",
           "asleep \(asleepStalls) \(asleepSteps), awake \(stalls) \(steps)")
+
+    // Spotify moved on before the sleep; after the wake the tap is slow to call back again.
+    var slow = CaptureFlowWatch()
+    var wokeSteps: [(at: Double, step: CaptureFlowWatch.Step)] = []
+    for n in 0...20 { _ = slow.tick(callbacks: UInt64(n * 10), reading: true, source: moving(0.5 * Double(n)), at: 0.5 * Double(n)) }
+    slow.pause()
+    slow.resume(at: 16)
+    for n in 33...48 {
+        let now = 0.5 * Double(n)
+        let step = slow.tick(callbacks: 200, reading: true, source: moving((now / 2).rounded(.down) * 2), at: now)
+        if step != .none { wokeSteps.append((now, step)) }
+    }
+    check(wokeSteps.count == 1 && wokeSteps.first?.at == 24 && wokeSteps.first?.step == .stopped(.noCallback(8)),
+          "capture watch: the 6 s grace starts over at the wake, so a tap slow to resume isn't stopped 2 s after it",
+          "\(wokeSteps)")
 
     // A service restart during the sleep still closes the capture; its first try comes 1 s after the wake.
     var restarted = CaptureFlowWatch()
-    _ = restarted.tick(callbacks: 10, reading: true, playingReadAt: 0, at: 0)
+    _ = restarted.tick(callbacks: 10, reading: true, source: moving(0), at: 0)
     restarted.pause()
     let stop = restarted.report(.serviceRestarted, at: 0.5)
-    let held = (2...20).map { restarted.tick(callbacks: nil, reading: false, playingReadAt: nil, at: 0.5 * Double($0)) }
+    let held = (2...20).map { restarted.tick(callbacks: nil, reading: false, source: .nowPlaying(nil), at: 0.5 * Double($0)) }
     restarted.resume(at: 10)
-    let early = restarted.tick(callbacks: nil, reading: false, playingReadAt: nil, at: 10.5)
-    let first = restarted.tick(callbacks: nil, reading: false, playingReadAt: nil, at: 11)
+    let early = restarted.tick(callbacks: nil, reading: false, source: .nowPlaying(nil), at: 10.5)
+    let first = restarted.tick(callbacks: nil, reading: false, source: .nowPlaying(nil), at: 11)
     check(stop == .stopped(.serviceRestarted) && held.allSatisfy { $0 == .none } && early == .none && first == .tryOpen(1),
           "capture watch: a service restart during the sleep still closes the capture, and its first try comes 1 s after the wake",
           "\(stop) \(held.filter { $0 != .none }) \(early) \(first)")

@@ -437,7 +437,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             }
             self.checkBriefLosses()   // its start lead counts for 10 s at most (S328)
         }
-        engine.sourcePlayingReadAt = { [weak self] in self?.sourcePlayingReading()?.position?.readAt }
+        engine.nowPlayingReading = { [weak self] in
+            guard let monitor = self?.nowPlaying, monitor.isRunning else { return nil }
+            return monitor.reading
+        }
         engine.onAppQuit = { [weak self] bundleID, pids in
             self?.appQuit(bundleID: bundleID, pids: pids, seenByCapture: true)
         }
