@@ -535,7 +535,7 @@ struct StallTrial {
     told: bool,
 }
 
-/// An output on whose listed device refuses to open as if it were gone
+/// An output whose listed device refuses to open as if it were gone
 /// (S331).
 struct Refusal {
     /// Polls left of its first [`REFUSED_NOTICE_POLLS`], or once told,
@@ -690,7 +690,7 @@ pub struct Controller<D: Driver> {
     /// one waiting behind another's ([`Controller::sync_outputs`]): they
     /// start last in a pass, so the others aren't kept waiting behind them.
     hung: BTreeSet<String>,
-    /// The outputs on whose listed device refuses to open as if it were
+    /// The outputs whose listed devices refuse to open as if they were
     /// gone (S331).
     refused: BTreeMap<String, Refusal>,
     /// The outputs whose stream stalled and hasn't played five seconds
@@ -1382,9 +1382,17 @@ impl<D: Driver> Controller<D> {
                                 refusal.since.elapsed().as_secs()
                             )
                         });
-                        self.pending.push(BackendEvent::OutputPlaysAgain {
-                            id: endpoint.id.clone(),
-                        });
+                        // A stall's notice shares this one and clears only
+                        // after five seconds of play (S326).
+                        let stall_told = self
+                            .stall_trials
+                            .get(&endpoint.id)
+                            .is_some_and(|trial| trial.told);
+                        if !stall_told {
+                            self.pending.push(BackendEvent::OutputPlaysAgain {
+                                id: endpoint.id.clone(),
+                            });
+                        }
                     }
                     if self.busy.remove(&endpoint.id).is_some() {
                         self.log.log(|| {
@@ -4552,7 +4560,10 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
             )
         }
         BackendEvent::OutputPlaysAgain { id } => {
-            format!("output {} no longer counts as stalled", label(names, id))
+            format!(
+                "output {} no longer counts as stalled or refused",
+                label(names, id)
+            )
         }
         BackendEvent::Stopped { reason } => format!("stopped: {}", describe_stop(reason)),
         BackendEvent::SwitchedToSystem => {
