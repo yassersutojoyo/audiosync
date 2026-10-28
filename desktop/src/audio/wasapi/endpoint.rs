@@ -994,4 +994,28 @@ mod tests {
         let answered = reads.read_within("speakers", TIMEOUT, &STUCK, |_| Ok(FORMAT));
         assert_eq!(answered, Ok(FORMAT));
     }
+
+    #[test]
+    fn a_format_read_that_hangs_answers_every_other_output_at_once() {
+        static STUCK: StuckThreads = StuckThreads::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hangs = |calls: &Arc<AtomicUsize>| {
+            let calls = Arc::clone(calls);
+            move |_: &str| {
+                calls.fetch_add(1, Ordering::AcqRel);
+                thread::sleep(HANG);
+                Err(BackendError::UnsupportedFormat)
+            }
+        };
+        let mut reads = FormatReads::default();
+        let first = reads.read_within("speakers", TIMEOUT, &STUCK, hangs(&calls));
+        let started = Instant::now();
+        let other = reads.read_within("headphones", TIMEOUT, &STUCK, hangs(&calls));
+        let waited = started.elapsed();
+        assert_eq!(first, Err(BackendError::NotResponding));
+        assert_eq!(other, Err(BackendError::NotResponding));
+        assert!(waited < TIMEOUT / 2, "the other output waited {waited:?}");
+        assert_eq!(calls.load(Ordering::Acquire), 1, "no read starts meanwhile");
+        assert!(STUCK.none_within(HANG * 2), "the read ends once it answers");
+    }
 }
