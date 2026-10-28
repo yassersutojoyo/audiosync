@@ -1092,6 +1092,50 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | EC2 Bluetooth fresh link: switched off before its restart, it is not restarted | S325 |
 | EC2 Bluetooth fresh link: a start in one session arms a restart | S325 |
 | EC2 Bluetooth fresh link: a restart armed in a session that has ended is dropped | S325 |
+| automation consent: an undecided player gets one request that waits for the answer, is read after Allow, and other players read on | S336 |
+| automation consent: after Don't Allow a player is neither read nor asked again until the decision changes | S336 |
+| automation consent: a player that quits ends its pending request, its late return changes nothing, and the next request waits 10 s | S336 |
+| automation consent: nothing asks before the explanation was read, and only one request is pending across players | S336 |
+| automation consent: a request that returns undecided is not repeated within 10 s | S336 |
+| automation consent: a play, pause or skip command never goes to a player macOS hasn't allowed | S336 |
+| automation consent: a player whose permission macOS can't tell yet is not read | S336 |
+| automation consent: macOS's answers read as allowed, denied, undecided, and anything else as unknown | S336 |
+| capture watch: no callback for 2 s after the first asks for a capture reopen, a service restart asks at once, a quiet source never does | S335 |
+| capture watch: a tap that stops calling back while the source is paused never ends the session | S335 |
+| capture watch: the first try comes 1 s after the stop and is kept once it delivered for 5 s | S335 |
+| capture watch: a kept capture is watched on until the session ends | S335 |
+| capture watch: 5 tries, then the session stops as S21 says | S335 |
+| capture watch: a second stop while the capture is closed changes nothing | S335 |
+| capture watch: an app tap waiting for an audio process is never a stop | S335 |
+| capture watch: an app that quit or an input device that left ends the tries at once | S335 |
+| capture watch: a system source is never stopped for missing callbacks, even while Spotify plays | S335 |
+| capture watch: an input device source with no callback for 2 s after the first is stopped, with no Now Playing reading | S335 |
+| capture watch: missing callbacks count only once the source has read playing with its position moving for 6 s | S18, S335 |
+| capture watch: a source read as playing with its position standing still is never stopped | S335 |
+| capture watch: a source of several apps counts only while one of its apps plays with its position moving | S335 |
+| status line: outputs are numbered in UID order at first | S334 |
+| status line: an output leaving or joining never renumbers the others | S334 |
+| status line: a re-attach gets a new token, the other outputs keep theirs | S334 |
+| status line: deltas since the last line, frames rendered per output; a re-attached output's counts are all new, a new output counts from 0 | S334 |
+| status line: outputs are numbered, never named | S334 |
+| status line: an output leaving keeps the others' numbers | S334 |
+| status line: no time passed gives a rate of 0, and no outputs say so | S334 |
+| output stall: frames that stop for 2 s after the first stall the output, a clock that sticks while they move never does | S334 |
+| output stall: the 2 s count only uptime, so a sleep never counts toward them | S334 |
+| output stall: a re-attached output is watched from its new renderer, not before it takes frames | S334 |
+| output stall: the sign is another process's hog mode with its PID, a device no longer running, or none | S334 |
+| output stall: one debug line names the output's number, how long it stalled and the sign | S334 |
+| output stall: the stop line tells a stall from a lost device | S334 |
+| output stall: a first stall reopens at once; a second within 5 s of play, or a refused start, retries every 10 s | S334 |
+| output stall: a refused start that followed no stall is switched off as before; 5 s of play or a switch-off ends a stall | S334 |
+| output stall and capture watch: neither fires from the will-sleep notice to the wake; an output counts 2 s from the wake, the capture its 6 s grace | S334, S335 |
+| capture watch: the 6 s grace starts over at the wake, so a tap slow to resume isn't stopped 2 s after it | S334, S335 |
+| capture watch: a service restart during the sleep still closes the capture, and its first try comes 1 s after the wake | S334, S335 |
+| output format: a running output reopens once its device reports another rate or channel count, never for a notice that changes neither | S330 |
+| output format: an output fading out, or a format the start or the notice can't read, is never reopened | S330 |
+| output format: one debug line names the output's number and the old and the new format | S330 |
+| output format: the stop line tells a format change from a stall or a lost device | S330 |
+| output format: a format change during a stall trial reopens as a format change and leaves the trial as it was | S330 |
 | EC4 rate: a new capture rate rebuilds the session | S20, S140, S157 |
 | EC4 rate: a higher capture rate rebuilds the session | S20, S140, S157 |
 | EC4 rate: the same rate keeps playing | S157 |
@@ -1299,6 +1343,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | local delay: a late speaker switched on or off re-times the running others | S177 |
 | local delay: editing the lowest offset re-times the others | S177 |
 | local delay: an output lost for one poll keeps the others' hold-backs | S177, S328 |
+| local delay: an output still lost after 10 s re-times the others once | S177, S328 |
+| local delay: a lost output switched off re-times the others at once | S177, S328 |
 | AirPlay delay: the native sender's field shows L + A, follows a new L and an edit stores the difference | S178, S181 |
 | migration: a setup tuned for AirPlay sounds the same with AirPlay | S179 |
 | migration: the reference's old delay becomes the AirPlay delay | S179 |
@@ -2710,7 +2756,7 @@ The release side:
 | no_start_step_after_the_window_or_once_a_stop_began (`core/src/render.rs`) | S317, S319 |
 | a_resync_while_the_anchor_floor_falls_after_a_late_start_lands_on_its_delay (`core/src/render.rs`) | S209, S319 |
 
-### Pro Audio threads, stalled outputs, capture loss, format changes, busy inputs and unwatched apps: Windows (`cargo test` in `desktop/`)
+### Pro Audio threads, stalled outputs, capture loss, format changes, busy inputs, refused outputs and unwatched apps: Windows (`cargo test` in `desktop/`)
 
 | Test | Clauses |
 |---|---|
@@ -2768,6 +2814,12 @@ The release side:
 | an_input_whose_device_went_away_is_gone_at_initialize (`desktop/src/audio/wasapi/loopback.rs`) | S333 |
 | an_output_whose_device_leaves_as_its_restart_rest_ends_is_lost (`desktop/src/audio/controller.rs`) | S325, S68 |
 | a_busy_input_that_goes_away_gets_the_usual_tries (`desktop/src/audio/controller.rs`) | S333, S329 |
+| an_output_whose_listed_device_keeps_refusing_stays_on_and_is_tried_every_3_s (`desktop/src/audio/controller.rs`) | S331 |
+| a_refused_try_that_doesnt_answer_waits_10_s_and_the_next_refusal_3_s (`desktop/src/audio/controller.rs`) | S326, S331 |
+| a_refused_output_that_then_fails_hard_is_turned_off_at_once (`desktop/src/audio/controller.rs`) | S69, S331 |
+| switching_off_a_refused_output_ends_its_tries_and_its_notice (`desktop/src/audio/controller.rs`) | S331 |
+| a_stalled_output_that_opens_after_a_refusal_keeps_its_notice_until_five_seconds_of_play (`desktop/src/audio/controller.rs`) | S326, S331 |
+| a_speaker_windows_keeps_refusing_shows_the_lost_notice_until_it_plays (`desktop/src/adapter.rs`) | S331 |
 
 ## 19. Windows updater
 
