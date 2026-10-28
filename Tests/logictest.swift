@@ -6001,6 +6001,16 @@ do {
     check(keeps(listed: false, published: false) && keeps(listed: true, published: false)
             && !keeps(listed: true, published: true) && !keeps(listed: false, published: false, now: 15),
           "local delay: a lost output's start lead counts until its new renderer publishes one, 10 s at most")
+    // A restart holds the lead with no brief loss: the next check still comes
+    // in 0.5 s while it plays again, and at the 10 s bound while it doesn't.
+    let restarted = LocalBriefLoss()
+    let whileOff = restarted.nextCheck(now: 21, held: [bt: 20], playing: [r])
+    let whilePlaying = restarted.nextCheck(now: 23, held: [bt: 20], playing: [r, bt])
+    let released = restarted.nextCheck(now: 24, held: [:], playing: [r, bt])
+    check(whileOff == 30 && whilePlaying == 23.5 && released == nil,
+          "local delay: a restarted output's held start lead is checked until it publishes, 10 s at most",
+          "while off \(String(describing: whileOff)), while playing \(String(describing: whilePlaying)), "
+            + "released \(String(describing: released))")
 
     // covers: S178, S181 (the AirPlay delay field)
     var native = AirPlayDelay(adjustmentMs: 250)
