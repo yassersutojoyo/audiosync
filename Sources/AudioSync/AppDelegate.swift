@@ -110,7 +110,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
     /// Local speakers the user wants on, by device UID.
     var enabledLocal: Set<String> {
-        didSet { if enabledLocal != oldValue { store.save(ids: enabledLocal, forKey: Keys.enabledLocal) } }
+        didSet {
+            guard enabledLocal != oldValue else { return }
+            store.save(ids: enabledLocal, forKey: Keys.enabledLocal)
+            briefLoss.followSwitches(from: oldValue, to: enabledLocal)   // switched off, a lost one no longer counts (S328)
+        }
     }
     var masterVolume: Double {
         didSet {
@@ -248,6 +252,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var localBoundDevices: [String: AudioObjectID] = [:]
     /// Bluetooth outputs that started on a link that just came up (S325).
     let freshLinks = FreshLinkWatch()
+    /// Speakers whose devices left the list a moment ago, still counted (S328).
+    var briefLoss = LocalBriefLoss()
     /// The microphone calibration under way, if any (S232).
     var calibrationRun: CalibrationRun?
     /// Calibrate All Speakers under way, its sheet and the Undo of its Apply (S235 to S240).
@@ -417,6 +423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             // without being alive leaves the speaker list at once.
             DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
             self?.devicesChanged()
+            self?.checkBriefLosses()   // its start lead counts for 10 s at most (S328)
         }
         engine.onAppQuit = { [weak self] bundleID, pids in
             self?.appQuit(bundleID: bundleID, pids: pids, seenByCapture: true)

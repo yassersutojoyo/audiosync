@@ -56,7 +56,8 @@ use std::time::{Duration, Instant};
 
 use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
-use audiosync_core::policy::delay::native_airplay_latency_ms;
+use audiosync_core::lead::HeldLead;
+use audiosync_core::policy::delay::{BRIEF_LOSS_HOLD, native_airplay_latency_ms};
 use audiosync_core::policy::source::AudioSource;
 use audiosync_core::policy::source_quit::{
     SourceQuitAction, SourceQuitWatch, Streaming, WhenSourceQuits,
@@ -148,6 +149,12 @@ const REFUSED_GIVE_UP_POLLS: u32 = 60;
 /// polls (about five seconds); a loss before then means the restart failed,
 /// and streaming stops. After it, the next loss is restarted again.
 const RESTART_TRIAL_POLLS: u32 = 10;
+
+/// A held start lead (S328) of an output whose device is still listed, so
+/// one that stopped by itself and starts again, ends this many polls after
+/// its renderer stopped at the latest: [`BRIEF_LOSS_HOLD`] in UI polls.
+const BRIEF_LOSS_POLLS: u32 =
+    (BRIEF_LOSS_HOLD.as_millis() / super::outputs::POLL_PERIOD.as_millis()) as u32;
 
 /// How a running capture is doing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -372,6 +379,9 @@ struct Session<D: Driver> {
     logged_lead: Option<i64>,
     /// The captured app, when its capture can't watch it for its exit.
     unwatched: Option<UnwatchedApp>,
+    /// The start leads of switched-on outputs whose renderers stopped as
+    /// their devices went away, still counted in the session lead (S328).
+    held_leads: BTreeMap<String, LostLead>,
 }
 
 /// A single app captured whose process Windows won't open for a wait (an
@@ -388,6 +398,27 @@ struct UnwatchedApp {
     executable: Option<String>,
     /// When the last check ran; `None` before the first.
     checked: Option<Instant>,
+}
+
+/// The start lead of an output whose renderer stopped while it stays on.
+struct LostLead {
+    lead: HeldLead,
+    /// Polls left while its device is listed ([`BRIEF_LOSS_POLLS`]).
+    polls_left: u32,
+}
+
+/// Keeps the start lead of output `id`'s renderer counting after it stops,
+/// when the output stays switched on (S328).
+fn keep_lead(held: &mut BTreeMap<String, LostLead>, id: &str, control: &RendererControl) {
+    if let Some(lead) = control.hold_lead() {
+        held.insert(
+            id.to_owned(),
+            LostLead {
+                lead,
+                polls_left: BRIEF_LOSS_POLLS,
+            },
+        );
+    }
 }
 
 /// The reopen of a capture lost because Windows audio restarted or its
@@ -1110,6 +1141,7 @@ impl<D: Driver> Controller<D> {
                 continue;
             };
             let why = if self.policy.settings(id).enabled {
+                keep_lead(&mut session.held_leads, id, &playing.control);
                 drop(playing);
                 "its device isn't listed"
             } else {
@@ -1334,11 +1366,13 @@ impl<D: Driver> Controller<D> {
             .filter(|id| !present.iter().any(|endpoint| endpoint.id == **id))
             .cloned()
             .collect();
-        let stopped: Vec<Playing<D::Renderer>> = unlisted
-            .iter()
-            .filter_map(|id| session.outputs.remove(id))
-            .collect();
-        drop(stopped);
+        for id in &unlisted {
+            if let Some(playing) = session.outputs.remove(id)
+                && self.policy.settings(id).enabled
+            {
+                keep_lead(&mut session.held_leads, id, &playing.control);
+            }
+        }
         for id in &unlisted {
             self.log.log(|| {
                 format!(
@@ -1569,12 +1603,47 @@ impl<D: Driver> Controller<D> {
         true
     }
 
+    /// Lets go of the held start leads (S328) of the outputs that no longer
+    /// count: one whose device is listed once its new renderer published its
+    /// own lead or [`BRIEF_LOSS_POLLS`] went by, one whose device is missing
+    /// once the policy stops counting it, and one switched off or the
+    /// reference at once. `polled` counts a poll.
+    fn release_held_leads(&mut self, polled: bool) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let policy = &self.policy;
+        let present = &self.present;
+        let outputs = &session.outputs;
+        session.held_leads.retain(|id, held| {
+            if polled {
+                held.polls_left = held.polls_left.saturating_sub(1);
+            }
+            if !policy.settings(id).enabled {
+                return false;
+            }
+            if !present.iter().any(|endpoint| endpoint.id == *id) {
+                return policy.counts_while_lost(id);
+            }
+            policy.reference() != Some(id.as_str())
+                && held.polls_left > 0
+                && !outputs
+                    .get(id)
+                    .is_some_and(|playing| playing.control.start_lead_frames().is_some())
+        });
+    }
+
     /// Gives every playing output its current hold-back, after the outputs
     /// taking part, an offset, the reference, the AirPlay condition or L
     /// changed (S177): an increase inserts that much silence, a decrease
     /// skips forward, and an output whose hold-back is unchanged gets no
     /// call.
     fn retime(&self) {
+        if let Some(session) = &self.session {
+            for (id, held) in &session.held_leads {
+                held.lead.set_hold_back(self.policy.params(id).delay_frames);
+            }
+        }
         for id in self.playing_ids() {
             if self.apply_delay(&id) {
                 self.log.log(|| {
@@ -2112,6 +2181,7 @@ impl<D: Driver> Controller<D> {
         let (capture, equalizer, waits_for_feed) = self.open_capture(&target, writer)?;
         let unwatched = self.unwatched_app(&target, &capture);
         self.log.log(|| self.policy.describe_lead());
+        self.policy.end_brief_losses();
         self.session = Some(Session {
             source: source.clone(),
             target,
@@ -2125,6 +2195,7 @@ impl<D: Driver> Controller<D> {
             waits_for_feed,
             logged_lead: None,
             unwatched,
+            held_leads: BTreeMap::new(),
         });
         self.refresh_if_needed(false);
         let failures = self.sync_outputs();
@@ -2645,6 +2716,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
                     .push(BackendEvent::OutputFailed { id: failed, error });
             }
         }
+        self.release_held_leads(false);
         self.retime();
         // An output that couldn't start was turned off again.
         self.follow_device_volumes();
@@ -3132,6 +3204,11 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
         self.tick_stall_trials();
         self.device_volumes.tick();
+        if self.policy.tick() {
+            self.log.log(|| {
+                "a lost output's 10 s are up: it no longer counts for the others' delays".to_owned()
+            });
+        }
         self.log_session_lead();
         self.log_clock_queues();
         // Outputs that faded out stop, and then an ended session's capture;
@@ -3234,8 +3311,13 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 .map(|(id, playing)| (id.clone(), playing.handle.stall()))
                 .collect();
             // Released before the log says why they ended (S126).
-            for (id, _) in &stopped {
-                drop(session.outputs.remove(id));
+            for (id, stall) in &stopped {
+                if let Some(playing) = session.outputs.remove(id)
+                    && stall.is_none()
+                    && self.policy.settings(id).enabled
+                {
+                    keep_lead(&mut session.held_leads, id, &playing.control);
+                }
             }
         }
         let mut ended = Vec::new();
@@ -3266,6 +3348,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         ended.extend(self.stop_unlisted_outputs());
         ended.extend(self.forget_unlisted_unplayable());
         let failures = self.sync_outputs();
+        self.release_held_leads(true);
         // An output that left or joined moves the others (S177).
         self.retime();
         for id in ended {
@@ -7017,14 +7100,76 @@ mod tests {
         assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
         backend.set_output_enabled(BLUETOOTH, false).unwrap();
         assert_eq!(held(&backend), [Some(0), Some(150), None]);
-        // A device that goes away leaves too, and joins again when it's back.
+        // A device that goes away leaves too once 10 s have passed (S328),
+        // and joins again when it's back.
         backend.set_output_enabled(BLUETOOTH, true).unwrap();
         backend.disconnect_output(BLUETOOTH);
         backend.poll();
+        poll_quietly(&mut backend, 20);
         assert_eq!(held(&backend), [Some(0), Some(150), None]);
         backend.connect_output_as(BLUETOOTH, "Earbuds", OutputKind::Bluetooth);
         backend.poll();
         assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+    }
+
+    // covers: S328
+    #[test]
+    fn a_bluetooth_output_unlisted_for_one_poll_leaves_the_built_in_delay_unchanged() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+        backend.disconnect_output(BLUETOOTH);
+        backend.poll();
+        assert_eq!(held(&backend), [Some(250), Some(400), None]);
+        assert!(backend.policy().settings(BLUETOOTH).enabled);
+        backend.connect_output_as(BLUETOOTH, "Earbuds", OutputKind::Bluetooth);
+        backend.poll();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+        // Lost as its stream fails before the listing drops it: the same.
+        backend.disconnect_output_unnoticed(BLUETOOTH);
+        backend.end_renderer(BLUETOOTH);
+        backend.poll();
+        assert_eq!(held(&backend), [Some(250), Some(400), None]);
+    }
+
+    // covers: S328
+    #[test]
+    fn a_bluetooth_output_still_unlisted_after_10_s_retimes_the_others_once() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.disconnect_output(BLUETOOTH);
+        backend.poll();
+        // 10 s after the poll that found it gone, at the UI's two polls a second.
+        poll_quietly(&mut backend, 19);
+        assert_eq!(held(&backend), [Some(250), Some(400), None]);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(held(&backend), [Some(0), Some(150), None]);
+        backend.connect_output_as(BLUETOOTH, "Earbuds", OutputKind::Bluetooth);
+        backend.poll();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+    }
+
+    // covers: S328
+    #[test]
+    fn a_lost_bluetooth_output_switched_off_retimes_the_others_at_once() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.disconnect_output(BLUETOOTH);
+        backend.poll();
+        backend.set_output_enabled(BLUETOOTH, false).unwrap();
+        assert_eq!(held(&backend), [Some(0), Some(150), None]);
+    }
+
+    // covers: S328
+    #[test]
+    fn a_session_restart_counts_only_the_outputs_listed_then() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.disconnect_output(BLUETOOTH);
+        backend.poll();
+        backend.stop();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(held(&backend), [Some(0), Some(150), None]);
     }
 
     #[test]

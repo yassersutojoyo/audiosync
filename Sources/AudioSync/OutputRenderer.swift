@@ -188,6 +188,13 @@ final class OutputRenderer: FadingOutput {
         delayFrames.store(renderer.delayFrames, ordering: .relaxed)
     }
 
+    /// Keeps the running renderer's start lead counting after this output
+    /// stops, for a speaker whose device went away while it stays on (S328).
+    func holdLead() -> CoreHeldLead? { target?.renderer.holdLead() }
+
+    /// Whether the running renderer has published its start lead (S208).
+    var publishedLead: Bool { target?.renderer.publishedLead ?? false }
+
     /// Starts rendering on `device`, reading the ring captured at
     /// `captureRate` Hz at `delayMs`. A running output is halted first,
     /// without a fade. Throws the step that failed and leaves nothing running.
