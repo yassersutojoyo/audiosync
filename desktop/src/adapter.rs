@@ -7617,6 +7617,30 @@ mod tests {
         assert!(!adapter.snapshot().running, "nothing is on anymore");
     }
 
+    #[test]
+    fn turning_the_last_speaker_off_leaves_every_airplay_speaker_deselected() {
+        let (mut adapter, fake, kitchen, study) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+        fake.take_calls();
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        assert!(adapter.snapshot().running, "Speakers is still on");
+        adapter.set_speaker_enabled(&key(SPEAKERS), false);
+        let state = adapter.snapshot();
+        assert!(!state.running);
+        for id in [ap(&kitchen), ap(&study)] {
+            assert!(!state.speaker(&id).expect("listed").enabled, "{id}");
+        }
+        assert!(adapter.audio.enabled_airplay().is_empty());
+        let calls = fake.take_calls();
+        assert!(calls.contains(&Call::Remove(id_of(&kitchen))), "{calls:?}");
+        assert!(
+            !calls.iter().any(|call| matches!(call, Call::Add { .. })),
+            "{calls:?}"
+        );
+    }
+
     /// `airplay_adapter()` with an Apple TV that asks for a PIN listed too.
     fn apple_tv_adapter() -> (AudioAdapter<MockBackend>, FakeAirPlay, Device) {
         let (mut adapter, fake, _, _) = airplay_adapter();
