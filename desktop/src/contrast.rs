@@ -1210,6 +1210,35 @@ fn the_fix_keeps_the_keyboard_focus_in_the_row() {
     assert!(link.contains("focus-on-click: false;"));
 }
 
+/// A zone card's speaker row shows why a zone click left it off ("Stayed
+/// off, since one Cast speaker plays at a time"); its toggle hands Narrator
+/// the same note, as the compact row under "In zones" does.
+#[test]
+fn a_zone_cards_row_reads_its_zone_note_to_narrator() {
+    let widgets = include_str!("../ui/widgets.slint");
+    for component in ["SpeakerRow", "ZoneMemberRow"] {
+        let row = component_body(widgets, component);
+        assert!(
+            row.contains(
+                "property <string> note: root.item.zone-note != \"\" ? root.item.zone-note"
+            ),
+            "{component} shows the zone note first"
+        );
+        let badge = &row[row
+            .find("badge := SpeakerBadge {")
+            .expect("the row's toggle")..];
+        let description = badge
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("description:"))
+            .expect("the toggle has a description");
+        assert!(
+            description.contains("root.item.zone-note") || description.contains("root.note"),
+            "{component}'s toggle reads the zone note: {description}"
+        );
+    }
+}
+
 /// The tray flyout's row of a switched-on local output shows the state as a
 /// small glyph in the secondary text color, with no button, and Narrator
 /// hears the hint in the row's description (S198, S199).

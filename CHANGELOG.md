@@ -50,6 +50,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, an AirPlay speaker set to ask for a code every time that you turned on yourself goes off with a notice when streaming stops, and the next click asks for a new code, as on the Mac. Before, it stayed On after a stop and a start while nothing played.
 - On Windows, when streaming stops while such a speaker is still pairing, a pairing that then fails before streaming starts again turns it off with the notice that it needs a PIN, instead of saying the pairing failed. Closing its PIN prompt after the stop cancels your click, so the speaker isn't kept on for a later stream.
 - On Windows, after a screen reader sets an AirPlay speaker's volume, the speaker's row follows its own remote again within a few seconds. Before, the row ignored the remote until you dragged its slider or pressed a key on it.
+- On Windows, Narrator reads a zone speaker's note, such as "Stayed off, since one Cast speaker plays at a time", from its button in the main window, as it already did under In zones and in the tray panel. Before, it read only "Turn On".
 
 ## [0.7.1] - 2026-10-27
 
