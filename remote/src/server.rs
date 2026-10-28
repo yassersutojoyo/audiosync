@@ -234,7 +234,8 @@ pub enum ServerEvent {
         from: IpAddr,
         status: u16,
     },
-    /// A peer outside the private, link-local and loopback ranges and not on
+    /// A peer outside the private, link-local, loopback and carrier-grade NAT
+    /// (100.64/10) ranges and not on
     /// this machine's IPv6 /64, closed at accept.
     NotPrivate {
         from: IpAddr,
