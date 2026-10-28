@@ -2209,7 +2209,7 @@ The release side:
 |---|---|
 | the_app_raises_the_airplay_driver_thread_on_windows (`desktop/src/audio/airplay.rs`) | S323 |
 | a_refused_pro_audio_registration_is_noted_once (`desktop/src/audio/wasapi/mod.rs`) | S323 |
-| the_mac_app_raises_the_airplay_driver_thread (`core/src/ffi/airplay.rs`) | S323 |
+| the_sender_config_installs_the_driver_thread_hook (`core/src/ffi/airplay.rs`) | S323 |
 | the_driver_thread_setup_gives_the_thread_user_interactive_qos (`core/src/ffi/airplay.rs`, macOS only) | S323 |
 | a_stream_that_never_signals_with_full_padding_ends_as_stalled_within_2_s (`desktop/src/audio/wasapi/endpoint.rs`) | S326 |
 | a_frozen_clock_with_full_padding_ends_as_stalled_within_2_s (`desktop/src/audio/wasapi/endpoint.rs`) | S326 |

@@ -4384,7 +4384,7 @@ mod tests {
 
     // covers: S323
     #[test]
-    fn the_mac_app_raises_the_airplay_driver_thread() {
+    fn the_sender_config_installs_the_driver_thread_hook() {
         assert!(sender_config(false, None, None).on_driver_thread.is_some());
     }
 
