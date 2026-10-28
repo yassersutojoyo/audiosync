@@ -1788,6 +1788,7 @@ The decisions the hosts take from the core: sources and capture, session start a
 | volumes_are_clamped_and_non_finite_ones_ignored (`desktop/src/audio/outputs.rs`) | S76 |
 | nothing_plays_while_stopped (`desktop/src/audio/outputs.rs`) | S117 |
 | turning_the_last_speaker_off_stops_streaming (`desktop/src/adapter.rs`; streaming stops, the AirPlay deselect is not checked) | S118 |
+| turning_the_last_speaker_off_leaves_every_airplay_speaker_deselected (`desktop/src/adapter.rs`; the stop when the last speaker is AirPlay; deselect at stop has nothing left to do on Windows, S162) | S118 |
 | a_capture_that_cant_start_starts_nothing (`desktop/src/audio/controller.rs`) | S121 |
 | capture_that_cant_start_leaves_streaming_off_with_a_notice (`desktop/src/adapter.rs`) | S121 |
 | start_problems_name_the_chosen_app (`desktop/src/adapter.rs`) | S121 |
@@ -1797,6 +1798,7 @@ The decisions the hosts take from the core: sources and capture, session start a
 | the_session_ends_when_the_captured_app_quits (`desktop/src/audio/controller.rs`) | S142 |
 | an_app_that_quits_ends_the_session_without_a_restart (`desktop/src/audio/controller.rs`) | S142 |
 | an_app_that_quits_stops_streaming_and_stays_chosen (`desktop/src/adapter.rs`) | S142 |
+| all_speakers_off_then_one_on_starts_a_new_session_with_the_saved_settings (`desktop/src/adapter.rs`; local speakers only; AirPlay deselect is S118's test) | S144 |
 | notices_can_be_dismissed_one_by_one_or_all_at_once (`desktop/src/adapter.rs`) | S153 |
 | enabled_connected_outputs_play_sorted_by_id (`desktop/src/audio/outputs.rs`) | S161 |
 | an_output_turned_off_is_removed (`desktop/src/audio/outputs.rs`) | S161 |
