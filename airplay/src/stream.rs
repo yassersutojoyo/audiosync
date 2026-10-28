@@ -499,6 +499,9 @@ struct Speaker {
     delay: f64,
     /// A delay change waiting for its flush: the delay and when.
     pending_delay: Option<(f64, f64)>,
+    /// The merge window of `pending_delay` ended; it waits for its session
+    /// to be able to send the FLUSH at once (P100).
+    delay_due: bool,
     /// The next timeline packet to send.
     next_packet: u64,
     next_seq: u16,
@@ -1037,7 +1040,9 @@ impl Stream {
         let context = self.context();
         let mut next = context.cut_due(self.next_cut);
         for speaker in self.speakers.iter().filter(|s| self.sending(s)) {
-            if let Some((_, at)) = speaker.pending_delay {
+            if let Some((_, at)) = speaker.pending_delay
+                && !speaker.delay_due
+            {
                 next = next.min(at);
             }
             if speaker.next_packet < self.next_cut {
@@ -1048,8 +1053,8 @@ impl Stream {
     }
 
     /// Runs everything due at `now`: takes the host's arrivals into the
-    /// model, cuts the packets whose time came, applies delay changes whose
-    /// merge window ended (P100), and sends every packet whose time came to
+    /// model, cuts the packets whose time came, marks delay changes whose
+    /// merge window ended as due (P100), and sends every packet whose time came to
     /// each speaker, a packet already past its time at once (P84, P112).
     pub fn handle_timeout(&mut self, now: Instant) {
         let t = self.clock.seconds(now);
@@ -1078,12 +1083,10 @@ impl Stream {
             if paused || speaker.awaiting_flush {
                 continue;
             }
-            if let Some((delay, at)) = speaker.pending_delay
+            if let Some((_, at)) = speaker.pending_delay
                 && at <= t + DUE_TOLERANCE
             {
-                speaker.pending_delay = None;
-                speaker.delay = delay;
-                flush(speaker, &context, t, &mut self.events);
+                speaker.delay_due = true;
             }
             while speaker.next_packet < context.next_cut {
                 let due = context.cut_due(speaker.next_packet) + speaker.delay;
@@ -1146,6 +1149,7 @@ impl Stream {
             first_rtptime: config.first_rtptime,
             delay: clamp_delay(config.delay),
             pending_delay: None,
+            delay_due: false,
             next_packet: 0,
             next_seq: config.first_seq,
             rtp_offset: 0,
@@ -1218,7 +1222,8 @@ impl Stream {
     /// Sets a speaker's delay d_s, clamped to 0 to 20 000 ms (P99). A speaker
     /// that has sent nothing yet just starts later or sooner; a playing one
     /// changes through a flush (P100) 250 ms after the last of a burst of
-    /// changes, and plays on under its old delay until then.
+    /// changes, and plays on under its old delay until its session can send
+    /// that FLUSH; a change made while it waits replaces the waiting one.
     pub fn set_delay(&mut self, id: SpeakerId, delay: Duration, now: Instant) -> bool {
         self.handle_timeout(now);
         let t = self.clock.seconds(now);
@@ -1238,12 +1243,45 @@ impl Stream {
             let first = context.first_due(delay, t);
             speaker.start_at(first, speaker.first_rtptime);
             report_first_sound(speaker, &context, &mut self.events);
+        } else if speaker.delay_due {
+            speaker.pending_delay = Some((delay, t));
         } else if delay == speaker.delay {
             speaker.pending_delay = None;
         } else {
             speaker.pending_delay = Some((delay, t + seconds(DELAY_MERGE)));
         }
         true
+    }
+
+    /// The speakers whose delay change waits for its FLUSH (P100): the
+    /// driver calls [`Stream::apply_delay`] once their session can send it
+    /// at once.
+    pub fn delays_due(&self) -> Vec<SpeakerId> {
+        self.speakers
+            .iter()
+            .filter(|speaker| speaker.delay_due && self.sending(speaker))
+            .map(|speaker| speaker.id)
+            .collect()
+    }
+
+    /// Applies a due delay change as its FLUSH goes out (P100): the FLUSH
+    /// names the first packet under the new delay, which waits for the
+    /// answer ([`Stream::flush_answered`]).
+    pub fn apply_delay(&mut self, id: SpeakerId, now: Instant) {
+        let t = self.clock.seconds(now);
+        let context = context!(self);
+        let paused = self.paused;
+        let Some(speaker) = self.speakers.iter_mut().find(|speaker| {
+            speaker.id == id && speaker.delay_due && !paused && !speaker.awaiting_flush
+        }) else {
+            return;
+        };
+        speaker.delay_due = false;
+        if let Some((delay, _)) = speaker.pending_delay.take() {
+            speaker.delay = delay;
+            speaker.awaiting_flush = true;
+            flush(speaker, &context, t, &mut self.events);
+        }
     }
 
     /// Sets the volume a speaker with `sv=true` or `sm=true` applies to its
@@ -1341,6 +1379,7 @@ impl Stream {
         let context = context!(self);
         let paused = self.paused;
         for speaker in &mut self.speakers {
+            speaker.delay_due = false;
             if let Some((delay, _)) = speaker.pending_delay.take() {
                 speaker.delay = delay;
             }
@@ -1414,6 +1453,7 @@ impl Stream {
         let packet = first_frame.div_ceil(PACKET_FRAMES).max(self.next_cut);
         let context = context!(self);
         for speaker in &mut self.speakers {
+            speaker.delay_due = false;
             if let Some((delay, _)) = speaker.pending_delay.take() {
                 speaker.delay = delay;
             }

@@ -710,6 +710,55 @@ fn delay_change_flushes_one_speaker() {
     assert_eq!(flushes(&rig, moved).len(), 3);
 }
 
+// covers: P100
+#[test]
+fn delay_changes_behind_a_request_in_flight_give_one_flush() {
+    let mut rig = Rig::with_host();
+    let moved = rig.add(speaker(1, Codec::Alac));
+    rig.run_for(Duration::from_secs(3));
+    let changed_at = rig.t();
+    rig.busy = true;
+    rig.stream
+        .set_delay(moved, Duration::from_millis(300), rig.now);
+    rig.run_for(Duration::from_millis(400));
+    rig.stream
+        .set_delay(moved, Duration::from_millis(500), rig.now);
+    rig.run_for(Duration::from_secs(1));
+
+    // While the FLUSH waits, the old delay plays on.
+    assert!(flushes(&rig, moved).is_empty());
+    assert!(rig.audio(moved)[1..].iter().all(|a| !a.header.marker));
+    let waited: Vec<_> = rig
+        .syncs(moved)
+        .into_iter()
+        .filter(|(at, _)| *at >= changed_at)
+        .collect();
+    assert!(!waited.is_empty());
+    for (_, sync) in &waited {
+        let n = rig.frame_of(moved, sync.rtp_heard);
+        assert!((stated(&rig, sync) - (rig.c(n) + rig.latency())).abs() < 1e-6);
+    }
+
+    // One FLUSH once the session is free, under the last delay.
+    rig.busy = false;
+    let freed = rig.t();
+    rig.run_for(Duration::from_secs(1));
+    let flush = flushes(&rig, moved);
+    assert_eq!(flush.len(), 1);
+    let after: Vec<_> = rig
+        .syncs(moved)
+        .into_iter()
+        .filter(|(at, _)| *at >= freed)
+        .collect();
+    assert!(after[0].1.first);
+    assert_eq!(after[0].1.next_rtp, flush[0].1);
+    for (_, sync) in &after {
+        let n = rig.frame_of(moved, sync.rtp_heard);
+        let time = stated(&rig, sync);
+        assert!((time - (rig.c(n) + rig.latency() + 0.5)).abs() < 1e-6);
+    }
+}
+
 // covers: P103
 #[test]
 fn join_mid_stream() {

@@ -876,6 +876,9 @@ impl Driver {
             if self.send_ptp() {
                 progressed = true;
             }
+            if self.delay_flushes(now) {
+                progressed = true;
+            }
             while let Some(event) = self.stream.poll_event() {
                 progressed = true;
                 self.stream_event(event, now);
@@ -1156,6 +1159,28 @@ impl Driver {
             }
             IoEvent::Control { .. } | IoEvent::TimingRequest { .. } | IoEvent::Ptp { .. } => {}
         }
+    }
+
+    /// Applies each due delay change once its session can send the FLUSH at
+    /// once; until then that session starts no other request (P100).
+    fn delay_flushes(&mut self, now: Instant) -> bool {
+        let mut applied = false;
+        for id in self.stream.delays_due() {
+            let Some(key) = self.stream_ids.get(&id).cloned() else {
+                continue;
+            };
+            let free = match self.active(&key) {
+                Some(active) => active.session.flush_slot(),
+                None => self
+                    .ap2_active(&key)
+                    .is_none_or(|active| active.session.flush_slot()),
+            };
+            if free {
+                self.stream.apply_delay(id, now);
+                applied = true;
+            }
+        }
+        applied
     }
 
     /// A session's FLUSH got its answer, success or not. A resume from a
