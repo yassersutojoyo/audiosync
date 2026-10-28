@@ -5571,6 +5571,34 @@ pub mod tests {
         );
     }
 
+    // covers: S223
+    #[test]
+    fn an_every_time_pairing_failing_after_a_stop_and_start_before_a_poll_says_pairing_failed() {
+        let tv = airplay2_every_time_tv(9, "Den");
+        let id = id_of(&tv);
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        airplay.set_streaming(true);
+        pin_shown(&fake, &mut airplay, &tv);
+
+        // The poll that takes in the ended stream runs once the new one has
+        // started.
+        airplay.set_streaming(false);
+        airplay.set_streaming(true);
+        airplay.poll();
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(&tv, pairing_failed(ErrorKind::PairingFailed, false));
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayFailed {
+                id: id.clone(),
+                problem: AirPlayProblem::PairingFailed,
+            }),
+            "it failed within the new stream: {events:?}"
+        );
+    }
+
     #[test]
     fn a_pairing_in_the_attempt_that_fails_stops_with_the_notice() {
         let tv = airplay2_tv(9, "Loft");
