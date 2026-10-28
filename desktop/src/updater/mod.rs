@@ -34,7 +34,7 @@ const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 pub const RELEASE_PAGE: &str = "https://github.com/yassersutojoyo/audiosync/releases/latest";
 
 /// Whether this exe updates itself: only a build the release CI job made
-/// for a push to main, which sets `AUDIOSYNC_RELEASE_BUILD` to `1`.
+/// for a push to main or to a release/ branch, which sets `AUDIOSYNC_RELEASE_BUILD` to `1`.
 pub fn enabled() -> bool {
     marked(option_env!("AUDIOSYNC_RELEASE_BUILD")) && !cfg!(test)
 }
