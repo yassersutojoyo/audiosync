@@ -22,7 +22,7 @@
 //! first copies the file aside, next to it as
 //! `airplay-pairings.ignored-<seconds since 1970>.dat`, owner-only, and no
 //! later copy replaces it, so nothing the file held is lost; a file that
-//! can't be read at all is replaced without a copy. Forgetting a receiver
+//! can't be read at all is left as it is, as a newer one is. Forgetting a receiver
 //! also deletes every copy that holds its ID, so its secret doesn't stay
 //! behind. A file of a
 //! newer format version is ignored too but left as it is, so a newer
@@ -143,7 +143,7 @@ impl PairingStore {
                 keep_aside = true;
                 (BTreeMap::new(), true, Loaded::Ignored(reason))
             }
-            Err(Unreadable::Ignored(reason)) => (BTreeMap::new(), true, Loaded::Ignored(reason)),
+            Err(Unreadable::Ignored(reason)) => (BTreeMap::new(), false, Loaded::Ignored(reason)),
         };
         let store = PairingStore {
             path: Some(path),
@@ -221,9 +221,7 @@ impl PairingStore {
             return Ok(());
         };
         if !self.writable {
-            return Err(io::Error::other(
-                "a newer AudioSync wrote the pairings file, which is left as it is",
-            ));
+            return Err(io::Error::other("the pairings file is left as it is"));
         }
         if let Some(bytes) = &self.unusable {
             keep_aside(path, bytes)?;

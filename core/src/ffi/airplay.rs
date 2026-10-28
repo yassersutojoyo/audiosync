@@ -376,7 +376,7 @@ pub const AIRPLAY_ERROR_RECEIVER_UNVERIFIED: i32 = 11;
 /// a null or dead handle, or a path that isn't UTF-8.
 pub const AIRPLAY_PAIRINGS_FAILED: i32 = -1;
 /// The pairings file can't be read or isn't in the expected format: it is
-/// ignored, and the next pairing replaces it.
+/// ignored, and the next pairing replaces it unless it couldn't be read.
 pub const AIRPLAY_PAIRINGS_IGNORED: i32 = -2;
 
 /// The largest hold-back [`asc_airplay_set_hold_back`] applies, in ms: the

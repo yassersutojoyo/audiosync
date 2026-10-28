@@ -351,7 +351,7 @@ final class NativeAirPlay {
     static func pairingsLogLine(_ loaded: Int32) -> String {
         switch loaded {
         case ASC_AIRPLAY_PAIRINGS_IGNORED:
-            return "the pairings file was unreadable or not in the expected format; it is ignored, and the next pairing replaces it"
+            return "the pairings file was unreadable or not in the expected format; it is ignored, and the next pairing replaces it unless it was unreadable"
         case ASC_AIRPLAY_PAIRINGS_NEWER:
             return "a newer AudioSync wrote the pairings file; it is left as it is, and pairings made now last until AudioSync quits"
         case ASC_AIRPLAY_PAIRINGS_FAILED:
