@@ -2298,14 +2298,16 @@ impl Driver {
                 || (self.directory.seen(key) && self.directory.device(key).is_none()))
     }
 
-    /// Discovery listed an unannounced speaker again: a session starts now,
-    /// the first of a fresh schedule, unless the records still leave it
-    /// unannounced (P215).
+    /// Discovery listed an unannounced speaker, or one waiting to retry,
+    /// again: a session starts now, the first of a fresh schedule, unless
+    /// the records still leave it unannounced (P215, P142).
     fn announced(&mut self, key: &DeviceKey, now: Instant) {
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
-        if !matches!(speaker.phase, Phase::Unannounced) || self.stopping.is_some() {
+        let retry =
+            matches!(speaker.phase, Phase::Waiting(_)) && speaker.next_start == StartKind::Retry;
+        if !(retry || matches!(speaker.phase, Phase::Unannounced)) || self.stopping.is_some() {
             return;
         }
         speaker.backoff = Backoff::new();
