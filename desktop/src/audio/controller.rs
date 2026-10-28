@@ -1764,10 +1764,20 @@ impl<D: Driver> Controller<D> {
         let source = session.source.clone();
         let ring = Arc::clone(&session.ring);
         let started_as = session.started_as;
+        // The lost capture's thread, let go while Windows audio hangs, may
+        // still hold the ring's writer: that try fails as one Windows audio
+        // didn't answer, and the next may work.
+        let mut writer_held = false;
         let opened = match self.capture_target(&source) {
-            Ok(target) => self
-                .open_capture(&target, &ring)
-                .map(|opened| (target, opened)),
+            Ok(target) => match ring.writer() {
+                Some(writer) => self
+                    .open_capture(&target, writer)
+                    .map(|opened| (target, opened)),
+                None => {
+                    writer_held = true;
+                    Err(BackendError::NotResponding)
+                }
+            },
             Err(error) => Err(error),
         };
         match opened {
@@ -1798,11 +1808,16 @@ impl<D: Driver> Controller<D> {
                 self.log
                     .log(|| "the capture runs again; the outputs played on".to_owned());
             }
-            Err(error) if tries_left > 0 && may_start_later(&error) => {
+            Err(error) if tries_left > 0 && (writer_held || may_start_later(&error)) => {
                 self.log.log(|| {
-                    format!(
-                        "the capture couldn't open again yet: {error} It tries again in a moment."
-                    )
+                    if writer_held {
+                        "the capture couldn't open again yet: the lost capture still holds the                          ring. It tries again in a moment."
+                            .to_owned()
+                    } else {
+                        format!(
+                            "the capture couldn't open again yet: {error} It tries again in a                              moment."
+                        )
+                    }
                 });
                 if let Some(session) = self.session.as_mut() {
                     session.reopen = Some(CaptureReopen {
@@ -2064,7 +2079,8 @@ impl<D: Driver> Controller<D> {
     fn start_session(&mut self, source: &SourceId) -> Result<(), BackendError> {
         let target = self.capture_target(source)?;
         let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
-        let (capture, equalizer, waits_for_feed) = self.open_capture(&target, &ring)?;
+        let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
+        let (capture, equalizer, waits_for_feed) = self.open_capture(&target, writer)?;
         self.log.log(|| self.policy.describe_lead());
         self.session = Some(Session {
             source: source.clone(),
@@ -2089,16 +2105,15 @@ impl<D: Driver> Controller<D> {
         Ok(())
     }
 
-    /// Starts capturing `target` into `ring`, through an equalizer at the
+    /// Starts capturing `target` through `writer`, through an equalizer at the
     /// current settings, feeding the senders whose feeds are free. Returns
     /// the capture, its equalizer's control half and the feeds it went
     /// without.
     fn open_capture(
         &mut self,
         target: &CaptureTarget,
-        ring: &Arc<Ring>,
+        writer: RingWriter,
     ) -> Result<(D::Capture, EqControl, MissingFeeds), BackendError> {
-        let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
         // The capture equalizes at the session rate, after any resampling
         // (a positive rate is always accepted).
         let (mut equalizer, processor) = eq::equalizer();

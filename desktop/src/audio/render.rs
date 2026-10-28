@@ -210,12 +210,14 @@ pub struct WakeCounts {
     pub empty: u64,
 }
 
-/// What showed that an output stream stopped taking frames (S326).
+/// What the log names as the sign of an output stream that took no frame
+/// (S326): every padding read showed the whole buffer still queued, and
+/// with a clock that had run, it stood still too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StallSign {
-    /// Every padding read showed the whole buffer still queued.
+    /// The buffer stayed full.
     FullPadding,
-    /// The device clock stayed where it was while frames were queued.
+    /// The buffer stayed full and the device clock, which had run, stopped.
     FrozenClock,
 }
 

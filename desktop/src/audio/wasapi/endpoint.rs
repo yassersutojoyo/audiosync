@@ -484,17 +484,18 @@ fn render_loop(
 }
 
 /// Watches a running stream for frames it stops taking (S326), counted as
-/// frames the device accepted against wall time rather than as wakes.
+/// frames the device accepted against wall time rather than as wakes: only
+/// a stream that took none for [`STALL_SPAN`] stalls, and the clock only
+/// names the sign.
 #[derive(Debug, Default)]
 struct StallWatch {
     /// When the stream last took frames: a padding read below a full buffer,
     /// or a clock that moved. `None` until it first did: a link still coming
     /// up isn't checked.
     took: Option<Instant>,
-    /// When the clock last moved, or last had nothing queued to play;
-    /// `None` until it first moved, so a clock that never runs isn't held
-    /// against the stream.
-    ticked: Option<Instant>,
+    /// Whether the clock has moved since the start, so that a still one
+    /// says the device stopped too.
+    clock_runs: bool,
     /// The clock's position at the last read.
     position: Option<u64>,
 }
@@ -517,35 +518,20 @@ impl StallWatch {
         if let Some(position) = position {
             if self.position.is_some_and(|last| last != position) {
                 self.took = Some(now);
-                self.ticked = Some(now);
-            } else if padding == 0 && self.ticked.is_some() {
-                self.ticked = Some(now);
+                self.clock_runs = true;
             }
             self.position = Some(position);
         }
-        let since = |moment: Option<Instant>| {
-            moment
-                .map(|moment| now.saturating_duration_since(moment))
-                .filter(|&span| span >= STALL_SPAN)
+        let span = now.saturating_duration_since(self.took?);
+        if span < STALL_SPAN {
+            return None;
+        }
+        let sign = if self.clock_runs && position.is_some() {
+            StallSign::FrozenClock
+        } else {
+            StallSign::FullPadding
         };
-        if position.is_some()
-            && padding > 0
-            && let Some(span) = since(self.ticked)
-        {
-            return Some(Stall {
-                span,
-                sign: StallSign::FrozenClock,
-            });
-        }
-        if padding >= buffer_frames
-            && let Some(span) = since(self.took)
-        {
-            return Some(Stall {
-                span,
-                sign: StallSign::FullPadding,
-            });
-        }
-        None
+        Some(Stall { span, sign })
     }
 }
 
