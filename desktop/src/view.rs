@@ -5502,6 +5502,11 @@ mod tests {
         HELD_CLOCK.with(|clock| clock.set(Some(CLOCK_START.elapsed())));
     }
 
+    /// Moves the clock [`hold_clock`] stopped on by `by`.
+    fn advance_clock(by: Duration) {
+        HELD_CLOCK.with(|clock| clock.set(clock.get().map(|now| now + by)));
+    }
+
     /// Draws a frame of every headless window, as the event loop would after
     /// an event: lists are laid out then, and their new rows built.
     pub(super) fn draw_frames() {
@@ -7376,6 +7381,7 @@ mod tests {
 
     #[test]
     fn a_double_click_on_a_name_renames_and_a_single_one_is_a_click_on_the_row() {
+        hold_clock();
         let app = app_over(MockBackend::new());
         draw_frames();
         let window = app.main.window();
@@ -7386,7 +7392,7 @@ mod tests {
             row_of(&app, "local:desk").renaming,
             "the double-click renames"
         );
-        std::thread::sleep(std::time::Duration::from_millis(600));
+        advance_clock(Duration::from_millis(600));
         draw_frames();
         assert!(
             app.ui.borrow().sync_open.is_empty(),
@@ -7401,7 +7407,7 @@ mod tests {
             app.ui.borrow().sync_open.is_empty(),
             "one click waits for a second"
         );
-        std::thread::sleep(std::time::Duration::from_millis(600));
+        advance_clock(Duration::from_millis(600));
         draw_frames();
         assert!(
             app.ui.borrow().sync_open.contains("local:desk"),
@@ -7411,6 +7417,7 @@ mod tests {
 
     #[test]
     fn a_click_on_a_name_waits_the_systems_double_click_time() {
+        hold_clock();
         let app = app_over(MockBackend::new());
         let field = app.main.global::<NameField>();
         assert_eq!(
@@ -7424,7 +7431,7 @@ mod tests {
 
         field.set_double_click(150);
         click(window, x, y);
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        advance_clock(Duration::from_millis(250));
         draw_frames();
         assert!(
             app.ui.borrow().sync_open.contains("local:desk"),
@@ -7433,11 +7440,10 @@ mod tests {
 
         app.main.invoke_sync_toggled("local:desk".into());
         assert!(app.ui.borrow().sync_open.is_empty());
-        // 700 ms is past Slint's fixed 500 ms; the 3 s setting leaves a slow
-        // runner more than 2 s before the second click lands.
+        // 700 ms is past Slint's fixed 500 ms.
         field.set_double_click(3000);
         click(window, x, y);
-        std::thread::sleep(std::time::Duration::from_millis(700));
+        advance_clock(Duration::from_millis(700));
         draw_frames();
         click(window, x, y);
         assert!(
@@ -7507,6 +7513,7 @@ mod tests {
 
     #[test]
     fn a_double_click_on_a_zone_name_renames_it_in_its_header_and_a_single_one_folds_it() {
+        hold_clock();
         let app = app_over(MockBackend::zones_preview());
         draw_frames();
         let window = app.main.window();
@@ -7526,7 +7533,7 @@ mod tests {
         }
         press(window, Key::Return);
         assert_eq!(zone_name(&app, "zone:living"), "Den");
-        std::thread::sleep(std::time::Duration::from_millis(600));
+        advance_clock(Duration::from_millis(600));
         draw_frames();
         assert!(
             !app.ui.borrow().collapsed.contains("zone:living"),
@@ -7548,7 +7555,7 @@ mod tests {
             !app.ui.borrow().collapsed.contains("zone:living"),
             "one click waits for a second"
         );
-        std::thread::sleep(std::time::Duration::from_millis(600));
+        advance_clock(Duration::from_millis(600));
         draw_frames();
         assert!(
             app.ui.borrow().collapsed.contains("zone:living"),

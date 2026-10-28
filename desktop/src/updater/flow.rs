@@ -428,7 +428,7 @@ pub mod tests {
     use super::*;
     use crate::updater::archive::tests::{fake_exe, zip_of};
     use crate::updater::fetch::tests::MemoryFetch;
-    use crate::updater::files::{RealFiles, Sink};
+    use crate::updater::files::{LOCK_RETRIES, RealFiles, Sink};
     use crate::updater::signature::test_key;
     use crate::updater::tests::test_dir;
     use std::collections::HashMap;
@@ -1043,45 +1043,51 @@ pub mod tests {
     // covers: S315
     #[test]
     fn a_sharing_violation_is_retried_five_times_then_fails() {
-        let held = |name: &str| {
+        // The waits are counted, not slept, and the exe is let go once they
+        // add up to `hold`: a loaded machine stretches neither part.
+        let held = |name: &str, hold: Duration| {
             let (release, receiver) = std::sync::mpsc::channel();
             let files = Arc::new(Held {
                 release: std::sync::Mutex::new(Some(receiver)),
                 held: std::sync::Mutex::new(None),
             });
-            let f = fixture(name, false, files.clone(), DebugLog::default());
-            (f, files, release)
+            let mut f = fixture(name, false, files.clone(), DebugLog::default());
+            let waits = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let (holder, counted) = (files.clone(), waits.clone());
+            let on_time = std::sync::Mutex::new(Some(release.clone()));
+            f.env.pause = Arc::new(Pause::counted(move |wait| {
+                let mut waits = counted.lock().unwrap();
+                waits.push(wait);
+                if waits.iter().sum::<Duration>() >= hold
+                    && let Some(release) = on_time.lock().unwrap().take()
+                {
+                    let _ = release.send(());
+                    let thread = holder.held.lock().unwrap().take();
+                    thread.expect("the exe was held").join().unwrap();
+                }
+            }));
+            (f, files, release, waits)
         };
 
-        let (f, files, release) = held("held-1s");
+        let (f, _, _, waits) = held("held-1s", Duration::from_secs(1));
         let update = update_of(&f.env);
-        let releaser = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(1));
-            let _ = release.send(());
-        });
         assert!(matches!(run(&f.env, &update), Installed::Done(_)));
-        releaser.join().unwrap();
-        assert!(files.held.lock().unwrap().is_some(), "the exe was held");
+        assert_eq!(*waits.lock().unwrap(), LOCK_RETRIES[..3]);
         assert!(
             fs::read(f.env.install_dir.join(archive::EXE_NAME))
                 .unwrap()
                 .ends_with(b"new exe")
         );
 
-        let (f, files, release) = held("held-throughout");
+        let (f, files, release, waits) = held("held-throughout", Duration::MAX);
         let update = update_of(&f.env);
-        let started = Instant::now();
         let outcome = run(&f.env, &update);
-        let took = started.elapsed();
         let _ = release.send(());
         if let Some(holder) = files.held.lock().unwrap().take() {
             holder.join().unwrap();
         }
         assert_eq!(outcome, Installed::Failed);
-        assert!(
-            took >= Duration::from_millis(7750) && took < Duration::from_secs(10),
-            "five retries, {took:?}"
-        );
+        assert_eq!(*waits.lock().unwrap(), LOCK_RETRIES, "five retries");
         assert_eq!(
             fs::read(f.env.install_dir.join(archive::EXE_NAME)).unwrap(),
             b"old exe"
