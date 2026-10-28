@@ -472,6 +472,9 @@ fn negotiated(param: &Pod) -> Negotiated {
 /// The `EnumFormat` param that asks for `asked`, as a serialized pod: front
 /// left and right for stereo, else the device's channels in order.
 fn enum_format(asked: StreamFormat) -> Result<Vec<u8>, BackendError> {
+    if asked.channels > format::MAX_CHANNELS {
+        return Err(BackendError::UnsupportedFormat);
+    }
     let mut info = AudioInfoRaw::new();
     info.set_format(AudioFormat::F32LE);
     info.set_rate(asked.rate);

@@ -4228,7 +4228,15 @@ fn describe_source(source: &SourceId) -> String {
     }
 }
 
-/// What a capture captures, and the format Windows delivers it in.
+/// The audio system that converts between AudioSync's float samples and a
+/// device's format.
+const CONVERTER: &str = if cfg!(target_os = "linux") {
+    "PipeWire"
+} else {
+    "Windows"
+};
+
+/// What a capture captures, and the format the audio system delivers it in.
 fn describe_capture(target: &CaptureTarget, setup: Option<CaptureAttempt>) -> String {
     let what = match target {
         CaptureTarget::Loopback(activation) => {
@@ -4264,9 +4272,9 @@ fn describe_capture(target: &CaptureTarget, setup: Option<CaptureAttempt>) -> St
                 SampleType::I16 => "16-bit integer",
             };
             let converted = if attempt.autoconvert {
-                ", converted by Windows"
+                format!(", converted by {CONVERTER}")
             } else {
-                ""
+                String::new()
             };
             format!(
                 "{} Hz, {} ch, {sample}{converted}",
@@ -4285,9 +4293,9 @@ fn describe_stream(setup: Option<StreamSetup>) -> String {
     };
     let format = setup.format;
     let samples = if format.convert {
-        "float, converted by Windows to the device's format"
+        format!("float, converted by {CONVERTER} to the device's format")
     } else {
-        "float, the device's own format"
+        "float, the device's own format".to_owned()
     };
     let buffer_ms = f64::from(setup.buffer_frames) * 1_000.0 / f64::from(format.rate.max(1));
     format!(
@@ -7944,8 +7952,10 @@ mod tests {
             &messages,
             &[
                 "starting: capturing the whole system",
-                "capture started: everything except process 1000 and its children; \
-                 48000 Hz, 2 ch, 32-bit float, converted by Windows",
+                &format!(
+                    "capture started: everything except process 1000 and its children; \
+                     48000 Hz, 2 ch, 32-bit float, converted by {CONVERTER}"
+                ),
                 "output \"Headphones\" (headphones) started: 48000 Hz, 2 ch (mask 0x3), \
                  float, the device's own format; buffer 960 frames (20.0 ms); delay 0 ms, volume ",
                 "output \"Speakers\" (speakers) started: 48000 Hz",

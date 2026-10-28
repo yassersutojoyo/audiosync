@@ -343,7 +343,9 @@ impl Graph {
                     form_factor: None,
                     enumerator: node.prop("device.api").map(str::to_owned),
                     display_port: false,
-                    channels: node.prop_channels(),
+                    channels: node
+                        .prop_channels()
+                        .map(|channels| channels.min(super::format::MAX_CHANNELS)),
                 }),
             })
             .collect()

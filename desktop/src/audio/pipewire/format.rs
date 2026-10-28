@@ -24,12 +24,17 @@ pub const SETUP: CaptureAttempt = CaptureAttempt {
     pair: InputPair::FIRST,
 };
 
+/// The most channels a capture asks for: SPA's audio format holds a
+/// position for 64 (`SPA_AUDIO_MAX_CHANNELS`).
+pub const MAX_CHANNELS: u16 = 64;
+
 /// How an input device with `channels` channels is captured for the pair
 /// stored as `saved`: pair 1-2, or a pair the device no longer has, keeps
 /// the adapter's stereo mix of the device, as Windows does; any other pair
-/// takes every channel unmixed and plays that pair.
+/// takes every channel unmixed, up to [`MAX_CHANNELS`], and plays that pair.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn input_setup(saved: u16, channels: u16) -> CaptureAttempt {
+    let channels = channels.min(MAX_CHANNELS);
     let (pair, _) = InputPair::resolve(saved, channels);
     if pair.index == 0 {
         return SETUP;
