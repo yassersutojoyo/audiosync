@@ -3808,7 +3808,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// The sources as the UI lists them: what is listed, and the chosen app
-    /// after them while it isn't running, so the choice still shows.
+    /// among them while it isn't running, so the choice still shows.
     fn source_rows(&self) -> Vec<Source> {
         let mut rows: Vec<Source> = self
             .sources
@@ -3826,9 +3826,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             })
             .collect();
         let chosen = self.chosen.key();
-        if !rows.iter().any(|row| row.id == chosen) {
+        // An unplugged input isn't listed; the picker shows the whole system.
+        if !rows.iter().any(|row| row.id == chosen) && !matches!(self.chosen, Chosen::Input { .. })
+        {
             let kind = match self.chosen {
-                Chosen::Input { .. } => SourceKind::Input,
                 Chosen::Mix {
                     mode: MixMode::AllExcept,
                     ..
@@ -3840,14 +3841,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 Chosen::Mix { apps, .. } => mix_names(apps).join(", "),
                 chosen => chosen.shown_name(),
             };
-            // Apps come before input devices, as in the listing.
-            let at = match kind {
-                SourceKind::Input => rows.len(),
-                _ => rows
-                    .iter()
-                    .position(|row| row.kind == SourceKind::Input)
-                    .unwrap_or(rows.len()),
-            };
+            // Apps come before input devices, as in the listing; one app
+            // sorts by name among them, as `source_list` sorts.
+            let sorted = matches!(self.chosen, Chosen::App { .. });
+            let at = rows
+                .iter()
+                .position(|row| {
+                    row.kind == SourceKind::Input
+                        || (sorted
+                            && row.kind == SourceKind::App
+                            && row.name.to_lowercase() > name.to_lowercase())
+                })
+                .unwrap_or(rows.len());
             rows.insert(
                 at,
                 Source {

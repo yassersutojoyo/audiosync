@@ -39,7 +39,7 @@ S199 Hosts only: the hint's wording in UIStrings (Mac) and strings.slint (Window
 S200 Hosts only: VoiceOver and Narrator labels of the hint and its fix button; the Mac logic suite and the Windows tests check it.
 S202 Hosts only: re-reads when a device goes away, comes back or its row is switched on again; the Mac logic suite and the Windows tests check it.
 S204 Mac host only: settings the Mac app saved under the bundled engine's output IDs move to the native sender's receiver IDs; its logic suite checks it.
-S211 Mac host only: the source picker's entries; its logic suite checks it.
+S211 Hosts only: the source picker's entries; the Mac logic suite and the Windows tests check it.
 S212 Hosts only: stored settings read back and clamped (the user defaults on the Mac, a JSON file on Windows); the Mac logic suite and the Windows host's tests check it.
 S213 Mac host only: notes on choices older builds read; its logic suite checks it.
 S214 Mac host only: where a window reopens; its logic suite checks it.

@@ -1847,10 +1847,18 @@ impl App {
                 SourceKind::AppsExcept => strings.invoke_source_all_except(s.name.as_str().into()),
             })
             .collect();
+        // A choice the picker doesn't list, an unplugged input, shows as the
+        // whole system rather than a blank picker.
         let source_index = state
             .sources
             .iter()
             .position(|s| s.id == state.source_id)
+            .or_else(|| {
+                state
+                    .sources
+                    .iter()
+                    .position(|s| s.kind == SourceKind::System)
+            })
             .map_or(-1, |i| i as i32);
         let (input_pairs, input_pair_index) = input_pair_choice(&state, |first, last| {
             strings.invoke_input_channel_pair(first, last)
