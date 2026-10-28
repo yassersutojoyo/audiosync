@@ -1268,8 +1268,7 @@ impl<D: Driver> Controller<D> {
     /// held the UI thread for the whole wait, the starts left in the pass
     /// wait as that one does ([`STALL_RETRY_POLLS`]) without a try, so a
     /// pass holds the window that long once at most; the outputs whose own
-    /// start hung go last in the next pass. From a suspend notice until the
-    /// resume, no start is tried (S332).
+    /// start hung go last in the next pass.
     fn sync_outputs(&mut self) -> Vec<(String, BackendError)> {
         self.cancel_stale_fresh_restarts();
         let Some(session) = self.session.as_mut() else {
@@ -1364,12 +1363,26 @@ impl<D: Driver> Controller<D> {
                 &endpoint.id,
                 params.gain,
             )));
-            let failed = match self.driver.start_renderer(
-                &endpoint,
-                reader,
-                control.clone(),
-                Arc::clone(&gain),
-            ) {
+            let started =
+                self.driver
+                    .start_renderer(&endpoint, reader, control.clone(), Arc::clone(&gain));
+            // A device that now refuses or doesn't answer is no longer held
+            // by another app, so the busy notice would mislead.
+            if let Err(BackendError::DeviceGone | BackendError::NotResponding) = started
+                && self.busy.remove(&endpoint.id).is_some()
+            {
+                self.log.log(|| {
+                    format!(
+                        "output {}: the other app let go of its device, but the device doesn't \
+                         open yet; it is no longer busy and stays on",
+                        label(&self.names, &endpoint.id)
+                    )
+                });
+                self.pending.push(BackendEvent::OutputFree {
+                    id: endpoint.id.clone(),
+                });
+            }
+            let failed = match started {
                 Ok(handle) => {
                     if let Some(trial) = self.stall_trials.get_mut(&endpoint.id) {
                         trial.polls = RESTART_TRIAL_POLLS;
@@ -1458,12 +1471,6 @@ impl<D: Driver> Controller<D> {
                 // Still listed and refused about thirty seconds on, it gets
                 // the notice and a try every few seconds (S331).
                 Err(BackendError::DeviceGone) => {
-                    // The other app let go, but the device doesn't open yet.
-                    if self.busy.remove(&endpoint.id).is_some() {
-                        self.pending.push(BackendEvent::OutputFree {
-                            id: endpoint.id.clone(),
-                        });
-                    }
                     let refusal =
                         self.refused
                             .entry(endpoint.id.clone())
@@ -1504,11 +1511,6 @@ impl<D: Driver> Controller<D> {
                 // stays on, and is tried again a few seconds later, since
                 // each try may hold the UI thread that long.
                 Err(BackendError::NotResponding) => {
-                    if self.busy.remove(&endpoint.id).is_some() {
-                        self.pending.push(BackendEvent::OutputFree {
-                            id: endpoint.id.clone(),
-                        });
-                    }
                     held = true;
                     self.unplayable.insert(endpoint.id.clone());
                     self.stalled.insert(endpoint.id.clone(), STALL_RETRY_POLLS);
@@ -5694,26 +5696,28 @@ mod tests {
     // covers: S331
     #[test]
     fn a_busy_output_whose_device_then_refuses_to_open_is_no_longer_busy() {
-        let mut backend = backend();
-        backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
-        backend.start(&SourceId::WholeSystem).unwrap();
-        assert_eq!(
-            backend.poll(),
-            [BackendEvent::OutputBusy {
-                id: HEADPHONES.to_owned(),
-            }]
-        );
-        // The other app let go while Windows rebuilds the endpoint.
-        backend.fail_output(HEADPHONES, Some(BackendError::DeviceGone));
-        let events: Vec<BackendEvent> =
-            (0..BUSY_RETRY_POLLS).flat_map(|_| backend.poll()).collect();
-        assert_eq!(
-            events,
-            [BackendEvent::OutputFree {
-                id: HEADPHONES.to_owned(),
-            }]
-        );
-        assert!(backend.policy().settings(HEADPHONES).enabled);
+        for refusal in [BackendError::DeviceGone, BackendError::NotResponding] {
+            let mut backend = backend();
+            backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+            backend.start(&SourceId::WholeSystem).unwrap();
+            assert_eq!(
+                backend.poll(),
+                [BackendEvent::OutputBusy {
+                    id: HEADPHONES.to_owned(),
+                }]
+            );
+            // The other app let go while Windows rebuilds the endpoint.
+            backend.fail_output(HEADPHONES, Some(refusal));
+            let events: Vec<BackendEvent> =
+                (0..BUSY_RETRY_POLLS).flat_map(|_| backend.poll()).collect();
+            assert_eq!(
+                events,
+                [BackendEvent::OutputFree {
+                    id: HEADPHONES.to_owned(),
+                }]
+            );
+            assert!(backend.policy().settings(HEADPHONES).enabled);
+        }
     }
 
     #[test]
