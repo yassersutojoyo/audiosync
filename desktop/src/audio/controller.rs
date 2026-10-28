@@ -1268,7 +1268,8 @@ impl<D: Driver> Controller<D> {
     /// held the UI thread for the whole wait, the starts left in the pass
     /// wait as that one does ([`STALL_RETRY_POLLS`]) without a try, so a
     /// pass holds the window that long once at most; the outputs whose own
-    /// start hung go last in the next pass.
+    /// start hung go last in the next pass. From a suspend notice until the
+    /// resume, no start is tried (S332).
     fn sync_outputs(&mut self) -> Vec<(String, BackendError)> {
         self.cancel_stale_fresh_restarts();
         let Some(session) = self.session.as_mut() else {
@@ -1310,6 +1311,10 @@ impl<D: Driver> Controller<D> {
         // waited behind them doesn't wait behind them again.
         let mut attach = plan.attach;
         attach.sort_by_key(|endpoint| self.hung.contains(&endpoint.id));
+        // Each try may hold the UI thread for seconds (S332).
+        if self.power.suspended.is_some() {
+            attach.clear();
+        }
         // Whether a start in this pass didn't answer in time.
         let mut held = false;
         for endpoint in attach {
