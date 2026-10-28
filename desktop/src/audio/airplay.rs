@@ -7064,6 +7064,30 @@ pub mod tests {
         );
     }
 
+    // covers: S276
+    #[test]
+    fn a_device_volume_during_a_calibration_solo_is_kept_and_stays_muted() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let study = device(2, "Study", OPEN_TXT);
+        let (k, s) = (id_of(&kitchen), id_of(&study));
+        fake.appear(&kitchen);
+        fake.appear(&study);
+        airplay.poll();
+        airplay.set_enabled(&k, true).unwrap();
+        airplay.set_enabled(&s, true).unwrap();
+        airplay.set_streaming(true);
+        airplay.set_calibration_solo(Some(&k));
+        fake.take_calls();
+        // Study's remote asks for −6 dB while only Kitchen may be heard.
+        remote(&fake, &study, RemoteCommand::DeviceVolume(Volume::Db(-6.0)));
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(sent_levels(&fake), [(s.clone(), None)]);
+        airplay.set_calibration_solo(None);
+        assert!(sent_levels(&fake).contains(&(s.clone(), Some(-6.0))));
+    }
+
     #[test]
     fn the_cast_hold_back_comes_on_top_of_each_speakers_own_delay() {
         let fake = FakeAirPlay::new();

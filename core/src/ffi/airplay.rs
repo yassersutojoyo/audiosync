@@ -7520,6 +7520,30 @@ mod tests {
 
     // covers: S276
     #[test]
+    fn a_device_volume_on_a_silenced_speaker_is_kept_and_stays_muted() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005412";
+        let c_id = c_string(id);
+        let key = speaker_key(0x12);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        // Another speaker is measured: this one stays muted.
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_silenced(handle, c_id.as_ptr(), true)) };
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-6.0)),
+        );
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 80.0)]);
+        let muted = Some(Volume::Muted.wire_db());
+        assert_eq!(inside(handle).added[id].read_back.echo_of(), muted);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S276
+    #[test]
     fn a_device_volume_while_the_slider_is_dragged_is_ignored() {
         let mut handle = create_with(quiet);
         let id = "02005E005406";
