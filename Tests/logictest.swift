@@ -6519,6 +6519,15 @@ do {
           "output format: one debug line names the output's number and the old and the new format", line)
     check(OutputLoss.formatChanged(old: stereo48, new: stereo48).reason == "format changed",
           "output format: the stop line tells a format change from a stall or a lost device")
+    var trial = OutputStallRetry()
+    _ = trial.stalled("A", nowS: 100)
+    trial.started("A", nowS: 100.5)
+    let asFormat = trial.afterStall(formatReopens: ["A"])
+    let asStall = trial.afterStall(formatReopens: [])
+    let inARow = trial.stalled("A", nowS: 103)
+    check(asFormat.isEmpty && asStall == ["A"] && inARow == .retry(atS: 113),
+          "output format: a format change during a stall trial reopens as a format change and leaves the trial as it was",
+          "\(asFormat) \(asStall) \(inARow)")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
