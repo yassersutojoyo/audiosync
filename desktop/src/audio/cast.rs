@@ -34,7 +34,7 @@
 //! under an ID that follows from the address ([`CastAddress::device_id`]),
 //! and a host name is looked up on a thread of its own.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -550,6 +550,8 @@ pub struct CastSpeakers {
     link: Option<Box<dyn CastLink>>,
     feed: CastFeed,
     list: DeviceList,
+    /// Devices whose records went away during a session (C17).
+    offline: BTreeSet<DeviceId>,
     /// The one device the user turned on.
     enabled: Option<DeviceId>,
     /// Each device's volume as its latest status reports it.
@@ -597,6 +599,7 @@ impl CastSpeakers {
             link: Some(link),
             feed: CastFeed::new(),
             list: DeviceList::new(),
+            offline: BTreeSet::new(),
             enabled: None,
             volumes: BTreeMap::new(),
             requested: None,
@@ -1466,8 +1469,20 @@ impl CastSpeakers {
                 ListEvent::Skipped(_) => {}
                 change => {
                     self.log.log(|| format!("Cast discovery: {change:?}"));
-                    if let ListEvent::Added(DeviceKey::Id(id))
-                    | ListEvent::Updated(DeviceKey::Id(id)) = change
+                    // A re-resolve of a device still listed, such as a TXT
+                    // change, is not the device announcing itself again.
+                    let back = match change {
+                        ListEvent::Offline(DeviceKey::Id(id)) => {
+                            self.offline.insert(id);
+                            None
+                        }
+                        ListEvent::Added(DeviceKey::Id(id)) => Some(id),
+                        ListEvent::Updated(DeviceKey::Id(id)) => {
+                            self.offline.remove(&id).then_some(id)
+                        }
+                        _ => None,
+                    };
+                    if let Some(id) = back
                         && let Some(link) = self.link.as_mut()
                     {
                         link.announced(id);
@@ -1758,6 +1773,7 @@ pub mod tests {
         pub tracks: Vec<CastTrack>,
         pub resyncs: usize,
         pub shutdowns: usize,
+        pub announced: Vec<DeviceId>,
         pub memory: DeviceMemory,
         pub refuse: Option<StartRefused>,
         pub readers: Vec<AudioReader>,
@@ -1871,7 +1887,9 @@ pub mod tests {
             self.state().browse.pop_front()
         }
 
-        fn announced(&mut self, _device: DeviceId) {}
+        fn announced(&mut self, device: DeviceId) {
+            self.state().announced.push(device);
+        }
 
         fn discovery(&self) -> CastDiscovery {
             CastDiscovery::Browsing
@@ -2038,6 +2056,25 @@ pub mod tests {
         let kitchen = &cast.speakers()[1];
         assert!(!kitchen.enabled);
         assert_eq!(kitchen.status, CastStatus::Idle);
+    }
+
+    // covers: C81
+    #[test]
+    fn only_a_device_coming_back_after_its_records_went_away_is_an_announcement() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.poll();
+        assert_eq!(fake.state().announced.len(), 3, "each one found");
+        fake.state().announced.clear();
+        fake.announce(KITCHEN, "Kitchen", DEVICE_PORT);
+        cast.poll();
+        assert!(fake.state().announced.is_empty(), "a re-resolve");
+        fake.withdraw(KITCHEN, "Kitchen");
+        cast.poll();
+        fake.announce(KITCHEN, "Kitchen", DEVICE_PORT);
+        cast.poll();
+        assert_eq!(fake.state().announced, [id(KITCHEN)]);
     }
 
     #[test]

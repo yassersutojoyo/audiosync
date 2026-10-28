@@ -29,7 +29,7 @@
 //! [`asc_cast_next_event`] reports [`CAST_EVENT_FAILED`] once, with where
 //! the panic happened; the host then destroys it and may create another.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::ffi::{CStr, CString, c_char};
 use std::net::{IpAddr, SocketAddr};
 use std::panic::{self, AssertUnwindSafe};
@@ -191,8 +191,8 @@ const INPUT_CHUNK_FRAMES: usize = 4096;
 const MAX_HOLD_BACK_FRAMES: usize = MAX_HOLD_BACK_MS as usize * CAST_RATE as usize / 1000;
 /// The largest artwork [`asc_cast_set_artwork`] keeps.
 const MAX_ARTWORK_BYTES: usize = 8 << 20;
-/// The largest offset [`asc_cast_set_offset`] stores: C74 reports latencies
-/// beyond 30 s.
+/// The largest offset [`asc_cast_set_offset`] accepts: C74 reports latencies
+/// beyond 30 s. The sender stores at most `MAX_OFFSET`, 20 s.
 const MAX_OFFSET_MS: f64 = 120_000.0;
 
 /// One device change. The strings are NUL-terminated UTF-8 owned by the
@@ -475,6 +475,8 @@ pub struct AscCast {
     shared: Arc<Shared>,
     input_taken: bool,
     list: DeviceList,
+    /// Devices whose records went away during a session (C17).
+    offline: BTreeSet<DeviceId>,
     browser: Option<Box<dyn Browse>>,
     open_browser: OpenBrowser,
     changes: VecDeque<Change>,
@@ -723,8 +725,17 @@ impl AscCast {
     }
 
     fn listed(&mut self, event: ListEvent) {
-        if let ListEvent::Added(DeviceKey::Id(id)) | ListEvent::Updated(DeviceKey::Id(id)) = event {
-            self.host.announced(id);
+        // A re-resolve of a device still listed, such as a TXT change, is
+        // not the device announcing itself again (C81).
+        match event {
+            ListEvent::Offline(DeviceKey::Id(id)) => {
+                self.offline.insert(id);
+            }
+            ListEvent::Added(DeviceKey::Id(id)) => self.host.announced(id),
+            ListEvent::Updated(DeviceKey::Id(id)) if self.offline.remove(&id) => {
+                self.host.announced(id);
+            }
+            _ => {}
         }
         match event {
             ListEvent::Added(key) => {
@@ -1161,6 +1172,7 @@ fn create_with(memory_json: &str, open_browser: OpenBrowser) -> *mut AscCast {
             shared: Arc::new(Shared::new()),
             input_taken: false,
             list: DeviceList::new(),
+            offline: BTreeSet::new(),
             browser: None,
             open_browser,
             changes: VecDeque::new(),
@@ -1741,8 +1753,8 @@ pub unsafe extern "C" fn asc_cast_resync(cast: *mut AscCast) -> bool {
 }
 
 /// Stores the user's measured offset for device `id`, in ms, rounded to
-/// whole ms (C77): the host delays its other outputs by it. The device
-/// needn't be listed. Store [`asc_cast_memory_json`] afterwards. False for
+/// whole ms and capped at 20 s (C77): the host delays its other outputs by
+/// it. The device needn't be listed. Store [`asc_cast_memory_json`] afterwards. False for
 /// a null or dead handle, an ID that doesn't read, or an offset outside 0
 /// to 120 000 ms.
 ///
