@@ -1199,6 +1199,28 @@ fn after_stop_the_port_is_free_and_no_command_arrives() {
 }
 
 #[test]
+fn stop_returns_at_once_while_a_stream_is_stuck_sending() {
+    let remote = start("stop-stuck");
+    let token = pair(&remote);
+    // The page never reads, so the server's send blocks once the socket buffers are full.
+    let _stuck = Events::open(&remote, &token);
+    let mut state = sample();
+    state.computer_name = "x".repeat(1 << 20);
+    for volume in 0..32 {
+        state.master_volume = f64::from(volume);
+        remote.server.publish(state.clone());
+    }
+    thread::sleep(Duration::from_millis(500));
+    let started = Instant::now();
+    remote.server.stop();
+    assert!(
+        started.elapsed() < Duration::from_millis(250),
+        "stop took {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
 fn a_busy_port_is_reported_as_such() {
     let first = start("busy");
     let taken = RemoteServer::start(
