@@ -3552,31 +3552,34 @@ mod tests {
         assert_eq!(remote, Some(SocketAddr::new(v4, 5000)));
     }
 
-    // A receiver that restarts on a new port after the short retries are
-    // used up: discovery listing it again starts a session at once instead
-    // of after the 30 s wait.
-    // covers: P142
-    #[test]
-    fn a_speaker_waiting_to_retry_starts_at_once_when_discovery_lists_it_again() {
-        use crate::discovery::{ScopedAddr, ServiceKind, ServiceRecord};
-        use std::net::{IpAddr, SocketAddr};
+    const KITCHEN: [u8; 4] = [192, 0, 2, 59];
 
-        let now = Instant::now();
-        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
-        let (inputs, receiver) = mpsc::channel();
-        let (events, _events) = mpsc::channel();
-        let latency = Arc::new(AtomicU32::new(0));
-        let mut driver = Driver::new(stream, receiver, inputs, events, latency);
-        let ip: IpAddr = "192.0.2.59".parse().expect("an address");
-        let record = |port| ServiceRecord {
+    /// A RAOP receiver at a fixed address, on `port`.
+    fn kitchen(port: u16) -> crate::discovery::ServiceRecord {
+        use crate::discovery::{ScopedAddr, ServiceKind, ServiceRecord};
+        ServiceRecord {
             kind: ServiceKind::Raop,
             instance: "0123456789AB@Kitchen".to_owned(),
             host: "kitchen.local".to_owned(),
             port,
             txt: vec![b"cn=0,1".to_vec(), b"et=0".to_vec()],
-            addresses: vec![ScopedAddr::new(ip)],
-        };
-        let changes = driver.directory.apply(BrowseEvent::Resolved(record(5000)));
+            addresses: vec![ScopedAddr::new(KITCHEN.into())],
+        }
+    }
+
+    fn connect_kitchen(port: u16) -> Output {
+        Output::Connect(std::net::SocketAddr::from((KITCHEN, port)))
+    }
+
+    /// A driver with a speaker on [`kitchen`] port 5000, its session
+    /// connecting.
+    fn kitchen_driver(now: Instant) -> (Driver, DeviceKey) {
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency);
+        let changes = driver.directory.apply(BrowseEvent::Resolved(kitchen(5000)));
         driver.report_changes(changes);
         let device = driver.directory.devices().next().cloned().expect("listed");
         let key = device.key.clone();
@@ -3586,14 +3589,41 @@ mod tests {
             Arc::new(SpeakerCounters::default()),
             now,
         );
+        assert_eq!(driver.next_output(&key), Some(connect_kitchen(5000)));
+        (driver, key)
+    }
+
+    /// Discovery lists [`kitchen`] on `port`; what the speaker sends by `at`.
+    fn relist_kitchen(
+        driver: &mut Driver,
+        key: &DeviceKey,
+        port: u16,
+        at: Instant,
+    ) -> Option<Output> {
+        let changes = driver.directory.apply(BrowseEvent::Resolved(kitchen(port)));
+        driver.report_changes(changes);
+        driver.run_timers(at);
+        driver.next_output(key)
+    }
+
+    // A receiver that restarts on a new port after the short retries are
+    // used up: discovery listing it again starts a session at once instead
+    // of after the 30 s wait. The same records again change nothing.
+    // covers: P142
+    #[test]
+    fn a_speaker_waiting_to_retry_starts_at_once_when_discovery_lists_it_again() {
+        let now = Instant::now();
+        let (mut driver, key) = kitchen_driver(now);
         let mut failed_at = now;
         let mut retry_at = now;
         for attempt in 1..=6 {
-            assert_eq!(
-                driver.next_output(&key),
-                Some(Output::Connect(SocketAddr::new(ip, 5000))),
-                "attempt {attempt}"
-            );
+            if attempt > 1 {
+                assert_eq!(
+                    driver.next_output(&key),
+                    Some(connect_kitchen(5000)),
+                    "attempt {attempt}"
+                );
+            }
             failed_at = retry_at;
             driver.on_failed(&key, SessionError::new(ErrorKind::Unreachable), failed_at);
             let Phase::Waiting(at) = driver.speakers[&key].phase else {
@@ -3606,12 +3636,33 @@ mod tests {
         }
         assert_eq!(retry_at - failed_at, Duration::from_secs(30));
 
-        let changes = driver.directory.apply(BrowseEvent::Resolved(record(5001)));
-        driver.report_changes(changes);
-        driver.run_timers(failed_at + Duration::from_secs(1));
+        let soon = failed_at + Duration::from_secs(1);
+        assert_eq!(relist_kitchen(&mut driver, &key, 5000, soon), None);
+        assert!(matches!(driver.speakers[&key].phase, Phase::Waiting(at) if at == retry_at));
         assert_eq!(
-            driver.next_output(&key),
-            Some(Output::Connect(SocketAddr::new(ip, 5001)))
+            relist_kitchen(&mut driver, &key, 5001, soon),
+            Some(connect_kitchen(5001))
         );
+    }
+
+    // A wait the receiver asked for holds even when discovery lists it on
+    // new records.
+    // covers: P142, P154
+    #[test]
+    fn a_wait_the_receiver_asked_for_holds_when_discovery_lists_it_again() {
+        let now = Instant::now();
+        let (mut driver, key) = kitchen_driver(now);
+        let mut error = SessionError::new(ErrorKind::PairingFailed);
+        error.retry_after = Some(Duration::from_secs(60));
+        driver.on_failed(&key, error, now);
+        let Phase::Waiting(retry_at) = driver.speakers[&key].phase else {
+            panic!("not retried");
+        };
+        assert_eq!(retry_at - now, Duration::from_secs(60));
+
+        let before = retry_at - Duration::from_secs(1);
+        assert_eq!(relist_kitchen(&mut driver, &key, 5001, before), None);
+        driver.run_timers(retry_at);
+        assert_eq!(driver.next_output(&key), Some(connect_kitchen(5001)));
     }
 }
