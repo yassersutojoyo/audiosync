@@ -67,8 +67,10 @@ enum AppLifecycle {
     static func answersSecondLaunch(exiting: Bool) -> Bool { !exiting }
 
     /// Whether a new copy that finds another one running leaves it the speakers.
+    /// Two copies still launching can't hear each other's show request yet, so
+    /// the lower PID stays and only the other leaves.
     static func defersToOtherCopy(ownPID: Int32, otherPID: Int32, otherFinishedLaunching: Bool) -> Bool {
-        true
+        otherFinishedLaunching || otherPID < ownPID
     }
 
     /// The signals that end AudioSync the clean way (S111): the entry point

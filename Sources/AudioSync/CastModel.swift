@@ -621,8 +621,13 @@ struct CastModel {
         case .groupLog: return nil
         case .discoveryStopped:
             discovery = .failed
-            // The sender keeps the playing device and those added by address.
-            devices = devices.filter { $0.key == attempt?.device || $0.value.manual }
+            // The sender keeps the device in a session, a start included, and those added by address.
+            devices = devices.filter { $0.key == attempt?.device || $0.key == starting || $0.value.manual }
+            // A browsed device that is on but unlisted can't come back until AudioSync starts again.
+            if let id = enabled, devices[id] == nil {
+                enabled = nil
+                return .turnedOff(id, problem: nil)
+            }
             return .changed
         case .failed:
             let wasOn = enabled

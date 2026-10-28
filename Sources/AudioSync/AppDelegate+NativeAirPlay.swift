@@ -76,7 +76,6 @@ extension AppDelegate {
             nativeAirPlay = nil
             if news { notify(text.nativeAirPlayCouldNotStart, origin: .automatic, subject: Notice.airplaySender) }
             stopNativeLocalNetworkProbe()
-            retimeLocalOutputs()   // no native speaker is chosen any more
         }
         retimeLocalOutputs()   // L is known now
         pushModel()

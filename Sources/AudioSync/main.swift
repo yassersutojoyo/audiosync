@@ -16,7 +16,10 @@ func otherRunningCopy() -> NSRunningApplication? {
 /// Flipped by the reply observer; the run loop below polls it.
 final class ReplyFlag { var received = false }
 
-if otherRunningCopy() != nil {
+if let other = otherRunningCopy(),
+   AppLifecycle.defersToOtherCopy(ownPID: ProcessInfo.processInfo.processIdentifier,
+                                  otherPID: other.processIdentifier,
+                                  otherFinishedLaunching: other.isFinishedLaunching) {
     let center = DistributedNotificationCenter.default()
     let flag = ReplyFlag()
     let token = center.addObserver(forName: AppDelegate.showReply, object: nil, queue: nil) { _ in
