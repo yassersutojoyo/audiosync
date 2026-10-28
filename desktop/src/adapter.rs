@@ -7954,6 +7954,22 @@ mod tests {
         );
     }
 
+    /// Types the password, then the PIN the Apple TV asks for next, which
+    /// it turns down.
+    fn type_password_and_fail_the_pin(
+        adapter: &mut AudioAdapter<MockBackend>,
+        fake: &FakeAirPlay,
+        tv: &Device,
+    ) {
+        let id = ap(tv);
+        adapter.submit_password(&id, "hunter2");
+        fake.pairing(tv, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fail_pairing(fake, tv, ErrorKind::PairingFailed);
+        adapter.poll();
+    }
+
     // covers: S223
     #[test]
     fn an_every_time_pairing_whose_password_prompt_outlived_the_stream_says_it_needs_a_pin() {
@@ -7965,13 +7981,12 @@ mod tests {
         adapter.poll();
         adapter.set_running(false);
         adapter.poll();
+        adapter
+            .audio
+            .refuse_captures(Some(BackendError::DeviceGone));
 
-        adapter.submit_password(&id, "hunter2");
-        fake.pairing(&den, PairingEvent::PinRequested);
-        adapter.poll();
-        adapter.submit_pin(&id, "4821");
-        fail_pairing(&fake, &den, ErrorKind::PairingFailed);
-        adapter.poll();
+        type_password_and_fail_the_pin(&mut adapter, &fake, &den);
+        assert!(!adapter.running(), "no new stream started");
         assert!(!adapter.snapshot().speaker(&id).unwrap().enabled);
         says_cant_play(&adapter, ui_model::AirPlayProblem::NeedsPin);
     }
@@ -7985,16 +8000,32 @@ mod tests {
         adapter.set_speaker_enabled(&id, true);
         adapter.set_running(false);
         adapter.poll();
+        adapter
+            .audio
+            .refuse_captures(Some(BackendError::DeviceGone));
 
         fail_pairing(&fake, &den, ErrorKind::PasswordRequired);
         adapter.poll();
-        adapter.submit_password(&id, "hunter2");
-        fake.pairing(&den, PairingEvent::PinRequested);
-        adapter.poll();
-        adapter.submit_pin(&id, "4821");
-        fail_pairing(&fake, &den, ErrorKind::PairingFailed);
-        adapter.poll();
+        type_password_and_fail_the_pin(&mut adapter, &fake, &den);
+        assert!(!adapter.running(), "no new stream started");
         says_cant_play(&adapter, ui_model::AirPlayProblem::NeedsPin);
+    }
+
+    // covers: S223
+    #[test]
+    fn an_every_time_pairing_whose_password_starts_a_new_stream_says_pairing_failed() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fail_pairing(&fake, &den, ErrorKind::PasswordRequired);
+        adapter.poll();
+        adapter.set_running(false);
+        adapter.poll();
+
+        type_password_and_fail_the_pin(&mut adapter, &fake, &den);
+        assert!(adapter.running(), "the typed password started a new stream");
+        says_cant_play(&adapter, ui_model::AirPlayProblem::PairingFailed);
     }
 
     // covers: S223
