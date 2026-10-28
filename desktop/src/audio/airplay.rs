@@ -2944,6 +2944,10 @@ impl AirPlaySpeakers {
     /// move (S290). Returns whether the speaker list changed.
     fn remote_move(&mut self, row: &str, to: f64, on_speaker: bool, now: Instant) -> bool {
         if on_speaker && matches!(self.calibration_solo.as_deref(), Some(solo) if solo != row) {
+            let volume = self.volume_of(row);
+            if let Some(added) = self.added.get_mut(row) {
+                added.set_volume(self.link.as_mut(), volume);
+            }
             return false;
         }
         let (zone, master) = (self.zone(row), self.master);
@@ -7090,6 +7094,7 @@ pub mod tests {
         airplay.poll();
         fake.take_calls();
         airplay.set_calibration_solo(Some(&k));
+        fake.take_calls();
         remote(
             &fake,
             &study,
