@@ -1116,6 +1116,25 @@ mod tests {
 
     // covers: S218
     #[test]
+    fn whole_system_a_paused_track_survives_a_poll_with_no_answer() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(track("Spotify.exe", "Song", true, Some(COVER))));
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(track("Spotify.exe", "Song", false, Some(COVER))));
+        info.sync(Some(&whole_system()), start);
+
+        reader.read(None);
+        assert_eq!(info.sync(Some(&whole_system()), start), None, "it stays");
+        assert_eq!(reader.played_last().as_deref(), Some("Spotify.exe"));
+        reader.read(Some(track("Spotify.exe", "Song", false, Some(COVER))));
+        assert_eq!(info.sync(Some(&whole_system()), start), None, "still");
+    }
+
+    // covers: S218
+    #[test]
     fn whole_system_another_player_that_plays_takes_over_from_a_paused_one() {
         let reader = FakeReader::with_icon(ICON);
         let mut info = track_info(&reader);
