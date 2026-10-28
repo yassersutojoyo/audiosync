@@ -8,7 +8,10 @@
 //! store, safe on an audio thread (S190).
 
 use std::fmt;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+
+use crate::ring::Ring;
 
 /// How many renderers of one ring count towards the session lead.
 pub const SESSION_SLOTS: usize = 32;
@@ -122,6 +125,36 @@ impl SessionLeads {
             slot.lead.load(Ordering::Relaxed) != NO_LEAD
         });
         (any && all).then(|| self.session_lead())
+    }
+}
+
+/// A start lead that keeps counting in its ring's session lead after its
+/// renderer stopped, while the host still counts that output (S328). It
+/// takes a slot of its own and frees it when dropped.
+#[derive(Debug)]
+pub struct HeldLead {
+    ring: Arc<Ring>,
+    slot: usize,
+}
+
+impl HeldLead {
+    /// Counts a start lead of `lead` frames at a hold-back of `hold_back`
+    /// frames in `ring`'s session lead; `None` when no slot is free.
+    pub fn new(_ring: &Arc<Ring>, _lead: i64, _hold_back: i64) -> Option<HeldLead> {
+        None
+    }
+
+    /// The hold-back the host now counts for the output, in capture frames.
+    pub fn set_hold_back(&self, frames: i64) {
+        self.ring
+            .session_leads()
+            .set_hold_back(self.slot, frames.max(0));
+    }
+}
+
+impl Drop for HeldLead {
+    fn drop(&mut self) {
+        self.ring.session_leads().release(self.slot);
     }
 }
 

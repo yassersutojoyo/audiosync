@@ -98,7 +98,7 @@ use std::time::Duration;
 
 use crate::convert::map_to_device;
 use crate::fade::{Fade, FadeState};
-use crate::lead::SessionLeads;
+use crate::lead::{HeldLead, SessionLeads};
 use crate::reader::{Correction, NextRead, ReadReport, Reader, ReaderControl, ReaderCounters};
 use crate::resample::Resampler;
 use crate::ring::Ring;
@@ -519,6 +519,13 @@ impl RendererControl {
     /// the reader has it yet.
     pub fn delay_frames(&self) -> i64 {
         self.shared.delay.load(Ordering::Relaxed)
+    }
+
+    /// Keeps this renderer's published start lead counting in the session
+    /// lead after it stops, at its current hold-back (S328); `None` before
+    /// it published one, or with no slot free.
+    pub fn hold_lead(&self) -> Option<HeldLead> {
+        None
     }
 
     /// Asks the renderer to fade out from its next callback and render exact

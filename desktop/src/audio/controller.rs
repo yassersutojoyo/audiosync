@@ -6744,14 +6744,76 @@ mod tests {
         assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
         backend.set_output_enabled(BLUETOOTH, false).unwrap();
         assert_eq!(held(&backend), [Some(0), Some(150), None]);
-        // A device that goes away leaves too, and joins again when it's back.
+        // A device that goes away leaves too once 10 s have passed (S328),
+        // and joins again when it's back.
         backend.set_output_enabled(BLUETOOTH, true).unwrap();
         backend.disconnect_output(BLUETOOTH);
         backend.poll();
+        poll_quietly(&mut backend, 20);
         assert_eq!(held(&backend), [Some(0), Some(150), None]);
         backend.connect_output_as(BLUETOOTH, "Earbuds", OutputKind::Bluetooth);
         backend.poll();
         assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+    }
+
+    // covers: S328
+    #[test]
+    fn a_bluetooth_output_unlisted_for_one_poll_leaves_the_built_in_delay_unchanged() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+        backend.disconnect_output(BLUETOOTH);
+        backend.poll();
+        assert_eq!(held(&backend), [Some(250), Some(400), None]);
+        assert!(backend.policy().settings(BLUETOOTH).enabled);
+        backend.connect_output_as(BLUETOOTH, "Earbuds", OutputKind::Bluetooth);
+        backend.poll();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+        // Lost as its stream fails before the listing drops it: the same.
+        backend.disconnect_output_unnoticed(BLUETOOTH);
+        backend.end_renderer(BLUETOOTH);
+        backend.poll();
+        assert_eq!(held(&backend), [Some(250), Some(400), None]);
+    }
+
+    // covers: S328
+    #[test]
+    fn a_bluetooth_output_still_unlisted_after_10_s_retimes_the_others_once() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.disconnect_output(BLUETOOTH);
+        backend.poll();
+        // 10 s at the UI's two polls a second, the poll above included.
+        poll_quietly(&mut backend, 18);
+        assert_eq!(held(&backend), [Some(250), Some(400), None]);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(held(&backend), [Some(0), Some(150), None]);
+        backend.connect_output_as(BLUETOOTH, "Earbuds", OutputKind::Bluetooth);
+        backend.poll();
+        assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
+    }
+
+    // covers: S328
+    #[test]
+    fn a_lost_bluetooth_output_switched_off_retimes_the_others_at_once() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.disconnect_output(BLUETOOTH);
+        backend.poll();
+        backend.set_output_enabled(BLUETOOTH, false).unwrap();
+        assert_eq!(held(&backend), [Some(0), Some(150), None]);
+    }
+
+    // covers: S328
+    #[test]
+    fn a_session_restart_counts_only_the_outputs_listed_then() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.disconnect_output(BLUETOOTH);
+        backend.poll();
+        backend.stop();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(held(&backend), [Some(0), Some(150), None]);
     }
 
     #[test]

@@ -5582,6 +5582,43 @@ do {
           "local delay: editing the lowest offset re-times the others",
           "\(LocalDelay.retimes(applied: withBT, holdBacks: holds([r, usb, bt], offsets: edited)))")
 
+    // covers: S328 (a speaker whose device leaves the list for a moment)
+    let on: Set<String> = [r, usb, bt]
+    func flapped(at lostAt: Double = 5) -> LocalBriefLoss {
+        var flap = LocalBriefLoss()
+        flap.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
+        flap.noteListing([r, usb], enabled: on, reference: r, now: lostAt)
+        return flap
+    }
+    var flap = flapped()
+    let duringLoss = holds([r, usb] + flap.held.sorted())
+    let runningOthers = withBT.filter { $0.key != bt }
+    flap.noteListing([r, usb, bt], enabled: on, reference: r, now: 6)
+    check(duringLoss == withBT && LocalDelay.retimes(applied: runningOthers, holdBacks: duringLoss).isEmpty
+            && flap.held.isEmpty && LocalDelay.retimes(applied: runningOthers, holdBacks: holds([r, usb, bt])).isEmpty,
+          "local delay: an output lost for one poll keeps the others' hold-backs", "\(duringLoss)")
+    flap = flapped()
+    let early = flap.expire(now: 14.9), nextEnd = flap.nextExpiry
+    let ended = flap.expire(now: 15), again = flap.expire(now: 16)
+    let afterLoss = holds([r, usb] + flap.held.sorted())
+    check(LocalBriefLoss.holdSeconds == 10 && !early && nextEnd == 15 && ended && !again && flap.nextExpiry == nil
+            && LocalDelay.retimes(applied: runningOthers, holdBacks: afterLoss) == [r: 0, usb: 150],
+          "local delay: an output still lost after 10 s re-times the others once", "\(afterLoss)")
+    flap = flapped()
+    let offHeld = flap.switchedOff(bt), offListed = flap.switchedOff(usb)
+    check(offHeld && !offListed && flap.held.isEmpty,
+          "local delay: a lost output switched off re-times the others at once")
+    flap = flapped()
+    flap.restart()
+    var lostReference = LocalBriefLoss()
+    lostReference.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
+    lostReference.noteListing([usb, bt], enabled: on, reference: nil, now: 5)
+    var offFirst = LocalBriefLoss()
+    offFirst.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
+    offFirst.noteListing([r, usb], enabled: [r, usb], reference: r, now: 5)
+    check(flap.held.isEmpty && lostReference.held.isEmpty && offFirst.held.isEmpty && flapped().held == [bt],
+          "local delay: a session restart, a lost reference or a speaker already off holds nothing")
+
     // covers: S178, S181 (the AirPlay delay field)
     var native = AirPlayDelay(adjustmentMs: 250)
     let shown = native.latencyMs(senderMs: 1750)

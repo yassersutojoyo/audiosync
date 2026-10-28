@@ -181,6 +181,32 @@ enum LocalDelay {
     }
 }
 
+/// The switched-on local speakers whose devices left the list less than
+/// `holdSeconds` ago (S328). Each still counts among the speakers taking part,
+/// at its offset, so a brief loss and return re-time no other speaker. Times
+/// are the host's uptime in seconds.
+struct LocalBriefLoss: Equatable {
+    static let holdSeconds = 10.0
+
+    /// A device list came in at `now`.
+    mutating func noteListing(_ listed: [String], enabled: Set<String>, reference: String?, now: Double) {}
+
+    /// Speaker `uid` was switched off. True when it was held.
+    mutating func switchedOff(_ uid: String) -> Bool { false }
+
+    /// Ends the holds `holdSeconds` old at `now`. True when any ended.
+    mutating func expire(now: Double) -> Bool { false }
+
+    /// A session restart: no speaker is held any longer.
+    mutating func restart() {}
+
+    /// The held speakers.
+    var held: Set<String> { [] }
+
+    /// When the next hold ends, if any is held.
+    var nextExpiry: Double? { nil }
+}
+
 /// The AirPlay delay (S178), which the window shows as one field (S181): an
 /// adjustment A on top of the latency the AirPlay sender reports, so it stays
 /// right when that latency changes.
