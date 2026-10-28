@@ -347,7 +347,7 @@ final class SourceCapture {
     private func updateTap(to processes: [AudioObjectID]) -> Bool {
         guard let tap else { return false }
         let description = Self.describe(processes, excluding: tapExcludes)
-        TapObjects.configure(description)
+        Self.configureTap(description)
         description.uuid = tap.uuid   // the same tap, which the aggregate device names by its UID
         let status = HAL.setTapDescription(of: tap.tap, to: description)
         if status != noErr { DebugTrace.log("[AudioSync] capture: the tap can't be changed in place (status \(status))") }
@@ -621,6 +621,14 @@ final class SourceCapture {
         AppTapFollow.candidates(pids.flatMap { AudioProcesses.objects(forAppPID: $0) },
                                 own: AudioProcesses.processObject(for: getpid()))
     }
+
+    /// Every tap AudioSync makes: it mutes what it taps, and only
+    /// AudioSync's own process sees it.
+    static func configureTap(_ setup: CATapDescription) {
+        setup.name = "AudioSync Capture"
+        setup.isPrivate = true
+        setup.muteBehavior = .muted
+    }
 }
 
 // MARK: - Core Audio objects
@@ -724,18 +732,10 @@ private extension SourceCapture {
         /// The tap's format rate when it was made (0 when it read 0).
         let tapRate: Double
 
-        /// Every tap AudioSync makes: it mutes what it taps, and only
-        /// AudioSync's own process sees it.
-        static func configure(_ setup: CATapDescription) {
-            setup.name = "AudioSync Capture"
-            setup.isPrivate = true
-            setup.muteBehavior = .muted
-        }
-
         /// Makes the tap, reads its format, then makes an aggregate device
         /// holding only the tap.
         init(_ setup: CATapDescription) throws {
-            Self.configure(setup)
+            SourceCapture.configureTap(setup)
             // A UUID of its own for every tap, so a new tap never shares one
             // with an earlier tap that has yet to be destroyed (`CaptureClose`).
             setup.uuid = UUID()
