@@ -298,6 +298,11 @@ struct Speaker {
     next_start: StartKind,
     /// Reported Connecting while it waited for its turn (P224).
     told_connecting: bool,
+    /// How its last start queued, which a P228 restart queues as again.
+    started_as: StartKind,
+    /// A P228 restart waits for its turn: its connect is the start it
+    /// replaces, not counted again.
+    restarting: bool,
 }
 
 impl Speaker {
@@ -323,6 +328,8 @@ impl Speaker {
             target,
             next_start: StartKind::Host,
             told_connecting: false,
+            started_as: StartKind::Host,
+            restarting: false,
         }
     }
 
@@ -1189,6 +1196,7 @@ impl Driver {
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
+        speaker.restarting = false;
         match std::mem::replace(&mut speaker.phase, phase) {
             Phase::Active(active) => {
                 self.sessions.remove(&active.key);
@@ -1951,6 +1959,9 @@ impl Driver {
             }
             return false;
         }
+        if let Some(speaker) = self.speakers.get_mut(key) {
+            speaker.started_as = kind;
+        }
         let ap2 = self.plans_ap2(key);
         let kind = if ap2 && self.held.contains_key(key) {
             StartKind::OpenConnection
@@ -1973,6 +1984,13 @@ impl Driver {
     /// that ends before connecting leaves the turn to the next (P222).
     fn take_turns(&mut self, now: Instant) {
         while let Some((turn, kind)) = self.connects.pop(now) {
+            let restarting = match &turn {
+                Turn::Session(key) => self
+                    .speakers
+                    .get_mut(key)
+                    .is_some_and(|speaker| std::mem::take(&mut speaker.restarting)),
+                Turn::Pairing(_) => false,
+            };
             let connecting = match &turn {
                 Turn::Session(key) => self.begin_session(key, now),
                 Turn::Pairing(key) => self.begin_pairing(key, now),
@@ -1981,6 +1999,7 @@ impl Driver {
                 self.connects.connected(now);
                 if let Turn::Session(key) = &turn
                     && let Some(speaker) = self.speakers.get(key)
+                    && !restarting
                 {
                     speaker.counters.count_connect_start(now);
                 }
@@ -2000,6 +2019,7 @@ impl Driver {
             speaker.ap2_waiting = false;
             speaker.ptp_waiting = false;
             speaker.ap2_retry = false;
+            speaker.restarting = false;
             held
         });
         self.open_session(key, now);
@@ -3299,6 +3319,8 @@ mod tests {
                 target: None,
                 next_start: StartKind::Host,
                 told_connecting: false,
+                started_as: StartKind::Host,
+                restarting: false,
             },
         );
 

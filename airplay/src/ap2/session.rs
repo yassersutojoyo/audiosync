@@ -361,6 +361,8 @@ pub struct Ap2Session {
     remembered: bool,
     /// A pair-verify on this session succeeded (P66).
     pair_verified: bool,
+    /// A connection opened once; a reconnect never clears it (P228).
+    connected: bool,
     attempt: usize,
     attempt_started: Instant,
     remote: Option<SocketAddr>,
@@ -497,6 +499,7 @@ impl Ap2Session {
             ptp_retried: timing == Timing::Ptp,
             remembered: timing == Timing::Ptp,
             pair_verified: false,
+            connected: false,
             attempt: 0,
             attempt_started: now,
             remote: None,
@@ -637,7 +640,7 @@ impl Ap2Session {
     /// Whether discovery listing `listed` starts the session again: it
     /// hasn't connected and `listed` has an address it lacks (P228).
     pub fn restarts_on(&self, listed: &[SocketAddr]) -> bool {
-        self.state == Ap2State::Connecting
+        !self.connected
             && listed
                 .iter()
                 .any(|address| !self.config.addresses.contains(address))
@@ -823,6 +826,7 @@ impl Ap2Session {
         };
         self.remote = Some(remote);
         self.connection = Some(connection);
+        self.connected = true;
         self.send(Kind::Info { first: true }, now, false);
     }
 

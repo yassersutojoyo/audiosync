@@ -830,8 +830,12 @@ impl Driver {
         {
             return;
         }
+        let kind = speaker.started_as;
         self.end_session(key, Phase::Idle);
-        self.start_session(key, StartKind::Host, now);
+        if let Some(speaker) = self.speakers.get_mut(key) {
+            speaker.restarting = true;
+        }
+        self.start_session(key, kind, now);
     }
 
     /// Closes, without a TEARDOWN, a session that took PTP over an address
