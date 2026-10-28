@@ -3,7 +3,7 @@
 use std::fmt;
 use std::io;
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::framing::FrameError;
 
@@ -143,4 +143,21 @@ impl Default for Backoff {
     fn default() -> Backoff {
         Backoff::new()
     }
+}
+
+/// The spacing of reconnects to one receiver across channel deaths (C81).
+#[derive(Clone, Debug, Default)]
+pub struct ReconnectPacer {}
+
+impl ReconnectPacer {
+    /// The wait before a reconnect attempt that is due at `now`.
+    pub fn next_wait(&mut self, _now: Instant) -> Duration {
+        Duration::ZERO
+    }
+
+    /// A reconnect at `now` got the session going again.
+    pub fn connected(&mut self, _now: Instant) {}
+
+    /// The receiver announced itself again.
+    pub fn announced(&mut self) {}
 }
