@@ -79,6 +79,51 @@ struct CaptureWatch {
     }
 }
 
+/// A running session's capture, watched from its first callback until the
+/// session ends (S335). Fed on the main queue every 0.5 s with the capture's
+/// callback count and the uptime clock, which stands still while the Mac sleeps.
+struct CaptureFlowWatch {
+    /// Seconds without a callback that make a stopped capture, the span S326 and S334 give an output.
+    static let stallSpan: TimeInterval = 2
+    static let trySpacing: TimeInterval = 1
+    /// Seconds a reopened capture delivers before its try is kept.
+    static let trialSpan: TimeInterval = 5
+    static let tries = 5
+
+    enum Sign: Equatable {
+        case noCallback(TimeInterval)
+        case serviceRestarted
+        case aggregateDied
+    }
+
+    enum Step: Equatable {
+        case none
+        /// Close the capture now; tries to open it again follow.
+        case stopped(Sign)
+        /// Open the capture again, try `n` of `tries`.
+        case tryOpen(Int)
+        /// Try `n` delivered for `trialSpan`.
+        case kept(Int)
+        /// Every try failed: the session stops (S21).
+        case giveUp
+    }
+
+    /// `callbacks` is nil while the capture has no IOProc; `reading` is false
+    /// while an app tap waits for an audio process, which is no stop.
+    mutating func tick(callbacks: UInt64?, reading: Bool, at uptime: TimeInterval) -> Step { .none }
+
+    /// A stop the host was told of: Core Audio's service restarted, or the
+    /// tap's aggregate device died.
+    mutating func report(_ sign: Sign, at uptime: TimeInterval) -> Step { .none }
+
+    /// The try `tick` asked for could not open the capture.
+    mutating func failed(at uptime: TimeInterval) -> Step { .none }
+
+    /// Whether a try that threw `error` leaves room for the next one: an app
+    /// that quit (S142, S164) and an input device that left keep their own handling.
+    static func retries(after error: SourceCapture.CaptureError) -> Bool { false }
+}
+
 /// The capture's sample rate changed under a running session: the tap's format
 /// can follow an output device's rate, and an input device can be switched to
 /// another rate.

@@ -1743,6 +1743,89 @@ do {
     check(verdicts.allSatisfy { $0 == .waiting }, "capture: silent zeros with nothing live → waiting")
 }
 
+// MARK: Capture watch: a capture that stops calling back is opened again, the capture only
+// covers: S335 (the 2 s span, the service restart and a quiet source, through the main queue's 0.5 s ticks)
+do {
+    // Callbacks at 0 and 0.5 s, then none: 2 s after the last one the capture counts as stopped.
+    var watch = CaptureFlowWatch()
+    var steps: [CaptureFlowWatch.Step] = []
+    for (uptime, count) in [(100.0, 4 as UInt64), (100.5, 9), (101, 9), (101.5, 9), (102, 9), (102.5, 9)] {
+        steps.append(watch.tick(callbacks: count, reading: true, at: uptime))
+    }
+    let stall = steps.dropLast().allSatisfy { $0 == .none } && steps.last == .stopped(.noCallback(2))
+
+    // A service restart stops a capture that flows, at once.
+    var restarted = CaptureFlowWatch()
+    _ = restarted.tick(callbacks: 3, reading: true, at: 10)
+    let atOnce = restarted.report(.serviceRestarted, at: 10.2) == .stopped(.serviceRestarted)
+
+    // A tap that calls back with silence, and one that never called back, are never a stop.
+    var silent = CaptureFlowWatch()
+    var never = CaptureFlowWatch()
+    var quietSteps: [CaptureFlowWatch.Step] = []
+    for tick in 0..<40 {
+        let uptime = 50 + 0.5 * Double(tick)
+        quietSteps.append(silent.tick(callbacks: UInt64(tick * 47), reading: true, at: uptime))
+        quietSteps.append(never.tick(callbacks: 0, reading: true, at: uptime))
+    }
+    let quiet = quietSteps.allSatisfy { $0 == .none }
+    check(stall && atOnce && quiet,
+          "capture watch: no callback for 2 s after the first asks for a capture reopen, a service restart asks at once, a quiet source never does",
+          "\(steps) \(atOnce) \(quiet)")
+}
+// covers: S335 (5 tries 1 s apart, a try kept after 5 s of callbacks, the last failed try stops the session)
+do {
+    var watch = CaptureFlowWatch()
+    _ = watch.tick(callbacks: 1, reading: true, at: 0)
+    let stop = watch.report(.aggregateDied, at: 0.5)
+    let early = watch.tick(callbacks: nil, reading: false, at: 1)
+    let first = watch.tick(callbacks: nil, reading: false, at: 1.5)
+    // The reopened capture's counter starts again at 0.
+    var trial: [CaptureFlowWatch.Step] = []
+    for tick in 1...10 { trial.append(watch.tick(callbacks: UInt64(tick * 10), reading: true, at: 1.5 + 0.5 * Double(tick))) }
+    check(stop == .stopped(.aggregateDied) && early == .none && first == .tryOpen(1)
+            && trial.dropLast().allSatisfy { $0 == .none } && trial.last == .kept(1),
+          "capture watch: the first try comes 1 s after the stop and is kept once it delivered for 5 s",
+          "\(stop) \(early) \(first) \(trial)")
+    let again = watch.tick(callbacks: 100, reading: true, at: 8.5)
+    check(again == .stopped(.noCallback(2)), "capture watch: a kept capture is watched on until the session ends", "\(again)")
+
+    // Every try fails: two that can't open, three that open and stop calling back.
+    var failing = CaptureFlowWatch()
+    _ = failing.tick(callbacks: 1, reading: true, at: 0)
+    var seen = [failing.report(.serviceRestarted, at: 0)]
+    var now = 0.0
+    while now < 60, seen.last != .giveUp {
+        now += 0.5
+        let step = failing.tick(callbacks: 0, reading: true, at: now)
+        seen.append(step)
+        if case .tryOpen(let n) = step, n <= 2 { seen.append(failing.failed(at: now)) }
+    }
+    let tries = seen.compactMap { step -> Int? in if case .tryOpen(let n) = step { return n } else { return nil } }
+    check(tries == [1, 2, 3, 4, 5] && seen.last == .giveUp && seen.filter({ $0 == .giveUp }).count == 1,
+          "capture watch: 5 tries, then the session stops as S21 says", "\(seen)")
+
+    // A stop the host is told of while the capture is already closed asks for nothing more.
+    var closed = CaptureFlowWatch()
+    _ = closed.tick(callbacks: 1, reading: true, at: 0)
+    _ = closed.report(.aggregateDied, at: 0)
+    check(closed.report(.serviceRestarted, at: 0.2) == .none,
+          "capture watch: a second stop while the capture is closed changes nothing")
+
+    // An app tap waiting for an audio process has no IOProc by design.
+    var waiting = CaptureFlowWatch()
+    _ = waiting.tick(callbacks: 5, reading: true, at: 0)
+    let idle = (1...20).map { waiting.tick(callbacks: 5, reading: false, at: 0.5 * Double($0)) }
+    check(idle.allSatisfy { $0 == .none }, "capture watch: an app tap waiting for an audio process is never a stop")
+
+    check(CaptureFlowWatch.retries(after: .aggregateDeviceFailed(kAudioHardwareBadDeviceError))
+            && CaptureFlowWatch.retries(after: .tapNotCreated(kAudioHardwareNotRunningError))
+            && !CaptureFlowWatch.retries(after: .appNotRunning("com.example.player"))
+            && !CaptureFlowWatch.retries(after: .inputNotFound("input"))
+            && !CaptureFlowWatch.retries(after: .inputHandsFree("input")),
+          "capture watch: an app that quit or an input device that left ends the tries at once")
+}
+
 // MARK: Calibration fill: a quiet tap still carries the test signal (CalibrationTap.swift)
 do {
     // Calibrate All on All System Audio with nothing playing failed every time: the
