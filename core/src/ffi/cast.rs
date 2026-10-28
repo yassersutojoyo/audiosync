@@ -704,8 +704,8 @@ impl AscCast {
         }
     }
 
-    /// Hands the playing group's latest records and its members' addresses
-    /// to its session (C90, C103).
+    /// Hands the playing device or group its latest records, and a group
+    /// its members' addresses (C90, C103, C111).
     fn follow_groups(&mut self) {
         let member_ips: Vec<IpAddr> = self
             .members
@@ -714,13 +714,15 @@ impl AscCast {
             .flat_map(|entry| entry.addresses.iter().map(SocketAddr::ip))
             .collect();
         for attempt in &self.attempts {
-            let Some(records) = &attempt.group else {
+            let Some(records) = attempt.group.as_ref().or(attempt.records.as_ref()) else {
                 continue;
             };
             if let Some(entry) = self.list.get(attempt.key) {
                 records.set_group(entry.addresses.clone());
             }
-            records.set_members(member_ips.clone());
+            if attempt.group.is_some() {
+                records.set_members(member_ips.clone());
+            }
         }
     }
 
@@ -928,14 +930,17 @@ impl AscCast {
         self.pump_discovery();
         let key = device_key(id).ok_or(CAST_REFUSED_UNKNOWN)?;
         let entry = self.list.get(key).ok_or(CAST_REFUSED_UNKNOWN)?;
-        let group = entry
-            .is_group()
-            .then(|| GroupRecords::new(entry.addresses.clone()));
+        let all = GroupRecords::new(entry.addresses.clone());
+        let (group, records) = if entry.is_group() {
+            (Some(all), None)
+        } else {
+            (None, Some(all))
+        };
         let target = CastTarget {
             id: memory_id(key),
             addresses: entry.addresses.clone(),
             group: group.clone(),
-            records: None,
+            records: records.clone(),
         };
         let (writer, reader) = audio_ring(RING_FRAMES);
         let attempt = self
@@ -962,7 +967,7 @@ impl AscCast {
             key,
             id: device_id_text(key),
             group,
-            records: None,
+            records,
         });
         Ok(attempt)
     }
