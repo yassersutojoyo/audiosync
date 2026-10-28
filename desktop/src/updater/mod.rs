@@ -580,6 +580,11 @@ impl Updater {
                     Err(_) => break,
                 }
             }
+            if self.work == Work::Installing {
+                self.env
+                    .log
+                    .log(|| "updater: quit while an install was still running".to_owned());
+            }
         }
         if self.work == Work::Restarting {
             self.finish_restart(&mut polled);
