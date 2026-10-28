@@ -6927,6 +6927,45 @@ mod tests {
         assert_eq!(starts_of(&ended, BUDS), 2);
     }
 
+    // covers: S325, S332
+    #[test]
+    fn a_sleep_cancels_a_fresh_link_restart_and_the_output_plays_on() {
+        let noticed = |backend: &mut MockBackend| sleep_two_hours(backend);
+        let by_clock = |backend: &mut MockBackend| {
+            backend.pass_wall_time(Duration::from_secs(11));
+        };
+        let sleeps: [&dyn Fn(&mut MockBackend); 2] = [&noticed, &by_clock];
+        for sleep in sleeps {
+            let mut backend = backend();
+            backend.start(&SourceId::WholeSystem).unwrap();
+            fresh_buds(&mut backend);
+            poll_quietly(&mut backend, 1);
+            sleep(&mut backend);
+            poll_quietly(&mut backend, 20);
+            assert_eq!(starts_of(&backend, BUDS), 1, "no restart");
+            assert_eq!(backend.driver().renderers_faded(), 0);
+            assert_eq!(playing(&backend), [BUDS, HEADPHONES, SPEAKERS]);
+        }
+    }
+
+    // covers: S325, S332
+    #[test]
+    fn a_bluetooth_links_3_s_start_over_at_the_resume() {
+        // Listed 2.5 s before the sleep and started at the resume: its link
+        // counts as new.
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        backend.poll();
+        poll_quietly(&mut backend, 5);
+        sleep_two_hours(&mut backend);
+        poll_quietly(&mut backend, 1);
+        backend.set_output_enabled(BUDS, true).unwrap();
+        poll_quietly(&mut backend, 20);
+        assert_eq!(starts_of(&backend, BUDS), 2, "it restarted");
+        assert_eq!(backend.driver().renderers_faded(), 1);
+    }
+
     // covers: S325, S68
     #[test]
     fn an_output_whose_device_leaves_as_its_restart_rest_ends_is_lost() {
