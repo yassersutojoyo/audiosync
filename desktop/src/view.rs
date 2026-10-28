@@ -5472,7 +5472,12 @@ mod tests {
         /// The windows the headless platform made on this thread.
         static HEADLESS_WINDOWS: RefCell<Vec<Weak<MinimalSoftwareWindow>>> =
             RefCell::default();
+        /// Slint's time on this thread once the test holds its clock.
+        static HELD_CLOCK: Cell<Option<Duration>> = const { Cell::new(None) };
     }
+
+    static CLOCK_START: std::sync::LazyLock<std::time::Instant> =
+        std::sync::LazyLock::new(std::time::Instant::now);
 
     impl slint::platform::Platform for Headless {
         fn create_window_adapter(
@@ -5482,6 +5487,19 @@ mod tests {
             HEADLESS_WINDOWS.with(|windows| windows.borrow_mut().push(Rc::downgrade(&window)));
             Ok(window)
         }
+
+        fn duration_since_start(&self) -> Duration {
+            HELD_CLOCK
+                .with(Cell::get)
+                .unwrap_or_else(|| CLOCK_START.elapsed())
+        }
+    }
+
+    /// Stops Slint's clock on this thread for the rest of the test: the
+    /// double-click timers then see two clicks as one double-click however
+    /// long a loaded machine takes between them.
+    fn hold_clock() {
+        HELD_CLOCK.with(|clock| clock.set(Some(CLOCK_START.elapsed())));
     }
 
     /// Draws a frame of every headless window, as the event loop would after
@@ -7540,6 +7558,7 @@ mod tests {
 
     #[test]
     fn a_double_click_on_an_in_zones_name_renames_the_speaker_in_that_row() {
+        hold_clock();
         let app = app_over(MockBackend::zones_preview());
         draw_frames();
         let window = app.main.window();
