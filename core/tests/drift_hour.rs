@@ -412,31 +412,45 @@ fn a_producer_stall_past_the_dead_band_costs_every_output_a_step_back_and_a_skip
 
 // covers: S226
 #[test]
-#[ignore = "on demand: local outputs 3 ppm apart stay within S207's 15-frame dead zone floor (13.8 frames measured over 60 simulated min); run with --ignored"]
-fn two_outputs_3_ppm_apart_one_held_back_2_s_stay_within_the_trim_dead_zone_all_hour() {
-    // An output on the host's clock at hold-back 0 next to one 3 ppm fast
-    // held back 2 s: the trim holds their offset at the dead zone's edge,
-    // not within a frame or two, and the dead band never acts.
-    for (exact_stamps, bound) in [
-        (true, TRIM_DEAD_ZONE_FRAMES + 1.0),
-        (false, f64::from(RATE) / 1000.0),
-    ] {
-        let hour = run_hour(Setup {
-            host: Host::Renderer { stamped: true },
-            fast_ppb: [0, 3_000],
-            stall: None,
-            exact_stamps,
-            delays: [0, DELAY],
-        });
-        let corrections: u64 = hour.corrections.iter().sum();
-        eprintln!(
-            "exact stamps {exact_stamps}: offset strayed {:.2} frames, callback spread {:.2}, \
-             {corrections} corrections in the hour, trims {:?}",
-            hour.offset_strayed, hour.spread[1], hour.trims
-        );
-        assert!(
-            corrections == 0 && hour.offset_strayed <= bound && hour.spread[1] <= bound,
-            "exact stamps {exact_stamps}: {hour:?}"
-        );
+#[ignore = "on demand: the gap between local outputs 3 ppm apart, one held back 2 s, moves at most S207's 15-frame dead zone plus a frame in 60 simulated min; run with --ignored"]
+fn the_gap_between_outputs_3_ppm_apart_moves_at_most_the_trim_dead_zone_all_hour() {
+    // An output at hold-back 0 next to one held back 2 s, the fast clock on
+    // either: the trim holds the gap's move at the dead zone's edge, not
+    // within a frame or two, and nothing else acts.
+    for fast_ppb in [[0, 3_000], [3_000, 0]] {
+        for (exact_stamps, bound) in [
+            (true, TRIM_DEAD_ZONE_FRAMES + 1.0),
+            (false, f64::from(RATE) / 1000.0),
+        ] {
+            let hour = run_hour(Setup {
+                host: Host::Renderer { stamped: true },
+                fast_ppb,
+                stall: None,
+                exact_stamps,
+                delays: [0, DELAY],
+            });
+            let context = format!("fast {fast_ppb:?} ppb, exact stamps {exact_stamps}");
+            let spread = hour.spread[0].max(hour.spread[1]);
+            eprintln!(
+                "{context}: gap moved {:.2} frames, callback spread {spread:.2}, trims {:?}",
+                hour.offset_strayed, hour.trims
+            );
+            for c in hour.counters {
+                assert_eq!(
+                    (
+                        c.drift_skips,
+                        c.drift_silences,
+                        c.starved_renders,
+                        c.resyncs
+                    ),
+                    (0, 0, 0, 0),
+                    "{context}: {hour:?}"
+                );
+            }
+            assert!(
+                hour.offset_strayed <= bound && spread <= bound,
+                "{context}: {hour:?}"
+            );
+        }
     }
 }
