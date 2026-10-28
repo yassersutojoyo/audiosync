@@ -1028,22 +1028,30 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Takes in the settings of the file ignored at launch, now that it
-    /// reads as settings, as if read at launch (S212), except what is
-    /// already running: a session's source, and the AirPlay 2 path the
-    /// sender started with. The window shows them again. Returns true.
+    /// reads as settings, as if read at launch (S212): they replace what
+    /// changed since, except the AirPlay 2 path the sender started with. A
+    /// running session moves to their source as a switch does, and with none
+    /// running, speakers they leave on start one as auto-connect does. The
+    /// window shows them again. Returns true.
     fn restore_read_late(&mut self, (saved, loaded): (Settings, settings::Loaded)) -> bool {
-        self.log
-            .log(|| format!("settings: the file ignored at launch can be read now, {loaded}"));
+        self.log.log(|| {
+            format!(
+                "settings: the file ignored at launch can be read now, {loaded}; it replaces \
+                 the changes made since launch"
+            )
+        });
         self.delays_to_migrate = matches!(
             loaded,
             settings::Loaded::Read { version, .. } if version < settings::OFFSETS_VERSION
         );
-        let running_source = self.running().then(|| self.chosen.clone());
+        let before = self.chosen.clone();
         let airplay2_at_launch = self.airplay2_at_launch;
         self.restore(saved);
         self.airplay2_at_launch = airplay2_at_launch;
-        if let Some(chosen) = running_source {
-            self.chosen = chosen;
+        let read = std::mem::replace(&mut self.chosen, before);
+        self.choose(read);
+        if !self.running() && !self.auto_connect_skipped && self.enabled_count() > 0 {
+            self.start_session(StartOrigin::AutoConnect);
         }
         self.view_restored = true;
         true
