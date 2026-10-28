@@ -1767,6 +1767,12 @@ The decisions the hosts take from the core: sources and capture, session start a
 | delays_ring_indices_and_lag_count_capture_rate_frames (`core/tests/session_model.rs`) | S4, S62, S45 |
 | every_session_has_its_own_history_reader_positions_and_frame_count (`core/tests/session_model.rs`) | S5, S17, S39, S45 |
 
+### Notices: Windows (`cargo test` in `desktop/`)
+
+| Test | Clauses |
+|---|---|
+| a_reposted_notice_replaces_the_old_one_and_moves_to_the_top (`desktop/src/adapter.rs`) | S153 |
+
 ### Streaming start and stop: Windows (`cargo test` in `desktop/`)
 
 | Test | Clauses |

@@ -7138,6 +7138,25 @@ mod tests {
         assert!(adapter.snapshot().notices.is_empty());
     }
 
+    // covers: S153
+    #[test]
+    fn a_reposted_notice_replaces_the_old_one_and_moves_to_the_top() {
+        let mut adapter = adapter();
+        adapter.post(NoticeSubject::Start, NoticeMessage::NoSpeaker);
+        adapter.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
+        let old = adapter.snapshot().notices[1].id;
+        adapter.post(NoticeSubject::Start, NoticeMessage::CaptureFailed);
+        assert_eq!(
+            messages(&adapter),
+            [
+                NoticeMessage::CaptureFailed,
+                NoticeMessage::SettingsNotSaved
+            ]
+        );
+        let notices = adapter.snapshot().notices;
+        assert!(notices.iter().all(|n| n.id != old), "{notices:?}");
+    }
+
     #[test]
     fn the_equalizer_is_quantized_and_reaches_the_capture() {
         let mut adapter = adapter();
