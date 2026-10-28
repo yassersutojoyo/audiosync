@@ -7160,9 +7160,16 @@ do {
           "S331 refused start: tried again every 3 s, told at the first refusal and once past 30 s; a start ends the tries",
           "\(firstRefusal) \(quietRefusal) \(before30) \(at30) \(after30) \(String(describing: refusedFor))")
     _ = refusals.refused("bt", nowS: 200)
-    refusals.settle(enabled: ["usb"])
+    refusals.settle(enabled: ["usb"], listed: ["usb", "bt"])
     check(refusals.held(nowS: 200).isEmpty && refusals.started("bt", nowS: 201) == nil,
           "S331 refused start: switching the speaker off ends its tries")
+    _ = refusals.refused("bt", nowS: 300)
+    refusals.settle(enabled: ["bt"], listed: ["usb"])
+    let backAfterLeaving = refusals.refused("bt", nowS: 340)
+    let notYetLost = refusals.refused("bt", nowS: 369.9)
+    check(backAfterLeaving == OutputRefusalRetry.Step(retryAtS: 343, tell: .refused) && notYetLost.tell == nil,
+          "S331 refused start: a refused device that leaves the list and comes back starts a fresh 30 s, not counted as lost",
+          "\(backAfterLeaving) \(notYetLost)")
 
     // covers: S72
     // S72: a master change gives each running local speaker its gain again;

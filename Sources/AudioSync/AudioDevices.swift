@@ -134,8 +134,9 @@ struct AudioDevices: Sendable {
     /// and a private aggregate. A device that just vanished can linger in Core
     /// Audio's list for a moment; listing it would make its speaker's start
     /// fail and be tried again every 3 s (S331), where a missing one waits for
-    /// the device-list notice (S68, S161). A name or UID that can't be read stays empty: the window shows an
-    /// empty name as an unknown device, and callers skip devices without a UID.
+    /// the device-list notice (S68, S161). A name or UID that can't be read
+    /// stays empty: the window shows an empty name as an unknown device, and
+    /// callers skip devices without a UID.
     static func entry(id: AudioDeviceID, alive: UInt32?, channels: Int, transport: UInt32?,
                       composition: [String: Any]?, uid: String?, name: String?) -> Device? {
         guard alive != 0, channels > 0 else { return nil }

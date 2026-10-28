@@ -241,9 +241,10 @@ struct OutputRefusalRetry {
         Set(entries.filter { $0.value.retryAtS > nowS }.keys)
     }
 
-    /// Forgets the outputs switched off.
-    mutating func settle(enabled: Set<String>) {
-        entries = entries.filter { enabled.contains($0.key) }
+    /// Forgets the outputs switched off, and those whose device left the list,
+    /// which S68 covers; listed again, a refusal starts its 30 s over.
+    mutating func settle(enabled: Set<String>, listed: Set<String>) {
+        entries = entries.filter { enabled.contains($0.key) && listed.contains($0.key) }
     }
 
     mutating func reset() {

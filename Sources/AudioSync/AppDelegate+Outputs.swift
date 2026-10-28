@@ -382,7 +382,7 @@ extension AppDelegate {
 
         let now = ProcessInfo.processInfo.systemUptime
         stallRetry.settle(enabled: enabledLocal, nowS: now)
-        refusalRetry.settle(enabled: enabledLocal)
+        refusalRetry.settle(enabled: enabledLocal, listed: Set(listing.map(\.uid)))
         let afterStall = stallRetry.afterStall(formatReopens: formatReopens)
         let applied = LocalOutputSync.apply(enabled: enabledLocal.subtracting(freshLinks.held)
                                                 .subtracting(stallRetry.held(nowS: now))
