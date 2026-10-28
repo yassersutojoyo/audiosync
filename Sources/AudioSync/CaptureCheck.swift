@@ -120,14 +120,16 @@ struct CaptureFlowWatch {
     /// What the watch reads for a session capturing `source`, given Now
     /// Playing's latest reading (nil while the monitor doesn't run).
     static func source(_ source: AudioSource, reading track: NowPlayingMonitor.Track?) -> Source {
-        guard let track, track.isPlaying else { return .nowPlaying(nil) }
+        let ours: Bool
         switch source {
-        case .system: return .nowPlaying(track.position)
-        case .app(let bundleID): return .nowPlaying(track.bundleID == bundleID ? track.position : nil)
-        case .mix(.only, let ids): return .nowPlaying(ids.contains(track.bundleID) ? track.position : nil)
-        case .mix(.allExcept, let ids): return .nowPlaying(ids.contains(track.bundleID) ? nil : track.position)
-        case .input: return .nowPlaying(nil)
+        case .system: return .unwatched
+        case .input: return .callbacksOnly
+        case .app(let bundleID): ours = track?.bundleID == bundleID
+        case .mix(.only, let ids): ours = track.map { ids.contains($0.bundleID) } ?? false
+        case .mix(.allExcept, let ids): ours = track.map { !ids.contains($0.bundleID) } ?? false
         }
+        guard ours, let track, track.isPlaying else { return .nowPlaying(nil) }
+        return .nowPlaying(track.position)
     }
 
     enum Step: Equatable {
@@ -153,8 +155,10 @@ struct CaptureFlowWatch {
     private var lastCount: UInt64?
     /// When the count last moved; nil until this capture's first callback.
     private var movedAt: TimeInterval?
-    /// The first reading of Now Playing's current stretch showing the source playing.
-    private var playingSince: TimeInterval?
+    /// Now Playing's latest distinct reading of the source playing.
+    private var lastPosition: NowPlayingMonitor.Position?
+    /// The read time of the first reading in the current stretch whose position moved on from the one before.
+    private var movingSince: TimeInterval?
     private var paused = false
 
     /// `callbacks` is nil while the capture has no IOProc; `reading` is false
@@ -163,9 +167,7 @@ struct CaptureFlowWatch {
     /// missing callbacks can count at all.
     mutating func tick(callbacks: UInt64?, reading: Bool, source: Source, at uptime: TimeInterval) -> Step {
         guard !paused else { return .none }
-        var playingReadAt: TimeInterval?
-        if case .nowPlaying(let position) = source { playingReadAt = position?.readAt }
-        playingSince = playingReadAt.map { playingSince ?? $0 }
+        read(source)
         if case .waiting(let next, let due) = phase {
             guard uptime >= due else { return .none }
             phase = .trial(next, since: uptime)
@@ -190,11 +192,11 @@ struct CaptureFlowWatch {
         case .waiting:
             return .none
         case .watching:
-            guard let movedAt, quietWhilePlaying(since: movedAt, readAt: playingReadAt) else { return .none }
+            guard let movedAt, missing(since: movedAt, source: source, at: uptime) else { return .none }
             return stop(.noCallback(uptime - movedAt), at: uptime)
         case .trial(let number, let since):
             let lastHeard = movedAt ?? since
-            if quietWhilePlaying(since: lastHeard, readAt: playingReadAt) {
+            if missing(since: lastHeard, source: source, at: uptime) {
                 return stop(.noCallback(uptime - lastHeard), at: uptime)
             }
             guard uptime - since >= Self.trialSpan else { return .none }
@@ -205,12 +207,37 @@ struct CaptureFlowWatch {
         }
     }
 
-    /// A reading taken `stallSpan` after the last callback, and after the
-    /// source was first seen playing, still shows it playing: Now Playing
-    /// reads every 2 s, so a pause it hasn't read yet never counts.
-    private func quietWhilePlaying(since lastHeard: TimeInterval, readAt: TimeInterval?) -> Bool {
-        guard let readAt, let playingSince else { return false }
-        return readAt - max(lastHeard, playingSince) >= Self.stallSpan
+    /// Ticks outpace Now Playing's 2 s polls, so only a new reading moves the stretch on.
+    private mutating func read(_ source: Source) {
+        guard case .nowPlaying(let position?) = source else {
+            lastPosition = nil
+            movingSince = nil
+            return
+        }
+        guard let last = lastPosition else {
+            lastPosition = position
+            return
+        }
+        guard position.readAt > last.readAt else { return }
+        movingSince = NowPlayingMonitor.Position.advances(from: last, to: position) ? (movingSince ?? position.readAt) : nil
+        lastPosition = position
+    }
+
+    /// Whether the capture misses its callbacks since `lastHeard`. For an app
+    /// source, a reading taken `stallSpan` after the last callback still shows
+    /// it playing with its position moving, a stretch read for at least
+    /// `CaptureCheck.playingGrace`: Now Playing reads every 2 s, so a pause it
+    /// hasn't read yet never counts, nor does a source that just started.
+    private func missing(since lastHeard: TimeInterval, source: Source, at uptime: TimeInterval) -> Bool {
+        switch source {
+        case .unwatched:
+            return false
+        case .callbacksOnly:
+            return uptime - lastHeard >= Self.stallSpan
+        case .nowPlaying:
+            guard let readAt = lastPosition?.readAt, let movingSince else { return false }
+            return readAt - lastHeard >= Self.stallSpan && readAt - movingSince >= CaptureCheck.playingGrace
+        }
     }
 
     /// A stop the host was told of: Core Audio's service restarted, or the
