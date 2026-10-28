@@ -3157,6 +3157,7 @@ impl App {
     /// event loop does. Returns whether no change is left unsaved.
     #[cfg(windows)]
     pub fn at_session_end(&self) -> bool {
+        self.updater_at_exit();
         self.save_settings()
     }
 
