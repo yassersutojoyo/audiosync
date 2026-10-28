@@ -865,4 +865,21 @@ mod tests {
         assert_eq!(inputs[0].id.as_deref(), Ok("mic"));
         assert_eq!(inputs[0].properties.as_ref().unwrap().channels, Some(4));
     }
+
+    // covers: S14
+    #[test]
+    fn inputs_offer_at_most_64_channels() {
+        let mut graph = Graph::default();
+        graph.add(
+            1,
+            Kind::Node,
+            props(&[
+                ("media.class", "Audio/Source"),
+                ("node.name", "madi"),
+                ("audio.channels", "128"),
+            ]),
+        );
+        let inputs = graph.inputs();
+        assert_eq!(inputs[0].properties.as_ref().unwrap().channels, Some(64));
+    }
 }

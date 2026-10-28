@@ -1146,6 +1146,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn more_channels_than_spa_positions_are_unsupported() {
+        let asked = |channels| StreamFormat {
+            channels,
+            ..CAPTURE_FORMAT
+        };
+        assert!(enum_format(asked(64)).is_ok());
+        assert_eq!(enum_format(asked(65)), Err(BackendError::UnsupportedFormat));
+    }
+
     /// Needs a PipeWire daemon whose default output plays a tone (the Linux
     /// CI job starts one on a null sink): `cargo test -- --ignored`.
     #[test]

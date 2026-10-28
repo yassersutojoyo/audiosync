@@ -299,6 +299,30 @@ fn an_output_line_shows_the_stream_an_endpoint_gets() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn on_linux_the_capture_and_output_lines_name_pipewire_as_the_converter() {
+    let input = CaptureTarget::Input {
+        endpoint_id: "mic".to_owned(),
+        pair: 0,
+    };
+    let capture = describe_capture_start(&input, Some(CAPTURE_ATTEMPTS[0]), false);
+    let output = describe_output_start(
+        &label(&names(), SPEAKERS_ID),
+        Some(wasapi_setup(HEADSET_MIX, DEFAULT_PERIOD_HNS)),
+        0.0,
+        100.0,
+        1.0,
+        0,
+    );
+    for line in [capture, output] {
+        assert!(
+            line.contains("converted by PipeWire") && !line.contains("Windows"),
+            "{line}"
+        );
+    }
+}
+
 #[test]
 fn the_status_clock_gives_a_line_every_five_seconds_at_the_poll_cadence() {
     let start = Instant::now();

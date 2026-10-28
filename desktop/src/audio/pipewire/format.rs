@@ -166,6 +166,15 @@ mod tests {
         }
     }
 
+    // covers: S14
+    #[test]
+    fn a_device_past_64_channels_is_captured_on_its_first_64() {
+        let setup = input_setup(1, 128);
+        assert_eq!(setup.format.channels, 64);
+        assert_eq!(setup.pair.index, 1);
+        assert_eq!(input_setup(32, 128), SETUP);
+    }
+
     #[test]
     fn frames_follow_the_stride() {
         assert_eq!(frames_in(8192, 8, 8), 1024);
