@@ -6491,6 +6491,40 @@ mod tests {
         assert_eq!(playing(&adapter), [SPEAKERS]);
     }
 
+    // covers: S326
+    #[test]
+    fn a_stream_that_stalls_twice_in_a_row_is_reported_until_one_plays_five_seconds() {
+        use crate::audio::render::{Stall, StallSign};
+        let stall = Stall {
+            span: std::time::Duration::from_secs(2),
+            sign: StallSign::FullPadding,
+        };
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().stall_renderer(SPEAKERS, stall);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "a first stall isn't told");
+        adapter.poll();
+        adapter.audio_mut().stall_renderer(SPEAKERS, stall);
+        adapter.poll();
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "Speakers".into(),
+        };
+        assert_eq!(messages(&adapter), [lost]);
+        assert!(enabled(&adapter, SPEAKERS), "it stays on");
+
+        // Ten seconds on it plays again, and after five more the notice goes.
+        for _ in 0..20 {
+            adapter.poll();
+        }
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+        assert_eq!(messages(&adapter).len(), 1, "not yet");
+        for _ in 0..10 {
+            adapter.poll();
+        }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
     #[test]
     fn a_stream_that_resets_while_its_device_stays_gets_no_notice() {
         let mut adapter = adapter();
