@@ -651,6 +651,8 @@ mod tests {
         lists: AtomicUsize,
         thumbnails: AtomicUsize,
         sends: AtomicUsize,
+        /// The app IDs of the sessions sent to.
+        sent_to: Mutex<Vec<String>>,
         ended: AtomicBool,
     }
 
@@ -680,14 +682,18 @@ mod tests {
     const JPEG: &[u8] = b"jpeg";
 
     impl SessionList for Fake {
-        type Session = ();
+        type Session = String;
 
-        fn list(&mut self) -> Result<Vec<(MediaSession, ())>, String> {
+        fn list(&mut self) -> Result<Vec<(MediaSession, String)>, String> {
             self.counts.lists.fetch_add(1, Ordering::SeqCst);
-            Ok(self.sessions.iter().map(|s| (s.clone(), ())).collect())
+            Ok(self
+                .sessions
+                .iter()
+                .map(|s| (s.clone(), s.app_id.clone()))
+                .collect())
         }
 
-        fn thumbnail(&self, _: &(), deadline: Instant) -> Result<Option<Vec<u8>>, String> {
+        fn thumbnail(&self, _: &String, deadline: Instant) -> Result<Option<Vec<u8>>, String> {
             self.counts.thumbnails.fetch_add(1, Ordering::SeqCst);
             match self.thumbnail {
                 Thumbnail::Image => Ok(Some(IMAGE.to_vec())),
@@ -698,12 +704,13 @@ mod tests {
             }
         }
 
-        fn timeline(&self, _: &()) -> Result<RawTimeline, String> {
+        fn timeline(&self, _: &String) -> Result<RawTimeline, String> {
             Ok(TIMELINE)
         }
 
-        fn send(&self, _: &(), _: Transport, _: Instant) -> Result<bool, String> {
+        fn send(&self, app_id: &String, _: Transport, _: Instant) -> Result<bool, String> {
             self.counts.sends.fetch_add(1, Ordering::SeqCst);
+            self.counts.sent_to.lock().unwrap().push(app_id.clone());
             Ok(true)
         }
 
@@ -851,6 +858,34 @@ mod tests {
         reader.sessions.sessions.push(playing());
         reader.send(&Follow::AnyApp, Transport::Next, &DebugLog::default());
         assert_eq!(counts.sends.load(Ordering::SeqCst), 1);
+    }
+
+    // covers: S218
+    #[test]
+    fn a_remote_button_goes_to_the_paused_session_the_receivers_read() {
+        let paused = |app_id: &str, title: &str| MediaSession {
+            app_id: app_id.to_owned(),
+            title: title.to_owned(),
+            playing: false,
+            paused: true,
+            ..playing()
+        };
+        let (mut fake, counts) = fake(Thumbnail::Image);
+        fake.sessions = vec![paused("Chrome", "Video"), paused("Spotify.exe", "Song")];
+        let (mut track, _card) = spawn(
+            move || Ok(fake),
+            Duration::from_millis(10),
+            DebugLog::default(),
+        );
+        track.follow(Some(Follow::AnyApp));
+        track.played_last(Some("Spotify.exe"));
+        track.send(Transport::PlayPause);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while counts.sends.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "nothing was sent");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(*counts.sent_to.lock().unwrap(), ["Spotify.exe"]);
     }
 
     #[test]
