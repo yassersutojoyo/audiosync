@@ -1687,7 +1687,9 @@ fn problem_of(end: &SessionEnd) -> Option<CastProblem> {
         SessionEnd::Failed(SessionError::Launch(_) | SessionError::Media(_)) => {
             Some(CastProblem::Refused)
         }
-        SessionEnd::Failed(SessionError::Stream(_)) => Some(CastProblem::ConnectionLost),
+        SessionEnd::Failed(SessionError::Stream(_) | SessionError::Internal) => {
+            Some(CastProblem::ConnectionLost)
+        }
     }
 }
 
@@ -1906,6 +1908,12 @@ pub mod tests {
         assert_eq!(problem_of(&blocked), Some(CastProblem::Blocked));
         let refused = SessionEnd::Failed(SessionError::Media(MediaError::LoadCancelled));
         assert_eq!(problem_of(&refused), Some(CastProblem::Refused));
+    }
+
+    #[test]
+    fn a_fault_inside_the_sender_reads_as_a_lost_connection() {
+        let internal = SessionEnd::Failed(SessionError::Internal);
+        assert_eq!(problem_of(&internal), Some(CastProblem::ConnectionLost));
     }
 
     #[test]

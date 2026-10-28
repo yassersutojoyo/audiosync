@@ -26,6 +26,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::net::SocketAddr;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{
     self, Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError, TrySendError,
@@ -388,7 +389,15 @@ impl CastHost {
             let shared = Arc::clone(&shared);
             thread::Builder::new()
                 .name("cast-host".to_owned())
-                .spawn(move || Worker::new(inbox, outbox, shared).run())?
+                .spawn(move || {
+                    let mut worker = Worker::new(inbox, outbox, shared);
+                    while panic::catch_unwind(AssertUnwindSafe(|| worker.run())).is_err() {
+                        worker.recover();
+                        if worker.quitting() {
+                            break;
+                        }
+                    }
+                })?
         };
         Ok(CastHost {
             commands,
@@ -459,8 +468,9 @@ impl CastHost {
         Ok(attempt)
     }
 
-    /// Whether the worker still runs: false after [`CastHost::shutdown`],
-    /// and when a panic ended it, which no event reports.
+    /// Whether the worker still runs: false after [`CastHost::shutdown`].
+    /// A panic in the worker ends the attempt it was handling as failed
+    /// and the worker carries on (C107).
     pub fn is_running(&self) -> bool {
         self.worker
             .as_ref()
@@ -590,6 +600,9 @@ struct Worker {
     /// Lives as long as the worker, so a device's next session sees the
     /// certificate of its last one (C21).
     fingerprints: Arc<Mutex<FingerprintBook>>,
+    /// The attempt from its start until its `Ended`, which a panic in
+    /// between still owes the host (C107).
+    in_hand: Option<(AttemptId, DeviceId)>,
 }
 
 impl Worker {
@@ -601,6 +614,25 @@ impl Worker {
             shared,
             running: None,
             fingerprints: Arc::new(Mutex::new(FingerprintBook::new())),
+            in_hand: None,
+        }
+    }
+
+    /// After a panic: the session in hand is torn down as far as it still
+    /// can be and its attempt ends as failed, which frees the slot (C107).
+    fn recover(&mut self) {
+        if let Some(running) = self.running.take() {
+            let quitting = self.quitting();
+            let _ = panic::catch_unwind(AssertUnwindSafe(move || {
+                if quitting {
+                    running.session.quit();
+                } else {
+                    running.session.stop();
+                }
+            }));
+        }
+        if let Some((attempt, device)) = self.in_hand.take() {
+            self.ended(attempt, device, SessionEnd::Failed(SessionError::Internal));
         }
     }
 
@@ -639,7 +671,7 @@ impl Worker {
         self.shared.quitting.load(Ordering::SeqCst)
     }
 
-    fn run(mut self) {
+    fn run(&mut self) {
         loop {
             self.flush();
             let command = if self.running.is_some() {
@@ -764,6 +796,7 @@ impl Worker {
         selected: Arc<AtomicBool>,
     ) {
         let device = target.id;
+        self.in_hand = Some((attempt, device));
         #[cfg(test)]
         if self.shared.panic_in_start.swap(false, Ordering::SeqCst) {
             panic!("a test panic in the Cast worker");
@@ -910,6 +943,9 @@ impl Worker {
     }
 
     fn ended(&mut self, attempt: AttemptId, device: DeviceId, end: SessionEnd) {
+        if self.in_hand.is_some_and(|(held, _)| held == attempt) {
+            self.in_hand = None;
+        }
         self.shared.release(attempt);
         self.emit(HostEvent::Ended {
             attempt,
@@ -970,7 +1006,7 @@ mod tests {
             matches!(
                 end,
                 HostEvent::Ended {
-                    end: SessionEnd::Failed(_),
+                    end: SessionEnd::Failed(SessionError::Internal),
                     ..
                 }
             ),

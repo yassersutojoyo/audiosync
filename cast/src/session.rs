@@ -55,6 +55,8 @@ pub enum SessionError {
     Launch(LaunchError),
     Media(MediaError),
     Stream(StreamError),
+    /// A fault in the sender itself, not the device or the network (C107).
+    Internal,
 }
 
 impl fmt::Display for SessionError {
@@ -64,6 +66,7 @@ impl fmt::Display for SessionError {
             SessionError::Launch(error) => error.fmt(f),
             SessionError::Media(error) => error.fmt(f),
             SessionError::Stream(error) => error.fmt(f),
+            SessionError::Internal => f.write_str("the Cast sender hit an internal error"),
         }
     }
 }

@@ -173,6 +173,8 @@ pub const CAST_ERROR_ARTWORK: i32 = 9;
 /// No longer reported: a Cast group plays like a device (C3). Kept so
 /// hosts built against it still compile.
 pub const CAST_ERROR_GROUP: i32 = 10;
+/// A fault inside the sender ended the attempt; the next start runs (C107).
+pub const CAST_ERROR_INTERNAL: i32 = 11;
 
 /// A stream's format ([`AscCastEvent::format`]): live WAV.
 pub const CAST_FORMAT_WAV: i32 = 1;
@@ -605,6 +607,7 @@ fn session_code(error: &SessionError) -> i32 {
         SessionError::Launch(_) => CAST_ERROR_LAUNCH,
         SessionError::Media(error) => media_code(error),
         SessionError::Stream(error) => stream_code(error),
+        SessionError::Internal => CAST_ERROR_INTERNAL,
     }
 }
 
