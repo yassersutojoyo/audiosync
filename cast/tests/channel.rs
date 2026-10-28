@@ -529,7 +529,11 @@ fn receiver_status_fields_and_their_defaults() {
     assert!(status.volume.muted);
     assert_eq!(status.volume.control_type, ControlType::Fixed);
     assert_eq!(status.volume.step_interval, Some(0.05));
-    assert!(status.applications.is_empty());
+    assert_eq!(
+        status.applications.len(),
+        1,
+        "no applications field keeps the known ones"
+    );
 }
 
 // covers: C38
@@ -566,6 +570,41 @@ fn the_app_vanishing_from_the_status_ends_the_session_as_taken_over() {
     assert!(channel.is_ended());
     assert!(events(&mut channel).contains(&Event::Ended(EndReason::TakenOver)));
     assert!(sent(&mut channel).is_empty(), "no relaunch");
+}
+
+// covers: C37, C43
+#[test]
+fn a_status_missing_its_applications_or_volume_keeps_what_was_known() {
+    let start = Instant::now();
+    let mut channel = running(start);
+    let receiver_status = |body: Value| json_message(PLATFORM, SENDER, NS_RECEIVER, body);
+    channel.handle(
+        start,
+        receiver_status(json!({"type": "RECEIVER_STATUS", "requestId": 0})),
+    );
+    channel.handle(
+        start,
+        receiver_status(
+            json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {"volume": {"level": 0.6}}}),
+        ),
+    );
+    channel.handle(
+        start,
+        receiver_status(json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {
+            "applications": [app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")],
+        }})),
+    );
+    let seen = events(&mut channel);
+    assert!(!channel.is_ended(), "{seen:?}");
+    let levels: Vec<f64> = seen
+        .iter()
+        .filter_map(|event| match event {
+            Event::Status(status) => Some(status.volume.level),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(levels, [0.6, 0.6], "no status without a status object");
+    assert!(channel.status().expect("status").has_session("s-1"));
 }
 
 // covers: C44
