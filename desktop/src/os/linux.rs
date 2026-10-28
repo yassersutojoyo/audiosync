@@ -4,7 +4,7 @@
 //! `status_notifier`.
 
 pub use super::engine::Media;
-pub use super::other::{computer_name, notice_time};
+pub use super::other::computer_name;
 pub use super::status_notifier::create_tray;
 pub use super::xdg::{Instance, claim_instance, data_base, sealer};
 
@@ -37,4 +37,23 @@ pub fn start_with(log: &DebugLog, backend: Box<dyn crate::ui_model::Backend>) ->
         backend,
         media: Media::new(SharedLabels::default(), Box::new(card_reader)),
     }
+}
+
+/// The local time now, hours and minutes, as Windows gives its notices.
+#[allow(
+    clippy::useless_conversion,
+    reason = "time_t and c_long are 32-bit on some targets"
+)]
+pub fn notice_time() -> String {
+    // SAFETY: time with a null pointer only returns the time.
+    let now = unsafe { libc::time(std::ptr::null_mut()) };
+    // SAFETY: tm is plain data, which localtime_r fills.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers are to live locals of the right types.
+    let offset = if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() {
+        0
+    } else {
+        i64::from(tm.tm_gmtoff)
+    };
+    crate::platform::clock_at(i64::from(now), offset)
 }

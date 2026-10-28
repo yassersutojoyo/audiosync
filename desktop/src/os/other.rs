@@ -110,6 +110,7 @@ pub fn computer_name() -> Option<String> {
 }
 
 /// The time now in UTC, hours and minutes: std reads no time zone.
+#[cfg(not(target_os = "linux"))]
 pub fn notice_time() -> String {
     let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

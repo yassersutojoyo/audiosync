@@ -107,22 +107,16 @@ pub fn system_summary() -> String {
         os_release.as_deref(),
         kernel.as_deref(),
         std::env::consts::ARCH,
-        &local_clock(),
+        &notice_time(),
     )
 }
 
-/// The local time now, hours and minutes.
-#[cfg(target_os = "linux")]
-fn local_clock() -> String {
-    // SAFETY: time with a null pointer only returns the time.
-    let now = unsafe { libc::time(std::ptr::null_mut()) };
-    // SAFETY: tm is plain data, which localtime_r fills.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    // SAFETY: both pointers are to live locals of the right types.
-    if unsafe { libc::localtime_r(&now, &mut tm) }.is_null() {
-        return "unknown".to_owned();
-    }
-    format!("{:02}.{:02}", tm.tm_hour, tm.tm_min)
+/// Hours and minutes at `seconds` since the Unix epoch, on a clock
+/// `utc_offset` seconds ahead of UTC.
+#[cfg_attr(windows, allow(dead_code))]
+pub fn clock_at(seconds: i64, utc_offset: i64) -> String {
+    let minutes = (seconds + utc_offset).div_euclid(60).rem_euclid(24 * 60);
+    format!("{:02}.{:02}", minutes / 60, minutes % 60)
 }
 
 /// The Linux line of the debug log, from the text of `os-release`, the
