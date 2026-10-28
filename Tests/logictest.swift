@@ -766,6 +766,11 @@ do {
     run.write(nil, Keys.enabledAirPlay)
     check(AppSettings.ids(run.read(Keys.enabledLocal)) == ["Headphones"] && run.read(Keys.enabledAirPlay) == nil,
           "auto-connect skipped: the run reads its own changes")
+    var asks = PermissionAsks.load(run)
+    asks.accept(.microphone)
+    asks.save(run)
+    check(PermissionAsks.load(run).stored == ["microphone"],
+          "auto-connect skipped: an accepted permission explanation holds for the run")
     check(NSDictionary(dictionary: saved.values) == before,
           "auto-connect skipped: nothing the run changes is saved")
     let next = disk.load().atLaunch(holdingSpeakersOff: false)
