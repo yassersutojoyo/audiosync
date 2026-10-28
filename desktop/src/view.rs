@@ -9143,6 +9143,53 @@ mod tests {
     }
 
     #[test]
+    fn a_flyout_zone_header_folds_and_unfolds_through_its_accessibility_actions() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::zones_preview());
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let expanded = || {
+            app.models
+                .zones
+                .iter()
+                .find(|zone| zone.id == "zone:living")
+                .expect("the zone is listed")
+                .expanded
+        };
+        let element = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.flyout, label)
+                .next()
+                .unwrap_or_else(|| panic!("nothing in the flyout is labeled {label}"))
+        };
+        assert!(expanded());
+
+        let arrow = element("Hide speakers in Living Room");
+        assert_ne!(
+            arrow.accessible_expandable(),
+            Some(true),
+            "UI Automation can't fold through an expandable arrow"
+        );
+        arrow.invoke_accessible_default_action();
+        draw_frames();
+        assert!(!expanded(), "Invoke on the flyout's arrow folded the zone");
+
+        let arrow = element("Show speakers in Living Room");
+        assert_ne!(arrow.accessible_expandable(), Some(true));
+        arrow.invoke_accessible_default_action();
+        draw_frames();
+        assert!(expanded(), "Invoke on the flyout's arrow unfolded it");
+
+        app.flyout
+            .invoke_zone_expanded_changed("zone:living".into(), false);
+        draw_frames();
+        let toggle = element("Living Room, zone");
+        assert_eq!(toggle.accessible_expanded(), Some(false));
+        toggle.invoke_accessible_expand_action();
+        draw_frames();
+        assert!(expanded(), "Expand on the flyout zone's toggle unfolded it");
+    }
+
+    #[test]
     fn speakers_move_between_zones_and_back_from_their_menus() {
         let app = app_over(MockBackend::zones_preview());
         let main = &app.main;
