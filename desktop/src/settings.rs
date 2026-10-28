@@ -2090,6 +2090,72 @@ mod tests {
         );
     }
 
+    #[test]
+    fn every_field_moves_each_field_from_its_default() {
+        let default = Settings::default();
+        // No `..`: a new field breaks this until it is checked here too.
+        let Settings {
+            version: _,
+            source,
+            input_device,
+            input_pairs,
+            source_mix,
+            master_volume,
+            outputs,
+            airplay,
+            auto_connect,
+            speaker_names,
+            hidden_speakers,
+            groups,
+            speaker_zones,
+            speaker_zones_migrated: _,
+            speaker_presets,
+            speaker_presets_migrated: _,
+            equalizer,
+            equalizer_curves,
+            show_virtual_devices,
+            appearance,
+            window,
+            airplay_adjustment_ms,
+            when_source_quits,
+            remote,
+            cast_addresses,
+            airplay2_experimental,
+            check_updates_automatically,
+            last_update_check,
+            update_record,
+        } = every_field();
+        assert_ne!(source, default.source);
+        assert_ne!(input_device, default.input_device);
+        assert_ne!(input_pairs, default.input_pairs);
+        assert_ne!(source_mix, default.source_mix);
+        assert_ne!(master_volume, default.master_volume);
+        assert_ne!(outputs, default.outputs);
+        assert_ne!(airplay, default.airplay);
+        assert_ne!(auto_connect, default.auto_connect);
+        assert_ne!(speaker_names, default.speaker_names);
+        assert_ne!(hidden_speakers, default.hidden_speakers);
+        assert_ne!(groups, default.groups);
+        assert_ne!(speaker_zones, default.speaker_zones);
+        assert_ne!(speaker_presets, default.speaker_presets);
+        assert_ne!(equalizer, default.equalizer);
+        assert_ne!(equalizer_curves, default.equalizer_curves);
+        assert_ne!(show_virtual_devices, default.show_virtual_devices);
+        assert_ne!(appearance, default.appearance);
+        assert_ne!(window, default.window);
+        assert_ne!(airplay_adjustment_ms, default.airplay_adjustment_ms);
+        assert_ne!(when_source_quits, default.when_source_quits);
+        assert_ne!(remote, default.remote);
+        assert_ne!(cast_addresses, default.cast_addresses);
+        assert_ne!(airplay2_experimental, default.airplay2_experimental);
+        assert_ne!(
+            check_updates_automatically,
+            default.check_updates_automatically
+        );
+        assert_ne!(last_update_check, default.last_update_check);
+        assert_ne!(update_record, default.update_record);
+    }
+
     // covers: S212
     #[test]
     fn settings_survive_a_save_and_a_load() {
