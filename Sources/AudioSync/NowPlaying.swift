@@ -415,11 +415,13 @@ final class NowPlayingMonitor {
                 return trackText & timing
             end timeout
             """
+        // Stamped before the script runs: a reply can take up to 2 s, and a later stamp would let
+        // a "playing" read just before a pause look current to the capture watch (S335).
+        let readAt = ProcessInfo.processInfo.systemUptime
         guard let result = run(target: bundleID, script)?.stringValue else {
             return .empty(denied.contains(bundleID) ? .denied : .unreadable)
         }
         if result == "stopped" { return .empty(.stopped) }
-        let readAt = ProcessInfo.processInfo.systemUptime
         let parts = result.components(separatedBy: sep)
         guard parts.count >= 4, !parts[1].isEmpty else {
             return .empty(parts[0] == "playing" ? .playingNameless : .unreadable)

@@ -109,6 +109,10 @@ final class SourceCapture {
                                  silentCallbacks: $0.silentCallbacks.load(ordering: .relaxed)) }
     }
 
+    /// An IOProc reads the source; false while stopped and while an app tap
+    /// waits for an audio process.
+    var isReading: Bool { io != nil }
+
     private var source: AudioSource?
     /// The stored channel pair (`InputChannelPair.index`) an input source reads.
     private var inputPair = 0
@@ -161,6 +165,18 @@ final class SourceCapture {
         sink = CaptureSink(parts: parts, provesPermission: CaptureCheck.provesPermission(source))
         sampleRate = CaptureRate.fallback
         do { try startSource(source, rebuild: rebuild) } catch { halt(); throw error }
+    }
+
+    /// Opens the capture of a running session again after it stopped (S335),
+    /// into the same parts, so the ring's timeline goes on. Throws as `start`
+    /// does; on a failure the session's rate stays as it was, for the outputs
+    /// that attach meanwhile.
+    func reopen(source: AudioSource, parts: EngineParts, inputPair: Int) throws {
+        let rate = sampleRate
+        do { try start(source: source, parts: parts, inputPair: inputPair, rebuild: true) } catch {
+            sampleRate = rate
+            throw error
+        }
     }
 
     /// Builds whatever reading `source` takes; on failure the caller releases
