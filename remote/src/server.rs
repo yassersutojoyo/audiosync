@@ -47,8 +47,6 @@ const RESERVED_REQUEST: Duration = Duration::from_secs(1);
 const MAX_STREAMS_PER_DEVICE: usize = 2;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const PROBE: Duration = Duration::from_millis(1);
-/// How long a stop waits for the connection threads.
-const STOP_GRACE: Duration = Duration::from_millis(500);
 /// How long a refused connection is drained before it is closed.
 const REFUSED_LINGER: Duration = Duration::from_secs(1);
 /// Refused connections drained at once; the oldest is closed for a new one.
@@ -796,20 +794,10 @@ impl RemoteServer {
         if let Some(accept) = self.accept.take() {
             let _ = accept.join();
         }
-        let connections = std::mem::take(&mut *lock(&self.shared.connections));
-        for connection in &connections {
+        // Not joined: a send blocked on a peer that stopped reading may not
+        // return when its socket is shut (WinSock); it ends within its write timeout.
+        for connection in std::mem::take(&mut *lock(&self.shared.connections)) {
             let _ = connection.stream.shutdown(Shutdown::Both);
-        }
-        // A send blocked on a peer that stopped reading may not return when
-        // its socket is shut (WinSock); it ends within its write timeout.
-        let until = Instant::now() + STOP_GRACE;
-        for Connection { thread, .. } in connections {
-            while !thread.is_finished() && Instant::now() < until {
-                thread::sleep(Duration::from_millis(5));
-            }
-            if thread.is_finished() {
-                let _ = thread.join();
-            }
         }
     }
 }
