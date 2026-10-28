@@ -2033,6 +2033,12 @@ impl MockBackend {
         self.state.speakers.retain(keep);
     }
 
+    /// Keeps only the example sources `keep` accepts; the choice stays.
+    #[cfg(test)]
+    pub fn retain_sources(&mut self, keep: impl Fn(&Source) -> bool) {
+        self.state.sources.retain(keep);
+    }
+
     /// Adds preset `id` of the speakers `members` at the master and the
     /// curve now, with no own volumes.
     pub fn add_preset(&mut self, id: &str, name: &str, members: &[&str]) {

@@ -5647,6 +5647,19 @@ mod tests {
         assert_eq!(app.main.get_input_pair_index(), 0);
     }
 
+    // covers: S211
+    #[test]
+    fn a_chosen_source_the_picker_doesnt_list_shows_as_the_whole_system() {
+        let mut backend = MockBackend::new();
+        backend.select_source("input:line");
+        backend.retain_sources(|source| source.id != "input:line");
+        let app = app_over(backend);
+        assert_eq!(app.snapshot().source_id, "input:line");
+        assert_eq!(app.snapshot().sources[0].kind, SourceKind::System);
+        assert_eq!(app.main.get_source_index(), 0);
+        assert_eq!(app.flyout.get_source_index(), 0);
+    }
+
     #[test]
     fn a_saved_pair_the_device_no_longer_has_shows_channels_one_and_two() {
         let mut state = MockBackend::new().snapshot();

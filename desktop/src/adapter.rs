@@ -5559,6 +5559,7 @@ mod tests {
         assert_eq!(playing(&adapter), [SPEAKERS]);
     }
 
+    // covers: S211
     #[test]
     fn an_input_device_choice_is_saved_and_restored_while_it_is_unplugged() {
         let mut adapter = adapter();
@@ -5577,8 +5578,8 @@ mod tests {
             })
         );
 
-        // At the next launch the device is unplugged: the choice stays, and
-        // shows under its saved name, after the apps.
+        // At the next launch the device is unplugged: the choice stays, but
+        // the picker doesn't list it.
         let mut audio = MockBackend::empty();
         audio.connect_output(SPEAKERS, "Speakers");
         audio.add_app(PLAYER_PID, "player.exe");
@@ -5587,11 +5588,8 @@ mod tests {
         restored.refresh_sources();
         let state = restored.snapshot();
         assert_eq!(state.source_id, mic());
-        let last = state.sources.last().expect("listed");
-        assert_eq!(
-            (last.id.as_str(), last.name.as_str(), last.kind),
-            (mic().as_str(), "Microphone (USB Audio)", SourceKind::Input)
-        );
+        let ids: Vec<&str> = state.sources.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["system", player().as_str()]);
 
         // Streaming doesn't start without it, and says so.
         turn_on(&mut restored, SPEAKERS);
@@ -6301,6 +6299,56 @@ mod tests {
         assert!(adapter.snapshot().running);
         assert_eq!(captures(&adapter), [(LoopbackMode::IncludeTree, 2100)]);
         assert_eq!(adapter.snapshot().source_id, "app:2100:player.exe");
+    }
+
+    // covers: S211
+    #[test]
+    fn a_chosen_app_that_isnt_running_is_listed_by_name_among_the_apps() {
+        let mut adapter = adapter();
+        adapter.audio_mut().add_app(2100, "zither.exe");
+        adapter.audio.connect_input(MIC, "Microphone", "USB");
+        adapter.select_source(&player());
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.refresh_sources();
+        let state = adapter.snapshot();
+        let rows: Vec<(&str, SourceKind)> = state
+            .sources
+            .iter()
+            .map(|s| (s.name.as_str(), s.kind))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("All System Audio", SourceKind::System),
+                ("Player", SourceKind::App),
+                ("Zither", SourceKind::App),
+                ("Microphone", SourceKind::Input),
+            ]
+        );
+        assert_eq!(state.source_id, player());
+    }
+
+    // covers: S211
+    #[test]
+    fn a_chosen_source_that_is_listed_is_listed_once_in_its_place() {
+        let mut adapter = adapter();
+        adapter.audio_mut().add_app(2100, "zither.exe");
+        adapter.audio.connect_input(MIC, "Microphone", "USB");
+        adapter.refresh_sources();
+        let listed = |adapter: &AudioAdapter<MockBackend>| -> Vec<String> {
+            adapter
+                .snapshot()
+                .sources
+                .into_iter()
+                .map(|s| s.id)
+                .collect()
+        };
+        let before = listed(&adapter);
+        for chosen in [player(), mic()] {
+            adapter.select_source(&chosen);
+            assert_eq!(listed(&adapter), before, "{chosen}");
+            assert_eq!(adapter.snapshot().source_id, chosen);
+        }
     }
 
     #[test]
