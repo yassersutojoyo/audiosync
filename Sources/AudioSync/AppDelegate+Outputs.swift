@@ -370,7 +370,8 @@ extension AppDelegate {
     /// stops the renderers of speakers switched off (`LocalOutputSync.plan`).
     /// `provided` is a device list the caller has just read; without one the
     /// devices are read here. A speaker whose renderer won't start is switched
-    /// off and gets a notice, plus an alert when `origin` is the user.
+    /// off and gets a notice, plus an alert when `origin` is the user, unless
+    /// its listed device only refused the start: that one stays on (S331).
     /// `formatReopens` start again because their device's format changed
     /// (S330), never as a stall's reopen, even inside its trial.
     func syncLocalOutputs(available provided: [AudioDevices.Device]? = nil, origin: StartOrigin = .user,
@@ -381,9 +382,11 @@ extension AppDelegate {
 
         let now = ProcessInfo.processInfo.systemUptime
         stallRetry.settle(enabled: enabledLocal, nowS: now)
+        refusalRetry.settle(enabled: enabledLocal, listed: Set(listing.map(\.uid)))
         let afterStall = stallRetry.afterStall(formatReopens: formatReopens)
         let applied = LocalOutputSync.apply(enabled: enabledLocal.subtracting(freshLinks.held)
-                                                .subtracting(stallRetry.held(nowS: now)), listing: listing,
+                                                .subtracting(stallRetry.held(nowS: now))
+                                                .subtracting(refusalRetry.held(nowS: now)), listing: listing,
                                             to: engine,
                                             bound: localBoundDevices,
                                             holdBacks: localHoldBackTargets(), gain: { effectiveGain($0) })
@@ -391,6 +394,10 @@ extension AppDelegate {
             localHoldBacks[uid] = holdBack
             clearNotices([SpeakerKey.make(id: uid, airplay: false)])
             if let device = listing.first(where: { $0.uid == uid }) { noteFreshLinkStart(uid, device) }
+            if let refusedS = refusalRetry.started(uid, nowS: now) {
+                DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) started after its device refused it for "
+                    + String(format: "%.1f", refusedS) + " s")
+            }
             if afterStall.contains(uid) {
                 stallRetry.started(uid, nowS: now)
                 DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) reopened after a stall, "
@@ -404,13 +411,15 @@ extension AppDelegate {
         // mode refuses every start) is a stall in a row: the speaker stays on (S334).
         var failures: [LocalOutputSync.Failure] = []
         for failure in applied.failures {
-            guard afterStall.contains(failure.uid), let retryAt = stallRetry.refused(failure.uid, nowS: now) else {
+            if afterStall.contains(failure.uid), let retryAt = stallRetry.refused(failure.uid, nowS: now) {
+                DebugTrace.log("[AudioSync] output \(engine.outputNumber(failure.uid)) not reopened after a stall: "
+                    + "its device refused the start; trying again in \(Int(OutputStallRetry.retryEveryS)) s")
+                scheduleStallRetry(atS: retryAt)
+            } else if let refusal = failure.refusal {
+                outputRefused(failure.uid, refusal, nowS: now)
+            } else {
                 failures.append(failure)
-                continue
             }
-            DebugTrace.log("[AudioSync] output \(engine.outputNumber(failure.uid)) not reopened after a stall: "
-                + "its device refused the start; trying again in \(Int(OutputStallRetry.retryEveryS)) s")
-            scheduleStallRetry(atS: retryAt)
         }
         for uid in applied.detached {
             localHoldBacks[uid] = nil
@@ -452,6 +461,25 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) stalled again before playing "
             + "\(Int(OutputStallRetry.trialS)) s; trying again every \(Int(OutputStallRetry.retryEveryS)) s")
         scheduleStallRetry(atS: atS)
+    }
+
+    /// The listed device of output `uid` refused its start (S331): the speaker
+    /// stays on and is tried again every 3 s. Like a speaker whose device left
+    /// the list (S68), it gets no notice on the Mac, even past 30 s.
+    private func outputRefused(_ uid: String, _ refusal: String, nowS: Double) {
+        let step = refusalRetry.refused(uid, nowS: nowS)
+        let number = engine.outputNumber(uid)
+        switch step.tell {
+        case .refused?:
+            DebugTrace.log("[AudioSync] output \(number) refused by its device (\(refusal)); "
+                + "trying again every \(Int(OutputRefusalRetry.retryEveryS)) s")
+        case .lost?:
+            DebugTrace.log("[AudioSync] output \(number) still refused after \(Int(OutputRefusalRetry.lostAfterS)) s; "
+                + "counted as lost, still trying every \(Int(OutputRefusalRetry.retryEveryS)) s")
+        case nil:
+            break
+        }
+        scheduleStallRetry(atS: step.retryAtS)
     }
 
     /// A sync just after uptime `atS`, when a held output may start again.

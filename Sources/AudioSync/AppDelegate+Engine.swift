@@ -68,6 +68,7 @@ extension AppDelegate {
         var outcome = CaptureSwitch.Outcome.switched
         briefLoss.restart()   // a new session counts only the devices listed now (S328)
         stallRetry.reset()
+        refusalRetry.reset()
         do {
             try engine.start(source: audioSource, inputPair: currentInputPair, rebuild: rebuild)
         } catch {

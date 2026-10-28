@@ -287,6 +287,13 @@ enum ZoneLayout {
         speakers.filter { zoned.contains(key($0)) }
     }
 
+    /// Whether the note and the Add by address button under a section's rows
+    /// each get a separator above them. The zone box has its own edge, so a
+    /// full-width line right under it would run past its rounded corners.
+    static func linesBelowRows(zoneBox: Bool, note: Bool, castAdd: Bool) -> (note: Bool, castAdd: Bool) {
+        (note && !zoneBox, castAdd && (note || !zoneBox))
+    }
+
     struct ZoneGroup<T>: Identifiable {
         let zone: String
         let rows: [T]
