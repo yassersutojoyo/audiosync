@@ -85,10 +85,6 @@ const PAGE_BYTES: usize = 4096;
 /// The volume step of a device that reports none, 0 to 100.
 const DEFAULT_VOLUME_STEP: f64 = 1.0;
 
-/// The unanswered levels kept to recognize their answers: a slider drag
-/// sends one every 100 ms at most (C70).
-const MAX_UNANSWERED: usize = 16;
-
 /// Discovery answers handled per UI tick, so a flood of mDNS answers
 /// cannot stall the UI thread; the rest wait for the next tick (C106).
 const MAX_BROWSE_PER_POLL: usize = 256;
@@ -568,7 +564,8 @@ pub struct CastSpeakers {
     /// here is in no zone.
     zones: BTreeMap<DeviceId, f64>,
     /// The levels sent in this session that no status has answered yet,
-    /// oldest first.
+    /// oldest first; all of them, since the sender paces a drag later (C70)
+    /// and may send any of them.
     unanswered: Vec<f64>,
     attempt: Option<Attempt>,
     /// How long the feed waits for L, in ms (C77).
@@ -1310,9 +1307,6 @@ impl CastSpeakers {
                 self.requested = None;
             }
         } else {
-            if self.unanswered.len() == MAX_UNANSWERED {
-                self.unanswered.remove(0);
-            }
             self.unanswered.push(level);
         }
         if let Some(link) = self.link.as_mut() {
