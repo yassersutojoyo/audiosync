@@ -1777,7 +1777,7 @@ The decisions the hosts take from the core: sources and capture, session start a
 | a_start_that_fails_before_its_capture_never_tries_one_and_holds_no_feed (`desktop/src/audio/controller.rs`) | S114 |
 | each_start_captures_into_a_fresh_ring_through_an_equalizer_already_set (`desktop/src/audio/controller.rs`) | S114 |
 | a_second_stop_is_safe_and_no_capture_runs_once_a_stop_finished (`desktop/src/audio/controller.rs`) | S115 |
-| turning_the_last_speaker_off_leaves_every_airplay_speaker_deselected (`desktop/src/adapter.rs`) | S118 |
+| turning_the_last_speaker_off_leaves_every_airplay_speaker_deselected (`desktop/src/adapter.rs`; the stop when the last speaker is AirPlay; deselect at stop has nothing left to do on Windows, S162) | S118 |
 | all_speakers_off_then_one_on_starts_a_new_session_with_the_saved_settings (`desktop/src/adapter.rs`; local speakers only; AirPlay deselect is S118's test) | S144 |
 
 ### local delay model: core (`cargo test` in `core/`)
