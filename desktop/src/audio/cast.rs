@@ -2521,6 +2521,39 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 80.0);
     }
 
+    // covers: C70, C104 (a device that rounds to its 0.05 step)
+    #[test]
+    fn a_device_that_rounds_to_its_step_answers_within_half_a_step() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        let stepped = |level| {
+            fake.report(HostEvent::Session {
+                attempt: AttemptId(1),
+                device: id(KITCHEN),
+                event: SessionEvent::Volume(DeviceVolume {
+                    level,
+                    step_interval: Some(0.05),
+                    ..DeviceVolume::default()
+                }),
+            });
+        };
+        stepped(0.5);
+        cast.poll();
+        cast.set_volume(KITCHEN, 33.0);
+        stepped(0.35);
+        cast.poll();
+        assert_eq!(shown(&cast, KITCHEN), 33.0, "the answer to 0.33");
+
+        // 0.36 rounds to the 0.35 it has, so no answer comes.
+        cast.set_volume(KITCHEN, 36.0);
+        stepped(0.4);
+        cast.poll();
+        stepped(0.35);
+        cast.poll();
+        assert_eq!(shown(&cast, KITCHEN), 35.0, "a change from elsewhere");
+    }
+
     // covers: C70, C104, C105 (nothing is sent before the first status)
     #[test]
     fn a_level_set_before_the_first_status_never_swallows_a_later_change_from_elsewhere() {
