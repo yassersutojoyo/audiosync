@@ -2077,6 +2077,19 @@ pub mod tests {
         assert_eq!(fake.state().announced, [id(KITCHEN)]);
     }
 
+    // covers: C81, C90
+    #[test]
+    fn a_group_whose_leader_handed_over_counts_as_announced() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        cast.poll();
+        fake.state().announced.clear();
+        fake.announce_at(ATTIC, "Attic", 32_123, Ipv4Addr::new(192, 0, 2, 11));
+        cast.poll();
+        assert_eq!(fake.state().announced, [id(ATTIC)]);
+    }
+
     #[test]
     fn a_failed_session_turns_its_speaker_off_with_the_reason() {
         let (fake, mut cast) = listed();
