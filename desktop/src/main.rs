@@ -264,7 +264,7 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
             let Some(app) = app.upgrade() else {
                 return;
             };
-            let saved = app.save_settings();
+            let saved = app.at_session_end();
             log.log(|| {
                 format!(
                     "Windows session ends: settings {}",

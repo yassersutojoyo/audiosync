@@ -3153,6 +3153,13 @@ impl App {
         }
     }
 
+    /// When Windows ends the session, which may end the process before the
+    /// event loop does. Returns whether no change is left unsaved.
+    #[cfg(windows)]
+    pub fn at_session_end(&self) -> bool {
+        self.save_settings()
+    }
+
     /// Takes the updater worker's news; a check that read the appcast
     /// stores its time.
     fn poll_updater(&self) {
@@ -7166,6 +7173,22 @@ mod tests {
         let state = app.snapshot();
         assert_eq!(state.speaker("local:desk").unwrap().delay_ms, Some(120.0));
         assert_eq!(state.airplay_delay_ms, Some(1750.0));
+    }
+
+    // covers: S315
+    #[cfg(windows)]
+    #[test]
+    fn the_end_of_a_windows_session_gives_a_removed_exe_its_bak_back_and_keeps_the_record() {
+        let app = app_over(MockBackend::new());
+        *app.updater.borrow_mut() = Some(crate::updater::tests::swapped_exe_gone("session-end"));
+        app.at_session_end();
+        assert_eq!(
+            app.backend.borrow().view_settings().update_record,
+            Some(ui_model::UpdateRecord {
+                version: "0.9.0".to_owned(),
+                reason: ui_model::UpdateRecordReason::Blocked,
+            })
+        );
     }
 
     #[test]
