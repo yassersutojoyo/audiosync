@@ -1751,6 +1751,8 @@ pub mod tests {
         pub readers: Vec<AudioReader>,
         /// The group records each start was handed.
         pub groups: Vec<Option<GroupRecords>>,
+        /// The single-device records each start was handed.
+        pub records: Vec<Option<GroupRecords>>,
         /// The addresses each start was handed.
         pub targets: Vec<Vec<SocketAddr>>,
         pub events: VecDeque<HostEvent>,
@@ -1818,6 +1820,7 @@ pub mod tests {
             state.started.push(target.id);
             state.targets.push(target.addresses);
             state.groups.push(target.group);
+            state.records.push(target.records);
             state.readers.push(reader);
             state.next += 1;
             Ok(AttemptId(state.next))
@@ -2095,6 +2098,24 @@ pub mod tests {
             .clone()
             .expect("Attic is a group")
             .members
+    }
+
+    #[test]
+    fn a_single_device_session_follows_its_announced_address() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        assert_eq!(fake.state().groups[0], None);
+        let records = fake.state().records[0]
+            .clone()
+            .expect("a single device's records");
+        let moved = Ipv4Addr::new(192, 0, 2, 30);
+        fake.announce_at(KITCHEN, "Kitchen", DEVICE_PORT, moved);
+        cast.poll();
+        assert_eq!(
+            records.get().group,
+            [SocketAddr::new(IpAddr::V4(moved), DEVICE_PORT)]
+        );
     }
 
     #[test]
