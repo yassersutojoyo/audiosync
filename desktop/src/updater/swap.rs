@@ -542,6 +542,10 @@ mod tests {
             child: None,
         };
         let running = copy.dir.join(EXE_NAME);
+        // Red on demand: another worktree's cargo clean takes the shared
+        // test binary away while the suite runs.
+        let exe = std::env::current_exe().unwrap();
+        std::fs::rename(&exe, exe.with_extension("gone")).unwrap();
         std::fs::copy(std::env::current_exe().unwrap(), &running).unwrap();
         let child = std::process::Command::new(&running)
             .args([

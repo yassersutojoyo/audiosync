@@ -7551,7 +7551,15 @@ mod tests {
                 && !zone_member_row(app, "airplay:bedroom").renaming
         };
         let (x, y) = double_click_point(&app, renames_bedroom);
-        click(window, x, y);
+        // Red on demand: on a loaded machine the first click's frame takes
+        // longer than the double-click time to draw.
+        let position = slint::LogicalPosition::new(x, y);
+        let button = PointerEventButton::Left;
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        window.dispatch_event(WindowEvent::PointerPressed { position, button });
+        window.dispatch_event(WindowEvent::PointerReleased { position, button });
+        std::thread::sleep(Duration::from_millis(5100));
+        draw_frames();
         click(window, x, y);
         let row = in_zones_row(&app, "airplay:bedroom");
         assert!(
