@@ -1260,6 +1260,19 @@ fn dacp_never_ends_a_session() {
     let mut events = Events::default();
     let (a_key, a_remote) = play(&sender, &mut events, &a, 1);
     let (b_key, _) = play(&sender, &mut events, &b, 2);
+    // Latency follows the first sound, after Playing: count only once it is in.
+    for key in [&a_key, &b_key] {
+        let latency = events.wait_for(&sender, LONG, |event| {
+            matches!(
+                event,
+                SenderEvent::Speaker {
+                    key: seen,
+                    event: SpeakerEvent::Latency(_),
+                } if seen == key
+            )
+        });
+        assert!(latency.is_some(), "{:?}", events.of(key));
+    }
     let port = sender.dacp_counters().port();
     let a_events = events.of(&a_key).len();
     let b_events = events.of(&b_key).len();
