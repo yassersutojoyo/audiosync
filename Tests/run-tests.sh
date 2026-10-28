@@ -38,7 +38,7 @@ trap cleanup EXIT
 CORE=(-I Sources/CAudioSyncCore -L core/target/universal-apple-darwin/release -laudiosync_core
   -framework Security -framework CoreFoundation)
 # The engine's parts on the core, with what they need to compile.
-ENGINE_PARTS=(EngineParts.swift CoreEngine.swift OutputRenderer.swift OutputFades.swift Equalizer.swift Diagnostics.swift
+ENGINE_PARTS=(EngineParts.swift CoreEngine.swift OutputRenderer.swift OutputFades.swift OutputFormatWatch.swift Equalizer.swift Diagnostics.swift
   NativeAirPlayTap.swift CastTap.swift CalibrationTap.swift)
 
 build() {   # [SWIFT_OPT=-Onone] build <name> <test file> <source files…> [-- <more swiftc arguments…>]

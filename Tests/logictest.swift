@@ -6495,6 +6495,30 @@ do {
           "\(String(describing: unstalled)) \(playing) \(settled) \(other.tracked)")
 }
 
+// MARK: Output format: a device whose rate or channels change under a running output (OutputFormatWatch.swift, S330)
+// covers: S330 (the Mac host's reopen decision and its debug line)
+do {
+    typealias F = OutputDeviceFormat
+    let stereo48 = F(rate: 48_000, channels: 2)
+    func decide(_ now: F?, from started: F? = F(rate: 48_000, channels: 2), fadingOut: Bool = false) -> OutputFormatWatch.Verdict {
+        OutputFormatWatch.decide(started: started, now: now, fadingOut: fadingOut)
+    }
+    let rate = decide(F(rate: 44_100, channels: 2))
+    let mono = decide(F(rate: 48_000, channels: 1))
+    let same = decide(F(rate: 48_000.0001, channels: 2))
+    check(rate == .reopen(old: stereo48, new: F(rate: 44_100, channels: 2))
+            && mono == .reopen(old: stereo48, new: F(rate: 48_000, channels: 1)) && same == .keep,
+          "output format: a running output reopens once its device reports another rate or channel count, never for a notice that changes neither",
+          "\(rate) \(mono) \(same)")
+    let quiet = [decide(F(rate: 44_100, channels: 2), fadingOut: true), decide(nil), decide(stereo48, from: nil),
+                 decide(F(rate: 0, channels: 0))]
+    check(quiet.allSatisfy { $0 == .keep },
+          "output format: an output fading out, or a format the start or the notice can't read, is never reopened", "\(quiet)")
+    let line = OutputFormatWatch.line(number: 2, old: stereo48, new: F(rate: 24_000, channels: 1))
+    check(line == "output 2: its device's format changed from 48000 Hz, 2 ch to 24000 Hz, 1 ch; reopening it",
+          "output format: one debug line names the output's number and the old and the new format", line)
+}
+
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
 // covers: S186 (the Mac's stop order)
 
