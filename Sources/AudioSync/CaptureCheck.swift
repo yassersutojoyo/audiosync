@@ -106,6 +106,30 @@ struct CaptureFlowWatch {
         }
     }
 
+    /// What the watch reads about the captured source each tick.
+    enum Source: Equatable {
+        /// Missing callbacks never count.
+        case unwatched
+        /// An input device: no Now Playing reading, the callback count works on its own.
+        case callbacksOnly
+        /// An app or mix source: Now Playing's latest position while it reports
+        /// one of the source's apps playing, nil otherwise.
+        case nowPlaying(NowPlayingMonitor.Position?)
+    }
+
+    /// What the watch reads for a session capturing `source`, given Now
+    /// Playing's latest reading (nil while the monitor doesn't run).
+    static func source(_ source: AudioSource, reading track: NowPlayingMonitor.Track?) -> Source {
+        guard let track, track.isPlaying else { return .nowPlaying(nil) }
+        switch source {
+        case .system: return .nowPlaying(track.position)
+        case .app(let bundleID): return .nowPlaying(track.bundleID == bundleID ? track.position : nil)
+        case .mix(.only, let ids): return .nowPlaying(ids.contains(track.bundleID) ? track.position : nil)
+        case .mix(.allExcept, let ids): return .nowPlaying(ids.contains(track.bundleID) ? nil : track.position)
+        case .input: return .nowPlaying(nil)
+        }
+    }
+
     enum Step: Equatable {
         case none
         /// Close the capture now; tries to open it again follow.
@@ -134,13 +158,13 @@ struct CaptureFlowWatch {
     private var paused = false
 
     /// `callbacks` is nil while the capture has no IOProc; `reading` is false
-    /// while an app tap waits for an audio process, which is no stop.
-    /// `playingReadAt` is when Now Playing last read the captured source as
-    /// playing, nil while it shows it paused or can't read it: a tap of a
-    /// paused source calls back nothing (S335 D3), so only a source known to
-    /// play can be missing callbacks.
-    mutating func tick(callbacks: UInt64?, reading: Bool, playingReadAt: TimeInterval?, at uptime: TimeInterval) -> Step {
+    /// while an app tap waits for an audio process, which is no stop. A tap of
+    /// a paused source calls back nothing (S335 D3), so `source` says when
+    /// missing callbacks can count at all.
+    mutating func tick(callbacks: UInt64?, reading: Bool, source: Source, at uptime: TimeInterval) -> Step {
         guard !paused else { return .none }
+        var playingReadAt: TimeInterval?
+        if case .nowPlaying(let position) = source { playingReadAt = position?.readAt }
         playingSince = playingReadAt.map { playingSince ?? $0 }
         if case .waiting(let next, let due) = phase {
             guard uptime >= due else { return .none }
