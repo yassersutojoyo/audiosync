@@ -4500,6 +4500,7 @@ do {
     final class Host: TrackInfoHost {
         var trackInfoFeed = TrackInfoFeed()
         var castTrackInfoFeed: TrackInfoFeed?
+        var castSending = false
         var sendsTrackInfo = true
         var nowPlayingPollingSince: Date?
         var nowPlayingHasReading = true
@@ -4522,7 +4523,11 @@ do {
             return (ReceiverInfo(fields: fields, artwork: .track), track == nil ? nil : cover)
         }
         func sendPlayback() { playbacks += 1 }
-        func sendCastTrackInfo(now: Date) { castLooks += 1 }
+        func sendCastTrackInfo(now: Date) {
+            castLooks += 1
+            _ = castTrackInfoFeed?.send(sending: castSending, now: now, pollingSince: nowPlayingPollingSince,
+                                        hasReading: nowPlayingHasReading, icon: nil, shows: { receiverShows() })
+        }
         func recheckTrackInfo(at date: Date) { rechecks.append(date) }
         func setSenderTrackInfo(fields: TrackMetadata.Fields?, artwork: NSImage?, sendsPosition: Bool,
                                 position: NowPlayingMonitor.Position?) {
@@ -4593,6 +4598,7 @@ do {
     let castOnly = Host()
     castOnly.sendsTrackInfo = false
     castOnly.castTrackInfoFeed = TrackInfoFeed()
+    castOnly.castSending = true
     castOnly.trackInfoModelUpdated(sending: false, casting: true)
     check(castOnly.castLooks == 1 && castOnly.sent.isEmpty,
           "track info wiring: a Cast device switched on alone gets its look, the AirPlay sender nothing")
@@ -4608,10 +4614,9 @@ do {
     rechecking.nowPlayingPollingSince = since
     rechecking.nowPlayingHasReading = false
     rechecking.castTrackInfoFeed = TrackInfoFeed()
+    rechecking.castSending = true
     rechecking.trackInfoModelUpdated(sending: true, casting: true)
     let due = since.addingTimeInterval(ReceiverInfo.readingWait)
-    _ = rechecking.castTrackInfoFeed?.send(sending: true, now: since, pollingSince: since, hasReading: false,
-                                           icon: nil, shows: { (ReceiverInfo(fields: first, artwork: .track), nil) })
     check(rechecking.sent.isEmpty && rechecking.trackInfoFeed.sent?.recheckAt == due
             && rechecking.castTrackInfoFeed?.sent?.recheckAt == due,
           "track info wiring: before Now Playing's first reading both feeds wait for the same date")
@@ -4674,7 +4679,7 @@ do {
     check(count(windows, "remote.onNowPlayingNeedChange = { [weak self] in self?.syncTrackInfo() }") == 1,
           "track info call site: a paired phone that starts or stops showing Now Playing syncs track info")
     let source = body(read("Sources/AudioSync/AppDelegate+Outputs.swift"), after: "func updateNowPlayingTarget() {")
-    check(count(body(source, after: "if nowPlaying.noteSource(audioSource) {", until: "\n        }"),
+    check(count(body(source, after: "if nowPlaying.noteSource(audioSource) {", until: "nowPlaying.refresh()"),
                 "self?.sendTrackInfo()") == 1,
           "track info call site: a source change that Now Playing notes sends track info again")
     let cast = body(read("Sources/AudioSync/AppDelegate+Cast.swift"), after: "func sendCastTrackInfo(now: Date) {")
