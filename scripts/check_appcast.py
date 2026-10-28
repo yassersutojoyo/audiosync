@@ -47,6 +47,7 @@ import contextlib
 import io
 import json
 import os
+import struct
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -334,6 +335,15 @@ def write_appcast(path, items):
 FIXTURE_SIGNATURE = base64.b64encode(bytes(range(ED25519_SIGNATURE_BYTES))).decode()
 
 
+def fixture_exe(version):
+    """An exe stub whose version resource reports version, "a.b.c.d", as its product version."""
+    a, b, c, d = (int(part) for part in version.split("."))
+    data = b"MZ" + bytes(8) + "VS_VERSION_INFO".encode("utf-16-le") + bytes(2)
+    data += bytes(-len(data) % 4)
+    return data + struct.pack("<6I", 0xFEEF04BD, 0x10000,
+                              a << 16 | b, c << 16 | d, a << 16 | b, c << 16 | d)
+
+
 def fixture_item(zip_path, version="0.8.0", build="80", os_attr=None, sig=True,
                  length=None, url_name=None):
     name = url_name or os.path.basename(zip_path)
@@ -423,6 +433,12 @@ def self_test():
         run("zip with an extra file", good(), [mac, x64, extra], "readme.txt")
         run("zip with the exe in a folder", good()[:2] + [fixture_item(nested,
             os_attr="windows-arm64")], [mac, x64, nested], "audiosync/audiosync.exe")
+        older = os.path.join(folder, "older", os.path.basename(x64))
+        os.mkdir(os.path.dirname(older))
+        write_zip(older, {**windows, "audiosync.exe": fixture_exe("0.7.0.0")})
+        run("exe reports another version",
+            good()[:1] + [fixture_item(older, os_attr="windows-x64")] + good()[2:],
+            [mac, older, arm], "audiosync.exe reports version 0.7.0.0; expected 0.8.0")
         two_enclosures = os.path.join(folder, "two enclosures.xml")
         write_appcast(two_enclosures, good())
         with open(two_enclosures, encoding="utf-8") as f:
