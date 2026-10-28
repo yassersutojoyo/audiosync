@@ -22,6 +22,7 @@ use super::{host_slice, host_slice_mut, samples_for, stereo_samples};
 use crate::clock;
 use crate::convert;
 use crate::fade::{FadeState, fade_frames};
+use crate::lead::HeldLead;
 use crate::reader::Reader;
 use crate::render::{Renderer, RendererControl, STOP_FADE_CAP};
 use crate::resample::Resampler;
@@ -891,6 +892,62 @@ pub unsafe extern "C" fn asc_renderer_floor_drop_ns(renderer: *const AscRenderer
 pub unsafe extern "C" fn asc_renderer_time_steps(renderer: *const AscRenderer) -> u64 {
     // SAFETY: by the caller's contract the handle is null or live.
     unsafe { control_side(renderer) }.map_or(0, RendererControl::time_steps)
+}
+
+/// A renderer's start lead kept counting in its ring's session lead after
+/// the renderer is gone (S328), behind an opaque C pointer.
+pub struct AscHeldLead {
+    lead: HeldLead,
+}
+
+/// Control thread: keeps `renderer`'s published start lead counting in the
+/// session lead at its current hold-back, for an output whose device went
+/// away while it stays switched on (S328); the renderer may then be
+/// destroyed. Null for a null handle, a renderer that published no lead yet,
+/// or no slot free.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_hold_lead(renderer: *const AscRenderer) -> *mut AscHeldLead {
+    // SAFETY: by the caller's contract the handle is null or live.
+    let Some(lead) = unsafe { control_side(renderer) }.and_then(RendererControl::hold_lead) else {
+        return ptr::null_mut();
+    };
+    Box::into_raw(Box::new(AscHeldLead { lead }))
+}
+
+/// Any thread: the hold-back the host now counts for the lost output, in
+/// capture-rate frames (negative counts as 0).
+///
+/// # Safety
+///
+/// `held` is null or a live held lead.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_held_lead_set_hold_back_frames(held: *mut AscHeldLead, frames: i64) {
+    if held.is_null() {
+        return;
+    }
+    // SAFETY: the handle is live; set_hold_back is an atomic store.
+    unsafe { &(*held).lead }.set_hold_back(frames);
+}
+
+/// Ends a held lead: it no longer counts.
+///
+/// # Safety
+///
+/// `held` is null or a pointer returned by [`asc_renderer_hold_lead`] that
+/// was not destroyed yet, and no other call on it runs now or later.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_held_lead_destroy(held: *mut AscHeldLead) {
+    if held.is_null() {
+        return;
+    }
+    // SAFETY: the pointer came from Box::into_raw in asc_renderer_hold_lead,
+    // and by the caller's contract it is destroyed once, with no call in
+    // progress.
+    drop(unsafe { Box::from_raw(held) });
 }
 
 #[cfg(test)]

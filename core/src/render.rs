@@ -525,7 +525,17 @@ impl RendererControl {
     /// lead after it stops, at its current hold-back (S328); `None` before
     /// it published one, or with no slot free.
     pub fn hold_lead(&self) -> Option<HeldLead> {
-        None
+        HeldLead::new(
+            &self.shared.ring,
+            self.start_lead_frames()?,
+            self.delay_frames(),
+        )
+    }
+
+    /// The start lead this renderer published for the session lead (S208),
+    /// in capture frames; `None` before it published one.
+    pub fn start_lead_frames(&self) -> Option<i64> {
+        self.shared.leads().lead(self.shared.slot?)
     }
 
     /// Asks the renderer to fade out from its next callback and render exact

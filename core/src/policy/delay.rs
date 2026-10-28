@@ -242,33 +242,58 @@ pub struct BriefLosses {
 }
 
 impl BriefLosses {
-    /// Takes in a device list made at `now`.
+    /// Takes in a device list made at `now`. An output that took part at the
+    /// last listing, wasn't the reference then, is still switched on
+    /// (`is_on`) and is missing now is held from `now`; one listed again, or
+    /// switched off, no longer is. `reference` is the reference among
+    /// `listed`.
     pub fn note_listing<'a>(
         &mut self,
-        _listed: impl IntoIterator<Item = &'a str>,
-        _is_on: impl Fn(&str) -> bool,
-        _reference: Option<&str>,
-        _now: Duration,
+        listed: impl IntoIterator<Item = &'a str>,
+        is_on: impl Fn(&str) -> bool,
+        reference: Option<&str>,
+        now: Duration,
     ) {
+        let listed: BTreeSet<&str> = listed.into_iter().collect();
+        for id in &self.listed {
+            if !listed.contains(id.as_str()) && is_on(id) {
+                self.lost.insert(id.clone(), now);
+            }
+        }
+        self.lost
+            .retain(|id, _| !listed.contains(id.as_str()) && is_on(id));
+        self.listed = listed
+            .into_iter()
+            .filter(|id| is_on(id) && Some(*id) != reference)
+            .map(str::to_owned)
+            .collect();
     }
 
-    /// Output `id` was switched off. Returns whether it was held.
-    pub fn switched_off(&mut self, _id: &str) -> bool {
-        false
+    /// Output `id` was switched off: it stops counting at once. Returns
+    /// whether it was held, so the host re-times the others.
+    pub fn switched_off(&mut self, id: &str) -> bool {
+        self.listed.remove(id);
+        self.lost.remove(id).is_some()
     }
 
     /// Ends the holds that are [`BRIEF_LOSS_HOLD`] old at `now`. Returns
-    /// whether any ended.
-    pub fn expire(&mut self, _now: Duration) -> bool {
-        false
+    /// whether any ended, so the host re-times the others once.
+    pub fn expire(&mut self, now: Duration) -> bool {
+        let before = self.lost.len();
+        self.lost
+            .retain(|_, lost_at| now.saturating_sub(*lost_at) < BRIEF_LOSS_HOLD);
+        self.lost.len() != before
     }
 
-    /// A session restart: no output is held any longer.
-    pub fn restart(&mut self) {}
+    /// A session restart (S20): no output is held any longer, and the new
+    /// session counts only the devices listed then.
+    pub fn restart(&mut self) {
+        self.lost.clear();
+    }
 
     /// Whether output `id` is held.
     pub fn holds(&self, id: &str) -> bool {
-        self.lost.contains_key(id) && self.listed.contains(id)
+        self.lost.contains_key(id)
     }
 
     /// The held outputs, sorted by ID.

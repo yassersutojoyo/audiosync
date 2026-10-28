@@ -293,6 +293,14 @@ final class CoreRenderer {
     /// The newest delay asked for, in capture-rate frames.
     var delayFrames: Int64 { asc_renderer_delay_frames(handle) }
 
+    /// Control thread: keeps this renderer's start lead counting in the
+    /// session lead after it is gone, for a speaker whose device went away
+    /// while it stays on (S328). Nil before it published a lead.
+    func holdLead() -> CoreHeldLead? {
+        guard let held = asc_renderer_hold_lead(handle) else { return nil }
+        return CoreHeldLead(handle: held, captureRate: captureRate)
+    }
+
     /// Control thread, before the output starts: whether its device is
     /// Bluetooth, which adds a capture block to its start lead (S230).
     func setBluetooth(_ bluetooth: Bool) { asc_renderer_set_bluetooth(handle, bluetooth) }
@@ -380,6 +388,28 @@ final class CoreRenderer {
     /// anchor's, in ms, and its steps in the device's output times (S229).
     var floorDropMs: Double { Double(asc_renderer_floor_drop_ns(handle)) / 1_000_000 }
     var timeSteps: Int64 { Int64(clamping: asc_renderer_time_steps(handle)) }
+}
+
+/// A lost speaker's start lead, still counted in the session lead until this
+/// is released (S328).
+final class CoreHeldLead {
+    private let handle: OpaquePointer
+    private let captureRate: UInt32
+
+    fileprivate init(handle: OpaquePointer, captureRate: UInt32) {
+        self.handle = handle
+        self.captureRate = captureRate
+    }
+
+    deinit { asc_held_lead_destroy(handle) }
+
+    /// The hold-back the host now counts for the lost speaker. A non-finite
+    /// value is ignored.
+    func setHoldBack(ms: Double) {
+        var frames: Int64 = 0
+        guard asc_delay_ms_to_frames(ms, captureRate, &frames) else { return }
+        asc_held_lead_set_hold_back_frames(handle, frames)
+    }
 }
 
 /// The core's volume curve: slider positions (0…100) and linear gain (S70, S71).

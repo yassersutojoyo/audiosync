@@ -89,6 +89,13 @@ impl SessionLeads {
         self.slots[slot].leaving.store(true, Ordering::Relaxed);
     }
 
+    /// The start lead `slot`'s renderer published, in capture frames; `None`
+    /// before it published one.
+    pub fn lead(&self, slot: usize) -> Option<i64> {
+        let lead = self.slots[slot].lead.load(Ordering::Relaxed);
+        (lead != NO_LEAD).then_some(lead)
+    }
+
     /// Frees `slot` for another renderer.
     pub fn release(&self, slot: usize) {
         let slot = &self.slots[slot];
@@ -140,8 +147,14 @@ pub struct HeldLead {
 impl HeldLead {
     /// Counts a start lead of `lead` frames at a hold-back of `hold_back`
     /// frames in `ring`'s session lead; `None` when no slot is free.
-    pub fn new(_ring: &Arc<Ring>, _lead: i64, _hold_back: i64) -> Option<HeldLead> {
-        None
+    pub fn new(ring: &Arc<Ring>, lead: i64, hold_back: i64) -> Option<HeldLead> {
+        let leads = ring.session_leads();
+        let slot = leads.claim(hold_back.max(0))?;
+        leads.set_lead(slot, lead);
+        Some(HeldLead {
+            ring: Arc::clone(ring),
+            slot,
+        })
     }
 
     /// The hold-back the host now counts for the output, in capture frames.

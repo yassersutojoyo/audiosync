@@ -18,14 +18,16 @@
 //! it by the difference. While an AirPlay speaker is chosen (S79), the
 //! AirPlay latency L comes on top: the sender's base latency L_s plus the
 //! user's adjustment A (S178), so the reference sounds with the AirPlay
-//! speakers and every other output by its offset.
+//! speakers and every other output by its offset. A switched-on output
+//! whose device leaves the list keeps counting for 10 s ([`BriefLosses`],
+//! S328), so a brief loss re-times no other output.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use audiosync_core::policy::delay::{
-    Participant, hold_backs, native_airplay_latency_ms, sanitize_airplay_adjustment_ms,
-    sanitize_offset_ms,
+    BriefLosses, Participant, hold_backs, native_airplay_latency_ms,
+    sanitize_airplay_adjustment_ms, sanitize_offset_ms,
 };
 use audiosync_core::policy::session::sync_outputs;
 use audiosync_core::reader::delay_ms_to_frames;
@@ -438,6 +440,10 @@ impl OutputPlan {
     }
 }
 
+/// The time one UI poll stands for in [`OutputPolicy::tick`]: the UI polls
+/// twice a second.
+const POLL_PERIOD: Duration = Duration::from_millis(500);
+
 /// Every output's settings, the master volume, and the decisions made from
 /// them.
 #[derive(Clone, Debug, PartialEq)]
@@ -456,6 +462,12 @@ pub struct OutputPolicy {
     listed: BTreeSet<String>,
     /// The reference among them (S174).
     reference: Option<String>,
+    /// The switched-on outputs whose devices left the list a moment ago,
+    /// still counted (S328).
+    brief_losses: BriefLosses,
+    /// The time [`OutputPolicy::tick`] has counted, which the brief losses
+    /// are timed by.
+    clock: Duration,
     /// The measured offset of the Google Cast speaker that is on (spec
     /// C77); `None` while none is.
     cast_offset: Option<Duration>,
@@ -473,6 +485,8 @@ impl OutputPolicy {
             last_sender_latency_ms: airplay.sender_latency_ms(),
             listed: BTreeSet::new(),
             reference: None,
+            brief_losses: BriefLosses::default(),
+            clock: Duration::ZERO,
             cast_offset: None,
         }
     }
@@ -535,6 +549,33 @@ impl OutputPolicy {
     pub fn set_listed(&mut self, listed: &[Endpoint]) {
         self.listed = listed.iter().map(|endpoint| endpoint.id.clone()).collect();
         self.reference = reference_output(listed).map(str::to_owned);
+        let settings = &self.settings;
+        self.brief_losses.note_listing(
+            self.listed.iter().map(String::as_str),
+            |id| settings.get(id).is_some_and(|settings| settings.enabled),
+            self.reference.as_deref(),
+            self.clock,
+        );
+    }
+
+    /// One UI poll went by: the brief losses held [`BRIEF_LOSS_HOLD`] end
+    /// (S328). Returns whether any did, so the outputs re-time once.
+    ///
+    /// [`BRIEF_LOSS_HOLD`]: audiosync_core::policy::delay::BRIEF_LOSS_HOLD
+    pub fn tick(&mut self) -> bool {
+        self.clock += POLL_PERIOD;
+        self.brief_losses.expire(self.clock)
+    }
+
+    /// A session (re)starts: it counts only the devices listed now (S328).
+    pub fn end_brief_losses(&mut self) {
+        self.brief_losses.restart();
+    }
+
+    /// Whether output `id`, whose device left the list a moment ago, still
+    /// counts toward the others' timing (S328).
+    pub fn counts_while_lost(&self, id: &str) -> bool {
+        self.brief_losses.holds(id)
     }
 
     /// The reference output's endpoint ID, if one is listed (S174).
@@ -582,8 +623,9 @@ impl OutputPolicy {
     }
 
     /// The hold-back of output `id` in ms (S176): among the outputs taking
-    /// part (switched on and listed), with `id` counted among them, so an
-    /// output about to start gets the hold-back it will play at.
+    /// part (switched on and listed, or lost a moment ago, S328), with `id`
+    /// counted among them, so an output about to start gets the hold-back
+    /// it will play at.
     pub fn hold_back_ms(&self, id: &str) -> f64 {
         let participant = |id: &str| Participant {
             id: "",
@@ -594,7 +636,9 @@ impl OutputPolicy {
             .settings
             .iter()
             .filter(|(other, settings)| {
-                settings.enabled && other.as_str() != id && self.listed.contains(other.as_str())
+                settings.enabled
+                    && other.as_str() != id
+                    && (self.listed.contains(other.as_str()) || self.brief_losses.holds(other))
             })
             .map(|(other, _)| participant(other));
         let mut taking_part = vec![participant(id)];
@@ -636,6 +680,9 @@ impl OutputPolicy {
     /// Turns output `id` on or off.
     pub fn set_enabled(&mut self, id: &str, enabled: bool) {
         self.entry(id).enabled = enabled;
+        if !enabled {
+            self.brief_losses.switched_off(id);
+        }
     }
 
     /// Sets the offset of output `id` relative to the reference. Returns

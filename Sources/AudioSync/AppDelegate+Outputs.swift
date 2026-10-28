@@ -157,12 +157,14 @@ extension AppDelegate {
     }
 
     /// The hold-back of every local speaker taking part: switched on and
-    /// listed now (S172, S176). They wait for L while an AirPlay speaker is
-    /// chosen, for the Cast speaker's offset while one is, and for the
-    /// longer of the two when both are, whatever the source (S244).
+    /// listed now, or lost a moment ago (S172, S176, S328). They wait for L
+    /// while an AirPlay speaker is chosen, for the Cast speaker's offset while
+    /// one is, and for the longer of the two when both are, whatever the
+    /// source (S244).
     func localHoldBackTargets() -> [String: Double] {
         let wait = networkWaitMs
-        return LocalDelay.holdBacks(takingPart: localListed.filter(enabledLocal.contains), reference: localReference,
+        let takingPart = localListed.filter(enabledLocal.contains) + briefLoss.held.filter(enabledLocal.contains).sorted()
+        return LocalDelay.holdBacks(takingPart: takingPart, reference: localReference,
                                     offsets: localOffsetMs, airPlayChosen: wait != nil,
                                     latencyMs: wait ?? airPlayLatencyMs)
     }
@@ -209,7 +211,9 @@ extension AppDelegate {
         }
         let running = Set(engine.activeOutputUIDs)
         localHoldBacks = localHoldBacks.filter { running.contains($0.key) }
-        let calls = LocalDelay.retimes(applied: localHoldBacks, holdBacks: localHoldBackTargets())
+        let targets = localHoldBackTargets()
+        syncHeldLeads(targets: targets)
+        let calls = LocalDelay.retimes(applied: localHoldBacks, holdBacks: targets)
         guard !calls.isEmpty else { return }
         for (uid, holdBack) in calls.sorted(by: { $0.key < $1.key }) {
             engine.setDelay(uid: uid, ms: holdBack)
@@ -220,12 +224,52 @@ extension AppDelegate {
                 .joined(separator: ", "))
     }
 
+    /// Lets go of the held start leads (S328) of the speakers that no longer
+    /// count: one switched off or now the reference at once, one still
+    /// missing once its brief loss ended, and any 10 s after its loss; the
+    /// rest count at their current hold-backs.
+    private func syncHeldLeads(targets: [String: Double]) {
+        let now = ProcessInfo.processInfo.systemUptime
+        for (uid, since) in engine.heldLeadTimes {
+            let missing = !localListed.contains(uid)
+            if !enabledLocal.contains(uid) || uid == localReference || (missing && !briefLoss.held.contains(uid))
+                || now - since >= LocalBriefLoss.holdSeconds {
+                engine.releaseHeldLead(uid: uid)
+            } else if let ms = targets[uid] {
+                engine.setHeldLeadDelay(uid: uid, ms: ms)
+            }
+        }
+    }
+
+    /// Ends the brief losses and held start leads that are due (S328), and
+    /// checks again when the next one is.
+    func checkBriefLosses() {
+        let now = ProcessInfo.processInfo.systemUptime
+        if briefLoss.expire(now: now) {
+            DebugTrace.log("[AudioSync] a lost speaker's 10 s are up: it no longer counts for the others' delays")
+        }
+        retimeLocalOutputs()
+        let due = ([briefLoss.nextExpiry].compactMap { $0 }
+            + engine.heldLeadTimes.values.map { $0 + LocalBriefLoss.holdSeconds }).min()
+        guard let due else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, due - now) + 0.05) { [weak self] in
+            self?.checkBriefLosses()
+        }
+    }
+
     /// A device list came in: the reference and the speakers taking part
-    /// follow it (S173, S172).
+    /// follow it (S173, S172), and a speaker that left the list counts for
+    /// 10 s more (S328).
     func noteLocalDeviceList(_ devices: [AudioDevices.Device]) {
         localListed = devices.map(\.uid).filter { !$0.isEmpty }
         freshLinks.noteListing(localListed, now: ProcessInfo.processInfo.systemUptime)
         localReference = LocalDelay.reference(in: devices)
+        let heldBefore = briefLoss.held
+        briefLoss.noteListing(localListed, enabled: enabledLocal, reference: localReference,
+                              now: ProcessInfo.processInfo.systemUptime)
+        if !briefLoss.held.subtracting(heldBefore).isEmpty {
+            DispatchQueue.main.async { [weak self] in self?.checkBriefLosses() }
+        }
         dataSourceWatch.onChange = { [weak self] in self?.pushModel() }
         dataSourceWatch.follow(devices)
     }

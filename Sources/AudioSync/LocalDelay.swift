@@ -186,25 +186,50 @@ enum LocalDelay {
 /// at its offset, so a brief loss and return re-time no other speaker. Times
 /// are the host's uptime in seconds.
 struct LocalBriefLoss: Equatable {
-    static let holdSeconds = 10.0
+    static let holdSeconds = Double(ASC_BRIEF_LOSS_HOLD_MS) / 1000
 
-    /// A device list came in at `now`.
-    mutating func noteListing(_ listed: [String], enabled: Set<String>, reference: String?, now: Double) {}
+    /// The speakers taking part at the last listing, the reference left out.
+    private var listed: Set<String> = []
+    /// Each held speaker, with the time of the listing that no longer had it.
+    private var lostAt: [String: Double] = [:]
 
-    /// Speaker `uid` was switched off. True when it was held.
-    mutating func switchedOff(_ uid: String) -> Bool { false }
+    /// A device list came in at `now`. A speaker that took part at the last
+    /// listing, wasn't the reference then, is still switched on and is
+    /// missing now is held from `now`; one listed again, or switched off, no
+    /// longer is.
+    mutating func noteListing(_ listed: [String], enabled: Set<String>, reference: String?, now: Double) {
+        let present = Set(listed)
+        for uid in self.listed where !present.contains(uid) && enabled.contains(uid) {
+            lostAt[uid] = now
+        }
+        lostAt = lostAt.filter { !present.contains($0.key) && enabled.contains($0.key) }
+        self.listed = present.filter { enabled.contains($0) && $0 != reference }
+    }
 
-    /// Ends the holds `holdSeconds` old at `now`. True when any ended.
-    mutating func expire(now: Double) -> Bool { false }
+    /// Speaker `uid` was switched off: it stops counting at once. True when
+    /// it was held, so the others re-time.
+    mutating func switchedOff(_ uid: String) -> Bool {
+        listed.remove(uid)
+        return lostAt.removeValue(forKey: uid) != nil
+    }
 
-    /// A session restart: no speaker is held any longer.
-    mutating func restart() {}
+    /// Ends the holds `holdSeconds` old at `now`. True when any ended, so the
+    /// others re-time once.
+    mutating func expire(now: Double) -> Bool {
+        let before = lostAt.count
+        lostAt = lostAt.filter { now - $0.value < Self.holdSeconds }
+        return lostAt.count != before
+    }
+
+    /// A session restart (S20): no speaker is held any longer, and the new
+    /// session counts only the devices listed then.
+    mutating func restart() { lostAt = [:] }
 
     /// The held speakers.
-    var held: Set<String> { [] }
+    var held: Set<String> { Set(lostAt.keys) }
 
     /// When the next hold ends, if any is held.
-    var nextExpiry: Double? { nil }
+    var nextExpiry: Double? { lostAt.values.min().map { $0 + Self.holdSeconds } }
 }
 
 /// The AirPlay delay (S178), which the window shows as one field (S181): an
