@@ -633,7 +633,8 @@ struct AutomationConsent {
 final class ConsentChecks {
     /// A stuck check stops a fresh one for this long, or until a consent request answers.
     static let staleAfter: TimeInterval = 30
-    /// Stuck checks per player, each holding a thread.
+    /// Stuck checks per player, each holding a thread, while no decision is known;
+    /// after one macOS answers at once, and a timeout makes the verdict undecided again.
     static let maxOut = 3
 
     private let queue: DispatchQueue
@@ -656,9 +657,11 @@ final class ConsentChecks {
     /// recent check is still out, the last verdict stands.
     func permission(_ app: String, at now: TimeInterval) -> AutomationConsent.Permission {
         let waiting = out[app] ?? []
-        if let newest = waiting.last, waiting.count >= Self.maxOut
+        let verdict = verdicts[app] ?? .undecided
+        let decided = verdict == .allowed || verdict == .denied
+        if let newest = waiting.last, (waiting.count >= Self.maxOut && !decided)
             || (now - newest.at < Self.staleAfter && (requestAnsweredAt[app] ?? -.infinity) < newest.at) {
-            return verdicts[app] ?? .undecided
+            return verdict
         }
         lastToken += 1
         let token = lastToken
