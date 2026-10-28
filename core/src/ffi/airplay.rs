@@ -1262,9 +1262,15 @@ impl AscAirPlay {
             return;
         };
         added.position = position;
-        // The sender keeps the level too, for a reconnect or a target
-        // member that starts late (P119, P180).
-        added.keep_volume(&self.sender, device_volume(level));
+        // The sender keeps the level as read too, past the wire range its
+        // nearest, for a reconnect or a target member that starts late
+        // (P119, P180).
+        let kept = if db <= MUTED_DB {
+            Volume::Muted
+        } else {
+            Volume::from_db(db).unwrap_or(Volume::Muted)
+        };
+        added.keep_volume(&self.sender, kept);
         self.queue_event(Pending::Volume(owner, position, level));
     }
 
