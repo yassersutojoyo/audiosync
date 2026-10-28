@@ -127,15 +127,26 @@ fn find_blank_line(data: &[u8]) -> Option<usize> {
 /// trickles ([`REQUEST_TIMEOUT`] in the product).
 pub fn read_request(stream: &mut TcpStream, limit: Duration) -> Result<Request, ReadError> {
     let deadline = Instant::now() + limit;
+    read_from(stream, |stream| {
+        let left = deadline.saturating_duration_since(Instant::now());
+        !left.is_zero() && stream.set_read_timeout(Some(left)).is_ok()
+    })
+}
+
+/// [`read_request`] over any reader: `arm` runs before each read, and a
+/// `false` from it ends the request as [`ReadError::Incomplete`].
+pub(crate) fn read_from<R: Read>(
+    reader: &mut R,
+    mut arm: impl FnMut(&mut R) -> bool,
+) -> Result<Request, ReadError> {
     let mut data = Vec::new();
     let mut buffer = [0u8; 1024];
-    let mut fill = |data: &mut Vec<u8>, stream: &mut TcpStream| -> Result<(), ReadError> {
-        let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+    let mut fill = |data: &mut Vec<u8>, reader: &mut R| -> Result<(), ReadError> {
+        if !arm(reader) {
             return Err(ReadError::Incomplete);
         }
         loop {
-            match stream.read(&mut buffer) {
+            match reader.read(&mut buffer) {
                 Ok(0) => return Err(ReadError::Incomplete),
                 Ok(count) => {
                     data.extend_from_slice(&buffer[..count]);
@@ -153,7 +164,7 @@ pub fn read_request(stream: &mut TcpStream, limit: Duration) -> Result<Request, 
         if data.len() > MAX_HEAD {
             return Err(ReadError::HeadTooLarge);
         }
-        fill(&mut data, stream)?;
+        fill(&mut data, reader)?;
     };
     if end > MAX_HEAD {
         return Err(ReadError::HeadTooLarge);
@@ -171,7 +182,7 @@ pub fn read_request(stream: &mut TcpStream, limit: Duration) -> Result<Request, 
     }
     let start = end + 4;
     while data.len() < start + length {
-        fill(&mut data, stream)?;
+        fill(&mut data, reader)?;
     }
     request.body = data[start..start + length].to_vec();
     Ok(request)

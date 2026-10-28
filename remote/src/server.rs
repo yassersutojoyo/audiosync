@@ -1143,7 +1143,7 @@ fn static_route(request: &Request, path: &str) -> Answer {
 
 /// A path segment with its `%XX` escapes decoded (RFC 3986 §2.1); none
 /// when an escape is broken or the result isn't UTF-8.
-fn percent_decode(segment: &str) -> Option<String> {
+pub(crate) fn percent_decode(segment: &str) -> Option<String> {
     let bytes = segment.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
