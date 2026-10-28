@@ -3248,10 +3248,12 @@ mod tests {
     // can both still report its close (and the reader its last bytes). Those
     // carry the earlier connect attempt and are dropped, so they don't end
     // the new attempt as Unreachable.
+    // covers: P228
     #[test]
     fn late_events_from_the_connection_before_a_reconnect_are_dropped() {
         use crate::discovery::{ScopedAddr, ServiceKind, ServiceRecord};
         use crate::session::Connection;
+        use std::net::IpAddr;
 
         let now = Instant::now();
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
@@ -3338,6 +3340,17 @@ mod tests {
                 .map(|active| (active.session.state(), active.attempt))
         };
         assert_eq!(state(&mut driver), Some((State::Connecting, 2)));
+
+        // Connecting again after a connection, it keeps its session when
+        // discovery adds an address (P228).
+        let mut wider = record.clone();
+        let added: IpAddr = "192.0.2.58".parse().expect("an address");
+        wider.addresses.push(ScopedAddr::new(added));
+        let changes = driver.directory.apply(BrowseEvent::Resolved(wider));
+        driver.report_changes(changes);
+        driver.run_timers(now);
+        assert_eq!(state(&mut driver), Some((State::Connecting, 2)));
+        assert_eq!(driver.speakers[&key].counters.connect_starts(), 0);
 
         // The writer's close and the reader's last bytes, late: dropped.
         driver.io_event(closed(1), now);
