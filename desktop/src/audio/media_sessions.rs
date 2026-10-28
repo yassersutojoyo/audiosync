@@ -295,12 +295,17 @@ fn run<L: SessionList>(
         // The host logged the command already (S279), so the send stays quiet.
         if let Some(track) = &track {
             for command in &remote {
-                reader.send(track, *command, &DebugLog::default());
+                reader.send(
+                    track,
+                    played_last.as_deref(),
+                    *command,
+                    &DebugLog::default(),
+                );
             }
         }
         if let Some(card) = &card {
             for command in &commands {
-                reader.send(card, *command, log);
+                reader.send(card, None, *command, log);
             }
         }
         let mut listing = reader.listing(log);
@@ -399,15 +404,7 @@ impl<L: SessionList> Reader<L> {
         played_last: Option<&str>,
         log: &DebugLog,
     ) -> Option<Track> {
-        let mut index = self.sessions.pick(&listing.listed, follow);
-        // Another app's paused track never takes its place, as on the Mac.
-        if let (Follow::AnyApp, Some(app_id)) = (follow, played_last)
-            && !index.is_some_and(|index| listing.listed[index].0.playing)
-        {
-            index = listing.listed.iter().position(|(session, _)| {
-                session.app_id == app_id && !session.title.trim().is_empty()
-            });
-        }
+        let index = self.counting(&listing.listed, follow, played_last);
         self.log_track(index.map(|index| &listing.listed[index].0), log);
         let index = index?;
         let session = listing.listed[index].0.clone();
@@ -431,6 +428,26 @@ impl<L: SessionList> Reader<L> {
             artwork,
             timeline,
         })
+    }
+
+    /// The listed session that counts for `follow`, with `played_last` the
+    /// app that played last.
+    fn counting(
+        &self,
+        listed: &[(MediaSession, L::Session)],
+        follow: &Follow,
+        played_last: Option<&str>,
+    ) -> Option<usize> {
+        let index = self.sessions.pick(listed, follow);
+        // Another app's paused track never takes its place, as on the Mac.
+        if let (Follow::AnyApp, Some(app_id)) = (follow, played_last)
+            && !index.is_some_and(|index| listed[index].0.playing)
+        {
+            return listed.iter().position(|(session, _)| {
+                session.app_id == app_id && !session.title.trim().is_empty()
+            });
+        }
+        index
     }
 
     /// The card's track for `follow`, or `None` when no session counts.
@@ -471,9 +488,15 @@ impl<L: SessionList> Reader<L> {
     }
 
     /// Sends `command` to the session that counts for `follow` now.
-    fn send(&mut self, follow: &Follow, command: Transport, log: &DebugLog) {
+    fn send(
+        &mut self,
+        follow: &Follow,
+        played_last: Option<&str>,
+        command: Transport,
+        log: &DebugLog,
+    ) {
         let sent = self.sessions.list().and_then(|listed| {
-            let Some(index) = self.sessions.pick(&listed, follow) else {
+            let Some(index) = self.counting(&listed, follow, played_last) else {
                 return Ok(None);
             };
             let (session, entry) = &listed[index];
@@ -853,14 +876,14 @@ mod tests {
         let (mut fake, counts) = fake(Thumbnail::Image);
         fake.sessions.clear();
         let mut reader = Reader::new(fake);
-        reader.send(&Follow::AnyApp, Transport::Next, &DebugLog::default());
+        reader.send(&Follow::AnyApp, None, Transport::Next, &DebugLog::default());
         assert_eq!(counts.sends.load(Ordering::SeqCst), 0, "no session counts");
         reader.sessions.sessions.push(playing());
-        reader.send(&Follow::AnyApp, Transport::Next, &DebugLog::default());
+        reader.send(&Follow::AnyApp, None, Transport::Next, &DebugLog::default());
         assert_eq!(counts.sends.load(Ordering::SeqCst), 1);
     }
 
-    // covers: S218
+    // covers: S218, S274
     #[test]
     fn a_remote_button_goes_to_the_paused_session_the_receivers_read() {
         let paused = |app_id: &str, title: &str| MediaSession {
