@@ -408,7 +408,9 @@ mod tests {
         assert!(script.contains("if (!inFlight && reported === sentValue) { release(); }"));
         assert!(script.contains("if (pending === null) { onSettle(); }"));
         assert!(script.contains("}, () => { power.checked = row.speaker.on; });"));
-        assert!(script.contains("}, () => showDelay(row, row.speaker.delay_ms));"));
+        assert!(script.contains(
+            "}, () => { if (document.activeElement !== row.delay) { showDelay(row, row.speaker.delay_ms); } });"
+        ));
         assert!(script.contains("if (!held) { control.show(read()); }"));
         for check in [
             "row.powerSender.busy(speaker.on)",

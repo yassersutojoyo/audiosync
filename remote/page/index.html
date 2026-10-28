@@ -791,7 +791,7 @@ function makeRow(speaker) {
   row.delaySender = sender((value) => change({ delay_ms: value }), (problem, settled) => {
     if (problem) { fail(problem.message); }
     if (settled) { showDelay(row, row.speaker.delay_ms); }
-  }, () => showDelay(row, row.speaker.delay_ms));
+  }, () => { if (document.activeElement !== row.delay) { showDelay(row, row.speaker.delay_ms); } });
 
   const sendDelay = (value) => {
     const min = row.speaker.delay_min_ms;
