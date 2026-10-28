@@ -19,7 +19,8 @@
 //! since ([`RenderPipeline::has_played_its_fade`]).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::time::Duration;
 
 use audiosync_core::clock;
 use audiosync_core::reader::Reader;
@@ -207,6 +208,68 @@ pub struct WakeCounts {
     pub late: u64,
     /// Wakes that found the device's buffer empty.
     pub empty: u64,
+}
+
+/// What the log names as the sign of an output stream that took no frame
+/// (S326): every padding read showed the whole buffer still queued, and
+/// with a clock that had run, it stood still too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StallSign {
+    /// The buffer stayed full.
+    FullPadding,
+    /// The buffer stayed full and the device clock, which had run, stopped.
+    FrozenClock,
+}
+
+/// An output stream that stopped taking frames (S326): for how long, and
+/// what showed it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stall {
+    pub span: Duration,
+    pub sign: StallSign,
+}
+
+/// Where a render thread leaves the [`Stall`] that ended its stream, for the
+/// controller to log once the stream is released.
+#[derive(Debug, Default)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    allow(dead_code, reason = "only the WASAPI render loop watches for stalls")
+)]
+pub struct StallSlot {
+    span_ms: AtomicU64,
+    /// 0 while there is none, then 1 + the sign's index.
+    sign: AtomicU8,
+}
+
+#[cfg_attr(
+    all(not(windows), not(test)),
+    allow(dead_code, reason = "only the WASAPI render loop watches for stalls")
+)]
+impl StallSlot {
+    /// Keeps `stall`. Never allocates, locks or blocks.
+    pub fn record(&self, stall: Stall) {
+        let span_ms = u64::try_from(stall.span.as_millis()).unwrap_or(u64::MAX);
+        self.span_ms.store(span_ms, Ordering::Relaxed);
+        let sign = match stall.sign {
+            StallSign::FullPadding => 1,
+            StallSign::FrozenClock => 2,
+        };
+        self.sign.store(sign, Ordering::Release);
+    }
+
+    /// The stall kept, if any.
+    pub fn get(&self) -> Option<Stall> {
+        let sign = match self.sign.load(Ordering::Acquire) {
+            1 => StallSign::FullPadding,
+            2 => StallSign::FrozenClock,
+            _ => return None,
+        };
+        Some(Stall {
+            span: Duration::from_millis(self.span_ms.load(Ordering::Relaxed)),
+            sign,
+        })
+    }
 }
 
 #[cfg(test)]

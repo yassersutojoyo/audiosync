@@ -90,7 +90,7 @@ use super::outputs::{
 };
 use super::pairings::PairingStore;
 use super::process::ProcessTable;
-use super::render::WakeCounts;
+use super::render::{Stall, StallSign, WakeCounts};
 use super::routing::{
     self, Captured, DirectPath, DirectReason, EndpointAudio, EndpointVolume, PlayedOn,
 };
@@ -217,6 +217,12 @@ pub trait RendererHandle {
     fn wakes(&self) -> WakeCounts {
         WakeCounts::default()
     }
+
+    /// Why its stream ended when it stopped taking frames (S326); `None`
+    /// for any other end, and for an output that doesn't watch for it.
+    fn stall(&self) -> Option<Stall> {
+        None
+    }
 }
 
 /// The platform calls the backend makes.
@@ -334,7 +340,15 @@ struct Session<D: Driver> {
     /// What the capture takes in.
     target: CaptureTarget,
     ring: Arc<Ring>,
-    capture: D::Capture,
+    /// The capture; `None` while one lost with Windows audio is opened
+    /// again (S329), the outputs playing silence meanwhile.
+    capture: Option<D::Capture>,
+    /// How the session's first capture delivered its audio: one opened
+    /// again at another rate or channel count starts the session again
+    /// (S20).
+    started_as: Option<CaptureAttempt>,
+    /// The reopen of a lost capture, while one waits.
+    reopen: Option<CaptureReopen>,
     /// The control half of the capture's equalizer.
     equalizer: EqControl,
     /// The playing outputs, by endpoint ID.
@@ -348,6 +362,27 @@ struct Session<D: Driver> {
     waits_for_feed: MissingFeeds,
     /// The session lead last written to the debug log, in capture frames.
     logged_lead: Option<i64>,
+}
+
+/// The reopen of a capture lost because Windows audio restarted or its
+/// device went away (S329).
+#[derive(Clone, Copy)]
+struct CaptureReopen {
+    /// Polls left before the next try ([`RESTART_DELAY_POLLS`]).
+    wait: u32,
+    /// The tries left after that one ([`RESTART_TRIES`]).
+    tries_left: u32,
+}
+
+/// An output whose stream stalled (S326), until its reopened stream has
+/// played [`RESTART_TRIAL_POLLS`].
+#[derive(Clone, Copy)]
+struct StallTrial {
+    /// Polls left before the reopened stream counts as playing; set when it
+    /// starts.
+    polls: u32,
+    /// Whether [`BackendEvent::OutputStalled`] told of it.
+    told: bool,
 }
 
 /// Which of the senders' feeds a capture started without.
@@ -381,8 +416,8 @@ struct SwitchFrom {
 /// drops what has faded, and what hasn't after [`STOP_FADE_CAP`].
 struct Retiring<D: Driver> {
     outputs: Vec<Playing<D::Renderer>>,
-    /// The ended session's capture and ring.
-    session: Option<(D::Capture, Arc<Ring>)>,
+    /// The ended session's capture, unless it was lost, and ring.
+    session: Option<(Option<D::Capture>, Arc<Ring>)>,
     /// When the fade-outs were asked for.
     since: Instant,
 }
@@ -462,12 +497,6 @@ pub struct Controller<D: Driver> {
     /// While a source switch waits in `next_start`, what the last session
     /// played: a new source that can't start gives way to it (S141).
     switch_from: Option<SwitchFrom>,
-    /// Polls left before `next_start` restarts a capture that was lost
-    /// ([`RESTART_DELAY_POLLS`]); `None` when it isn't a restart.
-    restart_wait: Option<u32>,
-    /// The tries a restart has left after the one `restart_wait` waits for
-    /// ([`RESTART_TRIES`]).
-    restart_tries_left: u32,
     /// The own volume and mute of each output that is on and connected
     /// (spec S192 to S202), followed through Windows' notifications.
     device_volumes: device_volume::Followed,
@@ -493,6 +522,9 @@ pub struct Controller<D: Driver> {
     /// gone, each with the polls left before that counts as a start that
     /// failed ([`REFUSED_GIVE_UP_POLLS`]).
     refused: BTreeMap<String, u32>,
+    /// The outputs whose stream stalled and hasn't played five seconds
+    /// since (S326).
+    stall_trials: BTreeMap<String, StallTrial>,
     /// What AirPlay receivers with a screen show of the playing track.
     track_info: TrackInfo,
     /// The source track info last followed, as it looks to track info.
@@ -545,8 +577,6 @@ impl<D: Driver> Controller<D> {
             retiring: Vec::new(),
             next_start: None,
             switch_from: None,
-            restart_wait: None,
-            restart_tries_left: 0,
             quit_watch: SourceQuitWatch::default(),
             mix_checked: None,
             device_volumes: device_volume::Followed::default(),
@@ -555,6 +585,7 @@ impl<D: Driver> Controller<D> {
             stalled: BTreeMap::new(),
             hung: BTreeSet::new(),
             refused: BTreeMap::new(),
+            stall_trials: BTreeMap::new(),
             track_info: TrackInfo::default(),
             track_source: None,
             calibration_tap: Arc::new(CalibrationTap::new()),
@@ -1121,6 +1152,9 @@ impl<D: Driver> Controller<D> {
                 Arc::clone(&gain),
             ) {
                 Ok(handle) => {
+                    if let Some(trial) = self.stall_trials.get_mut(&endpoint.id) {
+                        trial.polls = RESTART_TRIAL_POLLS;
+                    }
                     self.unplayable.remove(&endpoint.id);
                     self.stalled.remove(&endpoint.id);
                     self.hung.remove(&endpoint.id);
@@ -1241,6 +1275,7 @@ impl<D: Driver> Controller<D> {
                     )
                 });
                 self.policy.set_enabled(&endpoint.id, false);
+                self.stall_trials.remove(&endpoint.id);
                 self.unplayable.remove(&endpoint.id);
                 self.stalled.remove(&endpoint.id);
                 self.hung.remove(&endpoint.id);
@@ -1405,7 +1440,7 @@ impl<D: Driver> Controller<D> {
         } = entry;
         let stopped = outputs.len();
         let (capture, ring) = session.unzip();
-        drop(capture);
+        drop(capture.flatten());
         drop(outputs);
         if !faded {
             self.log.log(|| {
@@ -1483,7 +1518,11 @@ impl<D: Driver> Controller<D> {
             describe_status(
                 &session.source,
                 span,
-                session.capture.glitches(),
+                session
+                    .capture
+                    .as_ref()
+                    .map(CaptureHandle::glitches)
+                    .unwrap_or_default(),
                 &outputs,
                 airplay.as_deref(),
             )
@@ -1547,7 +1586,6 @@ impl<D: Driver> Controller<D> {
     /// either way.
     fn begin_session(&mut self, source: &SourceId) -> Result<(), BackendError> {
         self.next_start = None;
-        self.restart_wait = None;
         self.reap(false);
         if !self.last_session_fading() {
             return self.start_session(source);
@@ -1559,14 +1597,97 @@ impl<D: Driver> Controller<D> {
         Ok(())
     }
 
+    /// Takes the stall that ended output `id`'s stream (S326) and logs it.
+    /// A first stall, or one after the reopened stream played
+    /// [`RESTART_TRIAL_POLLS`], is opened again at once without a notice;
+    /// returns true for one before that, which stays on, is told once
+    /// ([`BackendEvent::OutputStalled`]) and waits [`STALL_RETRY_POLLS`]
+    /// for its next try.
+    fn note_stall(&mut self, id: &str, stall: Stall) -> bool {
+        let again = self
+            .stall_trials
+            .get(id)
+            .is_some_and(|trial| trial.polls > 0);
+        let sign = match stall.sign {
+            StallSign::FullPadding => "its buffer stayed full",
+            StallSign::FrozenClock => "its device clock stood still",
+        };
+        let next = if again {
+            "it stalled again within five seconds of its reopen, so it stays on and is opened \
+             again in about ten seconds"
+        } else {
+            "it is opened again"
+        };
+        self.log.log(|| {
+            format!(
+                "output {} stalled: it took no frame for {} ms, {sign}; {next}",
+                label(&self.names, id),
+                stall.span.as_millis()
+            )
+        });
+        let trial = self
+            .stall_trials
+            .entry(id.to_owned())
+            .or_insert(StallTrial {
+                polls: 0,
+                told: false,
+            });
+        trial.polls = 0;
+        if !again {
+            return false;
+        }
+        if !trial.told {
+            trial.told = true;
+            self.pending
+                .push(BackendEvent::OutputStalled { id: id.to_owned() });
+        }
+        self.unplayable.insert(id.to_owned());
+        self.stalled.insert(id.to_owned(), STALL_RETRY_POLLS);
+        true
+    }
+
+    /// Counts a poll of play for each reopened output that stalled (S326):
+    /// once one has played [`RESTART_TRIAL_POLLS`], its stall is over, and
+    /// a notice about it clears.
+    fn tick_stall_trials(&mut self) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let mut over = Vec::new();
+        self.stall_trials.retain(|id, trial| {
+            if trial.polls == 0 || !session.outputs.contains_key(id) {
+                return true;
+            }
+            trial.polls -= 1;
+            if trial.polls > 0 {
+                return true;
+            }
+            if trial.told {
+                over.push(id.clone());
+            }
+            false
+        });
+        for id in over {
+            self.log.log(|| {
+                format!(
+                    "output {} has played five seconds since its reopen: no longer stalled",
+                    label(&self.names, &id)
+                )
+            });
+            self.pending.push(BackendEvent::OutputPlaysAgain { id });
+        }
+    }
+
     /// Starts the session again once a sender's feed (AirPlay or Google
     /// Cast), which an earlier capture let go while Windows audio hung still
     /// held when it started, is back in its slot: the capture can't take a
     /// feed while it runs, as for Retry. Streaming stays on meanwhile.
     fn take_back_feed(&mut self) {
+        // A capture opened again takes the feeds that are back itself.
         let Some((source, missing)) = self
             .session
             .as_ref()
+            .filter(|session| session.capture.is_some())
             .map(|session| (session.source.clone(), session.waits_for_feed))
         else {
             return;
@@ -1599,24 +1720,135 @@ impl<D: Driver> Controller<D> {
         }
     }
 
-    /// Ends the session whose capture was lost because Windows audio
-    /// restarted or its device went away, and starts it again
-    /// [`RESTART_DELAY_POLLS`] polls later (`start_when_faded`), up to
-    /// [`RESTART_TRIES`] times. Streaming stays on meanwhile, the AirPlay
-    /// speakers in the stream included, as for a change of source.
-    fn restart_capture(&mut self) {
-        let Some(source) = self.session.as_ref().map(|session| session.source.clone()) else {
+    /// Lets go of the running session's capture, lost because Windows audio
+    /// restarted or its device went away, and opens only the capture again
+    /// [`RESTART_DELAY_POLLS`] polls later, up to [`RESTART_TRIES`] times
+    /// (S329). The outputs keep their readers and hold-backs on the same
+    /// ring and play silence meanwhile; the AirPlay and Google Cast speakers
+    /// stay in the stream.
+    fn lose_capture(&mut self) {
+        let Some(session) = self.session.as_mut() else {
             return;
         };
+        drop(session.capture.take());
+        session.reopen = Some(CaptureReopen {
+            wait: RESTART_DELAY_POLLS,
+            tries_left: RESTART_TRIES - 1,
+        });
         self.log.log(|| {
-            "the capture was lost: Windows audio restarted or its device went away; it starts \
-             again in a moment"
+            "the capture was lost: Windows audio restarted or its device went away; it opens \
+             again in a moment while the outputs play on"
                 .to_owned()
         });
-        self.end_session();
-        self.next_start = Some(source);
-        self.restart_wait = Some(RESTART_DELAY_POLLS);
-        self.restart_tries_left = RESTART_TRIES - 1;
+    }
+
+    /// Opens the lost capture of the running session again once its wait
+    /// is over (S329). Back in the way the session started with, it takes
+    /// its place and starts the trial of a restarted capture; back at
+    /// another rate or channel count, the session starts again (S20). A
+    /// failed try waits for the next while tries are left and it may work
+    /// later; after the last, streaming stops (S21), unless the captured app
+    /// quit and the setting moves to the whole system (S227).
+    fn reopen_capture_when_due(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        let Some(reopen) = session.reopen.as_mut() else {
+            return;
+        };
+        reopen.wait = reopen.wait.saturating_sub(1);
+        if reopen.wait > 0 {
+            return;
+        }
+        let tries_left = reopen.tries_left;
+        let source = session.source.clone();
+        let ring = Arc::clone(&session.ring);
+        let started_as = session.started_as;
+        // The lost capture's thread, let go while Windows audio hangs, may
+        // still hold the ring's writer: that try fails as one Windows audio
+        // didn't answer, and the next may work.
+        let mut writer_held = false;
+        let opened = match self.capture_target(&source) {
+            Ok(target) => match ring.writer() {
+                Some(writer) => self
+                    .open_capture(&target, writer)
+                    .map(|opened| (target, opened)),
+                None => {
+                    writer_held = true;
+                    Err(BackendError::NotResponding)
+                }
+            },
+            Err(error) => Err(error),
+        };
+        match opened {
+            Ok((target, (capture, equalizer, waits_for_feed))) => {
+                let now_as = capture.setup();
+                if another_format(started_as, now_as) {
+                    drop(capture);
+                    self.log.log(|| {
+                        "the capture is back at another rate or channel count: the session \
+                         starts again"
+                            .to_owned()
+                    });
+                    self.end_session();
+                    match self.begin_session(&source) {
+                        Ok(()) => self.follow_device_volumes(),
+                        Err(error) => self.stop_for(error),
+                    }
+                    return;
+                }
+                if let Some(session) = self.session.as_mut() {
+                    session.capture = Some(capture);
+                    session.target = target;
+                    session.equalizer = equalizer;
+                    session.waits_for_feed = waits_for_feed;
+                    session.reopen = None;
+                    session.trial_polls = RESTART_TRIAL_POLLS;
+                }
+                self.log
+                    .log(|| "the capture runs again; the outputs played on".to_owned());
+            }
+            Err(error) if tries_left > 0 && (writer_held || may_start_later(&error)) => {
+                self.log.log(|| {
+                    if writer_held {
+                        "the capture couldn't open again yet: the lost capture still holds the                          ring. It tries again in a moment."
+                            .to_owned()
+                    } else {
+                        format!(
+                            "the capture couldn't open again yet: {error} It tries again in a                              moment."
+                        )
+                    }
+                });
+                if let Some(session) = self.session.as_mut() {
+                    session.reopen = Some(CaptureReopen {
+                        wait: RESTART_DELAY_POLLS,
+                        tries_left: tries_left - 1,
+                    });
+                }
+            }
+            Err(BackendError::SourceGone)
+                if self.decide_quit(&source, Streaming::Rebuilding)
+                    == SourceQuitAction::SwitchToSystem =>
+            {
+                self.switch_to_system();
+            }
+            Err(error) => {
+                self.log
+                    .log(|| format!("the capture couldn't open again: {error}"));
+                self.end_session();
+                self.stop_for(error);
+            }
+        }
+    }
+
+    /// Ends streaming after the capture couldn't start: the network
+    /// speakers leave the stream, and the UI hears why (S21).
+    fn stop_for(&mut self, error: BackendError) {
+        self.airplay_streaming(false);
+        self.release_busy();
+        self.pending.push(BackendEvent::Stopped {
+            reason: StopReason::CaptureFailed(error),
+        });
     }
 
     /// Ends the wait of every output reported busy, once streaming stopped:
@@ -1630,6 +1862,11 @@ impl<D: Driver> Controller<D> {
         self.stalled.clear();
         self.hung.clear();
         self.refused.clear();
+        for (id, trial) in std::mem::take(&mut self.stall_trials) {
+            if trial.told {
+                self.pending.push(BackendEvent::OutputPlaysAgain { id });
+            }
+        }
         for id in std::mem::take(&mut self.busy).into_keys() {
             self.pending.push(BackendEvent::OutputFree { id });
         }
@@ -1641,63 +1878,27 @@ impl<D: Driver> Controller<D> {
     }
 
     /// Starts the session that waits for the last one's outputs to fade, once
-    /// they have, and for a restart its delay too; a capture that can't start
-    /// then ends it with that reason, unless it is a restart with tries left
-    /// that may work later ([`may_start_later`]): that one waits again.
+    /// they have; a capture that can't start then ends it with that reason,
+    /// unless a switch can give way to the source before it (S141).
     fn start_when_faded(&mut self) {
-        if let Some(wait) = self.restart_wait.as_mut() {
-            *wait = wait.saturating_sub(1);
-            if *wait > 0 {
-                return;
-            }
-        }
         if self.last_session_fading() {
             return;
         }
         let Some(source) = self.next_start.take() else {
             return;
         };
-        let restart = self.restart_wait.take().is_some();
         let from = self.switch_from.take();
         match self.start_rebuilt(&source) {
-            Ok(()) => {
-                if restart {
-                    self.log.log(|| "the capture runs again".to_owned());
-                    if let Some(session) = self.session.as_mut() {
-                        session.trial_polls = RESTART_TRIAL_POLLS;
-                    }
-                }
-                self.follow_device_volumes();
-            }
-            Err(error) if restart && self.restart_tries_left > 0 && may_start_later(&error) => {
-                self.restart_tries_left -= 1;
-                self.log.log(|| {
-                    format!(
-                        "the capture couldn't start again yet: {error} It tries again in a moment."
-                    )
-                });
-                self.next_start = Some(source);
-                self.restart_wait = Some(RESTART_DELAY_POLLS);
-            }
+            Ok(()) => self.follow_device_volumes(),
             Err(error) => {
-                self.log.log(|| {
-                    if restart {
-                        format!("the capture couldn't start again: {error}")
-                    } else {
-                        format!("the start failed: {error}")
-                    }
-                });
+                self.log.log(|| format!("the start failed: {error}"));
                 if let Some(from) = from
                     && self.start_old_source(from, &error, true)
                 {
                     self.follow_device_volumes();
                     return;
                 }
-                self.airplay_streaming(false);
-                self.release_busy();
-                self.pending.push(BackendEvent::Stopped {
-                    reason: StopReason::CaptureFailed(error),
-                });
+                self.stop_for(error);
             }
         }
     }
@@ -1705,15 +1906,11 @@ impl<D: Driver> Controller<D> {
     /// What the running session plays, for a switch away from it; while a
     /// switch waits, what the session before it played, since the waiting
     /// source never played; while an old source that a failed switch gave
-    /// way to waits for the fade, that source. Nothing while a lost capture
-    /// waits to restart.
+    /// way to waits for the fade, that source.
     fn switch_origin(&self) -> Option<SwitchFrom> {
         let Some(session) = &self.session else {
             if self.switch_from.is_some() {
                 return self.switch_from.clone();
-            }
-            if self.restart_wait.is_some() {
-                return None;
             }
             return self.next_start.as_ref().map(|source| {
                 let pair = match source {
@@ -1883,6 +2080,40 @@ impl<D: Driver> Controller<D> {
         let target = self.capture_target(source)?;
         let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
         let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
+        let (capture, equalizer, waits_for_feed) = self.open_capture(&target, writer)?;
+        self.log.log(|| self.policy.describe_lead());
+        self.session = Some(Session {
+            source: source.clone(),
+            target,
+            ring,
+            started_as: capture.setup(),
+            capture: Some(capture),
+            reopen: None,
+            equalizer,
+            outputs: BTreeMap::new(),
+            trial_polls: 0,
+            waits_for_feed,
+            logged_lead: None,
+        });
+        self.refresh_if_needed(false);
+        let failures = self.sync_outputs();
+        self.report_failures(failures);
+        // An output that couldn't start was turned off: the others no
+        // longer wait for it (S177).
+        self.retime();
+        self.airplay_streaming(true);
+        Ok(())
+    }
+
+    /// Starts capturing `target` through `writer`, through an equalizer at the
+    /// current settings, feeding the senders whose feeds are free. Returns
+    /// the capture, its equalizer's control half and the feeds it went
+    /// without.
+    fn open_capture(
+        &mut self,
+        target: &CaptureTarget,
+        writer: RingWriter,
+    ) -> Result<(D::Capture, EqControl, MissingFeeds), BackendError> {
         // The capture equalizes at the session rate, after any resampling
         // (a positive rate is always accepted).
         let (mut equalizer, processor) = eq::equalizer();
@@ -1904,7 +2135,7 @@ impl<D: Driver> Controller<D> {
             .driver
             .start_capture(target.clone(), writer, processor, feeds)?;
         self.log
-            .log(|| describe_capture_start(&target, capture.setup(), feeds_airplay));
+            .log(|| describe_capture_start(target, capture.setup(), feeds_airplay));
         for (missing, sender) in [
             (waits_for_feed.airplay, "AirPlay"),
             (waits_for_feed.cast, "Google Cast"),
@@ -1922,26 +2153,7 @@ impl<D: Driver> Controller<D> {
             airplay.capture_started();
         }
         self.sessions_started += 1;
-        self.log.log(|| self.policy.describe_lead());
-        self.session = Some(Session {
-            source: source.clone(),
-            target,
-            ring,
-            capture,
-            equalizer,
-            outputs: BTreeMap::new(),
-            trial_polls: 0,
-            waits_for_feed,
-            logged_lead: None,
-        });
-        self.refresh_if_needed(false);
-        let failures = self.sync_outputs();
-        self.report_failures(failures);
-        // An output that couldn't start was turned off: the others no
-        // longer wait for it (S177).
-        self.retime();
-        self.airplay_streaming(true);
-        Ok(())
+        Ok((capture, equalizer, waits_for_feed))
     }
 
     /// For a session of several apps, every [`MIX_FOLLOW_INTERVAL`]: when
@@ -1954,6 +2166,10 @@ impl<D: Driver> Controller<D> {
             self.mix_checked = None;
             return;
         };
+        // A capture being opened again is opened on the apps of the moment.
+        if session.capture.is_none() {
+            return;
+        }
         if !matches!(
             session.source,
             SourceId::Apps { .. } | SourceId::AppsExcept { .. }
@@ -1971,10 +2187,13 @@ impl<D: Driver> Controller<D> {
         if same_mix(&target, &running) {
             // An app whose loopback failed to open, or failed while it runs,
             // is tried again.
-            if let Some(session) = self.session.as_mut()
-                && !session.capture.holds_all()
+            if let Some(capture) = self
+                .session
+                .as_mut()
+                .and_then(|session| session.capture.as_mut())
+                && !capture.holds_all()
             {
-                session.capture.retarget(&target);
+                capture.retarget(&target);
             }
             return;
         }
@@ -1986,7 +2205,10 @@ impl<D: Driver> Controller<D> {
             )
         });
         if let Some(session) = self.session.as_mut()
-            && session.capture.retarget(&target)
+            && session
+                .capture
+                .as_mut()
+                .is_some_and(|capture| capture.retarget(&target))
         {
             session.target = target;
             return;
@@ -2257,7 +2479,6 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
         self.next_start = None;
         self.switch_from = None;
-        self.restart_wait = None;
         self.end_session();
         self.airplay_streaming(false);
         self.release_busy();
@@ -2289,6 +2510,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
             self.stalled.remove(id);
             self.hung.remove(id);
             self.refused.remove(id);
+            if self.stall_trials.remove(id).is_some_and(|trial| trial.told) {
+                self.pending
+                    .push(BackendEvent::OutputPlaysAgain { id: id.to_owned() });
+            }
         }
         if !enabled && self.busy.remove(id).is_some() {
             self.pending
@@ -2795,6 +3020,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         {
             *wait = wait.saturating_sub(1);
         }
+        self.tick_stall_trials();
         self.device_volumes.tick();
         self.log_session_lead();
         self.log_clock_queues();
@@ -2802,30 +3028,34 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // a start that waited for them goes ahead.
         self.reap(false);
         self.start_when_faded();
+        self.reopen_capture_when_due();
         // A session whose capture stopped ends first. One lost because
-        // Windows audio restarted, or its device went away, starts again a
-        // moment later; streaming stays on meanwhile.
+        // Windows audio restarted, or its device went away, is opened again
+        // a moment later while the outputs play on (S329).
         let mut lost = false;
         let stop_reason = match self.session.as_mut() {
             None => None,
-            Some(session) => match session.capture.state() {
-                CaptureState::Running => {
+            Some(session) => match session.capture.as_ref().map(CaptureHandle::state) {
+                None => None,
+                Some(CaptureState::Running) => {
                     session.trial_polls = session.trial_polls.saturating_sub(1);
                     None
                 }
-                CaptureState::Failed(BackendError::DeviceGone) if session.trial_polls == 0 => {
+                Some(CaptureState::Failed(BackendError::DeviceGone))
+                    if session.trial_polls == 0 =>
+                {
                     lost = true;
                     None
                 }
                 // "All except" outlives its apps: the mix follows the apps left.
-                CaptureState::SourceQuit
+                Some(CaptureState::SourceQuit)
                     if matches!(session.source, SourceId::AppsExcept { .. }) =>
                 {
                     self.mix_checked = None;
                     None
                 }
-                CaptureState::SourceQuit => Some(StopReason::SourceQuit),
-                CaptureState::Failed(error) => Some(StopReason::CaptureFailed(error)),
+                Some(CaptureState::SourceQuit) => Some(StopReason::SourceQuit),
+                Some(CaptureState::Failed(error)) => Some(StopReason::CaptureFailed(error)),
             },
         };
         let quit_source = match stop_reason {
@@ -2843,7 +3073,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             _ => stop_reason,
         };
         if lost {
-            self.restart_capture();
+            self.lose_capture();
         }
         if let Some(reason) = stop_reason {
             self.log
@@ -2879,29 +3109,41 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.sync_track_info();
 
         // Outputs that stopped by themselves.
-        let mut ended = Vec::new();
+        let mut stopped: Vec<(String, Option<Stall>)> = Vec::new();
         if let Some(session) = self.session.as_mut() {
-            let stopped: Vec<String> = session
+            stopped = session
                 .outputs
                 .iter()
                 .filter(|(_, playing)| playing.handle.has_ended())
-                .map(|(id, _)| id.clone())
+                .map(|(id, playing)| (id.clone(), playing.handle.stall()))
                 .collect();
-            for id in stopped {
-                session.outputs.remove(&id);
-                self.log.log(|| {
-                    format!(
-                        "output {} stopped by itself: its stream failed or its device went away",
-                        label(&self.names, &id)
-                    )
-                });
-                ended.push(id);
+            // Released before the log says why they ended (S126).
+            for (id, _) in &stopped {
+                drop(session.outputs.remove(id));
+            }
+        }
+        let mut ended = Vec::new();
+        let mut stalled_again = false;
+        for (id, stall) in stopped {
+            match stall {
+                Some(stall) if self.note_stall(&id, stall) => stalled_again = true,
+                Some(_) => ended.push(id),
+                None => {
+                    self.log.log(|| {
+                        format!(
+                            "output {} stopped by itself: its stream failed or its device went \
+                             away",
+                            label(&self.names, &id)
+                        )
+                    });
+                    ended.push(id);
+                }
             }
         }
 
         // A stopped output may mean a device went away before its
         // notification arrived, so the list is read again then too.
-        self.refresh_if_needed(!ended.is_empty());
+        self.refresh_if_needed(!ended.is_empty() || stalled_again);
         // An output whose device is no longer listed is lost too, whether or
         // not its stream noticed, and so is one that couldn't play while its
         // device was still listed.
@@ -2937,6 +3179,18 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 .log(|| format!("event: {}", describe_event(event, &self.names)));
         }
         events
+    }
+}
+
+/// Whether a capture opened again after a loss delivers another rate or
+/// channel count than the one its session started with (S329); unknown
+/// either way counts as the same.
+fn another_format(started: Option<CaptureAttempt>, now: Option<CaptureAttempt>) -> bool {
+    match (started, now) {
+        (Some(started), Some(now)) => {
+            started.format.rate != now.format.rate || started.format.channels != now.format.channels
+        }
+        _ => false,
     }
 }
 
@@ -3429,6 +3683,15 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::OutputFree { id } => {
             format!("output {} no longer waits for its device", label(names, id))
         }
+        BackendEvent::OutputStalled { id } => {
+            format!(
+                "output {} stalled again soon after a reopen",
+                label(names, id)
+            )
+        }
+        BackendEvent::OutputPlaysAgain { id } => {
+            format!("output {} no longer counts as stalled", label(names, id))
+        }
         BackendEvent::Stopped { reason } => format!("stopped: {}", describe_stop(reason)),
         BackendEvent::SwitchedToSystem => {
             "the captured app quit: the whole system is the source now".to_owned()
@@ -3521,6 +3784,7 @@ mod tests {
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
     use crate::audio::now_playing::fake::{FakeReader, shared_labels, track};
     use crate::audio::outputs::{EndpointProperties, EndpointReading};
+    use crate::audio::render::StallSign;
     use crate::audio::routing::{DirectPath, DirectReason, HOLD_CHECKS};
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
 
@@ -4877,6 +5141,105 @@ mod tests {
         );
     }
 
+    /// A stream that took no frame for 2 s while its buffer stayed full.
+    const FULL_STALL: Stall = Stall {
+        span: Duration::from_secs(2),
+        sign: StallSign::FullPadding,
+    };
+
+    // covers: S326
+    #[test]
+    fn a_stalled_output_reopens_at_the_next_poll_with_a_debug_line() {
+        let (mut backend, log, dir) = logged_backend("controller-stall");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let hold_back = backend.policy().hold_back_ms(SPEAKERS);
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        assert!(backend.poll().is_empty(), "a first stall posts no notice");
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES],
+            "the other output isn't opened again"
+        );
+        assert_eq!(
+            backend.policy().hold_back_ms(SPEAKERS),
+            hold_back,
+            "nor re-timed"
+        );
+        assert!(backend.policy().settings(HEADPHONES).enabled);
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "output \"Headphones\" (headphones) stalled: it took no frame for 2000 ms, its \
+               buffer stayed full; it is opened again",
+            ],
+        );
+
+        // Once it has played five seconds again, a stall is a first one.
+        poll_quietly(&mut backend, RESTART_TRIAL_POLLS);
+        backend.stall_renderer(
+            HEADPHONES,
+            Stall {
+                sign: StallSign::FrozenClock,
+                ..FULL_STALL
+            },
+        );
+        assert!(backend.poll().is_empty());
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "output \"Headphones\" (headphones) stalled: it took no frame for 2000 ms, its \
+               device clock stood still; it is opened again",
+            ],
+        );
+    }
+
+    // covers: S326
+    #[test]
+    fn a_second_stall_in_a_row_posts_the_lost_notice_and_keeps_the_output_on() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        poll_quietly(&mut backend, 1);
+        // It stalls again a second and a half after the reopen.
+        poll_quietly(&mut backend, 3);
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        let stalled = BackendEvent::OutputStalled {
+            id: HEADPHONES.to_owned(),
+        };
+        assert_eq!(backend.poll(), std::slice::from_ref(&stalled));
+        assert!(backend.policy().settings(HEADPHONES).enabled, "it stays on");
+        assert_eq!(playing(&backend), [SPEAKERS]);
+
+        // Opened again ten seconds later; a stall soon after that is told
+        // no more, and waits the same.
+        poll_quietly(&mut backend, STALL_RETRY_POLLS - 1);
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        assert!(backend.poll().is_empty(), "told once");
+        assert_eq!(playing(&backend), [SPEAKERS]);
+        poll_quietly(&mut backend, STALL_RETRY_POLLS);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+
+        // Five seconds of play clear the notice.
+        poll_quietly(&mut backend, RESTART_TRIAL_POLLS - 1);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::OutputPlaysAgain {
+                id: HEADPHONES.to_owned(),
+            }]
+        );
+        poll_quietly(&mut backend, 2);
+        assert_eq!(
+            backend.driver().renderers_started().len(),
+            2 + 3,
+            "the speakers were never opened again"
+        );
+    }
+
     #[test]
     fn the_session_ends_when_the_captured_app_quits() {
         let mut backend = backend();
@@ -4935,7 +5298,11 @@ mod tests {
             Some(SourceId::WholeSystem),
             "streaming stays on"
         );
-        assert!(playing(&backend).is_empty());
+        assert_eq!(
+            playing(&backend),
+            [HEADPHONES, SPEAKERS],
+            "and so do the outputs"
+        );
         poll_quietly(&mut backend, RESTART_DELAY_POLLS - 1);
         assert_eq!(backend.driver().captures_started().len(), 1, "not yet");
         poll_quietly(&mut backend, 1);
@@ -4943,6 +5310,154 @@ mod tests {
         assert!(backend.driver().capture_running());
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+    }
+
+    // covers: S329
+    #[test]
+    fn a_capture_device_gone_reopens_only_the_capture_and_keeps_every_output_running() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        let feed = FeedSlot::new(input);
+        backend.set_airplay(fake.link(), Some(feed.clone()));
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        backend.poll();
+        backend.set_airplay_enabled(&id, true).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let ring = backend.driver().capture_ring().expect("a ring");
+        assert!(backend.driver().capture_feeds_cast());
+        fake.take_calls();
+        // The Cast speaker's join reports itself; nothing else may.
+        let poll_quietly = |backend: &mut MockBackend, count: u32| {
+            for _ in 0..count {
+                let events = backend.poll();
+                assert!(
+                    events
+                        .iter()
+                        .all(|event| matches!(event, BackendEvent::CastChanged)),
+                    "{events:?}"
+                );
+            }
+        };
+
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        assert!(!backend.driver().capture_running(), "the capture is let go");
+        assert_eq!(
+            playing(&backend),
+            [HEADPHONES, SPEAKERS],
+            "the outputs play silence meanwhile"
+        );
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_running());
+        assert!(
+            Arc::ptr_eq(&backend.driver().capture_ring().expect("a ring"), &ring),
+            "the ring's timeline goes on"
+        );
+        assert!(backend.driver().capture_feeds_airplay());
+        assert!(!feed.is_free(), "the new capture holds the AirPlay feed");
+        assert!(
+            backend.driver().capture_feeds_cast(),
+            "and feeds the Cast speaker"
+        );
+        assert_eq!(cast.state().stops, 0, "the Cast speaker stays connected");
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS],
+            "no output started again"
+        );
+        assert_eq!(backend.driver().renderers_faded(), 0);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+        let calls = fake.take_calls();
+        assert!(
+            !calls
+                .iter()
+                .any(|call| matches!(call, Call::Remove(_) | Call::Pause)),
+            "the AirPlay speaker stays in the stream: {calls:?}"
+        );
+        assert_eq!(backend.enabled_airplay(), [id]);
+    }
+
+    // covers: S329
+    #[test]
+    fn a_capture_reopen_waits_while_the_lost_capture_still_holds_the_ring() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let ring = backend.driver().capture_ring().expect("a ring");
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        // The lost capture's thread, let go while Windows audio hangs, still
+        // holds the ring's writer at the first try.
+        let held = ring.writer().expect("the mock capture let it go");
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().captures_started().len(), 1);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        drop(held);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_running());
+    }
+
+    // covers: S329
+    #[test]
+    fn a_capture_back_in_another_format_restarts_the_session() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let ring = backend.driver().capture_ring().expect("a ring");
+        backend.fail_capture(BackendError::DeviceGone);
+        // Windows audio comes back at 44.1 kHz.
+        backend.set_capture_setup(crate::audio::capture::CAPTURE_ATTEMPTS[3]);
+        poll_quietly(&mut backend, 1 + RESTART_DELAY_POLLS);
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            3,
+            "the reopened capture gives way to a new session's"
+        );
+        assert!(backend.driver().capture_running());
+        assert!(
+            !Arc::ptr_eq(&backend.driver().capture_ring().expect("a ring"), &ring),
+            "a new ring"
+        );
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES, SPEAKERS]
+        );
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+    }
+
+    // covers: S329, S21
+    #[test]
+    fn a_capture_that_fails_its_last_try_stops_as_before() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        poll_quietly(&mut backend, RESTART_TRIES * RESTART_DELAY_POLLS);
+        assert_eq!(
+            playing(&backend),
+            [HEADPHONES, SPEAKERS],
+            "the outputs play on through the tries"
+        );
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(BackendError::DeviceGone),
+            }]
+        );
+        assert_eq!(backend.driver().capture_attempts(), 1 + 5);
+        assert_eq!(backend.running_source(), None);
+        assert!(playing(&backend).is_empty());
     }
 
     #[test]

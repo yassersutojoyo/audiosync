@@ -52,6 +52,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, when streaming stops while such a speaker is still pairing, a pairing that then fails before streaming starts again turns it off with the notice that it needs a PIN, instead of saying the pairing failed. Closing its PIN prompt after the stop cancels your click, so the speaker isn't kept on for a later stream.
 - On Windows, after a screen reader sets an AirPlay speaker's volume, the speaker's row follows its own remote again within a few seconds. Before, the row ignored the remote until you dragged its slider or pressed a key on it.
 - On Windows, Narrator reads a zone speaker's note, such as "Stayed off, since one Cast speaker plays at a time", from its button in the main window, as it already did under In zones and in the tray panel. Before, it read only "Turn On".
+- On Windows, a local speaker that goes silent because Windows stops taking its sound, while its row still says it plays, now starts again on its own about 2.5 seconds after it went quiet. If it goes silent again within 5 seconds, AudioSync says the speaker was lost, keeps it on and tries it every 10 seconds; the notice goes once it has played 5 seconds. The other speakers keep playing in step.
+- On Windows, when Windows audio restarts or the captured device drops out for a moment, only the capture starts again. Your speakers keep playing, silent for that moment, and AirPlay and Google Cast speakers stay connected, instead of every speaker stopping and starting again.
 
 ## [0.7.1] - 2026-10-27
 

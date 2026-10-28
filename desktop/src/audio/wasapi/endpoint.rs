@@ -15,6 +15,7 @@
 use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use audiosync_core::reader::Reader;
 use audiosync_core::render::{RendererControl, STOP_FADE_CAP};
@@ -41,7 +42,9 @@ use crate::audio::controller::RendererHandle;
 use crate::audio::outputs::{
     RenderFormat, StreamSetup, period_frames, render_buffer_hns, render_format,
 };
-use crate::audio::render::{EndpointQueue, RenderPipeline, WakeCounters, WakeCounts};
+use crate::audio::render::{
+    EndpointQueue, RenderPipeline, Stall, StallSign, StallSlot, WakeCounters, WakeCounts,
+};
 
 /// The flags of every render stream: event-driven, and without volume
 /// settings that Windows would remember for AudioSync's session.
@@ -58,6 +61,11 @@ const WAIT_MS: u32 = 500;
 /// device that stops asking for audio then just stops.
 const FADE_WAIT_MS: u32 = 100;
 
+/// How long a running stream may take no frame before it counts as stalled
+/// and ends (S326): four of the loop's [`WAIT_MS`] waits, so a late event or
+/// two never ends a healthy stream.
+const STALL_SPAN: Duration = Duration::from_secs(2);
+
 /// A running output.
 pub struct EndpointRenderer {
     stop: Arc<Event>,
@@ -73,6 +81,8 @@ pub struct EndpointRenderer {
     probe: Option<Arc<ClockProbe>>,
     /// The render thread's late and empty wakes.
     wakes: Arc<WakeCounters>,
+    /// The stall that ended the stream, if one did.
+    stall: Arc<StallSlot>,
 }
 
 impl RendererHandle for EndpointRenderer {
@@ -100,6 +110,10 @@ impl RendererHandle for EndpointRenderer {
     fn wakes(&self) -> WakeCounts {
         self.wakes.counts()
     }
+
+    fn stall(&self) -> Option<Stall> {
+        self.stall.get()
+    }
 }
 
 impl Drop for EndpointRenderer {
@@ -126,6 +140,7 @@ pub(super) fn start(
     let ended = Arc::new(AtomicBool::new(false));
     let probe = ClockProbe::from_env();
     let wakes = Arc::new(WakeCounters::default());
+    let stall = Arc::new(StallSlot::default());
     let (thread, setup) = {
         let stop = Arc::clone(&stop);
         let abort = Arc::clone(&abort);
@@ -133,12 +148,14 @@ pub(super) fn start(
         let control = control.clone();
         let probe = probe.clone();
         let wakes = Arc::clone(&wakes);
+        let stall = Arc::clone(&stall);
         spawn_worker("audiosync-output", move |ready| {
             let signals = Signals {
                 stop: &stop,
                 abort: &abort,
                 ended: &ended,
                 wakes: &wakes,
+                stall: &stall,
             };
             run(&id, reader, &control, gain, probe, &signals, ready);
         })?
@@ -152,6 +169,7 @@ pub(super) fn start(
         setup,
         probe,
         wakes,
+        stall,
     })
 }
 
@@ -165,6 +183,8 @@ struct Signals<'a> {
     ended: &'a AtomicBool,
     /// Counted by the thread at each wake that isn't part of a stop.
     wakes: &'a WakeCounters,
+    /// Set by the thread before it marks the output ended for a stall.
+    stall: &'a StallSlot,
 }
 
 /// The render thread.
@@ -350,7 +370,9 @@ fn prefill_silence(stream: &RenderStream) -> Result<(), BackendError> {
 /// Real-time: waits for the device's event, then fills the free part of the
 /// buffer. When the device hasn't asked for [`WAIT_MS`], it does the same:
 /// the padding call fails once Windows invalidated the stream, which ends the
-/// loop as lost. Never allocates, locks or logs. With a `sampler`, it
+/// loop as lost. So does a stream that took no frame for [`STALL_SPAN`]
+/// while it isn't stopping (S326), its stall left in the signals. Never
+/// allocates, locks or logs. With a `sampler`, it
 /// samples the clock queue at the probe times, counted in frames written
 /// past the silent prefill.
 fn render_loop(
@@ -367,6 +389,7 @@ fn render_loop(
     let mut stopping: Option<u32> = None;
     // Frames written since the start, the silent prefill included.
     let mut written_total = u64::from(stream.buffer_frames);
+    let mut watch = StallWatch::default();
     loop {
         let wait = match stopping {
             // SAFETY: both handles live as long as this loop.
@@ -402,6 +425,13 @@ fn render_loop(
             signals
                 .wakes
                 .count_wake(padding, stream.buffer_frames, stream.period_frames);
+            let position = clock_position(stream);
+            if let Some(stall) =
+                watch.observe(Instant::now(), padding, stream.buffer_frames, position)
+            {
+                signals.stall.record(stall);
+                return true;
+            }
         }
         if stopping.is_some()
             && pipeline.has_played_its_fade(EndpointQueue {
@@ -453,6 +483,68 @@ fn render_loop(
     }
 }
 
+/// Watches a running stream for frames it stops taking (S326), counted as
+/// frames the device accepted against wall time rather than as wakes: only
+/// a stream that took none for [`STALL_SPAN`] stalls, and the clock only
+/// names the sign.
+#[derive(Debug, Default)]
+struct StallWatch {
+    /// When the stream last took frames: a padding read below a full buffer,
+    /// or a clock that moved. `None` until it first did: a link still coming
+    /// up isn't checked.
+    took: Option<Instant>,
+    /// Whether the clock has moved since the start, so that a still one
+    /// says the device stopped too.
+    clock_runs: bool,
+    /// The clock's position at the last read.
+    position: Option<u64>,
+}
+
+impl StallWatch {
+    /// Takes one wake's padding read of a stream whose buffer holds
+    /// `buffer_frames`, and its clock position when there is one, at `now`;
+    /// returns the stall once the stream counts as stalled. Real-time: no
+    /// allocation.
+    fn observe(
+        &mut self,
+        now: Instant,
+        padding: u32,
+        buffer_frames: u32,
+        position: Option<u64>,
+    ) -> Option<Stall> {
+        if padding < buffer_frames {
+            self.took = Some(now);
+        }
+        if let Some(position) = position {
+            if self.position.is_some_and(|last| last != position) {
+                self.took = Some(now);
+                self.clock_runs = true;
+            }
+            self.position = Some(position);
+        }
+        let span = now.saturating_duration_since(self.took?);
+        if span < STALL_SPAN {
+            return None;
+        }
+        let sign = if self.clock_runs && position.is_some() {
+            StallSign::FrozenClock
+        } else {
+            StallSign::FullPadding
+        };
+        Some(Stall { span, sign })
+    }
+}
+
+/// The position of the stream's clock, unless it has none or can't tell.
+/// Real-time: no allocation.
+fn clock_position(stream: &RenderStream) -> Option<u64> {
+    let (clock, _) = stream.clock.as_ref()?;
+    let mut position = 0u64;
+    // SAFETY: a call on the clock of the stream this thread owns.
+    unsafe { clock.GetPosition(&raw mut position, None) }.ok()?;
+    Some(position)
+}
+
 /// The frames of `written` the stream's clock says the endpoint hasn't
 /// played yet, or `None` without a clock reading. Real-time: no allocation.
 fn clock_queued(stream: &RenderStream, written: u64) -> Option<u64> {
@@ -482,6 +574,93 @@ mod tests {
 
     /// How long a test waits for an answer.
     const TIMEOUT: Duration = Duration::from_millis(200);
+
+    /// The stream buffer of the stall tests, in frames.
+    const BUFFER: u32 = 960;
+
+    /// One device period, in frames.
+    const PERIOD: u32 = 480;
+
+    /// The time `ms` after `start`.
+    fn at(start: Instant, ms: u64) -> Instant {
+        start + Duration::from_millis(ms)
+    }
+
+    // covers: S326
+    #[test]
+    fn a_stream_that_never_signals_with_full_padding_ends_as_stalled_within_2_s() {
+        let start = Instant::now();
+        let mut watch = StallWatch::default();
+        // A Bluetooth link still coming up takes nothing for 10 s: it isn't
+        // checked before it has taken frames once.
+        for ms in (0..10_000).step_by(500) {
+            assert_eq!(watch.observe(at(start, ms), BUFFER, BUFFER, None), None);
+        }
+        // It plays: each wake finds a period taken.
+        for ms in (10_000..12_000).step_by(10) {
+            let stall = watch.observe(at(start, ms), BUFFER - PERIOD, BUFFER, None);
+            assert_eq!(stall, None);
+        }
+        // Then Windows stops signalling while the padding stays full: only
+        // the 500 ms timeouts wake the loop. The last frames went at 11 990.
+        for ms in [12_490, 12_990, 13_490] {
+            assert_eq!(
+                watch.observe(at(start, ms), BUFFER, BUFFER, None),
+                None,
+                "{ms} ms"
+            );
+        }
+        assert_eq!(
+            watch.observe(at(start, 13_990), BUFFER, BUFFER, None),
+            Some(Stall {
+                span: Duration::from_secs(2),
+                sign: StallSign::FullPadding,
+            })
+        );
+    }
+
+    // covers: S326
+    #[test]
+    fn a_frozen_clock_with_full_padding_ends_as_stalled_within_2_s() {
+        let start = Instant::now();
+        let mut watch = StallWatch::default();
+        // The padding never shows a free frame, but the clock moves: the
+        // stream plays.
+        let mut position = 0;
+        for ms in (0..1_000).step_by(10) {
+            position += u64::from(PERIOD);
+            let stall = watch.observe(at(start, ms), BUFFER, BUFFER, Some(position));
+            assert_eq!(stall, None);
+        }
+        // The clock stops at 990 while the buffer stays full, the device's
+        // events still coming.
+        for ms in (1_000..2_990).step_by(10) {
+            let stall = watch.observe(at(start, ms), BUFFER, BUFFER, Some(position));
+            assert_eq!(stall, None, "{ms} ms");
+        }
+        assert_eq!(
+            watch.observe(at(start, 2_990), BUFFER, BUFFER, Some(position)),
+            Some(Stall {
+                span: Duration::from_secs(2),
+                sign: StallSign::FrozenClock,
+            })
+        );
+    }
+
+    // covers: S326
+    #[test]
+    fn a_stream_that_takes_frames_is_never_stalled_by_a_clock_that_sticks() {
+        let start = Instant::now();
+        let mut watch = StallWatch::default();
+        // The clock moves once, then a driver's position sticks while every
+        // wake still finds a period taken.
+        let stuck = u64::from(PERIOD);
+        assert_eq!(watch.observe(at(start, 0), BUFFER, BUFFER, Some(0)), None);
+        for ms in (10..10_000).step_by(10) {
+            let stall = watch.observe(at(start, ms), BUFFER - PERIOD, BUFFER, Some(stuck));
+            assert_eq!(stall, None, "{ms} ms");
+        }
+    }
 
     #[test]
     fn a_render_thread_that_hangs_stopping_its_stream_doesnt_hold_quitting() {
@@ -527,6 +706,7 @@ mod tests {
             },
             probe: None,
             wakes: Arc::default(),
+            stall: Arc::default(),
         };
         let answers = thread::spawn(move || {
             thread::sleep(HANG);

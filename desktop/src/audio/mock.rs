@@ -37,6 +37,7 @@ use super::outputs::{
     StreamSetup, list_endpoints,
 };
 use super::process::{ProcessEntry, ProcessTable};
+use super::render::{Stall, StallSlot};
 use super::routing::{EndpointAudio, EndpointVolume};
 
 /// AudioSync's process ID in the mock.
@@ -141,6 +142,8 @@ struct CaptureLink {
     missing: bool,
     /// How often a mix was moved onto new apps.
     retargets: u32,
+    /// The format it captures in.
+    setup: CaptureAttempt,
 }
 
 fn lock(link: &Mutex<CaptureLink>) -> std::sync::MutexGuard<'_, CaptureLink> {
@@ -157,9 +160,9 @@ impl CaptureHandle for MockCapture {
         lock(&self.link).state.clone()
     }
 
-    /// The first way a real capture tries.
+    /// The first way a real capture tries, unless a test chose another.
     fn setup(&self) -> Option<CaptureAttempt> {
-        Some(CAPTURE_ATTEMPTS[0])
+        Some(lock(&self.link).setup)
     }
 
     /// A mix follows its apps, as a real one does.
@@ -200,6 +203,7 @@ pub struct MockRenderer {
     /// While set, no fade-out has played yet.
     hold_fades: Arc<AtomicBool>,
     stop_requested: bool,
+    stall: Arc<StallSlot>,
 }
 
 impl Drop for MockRenderer {
@@ -215,6 +219,7 @@ struct RendererLink {
     ring: Arc<Ring>,
     ended: Arc<AtomicBool>,
     dropped: Arc<AtomicBool>,
+    stall: Arc<StallSlot>,
 }
 
 impl RendererLink {
@@ -243,6 +248,10 @@ impl RendererHandle for MockRenderer {
     fn setup(&self) -> Option<StreamSetup> {
         Some(MOCK_STREAM)
     }
+
+    fn stall(&self) -> Option<Stall> {
+        self.stall.get()
+    }
 }
 
 /// The pretend world of the mock.
@@ -262,6 +271,8 @@ pub struct MockDriver {
     capture_error: Option<BackendError>,
     /// The error only the next capture start fails with.
     next_capture_error: Option<BackendError>,
+    /// The format the next captures start in.
+    capture_setup: CaptureAttempt,
     capture: Option<Arc<Mutex<CaptureLink>>>,
     /// Every output started that hasn't ended by itself.
     renderers: Vec<RendererLink>,
@@ -320,6 +331,7 @@ impl MockDriver {
             output_errors: BTreeMap::new(),
             capture_error: None,
             next_capture_error: None,
+            capture_setup: CAPTURE_ATTEMPTS[0],
             capture: None,
             renderers: Vec::new(),
             active_sessions: BTreeMap::new(),
@@ -657,6 +669,7 @@ impl Driver for MockDriver {
             feeds,
             missing: false,
             retargets: 0,
+            setup: self.capture_setup,
         }));
         self.capture = Some(Arc::clone(&link));
         Ok(MockCapture { link })
@@ -680,11 +693,13 @@ impl Driver for MockDriver {
             .retain(|renderer| !renderer.ended.load(Ordering::Relaxed));
         let ended = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicBool::new(false));
+        let stall = Arc::new(StallSlot::default());
         self.renderers.push(RendererLink {
             id: endpoint.id.clone(),
             ring: Arc::clone(reader.ring()),
             ended: Arc::clone(&ended),
             dropped: Arc::clone(&dropped),
+            stall: Arc::clone(&stall),
         });
         self.renderers_started.push(endpoint.id.clone());
         Ok(MockRenderer {
@@ -693,6 +708,7 @@ impl Driver for MockDriver {
             faded: Arc::clone(&self.faded),
             hold_fades: Arc::clone(&self.hold_fades),
             stop_requested: false,
+            stall,
         })
     }
 }
@@ -945,6 +961,22 @@ impl Controller<MockDriver> {
     /// device stays connected (as after a change of its format).
     pub fn end_renderer(&mut self, id: &str) {
         self.driver_mut().end_renderers_of(id);
+    }
+
+    /// Ends the output playing on `id` as a render thread ends a stream
+    /// that stopped taking frames (S326), while the device stays listed.
+    pub fn stall_renderer(&mut self, id: &str, stall: Stall) {
+        for renderer in &self.driver().renderers {
+            if renderer.id == id && renderer.plays() {
+                renderer.stall.record(stall);
+                renderer.ended.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Makes the captures started from now on deliver `setup`'s format.
+    pub fn set_capture_setup(&mut self, setup: CaptureAttempt) {
+        self.driver_mut().capture_setup = setup;
     }
 
     /// Makes every later capture start fail with `error`, or succeed again
