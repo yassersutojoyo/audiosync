@@ -5,8 +5,8 @@ use std::f64::consts::PI;
 use audiosync_core::eq::{
     BAND_CENTERS_HZ, BAND_COUNT, BAND_Q, Biquad, CurveMatch, DEFAULT_SAMPLE_RATE, EqControl,
     EqProcessor, EqSettings, MAX_CENTER_RATIO, MAX_CURVE_NAME_CHARS, MAX_USER_CURVES, PRESETS,
-    UserCurve, delete_curve, design_bands, equalizer, matching_curve, preset, quantize_gain_db,
-    rename_curve, sanitized_curves, save_curve,
+    UserCurve, cascade_peak_db, delete_curve, design_bands, equalizer, matching_curve, preset,
+    quantize_gain_db, rename_curve, sanitized_curves, save_curve,
 };
 use proptest::prelude::*;
 
@@ -56,11 +56,18 @@ fn measure_db(processor: &mut EqProcessor, rate: f64, freq: f64, amplitude: f64)
     10.0 * (energy_out / energy_in).log10()
 }
 
+/// Past the on ramp of S28: silence through zeroed filters leaves them zeroed.
 fn configured(rate: f64, settings: EqSettings) -> (EqControl, EqProcessor) {
-    let (mut control, processor) = equalizer();
+    let (mut control, mut processor) = equalizer();
     assert!(control.set_sample_rate(rate));
     control.set_settings(settings);
+    processor.process(&mut vec![0.0f32; 2 * 4096]);
     (control, processor)
+}
+
+/// The automatic headroom of S26, in dB.
+fn headroom_db(settings: &EqSettings, fs: f64) -> f64 {
+    cascade_peak_db(&settings.gains_db, fs).max(0.0)
 }
 
 /// The spec's coefficient formulas, written out independently (S25).
@@ -107,7 +114,7 @@ impl Reference {
             bands: std::array::from_fn(|i| {
                 spec_peaking(BAND_CENTERS_HZ[i], settings.gains_db[i], fs)
             }),
-            preamp: 10f64.powf(settings.preamp_db / 20.0),
+            preamp: 10f64.powf((settings.preamp_db - headroom_db(settings, fs)) / 20.0),
             state: [[(0.0, 0.0); BAND_COUNT]; 2],
         }
     }
@@ -167,9 +174,11 @@ fn the_host_quantizes_to_half_db_steps_between_minus_and_plus_12_db() {
 #[test]
 fn the_dsp_applies_any_finite_gain_it_is_given() {
     // +18 dB is outside the host's range, yet the DSP applies it.
-    let (control, mut processor) = configured(48_000.0, enabled(with_band(5, 18.0), 0.0));
+    let settings = enabled(with_band(5, 18.0), 0.0);
+    let (control, mut processor) = configured(48_000.0, settings);
     assert_eq!(control.settings().gains_db[5], 18.0);
-    let measured = measure_db(&mut processor, 48_000.0, 1000.0, 0.02);
+    let measured =
+        measure_db(&mut processor, 48_000.0, 1000.0, 0.02) + headroom_db(&settings, 48_000.0);
     assert!((measured - 18.0).abs() < 0.2, "measured {measured:.2} dB");
     // A non-finite value counts as 0 dB.
     let (control, mut processor) =
@@ -395,7 +404,8 @@ fn the_rate_defaults_to_48_khz_and_a_change_recomputes_and_zeroes_state() {
     let mut silence = vec![0.0f32; BLOCK * 2];
     processor.process(&mut silence);
     assert!(silence.iter().all(|&x| x == 0.0));
-    let measured = measure_db(&mut processor, 44_100.0, 1000.0, 0.25);
+    let measured =
+        measure_db(&mut processor, 44_100.0, 1000.0, 0.25) + headroom_db(&settings, 44_100.0);
     assert!(
         (measured - 6.0).abs() < 0.2,
         "measured {measured:.2} dB at 44.1 kHz"
@@ -460,11 +470,13 @@ fn a_change_takes_effect_at_the_next_block_and_keeps_filter_state() {
             "new coefficients, same state, from the block boundary on"
         );
     }
-    // Toggling the flag together with new gains also applies as one change.
+    // Toggling the flag together with new gains also applies as one change,
+    // bypassed once the off ramp (S27) is over.
     control.set_settings(EqSettings {
         enabled: false,
         ..first
     });
+    processor.process(&mut sine(0, 4096, 200.0, 48_000.0, 0.4));
     let mut untouched = sine(0, BLOCK, 200.0, 48_000.0, 0.4);
     let copy = untouched.clone();
     processor.process(&mut untouched);
@@ -478,24 +490,26 @@ fn measured_response_matches_the_reference_measurements() {
     let db = measure_db(&mut flat, 48_000.0, 1000.0, 0.25);
     assert!(db.abs() <= 0.05, "flat: {db:.3} dB");
 
-    let (_c, mut band5) = configured(48_000.0, enabled(with_band(5, 6.0), 0.0));
-    let db = measure_db(&mut band5, 48_000.0, 1000.0, 0.25);
+    let band5 = enabled(with_band(5, 6.0), 0.0);
+    let (_c, mut processor) = configured(48_000.0, band5);
+    let db = measure_db(&mut processor, 48_000.0, 1000.0, 0.25) + headroom_db(&band5, 48_000.0);
     assert!((db - 6.0).abs() <= 0.2, "+6 dB band at 1 kHz: {db:.3} dB");
 
-    let (_c, mut band5) = configured(44_100.0, enabled(with_band(5, 6.0), 0.0));
-    let db = measure_db(&mut band5, 44_100.0, 1000.0, 0.25);
+    let (_c, mut processor) = configured(44_100.0, band5);
+    let db = measure_db(&mut processor, 44_100.0, 1000.0, 0.25) + headroom_db(&band5, 44_100.0);
     assert!(
         (db - 6.0).abs() <= 0.2,
         "+6 dB band at 1 kHz, 44.1 kHz: {db:.3} dB"
     );
 
-    let (_c, mut band5) = configured(48_000.0, enabled(with_band(5, 6.0), 0.0));
-    let db = measure_db(&mut band5, 48_000.0, 8000.0, 0.25);
+    let (_c, mut processor) = configured(48_000.0, band5);
+    let db = measure_db(&mut processor, 48_000.0, 8000.0, 0.25) + headroom_db(&band5, 48_000.0);
     assert!(db.abs() <= 0.5, "+6 dB band at 8 kHz: {db:.3} dB");
 
     let bass = preset("bassBoost").unwrap();
-    let (_c, mut boost) = configured(48_000.0, enabled(bass.gains_db, 0.0));
-    let db = measure_db(&mut boost, 48_000.0, 40.0, 0.25);
+    let boost = enabled(bass.gains_db, 0.0);
+    let (_c, mut processor) = configured(48_000.0, boost);
+    let db = measure_db(&mut processor, 48_000.0, 40.0, 0.25) + headroom_db(&boost, 48_000.0);
     assert!(db > 5.0, "Bass Boost at 40 Hz: {db:.3} dB");
 
     let (_c, mut preamp) = configured(48_000.0, enabled([0.0; BAND_COUNT], -6.0));
@@ -733,13 +747,27 @@ fn largest_step(interleaved: &[f32]) -> f32 {
 // covers: S26
 #[test]
 fn bass_boost_on_a_full_scale_33_hz_sine_never_reaches_the_clamp() {
+    // The cascade is linear and halving is exact in floating point, so full scale
+    // gives exactly twice the half-scale output unless the clamp cut a sample.
+    // 33 Hz is the cascade's peak; the filters' onset overshoots its steady
+    // level by under 1e-4 for the first quarter second.
     let bass = preset("bassBoost").unwrap();
-    let (_c, mut processor) = configured(48_000.0, enabled(bass.gains_db, 0.0));
+    let (_c, mut full) = configured(48_000.0, enabled(bass.gains_db, 0.0));
+    let (_c, mut half) = configured(48_000.0, enabled(bass.gains_db, 0.0));
     for start in (0..48_000).step_by(BLOCK) {
-        let mut block = sine(start, BLOCK, 33.0, 48_000.0, 1.0);
-        processor.process(&mut block);
-        let peak = block.iter().fold(0.0f32, |peak, x| peak.max(x.abs()));
-        assert!(peak < 1.0, "clamped in the block at frame {start}");
+        let mut loud = sine(start, BLOCK, 33.0, 48_000.0, 1.0);
+        let mut quiet: Vec<f32> = loud.iter().map(|x| x / 2.0).collect();
+        full.process(&mut loud);
+        half.process(&mut quiet);
+        let doubled: Vec<f32> = quiet.iter().map(|x| x * 2.0).collect();
+        let cut = loud
+            .iter()
+            .zip(&doubled)
+            .fold(0.0f32, |cut, (a, b)| cut.max((a - b).abs()));
+        assert!(cut < 1e-4, "clamp cut {cut} at frame {start}");
+        if start >= 24_000 {
+            assert_eq!(loud, doubled, "clamped once settled, at frame {start}");
+        }
     }
 }
 
@@ -759,10 +787,18 @@ fn flat_stays_bit_transparent() {
 #[test]
 fn the_engine_takes_the_cascade_peak_off_the_user_preamp() {
     let bass = preset("bassBoost").unwrap();
-    let peak = grid_peak_db(&bass.gains_db, 48_000.0);
-    assert!(peak > 0.0, "Bass Boost peaks at {peak:.2} dB");
+    let peak = cascade_peak_db(&bass.gains_db, 48_000.0);
+    let grid = grid_peak_db(&bass.gains_db, 48_000.0);
+    assert!(
+        grid > 0.0 && peak >= grid && peak - grid < 0.05,
+        "Bass Boost peaks at {peak:.3} dB, {grid:.3} dB on the grid"
+    );
     let (control, mut processor) = configured(48_000.0, enabled(bass.gains_db, -6.0));
-    assert_eq!(control.settings().preamp_db, -6.0, "the user's preamp is kept");
+    assert_eq!(
+        control.settings().preamp_db,
+        -6.0,
+        "the user's preamp is kept"
+    );
     let at_1k: f64 = design_bands(&bass.gains_db, 48_000.0)
         .iter()
         .map(|b| response_db(b, 1000.0, 48_000.0))
@@ -796,11 +832,17 @@ fn toggling_bass_boost_on_a_steady_tone_never_steps_further_than_the_tone() {
         processor.process(&mut block);
         output.extend_from_slice(&block);
     }
-    let tone = largest_step(&input);
+    // Bass Boost is unity at 33 Hz after the headroom, so the equalized tone's
+    // steps equal the dry tone's up to one float32 rounding.
+    let tone = largest_step(&input) + f32::EPSILON;
     let worst = largest_step(&output);
     assert!(worst <= tone, "step {worst} against the tone's {tone}");
     let last = input.len() - 2 * BLOCK;
-    assert_eq!(output[last..], input[last..], "bypassed once the ramp is over");
+    assert_eq!(
+        output[last..],
+        input[last..],
+        "bypassed once the ramp is over"
+    );
 }
 
 proptest! {
