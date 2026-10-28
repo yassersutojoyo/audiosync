@@ -36,6 +36,8 @@
 pub mod auth;
 pub mod http;
 pub mod net;
+#[cfg(test)]
+mod never_panics;
 pub mod page;
 pub mod server;
 pub mod state;

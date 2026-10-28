@@ -1143,13 +1143,17 @@ fn static_route(request: &Request, path: &str) -> Answer {
 
 /// A path segment with its `%XX` escapes decoded (RFC 3986 §2.1); none
 /// when an escape is broken or the result isn't UTF-8.
-fn percent_decode(segment: &str) -> Option<String> {
+pub(crate) fn percent_decode(segment: &str) -> Option<String> {
     let bytes = segment.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' {
             let pair = segment.get(index + 1..index + 3)?;
+            // from_str_radix would also take "+F".
+            if !pair.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
             out.push(u8::from_str_radix(pair, 16).ok()?);
             index += 3;
         } else {
