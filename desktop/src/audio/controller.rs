@@ -157,6 +157,18 @@ const RESTART_TRIAL_POLLS: u32 = 10;
 const BRIEF_LOSS_POLLS: u32 =
     (BRIEF_LOSS_HOLD.as_millis() / super::outputs::POLL_PERIOD.as_millis()) as u32;
 
+/// A Bluetooth output that starts within this many polls (3 s) of its
+/// endpoint appearing in the list may play on a link still coming up, late
+/// by an amount its A2DP link never reports, so it is restarted once (S325).
+const FRESH_LINK_POLLS: u64 = 6;
+
+/// Polls from such a start to its restart's fade-out: 2 s.
+const FRESH_RESTART_POLLS: u32 = 4;
+
+/// Polls a restarted output rests between its old stream's release and its
+/// new start: 1 s.
+const FRESH_REST_POLLS: u32 = 2;
+
 /// How a running capture is doing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CaptureState {
@@ -482,6 +494,17 @@ struct Playing<R> {
     handle: R,
 }
 
+/// Where the one restart of an output that started on a new Bluetooth link
+/// stands (S325). Outside `Due` the output takes part as if it played.
+enum FreshRestart<R> {
+    /// Playing; polls left before it fades out.
+    Due(u32),
+    /// Fading out; its stream is released once the fade has played.
+    Fading { playing: Playing<R>, since: Instant },
+    /// Released; polls left before the output sync starts it again.
+    Resting(u32),
+}
+
 /// A running session's source, and for an input device the channel pair it
 /// captured, kept while a switch away from it starts.
 #[derive(Clone)]
@@ -625,6 +648,17 @@ pub struct Controller<D: Driver> {
     /// Sessions started so far, captures started again included: a
     /// calibration tells by it that its session went on.
     sessions_started: u64,
+    /// Polls so far, the clock of `appeared`.
+    polls: u64,
+    /// Whether a listing of the outputs ever worked: the endpoints of the
+    /// first are settled, so none of them is in `appeared`.
+    listed_once: bool,
+    /// The poll at which each endpoint listed after the first listing
+    /// appeared, until a start of its output uses it up (S325).
+    appeared: BTreeMap<String, u64>,
+    /// The outputs restarting once because their Bluetooth link was new
+    /// when they started (S325).
+    fresh_restarts: BTreeMap<String, FreshRestart<D::Renderer>>,
 }
 
 impl<D: Driver> Controller<D> {
@@ -673,6 +707,10 @@ impl<D: Driver> Controller<D> {
             calibration_solo: None,
             zone_volumes: ZoneVolumes::default(),
             sessions_started: 0,
+            polls: 0,
+            listed_once: false,
+            appeared: BTreeMap::new(),
+            fresh_restarts: BTreeMap::new(),
         }
     }
 
@@ -1097,6 +1135,17 @@ impl<D: Driver> Controller<D> {
                 .insert(endpoint.id.clone(), endpoint.name.clone());
         }
         self.listing_error = None;
+        if self.listed_once {
+            for endpoint in &listed {
+                if !self.present.iter().any(|known| known.id == endpoint.id) {
+                    self.appeared.insert(endpoint.id.clone(), self.polls);
+                }
+            }
+        }
+        // One that left is fresh again once it's back.
+        self.appeared
+            .retain(|id, _| listed.iter().any(|endpoint| endpoint.id == *id));
+        self.listed_once = true;
         self.present = listed;
         self.policy.set_listed(&self.present);
         self.listing_ok = true;
@@ -1150,6 +1199,7 @@ impl<D: Driver> Controller<D> {
     /// pass holds the window that long once at most; the outputs whose own
     /// start hung go last in the next pass.
     fn sync_outputs(&mut self) -> Vec<(String, BackendError)> {
+        self.cancel_stale_fresh_restarts();
         let Some(session) = self.session.as_mut() else {
             return Vec::new();
         };
@@ -1197,6 +1247,13 @@ impl<D: Driver> Controller<D> {
                 tries.get(&endpoint.id).is_some_and(|&wait| wait > 0)
             };
             if waits(&self.busy) || waits(&self.stalled) {
+                continue;
+            }
+            if self
+                .fresh_restarts
+                .get(&endpoint.id)
+                .is_some_and(|restart| !matches!(restart, FreshRestart::Due(_)))
+            {
                 continue;
             }
             // A start before it hung, which most likely means Windows audio
@@ -1266,6 +1323,23 @@ impl<D: Driver> Controller<D> {
                             control.extra_lead_frames(),
                         )
                     });
+                    // A new start replaces a restart still due, and uses up
+                    // its endpoint's appearance (S325).
+                    self.fresh_restarts.remove(&endpoint.id);
+                    let appeared = self.appeared.remove(&endpoint.id);
+                    if endpoint.kind == OutputKind::Bluetooth {
+                        let age = appeared.map(|poll| self.polls.saturating_sub(poll));
+                        let fresh = age.is_some_and(|age| age <= FRESH_LINK_POLLS);
+                        if fresh {
+                            self.fresh_restarts.insert(
+                                endpoint.id.clone(),
+                                FreshRestart::Due(FRESH_RESTART_POLLS),
+                            );
+                        }
+                        self.log.log(|| {
+                            describe_fresh_link(&label(&self.names, &endpoint.id), age, fresh)
+                        });
+                    }
                     session.outputs.insert(
                         endpoint.id.clone(),
                         Playing {
@@ -1437,6 +1511,118 @@ impl<D: Driver> Controller<D> {
         gone
     }
 
+    /// Moves each restart of an output on a new Bluetooth link a poll on
+    /// (S325): one due fades out, one whose fade has played (or that is
+    /// still fading after [`STOP_FADE_CAP`]) is released and rests, and one
+    /// rested is left to the output sync, which starts it again.
+    fn tick_fresh_restarts(&mut self) {
+        // First, so one whose rest ends as its device leaves is still lost.
+        self.cancel_stale_fresh_restarts();
+        let ids: Vec<String> = self.fresh_restarts.keys().cloned().collect();
+        for id in ids {
+            let Some(restart) = self.fresh_restarts.remove(&id) else {
+                continue;
+            };
+            let next = match restart {
+                FreshRestart::Due(polls) if polls > 1 => Some(FreshRestart::Due(polls - 1)),
+                FreshRestart::Due(_) => self.begin_fresh_restart(&id),
+                FreshRestart::Fading { playing, since } => {
+                    if playing.handle.is_faded()
+                        || playing.handle.has_ended()
+                        || since.elapsed() >= STOP_FADE_CAP
+                    {
+                        drop(playing);
+                        Some(FreshRestart::Resting(FRESH_REST_POLLS))
+                    } else {
+                        Some(FreshRestart::Fading { playing, since })
+                    }
+                }
+                FreshRestart::Resting(polls) if polls > 1 => Some(FreshRestart::Resting(polls - 1)),
+                FreshRestart::Resting(_) => None,
+            };
+            if let Some(next) = next {
+                self.fresh_restarts.insert(id, next);
+            }
+        }
+    }
+
+    /// Fades out output `id` for its restart, its start lead still counted
+    /// (S328), or cancels the restart when it no longer plays: its start
+    /// failed or stalled since (S68, S326, S331).
+    fn begin_fresh_restart(&mut self, id: &str) -> Option<FreshRestart<D::Renderer>> {
+        let session = self.session.as_mut()?;
+        let Some(mut playing) = session.outputs.remove(id) else {
+            self.log.log(|| {
+                format!(
+                    "output {}: its restart for a new Bluetooth link is cancelled: it stopped \
+                     before",
+                    label(&self.names, id)
+                )
+            });
+            return None;
+        };
+        keep_lead(&mut session.held_leads, id, &playing.control);
+        playing.handle.request_stop();
+        self.log.log(|| {
+            format!(
+                "output {} restarts: its Bluetooth link was new when it started",
+                label(&self.names, id)
+            )
+        });
+        Some(FreshRestart::Fading {
+            playing,
+            since: Instant::now(),
+        })
+    }
+
+    /// Cancels the restarts (S325) of the outputs switched off or no longer
+    /// listed. One fading goes on fading as a switched-off output does; one
+    /// out of its stream whose device left is lost.
+    fn cancel_stale_fresh_restarts(&mut self) {
+        let stale: Vec<(String, bool)> = self
+            .fresh_restarts
+            .keys()
+            .filter_map(|id| {
+                let enabled = self.policy.settings(id).enabled;
+                let listed = self.present.iter().any(|endpoint| endpoint.id == *id);
+                (!enabled || !listed).then(|| (id.clone(), enabled))
+            })
+            .collect();
+        for (id, enabled) in stale {
+            let out_of_stream = !matches!(self.fresh_restarts.get(&id), Some(FreshRestart::Due(_)));
+            self.cancel_fresh_restart(
+                &id,
+                if enabled {
+                    "its device isn't listed"
+                } else {
+                    "switched off"
+                },
+            );
+            if enabled && out_of_stream {
+                self.pending.push(BackendEvent::OutputLost { id });
+            }
+        }
+    }
+
+    fn cancel_fresh_restart(&mut self, id: &str, why: &str) {
+        let Some(restart) = self.fresh_restarts.remove(id) else {
+            return;
+        };
+        if let FreshRestart::Fading { playing, since } = restart {
+            self.retiring.push(Retiring {
+                outputs: vec![playing],
+                session: None,
+                since,
+            });
+        }
+        self.log.log(|| {
+            format!(
+                "output {}: its restart for a new Bluetooth link is cancelled: {why}",
+                label(&self.names, id)
+            )
+        });
+    }
+
     fn report_failures(&mut self, failures: Vec<(String, BackendError)>) {
         self.pending.extend(
             failures
@@ -1468,6 +1654,20 @@ impl<D: Driver> Controller<D> {
         let mut outputs: Vec<Playing<D::Renderer>> = outputs.into_values().collect();
         for playing in &mut outputs {
             playing.handle.request_stop();
+        }
+        // The session's end cancels every restart for a new Bluetooth link
+        // (S325); one fading fades on with the session's outputs.
+        for (id, restart) in std::mem::take(&mut self.fresh_restarts) {
+            if let FreshRestart::Fading { playing, .. } = restart {
+                outputs.push(playing);
+            }
+            self.log.log(|| {
+                format!(
+                    "output {}: its restart for a new Bluetooth link is cancelled: the session \
+                     ended",
+                    label(&self.names, &id)
+                )
+            });
         }
         if let Some(feed) = &self.feed {
             feed.request_fade_out();
@@ -2713,7 +2913,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
                     enabled: settings.enabled,
                     delay_ms: settings.delay_ms,
                     volume: settings.volume,
-                    playing: self.is_playing(&endpoint.id),
+                    // A restart for a new Bluetooth link is no pause (S325).
+                    playing: self.is_playing(&endpoint.id)
+                        || self
+                            .fresh_restarts
+                            .get(&endpoint.id)
+                            .is_some_and(|restart| !matches!(restart, FreshRestart::Due(_))),
                     device_volume: self.device_volumes.reading(&endpoint.id),
                 }
             })
@@ -3311,6 +3516,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn poll(&mut self) -> Vec<BackendEvent> {
+        self.polls += 1;
         // A busy or stalled output's next try comes a poll closer.
         // So does the end of a listed device's refusals.
         for wait in self
@@ -3467,6 +3673,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // device was still listed.
         ended.extend(self.stop_unlisted_outputs());
         ended.extend(self.forget_unlisted_unplayable());
+        self.tick_fresh_restarts();
         let failures = self.sync_outputs();
         self.release_held_leads(true);
         // An output that left or joined moves the others (S177).
@@ -3814,6 +4021,27 @@ fn describe_capture_start(
         "capture started: {}{airplay}",
         describe_capture(target, setup)
     )
+}
+
+/// What a Bluetooth output's start decided of its link (S325): `age` is the
+/// polls since its endpoint appeared, `None` for one listed at launch or
+/// whose appearance an earlier start used up.
+fn describe_fresh_link(output: &str, age: Option<u64>, fresh: bool) -> String {
+    let Some(age) = age else {
+        return format!("output {output}: it plays as is: its Bluetooth link isn't new");
+    };
+    let seconds = age as f64 * super::outputs::POLL_PERIOD.as_secs_f64();
+    if fresh {
+        format!(
+            "output {output}: its Bluetooth link came up {seconds:.1} s before this start; it \
+             restarts once 2 s from now"
+        )
+    } else {
+        format!(
+            "output {output}: it plays as is: its Bluetooth link came up {seconds:.1} s before \
+             this start"
+        )
+    }
 }
 
 /// The log line of an output that started: the output as [`label`] names
@@ -6041,6 +6269,191 @@ mod tests {
         );
         assert_eq!(playing(&backend), [SPEAKERS]);
         assert!(backend.policy().settings(HEADPHONES).enabled, "it stays on");
+    }
+
+    const BUDS: &str = "buds";
+
+    /// Lists Bluetooth earbuds after the first read and switches them on one
+    /// poll later, which starts them while a session runs.
+    fn fresh_buds(backend: &mut MockBackend) {
+        backend.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        backend.poll();
+        backend.poll();
+        backend.set_output_enabled(BUDS, true).unwrap();
+    }
+
+    fn starts_of(backend: &MockBackend, id: &str) -> usize {
+        backend
+            .driver()
+            .renderers_started()
+            .iter()
+            .filter(|started| *started == id)
+            .count()
+    }
+
+    // covers: S325
+    #[test]
+    fn a_bluetooth_output_that_starts_within_3_s_of_being_listed_restarts_once_2_s_later() {
+        let (mut backend, log, dir) = logged_backend("controller-fresh-link");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fresh_buds(&mut backend);
+        assert_eq!(starts_of(&backend, BUDS), 1);
+        poll_quietly(&mut backend, 3);
+        assert_eq!(backend.driver().renderers_faded(), 0, "not before 2 s");
+        poll_quietly(&mut backend, 1);
+        assert_eq!(
+            backend.driver().renderers_faded(),
+            1,
+            "it fades out 2 s after its start"
+        );
+        // The mock plays a fade at once; then it rests 1 s.
+        for _ in 0..2 {
+            poll_quietly(&mut backend, 1);
+            assert_eq!(starts_of(&backend, BUDS), 1, "it rests");
+        }
+        poll_quietly(&mut backend, 1);
+        assert_eq!(starts_of(&backend, BUDS), 2, "then starts again");
+        assert_eq!(playing(&backend), [BUDS, HEADPHONES, SPEAKERS]);
+        poll_quietly(&mut backend, 20);
+        assert_eq!(starts_of(&backend, BUDS), 2, "once");
+        assert_eq!(backend.driver().renderers_faded(), 1);
+        assert_eq!(
+            backend.driver().renderers_started().len(),
+            4,
+            "the others play on"
+        );
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "output \"Buds\" (buds) started: ",
+                "output \"Buds\" (buds): its Bluetooth link came up 0.5 s before this start; \
+                 it restarts once 2 s from now",
+                "output \"Buds\" (buds) restarts: its Bluetooth link was new when it started",
+                "output \"Buds\" (buds) started: ",
+                "output \"Buds\" (buds): it plays as is: its Bluetooth link isn't new",
+            ],
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S325
+    #[test]
+    fn a_bluetooth_output_listed_at_launch_or_after_4_s_starts_as_is() {
+        let mut at_launch = MockBackend::empty();
+        at_launch.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        at_launch.set_output_enabled(BUDS, true).unwrap();
+        at_launch.list_outputs().unwrap();
+        at_launch.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut at_launch, 20);
+        assert_eq!(at_launch.driver().renderers_started(), [BUDS]);
+        assert_eq!(at_launch.driver().renderers_faded(), 0);
+
+        let mut later = backend();
+        later.start(&SourceId::WholeSystem).unwrap();
+        later.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        later.poll();
+        poll_quietly(&mut later, 8);
+        later.set_output_enabled(BUDS, true).unwrap();
+        poll_quietly(&mut later, 20);
+        assert_eq!(starts_of(&later, BUDS), 1);
+        assert_eq!(later.driver().renderers_faded(), 0);
+    }
+
+    // covers: S325
+    #[test]
+    fn a_wired_output_that_just_appeared_starts_as_is() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.connect_output_as(USB_OUTPUT, "USB DAC", OutputKind::Usb);
+        backend.poll();
+        backend.poll();
+        backend.set_output_enabled(USB_OUTPUT, true).unwrap();
+        poll_quietly(&mut backend, 20);
+        assert_eq!(starts_of(&backend, USB_OUTPUT), 1);
+        assert_eq!(backend.driver().renderers_faded(), 0);
+    }
+
+    // covers: S325, S177
+    #[test]
+    fn a_fresh_link_restart_never_moves_another_outputs_hold_back() {
+        let mut backend = MockBackend::empty();
+        backend.connect_output_as(BUILT_IN, "Speakers", OutputKind::BuiltIn);
+        backend.connect_output_as(USB, "USB Speaker", OutputKind::Usb);
+        backend.set_output_enabled(BUILT_IN, true).unwrap();
+        backend.set_output_enabled(USB, true).unwrap();
+        backend.set_output_delay(USB, 150.0);
+        backend.set_output_delay(BUDS, -250.0);
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fresh_buds(&mut backend);
+        let others = |backend: &MockBackend| {
+            [BUILT_IN, USB].map(|id| {
+                (
+                    backend.policy().hold_back_ms(id),
+                    delay_frames(backend, id) / 48,
+                )
+            })
+        };
+        assert_eq!(others(&backend), [(250.0, 250), (400.0, 400)]);
+        for _ in 0..30 {
+            poll_quietly(&mut backend, 1);
+            assert_eq!(others(&backend), [(250.0, 250), (400.0, 400)]);
+        }
+        assert_eq!(starts_of(&backend, BUDS), 2, "it restarted");
+        assert_eq!(delay_frames(&backend, BUDS), 0);
+    }
+
+    // covers: S325
+    #[test]
+    fn switching_it_off_or_ending_the_session_cancels_the_restart() {
+        // Switched off before its restart, it stays off; on again, it plays
+        // as is.
+        let mut switched = backend();
+        switched.start(&SourceId::WholeSystem).unwrap();
+        fresh_buds(&mut switched);
+        poll_quietly(&mut switched, 2);
+        switched.set_output_enabled(BUDS, false).unwrap();
+        poll_quietly(&mut switched, 20);
+        assert_eq!(starts_of(&switched, BUDS), 1);
+        switched.set_output_enabled(BUDS, true).unwrap();
+        poll_quietly(&mut switched, 20);
+        assert_eq!(starts_of(&switched, BUDS), 2, "no restart");
+        assert_eq!(switched.driver().renderers_faded(), 1, "the switch-off");
+
+        // A session that ends while the restart's fade plays leaves nothing
+        // behind: the next session starts the output at once, as is.
+        let mut ended = backend();
+        ended.start(&SourceId::WholeSystem).unwrap();
+        fresh_buds(&mut ended);
+        poll_quietly(&mut ended, 4);
+        assert_eq!(ended.driver().renderers_faded(), 1, "the restart's fade");
+        ended.stop();
+        poll_quietly(&mut ended, 1);
+        ended.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(starts_of(&ended, BUDS), 2, "started with the session");
+        poll_quietly(&mut ended, 20);
+        assert_eq!(starts_of(&ended, BUDS), 2);
+    }
+
+    // covers: S325, S68
+    #[test]
+    fn an_output_whose_device_leaves_as_its_restart_rest_ends_is_lost() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fresh_buds(&mut backend);
+        // Fade out, release, then the first of its two polls of rest.
+        poll_quietly(&mut backend, 6);
+        assert_eq!(starts_of(&backend, BUDS), 1);
+        backend.disconnect_output(BUDS);
+        let events = backend.poll();
+        assert!(
+            events.contains(&BackendEvent::OutputLost {
+                id: BUDS.to_owned(),
+            }),
+            "{events:?}"
+        );
+        assert_eq!(starts_of(&backend, BUDS), 1);
+        assert!(backend.policy().settings(BUDS).enabled, "it stays on");
     }
 
     fn microphone(backend: &mut MockBackend) -> SourceId {
