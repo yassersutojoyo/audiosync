@@ -4,10 +4,10 @@
 HTML entities for it (&mdash;, &#8212;, &#x2014;) count too, and a text file
 in scope that isn't valid UTF-8 fails rather than being skipped unread.
 
-Scope is the tracked text people outside the project read: Markdown at the
-repository root, desktop/README.md, docs/*.md and everything under site/.
-docs/*_SPEC.md is left out because the specs quote test output verbatim.
-App strings, code and comments are out of scope.
+Scope is the tracked text people outside the project read: every Markdown
+file, everything under site/ and remote/page/, and the notices the Linux
+AppImage ships. docs/*_SPEC.md is left out because the specs quote test output
+verbatim. App strings, code and comments are out of scope.
 
 Usage:
     scripts/text_check.py              check every tracked file in scope
@@ -33,16 +33,12 @@ _HINT = "em dash; use a comma, colon, parentheses or two sentences"
 _SPEC = re.compile(r"docs/[^/]+_SPEC\.md")
 
 
+# Left out: desktop/src/windows_strings.txt (app text, tested in desktop/src/contrast.rs)
+# and brand/fonts/OFL.txt (the font's license, kept verbatim).
 def in_scope(path):
-    if path.startswith("site/"):
+    if path.startswith(("site/", "remote/page/")) or path == "desktop/linux/RUNTIME-NOTICES.txt":
         return True
-    if path == "desktop/README.md":
-        return True
-    if "/" not in path:
-        return path.endswith(".md")
-    if path.startswith("docs/") and path.count("/") == 1 and path.endswith(".md"):
-        return not _SPEC.fullmatch(path)
-    return False
+    return path.endswith(".md") and not _SPEC.fullmatch(path)
 
 
 def hits_in(text):
@@ -88,10 +84,15 @@ def self_test():
         "docs/DEVELOPMENT.md": True,
         "docs/ENGINE_SPEC.md": False,
         "docs/AIRPLAY_SPEC.md": False,
-        "docs/sub/NOTES.md": False,
+        "docs/sub/NOTES.md": True,
         "site/index.html": True,
         "site/icons/manifest.json": True,
-        "core/README.md": False,
+        "core/README.md": True,
+        "brand/README.md": True,
+        "remote/page/index.html": True,
+        "desktop/linux/RUNTIME-NOTICES.txt": True,
+        "desktop/src/windows_strings.txt": False,
+        "brand/fonts/OFL.txt": False,
         "Sources/AudioSync/Localization.swift": False,
         "notes.txt": False,
     }
@@ -118,7 +119,7 @@ def self_test():
         "site/icon.png": b"\x89PNG\xff\xfe",
         "docs/LATIN1.md": "caf\u00e9\n".encode("latin-1"),
         "docs/FINE.md": b"fine\n",
-        "core/README.md": EM_DASH.encode("utf-8"),
+        "core/src/lib.rs": EM_DASH.encode("utf-8"),
     }
     want = [("README.md", 2), ("site/index.html", 1), ("docs/LATIN1.md", 0)]
     with tempfile.TemporaryDirectory() as root:
