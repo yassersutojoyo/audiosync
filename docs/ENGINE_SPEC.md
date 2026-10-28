@@ -642,7 +642,7 @@ Check names as `Tests/run-tests.sh` prints them. Checks printed more than once a
 
 ### ring buffer
 
-Removed on 2026-10-19 with the Swift engine's ring (`Tests/ringtest.swift`). What it checked, the steady delay, the floor at one block, stalls, live delay changes, two readers, short gaps, drift both ways and the event counters, is the core's reader tests now: `core/src/reader.rs`, `core/tests/drift.rs` and `core/tests/reader_props.rs`, which name the clauses they cover (S41 to S59, S158, S159).
+Removed on 2026-10-19 with the Swift engine's ring (`Tests/ringtest.swift`). What it checked, the steady delay, the floor at one block, stalls, live delay changes, two readers, short gaps, drift both ways and the event counters, is the core's reader tests now: `core/src/reader.rs`, `core/tests/drift.rs` and `core/tests/reader_props.rs`, which name the clauses they cover (S41 to S59, S158, S159) and are listed under "Delay reader" below.
 
 ### logic
 
@@ -1484,7 +1484,7 @@ Removed on 2026-10-20 with the bundled engine: it ran a private engine whose onl
 
 ### Ring, resampler and volume: core (`cargo test` in `core/`)
 
-The core checks for the ring, the resampler, the output stage and the volume curve. The reader's own checks are under "ring buffer" above.
+The core checks for the ring, the resampler, the output stage and the volume curve. The reader's own checks are under "Delay reader" below.
 
 | Test | Clauses |
 |---|---|
@@ -1523,6 +1523,109 @@ The core checks for the ring, the resampler, the output stage and the volume cur
 | set_input_rate_resets_phase_and_history (`core/src/resample.rs`) | S94 |
 | non_finite_samples_pass_through_the_reader_unchanged (`core/src/reader.rs`) | S123 |
 | shared_types_are_send_and_sync (`core/tests/realtime.rs`) | S128 |
+| non_finite_samples_are_zeroed_at_the_output_stage (`core/src/convert.rs`) | S65, S123 |
+| channels_are_mapped_left_right_then_zeros (`core/src/convert.rs`) | S63, S65 |
+| gain_scales_every_frame_and_zero_is_exact_silence (`core/src/convert.rs`) | S64, S65 |
+| gain_crosses_the_boundary_a_buffer_at_a_time (`core/src/ffi.rs`) | S64, S65 |
+| equalizer_and_gain_paths_never_touch_the_heap (`core/src/ffi.rs`) | S126, S128, S130 |
+| every_real_time_call_of_the_c_interface_never_touches_the_heap (`core/src/ffi.rs`) | S126, S127, S128, S133 |
+| audio_threads_and_a_control_thread_share_handles_without_the_heap (`core/src/ffi.rs`) | S126, S128, S132, S133 |
+| a_resampler_through_the_c_interface_matches_the_rust_one (`core/src/ffi/render.rs`) | S16, S62, S85, S94 |
+| non_finite_input_becomes_silence_only_when_the_rates_differ (`core/src/ffi/render.rs`) | S85, S123, S125 |
+| the_output_stage_maps_channels_and_ramps_like_the_rust_one (`core/src/ffi/render.rs`) | S63, S64, S65 |
+| the_gain_stage_zeroes_silence_and_non_finite_values (`core/src/ffi/render.rs`) | S64, S65, S123 |
+| rings_are_created_within_their_limits (`core/src/ffi/ring.rs`) | S16, S36, S40 |
+| writes_count_frames_and_a_reset_clears_the_history (`core/src/ffi/ring.rs`) | S17, S37, S38, S39 |
+| handles_keep_the_ring_alive_in_any_destroy_order (`core/src/ffi/ring.rs`) | S128, S134 |
+| frame_counts_stay_within_two_over_any_run (`core/src/resample.rs`) | S85, S16 |
+| at_ratio_one_a_non_finite_sample_zeroes_what_was_still_to_play_and_the_rest_is_exact (`core/src/resample.rs`) | S85, S125 |
+| at_ratio_one_only_a_trimming_call_filters_and_the_copy_goes_on_at_the_new_delay (`core/src/resample.rs`) | S85, S206, S207 |
+| non_finite_input_resets_the_history_and_never_reaches_the_output (`core/src/resample.rs`) | S125, S123 |
+| one_writer_interleaved_stereo_fixed_capacity (`core/src/ring.rs`) | S35, S2 |
+| rings_are_sized_for_24_seconds (`core/src/ring.rs`) | S36, S16 |
+| reset_clears_history (`core/src/ring.rs`) | S39, S17 |
+| post_copy_check_rejects_a_copy_overtaken_by_the_writer (`core/src/ring.rs`) | S40, S37 |
+| samples_round_trip_bit_exactly_including_nan_payloads (`core/src/ring.rs`) | S135, S123 |
+| readable_frames_always_hold_their_own_index (`core/src/ring.rs`) | S35, S38, S40 |
+| concurrent_reads_never_see_torn_or_stale_frames (`core/src/ring.rs`) | S37, S40, S133, S135 |
+| ring_write_and_reader_read_do_not_allocate (`core/tests/realtime.rs`) | S126, S128, S127 |
+| resample_and_convert_do_not_allocate (`core/tests/realtime.rs`) | S126, S127 |
+| audio_path_modules_use_only_atomics (`core/tests/realtime.rs`) | S128, S126, S133 |
+| c_interface_audio_calls_use_only_atomics (`core/tests/realtime.rs`) | S126, S128 |
+| the_ring_is_reset_only_after_capture_stops_and_freed_after_its_last_reader (`core/tests/session_model.rs`) | S134, S39 |
+| negative_zero_counts_as_zero (`core/tests/volume.rs`) | S70, S76 |
+| host_volume_inputs_are_clamped_and_non_finite_ones_ignored (`core/tests/volume.rs`) | S76, S124 |
+| non_finite_values_never_reach_the_device (`core/tests/volume.rs`) | S65, S123 |
+| the_gain_stage_output_is_finite_and_bounded_by_the_gains (`core/tests/volume.rs`) | S64, S65 |
+
+### Delay reader: core (`cargo test` in `core/`)
+
+The checks for the delay reader (S41 to S59, S158, S159), in `core/src/reader.rs`, `core/src/ffi/ring.rs`, `core/tests/reader_props.rs`, `core/tests/drift.rs` and `core/tests/drift_hour.rs`.
+
+| Test | Clauses |
+|---|---|
+| a_reader_plays_every_frame_once_at_its_exact_delay (`core/src/ffi/ring.rs`) | S42, S44, S45, S49, S56, S158 |
+| delay_changes_through_the_c_interface_are_exact_and_never_repeat (`core/src/ffi/ring.rs`) | S46, S47, S48, S49, S158 |
+| an_empty_read_leaves_a_resync_or_a_prime_to_the_next_read (`core/src/ffi/ring.rs`) | S46, S56, S159 |
+| read_at_takes_the_delay_and_tolerance_from_the_caller (`core/src/ffi/ring.rs`) | S41, S50, S51, S52 |
+| a_reader_that_reaches_the_newest_frame_reports_starvation (`core/src/ffi/ring.rs`) | S53, S158 |
+| a_delay_change_on_a_dry_reader_waits_for_the_writer (`core/src/ffi/ring.rs`) | S46, S41, S158 |
+| reset_prime_starts_over_and_keeps_the_counters (`core/src/ffi/ring.rs`) | S159, S158 |
+| readers_of_one_ring_are_independent (`core/src/ffi/ring.rs`) | S9, S58 |
+| new_reader_anchors_at_exact_delay_with_history (`core/src/reader.rs`) | S41, S43, S44, S45 |
+| a_fresh_session_stays_silent_until_the_ring_holds_more_than_the_delay (`core/src/reader.rs`) | S45, S158 |
+| a_new_reader_primes_on_the_first_read_that_finds_more_than_de_written (`core/src/reader.rs`) | S45, S44, S56, S158 |
+| a_read_that_primes_uses_the_current_target_and_clears_the_resync_flag (`core/src/reader.rs`) | S45, S46, S158 |
+| delay_zero_is_floored_to_one_block_and_plays_near_live (`core/src/reader.rs`) | S42, S56, S44 |
+| steady_state_is_contiguous_with_any_block_size (`core/src/reader.rs`) | S44, S56, S59 |
+| two_second_delay_holds_for_the_last_frame_of_each_block (`core/src/reader.rs`) | S3, S42, S44, S56 |
+| change_to_500_ms_is_exact (`core/src/reader.rs`) | S46, S48 |
+| change_to_3000_ms_is_exact (`core/src/reader.rs`) | S46, S47 |
+| change_to_1820_ms_is_exact (`core/src/reader.rs`) | S3, S46, S48 |
+| change_to_0_ms_is_exact (`core/src/reader.rs`) | S42, S46, S48 |
+| increase_inserts_exactly_delta_silence_then_continues (`core/src/reader.rs`) | S47, S49, S46 |
+| decrease_is_applied_on_the_next_block (`core/src/reader.rs`) | S48, S46 |
+| up_then_down_lands_on_the_new_delay_without_replay (`core/src/reader.rs`) | S46, S47, S48, S49 |
+| a_change_while_the_writer_is_frozen_is_applied_by_the_next_read (`core/src/reader.rs`) | S46, S53, S54 |
+| a_change_on_a_dry_reader_waits_for_the_writer_then_lands_exactly (`core/src/reader.rs`) | S44, S46, S41, S49, S56, S158 |
+| a_long_change_on_a_dry_reader_lands_exactly_after_the_resume (`core/src/reader.rs`) | S46, S47, S52, S158 |
+| a_change_on_a_dry_reader_skips_ahead_when_more_than_de_arrives (`core/src/reader.rs`) | S46, S48 |
+| a_target_set_on_a_dry_reader_waits_and_the_newest_one_is_applied (`core/src/reader.rs`) | S46, S41, S133, S158 |
+| a_dry_reader_makes_no_correction_until_the_writer_writes_again (`core/src/reader.rs`) | S52, S53, S44, S54, S158 |
+| a_change_on_the_first_read_after_the_writer_stops_is_applied_at_once (`core/src/reader.rs`) | S46, S53 |
+| a_change_applied_during_a_stall_lands_short_by_the_stalled_reads (`core/src/reader.rs`) | S46, S52, S53 |
+| a_change_applied_during_a_stall_is_lost_once_the_reader_runs_dry (`core/src/reader.rs`) | S46, S52, S53, S54 |
+| nothing_is_corrected_inside_the_dead_band (`core/src/reader.rs`) | S50, S51 |
+| stall_resumes_after_the_last_frame_at_the_exact_delay (`core/src/reader.rs`) | S51, S49, S56 |
+| running_ahead_steps_back_with_masked_silence (`core/src/reader.rs`) | S52, S53, S49, S158 |
+| a_writer_stall_above_the_dead_band_holds_silence (`core/src/reader.rs`) | S53, S52, S49, S158 |
+| a_writer_stall_inside_the_dead_band_runs_dry_at_w (`core/src/reader.rs`) | S53, S49, S158 |
+| a_reader_holding_silence_resumes_with_the_first_frame_it_never_played (`core/src/reader.rs`) | S54, S49, S56 |
+| a_reader_that_ran_dry_plays_new_frames_as_they_arrive (`core/src/reader.rs`) | S54, S49 |
+| a_reader_far_behind_after_a_stall_skips_to_the_exact_delay (`core/src/reader.rs`) | S54, S51, S56 |
+| overrun_after_a_very_long_stall_skips_forward (`core/src/reader.rs`) | S55, S139, S49, S158 |
+| a_negative_p_early_in_a_session_is_never_an_overrun (`core/src/reader.rs`) | S44, S55, S158 |
+| a_copy_overtaken_by_the_writer_becomes_silence_and_skips_forward (`core/src/reader.rs`) | S40, S55, S184 |
+| a_writer_gap_shorter_than_t_leaves_a_residual_inside_the_dead_band (`core/src/reader.rs`) | S57, S50, S49 |
+| readers_are_independent (`core/src/reader.rs`) | S58, S9, S44 |
+| request_resync_reanchors_to_the_exact_delay (`core/src/reader.rs`) | S41, S46 |
+| a_replugged_output_never_replays_what_it_played_before (`core/src/reader.rs`) | S137, S45, S49 |
+| a_block_straddling_w_ends_in_silence_and_stops_at_w (`core/src/reader.rs`) | S44, S53 |
+| drift_after_a_stall_is_still_held (`core/src/reader.rs`) | S57, S50, S51, S52 |
+| a_delay_change_counts_one_resync_and_no_drift_correction (`core/src/reader.rs`) | S158, S46 |
+| a_delay_stored_before_its_resync_flag_waits_for_the_flag (`core/src/reader.rs`) | S158, S46, S133 |
+| a_lag_4488_frames_too_long_counts_one_skip_of_4488_frames (`core/src/reader.rs`) | S158, S51 |
+| starvation_counts_only_the_silence_after_w (`core/src/reader.rs`) | S158, S53 |
+| an_unanchored_read_asked_to_resync_counts_only_the_prime (`core/src/reader.rs`) | S158, S159 |
+| reset_prime_returns_the_reader_to_its_initial_state (`core/src/reader.rs`) | S159, S49, S45 |
+| after_a_prime_reset_p_only_feeds_the_lag_until_the_next_prime (`core/src/reader.rs`) | S159, S45, S56, S158 |
+| a_prime_reset_on_a_dry_reader_primes_at_once (`core/src/reader.rs`) | S159, S46, S53, S158 |
+| output_200_ppm_fast_for_two_hours (`core/tests/drift.rs`) | S57, S52, S49, S50 |
+| output_200_ppm_slow_for_two_hours (`core/tests/drift.rs`) | S57, S51, S49, S50 |
+| a_producer_stall_past_the_dead_band_costs_every_output_a_step_back_and_a_skip (`core/tests/drift_hour.rs`) | S51, S52, S53, S188 |
+| delay_changes_never_repeat_and_settle_exactly (`core/tests/reader_props.rs`) | S49, S46, S42, S44, S45, S47, S48, S53, S54, S58, S59, S40 |
+| a_fixed_delay_never_repeats_under_any_schedule (`core/tests/reader_props.rs`) | S49, S51, S52, S53, S55, S44, S45 |
+| readers_do_not_disturb_each_other (`core/tests/reader_props.rs`) | S58, S9 |
 
 ### Equalizer: core (`cargo test` in `core/`)
 
@@ -1546,6 +1649,18 @@ The core checks for the ring, the resampler, the output stage and the volume cur
 | a_saved_curve_keeps_its_gains_and_matches_after_the_presets (`core/tests/eq.rs`) | S270 |
 | saving_under_a_taken_name_replaces_that_curve_and_names_are_checked (`core/tests/eq.rs`) | S270 |
 | the_list_is_capped_and_stored_curves_are_cleaned_on_reading (`core/tests/eq.rs`) | S270 |
+| a_published_set_is_adopted_whole_while_the_control_thread_keeps_flipping (`core/src/eq.rs`) | S31, S130, S132, S133 |
+| the_control_side_never_rewrites_the_set_being_copied (`core/src/eq.rs`) | S31, S130 |
+| silence_after_boosted_bass_settles_to_an_all_zero_state (`core/src/eq.rs`) | S26, S127 |
+| an_equalizer_through_the_c_interface_matches_the_rust_one (`core/src/ffi.rs`) | S2, S26 |
+| the_c_interface_reports_non_finite_resets (`core/src/ffi.rs`) | S29, S131 |
+| each_channel_runs_its_own_cascade_in_float64_and_is_clamped (`core/tests/eq.rs`) | S2, S26 |
+| disabled_leaves_the_buffer_untouched (`core/tests/eq.rs`) | S27, S123 |
+| a_non_finite_cascade_output_resets_that_channel_and_silence_stays_silent (`core/tests/eq.rs`) | S29, S123, S131 |
+| the_rate_defaults_to_48_khz_and_a_change_recomputes_and_zeroes_state (`core/tests/eq.rs`) | S30, S140 |
+| a_block_is_equalized_once_in_place_and_both_consumers_get_the_same_samples (`core/tests/eq.rs`) | S7, S34 |
+| output_is_always_finite_and_within_full_scale (`core/tests/eq.rs`) | S123, S125 |
+| the_preset_table_matches_the_spec (`core/tests/spec_tables.rs`) | S22, S33 |
 
 ### Capture, sessions, speakers and notices: core (`cargo test` in `core/`)
 
@@ -1585,6 +1700,28 @@ The decisions the hosts take from the core: sources and capture, session start a
 | automation_notices_are_per_player_and_carry_their_pane (`core/tests/policy_speakers.rs`) | S153 |
 | the_same_rate_or_an_unreadable_one_keeps_playing (`core/tests/policy_capture.rs`) | S157 |
 | a_session_started_with_every_speaker_off_runs_until_its_last_speaker_goes (`core/tests/policy_session.rs`) | S162 |
+| capture_no_frames_from_an_unknown_source_is_waiting (`core/tests/policy_capture.rs`) | S17, S18 |
+| a_paused_or_unknown_source_never_blames_the_permission (`core/tests/policy_capture.rs`) | S18, S19 |
+| a_new_capture_rate_rebuilds_the_session_in_either_direction (`core/tests/policy_capture.rs`) | S157, S20, S140 |
+| a_capture_format_change_restarts_the_session_automatically (`core/tests/policy_session.rs`) | S20, S140 |
+| a_lost_device_stays_enabled_and_is_added_again_once_listed (`core/tests/policy_session.rs`) | S68, S137, S138 |
+| a_session_starts_only_with_a_speaker_enabled_then_runs_its_steps_in_order (`core/tests/policy_session.rs`) | S116, S162 |
+| switching_the_last_speaker_off_stops_the_session_and_deselects_airplay (`core/tests/policy_session.rs`) | S118, S144 |
+| a_click_on_a_waiting_speaker_turns_it_on_and_starts_streaming (`core/tests/policy_session.rs`) | S119, S122 |
+| output_sync_attaches_and_detaches_in_uid_order (`core/tests/policy_session.rs`) | S161, S117 |
+| an_unplugged_speaker_stays_on_and_is_attached_again_once_listed (`core/tests/policy_session.rs`) | S161, S68, S117, S137 |
+| a_headset_out_of_range_waits_while_the_other_speaker_plays (`core/tests/policy_session.rs`) | S161, S138 |
+| eight_local_speakers_are_attached_by_one_sync (`core/tests/policy_session.rs`) | S165, S161, S146 |
+| streaming_follows_the_enabled_sets_alone (`core/tests/policy_session.rs`) | S162, S118, S119, S144 |
+| streaming_keeps_running_while_the_only_speaker_is_unplugged (`core/tests/policy_session.rs`) | S162, S137 |
+| picking_a_source_switches_now_stores_it_or_does_nothing (`core/tests/policy_session.rs`) | S163, S141 |
+| output_sync_is_idempotent (`core/tests/policy_session.rs`) | S117, S161 |
+| virtual_aggregate_and_the_systems_airplay_output_are_hidden_by_default (`core/tests/policy_speakers.rs`) | S151, S145 |
+| names_sort_ignoring_case_with_numbers_in_order_and_ties_stable (`core/tests/policy_speakers.rs`) | S152, S147 |
+| a_built_in_output_and_sixteen_connected_speakers_are_all_listed (`core/tests/policy_speakers.rs`) | S165, S146, S152 |
+| long_names_that_differ_only_at_the_end_sort_whole_and_stay_unchanged (`core/tests/policy_speakers.rs`) | S166, S152, S147 |
+| delays_ring_indices_and_lag_count_capture_rate_frames (`core/tests/session_model.rs`) | S4, S62, S45 |
+| every_session_has_its_own_history_reader_positions_and_frame_count (`core/tests/session_model.rs`) | S5, S17, S39, S45 |
 
 ### Streaming start and stop: Windows (`cargo test` in `desktop/`)
 
@@ -1641,7 +1778,7 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | the_mac_migration_through_the_c_interface_matches_the_rust_one | S179 |
 | a_configured_delay_is_0_to_20000_ms_and_defaults_to_2000 (`core/tests/policy_delay.rs`) | S179 |
 | a_lost_output_keeps_its_offset_and_lead_for_10_s | S176, S208, S328 |
-| a_lost_output_listed_again_within_10_s_moves_no_hold_back | S177, S328 |
+| a_lost_output_listed_again_within_10_s_moves_no_hold_back | S328 |
 | a_lost_output_still_missing_after_10_s_retimes_once | S177, S328 |
 | switching_off_a_lost_output_retimes_at_once | S177, S328 |
 | a_late_speaker_switched_on_and_off_three_times_retimes_each_other_output_six_times (`core/tests/policy_local_delay.rs`) | S177 |
@@ -1649,6 +1786,9 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | a_lost_reference_retimes_at_once | S328 |
 | a_session_restart_clears_the_hold | S328 |
 | only_a_chosen_and_listed_airplay_speaker_counts (`core/tests/policy_delay.rs`) | S79 |
+| delay_inputs_are_sanitized (`core/src/ffi/sync.rs`) | S124, S178 |
+| non_finite_delay_input_is_ignored_and_other_input_clamped (`core/tests/policy_delay.rs`) | S124, S178 |
+| sanitized_delays_are_finite_and_in_range (`core/tests/policy_delay.rs`) | S124, S178 |
 
 ### local delay model: Windows (`cargo test` in `desktop/`)
 
@@ -1681,7 +1821,7 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | the_sync_hint_names_the_reference_and_says_which_way_to_move_a_value (`desktop/src/view.rs`) | S181 |
 | a_delay_that_is_not_a_signed_whole_number_applies_nothing_and_shows_the_stored_value (`desktop/src/view.rs`) | S181 |
 | a_paste_holding_anything_but_a_signed_whole_number_is_blocked_whole (`desktop/src/view.rs`) | S181 |
-| a_bluetooth_output_unlisted_for_one_poll_leaves_the_built_in_delay_unchanged (`desktop/src/audio/controller.rs`) | S177, S328 |
+| a_bluetooth_output_unlisted_for_one_poll_leaves_the_built_in_delay_unchanged (`desktop/src/audio/controller.rs`) | S328 |
 | a_bluetooth_output_still_unlisted_after_10_s_retimes_the_others_once (`desktop/src/audio/controller.rs`) | S328 |
 | a_lost_bluetooth_output_switched_off_retimes_the_others_at_once (`desktop/src/audio/controller.rs`) | S328 |
 | a_session_restart_counts_only_the_outputs_listed_then (`desktop/src/audio/controller.rs`) | S328 |
@@ -1723,6 +1863,8 @@ The checks for S182 to S191 in the Rust core, test functions with `// covers:` m
 | an_input_fade_leaves_the_callers_block_alone (`core/src/fade.rs`) | S189 |
 | fading_allocates_and_locks_nothing_on_the_audio_thread | S126, S127, S190 |
 | no_step_across_a_start_a_stop_or_a_delay_change_exceeds_the_ramps_slope | S191 |
+| a_renderer_through_the_c_interface_renders_like_the_rust_one (`core/src/ffi/render.rs`) | S183, S187 |
+| a_c_renderer_fades_in_publishes_its_fade_end_and_counts_as_faded_after_the_latency (`core/src/ffi/render.rs`) | S184, S185 |
 
 ### large delays: core (`cargo test` in `core/`)
 
@@ -1810,6 +1952,20 @@ The checks for S206 and S207 (`core/tests/render_start.rs`). The capture writes 
 | parts_of_one_block_count_together (`core/src/ring.rs`) | S38, S206 |
 | oversized_write_keeps_the_last_capacity_frames (`core/src/ring.rs`) | S38 |
 | resampled_frame_counts_keep_pace_with_the_input (`core/src/ffi/render.rs`) | S85 |
+| the_floor_forms_over_300_ms_of_callbacks_and_nothing_counts_as_late_before (`core/src/render.rs`) | S208, S209 |
+| what_pays_toward_the_anchor_floors_fall_keeps_the_fill_the_trim_measures (`core/src/render.rs`) | S206, S207, S209 |
+| with_stamps_a_fast_speaker_clock_is_trimmed_within_a_millisecond_all_hour (`core/tests/drift_hour.rs`) | S226, S207, S50 |
+| every_anchor_of_a_late_output_lands_on_the_same_delay (`core/tests/render_jitter.rs`) | S208, S209 |
+| a_clock_that_really_drifts_is_still_corrected_under_the_same_callbacks (`core/tests/render_wander.rs`) | S207, S209 |
+| every_case_of_the_matrix_holds_every_invariant (`core/tests/timing_matrix.rs`) | S50, S206, S207, S208, S209 |
+| the_capture_rate_output_that_sets_the_lead_never_runs_dry_through_its_wander (`core/tests/timing_matrix.rs`) | S85, S206, S209 |
+| a_late_second_callback_neither_corrects_drift_nor_moves_the_output_in_a_mac_case (`core/tests/timing_matrix.rs`) | S207, S208, S209 |
+| a_device_whose_first_callbacks_are_late_comes_down_within_2_s_and_moves_no_output (`core/tests/timing_matrix.rs`) | S208, S209, S318 |
+| every_windows_case_holds_every_invariant (`core/tests/timing_matrix.rs`) | S85, S206, S207, S208 |
+| every_output_of_every_mix_holds_every_invariant (`core/tests/timing_matrix.rs`) | S50, S206, S207, S208, S209 |
+| the_random_draws_that_failed_hold_every_invariant (`core/tests/timing_matrix.rs`) | S206, S207, S209 |
+| a_bluetooth_output_that_sets_the_lead_gains_a_block_of_slack_and_the_others_follow (`core/tests/timing_matrix.rs`) | S208, S229, S230 |
+| a_48_khz_output_that_does_not_convert_on_a_fast_clock_never_runs_dry (`core/tests/timing_matrix.rs`) | S85, S206, S207 |
 
 ### render start: Windows (`cargo test` in `desktop/`)
 
@@ -1838,6 +1994,7 @@ The checks for S196, S197 and S201 in the Rust core, test functions with `// cov
 | a_reading_logs_only_when_its_decision_changes | S201 |
 | a_log_line_only_when_the_decision_changes (`core/src/ffi/device_volume.rs`) | S201 |
 | every_decision_has_the_name_the_core_logs (`core/src/ffi/device_volume.rs`) | S201 |
+| the_decision_crosses_the_boundary_as_the_core_makes_it (`core/src/ffi/device_volume.rs`) | S196, S197 |
 
 ### device volume: Windows (`cargo test` in `desktop/`)
 
@@ -1856,10 +2013,13 @@ The Windows checks for S192 to S202 (`desktop/src/audio/controller/device_volume
 | reads_the_default_outputs_volume_and_mute (`desktop/src/audio/wasapi/volume.rs`) | S194 |
 | an_endpoint_volume_notification_updates_the_row | S195, S202 |
 | the_hint_and_the_fix_name_the_output_for_narrator | S199, S200 |
-| the_flyout_row_shows_the_glyph_and_the_hint_in_its_description | S198, S199 |
+| the_flyout_row_shows_the_glyph_and_the_hint_in_its_description | S198 |
 | the_device_volume_percent_reads_n_percent_without_a_space_in_every_locale (`desktop/src/view.rs`) | S199 |
 | a_volume_change_logs_only_when_its_decision_changes | S201 |
 | the_fix_keeps_the_keyboard_focus_in_the_row (`desktop/src/contrast.rs`) | S198 |
+| an_output_replugged_between_two_listings_is_followed_again (`desktop/src/audio/controller/device_volume.rs`) | S195, S202 |
+| an_output_whose_volume_listener_doesnt_answer_shows_no_device_volume_until_a_later_try (`desktop/src/audio/controller/device_volume.rs`) | S195, S202 |
+| a_device_volume_read_that_doesnt_answer_shows_none_until_a_later_try (`desktop/src/audio/controller/device_volume.rs`) | S195, S202 |
 
 Outside these suites, `cargo test real_endpoint_volumes -- --ignored --nocapture` in `desktop/` reads the PC's own endpoint volumes and registers and unregisters a listener on each, changing nothing (S194, S195).
 
@@ -1898,6 +2058,8 @@ The checks for S227 in the Rust core, test functions with `// covers:` markers (
 | the_same_quit_reported_twice_acts_once | S227 |
 | picking_a_source_forgets_the_switch | S227 |
 | bad_arguments_never_switch (`core/src/ffi/source_quit.rs`) | S227 |
+| the_decision_crosses_the_boundary_as_the_core_makes_it (`core/src/ffi/source_quit.rs`) | S142, S164, S227 |
+| only_the_source_apps_own_quit_ends_the_session (`core/tests/policy_capture.rs`) | S164, S142 |
 
 ### calibration: core (`cargo test` in `core/`)
 
@@ -1955,6 +2117,8 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | an_ignored_file_others_may_read_still_reports_it_was_tightened (`core/tests/airplay_pairings.rs`) | S224 |
 | a_symbolic_link_in_the_files_place_is_not_followed (`core/tests/airplay_pairings.rs`) | S224 |
 | a_file_another_account_owns_is_reported_unread (`core/tests/airplay_pairings.rs`) | S224 |
+| a_speaker_asking_every_time_saved_on_with_stored_credentials_stays_on_at_a_launch (`desktop/src/adapter.rs`) | S222, S223 |
+| a_speaker_saved_on_that_now_asks_for_a_pin_goes_off_with_a_notice_at_a_launch (`desktop/src/adapter.rs`) | S222, S223 |
 
 ### The observer: core and Windows (`cargo test` in `core/` and `desktop/`)
 
@@ -1965,6 +2129,8 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | a_jump_in_the_output_times_counts_once_and_jitter_below_a_millisecond_never (`core/tests/observer.rs`) | S229 |
 | a_10_ms_zero_hole_inside_a_tone_is_one_hole (`desktop/src/audio/capture.rs`) | S229 |
 | a_mix_marks_frames_whose_every_lane_gave_flagged_or_filled_silence (`desktop/src/audio/mix.rs`) | S229 |
+| an_output_on_a_fast_clock_without_stamps_shows_its_shortages_as_slack_below_zero (`core/tests/observer.rs`) | S206, S229 |
+| callbacks_earlier_than_at_the_anchor_show_as_the_floors_drop (`core/tests/observer.rs`) | S209, S229 |
 
 ### Calibrate All Speakers: core and Windows (`cargo test` in `core/` and `desktop/`)
 
@@ -2023,6 +2189,11 @@ The checks for S235 to S241 in the Rust core (`core/tests/calibrate_all.rs`, syn
 | calibrate_zone_is_offered_for_a_zone_with_a_member_here (`desktop/src/view.rs`) | S255 |
 | the_calibrate_all_card_of_a_zone_run_names_the_zone (`desktop/src/view.rs`) | S255 |
 | a_zone_run_is_ticked_once_it_starts (`desktop/src/view.rs`) | S255 |
+| a_searching_cast_speaker_and_missing_values_cross_the_boundary (`core/src/ffi/calibrate_all.rs`) | S235, S237, S238, S239 |
+| speakers_without_a_stored_delay_apply_from_their_default_and_undo_to_none (`core/tests/calibrate_all.rs`) | S237, S238 |
+| without_a_certain_airplay_row_only_the_other_speakers_change (`core/tests/calibrate_all.rs`) | S237, S238 |
+| an_ended_sheet_takes_no_row_from_another_sheet (`core/tests/calibrate_all.rs`) | S239, S240 |
+| a_silenced_speaker_going_or_an_off_member_turning_on_ends_a_zone_run (`desktop/src/audio/calibrate_all.rs`) | S240, S255 |
 
 ### Every app except some: Windows (`cargo test` in `desktop/`)
 
@@ -2096,7 +2267,7 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | a_speaker_whose_reads_stopped_is_not_asked_again | S271 |
 | a_new_session_asks_a_speaker_whose_reads_stopped_again | S271 |
 | a_reading_maps_linearly_onto_0_to_100 (core) | S289 |
-| the_row_shows_the_device_level_rounded_down | S289, S290 |
+| the_row_shows_the_device_level_rounded_down | S290 |
 | a_row_move_sends_the_row_and_stores_the_row_over_k | S290 |
 | the_master_and_the_zone_are_no_ceiling_for_a_row_move (core) | S290 |
 | with_k_at_0_a_row_move_sends_nothing (core) | S290 |
@@ -2126,6 +2297,19 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | an_absent_members_last_listed_name_survives_a_reload | S286 |
 | a_members_name_follows_it_and_leaves_with_it | S286 |
 | an_absent_zone_member_keeps_its_last_name_after_a_relaunch | S286 |
+| a_zoned_gain_crosses_the_boundary_as_the_core_makes_it (`core/src/ffi.rs`) | S71, S249 |
+| k1_at_master_63_the_row_and_the_television_agree_both_ways (`core/src/ffi/airplay.rs`) | S290, S291 |
+| the_s290_vector_cases_land_on_the_television (`core/src/ffi/airplay.rs`) | S290, S291, S276, S271 |
+| k1_keep_a_row_at_40_comes_back_at_40_after_a_restart (`core/src/ffi/airplay.rs`) | S290, S291 |
+| the_zoned_cast_levels_cross_the_boundary_as_the_sender_makes_them (`core/src/ffi/cast.rs`) | S249, S250 |
+| only_this_speaker_between_cast_members_never_stops_streaming (`desktop/src/adapter.rs`) | S162, S246 |
+| a_takeover_after_a_recall_keeps_its_notice_so_the_next_recall_sees_it_busy (`desktop/src/adapter.rs`) | S246, S252, S266 |
+| a_device_volume_or_mute_from_the_remote_moves_the_own_volume_and_is_sent (`desktop/src/audio/airplay.rs`) | S276, S277 |
+| a_slider_set_with_no_release_stops_holding_the_row_once_idle (`desktop/src/audio/airplay.rs`) | S271, S291 |
+| a_slider_moved_at_master_0_keeps_holding_the_row (`desktop/src/audio/airplay.rs`) | S271, S290 |
+| the_echo_of_a_level_held_at_k_0_changes_nothing (`desktop/src/audio/airplay.rs`) | S271, S276, S290 |
+| a_zone_with_an_unreadable_volume_member_or_name_keeps_the_rest (`desktop/src/settings.rs`) | S245, S212 |
+| zone_member_rows_say_why_they_dont_play (`desktop/src/view.rs`) | S246, S247 |
 
 ### Remote commands from AirPlay speakers: core and hosts (`cargo test` in `core/` and `desktop/`, the Mac logic suite)
 
@@ -2188,6 +2372,8 @@ The checks for S251 to S254 in the Rust core (`core/tests/policy_presets.rs`, `c
 | recall_leaves_delays_offsets_and_zone_members_untouched | S252 |
 | a_recalled_preset_is_current | S252, S253 |
 | a_recalled_zone_volume_reaches_the_playing_members (`desktop/src/adapter.rs`) | S252 |
+| save_and_update_capture_what_plays_and_need_a_speaker_on (`desktop/src/adapter.rs`) | S251, S262 |
+| a_hidden_speaker_is_never_saved_and_a_recall_names_it_hidden (`desktop/src/adapter.rs`) | S251, S265 |
 
 ### Speaker presets in the Windows app: Windows (`cargo test` in `desktop/`)
 
@@ -2209,6 +2395,12 @@ The checks for S251 to S254 in the Rust core (`core/tests/policy_presets.rs`, `c
 | the_menu_key_and_shift_f10_open_a_preset_rows_menu (`desktop/src/view.rs`) | S267 |
 | the_preset_controls_use_tokens_and_reach_the_keyboard (`desktop/src/contrast.rs`) | S268 |
 | the_preset_texts_come_from_strings (`desktop/src/view.rs`) | S269 |
+| deleting_the_preset_takes_its_notice_down_and_a_full_recall_clears_it (`desktop/src/adapter.rs`) | S262, S265 |
+| a_member_that_fails_to_start_after_a_recall_goes_into_the_preset_notice (`desktop/src/adapter.rs`) | S265, S266 |
+| the_presets_card_and_the_flyout_list_the_presets_and_mark_the_current_one (`desktop/src/view.rs`) | S259, S260, S263, S264 |
+| ctrl_and_a_digit_recalls_the_preset_in_that_place_in_every_window (`desktop/src/view.rs`) | S261, S266 |
+| a_recall_from_the_flyout_opens_nothing_and_leaves_the_flyout_as_it_is (`desktop/src/view.rs`) | S260, S266 |
+| save_rename_update_and_delete_ask_nothing_and_say_what_they_did (`desktop/src/view.rs`) | S261, S262, S269 |
 
 ### Web remote zones, presets and calibrating: remote crate, Windows and Mac (`cargo test` in `remote/` and `desktop/`, the logic suite)
 
@@ -2233,7 +2425,7 @@ The checks for S256 to S258, S287 and S288 in the remote crate (`remote/src/stat
 | the_snapshot_lists_zones_with_the_listed_members_and_the_presets | S256, S253 |
 | zone_and_preset_commands_map_to_the_windows_actions | S257 |
 | the_host_refuses_a_command_that_arrives_during_a_run | S258 |
-| phone_zone_and_preset_commands_apply_without_showing_the_main_window | S257, S120 |
+| phone_zone_and_preset_commands_apply_without_showing_the_main_window | S257, S266 |
 | a_phone_zone_toggle_or_recall_leaves_a_code_asking_member_off_and_opens_no_pin_dialog | S257 |
 | a_phone_zone_click_or_recall_leaves_a_code_asking_member_off_with_a_notice | S257 |
 | web remote: a zone lists its listed members in zone order with on, total and waiting; a hidden one doesn't count | S256 |
@@ -2249,6 +2441,7 @@ The checks for S256 to S258, S287 and S288 in the remote crate (`remote/src/stat
 | the_debug_switch_starts_the_remote_only_with_the_debug_log | S288 |
 | the_debug_switch_starts_the_remote_for_this_run_and_saves_nothing | S288 |
 | web remote: the debug switch starts it for one run on the saved or given port, only with the debug log | S288 |
+| a_phone_recall_posts_the_preset_notice_but_not_for_a_member_kept_off (`desktop/src/adapter.rs`) | S257, S265 |
 
 ### Receiver latency: AirPlay crate, core, Windows and Mac (`cargo test` in `airplay/`, `core/` and `desktop/`, the logic suite)
 
@@ -2448,6 +2641,8 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 | a_disk_full_copy_deletes_every_partial_file | S302 |
 | a_manual_check_with_nothing_newer_says_the_running_version_is_the_latest | S296, S305 |
 | a_failed_install_reports_and_try_again_retries | S302, S306 |
+| an_infected_error_at_any_swap_step_undoes_the_swap_and_offers_the_release_page | S302, S315, S316 |
+| an_old_exe_marked_from_the_web_is_swapped_and_the_new_one_is_unmarked | S301, S304, S307, S315 |
 | update_checks_are_on_by_default_and_keep_their_time (and a record of a blocked version, kept and read back) | S305, S316 |
 | a_manual_check_says_it_is_checking_until_the_answer_replaces_it (`desktop/src/updater/mod.rs`) | S305 |
 | a_new_exe_that_exits_or_never_signals_is_ended_and_the_bak_restored (a stand-in exe that exits at once, and one that sleeps past a shortened wait; the old process keeps streaming throughout) | S303, S314, S316 |
@@ -2514,6 +2709,9 @@ The release side:
 | two_stray_early_stamps_move_no_output_by_more_than_2_ms (`core/tests/timing_matrix.rs`) | S209 |
 | a_windows_wake_that_comes_after_the_buffer_ran_dry_moves_no_output_and_corrects_no_drift (`core/tests/timing_matrix.rs`) | S207, S324 |
 | a_windows_endpoint_whose_wakes_jitter_by_up_to_3_ms_makes_no_start_step (`core/tests/render_start.rs`) | S324 |
+| a_late_start_inside_the_window_is_made_up_in_one_step (`core/src/render.rs`) | S317, S318 |
+| no_start_step_after_the_window_or_once_a_stop_began (`core/src/render.rs`) | S317, S319 |
+| a_resync_while_the_anchor_floor_falls_after_a_late_start_lands_on_its_delay (`core/src/render.rs`) | S209, S319 |
 
 ### Pro Audio threads, stalled outputs, capture loss, format changes, busy inputs and unwatched apps: Windows (`cargo test` in `desktop/`)
 
@@ -2538,7 +2736,7 @@ The release side:
 | an_unwatched_app_streams_on_while_it_runs_and_is_checked_every_two_seconds (`desktop/src/audio/controller.rs`) | S327 |
 | only_a_single_app_that_refused_a_watch_is_checked (`desktop/src/audio/controller.rs`) | S327 |
 | an_unwatched_app_whose_process_id_another_app_took_counts_as_quit_without_a_start_time (`desktop/src/audio/controller.rs`) | S327 |
-| an_unwatched_app_that_restarts_gets_the_same_quit_handling_as_a_watched_one (`desktop/src/audio/controller.rs`) | S227, S327 |
+| an_unwatched_app_that_restarts_gets_the_same_quit_handling_as_a_watched_one (`desktop/src/audio/controller.rs`) | S327 |
 | a_capture_lost_after_a_resume_keeps_trying_until_60_s_after_it (`desktop/src/audio/controller.rs`) | S332 |
 | a_capture_still_failing_60_s_after_a_resume_stops_as_before (`desktop/src/audio/controller.rs`) | S21, S329, S332 |
 | a_capture_lost_as_the_resume_window_ends_gets_the_usual_tries (`desktop/src/audio/controller.rs`) | S329, S332 |
@@ -2571,6 +2769,8 @@ The release side:
 | a_busy_capture_is_told_free_when_streaming_stops (`desktop/src/audio/controller.rs`) | S333 |
 | a_lost_capture_whose_input_is_busy_shows_the_capture_notice_until_it_runs (`desktop/src/adapter.rs`) | S333 |
 | an_input_whose_device_went_away_is_gone_at_initialize (`desktop/src/audio/wasapi/loopback.rs`) | S333 |
+| an_output_whose_device_leaves_as_its_restart_rest_ends_is_lost (`desktop/src/audio/controller.rs`) | S325, S68 |
+| a_busy_input_that_goes_away_gets_the_usual_tries (`desktop/src/audio/controller.rs`) | S333, S329 |
 
 ## 19. Windows updater
 

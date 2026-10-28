@@ -8514,7 +8514,7 @@ mod tests {
         assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
     }
 
-    // covers: S244
+    // covers: S244, S176, S177
     #[test]
     fn live_input_waits_for_an_airplay_speaker_like_any_source() {
         let (mut backend, fake, kitchen) = local_delay_with_airplay();
@@ -8542,7 +8542,7 @@ mod tests {
             .collect()
     }
 
-    // covers: S244
+    // covers: S244, S176, S177
     #[test]
     fn live_input_waits_for_a_cast_speaker_and_a_source_switch_re_times_nothing() {
         use crate::audio::cast::tests::{FakeCast, KITCHEN};

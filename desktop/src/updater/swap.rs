@@ -368,7 +368,7 @@ mod tests {
         assert!(log.iter().all(|(_, code)| *code == 0), "{log:?}");
     }
 
-    // covers: S301
+    // covers: S301, S302
     #[test]
     fn a_leftover_new_is_deleted_before_the_exclusive_create() {
         let (dir, exe, _) = install("leftover-new");
