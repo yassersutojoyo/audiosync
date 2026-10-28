@@ -6076,6 +6076,8 @@ mod tests {
             ..EqSettings::default()
         });
         let raised = 0.25 * 10f32.powf(6.0 / 20.0);
+        // Past the 10 ms on ramp (S28).
+        adapter.audio_mut().feed_capture_level(480, 0.25);
         let fed = adapter.audio_mut().feed_capture_level(4, 0.25);
         assert!(fed.iter().all(|s| (s - raised).abs() < 1e-4), "{fed:?}");
 
@@ -7205,6 +7207,8 @@ mod tests {
         assert_eq!(adapter.snapshot().equalizer.preamp_db, 6.0);
         turn_on(&mut adapter, SPEAKERS);
         let raised = 0.25 * 10f32.powf(6.0 / 20.0);
+        // Past the 10 ms on ramp (S28).
+        adapter.audio_mut().feed_capture_level(480, 0.25);
         let fed = adapter.audio_mut().feed_capture_level(4, 0.25);
         assert!(fed.iter().all(|s| (s - raised).abs() < 1e-4), "{fed:?}");
     }
