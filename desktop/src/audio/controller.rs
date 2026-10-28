@@ -488,9 +488,6 @@ struct CaptureReopen {
     /// When a try first found the input held by another app; busy answers
     /// take no try (S333).
     busy_since: Option<Instant>,
-    /// Whether it was tried in a resume window (S332): a try that fails
-    /// once the window has ended stops streaming.
-    after_resume: bool,
 }
 
 /// Where the PC is in a sleep (S332).
@@ -499,8 +496,10 @@ struct PowerState {
     /// The wall time of the poll that took a suspend notice, until the
     /// resume.
     suspended: Option<SystemTime>,
-    /// The wall time of the last poll.
-    last_poll: Option<SystemTime>,
+    /// The wall time at which the last poll, or the last pass over the
+    /// outputs, ended: starts that don't answer hold those for seconds,
+    /// which mustn't look like a sleep.
+    awake: Option<SystemTime>,
     /// Polls left in the resume window; 0 outside one.
     window: u32,
 }
@@ -1432,6 +1431,7 @@ impl<D: Driver> Controller<D> {
                 failures.push((endpoint.id, error));
             }
         }
+        self.power.awake = Some(self.driver.wall_clock());
         failures
     }
 
@@ -1969,9 +1969,8 @@ impl<D: Driver> Controller<D> {
         let now = self.driver.wall_clock();
         let gap = self
             .power
-            .last_poll
+            .awake
             .and_then(|last| now.duration_since(last).ok());
-        self.power.last_poll = Some(now);
         let mut found = None;
         for notice in self.driver.power_notices() {
             match notice {
@@ -2023,18 +2022,19 @@ impl<D: Driver> Controller<D> {
     /// The PC woke, as `found` showed, at wall time `now`, `gap` after the
     /// poll before (S332).
     fn resume(&mut self, found: ResumeFound, now: SystemTime, gap: Option<Duration>) {
+        // A suspend taken in this same poll slept for the gap.
         let asleep = self
             .power
             .suspended
             .take()
             .and_then(|since| now.duration_since(since).ok())
+            .filter(|span| !span.is_zero())
             .or(gap)
             .unwrap_or_default();
         self.power.window = RESUME_WINDOW_POLLS;
         if let Some(session) = self.session.as_mut() {
             if let Some(reopen) = session.reopen.as_mut() {
                 reopen.wait = reopen.wait.min(RESTART_DELAY_POLLS);
-                reopen.after_resume = true;
             }
             if let Some(app) = session.unwatched.as_mut() {
                 app.checked = Some(Instant::now());
@@ -2072,7 +2072,6 @@ impl<D: Driver> Controller<D> {
             wait: RESTART_DELAY_POLLS,
             tries_left: RESTART_TRIES - 1,
             busy_since: None,
-            after_resume: self.power.window > 0,
         });
         self.log.log(|| {
             "the capture was lost: Windows audio restarted or its device went away; it opens \
@@ -2110,7 +2109,6 @@ impl<D: Driver> Controller<D> {
         }
         let tries_left = reopen.tries_left;
         let busy_since = reopen.busy_since;
-        let after_resume = reopen.after_resume || in_window;
         let source = session.source.clone();
         let ring = Arc::clone(&session.ring);
         let started_as = session.started_as;
@@ -2184,7 +2182,6 @@ impl<D: Driver> Controller<D> {
                         wait: BUSY_RETRY_POLLS,
                         tries_left,
                         busy_since: Some(busy_since.unwrap_or_else(Instant::now)),
-                        after_resume,
                     });
                 }
             }
@@ -2205,7 +2202,6 @@ impl<D: Driver> Controller<D> {
                         wait: RESTART_DELAY_POLLS,
                         tries_left,
                         busy_since,
-                        after_resume,
                     });
                 }
             }
@@ -2221,13 +2217,10 @@ impl<D: Driver> Controller<D> {
                         wait: STALL_RETRY_POLLS,
                         tries_left,
                         busy_since,
-                        after_resume,
                     });
                 }
             }
-            Err(error)
-                if !after_resume && tries_left > 0 && (writer_held || may_start_later(&error)) =>
-            {
+            Err(error) if tries_left > 0 && (writer_held || may_start_later(&error)) => {
                 self.log.log(|| {
                     if writer_held {
                         "the capture couldn't open again yet: the lost capture still holds the \
@@ -2245,7 +2238,6 @@ impl<D: Driver> Controller<D> {
                         wait: RESTART_DELAY_POLLS,
                         tries_left: tries_left - 1,
                         busy_since,
-                        after_resume,
                     });
                 }
             }
@@ -3700,6 +3692,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.check_routing_if_due(now);
         self.follow_mix_apps(now);
         self.log_status_if_due(now);
+        self.power.awake = Some(self.driver.wall_clock());
         let events = std::mem::take(&mut self.pending);
         // A device volume that changed is logged when its decision changes
         // (S201), so its event isn't.
@@ -6267,10 +6260,11 @@ mod tests {
         backend.refuse_captures(Some(BackendError::DeviceGone));
         poll_quietly(&mut backend, polls_in(60) - 1);
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
-        // The first try that fails once the window has ended stops streaming
-        // with the notice of a capture that couldn't start.
+        // Once the window has ended, the tries of S329 it had left when it
+        // was lost follow, and the last stops streaming with the notice of a
+        // capture that couldn't start.
         let mut events = Vec::new();
-        for _ in 0..2 * RESTART_DELAY_POLLS {
+        for _ in 0..RESTART_TRIES * RESTART_DELAY_POLLS {
             events.extend(backend.poll());
         }
         assert_eq!(
@@ -6328,10 +6322,14 @@ mod tests {
             &logged(&log, &dir),
             &["the PC woke after 11 s asleep, as the clock showed"],
         );
+    }
 
+    // covers: S332
+    #[test]
+    fn a_suspend_that_polls_go_on_after_for_10_s_ends_as_a_resume() {
         // A suspend notice with polls going on after it for 10 s ends as a
         // resume too, so a capture lost meanwhile isn't left waiting.
-        let mut suspended = self::backend();
+        let mut suspended = backend();
         suspended.start(&SourceId::WholeSystem).unwrap();
         suspended.notify_power(PowerNotice::Suspend);
         suspended.fail_capture(BackendError::DeviceGone);
