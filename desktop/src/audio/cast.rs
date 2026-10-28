@@ -2807,6 +2807,28 @@ pub mod tests {
         assert!(cast.speakers().is_empty());
     }
 
+    // covers: C2, C18
+    #[test]
+    fn a_host_name_that_looks_up_to_a_browsed_device_plays_as_that_device() {
+        let fake = FakeCast::default();
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 50),
+        );
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.poll();
+        cast.set_resolver(|_, port| Ok(SocketAddr::from(([192, 0, 2, 50], port))));
+        cast.add_address(address("kitchen.local"));
+        let manual = address("kitchen.local").device_id().to_string();
+        assert_eq!(cast.set_enabled(&manual, true), Ok(()));
+        cast.set_streaming(true);
+        poll_until_started(&fake, &mut cast);
+        assert_eq!(fake.state().started, [id(KITCHEN)]);
+        assert_eq!(cast.set_enabled(KITCHEN, true), Ok(()), "not busy");
+    }
+
     fn track(title: &str, artwork: Option<&[u8]>) -> CastTrack {
         CastTrack {
             metadata: Metadata {
