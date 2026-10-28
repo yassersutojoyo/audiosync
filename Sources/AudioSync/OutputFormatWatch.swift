@@ -20,11 +20,16 @@ enum OutputFormatWatch {
         case reopen(old: OutputDeviceFormat, new: OutputDeviceFormat)
     }
 
+    /// `started` is what the start read and `now` what the notice reads, nil
+    /// when unreadable; a device going away is S68's, not a format change.
     static func decide(started: OutputDeviceFormat?, now: OutputDeviceFormat?, fadingOut: Bool) -> Verdict {
-        .keep
+        guard !fadingOut, let started, let now, now.rate > 0, now.channels > 0 else { return .keep }
+        let same = abs(now.rate - started.rate) < 0.5 && now.channels == started.channels
+        return same ? .keep : .reopen(old: started, new: now)
     }
 
+    /// The debug line for output `number` (its status-line number, never its device's name).
     static func line(number: Int, old: OutputDeviceFormat, new: OutputDeviceFormat) -> String {
-        ""
+        "output \(number): its device's format changed from \(old.text) to \(new.text); reopening it"
     }
 }

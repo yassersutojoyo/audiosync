@@ -90,11 +90,14 @@ enum OutputLoss: Equatable {
     case deviceGone
     /// Its render callback took no frame for `quietS` seconds (S334).
     case stalled(quietS: Double, sign: OutputStallSign)
+    /// Its device's rate or channel count changed under it (S330).
+    case formatChanged(old: OutputDeviceFormat, new: OutputDeviceFormat)
 
     var reason: String {
         switch self {
         case .deviceGone: return "device lost"
         case .stalled: return "stalled"
+        case .formatChanged: return "format changed"
         }
     }
 }

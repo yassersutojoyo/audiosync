@@ -6517,6 +6517,8 @@ do {
     let line = OutputFormatWatch.line(number: 2, old: stereo48, new: F(rate: 24_000, channels: 1))
     check(line == "output 2: its device's format changed from 48000 Hz, 2 ch to 24000 Hz, 1 ch; reopening it",
           "output format: one debug line names the output's number and the old and the new format", line)
+    check(OutputLoss.formatChanged(old: stereo48, new: stereo48).reason == "format changed",
+          "output format: the stop line tells a format change from a stall or a lost device")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)

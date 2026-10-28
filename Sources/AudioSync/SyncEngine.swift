@@ -412,6 +412,10 @@ final class StreamEngine {
             guard let self, let renderer else { return }
             self.handleOutputLost(uid, renderer, .deviceGone)
         }
+        renderer.onFormatChanged = { [weak self, weak renderer] old, new in
+            guard let self, let renderer else { return }
+            self.handleOutputLost(uid, renderer, .formatChanged(old: old, new: new))
+        }
         try renderer.start(on: device, captureRate: capture.sampleRate, delayMs: delayMs)
         renderers[uid] = renderer
         attachTokens.attached(uid)
@@ -489,14 +493,16 @@ final class StreamEngine {
         renderers[uid]?.setGain(linear: g)
     }
 
-    /// The device of output `uid` is gone (S68) or its render callback
-    /// stopped (S334): its renderer halts at once, without a fade (S185),
-    /// also when it was fading out on its way out. A running one is dropped
-    /// and reported to the host, which keeps the speaker on and adds it again
-    /// once its device is listed (S137, S161). A stall's debug line comes
-    /// after the renderer is released.
+    /// The device of output `uid` is gone (S68), its render callback stopped
+    /// (S334) or its device's format changed (S330): its renderer halts at
+    /// once, without a fade (S185), also when it was fading out on its way
+    /// out. A running one is dropped and reported to the host, which keeps
+    /// the speaker on and adds it again once its device is listed (S137,
+    /// S161). A stall's or a format change's debug line comes after the
+    /// renderer is released.
     private func handleOutputLost(_ uid: String, _ renderer: OutputRenderer, _ loss: OutputLoss) {
         renderer.onDeviceGone = nil
+        renderer.onFormatChanged = nil
         if renderers[uid] === renderer, let lead = renderer.holdLead() {
             heldLeads[uid] = (lead, ProcessInfo.processInfo.systemUptime)
         }
@@ -509,6 +515,9 @@ final class StreamEngine {
         if case .stalled(let quietS, let sign) = loss {
             DebugTrace.log("[AudioSync] " + OutputStallSign.line(number: outputNumber(uid), quietS: quietS, sign: sign))
         }
+        if case .formatChanged(let old, let new) = loss {
+            DebugTrace.log("[AudioSync] " + OutputFormatWatch.line(number: outputNumber(uid), old: old, new: new))
+        }
         onOutputGone?(uid, loss)
     }
 
@@ -518,6 +527,7 @@ final class StreamEngine {
     private static func logStopped(_ uid: String, _ renderer: OutputRenderer, why reason: String,
                                    bluetoothOutputs: Int) {
         renderer.onDeviceGone = nil
+        renderer.onFormatChanged = nil
         DebugTrace.log("[AudioSync] output stopped (\(reason)): \(uid), \(renderer.stopNote), "
                 + renderer.statusText(bluetoothOutputs: bluetoothOutputs))
     }

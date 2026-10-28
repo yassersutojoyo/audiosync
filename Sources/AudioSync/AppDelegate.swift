@@ -424,12 +424,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             // device-list change: a device that lingers in Core Audio's list
             // without being alive leaves the speaker list at once.
             guard let self else { return }
-            if case .stalled = loss {
+            switch loss {
+            case .formatChanged:
+                // Its device stays listed: it starts again now, in the new format (S330).
+                self.syncLocalOutputs(origin: .automatic)
+            case .stalled:
                 self.outputStalled(lostUID)
-            } else {
+                self.devicesChanged()
+            case .deviceGone:
                 DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
+                self.devicesChanged()
             }
-            self.devicesChanged()
             self.checkBriefLosses()   // its start lead counts for 10 s at most (S328)
         }
         engine.onAppQuit = { [weak self] bundleID, pids in

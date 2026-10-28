@@ -308,7 +308,7 @@ if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
   echo "logic compile: $((SECONDS - logic_start)) s"
   "$OUT/logic/run" || status=1
   echo "▶ core (the app's wrappers of the core)"
-  build core Tests/coretest.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
+  build core Tests/coretest.swift "${ENGINE_PARTS[@]}" AudioDevices.swift -- "${CORE[@]}"
   "$OUT/core/run" || status=1
 else
   tail -n 20 "$OUT/core.log"
