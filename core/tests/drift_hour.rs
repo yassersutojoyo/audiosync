@@ -69,6 +69,8 @@ struct Setup {
     /// Stamps each block with the time its last frame was due rather than
     /// the producer's wake that wrote it, up to 2 ms later.
     exact_stamps: bool,
+    /// Each output's hold-back, in capture frames.
+    delays: [i64; 2],
 }
 
 enum Sink {
@@ -122,25 +124,29 @@ struct Hour {
     spread: [f64; 2],
     /// Capture frames each output's converter was slowed and sped by.
     trims: [(u64, u64); 2],
+    /// The most any 10 s window's mean inter-output offset (output 1's
+    /// timing error less output 0's) strayed from the first window's, in
+    /// frames.
+    offset_strayed: f64,
 }
 
 fn ms(frames: f64) -> f64 {
     frames * 1000.0 / f64::from(RATE)
 }
 
-fn sink(ring: &Arc<Ring>, host: Host) -> Sink {
+fn sink(ring: &Arc<Ring>, host: Host, delay: i64) -> Sink {
     let reader = Reader::new(Arc::clone(ring), RATE);
     match host {
         Host::Renderer { .. } => {
             let control = RendererControl::new(&reader);
-            control.set_delay_frames(DELAY);
+            control.set_delay_frames(delay);
             let gain = Arc::new(SharedGain::new(0.0));
             let renderer = Renderer::new(reader, &control, gain, RATE, RATE, 2).unwrap();
             Sink::Rendered(Box::new(renderer), control)
         }
         Host::Reader => {
             let control = reader.control();
-            control.set_delay_frames(DELAY);
+            control.set_delay_frames(delay);
             Sink::Read(reader, control)
         }
     }
@@ -182,7 +188,7 @@ fn run_hour(setup: Setup) -> Hour {
         (true, false) => Stamps::AtWake,
         (true, true) => Stamps::AtBlockEnd,
     };
-    let mut sinks = [sink(&ring, setup.host), sink(&ring, setup.host)];
+    let mut sinks = [0, 1].map(|i| sink(&ring, setup.host, setup.delays[i]));
     let periods = setup
         .fast_ppb
         .map(|ppb| CALLBACK as u64 * (PER_FRAME - ppb));
@@ -229,8 +235,8 @@ fn run_hour(setup: Setup) -> Hour {
             pulls[i] += periods[i];
         } else {
             let lags = [sinks[0].lag(), sinks[1].lag()];
-            for (sum, lag) in sums.iter_mut().zip(lags) {
-                *sum += (lag - DELAY) as f64;
+            for ((sum, lag), delay) in sums.iter_mut().zip(lags).zip(setup.delays) {
+                *sum += (lag - delay) as f64;
             }
             drift_sum += (lags[0] - lags[1]) as f64;
             count += 1;
@@ -261,6 +267,11 @@ fn run_hour(setup: Setup) -> Hour {
         }),
         spread: [0, 1].map(|i| highest[i] - lowest[i]),
         trims: [sinks[0].trims(), sinks[1].trims()],
+        offset_strayed: {
+            let first = timing_windows[0][1] - timing_windows[0][0];
+            let strayed = timing_windows.iter().map(|w| (w[1] - w[0] - first).abs());
+            strayed.fold(0.0, f64::max)
+        },
     }
 }
 
@@ -272,6 +283,7 @@ fn bench_outputs(host: Host, stall: Option<(u64, u64)>) -> Setup {
         fast_ppb: [0, 3000],
         stall,
         exact_stamps: false,
+        delays: [DELAY; 2],
     }
 }
 
@@ -338,6 +350,7 @@ fn with_stamps_a_fast_speaker_clock_is_trimmed_within_a_millisecond_all_hour() {
             fast_ppb: [0, ppb],
             stall: None,
             exact_stamps,
+            delays: [DELAY; 2],
         };
         let hour = run_hour(setup);
         let context = format!("{ppb} ppb, exact stamps {exact_stamps}");
@@ -395,4 +408,35 @@ fn a_producer_stall_past_the_dead_band_costs_every_output_a_step_back_and_a_skip
     // A longer stall steps back again each time the reader runs T ahead:
     // twice in 150 ms, short of a third time.
     assert_eq!(steps_and_skips(Host::Reader, 150), [(2, 1); 2]);
+}
+
+// covers: S226
+#[test]
+#[ignore = "T27: S207's 15-frame dead zone holds the offset at 13.8 frames (exact stamps), 34.2 (wake stamps)"]
+fn two_outputs_3_ppm_apart_one_held_back_2_s_stay_within_2_frames_all_hour() {
+    // The bound the trim at every delay was meant to reach: an output on
+    // the host's clock at hold-back 0 next to one 3 ppm fast held back
+    // 2 s, their offset within a frame or two of where it started.
+    let hours = [true, false].map(|exact_stamps| {
+        let hour = run_hour(Setup {
+            host: Host::Renderer { stamped: true },
+            fast_ppb: [0, 3_000],
+            stall: None,
+            exact_stamps,
+            delays: [0, DELAY],
+        });
+        let corrections: u64 = hour.corrections.iter().sum();
+        eprintln!(
+            "exact stamps {exact_stamps}: offset strayed {:.2} frames, callback spread {:.2}, \
+             {corrections} corrections in the hour, trims {:?}",
+            hour.offset_strayed, hour.spread[1], hour.trims
+        );
+        (exact_stamps, corrections, hour)
+    });
+    for (exact_stamps, corrections, hour) in hours {
+        assert!(
+            corrections == 0 && hour.offset_strayed <= 2.0,
+            "exact stamps {exact_stamps}: {hour:?}"
+        );
+    }
 }
