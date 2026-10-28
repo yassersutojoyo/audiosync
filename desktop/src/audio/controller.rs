@@ -6827,6 +6827,27 @@ mod tests {
         assert!(suspended.driver().capture_running());
     }
 
+    // covers: S332
+    #[test]
+    fn an_output_lost_after_a_suspend_notice_is_tried_at_the_resume() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.notify_power(PowerNotice::Suspend);
+        poll_quietly(&mut backend, 1);
+        let tries = backend.driver().renderer_attempts(HEADPHONES);
+        backend.end_renderer(HEADPHONES);
+        backend.poll();
+        assert_eq!(
+            backend.driver().renderer_attempts(HEADPHONES),
+            tries,
+            "no try while it sleeps"
+        );
+        backend.pass_wall_time(Duration::from_secs(2 * 3600));
+        backend.notify_power(PowerNotice::Resume);
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
     // covers: S332, S329
     #[test]
     fn a_capture_lost_as_the_resume_window_ends_gets_the_usual_tries() {
