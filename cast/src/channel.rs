@@ -17,7 +17,7 @@ use crate::media::{
 use crate::message::{
     self, BROADCAST, CastMessage, DEFAULT_MEDIA_RECEIVER, Namespace, PLATFORM, PayloadError, SENDER,
 };
-use crate::status::{AppSession, ControlType, ReceiverStatus};
+use crate::status::{AppSession, ControlType, DeviceVolume, ReceiverStatus};
 
 /// How long the first `RECEIVER_STATUS` may take (C33).
 pub const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -185,6 +185,9 @@ pub struct Channel {
     volume_queued: Option<f64>,
     /// The level last sent, until the next `RECEIVER_STATUS` reports one.
     volume_unconfirmed: Option<f64>,
+    /// The volume the previous channel to the device knew, for a first
+    /// status that leaves it out (C37).
+    assumed_volume: Option<DeviceVolume>,
     /// The member list was asked for: the channel is a group's, and the
     /// multizone namespace is read rather than dropped (C27, C94).
     multizone: bool,
@@ -209,6 +212,7 @@ impl Channel {
             volume_sent: None,
             volume_queued: None,
             volume_unconfirmed: None,
+            assumed_volume: None,
             multizone: false,
         };
         channel.connect(PLATFORM);
@@ -441,6 +445,12 @@ impl Channel {
         Ok(level)
     }
 
+    /// The volume a reconnect carries over, read where a status leaves
+    /// its volume or level out (C37, C81).
+    pub fn assume_volume(&mut self, volume: Option<DeviceVolume>) {
+        self.assumed_volume = volume;
+    }
+
     /// Takes the level still waiting for its interval, for the channel
     /// that replaces this one (C70, C81).
     pub fn take_queued_volume(&mut self) -> Option<f64> {
@@ -574,19 +584,22 @@ impl Channel {
                     return;
                 };
                 let mut status = ReceiverStatus::from_payload(&payload);
-                if let Some(known) = &self.status {
-                    if !fields.get("applications").is_some_and(|a| a.is_array()) {
-                        status.applications = known.applications.clone();
-                    }
+                if let Some(known) = &self.status
+                    && !fields.get("applications").is_some_and(|a| a.is_array())
+                {
+                    status.applications = known.applications.clone();
+                }
+                let known = self.status.as_ref().map(|known| &known.volume);
+                if let Some(known) = known.or(self.assumed_volume.as_ref()) {
                     if !fields.get("volume").is_some_and(|v| v.is_object()) {
-                        status.volume = known.volume.clone();
+                        status.volume = known.clone();
                     } else if fields
                         .get("volume")
                         .and_then(|v| v.get("level"))
                         .and_then(serde_json::Value::as_f64)
                         .is_none()
                     {
-                        status.volume.level = known.volume.level;
+                        status.volume.level = known.level;
                     }
                 }
                 self.on_status(id, status);

@@ -262,7 +262,7 @@ pub fn connect_retrying_with(
         if !selected.load(Ordering::SeqCst) {
             return None;
         }
-        match CastClient::connect_while(&addresses(), RequestIds::random(), selected) {
+        match CastClient::connect_while(&addresses(), RequestIds::random(), selected, None) {
             Ok(client) => return Some(client),
             Err(_) if !selected.load(Ordering::SeqCst) => return None,
             Err(error) => {
@@ -1002,7 +1002,9 @@ impl CastSession {
                 Some(records) => records.get().group,
                 None => self.addresses.clone(),
             };
-            match CastClient::connect_while(&addresses, RequestIds::random(), &self.selected) {
+            let known = self.last_volume.as_ref();
+            match CastClient::connect_while(&addresses, RequestIds::random(), &self.selected, known)
+            {
                 Ok(client) => return Some(client),
                 Err(_) if !self.selected.load(Ordering::SeqCst) => return None,
                 Err(error) => {

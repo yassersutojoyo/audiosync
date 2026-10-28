@@ -983,6 +983,7 @@ fn a_reconnect_whose_first_status_has_no_level_keeps_the_known_level() {
     let device = FakeDevice::start(Behavior::default());
     let (mut session, _feed) = start(&device);
     let known = session.volume().expect("volume").level;
+    while session.poll_event().is_some() {}
     device.send(Command::ForgetLevel);
     device.send(Command::DropConnection);
     let mut seen = run_until(&mut session, Duration::from_secs(10), |event| {

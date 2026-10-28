@@ -24,7 +24,7 @@ use crate::framing::{FrameReader, encode_frame};
 use crate::group::MultizoneMessage;
 use crate::ids::RequestIds;
 use crate::media::{LoadRequest, MediaError, VolumeError};
-use crate::status::{AppSession, ReceiverStatus};
+use crate::status::{AppSession, DeviceVolume, ReceiverStatus};
 
 /// TCP connect and TLS handshake limit per address.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -252,16 +252,18 @@ impl CastClient {
     /// [`MAX_CONNECT_ADDRESSES`] of them (C109), and returns once the first
     /// `RECEIVER_STATUS` arrived (C33).
     pub fn connect(addresses: &[SocketAddr], ids: RequestIds) -> Result<CastClient, ConnectError> {
-        CastClient::connect_while(addresses, ids, &AtomicBool::new(true))
+        CastClient::connect_while(addresses, ids, &AtomicBool::new(true), None)
     }
 
     /// [`CastClient::connect`] that gives up within a read slice once
     /// `selected` is cleared, with [`EndReason::Stopped`], so a quit never
-    /// waits out the timeouts of every address (C88).
+    /// waits out the timeouts of every address (C88). `known` is the
+    /// volume a reconnect carries over (C37).
     pub fn connect_while(
         addresses: &[SocketAddr],
         ids: RequestIds,
         selected: &AtomicBool,
+        known: Option<&DeviceVolume>,
     ) -> Result<CastClient, ConnectError> {
         let mut ordered: Vec<SocketAddr> = Vec::new();
         for &address in addresses {
@@ -279,7 +281,7 @@ impl CastClient {
             if !selected.load(Ordering::SeqCst) {
                 return Err(ConnectError::Ended(EndReason::Stopped));
             }
-            match CastClient::connect_one(address, ids.clone(), selected) {
+            match CastClient::connect_one(address, ids.clone(), selected, known) {
                 Ok(client) => return Ok(client),
                 Err(error) => {
                     first.get_or_insert(error);
@@ -293,6 +295,7 @@ impl CastClient {
         address: SocketAddr,
         ids: RequestIds,
         selected: &AtomicBool,
+        known: Option<&DeviceVolume>,
     ) -> Result<CastClient, ConnectError> {
         let tcp = tcp_connect(address, selected)?;
         if !selected.load(Ordering::SeqCst) {
@@ -355,6 +358,7 @@ impl CastClient {
             selected: None,
             teardown_until: None,
         };
+        client.channel.assume_volume(known.cloned());
         loop {
             client.step(READ_SLICE);
             if client.channel.is_ready() {

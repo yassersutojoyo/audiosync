@@ -272,7 +272,7 @@ fn connect_deselected_after(addresses: &[SocketAddr], delay: Duration) -> Connec
     let flag = Arc::clone(&selected);
     let addresses = addresses.to_vec();
     let connecting = thread::spawn(move || {
-        let result = CastClient::connect_while(&addresses, RequestIds::starting_at(1), &flag);
+        let result = CastClient::connect_while(&addresses, RequestIds::starting_at(1), &flag, None);
         let _ = sender.send(result.err());
     });
     thread::sleep(delay);
