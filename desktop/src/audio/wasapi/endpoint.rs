@@ -12,6 +12,7 @@
 //! dropped (S186). The drop waits for the thread as a [`Worker`] does:
 //! stopping the stream can hang while Windows audio doesn't answer.
 
+use std::collections::HashMap;
 use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,8 +36,9 @@ use windows::core::{BOOL, GUID, HSTRING, PCWSTR};
 use windows_core::implement;
 
 use super::com::{
-    Apartment, ComMemory, Event, ProAudioTask, READY_TIMEOUT, Ready, StuckThreads, WINDOWS_AUDIO,
-    Worker, device_error, float_format, read_mix_format, spawn_worker,
+    Apartment, Awaited, ComMemory, Event, ProAudioTask, READY_TIMEOUT, Ready, StuckThreads,
+    WINDOWS_AUDIO, Worker, awaited, device_error, float_format, read_mix_format,
+    spawn_ready_within, spawn_worker,
 };
 use super::devices::enumerator;
 use crate::audio::backend::BackendError;
@@ -201,12 +203,15 @@ pub(super) fn current_format(id: &str) -> Result<RenderFormat, BackendError> {
     render_format(unsafe { read_mix_format(mix.as_ptr()) })
 }
 
-/// The outputs' format reads ([`current_format`]).
+/// The outputs' format reads ([`current_format`]), each on a thread of its
+/// own: by endpoint, the reads given up on while still in their Windows call.
 #[derive(Default)]
-pub(super) struct FormatReads;
+pub(super) struct FormatReads(HashMap<String, Awaited>);
 
 impl FormatReads {
-    /// The format an output on the endpoint `id` would open in now.
+    /// The format an output on the endpoint `id` would open in now, or
+    /// [`BackendError::NotResponding`] when Windows audio didn't answer in
+    /// [`READY_TIMEOUT`] or an earlier read of `id` still hangs.
     pub(super) fn current(&mut self, id: &str) -> Result<RenderFormat, BackendError> {
         self.read_within(id, READY_TIMEOUT, &WINDOWS_AUDIO, current_format)
     }
@@ -214,11 +219,38 @@ impl FormatReads {
     fn read_within(
         &mut self,
         id: &str,
-        _timeout: Duration,
-        _stuck: &'static StuckThreads,
+        timeout: Duration,
+        stuck: &'static StuckThreads,
         read: impl FnOnce(&str) -> Result<RenderFormat, BackendError> + Send + 'static,
     ) -> Result<RenderFormat, BackendError> {
-        read(id)
+        self.0.retain(|_, hung| hung.pending());
+        if self.0.contains_key(id) {
+            return Err(BackendError::NotResponding);
+        }
+        let (running, end) = awaited(stuck);
+        let endpoint = id.to_owned();
+        let started = spawn_ready_within("audiosync-format", timeout, move |ready| {
+            let _running = running;
+            match read(&endpoint) {
+                Ok(format) => {
+                    let _ = ready.ok(format);
+                }
+                Err(error) => ready.fail(error),
+            }
+        });
+        match started {
+            Ok((thread, format)) => {
+                let _ = thread.join();
+                Ok(format)
+            }
+            Err(BackendError::NotResponding) => {
+                if end.let_go() {
+                    self.0.insert(id.to_owned(), end);
+                }
+                Err(BackendError::NotResponding)
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 

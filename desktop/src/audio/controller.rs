@@ -2128,7 +2128,18 @@ impl<D: Driver> Controller<D> {
             })
             .collect();
         for (id, invalidated, opened) in marked {
-            let now = self.driver.output_format(&id).ok();
+            let now = match self.driver.output_format(&id) {
+                Err(BackendError::NotResponding) => {
+                    self.log.log(|| {
+                        format!(
+                            "output {}: Windows audio didn't answer its format read in time",
+                            label(&self.names, &id)
+                        )
+                    });
+                    None
+                }
+                read => read.ok(),
+            };
             let changed = matches!((opened, now), (Some(opened), Some(now)) if opened != now);
             if !invalidated && !changed {
                 continue;
