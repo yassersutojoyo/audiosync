@@ -12,8 +12,10 @@
 //! rules, as on the Mac:
 //!
 //! - with the whole system as the source, the track of a session that
-//!   plays; with one app as the source, that app's session only, paused or
-//!   playing ([`pick`], [`decide`]);
+//!   plays, or the paused one of the app seen playing last, until another
+//!   plays, it stops or quits, or the source changes; with one app as the
+//!   source, that app's session only, paused or playing ([`pick`],
+//!   [`decide`]);
 //! - with no such track, AudioSync's own labels ([`ReceiverLabels`], worded
 //!   in the UI's strings), the source's name as the artist, and its icon:
 //!   never blank fields, since a TV may then show no text at all;
@@ -347,12 +349,16 @@ pub struct Shown {
 }
 
 /// What receivers should show for `track`, the newest reading's, with
-/// `source` captured. A paused track counts only when its app is the
-/// source: with the whole system as the source, what plays may be another
-/// app. A track's fields go out as its app gave them, blank artist or album
-/// included.
-pub fn decide(track: Option<&Track>, source: &TrackSource, labels: &ReceiverLabels) -> Shown {
-    if let Some(track) = track.filter(|track| counts(track, &source.follow)) {
+/// `source` captured. A paused track counts when its app is the source or
+/// is `last_played`, the app seen playing last. A track's fields go out as
+/// its app gave them, blank artist or album included.
+pub fn decide(
+    track: Option<&Track>,
+    source: &TrackSource,
+    labels: &ReceiverLabels,
+    last_played: Option<&str>,
+) -> Shown {
+    if let Some(track) = track.filter(|track| counts(track, &source.follow, last_played)) {
         let session = &track.session;
         return Shown {
             fields: TrackFields {
@@ -385,15 +391,17 @@ pub fn decide(track: Option<&Track>, source: &TrackSource, labels: &ReceiverLabe
     }
 }
 
-fn counts(track: &Track, follow: &Follow) -> bool {
-    track.session.playing || matches!(follow, Follow::App { .. })
+fn counts(track: &Track, follow: &Follow, last_played: Option<&str>) -> bool {
+    track.session.playing
+        || matches!(follow, Follow::App { .. })
+        || last_played == Some(track.session.app_id.as_str())
 }
 
 /// What a Cast device should show for `track`: its own fields and artwork
 /// only, nothing in place of what it lacks (Cast spec C53), and nothing at
 /// all when no track counts.
-pub fn cast_track(track: Option<&Track>, follow: &Follow) -> CastTrack {
-    let Some(track) = track.filter(|track| counts(track, follow)) else {
+pub fn cast_track(track: Option<&Track>, follow: &Follow, last_played: Option<&str>) -> CastTrack {
+    let Some(track) = track.filter(|track| counts(track, follow, last_played)) else {
         return CastTrack::default();
     };
     let field = |text: &str| {
@@ -492,6 +500,8 @@ pub struct TrackInfo {
     since: Option<Instant>,
     /// The newest reading since then, if one came.
     reading: Option<Reading>,
+    /// The app seen playing last since the source was chosen (S218).
+    last_played: Option<String>,
     /// The fields receivers should show, and since when.
     fields: Option<(TrackFields, Instant)>,
     /// What the sender was given last, and when.
@@ -531,7 +541,7 @@ impl TrackInfo {
             .reading
             .as_ref()
             .and_then(|reading| reading.track.as_ref());
-        Some(cast_track(track, follow))
+        Some(cast_track(track, follow, self.last_played.as_deref()))
     }
 
     /// The session that counts in the newest reading, by app ID, and whether
@@ -580,6 +590,7 @@ impl TrackInfo {
             self.following = follow;
             self.since = Some(now);
             self.reading = None;
+            self.last_played = None;
             self.timelines = TimelineGuard::default();
             if stopped {
                 self.fields = None;
@@ -593,6 +604,16 @@ impl TrackInfo {
         let source = source?;
         let labels = self.labels.get()?;
         if let Some(reading) = reader.take_reading() {
+            let session = reading.track.as_ref().map(|track| &track.session);
+            match session {
+                Some(session) if session.playing => {
+                    self.last_played = Some(session.app_id.clone());
+                }
+                // Another app's paused track never counts, so it can't tell whether this one quit.
+                Some(session)
+                    if session.paused || self.last_played.as_ref() != Some(&session.app_id) => {}
+                _ => self.last_played = None,
+            }
             self.reading = Some(reading);
         }
         let since = self.since.unwrap_or(now);
@@ -603,7 +624,7 @@ impl TrackInfo {
             .reading
             .as_ref()
             .and_then(|reading| reading.track.as_ref());
-        let shown = decide(track, source, &labels);
+        let shown = decide(track, source, &labels, self.last_played.as_deref());
         let fields_since = match &self.fields {
             Some((fields, since)) if *fields == shown.fields => *since,
             _ => {
@@ -1013,14 +1034,19 @@ mod tests {
     #[test]
     fn a_paused_track_counts_only_when_its_app_is_the_source() {
         let paused = track("Spotify.exe", "Song", false, Some(COVER));
-        let shown = decide(Some(&paused), &whole_system(), &labels());
+        let shown = decide(Some(&paused), &whole_system(), &labels(), None);
         assert_eq!(
             Some(shown.fields),
             fields("Title label", "Whole system label", "Album label")
         );
         assert_eq!(shown.artwork, Artwork::Icon);
 
-        let shown = decide(Some(&paused), &app("spotify.exe", "Spotify"), &labels());
+        let shown = decide(
+            Some(&paused),
+            &app("spotify.exe", "Spotify"),
+            &labels(),
+            None,
+        );
         assert_eq!(
             Some(shown.fields),
             fields("Song", "Song artist", "Song album")
@@ -1114,7 +1140,7 @@ mod tests {
 
     #[test]
     fn with_no_track_the_source_name_stands_in_for_the_artist() {
-        let shown = decide(None, &app("player.exe", "Player"), &labels());
+        let shown = decide(None, &app("player.exe", "Player"), &labels(), None);
         assert_eq!(
             Some(shown.fields),
             fields("Title label", "Player", "Album label")
@@ -1128,7 +1154,7 @@ mod tests {
             name: Some("  ".to_owned()),
         };
         assert_eq!(
-            Some(decide(None, &unnamed, &labels()).fields),
+            Some(decide(None, &unnamed, &labels(), None).fields),
             fields("Title label", "Unnamed label", "Album label")
         );
     }

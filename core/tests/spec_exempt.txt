@@ -46,7 +46,7 @@ S214 Mac host only: where a window reopens; its logic suite checks it.
 S215 Mac host only: login-item launches, second launches and the core-setup start message; its logic suite checks it.
 S216 Mac host only: closing a Core Audio process tap and its aggregate device; its logic suite checks it.
 S217 Hosts only: artwork encoded as a JPEG for the AirPlay sender; the Mac logic suite and the Windows host's tests check it.
-S218 Mac host only: the now-playing fields and artwork the receivers show; its logic suite checks it.
+S218 Hosts only: the now-playing fields and artwork the receivers show; the Mac logic suite and the Windows host's tests check it.
 S219 Hosts only: what the app hands its own AirPlay sender as track info; the Mac logic suite and the Windows host's tests check it.
 S220 Hosts only: the delay field's typed text and when it applies; the Mac logic suite and the Windows host's tests check it.
 S221 Mac host only: the delay panels of the speaker rows; its logic suite checks it.
