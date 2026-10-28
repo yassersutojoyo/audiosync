@@ -2428,6 +2428,21 @@ pub mod tests {
         assert_eq!(cast.speakers()[1].volume, 100.0, "ended");
     }
 
+    // covers: C105, S252 (a preset sets the volume before streaming starts)
+    #[test]
+    fn a_volume_set_before_the_session_is_kept_and_set_at_its_first_status() {
+        let (fake, mut cast) = listed();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_volume(KITCHEN, 30.0);
+        assert!(sent(&fake).is_empty(), "no session to send it to");
+        assert_eq!(shown(&cast, KITCHEN), 30.0, "the slider stays");
+
+        cast.set_streaming(true);
+        report(&fake, &mut cast, 0.8);
+        assert_eq!(sent(&fake), [0.3]);
+        assert_eq!(shown(&cast, KITCHEN), 30.0);
+    }
+
     #[test]
     fn the_capture_feeds_the_current_session() {
         let (fake, mut cast) = listed();
