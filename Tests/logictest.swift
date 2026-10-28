@@ -2026,6 +2026,31 @@ do {
           "capture watch: an input device source with no callback for 2 s after the first is stopped, with no Now Playing reading",
           "\(String(describing: stopped)) \(String(describing: neverCalled))")
 }
+// covers: S335 (an input device that stops delivering is opened again; the Mac sitting on 2026-10-28 had no removable input to unplug)
+do {
+    // Callbacks until 10 s, then none; the reopened capture counts from 0 and calls back again or never.
+    func steps(back: Bool) -> [(at: Double, step: CaptureFlowWatch.Step)] {
+        var watch = CaptureFlowWatch()
+        var opened: Double?
+        var seen: [(at: Double, step: CaptureFlowWatch.Step)] = []
+        for tick in 0...60 {
+            let uptime = 0.5 * Double(tick)
+            let callbacks = opened.map { back ? UInt64((uptime - $0) * 100) : 0 } ?? UInt64(min(uptime, 10) * 100)
+            let step = watch.tick(callbacks: callbacks, reading: true,
+                                  source: CaptureFlowWatch.source(.input(uid: "line-in"), reading: nil), at: uptime)
+            if case .tryOpen = step { opened = uptime }
+            if step != .none { seen.append((uptime, step)) }
+        }
+        return seen
+    }
+    let back = steps(back: true), off = steps(back: false)
+    let offTries = off.filter { if case .tryOpen = $0.step { return true } else { return false } }.count
+    check(back.map { $0.at } == [12, 13, 18] && back.map { $0.step } == [.stopped(.noCallback(2)), .tryOpen(1), .kept(1)]
+            && offTries == CaptureFlowWatch.tries && off.last?.at == 27 && off.last?.step == .giveUp
+            && !CaptureFlowWatch.retries(after: .inputDisconnected) && !CaptureFlowWatch.retries(after: .inputNotFound("line-in")),
+          "capture watch: an input device that stops delivering is opened again and kept once it calls back; one that stays silent gets 5 tries, one unplugged none",
+          "\(back) \(off)")
+}
 // covers: S335, S18 (the 6 s grace: read as playing with the position moving)
 do {
     // Spotify reads playing from 0 s, its position moving between the readings at 0 and 2 s; the tap calls back until 1 s.
