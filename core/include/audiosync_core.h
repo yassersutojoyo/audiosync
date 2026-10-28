@@ -192,7 +192,7 @@ extern "C" {
 
 /* What asc_airplay_open_pairings returns when the store holds nothing it found. */
 #define ASC_AIRPLAY_PAIRINGS_FAILED -1  /* NULL or dead handle, or NULL, empty or non-UTF-8 path */
-#define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* unreadable or not in the format: ignored; the next pairing replaces it unless unreadable */
+#define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* ignored; the wrong format is replaced by the next pairing, an unreadable file is left as it is */
 #define ASC_AIRPLAY_PAIRINGS_NEWER -3   /* a newer AudioSync wrote it: ignored and left as it is */
 
 /* How private asc_airplay_pairings_access and asc_airplay_airplay2_identity_access found a file. */

@@ -58,7 +58,8 @@ pub enum Loaded {
     NoFile,
     /// The credentials of this many receivers.
     Receivers(usize),
-    /// The file was ignored, for this reason; the next pairing replaces it.
+    /// The file was ignored, for this reason: one in the wrong format is
+    /// replaced by the next pairing, an unreadable one is left as it is.
     Ignored(String),
     /// A newer AudioSync wrote the file (its format version): it is left as
     /// it is, and pairings made now last until the app quits.
