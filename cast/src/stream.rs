@@ -665,8 +665,8 @@ impl StreamServer {
     }
 
     /// Answers whatever `records` hold at the time of each request, a
-    /// group's current addresses and its members' (C103), in place of the
-    /// static list.
+    /// group's current addresses and its members' (C103) or a single
+    /// device's current addresses (C111), in place of the static list.
     pub fn follow_group(&self, records: GroupRecords) {
         *lock(&self.shared.group) = Some(records);
     }

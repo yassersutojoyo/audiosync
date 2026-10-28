@@ -320,6 +320,9 @@ pub struct CastSession {
     /// [`QUIT_BUDGET`] (C88).
     quitting: Arc<AtomicBool>,
     group: Option<GroupRecords>,
+    /// Where every reconnect goes: the group's records or a single
+    /// device's (C90, C111).
+    records: Option<GroupRecords>,
     members: MemberList,
     group_types_logged: LoggedTypes,
     fingerprints: Option<Fingerprints>,
@@ -387,7 +390,8 @@ impl CastSession {
         on_failure: impl FnMut(ConnectError, Duration),
     ) -> Result<CastSession, SessionError> {
         let group = config.group.clone();
-        let connected = match &group {
+        let records = group.clone().or_else(|| config.records.clone());
+        let connected = match &records {
             Some(records) => connect_retrying_with(|| records.get().group, &selected, on_failure),
             None => connect_retrying(&config.addresses, &selected, on_failure),
         };
@@ -433,8 +437,10 @@ impl CastSession {
                 return Err(error.into());
             }
         };
-        if let Some(records) = &group {
+        if let Some(records) = &records {
             server.follow_group(records.clone());
+        }
+        if group.is_some() {
             server.set_group_limit(1);
         }
         let mut addresses = vec![client.address()];
@@ -479,6 +485,7 @@ impl CastSession {
             clock: Arc::new(Instant::now),
             quitting,
             group,
+            records,
             members: MemberList::new(),
             group_types_logged: LoggedTypes::default(),
             fingerprints: None,
@@ -910,12 +917,13 @@ impl CastSession {
         let addresses = self.addresses.clone();
         let selected = Arc::clone(&self.selected);
         let group = self.group.clone();
+        let records = self.records.clone();
         let on_failure = |error, retry_in| {
             self.report(SessionEvent::ConnectFailed { error, retry_in });
         };
-        // A group is resolved afresh: its leader may have handed over (C90,
-        // C97).
-        let result = match &group {
+        // Resolved afresh: a group's leader may have handed over (C90, C97),
+        // a single device may have moved (C111).
+        let result = match &records {
             Some(records) => connect_retrying_with(|| records.get().group, &selected, on_failure),
             None => connect_retrying(&addresses, &selected, on_failure),
         };
