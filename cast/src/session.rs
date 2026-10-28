@@ -948,6 +948,8 @@ impl CastSession {
             self.load_until_playing()
                 .map(|()| false)
                 .map_err(SessionError::from)
+        } else if self.client.status().is_some_and(|status| !status.is_idle()) {
+            return self.end(SessionEnd::TakenOver);
         } else {
             match self.client.launch() {
                 Ok(app) => {
