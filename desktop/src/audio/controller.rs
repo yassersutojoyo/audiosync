@@ -6167,6 +6167,29 @@ mod tests {
         assert_eq!(backend.session_lead(), before);
     }
 
+    // covers: S326, S328
+    #[test]
+    fn a_second_stall_keeps_the_outputs_lead_in_the_session_lead_through_its_retry() {
+        let mut backend = backend();
+        backend.set_output_period(HEADPHONES, 9_600);
+        backend.set_output_period(SPEAKERS, 480);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let before = backend.session_lead();
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        backend.set_output_period(HEADPHONES, 9_600);
+        poll_quietly(&mut backend, 1);
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        assert!(!backend.poll().is_empty(), "the second stall is told");
+        for poll in 1..STALL_RETRY_POLLS {
+            poll_quietly(&mut backend, 1);
+            assert_eq!(backend.session_lead(), before, "poll {poll} of the wait");
+        }
+        backend.set_output_period(HEADPHONES, 9_600);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(backend.session_lead(), before);
+    }
+
     // covers: S326
     #[test]
     fn a_second_stall_in_a_row_posts_the_lost_notice_and_keeps_the_output_on() {
