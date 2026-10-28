@@ -5869,7 +5869,8 @@ mod tests {
         let path = debug_log::test_dir("view-late-read").join(debug_log::FILE_NAME);
         let backend = MockBackend::new();
         let late_view = backend.late_view.clone();
-        let app = app_logging(backend, DebugLog::new(Some(path.clone())));
+        let log = DebugLog::new(Some(path.clone()));
+        let app = app_logging(backend, log.clone());
         let size = app.main.window().size();
         *late_view.borrow_mut() = Some(ViewSettings {
             window: Some(ui_model::WindowFrame {
@@ -5883,8 +5884,9 @@ mod tests {
         });
         app.poll();
         assert_eq!(app.main.window().size(), size, "the frame stays");
-        let log = std::fs::read_to_string(&path).unwrap_or_default();
-        assert!(!log.contains("applies at the next launch"), "{log}");
+        assert!(log.flush(debug_log::TEST_FLUSH));
+        let written = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(!written.contains("applies at the next launch"), "{written}");
     }
 
     // covers: S212
