@@ -1,8 +1,8 @@
 //! Cells of the Cast PC pass record that a fake device can reach: device
-//! behaviors the spec leaves open (CAST_SPEC G1 e, G3, G4, G8, G11, G12), each played
-//! by the fake in the forms a real device may take, plus the volume and mute
-//! changed on the device. Each passing cell prints `CELL <id> <measured>`
-//! under `--nocapture`.
+//! behaviors the spec leaves open (CAST_SPEC G1 e, G3, G4, G7, G8, G11,
+//! G12), each played by the fake in the forms a real device may take, plus
+//! the volume and mute changed on the device. Each passing cell prints
+//! `CELL <id> <measured>` under `--nocapture`.
 
 mod common;
 
@@ -18,7 +18,7 @@ use audiosync_cast::discovery::{
 use audiosync_cast::group::GroupRecords;
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::{DEFAULT_MEDIA_RECEIVER, NS_MEDIA, NS_RECEIVER, PLATFORM};
-use audiosync_cast::session::{CastSession, SessionConfig, SessionEvent};
+use audiosync_cast::session::{CastSession, Diagnostics, SessionConfig, SessionEvent};
 use common::{Behavior, Command, FakeDevice, app, json_message};
 use serde_json::{Value, json};
 
@@ -393,6 +393,108 @@ fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
     cell(
         "C19",
         "30 statuses, currentTime absent/0/backwards/1e9/negative/text/null: no reload, no drift",
+    );
+}
+
+// covers: C75
+#[test]
+fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops() {
+    let device = FakeDevice::start(Behavior {
+        read_pace: Some(0.5),
+        ..Behavior::default()
+    });
+    let (mut session, _feed) = start(&device);
+    let started = Instant::now();
+    let mut lines: Vec<(f64, Diagnostics)> = Vec::new();
+    let mut seen = Vec::new();
+    // The loopback socket buffers fill before the sender's queue starts to,
+    // and their size differs per system.
+    let until = started + Duration::from_secs(60);
+    while lines.iter().filter(|(_, line)| line.resync_offered).count() < 2 {
+        assert!(Instant::now() < until, "no resync offer in 60 s: {lines:?}");
+        session.run_for(Duration::from_millis(50));
+        while let Some(event) = session.poll_event() {
+            if let SessionEvent::Diagnostics(line) = &event {
+                lines.push((started.elapsed().as_secs_f64(), line.clone()));
+            }
+            seen.push(event);
+        }
+    }
+    let cap = Duration::from_secs(2);
+    for (_, line) in &lines {
+        assert!(line.queued <= cap, "{line:?}");
+        assert_eq!(
+            line.resync_offered,
+            line.drift > Duration::from_millis(250),
+            "{line:?}"
+        );
+    }
+    let per_second =
+        |from: &(f64, Diagnostics), to: &(f64, Diagnostics), of: fn(&Diagnostics) -> Duration| {
+            (of(&to.1).as_secs_f64() - of(&from.1).as_secs_f64()) / (to.0 - from.0)
+        };
+
+    let first_drop = lines
+        .iter()
+        .position(|(_, line)| line.frames_dropped > 0)
+        .expect("a drop");
+    let piling: Vec<_> = lines[..first_drop]
+        .iter()
+        .filter(|(_, line)| line.queued > Duration::ZERO)
+        .collect();
+    assert!(piling.len() >= 2, "{lines:?}");
+    assert!(
+        piling
+            .windows(2)
+            .all(|pair| pair[1].1.queued > pair[0].1.queued),
+        "the queue shrank before it was full: {lines:?}"
+    );
+    let growth = per_second(piling[0], piling[piling.len() - 1], |line| line.queued);
+    assert!((0.25..=0.8).contains(&growth), "{growth} s/s: {lines:?}");
+    let fullest = lines
+        .iter()
+        .map(|(_, line)| line.queued)
+        .max()
+        .expect("lines");
+    assert!(fullest >= cap - Duration::from_millis(40), "{lines:?}");
+
+    let dropping = &lines[first_drop..];
+    assert!(dropping.len() >= 2, "{lines:?}");
+    assert!(
+        dropping
+            .windows(2)
+            .all(|pair| pair[1].1.drift > pair[0].1.drift),
+        "the drift stopped growing: {lines:?}"
+    );
+    let drift_rate = per_second(&dropping[0], &dropping[dropping.len() - 1], |line| {
+        line.drift
+    });
+    assert!(
+        (0.25..=0.9).contains(&drift_rate),
+        "{drift_rate} s/s: {lines:?}"
+    );
+
+    // Resync stays the user's: no new LOAD, no restart of any kind (C79).
+    assert_eq!(device.payloads(NS_MEDIA, "LOAD").len(), 1);
+    assert!(
+        !seen.iter().any(|event| matches!(
+            event,
+            SessionEvent::Ended(_) | SessionEvent::Recovering(_) | SessionEvent::Reloaded
+        )),
+        "{seen:?}"
+    );
+    session.stop();
+    device.join();
+    let offered_at = lines
+        .iter()
+        .find(|(_, line)| line.resync_offered)
+        .map_or(0.0, |(at, _)| *at);
+    cell(
+        "C75",
+        &format!(
+            "read at half speed: queue +{growth:.2} s/s to {:.2} s, then drift +{drift_rate:.2} s/s, resync offered at {offered_at:.1} s, 1 LOAD",
+            fullest.as_secs_f64()
+        ),
     );
 }
 
