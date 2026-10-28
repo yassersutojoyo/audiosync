@@ -177,11 +177,17 @@ impl FetchHeaders {
     }
 }
 
+/// Decoding passes a logged header gets. Each pass undoes one level of
+/// `%25`, so without a cap an 8 KiB header nested thousands deep costs
+/// thousands of passes.
+const MAX_DECODE_PASSES: usize = 8;
+
 /// Decodes `%XX` escapes until none is left, so a token escaped twice is
-/// found too; each pass shortens the text, so the loop ends.
+/// found too. Text still escaped after [`MAX_DECODE_PASSES`] could hide the
+/// token, so it is redacted whole.
 fn percent_decoded(text: &str) -> String {
     let mut text = text.to_owned();
-    loop {
+    for _ in 0..MAX_DECODE_PASSES {
         let bytes = text.as_bytes();
         let mut decoded = Vec::with_capacity(bytes.len());
         let mut index = 0;
@@ -207,6 +213,7 @@ fn percent_decoded(text: &str) -> String {
         }
         text = String::from_utf8_lossy(&decoded).into_owned();
     }
+    "<redacted>".to_owned()
 }
 
 fn replace_ignoring_case(text: &str, needle: &str, with: &str) -> String {
