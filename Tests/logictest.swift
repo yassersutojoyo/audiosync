@@ -10187,6 +10187,16 @@ do {
     check(replaced == nil && removedAddress == den && !comesBack && readded && m.devices[id] != nil
             && m.removeManual("0123456789abcdef0123456789abcdef") == nil,
           "cast model: a removed manual device stays off the list until it is added again; only a manual one is removed")
+    // covers: S245 (Remove on a Cast speaker added by address that leaves the list)
+    var zoned = CastModel()
+    zoned.addedManually(id, address: den)
+    zoned.apply(.appeared(CastDevice(id: id, name: "", manual: true), offsetMs: nil))
+    let offList = zoned.devices[id]?.manual == true
+    let zone = SpeakerZone(id: "z1", name: "Den", members: ["lc:usb", CastID.key(id)], volume: 100)
+    check(zoned.removeManual(id) == den && zoned.devices[id] == nil
+            && ZoneEdit.removingCast(id, offList: offList, from: [zone]).map(\.members) == [["lc:usb"]]
+            && ZoneEdit.removingCast(id, offList: false, from: [zone]) == [zone],
+          "cast: removing a speaker added by address takes it out of its zone")
     let t = UIStrings()
     check(t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: nil, manual: true)) == "Added by address"
             && t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: nil)) == nil

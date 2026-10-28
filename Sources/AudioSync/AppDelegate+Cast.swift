@@ -277,10 +277,8 @@ extension AppDelegate {
         if castModel.devices[id]?.manual == true, castModel.enabled == id { setCastEnabled(appID, false) }
         let unfound = castModel.devices[id]?.manual == true
         guard let address = castModel.removeManual(id) else { return }
-        if unfound {
-            castSender?.removeDevice(id)
-            zones = ZoneEdit.removing(CastID.key(appID: appID), from: zones)
-        }
+        if unfound { castSender?.removeDevice(id) }
+        zones = ZoneEdit.removingCast(id, offList: unfound, from: zones)
         DebugTrace.log("[AudioSync] Cast: \(address.text) removed")
         var list = store.castManualList
         list.remove(address)
