@@ -592,13 +592,17 @@ function post(path, body) {
 // One request at a time per control, at most one every SEND_EVERY_MS, and
 // only the newest value waits: two requests in flight could reach the app in
 // the wrong order and leave the older value applied.
-function sender(send, onFail) {
+function sender(send, onFail, onSettle = () => {}) {
   let lastSent = 0;
   let timer = null;
   let pending = null;
   let sentValue = null;
   let inFlight = false;
-  let settleUntil = 0;
+  let settleTimer = null;
+  const release = () => {
+    window.clearTimeout(settleTimer);
+    settleTimer = null;
+  };
   const fire = () => {
     window.clearTimeout(timer);
     timer = null;
@@ -613,14 +617,16 @@ function sender(send, onFail) {
     sentValue = value;
     lastSent = Date.now();
     inFlight = true;
-    settleUntil = Infinity;
+    release();
     send(value).then(() => {
       inFlight = false;
-      settleUntil = Math.min(settleUntil, Date.now() + SETTLE_MS);
+      settleTimer = window.setTimeout(() => {
+        settleTimer = null;
+        if (pending === null) { onSettle(); }
+      }, SETTLE_MS);
       fire();
     }, (problem) => {
       inFlight = false;
-      settleUntil = 0;
       onFail(problem, pending === null);
       fire();
     });
@@ -632,8 +638,8 @@ function sender(send, onFail) {
       if (timer === null) { fire(); }
     },
     busy(reported) {
-      if (reported === sentValue) { settleUntil = 0; }
-      return inFlight || pending !== null || Date.now() < settleUntil;
+      if (!inFlight && reported === sentValue) { release(); }
+      return inFlight || pending !== null || settleTimer !== null;
     },
   };
 }
@@ -647,6 +653,8 @@ function rangeControl(input, output, read, write, onFail) {
   const send = sender(write, (problem, settled) => {
     if (problem) { onFail(problem.message); }
     if (settled && !held) { control.show(read()); }
+  }, () => {
+    if (!held) { control.show(read()); }
   });
   const control = {
     held: (reported) => held || send.busy(Math.round(reported)),
@@ -777,13 +785,13 @@ function makeRow(speaker) {
   row.powerSender = sender((on) => change({ on }), (problem, settled) => {
     if (problem) { fail(problem.message); }
     if (settled) { power.checked = row.speaker.on; }
-  });
+  }, () => { power.checked = row.speaker.on; });
   power.addEventListener("change", () => row.powerSender.set(power.checked));
 
   row.delaySender = sender((value) => change({ delay_ms: value }), (problem, settled) => {
     if (problem) { fail(problem.message); }
     if (settled) { showDelay(row, row.speaker.delay_ms); }
-  });
+  }, () => showDelay(row, row.speaker.delay_ms));
 
   const sendDelay = (value) => {
     const min = row.speaker.delay_min_ms;
