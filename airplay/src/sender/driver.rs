@@ -3355,4 +3355,69 @@ mod tests {
         assert!(failed);
         drop(listener);
     }
+
+    // An AirPlay 2 only receiver first listed with its IPv6 address alone:
+    // the session still connecting there starts again on the IPv4 address
+    // discovery adds, instead of waiting out the connect timeout.
+    // covers: P228
+    #[test]
+    fn a_connecting_airplay2_session_starts_again_on_an_address_discovery_adds() {
+        use crate::ap2::Ap2Output;
+        use crate::discovery::{DeviceId, ScopedAddr, ServiceKind, ServiceRecord};
+        use std::net::{IpAddr, SocketAddr};
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency).with_airplay2(
+            true,
+            false,
+            Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
+        );
+        let id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 0x55]);
+        let v6: IpAddr = "2001:db8::55".parse().expect("an address");
+        let v4: IpAddr = "192.0.2.55".parse().expect("an address");
+        let record = |addresses: &[IpAddr]| ServiceRecord {
+            kind: ServiceKind::AirPlay,
+            instance: "Test TV".to_owned(),
+            host: "speaker.local".to_owned(),
+            port: 7000,
+            txt: [
+                "features=0x0,0x10040".to_owned(),
+                "flags=0x4".to_owned(),
+                "model=Speaker1,1".to_owned(),
+                format!("deviceid={id}"),
+            ]
+            .into_iter()
+            .map(String::into_bytes)
+            .collect(),
+            addresses: addresses.iter().copied().map(ScopedAddr::new).collect(),
+        };
+        let changes = driver.directory.apply(BrowseEvent::Resolved(record(&[v6])));
+        driver.report_changes(changes);
+        let device = driver.directory.devices().next().cloned().expect("listed");
+        let key = device.key.clone();
+        driver.add_speaker(
+            device,
+            SpeakerOptions::new(Volume::Db(-20.0)),
+            Arc::new(SpeakerCounters::default()),
+            now,
+        );
+        assert_eq!(
+            driver.next_ap2_output(&key),
+            Some(Ap2Output::Connect(SocketAddr::new(v6, 7000)))
+        );
+
+        let changes = driver
+            .directory
+            .apply(BrowseEvent::Resolved(record(&[v4, v6])));
+        driver.report_changes(changes);
+        driver.run_timers(Instant::now() + Duration::from_secs(1));
+        assert_eq!(
+            driver.next_ap2_output(&key),
+            Some(Ap2Output::Connect(SocketAddr::new(v4, 7000)))
+        );
+    }
 }
