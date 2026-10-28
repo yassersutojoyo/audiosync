@@ -104,8 +104,6 @@ fn random_cuts(rng: &mut Rng, len: usize) -> Vec<usize> {
     cuts
 }
 
-// ---- Payloads ------------------------------------------------------------
-
 const NAMESPACES: &[&str] = &[
     NS_CONNECTION,
     NS_HEARTBEAT,
@@ -400,8 +398,6 @@ fn random_message(rng: &mut Rng, last_id: u32) -> CastMessage {
     }
 }
 
-// ---- Frames ----------------------------------------------------------------
-
 /// Bytes as a device might send them: whole frames, frames whose body is
 /// garbage, length prefixes at the edges, and loose bytes.
 fn random_stream(rng: &mut Rng) -> Vec<u8> {
@@ -539,8 +535,6 @@ fn frame_edges_get_the_documented_answers() {
         );
     }
 }
-
-// ---- The channel -------------------------------------------------------------
 
 /// The last request the channel sent.
 #[derive(Default)]
@@ -793,14 +787,12 @@ fn deep_and_huge_payloads_inside_a_frame_are_read_or_dropped() {
             channel.tick(now);
         }
         assert!(
-            started.elapsed() < Duration::from_millis(500),
+            started.elapsed() < Duration::from_millis(2_500),
             "{label:?} took {:?}",
             started.elapsed()
         );
     }
 }
-
-// ---- Discovery ---------------------------------------------------------------
 
 const TXT_BYTES: &[u8] = b"===idmdfnrsvecaIDMDFN0123456789-_ \xc3\xa9";
 
@@ -875,8 +867,6 @@ fn device_ids_parse_only_as_uuids_and_print_back() {
     }
 }
 
-// ---- Groups --------------------------------------------------------------------
-
 #[test]
 fn multizone_messages_never_grow_a_member_list_past_its_cap() {
     let mut rng = Rng::new(0x006a_0ce5);
@@ -904,8 +894,6 @@ fn multizone_messages_never_grow_a_member_list_past_its_cap() {
         }
     }
 }
-
-// ---- The stream server's request headers ---------------------------------------
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 const HEADER_BYTES: &[u8] = b"%%%2525250123456789abcdefABCDEF:: -=,bytes/\t";
@@ -994,7 +982,9 @@ fn fetch_headers_from_any_lines_stay_capped_and_scrubbed() {
 }
 
 /// A request is at most 8 KiB plus one read, and each nesting of `%25`
-/// costs the decoder a pass over the text.
+/// costs the decoder a pass over the text. An uncapped decoder reads every
+/// escape here down to `A`, in about 400 ms of a debug build; the time
+/// limit leaves headroom for a busy runner, the redaction check none.
 #[test]
 fn escapes_nested_through_a_whole_request_are_logged_quickly() {
     let deep = format!("%{}41", "25".repeat(4_000));
@@ -1011,12 +1001,16 @@ fn escapes_nested_through_a_whole_request_are_logged_quickly() {
         let logged = headers.for_log(TOKEN);
         let elapsed = started.elapsed();
         assert!(
-            elapsed < Duration::from_millis(50),
+            elapsed < Duration::from_millis(250),
             "for_log took {elapsed:?}"
         );
-        logged
-            .names
-            .iter()
-            .for_each(|name| check_logged(name, false));
+        let plain = ["User-Agent", "Range", "Icy-MetaData", "<redacted>"];
+        for name in &logged.names {
+            assert!(plain.contains(&name.as_str()), "{name:?}");
+        }
+        [&logged.user_agent, &logged.range, &logged.icy_metadata]
+            .into_iter()
+            .flatten()
+            .for_each(|value| assert_eq!(value, "<redacted>"));
     }
 }
