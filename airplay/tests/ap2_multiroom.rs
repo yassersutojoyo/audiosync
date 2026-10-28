@@ -650,3 +650,57 @@ fn ap2_a_peer_update_behind_a_slow_answer_sets_no_timer_in_the_past() {
     assert_eq!(rig.times_of("SETPEERS").len(), updates + 1);
     assert_eq!(last_peers(&rig), list(&[RECEIVER, FIRST, SECOND, SENDER]));
 }
+
+// covers: P209
+#[test]
+fn ap2_a_peer_update_behind_a_wanted_flush_sets_no_timer_in_the_past() {
+    let mut fake = ptp_fake();
+    fake.info_body = plist(dict(&[
+        (
+            "features",
+            int((1 << 15) | (1 << 38) | (1 << 41) | (1 << 48)),
+        ),
+        ("statusFlags", int(0x4)),
+    ]));
+    let mut rig = Ap2Rig::new(ptp_config(vec![FIRST]), fake);
+    assert!(rig.ready(), "{:?}", rig.keys());
+    let updates = rig.times_of("SETPEERS").len();
+
+    // A delay FLUSH waits behind the artwork answer while a second
+    // receiver joins; the answer comes, the FLUSH not yet.
+    rig.fake.hold = Some("SET_PARAMETER".to_owned());
+    let mut jpeg = vec![0x5A; 64];
+    jpeg[..3].copy_from_slice(&[0xFF, 0xD8, 0xFF]);
+    let now = rig.now;
+    assert_eq!(
+        rig.session.send_artwork(Artwork::single(jpeg), 1000, now),
+        Ok(())
+    );
+    rig.pump();
+    assert!(!rig.session.flush_slot());
+    set_peers(&mut rig, vec![FIRST, SECOND]);
+    rig.fake.hold = None;
+    rig.release();
+    let end = rig.now + Duration::from_secs(3);
+    while rig.now < end {
+        rig.now += Duration::from_millis(100);
+        let now = rig.now;
+        if rig.session.poll_timeout().is_some_and(|at| at <= now) {
+            rig.session.handle_timeout(now);
+        }
+        rig.pump();
+        let next = rig.session.poll_timeout();
+        assert!(
+            next.is_none_or(|at| at > now),
+            "a timer already due would wake the driver at once: {:?} past",
+            next.map(|at| now - at)
+        );
+    }
+    assert_eq!(rig.times_of("SETPEERS").len(), updates);
+
+    let now = rig.now;
+    assert!(rig.session.flush(100, 35_200, now));
+    rig.pump();
+    assert_eq!(rig.times_of("SETPEERS").len(), updates + 1);
+    assert_eq!(last_peers(&rig), list(&[RECEIVER, FIRST, SECOND, SENDER]));
+}
