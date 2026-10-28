@@ -407,11 +407,18 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
     let started = Instant::now();
     let mut lines: Vec<(f64, Diagnostics)> = Vec::new();
     let mut seen = Vec::new();
+    let cap = Duration::from_secs(2);
+    let full = cap - Duration::from_millis(40);
     // The loopback socket buffers fill before the sender's queue starts to,
-    // and their size differs per system.
+    // and their size differs per system. The run goes on 3 s past the full
+    // queue and the first offer, so a late automatic restart is caught.
     let until = started + Duration::from_secs(60);
-    while lines.iter().filter(|(_, line)| line.resync_offered).count() < 2 {
-        assert!(Instant::now() < until, "no resync offer in 60 s: {lines:?}");
+    let mut settled: Option<Instant> = None;
+    while settled.is_none_or(|at| at.elapsed() < Duration::from_secs(3)) {
+        assert!(
+            Instant::now() < until,
+            "no full queue and offer in 60 s: {lines:?}"
+        );
         session.run_for(Duration::from_millis(50));
         while let Some(event) = session.poll_event() {
             if let SessionEvent::Diagnostics(line) = &event {
@@ -419,8 +426,13 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
             }
             seen.push(event);
         }
+        if settled.is_none()
+            && lines.iter().any(|(_, line)| line.queued >= full)
+            && lines.iter().any(|(_, line)| line.resync_offered)
+        {
+            settled = Some(Instant::now());
+        }
     }
-    let cap = Duration::from_secs(2);
     for (_, line) in &lines {
         assert!(line.queued <= cap, "{line:?}");
         assert_eq!(
@@ -434,11 +446,13 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
             (of(&to.1).as_secs_f64() - of(&from.1).as_secs_f64()) / (to.0 - from.0)
         };
 
-    let first_drop = lines
+    // A stalled feed or pump also drops ring backlog (C64), so the queue
+    // reaching its cap marks where the overflow drops begin.
+    let filled = lines
         .iter()
-        .position(|(_, line)| line.frames_dropped > 0)
-        .expect("a drop");
-    let piling: Vec<_> = lines[..first_drop]
+        .position(|(_, line)| line.queued >= full)
+        .expect("a full queue");
+    let piling: Vec<_> = lines[..filled]
         .iter()
         .filter(|(_, line)| line.queued > Duration::ZERO)
         .collect();
@@ -451,15 +465,13 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
     );
     let growth = per_second(piling[0], piling[piling.len() - 1], |line| line.queued);
     assert!((0.25..=0.8).contains(&growth), "{growth} s/s: {lines:?}");
-    let fullest = lines
-        .iter()
-        .map(|(_, line)| line.queued)
-        .max()
-        .expect("lines");
-    assert!(fullest >= cap - Duration::from_millis(40), "{lines:?}");
 
-    let dropping = &lines[first_drop..];
-    assert!(dropping.len() >= 2, "{lines:?}");
+    let dropping = &lines[filled..];
+    assert!(dropping.len() >= 3, "{lines:?}");
+    assert!(
+        dropping[dropping.len() - 1].1.frames_dropped > 0,
+        "{lines:?}"
+    );
     assert!(
         dropping
             .windows(2)
@@ -492,8 +504,8 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
     cell(
         "C75",
         &format!(
-            "read at half speed: queue +{growth:.2} s/s to {:.2} s, then drift +{drift_rate:.2} s/s, resync offered at {offered_at:.1} s, 1 LOAD",
-            fullest.as_secs_f64()
+            "read at half speed: queue +{growth:.2} s/s, full at {:.1} s, then drift +{drift_rate:.2} s/s, resync offered at {offered_at:.1} s, 1 LOAD",
+            lines[filled].0
         ),
     );
 }
