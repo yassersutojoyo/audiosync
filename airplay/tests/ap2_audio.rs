@@ -992,8 +992,11 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     // A delay FLUSH in flight when the pause comes: only the pause FLUSH's
     // answer, about 2 ANSWER after the pause, lets the audio out.
     server.fake().pause.insert("FLUSH".to_owned(), ANSWER);
+    let flushes = server.fake().flushes_seen.clone();
     sender.set_delay(&key, Duration::from_millis(200));
-    std::thread::sleep(Duration::from_millis(400));
+    // A delay FLUSH still queued behind another request would merge with
+    // the pause FLUSH, so the pause waits until the speaker holds it.
+    assert!(wait_until(LONG, || flushes.load(Ordering::SeqCst) == 3));
     udp.data.take();
     sender.pause();
     let paused = Instant::now();

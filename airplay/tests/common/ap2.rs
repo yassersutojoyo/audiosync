@@ -250,6 +250,8 @@ pub struct FakeAp2 {
     /// GET_PARAMETERs read so far, counted before any pause of the answer
     /// and outside the lock an [`Ap2Server`] holds while it answers.
     pub reads_seen: Arc<AtomicUsize>,
+    /// FLUSHes read so far, counted like `reads_seen`.
+    pub flushes_seen: Arc<AtomicUsize>,
     /// The session SETUP answer's `Session` (see [`FakeAp2::session_id`]),
     /// which every later SET_PARAMETER must carry or get 500 (P25).
     pub session: Option<String>,
@@ -305,6 +307,7 @@ impl FakeAp2 {
             remote_step: None,
             volume_status: None,
             reads_seen: Arc::new(AtomicUsize::new(0)),
+            flushes_seen: Arc::new(AtomicUsize::new(0)),
             session: None,
             second_info_body: None,
             record_headers: Vec::new(),
@@ -452,6 +455,9 @@ impl FakeAp2 {
             }
             if key == "GET_PARAMETER" {
                 self.reads_seen.fetch_add(1, Ordering::SeqCst);
+            }
+            if key == "FLUSH" {
+                self.flushes_seen.fetch_add(1, Ordering::SeqCst);
             }
             if self.silent.contains(&key) {
                 continue;
