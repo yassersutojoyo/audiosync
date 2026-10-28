@@ -11713,6 +11713,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S212
     #[test]
     fn a_change_whose_save_failed_is_saved_at_quit_without_retrying_every_poll() {
         let dir = test_dir("adapter-settings-retry-at-quit");
@@ -11742,6 +11743,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S212
     #[test]
     fn a_change_whose_save_failed_is_saved_later_without_another_change() {
         let dir = test_dir("adapter-settings-retry-on-polls");
@@ -11771,6 +11773,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S212
     #[test]
     fn going_back_to_the_saved_settings_ends_a_failed_save() {
         let dir = test_dir("adapter-settings-back-to-saved");
