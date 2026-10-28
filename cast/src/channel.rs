@@ -17,7 +17,7 @@ use crate::media::{
 use crate::message::{
     self, BROADCAST, CastMessage, DEFAULT_MEDIA_RECEIVER, Namespace, PLATFORM, PayloadError, SENDER,
 };
-use crate::status::{AppSession, ControlType, DeviceVolume, ReceiverStatus, answers_level};
+use crate::status::{AppSession, ControlType, DeviceVolume, ReceiverStatus, answers_volume};
 
 /// How long the first `RECEIVER_STATUS` may take (C33).
 pub const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -479,9 +479,9 @@ impl Channel {
             json!({"type": "SET_VOLUME", "volume": {"level": level}}),
         );
         // A device reports only changes, so the level it already has gets no answer (C104).
-        let current = self.status.as_ref().map(|status| status.volume.level);
+        let current = self.status.as_ref().map(|status| &status.volume);
         self.volume_unconfirmed =
-            (!current.is_some_and(|current| answers_level(level, current))).then_some((id, level));
+            (!current.is_some_and(|current| answers_volume(level, current))).then_some((id, level));
     }
 
     /// Tears the session down (C44, C87): media `STOP` for the sender's
@@ -919,12 +919,10 @@ impl Channel {
         }
         // The answer to an older level leaves the newer one unanswered (C70); a
         // device that rounds to its step may answer without the request id.
-        let rounding = status.volume.step_interval.filter(|step| step.is_finite());
-        if self.volume_unconfirmed.is_some_and(|(request, level)| {
-            request == id
-                || answers_level(level, status.volume.level)
-                || rounding.is_some_and(|step| (level - status.volume.level).abs() < step / 2.0)
-        }) {
+        if self
+            .volume_unconfirmed
+            .is_some_and(|(request, level)| request == id || answers_volume(level, &status.volume))
+        {
             self.volume_unconfirmed = None;
         }
         self.status = Some(status.clone());
