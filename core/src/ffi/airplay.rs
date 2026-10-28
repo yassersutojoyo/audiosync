@@ -7875,6 +7875,44 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // covers: S291
+    #[test]
+    fn a_reading_below_the_wire_range_is_kept_at_its_bottom_not_muted() {
+        let receiver = Loopback::start();
+        let id = "02005E005365";
+        let mut handle = listing(vec![loopback_record(id, "Shelf", receiver.port)]);
+        let c_id = c_string(id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 50.0)) };
+        let volumes = || -> Vec<String> {
+            receiver
+                .bodies(Method::SetParameter)
+                .into_iter()
+                .filter(|body| body.starts_with("volume:"))
+                .collect()
+        };
+        assert!(wait_for(|| !volumes().is_empty()), "{:?}", volumes());
+        let key = {
+            let added = inside(handle).added.get_mut(id).expect("added");
+            added.volume_set_at = None;
+            added.reading = true;
+            added.key.clone()
+        };
+        // −40 dB, below the wire range: row 0, kept as −30 dB as on Windows.
+        report_volume(handle, &key, -40.0);
+        assert_eq!(inside(handle).added[id].position, 0.0);
+        let before = volumes().len();
+        receiver.hang_up();
+        assert!(
+            wait_for(|| volumes().len() > before),
+            "no reconnect: {:?}",
+            volumes()
+        );
+        assert_eq!(volumes()[before], "volume: -30.000000\r\n");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     /// What the host's row shows for an own volume at `master`, outside a
     /// zone (S290).
     fn shown_row(own: f64, master: f64) -> f64 {
