@@ -7612,18 +7612,19 @@ do {
     check(!AppLifecycle.answersSecondLaunch(exiting: true),
           "second launch: a copy that is quitting doesn't answer, so the new one waits for it")
     do {
-        func defers(_ own: (Int32, Date?), _ other: (Int32, Date?), finished: Bool = false) -> Bool {
-            AppLifecycle.defersToOtherCopy(ownPID: own.0, ownLaunch: own.1, otherPID: other.0, otherLaunch: other.1,
+        func defers(_ own: (Int32, Date), _ other: (Int32, Date), finished: Bool = false) -> Bool {
+            AppLifecycle.defersToOtherCopy(ownPID: own.0, ownStart: own.1, otherPID: other.0, otherStart: other.1,
                                            otherFinishedLaunching: finished)
         }
         let t0 = Date(timeIntervalSince1970: 1_800_000_000)
         check(defers((300, t0 + 1), (99_000, t0)) && !defers((99_000, t0), (300, t0 + 1)),
               "second launch: of two copies launching together, the one launched first stays and only the other leaves, even after a PID wrap")
-        check(!defers((500, t0), (501, t0)) && defers((501, t0), (500, t0))
-                && !defers((500, nil), (501, t0)) && defers((501, t0), (500, nil)),
-              "second launch: with equal or unknown launch times, the lower PID stays and only the other leaves")
-        check(defers((99_000, t0), (300, nil)) != defers((300, t0 + 1), (99_000, t0)),
-              "second launch: two copies that see each other's start differently still leave exactly one running")
+        check(!defers((500, t0), (501, t0)) && defers((501, t0), (500, t0)),
+              "second launch: with equal start times, the lower PID stays and only the other leaves")
+        let pairs: [((Int32, Date), (Int32, Date))] = [((99_000, t0), (300, t0 + 1)), ((500, t0), (501, t0)),
+                                                       ((501, t0), (500, t0 + 0.000_001))]
+        check(pairs.allSatisfy { defers($0.0, $0.1) != defers($0.1, $0.0) },
+              "second launch: two copies reading each other's kernel start time leave exactly one running")
         check(defers((500, t0), (501, t0 + 1), finished: true),
               "second launch: a copy that finished launching is asked to show its window, whatever its PID")
     }

@@ -13,14 +13,27 @@ func otherRunningCopy() -> NSRunningApplication? {
         .first { $0.processIdentifier != ownPID && !$0.isTerminated }
 }
 
+/// When the kernel started a process, to the microsecond. Unlike
+/// `launchDate` it exists for every process, so two copies see the same value.
+func processStart(_ pid: pid_t) -> Date? {
+    var info = kinfo_proc()
+    var size = MemoryLayout<kinfo_proc>.stride
+    var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+    guard sysctl(&mib, UInt32(mib.count), &info, &size, nil, 0) == 0, size > 0 else { return nil }
+    let start = info.kp_proc.p_un.__p_starttime   // p_starttime in C
+    return Date(timeIntervalSince1970: Double(start.tv_sec) + Double(start.tv_usec) / 1_000_000)
+}
+
 /// Flipped by the reply observer; the run loop below polls it.
 final class ReplyFlag { var received = false }
 
 if let other = otherRunningCopy(),
+   let ownStart = processStart(ProcessInfo.processInfo.processIdentifier),
+   let otherStart = processStart(other.processIdentifier),
    AppLifecycle.defersToOtherCopy(ownPID: ProcessInfo.processInfo.processIdentifier,
-                                  ownLaunch: NSRunningApplication.current.launchDate,
+                                  ownStart: ownStart,
                                   otherPID: other.processIdentifier,
-                                  otherLaunch: other.launchDate,
+                                  otherStart: otherStart,
                                   otherFinishedLaunching: other.isFinishedLaunching) {
     let center = DistributedNotificationCenter.default()
     let flag = ReplyFlag()
