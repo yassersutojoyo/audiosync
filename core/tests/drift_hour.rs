@@ -412,7 +412,7 @@ fn a_producer_stall_past_the_dead_band_costs_every_output_a_step_back_and_a_skip
 
 // covers: S226
 #[test]
-#[ignore = "on demand: the gap between local outputs 3 ppm apart, one held back 2 s, moves at most S207's 15-frame dead zone plus a frame in 60 simulated min; run with --ignored"]
+#[ignore = "on demand: the gap between local outputs 3 ppm apart, one held back 2 s, moves at most S207's 15-frame dead zone plus a frame (1 ms with late stamps) in 60 simulated min; run with --ignored"]
 fn the_gap_between_outputs_3_ppm_apart_moves_at_most_the_trim_dead_zone_all_hour() {
     // An output at hold-back 0 next to one held back 2 s, the fast clock on
     // either: the trim holds the gap's move at the dead zone's edge, not
