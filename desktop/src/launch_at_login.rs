@@ -650,6 +650,15 @@ mod tests {
     }
 
     #[test]
+    fn a_relative_exe_name_reads_as_elsewhere_not_gone() {
+        let (_, login) = setup(|e| {
+            e.run = Some("audiosync.exe --background".to_owned());
+            e.listed_exe_gone = true;
+        });
+        assert_eq!(login.status(), Status::Elsewhere);
+    }
+
+    #[test]
     fn a_refused_write_posts_a_notice_and_stays_off() {
         let (_, mut login) = setup(|e| e.refuse_writes = true);
         let outcome = login.set(true, time);
