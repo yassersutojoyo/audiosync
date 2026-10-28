@@ -4178,7 +4178,8 @@ fn clear_announcement(main: &slint::Weak<MainWindow>, flyout: &slint::Weak<TrayF
 /// The tray icon's tooltip: AudioSync and its status, then the newest
 /// notice's title on a second line while there is a notice, so Narrator
 /// reads it on the tray icon even with every window closed. `posted` is
-/// [`App::notices_posted`]; notices missing from it go by id.
+/// [`App::notices_posted`]; notices missing from it rank below listed
+/// ones, by id.
 #[cfg(any(windows, target_os = "linux", test))]
 pub fn tray_tooltip(strings: &Strings<'_>, state: &AppState, posted: &[u64]) -> String {
     let speakers = count(state.active_speakers());
