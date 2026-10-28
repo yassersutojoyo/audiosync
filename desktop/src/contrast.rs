@@ -1063,7 +1063,7 @@ fn spec_device_volume_wording() -> Vec<(String, String, String)> {
 /// names the output; the fix a link-style button whose label starts with its
 /// visible text and then names the output; both right after the slider in
 /// reading order; the glyph decorative.
-// covers: S198, S200
+// covers: S199, S200
 #[test]
 fn the_hint_and_the_fix_name_the_output_for_narrator() {
     let wording = spec_device_volume_wording();
