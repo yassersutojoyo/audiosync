@@ -703,8 +703,72 @@ unsafe extern "system" fn color_set_procedure(
 /// shutdown or restart), which may end the process as soon as it returns.
 /// Returns the hidden window that receives that message, `None` without one.
 #[cfg(windows)]
-pub fn on_session_end(_ending: Box<dyn Fn()>) -> Option<isize> {
-    None
+pub fn on_session_end(ending: Box<dyn Fn()>) -> Option<isize> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, RegisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
+    };
+    use windows::core::w;
+
+    SESSION_ENDING.with(|slot| *slot.borrow_mut() = Some(ending));
+    let class = WNDCLASSW {
+        lpfnWndProc: Some(session_end_procedure),
+        lpszClassName: w!("AudioSyncSessionEnd"),
+        ..Default::default()
+    };
+    // SAFETY: the class names a procedure and a NUL-terminated literal that
+    // both live for the whole process; a second registration only fails.
+    unsafe { RegisterClassW(&class) };
+    // A hidden top-level window, not a message-only one: those miss the
+    // end-of-session broadcast.
+    // SAFETY: the class was registered above, and the window takes no
+    // parent, menu or creation data.
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("AudioSyncSessionEnd"),
+            w!("AudioSync"),
+            WINDOW_STYLE(0),
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+    .ok()?;
+    Some(hwnd.0 as isize)
+}
+
+#[cfg(windows)]
+thread_local! {
+    static SESSION_ENDING: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn session_end_procedure(
+    hwnd: windows::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::LRESULT;
+    use windows::Win32::UI::WindowsAndMessaging::{DefWindowProcW, WM_ENDSESSION};
+
+    // A zero `wparam` means the end was called off.
+    if message == WM_ENDSESSION && wparam.0 != 0 {
+        let ending = SESSION_ENDING.with(|slot| slot.borrow_mut().take());
+        if let Some(ending) = ending {
+            ending();
+        }
+        return LRESULT(0);
+    }
+    // SAFETY: passes every other message on unchanged; WM_QUERYENDSESSION
+    // then answers that the session may end.
+    unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
 }
 
 /// Whether the taskbar (and the notification area) uses the light theme, so

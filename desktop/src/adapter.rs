@@ -5197,7 +5197,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         // Before the backend drops and the Cast host shuts down, so the last
         // offset change is kept even when its event was never polled.
         self.save_cast_memory();
-        true
+        self.unsaved.is_none()
     }
 
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
@@ -11716,7 +11716,7 @@ mod tests {
 
     // covers: S212
     #[test]
-    fn a_change_whose_save_failed_is_saved_at_quit_without_retrying_every_poll() {
+    fn a_change_whose_save_failed_is_logged_once_and_saved_at_quit() {
         let dir = test_dir("adapter-settings-retry-at-quit");
         let path = dir.join(settings::FILE_NAME);
         // A folder where the temporary file goes, as when another process

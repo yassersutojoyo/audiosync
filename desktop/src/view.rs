@@ -3383,8 +3383,8 @@ impl App {
     }
 
     /// Saves the settings now, with the main window's frame: the app is
-    /// about to quit.
-    pub fn save_settings(&self) {
+    /// about to quit. Returns whether no change is left unsaved.
+    pub fn save_settings(&self) -> bool {
         // Quit drops a typed delay or name that wasn't applied, so a focus
         // loss as the window goes applies nothing either.
         {
@@ -3394,7 +3394,7 @@ impl App {
             ui.rename = None;
         }
         self.remember_view();
-        self.backend.borrow_mut().save_settings();
+        self.backend.borrow_mut().save_settings()
     }
 
     fn step_delay(&self, id: &str, delta: i32) {
