@@ -8155,16 +8155,16 @@ pub mod tests {
         let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
         airplay.set_volume(&id, 10.0);
         fake.take_calls();
-        // Sent −27 dB; the speaker rounds it 0.3 dB off: its echo, however late.
+        // Sent −27 dB; the speaker rounds it on the same row: its echo, however late.
         settle(&mut airplay, &id);
         read_now(&mut airplay);
-        report_volume(&fake, &kitchen, -27.3);
+        report_volume(&fake, &kitchen, -26.97);
         assert!(airplay.poll().is_empty());
         read_now(&mut airplay);
-        report_volume(&fake, &kitchen, -27.3);
+        report_volume(&fake, &kitchen, -26.97);
         assert!(airplay.poll().is_empty());
         assert!(fake.take_calls().is_empty());
-        // One press down from the baseline: level 8, so own 8.
+        // Two presses down from the baseline: level 8, so own 8.
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -27.6);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
@@ -8175,6 +8175,29 @@ pub mod tests {
         report_volume(&fake, &kitchen, -26.4);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
         assert_eq!(own(&airplay), 12.0);
+    }
+
+    // covers: S276, S291
+    #[test]
+    fn one_step_inside_the_echo_window_is_a_change_on_the_speaker() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        // The row moved to 60 sent −12 dB; the remote pressed down once at
+        // once holds level 59, by DACP.
+        airplay.set_volume(&id, 60.0);
+        remote(
+            &fake,
+            &kitchen,
+            RemoteCommand::DeviceVolume(Volume::Db(-12.3)),
+        );
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(own(&airplay), 59.0);
+        // By a read before any echo: the row moved to 40, the speaker holds 39.
+        airplay.set_volume(&id, 40.0);
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -18.3);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(own(&airplay), 39.0);
     }
 
     // covers: S271
@@ -8468,11 +8491,10 @@ pub mod tests {
         airplay.set_master(63.0);
         airplay.move_row(&id, 20.0);
         fake.take_calls();
-        // Sent −24 dB; the television answers on its 0.6 dB grid, 0.3 dB off,
-        // however late.
+        // Sent −24 dB; the television answers on its 0.6 dB grid, however late.
         for _ in 0..3 {
             read_now(&mut airplay);
-            report_volume(&fake, &kitchen, -24.3);
+            report_volume(&fake, &kitchen, -24.0);
             assert!(airplay.poll().is_empty());
         }
         assert!(fake.take_calls().is_empty());
@@ -8515,7 +8537,7 @@ pub mod tests {
         // The same for a zone volume: after the echo of 21, level 21.9 reads
         // as own 21.9 ÷ 0.63 and row 21, which it shows again after the zone.
         read_now(&mut airplay);
-        report_volume(&fake, &kitchen, -23.763);
+        report_volume(&fake, &kitchen, -23.67);
         assert!(airplay.poll().is_empty());
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -23.43);
@@ -8578,7 +8600,7 @@ pub mod tests {
         airplay.set_volume(&id, 50.0);
         fake.take_calls();
         read_now(&mut airplay);
-        report_volume(&fake, &kitchen, -15.2);
+        report_volume(&fake, &kitchen, -14.95);
         assert!(airplay.poll().is_empty());
         assert_eq!(airplay.speakers()[0].volume, 50.0);
         read_now(&mut airplay);
@@ -8810,8 +8832,8 @@ pub mod tests {
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
         fake.take_calls();
         // The speaker echoes the level sent back inside the 3 s window, as
-        // sent and 0.2 dB off as it rounds.
-        for echoed in [-18.0, -18.2] {
+        // sent and on the same row as it rounds.
+        for echoed in [-18.0, -17.95] {
             remote(
                 &fake,
                 &kitchen,

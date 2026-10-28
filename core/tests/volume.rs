@@ -275,12 +275,12 @@ mod airplay_device_level {
     #[test]
     fn the_first_reading_near_a_level_sent_is_its_echo_and_the_baseline() {
         let mut read = ReadBack::default();
-        read.sent(-24.0);
-        assert_eq!(read.echo_of(), Some(-24.0));
-        // The 0.6 dB grid echoes −24 as −24.3: the baseline, no change.
-        assert!(!read.set_on_speaker(-24.3));
+        read.sent(-23.7);
+        assert_eq!(read.echo_of(), Some(-23.7));
+        // The 0.6 dB grid keeps level 21 (−23.7) as −24: the baseline, no change.
+        assert!(!read.set_on_speaker(-24.0));
         assert_eq!(read.echo_of(), None);
-        assert!(!read.set_on_speaker(-24.27));
+        assert!(!read.set_on_speaker(-24.03));
         assert!(!read.set_on_speaker(f64::NAN));
         // One remote press away from the baseline is a change and the new baseline.
         assert!(read.set_on_speaker(-23.7));
@@ -288,6 +288,20 @@ mod airplay_device_level {
         // More than 0.5 dB from a level just sent is a change at once.
         read.sent(-24.0);
         assert!(read.set_on_speaker(-23.4));
+    }
+
+    // covers: S291
+    #[test]
+    fn one_step_inside_the_echo_window_is_a_change_on_the_speaker() {
+        let mut read = ReadBack::default();
+        // The row at 50 sent −15 dB; the remote pressed down once before the
+        // first read holds level 49.
+        read.sent(-15.0);
+        assert!(read.set_on_speaker(-15.3));
+        assert!(!read.set_on_speaker(-15.3));
+        // A reading on the row sent is still its echo.
+        read.sent(-15.0);
+        assert!(!read.set_on_speaker(-14.98));
     }
 }
 
