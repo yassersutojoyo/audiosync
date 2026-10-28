@@ -6,7 +6,7 @@
 //! starts browsing, and takes the devices discovery finds, one change at a
 //! time, by their ID: the `id` TXT value in hex, or `manual:<address>` for a
 //! device the user added by address (C18), which is listed offline until a
-//! TCP connect to its address succeeds, checked again every 15 s while no
+//! TLS handshake with its address completes, checked again every 15 s while no
 //! session holds it. It starts one device at a time
 //! (C2) by that ID and gets an attempt number back; everything that happens
 //! to the attempt arrives as events carrying that number, and every attempt

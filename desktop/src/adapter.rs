@@ -4412,6 +4412,15 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         cast_address::remove(&mut self.cast_addresses, &address);
         self.audio.remove_cast_address(&address);
         self.take_events();
+        // Hidden rows are left out of the snapshot, so ask the sender.
+        let listed = self
+            .audio
+            .cast_speakers()
+            .into_iter()
+            .any(|speaker| Some(speaker.id.as_str()) == cast_id(id));
+        if !listed {
+            self.remove_from_zone(id);
+        }
         self.stop_if_idle();
     }
 
@@ -11913,6 +11922,50 @@ mod tests {
         let row = speaker_of(&adapter, &cc_address("192.0.2.20:8010"));
         assert_eq!(row.name, "192.0.2.20:8010");
         assert!(row.cast.as_ref().is_some_and(|cast| cast.added_by_address));
+    }
+
+    // covers: S245
+    #[test]
+    fn removing_a_speaker_added_by_address_takes_it_out_of_its_zone() {
+        let (mut adapter, _fake) = cast_adapter();
+        let id = cc_address("192.0.2.20");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), id.clone()])],
+            ..Settings::default()
+        });
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.20"), Ok(()));
+        adapter.remove_cast_address(&id);
+        assert_eq!(
+            adapter.current_settings().speaker_zones[0].members,
+            [key(SPEAKERS)]
+        );
+    }
+
+    // covers: S245
+    #[test]
+    fn a_hidden_device_a_browse_found_keeps_its_zone_when_its_address_is_removed() {
+        let (mut adapter, fake) = cast_adapter();
+        let den = "00112233445566778899aabbccddeeff";
+        fake.announce_at(
+            den,
+            "Den",
+            DEVICE_PORT,
+            std::net::Ipv4Addr::new(192, 0, 2, 31),
+        );
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), cc(den)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        adapter.hide_speaker(&cc(den), "Google Cast");
+        adapter.remove_cast_address(&cc(den));
+        assert_eq!(
+            adapter.current_settings().speaker_zones[0].members,
+            [key(SPEAKERS), cc(den)]
+        );
     }
 
     fn cast_ended(attempt: u64, end: SessionEnd) -> HostEvent {
