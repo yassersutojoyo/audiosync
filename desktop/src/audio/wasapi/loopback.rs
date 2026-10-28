@@ -470,9 +470,10 @@ fn finish_stream(
     })
 }
 
-/// How [`finish_stream`] reads a failed `call` on `target`'s client.
-fn finish_error(_target: &CaptureTarget, call: &'static str, code: HRESULT) -> BackendError {
-    system_error(call, &windows::core::Error::from_hresult(code))
+/// How [`finish_stream`] reads a failed `call` on `target`'s client: as
+/// `Initialize` and `Start` are (S333).
+fn finish_error(target: &CaptureTarget, call: &'static str, code: HRESULT) -> BackendError {
+    capture_error(target, call, code)
 }
 
 /// The attempts that capture every channel of input device `endpoint_id`
