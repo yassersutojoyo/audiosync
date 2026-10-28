@@ -237,7 +237,7 @@ final class OutputRenderer: FadingOutput {
     func start(on device: AudioObjectID, captureRate: Double, delayMs: Double) throws {
         halt()
         // A hogged device holds the start on the main thread for seconds (measured 7.5 s) before refusing it.
-        if case .hogMode = OutputStallSign.read(hogOwner: Self.hogOwner(device), ownPID: getpid(), running: nil) {
+        if let owner = Self.hogOwner(device), owner != getpid() {
             throw StartFailure.deviceDidNotStart(OSStatus(kAudioDevicePermissionsError))
         }
         let fresh = try Self.makeUnit()
