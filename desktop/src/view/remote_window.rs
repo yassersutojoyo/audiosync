@@ -766,6 +766,25 @@ mod tests {
         assert!(!app.remote_listening(), "off in the file, it stops");
     }
 
+    // covers: S212
+    #[test]
+    fn a_late_read_with_the_same_remote_setting_keeps_the_server_and_its_code() {
+        let backend = MockBackend::new();
+        let late_view = backend.late_view.clone();
+        let app = over_loopback(backend);
+        let port = free_port();
+        app.ui.borrow_mut().remote.port = port;
+        app.remote_window.invoke_remote_toggled(true);
+        let code = app.remote_window.get_code();
+        *late_view.borrow_mut() = Some(crate::ui_model::ViewSettings {
+            remote: RemoteSettings { on: true, port },
+            ..crate::ui_model::ViewSettings::default()
+        });
+        app.poll();
+        assert!(app.remote_listening());
+        assert_eq!(app.remote_window.get_code(), code);
+    }
+
     #[test]
     fn opening_the_window_again_makes_a_new_code() {
         let app = over_loopback(MockBackend::new());

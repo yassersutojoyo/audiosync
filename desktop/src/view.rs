@@ -5856,6 +5856,31 @@ mod tests {
 
     // covers: S212
     #[test]
+    fn a_late_read_keeps_the_window_frame_and_logs_no_unchanged_airplay2_choice() {
+        use crate::debug_log;
+        let path = debug_log::test_dir("view-late-read").join(debug_log::FILE_NAME);
+        let backend = MockBackend::new();
+        let late_view = backend.late_view.clone();
+        let app = app_logging(backend, DebugLog::new(Some(path.clone())));
+        let size = app.main.window().size();
+        *late_view.borrow_mut() = Some(ViewSettings {
+            window: Some(ui_model::WindowFrame {
+                x: 40,
+                y: 40,
+                width: 701.0,
+                height: 503.0,
+                maximized: true,
+            }),
+            ..ViewSettings::default()
+        });
+        app.poll();
+        assert_eq!(app.main.window().size(), size, "the frame stays");
+        let log = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(!log.contains("applies at the next launch"), "{log}");
+    }
+
+    // covers: S212
+    #[test]
     fn window_settings_read_after_launch_show_and_survive_a_quit() {
         let backend = MockBackend::new();
         let late_view = backend.late_view.clone();

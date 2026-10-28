@@ -11949,6 +11949,49 @@ mod tests {
 
     // covers: S212
     #[test]
+    fn a_late_restore_keeps_pairs_and_cast_addresses_added_meanwhile_and_the_file_wins_per_key() {
+        let mut adapter = adapter();
+        adapter.input_pairs.insert("mic-a".to_owned(), 2);
+        adapter.input_pairs.insert("mic-b".to_owned(), 1);
+        adapter.cast_addresses.push("192.0.2.30".to_owned());
+        adapter.restore(Settings {
+            input_pairs: BTreeMap::from([("mic-a".to_owned(), 3)]),
+            cast_addresses: vec!["192.0.2.20".to_owned()],
+            ..Settings::default()
+        });
+        assert_eq!(
+            adapter.input_pairs,
+            BTreeMap::from([("mic-a".to_owned(), 3), ("mic-b".to_owned(), 1)])
+        );
+        assert_eq!(adapter.cast_addresses, ["192.0.2.20", "192.0.2.30"]);
+    }
+
+    // covers: S212
+    #[test]
+    fn a_session_already_capturing_the_files_app_keeps_its_capture_after_a_late_read() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-same-app");
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        let captures = adapter.audio.driver().captures_started().len();
+        assert_eq!(
+            adapter.audio.running_source(),
+            Some(SourceId::App {
+                root_pid: PLAYER_PID
+            })
+        );
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(dir.join("held"), &path).expect("moved back");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().master_volume, 64.0, "read");
+        assert_eq!(adapter.audio.driver().captures_started().len(), captures);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
     fn held_settings_read_later_start_nothing_for_a_speaker_on_without_auto_connect() {
         use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
         let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-no-auto");
