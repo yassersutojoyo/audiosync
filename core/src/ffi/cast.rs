@@ -2066,7 +2066,7 @@ mod tests {
     use std::time::Instant;
 
     use audiosync_cast::client::Fingerprint;
-    use audiosync_cast::discovery::ServiceRecord;
+    use audiosync_cast::discovery::{MAX_DEVICES, ServiceRecord};
 
     thread_local! {
         /// The next guarded call on this thread panics inside its guard.
@@ -2473,6 +2473,42 @@ mod tests {
         assert_eq!(refused, CAST_REFUSED_NONE);
         // SAFETY: a live handle.
         unsafe { asc_cast_stop(handle) };
+        destroy(handle);
+    }
+
+    // CAST_SPEC: C108
+    #[test]
+    fn every_device_the_list_cap_drops_is_reported_gone() {
+        let handle = create();
+        let extra = 5;
+        let ids: Vec<String> = (1..=MAX_DEVICES + extra)
+            .map(|n| format!("{n:032x}"))
+            .collect();
+        let found = ids
+            .iter()
+            .map(|id| {
+                BrowseEvent::Resolved(record(
+                    id,
+                    "Speaker",
+                    DEVICE_PORT,
+                    Ipv4Addr::new(192, 0, 2, 5),
+                ))
+            })
+            .collect();
+        browse(handle, found, false);
+        let changes = devices(handle);
+        let gone: Vec<&str> = changes
+            .iter()
+            .filter(|change| change.event == CAST_GONE)
+            .map(|change| change.id.as_str())
+            .collect();
+        let expected: Vec<&str> = ids[..extra].iter().map(String::as_str).collect();
+        assert_eq!(gone, expected);
+        let appeared = changes
+            .iter()
+            .filter(|change| change.event == CAST_APPEARED)
+            .count();
+        assert_eq!(appeared - gone.len(), MAX_DEVICES);
         destroy(handle);
     }
 
