@@ -271,15 +271,17 @@ impl Graph {
     }
 
     /// The rate and channels to play to output `id` at: its own format,
-    /// else what its properties say, else 48 kHz stereo.
+    /// else what its properties say, else 48 kHz stereo; at most its first
+    /// [`MAX_CHANNELS`](super::format::MAX_CHANNELS) channels.
     pub fn sink_format(&self, id: u32) -> (u32, u16) {
         let Some(node) = self.nodes.get(&id) else {
             return (48_000, 2);
         };
-        node.format.unwrap_or_else(|| {
+        let (rate, channels) = node.format.unwrap_or_else(|| {
             let rate = node.prop("audio.rate").and_then(|rate| rate.parse().ok());
             (rate.unwrap_or(48_000), node.prop_channels().unwrap_or(2))
-        })
+        });
+        (rate, channels.min(super::format::MAX_CHANNELS))
     }
 
     /// The default input device, when one is set and present.

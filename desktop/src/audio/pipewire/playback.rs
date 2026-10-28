@@ -171,6 +171,9 @@ fn channel_id(name: &str) -> u32 {
 
 /// The `EnumFormat` param for float audio at `target`'s rate and channels.
 fn enum_format(target: &Target) -> Result<Vec<u8>, BackendError> {
+    if target.channels > super::format::MAX_CHANNELS {
+        return Err(BackendError::UnsupportedFormat);
+    }
     let mut info = AudioInfoRaw::new();
     info.set_format(AudioFormat::F32LE);
     info.set_rate(target.rate);
