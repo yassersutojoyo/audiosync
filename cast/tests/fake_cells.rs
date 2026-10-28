@@ -396,15 +396,28 @@ fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
     );
     let diagnostics = session.diagnostics();
     assert_eq!(diagnostics.current_time, Some(42.25));
-    assert_eq!(diagnostics.drift, Duration::ZERO);
-    assert!(!diagnostics.resync_offered);
+    // Drift is dropped audio plus time stalled (C79), and no status here
+    // stalls. A feed thread starved on a loaded machine catches up past the
+    // ring backlog and drops some (up to 0.9 s seen under 16 busy loops), so
+    // drift is checked to be those drops alone, with nothing from currentTime.
+    assert_eq!(diagnostics.rebuffers, 0);
+    assert_eq!(
+        diagnostics.drift,
+        Duration::from_secs_f64(diagnostics.frames_dropped as f64 / 48_000.0),
+        "{diagnostics:?}"
+    );
+    assert_eq!(
+        diagnostics.resync_offered,
+        diagnostics.drift > Duration::from_millis(250),
+        "{diagnostics:?}"
+    );
     assert_eq!(device.payloads(NS_MEDIA, "LOAD").len(), 1);
     assert_eq!(device.connection_count(), 1);
     session.stop();
     device.join();
     cell(
         "C19",
-        "30 statuses, currentTime absent/0/backwards/1e9/negative/text/null: no reload, no drift",
+        "30 statuses, currentTime absent/0/backwards/1e9/negative/text/null: no reload, no drift from currentTime",
     );
 }
 
@@ -504,6 +517,14 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
     };
     let growth = per_second(first, &lines[filled]);
     let overflow = per_second(&lines[filled], last);
+    // The feed runs in real time and the device reads at PACE, so audio made
+    // but not yet read grows at 1 - PACE. Both totals are counted outside the
+    // socket, so TCP bursts do not move them; the margin covers a feed that
+    // runs late and catches up.
+    assert!(
+        (1.0 - PACE - 0.15..=1.0 - PACE + 0.15).contains(&growth),
+        "{growth} s/s piled up before the queue filled: {lines:?}"
+    );
     let reading = (last.2 - first.2) / (last.0 - first.0);
     assert!(
         (PACE - 0.05..=PACE + 0.05).contains(&reading),
