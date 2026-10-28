@@ -1165,7 +1165,7 @@ mod tests {
     use audiosync_core::ring::Ring;
     use windows::Win32::System::Threading::INFINITE;
 
-    use super::super::com::{StuckThreads, spawn_worker_within};
+    use super::super::com::{READY_TIMEOUT, StuckThreads, spawn_worker_within};
     use super::*;
     use crate::audio::SESSION_RATE;
 
@@ -1239,9 +1239,9 @@ mod tests {
         let stop = Arc::new(Event::manual_reset().expect("an event"));
         let (answer, hung) = mpsc::channel::<()>();
         let (stopped, done) = mpsc::channel();
-        let (thread, ()) = {
+        let (mut thread, ()) = {
             let stop = Arc::clone(&stop);
-            spawn_worker_within("audiosync-test", TIMEOUT, &STUCK, move |ready| {
+            spawn_worker_within("audiosync-test", READY_TIMEOUT, &STUCK, move |ready| {
                 // The thread owns the ring's writer, as the real one does.
                 let _writer = writer;
                 if ready.ok(()) {
@@ -1255,6 +1255,7 @@ mod tests {
             })
             .expect("it starts")
         };
+        thread.set_timeout(TIMEOUT);
         let capture = LoopbackCapture {
             stop,
             failure: Arc::new(AtomicI32::new(0)),

@@ -807,8 +807,7 @@ mod tests {
         static STUCK: StuckThreads = StuckThreads::new();
         let (gate, hold) = mpsc::channel();
         let done = Done::default();
-        let watcher = VolumeWatcher::start_with(TIMEOUT, &STUCK, hanging(hold, done.clone()))
-            .expect("it starts");
+        let watcher = started(&STUCK, hanging(hold, done.clone()));
         // Windows audio hangs in the first registration: given up after the
         // wait, as no device volume for now.
         let (mut watcher, answer) = within(move || {
@@ -854,8 +853,7 @@ mod tests {
         static STUCK: StuckThreads = StuckThreads::new();
         let (gate, hold) = mpsc::channel();
         let done = Done::default();
-        let watcher = VolumeWatcher::start_with(TIMEOUT, &STUCK, hanging(hold, done.clone()))
-            .expect("it starts");
+        let watcher = started(&STUCK, hanging(hold, done.clone()));
         // Windows audio hangs in a read the UI thread asked for: the call
         // returns after the wait, as no device volume for now.
         let (mut watcher, read) = within(move || {
@@ -911,9 +909,7 @@ mod tests {
         static STUCK: StuckThreads = StuckThreads::new();
         let (gate, hold) = mpsc::channel();
         let done = Done::default();
-        let mut watcher =
-            VolumeWatcher::start_with(TIMEOUT, &STUCK, hanging_unregistration(hold, done.clone()))
-                .expect("it starts");
+        let mut watcher = started(&STUCK, hanging_unregistration(hold, done.clone()));
         gate.send(()).expect("the thread waits");
         assert_eq!(watcher.watch("speakers"), Ok(()));
         // A read hangs and is given up, then answers after all: the thread
@@ -940,9 +936,7 @@ mod tests {
         // The same when the listener is only dropped as the thread ends.
         let (gate, hold) = mpsc::channel();
         let done = Done::default();
-        let mut watcher =
-            VolumeWatcher::start_with(TIMEOUT, &STUCK, hanging_unregistration(hold, done.clone()))
-                .expect("it starts");
+        let mut watcher = started(&STUCK, hanging_unregistration(hold, done.clone()));
         gate.send(()).expect("the thread waits");
         assert_eq!(watcher.watch("headphones"), Ok(()));
         within(move || drop(watcher));
@@ -957,13 +951,28 @@ mod tests {
         timeout: Duration,
         hung: mpsc::Receiver<()>,
     ) -> Worker {
-        let (worker, ()) = spawn_worker_within("audiosync-test", timeout, stuck, move |ready| {
+        let start = timeout.max(READY_TIMEOUT);
+        let (mut worker, ()) = spawn_worker_within("audiosync-test", start, stuck, move |ready| {
             if ready.ok(()) {
                 let _ = hung.recv();
             }
         })
         .expect("it starts");
+        worker.set_timeout(timeout);
         worker
+    }
+
+    /// A watcher whose thread runs `body`, started within [`READY_TIMEOUT`]
+    /// so a loaded machine can't fail the start, then waiting [`TIMEOUT`]
+    /// for each answer and for its end.
+    fn started(
+        stuck: &'static StuckThreads,
+        body: impl FnOnce(&mpsc::Receiver<Command>, Ready) + Send + 'static,
+    ) -> VolumeWatcher {
+        let mut watcher = VolumeWatcher::start_with(READY_TIMEOUT, stuck, body).expect("it starts");
+        watcher.answer_timeout = TIMEOUT;
+        watcher.thread.set_timeout(TIMEOUT);
+        watcher
     }
 
     #[test]
@@ -971,8 +980,7 @@ mod tests {
         static STUCK: StuckThreads = StuckThreads::new();
         let (gate, hold) = mpsc::channel();
         let done = Done::default();
-        let watcher = VolumeWatcher::start_with(TIMEOUT, &STUCK, hanging(hold, done.clone()))
-            .expect("it starts");
+        let watcher = started(&STUCK, hanging(hold, done.clone()));
         let (watcher, read) = within(move || {
             let mut watcher = watcher;
             let read = watcher.read("speakers");

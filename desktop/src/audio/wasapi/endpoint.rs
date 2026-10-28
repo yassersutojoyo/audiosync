@@ -719,7 +719,7 @@ mod tests {
     use audiosync_core::ring::Ring;
     use windows::Win32::System::Threading::INFINITE;
 
-    use super::super::com::{StuckThreads, spawn_worker_within};
+    use super::super::com::{READY_TIMEOUT, StuckThreads, spawn_worker_within};
     use super::*;
     use crate::audio::SESSION_RATE;
 
@@ -854,10 +854,10 @@ mod tests {
         let abort = Arc::new(AtomicBool::new(false));
         let (answer, hung) = mpsc::channel::<()>();
         let (stopped, done) = mpsc::channel();
-        let (thread, ()) = {
+        let (mut thread, ()) = {
             let stop = Arc::clone(&stop);
             let abort = Arc::clone(&abort);
-            spawn_worker_within("audiosync-test", TIMEOUT, &STUCK, move |ready| {
+            spawn_worker_within("audiosync-test", READY_TIMEOUT, &STUCK, move |ready| {
                 // The thread owns the reader, as the real one does.
                 let _reader = reader;
                 if ready.ok(()) {
@@ -871,6 +871,7 @@ mod tests {
             })
             .expect("it starts")
         };
+        thread.set_timeout(TIMEOUT);
         let renderer = EndpointRenderer {
             invalidated: Arc::new(AtomicBool::new(false)),
             stop,

@@ -2613,7 +2613,7 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 | a_missing_signature_or_one_by_another_key_is_a_bad_signature | S299 |
 | zip_entries_with_folders_dot_dot_or_drive_letters_are_refused | S300 |
 | a_zip_without_audiosync_exe_or_with_an_exe_for_the_other_machine_is_refused | S300 |
-| the_running_test_binary_can_be_renamed_aside_and_back (proves the rename of a running image S301 relies on) | S301 |
+| a_running_exe_can_be_renamed_aside_and_back (proves the rename of a running image S301 relies on) | S301 |
 | a_failed_second_rename_restores_the_bak | S301, S302 |
 | a_read_only_install_folder_offers_the_release_page | S302 |
 | a_locked_exe_reports_another_copy_and_changes_nothing | S302 |
