@@ -8100,11 +8100,14 @@ pub mod tests {
     fn a_remote_volume_step_is_sent_and_starts_the_3_s_window() {
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        let listed = airplay.listed.get_mut(&id).expect("listed");
+        let txt = listed.info.device.airplay_txt.get_or_insert_with(Default::default);
+        txt.manufacturer = Some("Samsung".to_owned());
         remote(&fake, &kitchen, RemoteCommand::VolumeUp);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
         assert_eq!(airplay.speakers()[0].volume, 55.0);
         assert_eq!(sent_levels(&fake), [(id.clone(), Some(-13.5))]);
-        // The receiver's echo of that send, by DACP or by a read.
+        // A Samsung's echo of that send on its 0.6 dB grid, by DACP or a read.
         remote(
             &fake,
             &kitchen,
@@ -8221,6 +8224,29 @@ pub mod tests {
         report_volume(&fake, &kitchen, -18.3);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
         assert_eq!(own(&airplay), 39.0);
+    }
+
+    // covers: S276, S291
+    #[test]
+    fn one_step_from_an_odd_row_on_an_exact_receiver_is_a_change() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        // Row 49 sent −15.3 dB; a receiver that keeps it exactly reads
+        // −15 dB after one press up: level 50, by DACP.
+        airplay.set_volume(&id, 49.0);
+        remote(
+            &fake,
+            &kitchen,
+            RemoteCommand::DeviceVolume(Volume::Db(-15.0)),
+        );
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(own(&airplay), 50.0);
+        // Row 51 sent −14.7 dB; one press up reads −14.4 dB: level 52.
+        airplay.set_volume(&id, 51.0);
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -14.4);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(own(&airplay), 52.0);
     }
 
     // covers: S271

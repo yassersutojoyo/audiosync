@@ -302,6 +302,10 @@ mod airplay_device_level {
         // A reading on the row sent is still its echo.
         read.sent(-15.0);
         assert!(!read.set_on_speaker(-14.98));
+        // A receiver that keeps row 49 (−15.3) exactly: one press up to −15 dB
+        // is a change, though −15 lies on a 0.6 dB grid.
+        read.sent(-15.3);
+        assert!(read.set_on_speaker(-15.0));
     }
 }
 

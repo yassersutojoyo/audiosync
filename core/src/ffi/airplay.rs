@@ -7481,14 +7481,14 @@ mod tests {
         remote(handle, &key, None, RemoteCommand::VolumeDown);
         assert_eq!(volume_events(handle), vec![(id.to_owned(), 45.0)]);
         assert!(just_sent(handle, id));
-        // Sent −16.5 dB; the receiver echoes it 0.3 dB off, by DACP or a read.
+        // Sent −16.5 dB; the receiver echoes it on that row, by DACP or a read.
         remote(
             handle,
             &key,
             None,
-            RemoteCommand::DeviceVolume(Volume::Db(-16.2)),
+            RemoteCommand::DeviceVolume(Volume::Db(-16.4)),
         );
-        read_back(handle, &key, -16.8);
+        read_back(handle, &key, -16.45);
         assert!(volume_events(handle).is_empty());
         assert_eq!(inside(handle).added[id].position, 45.0);
         // SAFETY: destroyed once, by this thread.
@@ -7570,6 +7570,34 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // covers: S276, S291
+    #[test]
+    fn one_step_from_an_odd_row_on_an_exact_receiver_is_a_change() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005413";
+        let c_id = c_string(id);
+        let key = speaker_key(0x13);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        // Row 49 sent −15.3 dB; a receiver that keeps it exactly reads
+        // −15 dB after one press up: level 50, by DACP.
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 49.0)) };
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-15.0)),
+        );
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 50.0)]);
+        // Row 51 sent −14.7 dB; one press up reads −14.4 dB: level 52.
+        // SAFETY: as above.
+        unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 51.0)) };
+        read_back(handle, &key, -14.4);
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 52.0)]);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     // covers: S276
     #[test]
     fn a_device_volume_on_a_silenced_speaker_is_kept_and_stays_muted() {
@@ -7590,6 +7618,25 @@ mod tests {
         assert_eq!(volume_events(handle), vec![(id.to_owned(), 80.0)]);
         let muted = Some(Volume::Muted.wire_db());
         assert_eq!(inside(handle).added[id].read_back.echo_of(), muted);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S291
+    #[test]
+    fn a_reading_on_a_silenced_speaker_is_kept_muted() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005414";
+        let c_id = c_string(id);
+        let key = speaker_key(0x14);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_silenced(handle, c_id.as_ptr(), true)) };
+        // Turned up on the speaker while another one is measured: the row
+        // follows, and a reconnect would still start it muted.
+        read_back(handle, &key, -6.0);
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 80.0)]);
+        assert_eq!(inside(handle).added[id].level, 0.0);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -8141,6 +8188,9 @@ mod tests {
             let mut master = number(case, "master").expect("master");
             let mut own = 0.0;
             let mut handle = on_television(&receiver, &id, master, own);
+            let listed = inside(handle).listed.get_mut(&id).expect("listed");
+            let txt = listed.device.airplay_txt.get_or_insert_with(Default::default);
+            txt.manufacturer = Some("Samsung".to_owned());
             lands(&receiver, -144.0);
             let mut measured = Vec::new();
             for (step, &db) in steps.iter().zip(dbs) {
