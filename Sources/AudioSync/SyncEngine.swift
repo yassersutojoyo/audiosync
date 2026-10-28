@@ -47,9 +47,10 @@ final class StreamEngine {
         set { capture.onAppQuit = newValue }
     }
 
-    /// A local output's device went away (S68), with the output's UID. Its
-    /// renderer is already halted and detached.
-    var onOutputGone: ((String) -> Void)?
+    /// A local output's device went away (S68) or its render callback stopped
+    /// (S334), with the output's UID and which. Its renderer is already
+    /// halted and detached; the speaker stays on.
+    var onOutputGone: ((String, OutputLoss) -> Void)?
 
     /// The core's volume curve, for the host's gain arithmetic (S70, S71).
     let gainCurve = CoreGainCurve()
@@ -83,6 +84,9 @@ final class StreamEngine {
     /// Each attached output's token; a re-attach under the same UID is a new
     /// renderer whose counters start at 0.
     private var attachTokens = AttachTokens()
+    /// The 0.5 s check for outputs whose render callback stopped (S334).
+    private var stallTimer: DispatchSourceTimer?
+    private var stallWatch = OutputStallWatch()
 
     init() {
         capture.onInterrupted = { [weak self] reason in self?.handleInterruption(reason) }
@@ -94,6 +98,7 @@ final class StreamEngine {
         retirement.finishAll()
         fadeTimer?.cancel()
         statusTimer?.cancel()
+        stallTimer?.cancel()
     }
 
     /// Some frame this session captured was not silent; false while stopped.
@@ -158,6 +163,7 @@ final class StreamEngine {
         self.parts = parts
         isRunning = true
         DebugTrace.log("[AudioSync] session started: \(source) at \(capture.sampleRate) Hz")
+        startStallWatch()
         if DebugTrace.enabled {
             DispatchQueue.global(qos: .utility).async { DebugTrace.log("[AudioSync] network: \(WiFiNote.current())") }
             startStatusLine()
@@ -185,6 +191,50 @@ final class StreamEngine {
         statusTimer = timer
     }
 
+    /// Reads each output's frame count against the uptime clock every 0.5 s
+    /// on the main queue (S334); the render threads only bump the counts.
+    private func startStallWatch() {
+        stallTimer?.cancel()
+        stallWatch.reset()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        let every = OutputStallWatch.checkEveryS
+        timer.schedule(deadline: .now() + every, repeating: every, leeway: .milliseconds(50))
+        timer.setEventHandler { [weak self] in self?.checkStalls() }
+        timer.resume()
+        stallTimer = timer
+    }
+
+    private func stopStallWatch() {
+        stallTimer?.cancel()
+        stallTimer = nil
+        stallWatch.reset()
+    }
+
+    /// Drops each output that took no frame for 2 s, without a fade, after
+    /// reading its device's sign; its speaker stays on (S334).
+    private func checkStalls() {
+        guard isRunning else { return }
+        var readings: [String: OutputStallWatch.Reading] = [:]
+        for (uid, renderer) in renderers {
+            readings[uid] = OutputStallWatch.Reading(attach: attachTokens.byUID[uid] ?? 0,
+                                                     frames: renderer.framesRendered.load(ordering: .relaxed))
+        }
+        for stall in stallWatch.check(readings, nowS: ProcessInfo.processInfo.systemUptime) {
+            guard let renderer = renderers[stall.uid] else { continue }
+            let state = renderer.deviceState()
+            let sign = OutputStallSign.read(hogOwner: state.hogOwner, ownPID: getpid(), running: state.running)
+            renderer.noteStalled()
+            handleOutputLost(stall.uid, renderer, .stalled(quietS: stall.quietS, sign: sign))
+        }
+    }
+
+    /// Output `uid`'s number in the status line, given now if it has none, so
+    /// a debug line can name an output without its device's name.
+    func outputNumber(_ uid: String) -> Int {
+        SessionTally.number([uid], in: &statusNumbers)
+        return statusNumbers[uid] ?? 0
+    }
+
     private func stopStatusLine() {
         statusTimer?.cancel()
         statusTimer = nil
@@ -199,6 +249,7 @@ final class StreamEngine {
             let counted = renderer.counters
             outputs[uid] = SessionTally.Output(
                 number: statusNumbers[uid] ?? 0, attach: attachTokens.byUID[uid] ?? 0,
+                frames: renderer.framesRendered.load(ordering: .relaxed),
                 starvedRenders: counted.starvedRenders, starvedFrames: counted.starvedFrames,
                 driftSkips: counted.driftSkips, driftSilences: counted.driftSilences,
                 lateCallbacks: renderer.lateCallbacks, overloads: renderer.ioOverloads)
@@ -230,6 +281,7 @@ final class StreamEngine {
             return
         }
         holdCalibrationTime(false)
+        stopStallWatch()
         stopStatusLine()
         isRunning = false
         self.parts = nil
@@ -334,7 +386,7 @@ final class StreamEngine {
         renderer.setGain(linear: gain)
         renderer.onDeviceGone = { [weak self, weak renderer] in
             guard let self, let renderer else { return }
-            self.handleOutputLost(uid, renderer)
+            self.handleOutputLost(uid, renderer, .deviceGone)
         }
         try renderer.start(on: device, captureRate: capture.sampleRate, delayMs: delayMs)
         renderers[uid] = renderer
@@ -413,20 +465,24 @@ final class StreamEngine {
         renderers[uid]?.setGain(linear: g)
     }
 
-    /// The device of output `uid` is gone (S68): its renderer halts at once,
-    /// without a fade (S185), also when it was fading out on its way out. A
-    /// running one is dropped and reported to the host, which keeps the
-    /// speaker on and adds it again once its device is listed again (S137,
-    /// S161).
-    private func handleOutputLost(_ uid: String, _ renderer: OutputRenderer) {
+    /// The device of output `uid` is gone (S68) or its render callback
+    /// stopped (S334): its renderer halts at once, without a fade (S185),
+    /// also when it was fading out on its way out. A running one is dropped
+    /// and reported to the host, which keeps the speaker on and adds it again
+    /// once its device is listed (S137, S161). A stall's debug line comes
+    /// after the renderer is released.
+    private func handleOutputLost(_ uid: String, _ renderer: OutputRenderer, _ loss: OutputLoss) {
         renderer.onDeviceGone = nil
         retirement.stopLost(renderer)
         watchFades()
         guard renderers[uid] === renderer else { return }
         let bluetooth = bluetoothOutputs
         renderers.removeValue(forKey: uid)
-        StreamEngine.logStopped(uid, renderer, why: "device lost", bluetoothOutputs: bluetooth)
-        onOutputGone?(uid)
+        StreamEngine.logStopped(uid, renderer, why: loss.reason, bluetoothOutputs: bluetooth)
+        if case .stalled(let quietS, let sign) = loss {
+            DebugTrace.log("[AudioSync] " + OutputStallSign.line(number: outputNumber(uid), quietS: quietS, sign: sign))
+        }
+        onOutputGone?(uid, loss)
     }
 
     /// Logs what output `uid` rendered, how it stopped, what its reader
@@ -517,13 +573,14 @@ struct SessionTally: Equatable {
         for (uid, now) in outputs {
             // A re-attached output is a new renderer counting from 0, so its old totals are no baseline.
             let before = old.outputs[uid].flatMap { $0.attach == now.attach ? $0 : nil } ?? Output()
+            let rendered = change(now.frames, since: before.frames)
             let starved = change(now.starvedRenders, since: before.starvedRenders)
             let starvedFrames = change(now.starvedFrames, since: before.starvedFrames)
             let skips = change(now.driftSkips, since: before.driftSkips)
             let silences = change(now.driftSilences, since: before.driftSilences)
             let late = change(now.lateCallbacks, since: before.lateCallbacks)
             let overloads = change(now.overloads, since: before.overloads)
-            text += "; output \(now.number): starved \(starved) (\(starvedFrames) frames), "
+            text += "; output \(now.number): \(rendered) frames, starved \(starved) (\(starvedFrames) frames), "
             text += "drift skips \(skips), drift silences \(silences), "
             text += "late callbacks \(late), IO overloads \(overloads)"
         }

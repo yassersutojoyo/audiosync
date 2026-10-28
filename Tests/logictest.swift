@@ -6918,7 +6918,7 @@ do {
     let setGain: (StreamEngine) -> (String, Double) -> Void = StreamEngine.setGain(uid:g:)
     let setDelay: (StreamEngine) -> (String, Double) -> Void = StreamEngine.setDelay(uid:ms:)
     let equalizer: (StreamEngine) -> (Equalizer.Settings) -> Void = StreamEngine.updateEqualizer(_:)
-    let gone: ReferenceWritableKeyPath<StreamEngine, ((String) -> Void)?> = \.onOutputGone
+    let gone: ReferenceWritableKeyPath<StreamEngine, ((String, OutputLoss) -> Void)?> = \.onOutputGone
     let interrupted: ReferenceWritableKeyPath<StreamEngine, ((SourceCapture.Interruption) -> Void)?> = \.onInterrupted
     _ = (start, stop, running, attach, detach, detachTogether, active, setGain, setDelay, equalizer, gone, interrupted)
 

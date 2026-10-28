@@ -109,6 +109,10 @@ final class OutputRenderer: FadingOutput {
     /// earlier start does nothing.
     private var generation: UInt64 = 0
     private var reportedLoss = false
+    /// The host found this output's render callback stopped (S334).
+    private var stalled = false
+    /// The device the latest start opened; unknown before one.
+    private(set) var startedDevice = AudioObjectID(kAudioObjectUnknown)
     private var debugTimer: DispatchSourceTimer?
     private var lateTimer: DispatchSourceTimer?
     /// How the latest stop went, for the debug log.
@@ -213,6 +217,8 @@ final class OutputRenderer: FadingOutput {
         halUnit = fresh
         renderRate = started.rate
         reportedLoss = false
+        stalled = false
+        startedDevice = device
         stopNote = "running"
         let reportedNs = Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
         let uid = Self.deviceString(device, kAudioDevicePropertyDeviceUID)
@@ -247,6 +253,8 @@ final class OutputRenderer: FadingOutput {
         let now = HostClock.now()
         if reportedLoss {
             stopNote = "stopped without a fade: its device is gone"
+        } else if stalled {
+            stopNote = "stopped without a fade: it took no frame"
         } else if let renderer = target?.renderer, renderer.fadeEndNs != nil {
             stopNote = renderer.hasFaded(latencyNs: latencyNs, nowNs: now)
                 ? "stopped once its fade-out had played" : "stopped before its fade-out had played"
@@ -535,6 +543,27 @@ final class OutputRenderer: FadingOutput {
         var size = UInt32(MemoryLayout<UInt32>.size)
         let status = AudioObjectGetPropertyData(device, &address, 0, nil, &size, &alive)
         return status == noErr && alive != 0
+    }
+
+    /// For the host's stall check (S334), main queue: the process holding the
+    /// started device in hog mode (nil for none or unreadable) and whether the
+    /// device is running (nil when unreadable).
+    func deviceState() -> (hogOwner: pid_t?, running: Bool?) {
+        let device = startedDevice
+        guard device != AudioObjectID(kAudioObjectUnknown) else { return (nil, nil) }
+        var hogAddress = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyHogMode,
+                                                    mScope: kAudioObjectPropertyScopeGlobal,
+                                                    mElement: kAudioObjectPropertyElementMain)
+        var owner: pid_t = -1
+        var hogSize = UInt32(MemoryLayout<pid_t>.size)
+        let hogStatus = AudioObjectGetPropertyData(device, &hogAddress, 0, nil, &hogSize, &owner)
+        let running = Self.uint32(device, kAudioDevicePropertyDeviceIsRunning, kAudioObjectPropertyScopeGlobal)
+        return (hogStatus == noErr && owner > 0 ? owner : nil, running.map { $0 != 0 })
+    }
+
+    /// The host found the render callback stopped; the coming `halt` says so.
+    func noteStalled() {
+        stalled = true
     }
 
     /// Watches `device`'s alive flag on the main queue and reports its loss once.
