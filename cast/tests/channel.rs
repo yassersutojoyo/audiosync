@@ -609,6 +609,32 @@ fn a_status_missing_its_applications_or_volume_keeps_what_was_known() {
     assert!(channel.status().expect("status").has_session("s-1"));
 }
 
+// covers: C37
+#[test]
+fn a_volume_without_a_level_keeps_the_known_level() {
+    let start = Instant::now();
+    let mut channel = running(start);
+    let known = channel.status().expect("status").volume.level;
+    assert!(known < 1.0);
+    channel.handle(
+        start,
+        json_message(
+            PLATFORM,
+            SENDER,
+            NS_RECEIVER,
+            json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {"volume": {"muted": false}}}),
+        ),
+    );
+    let seen = events(&mut channel);
+    assert_eq!(channel.status().expect("status").volume.level, known);
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, Event::Status(status) if status.volume.level != known)),
+        "{seen:?}"
+    );
+}
+
 // covers: C44
 #[test]
 fn stop_sends_receiver_stop_with_the_session_then_closes_both_endpoints() {
