@@ -635,6 +635,21 @@ fn a_volume_without_a_level_keeps_the_known_level() {
     );
 }
 
+// covers: C70, C81
+#[test]
+fn a_level_sent_but_unanswered_goes_to_the_next_channel() {
+    let start = Instant::now();
+    let mut channel = running(start);
+    channel.set_volume(start, 0.3).expect("sent");
+    channel
+        .set_volume(start, 0.5)
+        .expect("waits for the interval");
+    channel.tick(start + Duration::from_millis(100));
+    // Sent into a channel that then went silent, with no status to answer it.
+    channel.end(EndReason::Silent);
+    assert_eq!(channel.take_queued_volume(), Some(0.5));
+}
+
 // covers: C44
 #[test]
 fn stop_sends_receiver_stop_with_the_session_then_closes_both_endpoints() {
