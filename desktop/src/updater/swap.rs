@@ -512,13 +512,38 @@ mod tests {
     // covers: S301
     #[test]
     fn the_running_test_binary_can_be_renamed_aside_and_back() {
-        let running = std::env::current_exe().unwrap();
+        const HOLD: &str = "AUDIOSYNC_SWAP_TEST_HOLD";
+        if std::env::var_os(HOLD).is_some() {
+            let _ = io::Read::read_to_end(&mut io::stdin(), &mut Vec::new());
+            return;
+        }
+        // A private running copy: the shared target folder's own test binary
+        // is also run, relinked and renamed by other cargo processes.
+        let dir = test_dir("running-rename");
+        let running = dir.join(EXE_NAME);
+        std::fs::copy(std::env::current_exe().unwrap(), &running).unwrap();
+        let mut child = std::process::Command::new(&running)
+            .args([
+                "--exact",
+                "updater::swap::tests::the_running_test_binary_can_be_renamed_aside_and_back",
+            ])
+            .env(HOLD, "1")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("the copy starts");
         let aside = running.with_extension("exe.renamed-aside");
-        RealFiles
-            .rename(&running, &aside)
-            .expect("a running image renames aside");
-        let back = RealFiles.rename(&aside, &running);
-        back.expect("and back");
+        let there = RealFiles.rename(&running, &aside);
+        let back = there
+            .as_ref()
+            .ok()
+            .map(|_| RealFiles.rename(&aside, &running));
+        drop(child.stdin.take());
+        let exit = child.wait().expect("the copy exits");
+        there.expect("a running image renames aside");
+        back.unwrap().expect("and back");
+        assert!(exit.success(), "the copy ran while renamed: {exit}");
         assert!(running.exists());
     }
 
