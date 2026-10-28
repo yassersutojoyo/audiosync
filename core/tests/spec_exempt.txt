@@ -6,7 +6,7 @@
 S6 Architecture overview only; each component it names has its own clauses.
 S10 Mac host only: the process tap leaves AudioSync's own process out; its logic suite checks it for app sources, mixes and their taps.
 S11 Mac host only: the Core Audio process objects that make up an app source; its logic suite checks it.
-S13 Mac host only: the process tap mutes the tapped processes' own output; its logic suite checks that a retap keeps the app muted, and the mute itself has no automated test.
+S13 Mac host only: the process tap mutes the tapped processes' own output; its logic suite checks that every tap is set up muted and private (SourceCapture.configureTap) and that a retap keeps the app muted.
 S60 Mac host only: Core Audio output device enumeration and device object IDs; the --hardware engine suite checks it.
 S61 The renderer object wraps a Core Audio output unit; its pure parts are S56, S62, S64 and S65, and the --hardware engine suite checks the rest.
 S66 A renderer's delay call measured on real hardware by the --hardware engine suite; its pure parts are S3 and S46.
@@ -67,7 +67,7 @@ S264 Hosts only: where the current-preset mark shows; its rule is S253's, which 
 S265 Hosts only: carrying out a recall and its notice; the plan is S252's, which the core covers.
 S266 Hosts only: a recall's focus and the phone's start origin; the Mac logic suite and the Windows tests check it.
 S267 Hosts only: keyboard reach and focus of the preset controls; the Windows tests check it, the Mac by hand.
-S268 Hosts only: the preset controls' colors in light and dark; the Windows contrast tests check it, the Mac by screenshot.
+S268 Hosts only: the preset controls' colors in light and dark; the Windows contrast tests and the Mac logic suite (the Presets card's tokens and their 4.5:1 contrast) check it.
 S269 Hosts only: the preset wording in UIStrings (Mac) and strings.slint (Windows); the Mac logic suite's "presets: the preset texts" and view.rs the_preset_texts_come_from_strings check it.
 S280 Hosts only: keeping each speaker's reported latency and setting the session's L; the rule is the AirPlay crate's (AirPlay spec P200); the Windows tests and the Mac logic suite check it.
 S281 Hosts only: re-timing on a new L reported by the AirPlay sender, through S177 and S178, which the core covers.
