@@ -98,8 +98,8 @@ use crate::audio::routing::{DirectPath, DirectReason};
 use crate::data_folder;
 use crate::debug_log::DebugLog;
 use crate::settings::{
-    self, KeptAside, MixMode, SavedCurve, SavedEqualizer, SavedGroup, SavedHidden, SavedInput,
-    SavedMix, SavedMixApp, SavedPreset, SavedSource, SavedSpeaker, SavedZone, Settings,
+    self, KeptAside, MixMode, Retried, SavedCurve, SavedEqualizer, SavedGroup, SavedHidden,
+    SavedInput, SavedMix, SavedMixApp, SavedPreset, SavedSource, SavedSpeaker, SavedZone, Settings,
     SettingsFile,
 };
 use crate::speaker_names::SpeakerNames;
@@ -1006,7 +1006,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.settings_file.keep_ignored_aside()
         };
         match kept {
-            Ok(Some(kept)) => self.tell_kept_aside(&kept, ""),
+            Ok(Some(Retried::Read(read))) => self.restore_read_late(*read),
+            Ok(Some(Retried::KeptAside(kept))) => self.tell_kept_aside(&kept, ""),
             Ok(None) => false,
             Err(error) => {
                 if !due {
@@ -1020,6 +1021,19 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 false
             }
         }
+    }
+
+    /// Takes in the settings of the file ignored at launch, now that it
+    /// reads as settings, as if read at launch (S212). Returns true.
+    fn restore_read_late(&mut self, (saved, loaded): (Settings, settings::Loaded)) -> bool {
+        self.log
+            .log(|| format!("settings: the file ignored at launch can be read now, {loaded}"));
+        self.delays_to_migrate = matches!(
+            loaded,
+            settings::Loaded::Read { version, .. } if version < settings::OFFSETS_VERSION
+        );
+        self.restore(saved);
+        true
     }
 
     /// Logs that the settings file was kept aside (`when`, for the log),
@@ -1075,6 +1089,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         self.must_save = false;
         let saved = self.settings_file.save(&current);
+        if let Ok(Some(Retried::Read(read))) = saved {
+            return self.restore_read_late(*read);
+        }
         let mut notices_changed = saved.is_ok() == self.unsaved.is_some();
         if saved.is_ok() && self.unsaved.is_some() {
             self.notices.clear(&[NoticeSubject::SettingsFile]);
@@ -1082,7 +1099,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let failed = saved.is_err();
         match saved {
             Ok(kept) if self.settings_file.path().is_some() => {
-                if let Some(kept) = kept {
+                if let Some(Retried::KeptAside(kept)) = kept {
                     notices_changed |= self.tell_kept_aside(&kept, " before saving over it");
                 }
                 self.log.log(|| "settings: saved".to_owned());
