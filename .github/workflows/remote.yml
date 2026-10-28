@@ -62,4 +62,4 @@ jobs:
         run: cargo install --locked cargo-deny --version 0.20.2
 
       - name: Only permissive licenses, dev-dependencies included (remote/deny.toml)
-        run: cargo deny check licenses
+        run: cargo deny --locked check licenses

@@ -50,10 +50,10 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Tests (including the spec coverage check against docs/CAST_SPEC.md)
-        run: cargo test
+        run: cargo test --locked
 
   licenses:
     name: Licenses
@@ -68,4 +68,4 @@ jobs:
         run: cargo install --locked cargo-deny --version 0.20.2
 
       - name: Only permissive licenses, dev-dependencies included (cast/deny.toml)
-        run: cargo deny check licenses
+        run: cargo deny --locked check licenses
