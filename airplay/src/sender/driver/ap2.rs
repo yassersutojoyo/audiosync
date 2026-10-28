@@ -824,17 +824,25 @@ impl Driver {
         let Some(speaker) = self.speakers.get(key) else {
             return;
         };
-        let Phase::Ap2(active) = &speaker.phase else {
-            return;
+        let restart = match &speaker.phase {
+            Phase::Ap2(active)
+                if active
+                    .session
+                    .restarts_on(&speaker.device.airplay_socket_addrs()) =>
+            {
+                active.ptp_restart
+            }
+            Phase::Active(active)
+                if active
+                    .session
+                    .restarts_on(&speaker.device.connect_socket_addrs()) =>
+            {
+                None
+            }
+            _ => return,
         };
-        if !active
-            .session
-            .restarts_on(&speaker.device.airplay_socket_addrs())
-        {
-            return;
-        }
         let kind = speaker.started_as;
-        if let Some(restart) = active.ptp_restart {
+        if let Some(restart) = restart {
             self.ptp_restart.insert(key.clone(), restart);
         }
         self.end_session(key, Phase::Idle);
