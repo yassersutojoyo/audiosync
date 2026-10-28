@@ -11322,6 +11322,19 @@ mod tests {
         );
     }
 
+    /// A view notice and a backend notice new in the same refresh: the
+    /// higher id is announced.
+    #[test]
+    fn a_tie_between_a_view_and_a_backend_notice_announces_the_higher_id() {
+        let mut a = NoticeAnnouncer::default();
+        assert_eq!(announce_for(&mut a, &[]), "keep");
+        let both = [
+            (1, "source", "Capture lost"),
+            (UPDATER_NOTICE_ID, "update", "Update"),
+        ];
+        assert_eq!(announce_for(&mut a, &both), "say Update");
+    }
+
     /// The tray tooltip once the notices were listed as `history` shows,
     /// one refresh each.
     fn tooltip_after(strings: &Strings<'_>, history: &[&[ui_model::Notice]]) -> String {
