@@ -116,6 +116,7 @@ fn start_group_with(
         metadata: Metadata::default(),
         artwork: None,
         group: Some(records.clone()),
+        records: None,
         fingerprints,
     };
     let (writer, reader) = audio_ring(48_000);
@@ -536,6 +537,7 @@ fn a_member_stays_a_target_of_its_own() {
         id: group_id,
         addresses: vec![leader.address],
         group: Some(GroupRecords::new(vec![leader.address])),
+        records: None,
     };
     host.start(target, 48_000, Metadata::default(), reader)
         .expect("started");
@@ -544,6 +546,7 @@ fn a_member_stays_a_target_of_its_own() {
         id: member_id,
         addresses: vec![leader.address],
         group: None,
+        records: None,
     };
     assert_eq!(
         host.start(member_target, 48_000, Metadata::default(), reader),

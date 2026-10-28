@@ -1134,6 +1134,7 @@ impl CastSpeakers {
             id,
             addresses: entry.addresses.clone(),
             group: records.clone(),
+            records: None,
         };
         let Some(link) = self.link.as_mut() else {
             return;

@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
 use audiosync_cast::error::ConnectError;
+use audiosync_cast::group::GroupRecords;
 use audiosync_cast::media::{IdleReason, MediaError, Metadata};
 use audiosync_cast::message::{NS_CONNECTION, NS_MEDIA, NS_RECEIVER, PLATFORM};
 use audiosync_cast::session::{
@@ -71,6 +72,7 @@ fn config(device: &FakeDevice) -> SessionConfig {
         },
         artwork: None,
         group: None,
+        records: None,
         fingerprints: None,
     }
 }
@@ -513,6 +515,45 @@ fn after_a_drop_only_an_idle_device_is_relaunched_on() {
     assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 2);
     session.stop();
     device.join();
+}
+
+// covers: C111
+#[test]
+fn a_device_that_moves_during_recovery_is_reconnected_at_its_new_address() {
+    let device = FakeDevice::start(Behavior::default());
+    let moved = FakeDevice::start(Behavior::default());
+    let records = GroupRecords::new(vec![device.address]);
+    let (writer, reader) = audio_ring(48_000);
+    let _feed = feed(writer, 9);
+    let config = SessionConfig {
+        records: Some(records.clone()),
+        ..config(&device)
+    };
+    let selected = Arc::new(AtomicBool::new(true));
+    let deselect = Arc::clone(&selected);
+    let mut session = CastSession::start(config, reader, selected, |_, _| {}).expect("plays");
+    records.set_group(vec![moved.address]);
+    device.join();
+    // Retries at the old address would hold the session forever.
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(15));
+        deselect.store(false, Ordering::SeqCst);
+    });
+    let seen = run_until(&mut session, Duration::from_secs(20), |event| {
+        matches!(
+            event,
+            SessionEvent::Recovered { .. } | SessionEvent::Ended(_)
+        )
+    });
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Recovered { relaunched: true })),
+        "{seen:?}"
+    );
+    assert_eq!(moved.connection_count(), 1);
+    assert!(!moved.fetches().is_empty(), "the new address is served");
+    session.stop();
+    moved.join();
 }
 
 // covers: C80

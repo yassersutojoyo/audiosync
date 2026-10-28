@@ -200,6 +200,9 @@ pub struct SessionConfig {
     /// latest records instead of `addresses` (C90, C93), and the stream
     /// server answers its members too (C103).
     pub group: Option<GroupRecords>,
+    /// A single device's latest addresses: every reconnect takes them
+    /// instead of `addresses`, and the stream server answers them (C111).
+    pub records: Option<GroupRecords>,
     /// Where every connect records the device's certificate fingerprint
     /// (C21) once the start succeeded; `None`, or a group, records nothing.
     pub fingerprints: Option<Fingerprints>,

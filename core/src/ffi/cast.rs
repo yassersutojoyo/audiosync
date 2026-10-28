@@ -933,6 +933,7 @@ impl AscCast {
             id: memory_id(key),
             addresses: entry.addresses.clone(),
             group: group.clone(),
+            records: None,
         };
         let (writer, reader) = audio_ring(RING_FRAMES);
         let attempt = self
