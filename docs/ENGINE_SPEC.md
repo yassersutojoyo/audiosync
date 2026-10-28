@@ -1532,6 +1532,7 @@ The core checks for the ring, the resampler, the output stage and the volume cur
 
 | Test | Clauses |
 |---|---|
+| every_clause_carries_a_tag_and_the_ids_are_s1_to_sn_once_each (`core/tests/spec_coverage.rs`) | S1 |
 | delays_convert_to_frames_at_the_capture_rate (`core/src/ffi/sync.rs`) | S3 |
 | milliseconds_convert_to_floored_frames (`core/src/reader.rs`) | S3 |
 | an_input_device_contributes_its_first_two_channels (`core/tests/volume.rs`) | S14 |
@@ -2586,9 +2587,9 @@ Windows (`desktop/src/audio/explicit_pause.rs` unless named):
 | sound_resumes_once_200_ms_of_it_came_after_the_stale_reading_time | S292 |
 | sound_never_pauses | S292 |
 | clearing_resumes_only_a_paused_stream | S292 |
-| only_a_session_that_plays_or_pauses_has_a_player_state (`now_playing.rs`) | S292 |
-| the_debug_log_names_what_resumed_a_pause (`airplay.rs`) | S292 |
-| the_debug_log_names_a_button_remote_capture_or_stop_resume (`airplay.rs`) | S292 |
+| only_a_session_that_plays_or_pauses_has_a_player_state (`desktop/src/audio/now_playing.rs`) | S292 |
+| the_debug_log_names_what_resumed_a_pause (`desktop/src/audio/airplay.rs`) | S292 |
+| the_debug_log_names_a_button_remote_capture_or_stop_resume (`desktop/src/audio/airplay.rs`) | S292 |
 
 The Mac (logic suite):
 
