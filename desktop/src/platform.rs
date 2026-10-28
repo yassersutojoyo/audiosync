@@ -899,4 +899,31 @@ mod tests {
             (0.0, 65_535.0)
         );
     }
+
+    // covers: S170
+    #[test]
+    fn the_log_names_the_host_it_runs_on() {
+        assert_eq!(host_name("linux"), "Linux");
+        assert_eq!(host_name("windows"), "Windows");
+    }
+
+    // covers: S170
+    #[test]
+    fn the_linux_summary_gives_the_os_version_and_local_time() {
+        let os_release =
+            "NAME=\"Ubuntu\"\nPRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nVERSION_ID=\"24.04\"\n";
+        assert_eq!(
+            linux_summary(
+                Some(os_release),
+                Some("6.8.0-45-generic\n"),
+                "x86_64",
+                "21.40"
+            ),
+            "Ubuntu 24.04.1 LTS, kernel 6.8.0-45-generic, x86_64, local time 21.40"
+        );
+        assert_eq!(
+            linux_summary(None, None, "aarch64", "07.05"),
+            "Linux, version unknown, aarch64, local time 07.05"
+        );
+    }
 }

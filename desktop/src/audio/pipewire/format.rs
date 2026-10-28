@@ -74,6 +74,11 @@ mod tests {
         channels: 2,
     };
 
+    const AGREED_SIX: Negotiated = Negotiated {
+        channels: 6,
+        ..AGREED
+    };
+
     #[test]
     fn the_asked_format_is_accepted() {
         assert_eq!(check(AGREED), Ok(()));
@@ -101,6 +106,43 @@ mod tests {
         ];
         for other in others {
             assert_eq!(check(other), Err(BackendError::UnsupportedFormat));
+        }
+    }
+
+    // covers: S14
+    #[test]
+    fn a_pair_past_1_2_takes_every_channel_unmixed() {
+        let setup = input_setup(1, 6);
+        assert_eq!(
+            setup.format,
+            StreamFormat {
+                sample: SampleType::F32,
+                rate: SESSION_RATE,
+                channels: 6,
+            }
+        );
+        assert_eq!(
+            setup.pair,
+            InputPair {
+                index: 1,
+                left: 2,
+                right: 3,
+            }
+        );
+        assert_eq!(check(AGREED_SIX, setup.format), Ok(()));
+        assert_eq!(
+            check(AGREED, setup.format),
+            Err(BackendError::UnsupportedFormat)
+        );
+    }
+
+    // covers: S14
+    #[test]
+    fn pair_1_2_and_a_pair_the_device_lost_keep_the_stereo_mix() {
+        for (saved, channels) in [(0, 6), (5, 6), (1, 2)] {
+            let setup = input_setup(saved, channels);
+            assert_eq!(setup.format, CAPTURE_FORMAT);
+            assert_eq!(setup.pair, InputPair::FIRST);
         }
     }
 

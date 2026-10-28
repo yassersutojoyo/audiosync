@@ -839,8 +839,9 @@ mod tests {
         assert!(graph.default_input_hands_free());
     }
 
+    // covers: S14
     #[test]
-    fn inputs_offer_two_channels_and_skip_hands_free() {
+    fn inputs_offer_every_channel_and_skip_hands_free() {
         let mut graph = Graph::default();
         graph.add(
             1,
@@ -863,6 +864,6 @@ mod tests {
         let inputs = graph.inputs();
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].id.as_deref(), Ok("mic"));
-        assert_eq!(inputs[0].properties.as_ref().unwrap().channels, Some(2));
+        assert_eq!(inputs[0].properties.as_ref().unwrap().channels, Some(4));
     }
 }
