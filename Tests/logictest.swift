@@ -7229,13 +7229,22 @@ do {
                            .unitNotCreated(OSStatus(kAudioHardwareIllegalOperationError))]
     check(refusalKinds.allSatisfy(\.isRefusal) && !hardKinds.contains(where: \.isRefusal),
           "S331 refused start: a device gone, rebuilt, not running or held in hog mode refuses; a format or any other error is hard")
+    let eagain = SF.deviceDidNotStart(OSStatus(EAGAIN))
     let hogged = RefusingEngine(active: [], refusing: ["usb"],
-                                refusal: SF.deviceDidNotStart(OSStatus(EAGAIN)))
+                                refusal: SF.hogChecked(eagain, hogOwner: 4242, ownPID: 100))
     let hoggedStart = LocalOutputSync.apply(enabled: ["usb"], listing: [usb], to: hogged, holdBacks: [:], gain: { _ in 1 })
-    check(SF.unitNotInitialized(OSStatus(EAGAIN)).isRefusal && hoggedStart.failures.first?.refusal != nil
+    check(hoggedStart.failures.first?.refusal != nil
             && LocalOutputSync.report(hoggedStart.failures, enabled: ["usb"], origin: .user) == nil,
-          "S331 refused start: a start the HAL output unit fails with 35 (EAGAIN) on a hogged device stays on, with no alert",
+          "S331 refused start: a start failing with 35 (EAGAIN) while another process hogs the device stays on, with no alert",
           "\(hoggedStart.failures)")
+    let unhogged = RefusingEngine(active: [], refusing: ["usb"],
+                                  refusal: SF.hogChecked(eagain, hogOwner: nil, ownPID: 100))
+    let unhoggedStart = LocalOutputSync.apply(enabled: ["usb"], listing: [usb], to: unhogged, holdBacks: [:], gain: { _ in 1 })
+    let unhoggedReport = LocalOutputSync.report(unhoggedStart.failures, enabled: ["usb"], origin: .user)
+    check(!eagain.isRefusal && !SF.hogChecked(eagain, hogOwner: 100, ownPID: 100).isRefusal
+            && unhoggedReport?.enabled == [] && unhoggedReport?.alertNames == ["USB DAC"],
+          "S331 refused start: a 35 with no other process hogging the device is hard, switched off with its alert",
+          "\(String(describing: unhoggedReport))")
 
     var refusals = OutputRefusalRetry()
     let firstRefusal = refusals.refused("bt", nowS: 100)
