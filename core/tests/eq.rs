@@ -845,6 +845,36 @@ fn toggling_bass_boost_on_a_steady_tone_never_steps_further_than_the_tone() {
     );
 }
 
+// covers: S27, S28
+#[test]
+fn turning_off_again_within_the_on_ramp_turns_back_smoothly_and_ends_dry() {
+    const SHORT: usize = 128;
+    let on = enabled(preset("bassBoost").unwrap().gains_db, 0.0);
+    let off = EqSettings {
+        enabled: false,
+        ..on
+    };
+    let (mut control, mut processor) = configured(48_000.0, off);
+    let input = sine(0, 40 * SHORT, 33.0, 48_000.0, 0.5);
+    let mut output = Vec::with_capacity(input.len());
+    for (index, chunk) in input.chunks(2 * SHORT).enumerate() {
+        // Off again 256 frames after on, before the 480-frame ramp is through.
+        match index {
+            10 => control.set_settings(on),
+            12 => control.set_settings(off),
+            _ => {}
+        }
+        let mut block = chunk.to_vec();
+        processor.process(&mut block);
+        output.extend_from_slice(&block);
+    }
+    let tone = largest_step(&input) + f32::EPSILON;
+    let worst = largest_step(&output);
+    assert!(worst <= tone, "step {worst} against the tone's {tone}");
+    let last = input.len() - 2 * SHORT;
+    assert_eq!(output[last..], input[last..], "the ramp ends dry");
+}
+
 proptest! {
     // covers: S123, S125
     #[test]

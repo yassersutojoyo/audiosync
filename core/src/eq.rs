@@ -354,23 +354,30 @@ impl Biquad {
 }
 
 /// P of S26: the largest gain of the ten bands in series, in dB, between 20 Hz and
-/// 20 kHz: the best point of a 1/12-octave grid, refined to 1/12 000 octave
-/// around it, since a peak between grid points reads up to a few hundredths of
-/// a dB low and a full-scale tone there would still touch the clamp.
+/// 20 kHz: the best point of a 1/12-octave grid and 20 kHz itself, refined to
+/// 1/12 000 octave around it, since a peak between grid points reads up to a few
+/// hundredths of a dB low and a full-scale tone there would still touch the clamp.
 pub fn cascade_peak_db(gains_db: &[f64; BAND_COUNT], sample_rate: f64) -> f64 {
     const FINE: i32 = 1000;
     let bands = design_bands(gains_db, sample_rate);
-    let last = (12.0 * 1000f64.log2()).floor() as i32 * FINE;
-    let power = |step: i32| {
-        let f = 20.0 * 2f64.powf(f64::from(step) / f64::from(12 * FINE));
+    let top = 1000f64.log2();
+    let last = (top * f64::from(12 * FINE)).floor() as i32;
+    let octaves = |step: i32| f64::from(step) / f64::from(12 * FINE);
+    let power = |octaves: f64| {
+        let f = 20.0 * 2f64.powf(octaves);
         let w = 2.0 * PI * f / sample_rate;
         bands.iter().map(|band| band.power_at(w)).product::<f64>()
     };
     let coarse = (0..=last)
         .step_by(FINE as usize)
+        .map(octaves)
+        .chain([top])
         .max_by(|&a, &b| power(a).total_cmp(&power(b)))
-        .unwrap_or(0);
-    let peak_power = ((coarse - FINE).max(0)..=(coarse + FINE).min(last))
+        .unwrap_or(0.0);
+    let center = (coarse * f64::from(12 * FINE)).round() as i32;
+    let peak_power = ((center - FINE).max(0)..=(center + FINE).min(last))
+        .map(octaves)
+        .chain([top])
         .map(power)
         .fold(0.0, f64::max);
     10.0 * peak_power.log10()
