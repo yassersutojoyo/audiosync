@@ -43,9 +43,10 @@ const RESERVED_PER_PEER: usize = 2;
 /// How long a connection in a reserved slot has to send its request; a
 /// browser on the same network sends it at once.
 const RESERVED_REQUEST: Duration = Duration::from_secs(1);
-/// Event streams one paired device may hold; a new one ends the oldest.
+/// Event streams one paired device may hold; a new one ends the oldest live one.
 const MAX_STREAMS_PER_DEVICE: usize = 2;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a probe waits to tell a live event stream from a closed one.
 const PROBE: Duration = Duration::from_millis(1);
 /// How long a refused connection is drained before it is closed.
 const REFUSED_LINGER: Duration = Duration::from_secs(1);
