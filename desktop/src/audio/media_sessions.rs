@@ -113,6 +113,8 @@ struct State {
     /// dropped.
     track_generation: u64,
     track_reading: Option<Reading>,
+    /// The app that played last, as track info tells it.
+    track_played_last: Option<String>,
     icon: Option<FittedArtwork>,
     card: Option<CardSource>,
     card_generation: u64,
@@ -149,6 +151,7 @@ impl TrackReader for MediaSessionReader {
             state.track = follow;
             state.track_generation += 1;
             state.track_reading = None;
+            state.track_played_last = None;
             state.remote.clear();
             self.shared.wake.notify_all();
         }
@@ -170,7 +173,12 @@ impl TrackReader for MediaSessionReader {
         }
     }
 
-    fn played_last(&mut self, _app_id: Option<&str>) {}
+    fn played_last(&mut self, app_id: Option<&str>) {
+        let mut state = self.shared.lock();
+        if state.track_played_last.as_deref() != app_id {
+            state.track_played_last = app_id.map(str::to_owned);
+        }
+    }
 }
 
 impl Drop for MediaSessionReader {
@@ -265,7 +273,7 @@ fn run<L: SessionList>(
     shared.lock().icon = sessions.icon(log);
     let mut reader = Reader::new(sessions);
     loop {
-        let (track, track_generation, card, card_generation, commands, remote) = {
+        let (track, track_generation, played_last, card, card_generation, commands, remote) = {
             let mut state = shared
                 .wake
                 .wait_while(shared.lock(), |state| {
@@ -280,6 +288,7 @@ fn run<L: SessionList>(
             (
                 state.track.clone(),
                 state.track_generation,
+                state.track_played_last.clone(),
                 state.card.clone().map(follow_for),
                 state.card_generation,
                 commands,
@@ -301,7 +310,7 @@ fn run<L: SessionList>(
         // The receivers' reading goes out first, so a thumbnail only the
         // card needs never holds it back.
         if let Some(follow) = &track {
-            let track = reader.track(&mut listing, follow, None, log);
+            let track = reader.track(&mut listing, follow, played_last.as_deref(), log);
             let mut state = shared.lock();
             if state.track_generation == track_generation {
                 state.track_reading = Some(Reading { track });
@@ -390,10 +399,18 @@ impl<L: SessionList> Reader<L> {
         &mut self,
         listing: &mut Listing<L::Session>,
         follow: &Follow,
-        _played_last: Option<&str>,
+        played_last: Option<&str>,
         log: &DebugLog,
     ) -> Option<Track> {
-        let index = self.sessions.pick(&listing.listed, follow);
+        let mut index = self.sessions.pick(&listing.listed, follow);
+        // Another app's paused track never takes its place, as on the Mac.
+        if let (Follow::AnyApp, Some(app_id)) = (follow, played_last)
+            && !index.is_some_and(|index| listing.listed[index].0.playing)
+        {
+            index = listing.listed.iter().position(|(session, _)| {
+                session.app_id == app_id && !session.title.trim().is_empty()
+            });
+        }
         self.log_track(index.map(|index| &listing.listed[index].0), log);
         let index = index?;
         let session = listing.listed[index].0.clone();

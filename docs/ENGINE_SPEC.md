@@ -2622,6 +2622,9 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | whole_system_the_player_that_played_last_keeps_its_paused_track | S218 |
 | whole_system_another_player_that_plays_takes_over_from_a_paused_one | S218 |
 | whole_system_a_paused_track_goes_when_its_player_quits_stops_or_the_source_changes | S218 |
+| a_status_neither_playing_nor_paused_drops_the_paused_track_only_on_its_third_reading | S218 |
+| the_reader_learns_which_app_played_last_until_the_source_changes | S218 |
+| with_none_playing_the_app_that_played_last_is_read_or_none (`desktop/src/audio/media_sessions.rs`) | S218 |
 | another_image_for_the_same_track_goes_out_once | S219 |
 | a_restarted_sender_gets_the_track_and_its_artwork_again | S219 |
 | a_busy_cover_takes_a_lower_quality_before_a_smaller_side | S217, S272 |

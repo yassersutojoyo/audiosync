@@ -509,6 +509,8 @@ pub struct TrackInfo {
     reading: Option<Reading>,
     /// The app seen playing last since the source was chosen (S218).
     last_played: Option<String>,
+    /// Its readings in a row neither playing nor paused.
+    idle_readings: u32,
     /// The fields receivers should show, and since when.
     fields: Option<(TrackFields, Instant)>,
     /// What the sender was given last, and when.
@@ -598,6 +600,8 @@ impl TrackInfo {
             self.since = Some(now);
             self.reading = None;
             self.last_played = None;
+            self.idle_readings = 0;
+            reader.played_last(None);
             self.timelines = TimelineGuard::default();
             if stopped {
                 self.fields = None;
@@ -612,15 +616,25 @@ impl TrackInfo {
         let labels = self.labels.get()?;
         if let Some(reading) = reader.take_reading() {
             let session = reading.track.as_ref().map(|track| &track.session);
-            match session {
+            self.idle_readings = match session {
                 Some(session) if session.playing => {
                     self.last_played = Some(session.app_id.clone());
+                    0
                 }
                 // Another app's paused track never counts, so it can't tell whether this one quit.
                 Some(session)
-                    if session.paused || self.last_played.as_ref() != Some(&session.app_id) => {}
-                _ => self.last_played = None,
-            }
+                    if session.paused || self.last_played.as_ref() != Some(&session.app_id) =>
+                {
+                    0
+                }
+                // Windows reports a track change as neither playing nor paused, as it does a stop.
+                Some(_) if self.idle_readings + 1 < DROP_AFTER => self.idle_readings + 1,
+                _ => {
+                    self.last_played = None;
+                    0
+                }
+            };
+            reader.played_last(self.last_played.as_deref());
             self.reading = Some(reading);
         }
         let since = self.since.unwrap_or(now);
