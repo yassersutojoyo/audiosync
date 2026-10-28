@@ -97,6 +97,9 @@ windows = { version = "0.62", features = [
     # QueryPerformanceCounter: the capture loop's clock while loopback
     # delivers nothing, in the time base of the packets' positions.
     "Win32_System_Performance",
+    # PowerRegisterSuspendResumeNotification: a sleep and wake while
+    # streaming (src/audio/wasapi/power.rs).
+    "Win32_System_Power",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",

@@ -639,6 +639,8 @@ struct StallWatch {
     clock_runs: bool,
     /// The clock's position at the last read.
     position: Option<u64>,
+    /// When the last read was.
+    read: Option<Instant>,
 }
 
 impl StallWatch {
@@ -653,6 +655,17 @@ impl StallWatch {
         buffer_frames: u32,
         position: Option<u64>,
     ) -> Option<Stall> {
+        // Reads come at least every 500 ms while the thread runs, so a longer
+        // gap is time it didn't run, a sleep of the PC say, and never counts
+        // toward a stall (S332).
+        if self
+            .read
+            .is_some_and(|read| now.saturating_duration_since(read) >= STALL_SPAN)
+            && self.took.is_some()
+        {
+            self.took = Some(now);
+        }
+        self.read = Some(now);
         if padding < buffer_frames {
             self.took = Some(now);
         }
