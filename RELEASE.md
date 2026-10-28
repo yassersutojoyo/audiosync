@@ -36,7 +36,7 @@ python3 -I scripts/check_appcast.py --assets $ONLY appcast.xml "$VERSION" "${ASS
   && gh release create "v$VERSION" --title "AudioSync $VERSION" --notes-file "$NOTES" \
      "${ASSETS[@]}" SHA256SUMS.txt
 
-# confirmation: the same check on the release as GitHub serves it
+# confirmation: the same check on the release as GitHub serves it (VERSION and ONLY as set above)
 mkdir -p .build/release-check
 gh release view "v$VERSION" --json assets > .build/release-check/assets.json
 gh release download "v$VERSION" --pattern appcast.xml --output .build/release-check/appcast.xml --clobber
@@ -44,7 +44,7 @@ python3 -I scripts/check_appcast.py --assets $ONLY .build/release-check/appcast.
   --assets-file .build/release-check/assets.json
 ```
 
-The `--assets` check fails when a zip in the list, such as a Windows zip, has no appcast item or sits under the wrong `sparkle:os` (the Windows updater picks its item by `sparkle:os` alone), or when an item names a zip that isn't in the list. It also fails when the appcast has no Mac item or, without `--mac-only`, no item for either Windows zip, so a release that forgot the Windows zips stops here. Run it before `gh release create`: once the release is public, `releases/latest/download/appcast.xml` serves its appcast at once. If it fails there, fix the zips or run `scripts/sign_appcast.sh` again, and don't tag yet. The run after publishing only confirms what GitHub serves. If that one fails, never edit or re-upload the published release: publish a new patch version with a correct appcast.
+The `--assets` check fails when a zip in the list, such as a Windows zip, has no appcast item or sits under the wrong `sparkle:os` (the Windows updater picks its item by `sparkle:os` alone), or when an item names a zip that isn't in the list. It also fails when the appcast has no Mac item or, without `--mac-only`, no item for one of the Windows zips, so a release that forgot the Windows zips stops here. Run it before `gh release create`: once the release is public, `releases/latest/download/appcast.xml` serves its appcast at once. If it fails there, fix the zips or run `scripts/sign_appcast.sh` again, and don't tag yet. The run after publishing only confirms what GitHub serves. If that one fails, never edit or re-upload the published release: publish a new patch version with a correct appcast.
 
 `scripts/install.sh` (the Terminal install in the README) depends on two of these: it downloads `AudioSync-$VERSION.zip`, expects `AudioSync.app` at the top of it, and checks it against that file's line in `SHA256SUMS.txt`. Keep both names and the `--keepParent` zip as they are. The copy attached to the release lets someone install that exact version with the script that shipped with it.
 

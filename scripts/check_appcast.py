@@ -5,8 +5,9 @@ The appcast must hold exactly one Mac item and one item each for
 windows-x64 and windows-arm64; with --mac-only it must hold the Mac item and
 no Windows item, and refuses Windows zips. A release is taken to carry
 Windows unless --mac-only says otherwise, so a forgotten Windows zip fails
-here instead of leaving Windows users without the update. Every item has one enclosure with a sparkle:edSignature,
-a url ending in releases/download/v<version>/<zip name> and a length; every
+here instead of leaving Windows users without the update. Every item has
+one enclosure with a sparkle:edSignature, a url ending in
+releases/download/v<version>/<zip name> and a length; every
 item carries the release's sparkle:shortVersionString and one shared
 sparkle:version. Each zip given must match its item's url name and length,
 and each Windows zip must hold exactly audiosync.exe and
