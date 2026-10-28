@@ -1219,15 +1219,20 @@ impl CastSpeakers {
     }
 
     /// The device's own level, 0 to 100, sent times the master (C69,
-    /// C104); shown until the device's next status answers it.
+    /// C104); shown until the device's next status answers it. Without a
+    /// session it is kept, and the next session's first status sets it (C105).
     pub fn set_volume(&mut self, id: &str, position: f64) {
-        let Some(device) = self.playing_device(id) else {
+        let Some(device) = DeviceId::parse(id) else {
             return;
         };
         if !position.is_finite() {
             return;
         }
         let own = (position / 100.0).clamp(0.0, 1.0);
+        if self.playing_device(id).is_none() {
+            self.levels.insert(device, own);
+            return;
+        }
         self.requested = Some((device, own));
         self.send_level(device, own);
     }
