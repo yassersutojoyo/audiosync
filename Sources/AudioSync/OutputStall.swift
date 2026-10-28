@@ -31,10 +31,12 @@ struct OutputStallWatch {
     }
 
     private var seen: [String: Seen] = [:]
+    private var paused = false
 
     /// The outputs in `readings` that stalled by uptime `nowS`, sorted by UID.
     /// A stalled output is forgotten, so it stalls once per attach.
     mutating func check(_ readings: [String: Reading], nowS: Double) -> [Stall] {
+        guard !paused else { return [] }
         seen = seen.filter { readings[$0.key] != nil }
         var stalls: [Stall] = []
         for (uid, reading) in readings {
@@ -55,6 +57,18 @@ struct OutputStallWatch {
 
     mutating func reset() {
         seen = [:]
+    }
+
+    /// From the Mac's will-sleep notice to its wake no output stalls: uptime
+    /// still runs between the notice and the sleep itself.
+    mutating func pause() {
+        paused = true
+    }
+
+    /// At the wake: the 2 s start over at uptime `nowS`.
+    mutating func resume(nowS: Double) {
+        paused = false
+        for uid in seen.keys { seen[uid]?.movedAtS = nowS }
     }
 }
 

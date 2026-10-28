@@ -101,6 +101,8 @@ final class StreamEngine {
     /// The 0.5 s check for outputs whose render callback stopped (S334).
     private var stallTimer: DispatchSourceTimer?
     private var stallWatch = OutputStallWatch()
+    /// Between the Mac's will-sleep notice and its wake neither watch acts.
+    private var asleep = false
 
     init() {
         capture.onInterrupted = { [weak self] reason in self?.handleInterruption(reason) }
@@ -237,6 +239,23 @@ final class StreamEngine {
         timer.setEventHandler { [weak self] in self?.checkStalls() }
         timer.resume()
         stallTimer = timer
+    }
+
+    /// The Mac's will-sleep notice: until `macWoke`, no output stalls and the
+    /// capture watch asks for nothing (S334, S335).
+    func macWillSleep() {
+        asleep = true
+        stallWatch.pause()
+        flowWatch.pause()
+    }
+
+    /// The wake: both watches count again from now.
+    func macWoke() {
+        guard asleep else { return }
+        asleep = false
+        let now = ProcessInfo.processInfo.systemUptime
+        stallWatch.resume(nowS: now)
+        flowWatch.resume(at: now)
     }
 
     private func stopStallWatch() {
@@ -419,6 +438,7 @@ final class StreamEngine {
     private func startFlowWatch(source: AudioSource, inputPair: Int) {
         stopFlowWatch()
         flowWatch = CaptureFlowWatch()
+        if asleep { flowWatch.pause() }
         opened = (source, inputPair)
         reopenError = nil
         let timer = DispatchSource.makeTimerSource(queue: .main)
