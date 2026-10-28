@@ -12,7 +12,6 @@
 //! dropped (S186). The drop waits for the thread as a [`Worker`] does:
 //! stopping the stream can hang while Windows audio doesn't answer.
 
-use std::collections::HashMap;
 use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -204,14 +203,14 @@ pub(super) fn current_format(id: &str) -> Result<RenderFormat, BackendError> {
 }
 
 /// The outputs' format reads ([`current_format`]), each on a thread of its
-/// own: by endpoint, the reads given up on while still in their Windows call.
+/// own: the read given up on while still in its Windows call, if any.
 #[derive(Default)]
-pub(super) struct FormatReads(HashMap<String, Awaited>);
+pub(super) struct FormatReads(Option<Awaited>);
 
 impl FormatReads {
     /// The format an output on the endpoint `id` would open in now, or
     /// [`BackendError::NotResponding`] when Windows audio didn't answer in
-    /// [`READY_TIMEOUT`] or an earlier read of `id` still hangs.
+    /// [`READY_TIMEOUT`] or an earlier read, of any output, still hangs.
     pub(super) fn current(&mut self, id: &str) -> Result<RenderFormat, BackendError> {
         self.read_within(id, READY_TIMEOUT, &WINDOWS_AUDIO, current_format)
     }
@@ -223,8 +222,8 @@ impl FormatReads {
         stuck: &'static StuckThreads,
         read: impl FnOnce(&str) -> Result<RenderFormat, BackendError> + Send + 'static,
     ) -> Result<RenderFormat, BackendError> {
-        self.0.retain(|_, hung| hung.pending());
-        if self.0.contains_key(id) {
+        // Every read waits on the same audio service, so one hang answers for all.
+        if self.0.as_ref().is_some_and(Awaited::pending) {
             return Err(BackendError::NotResponding);
         }
         let (running, end) = awaited(stuck);
@@ -245,7 +244,7 @@ impl FormatReads {
             }
             Err(BackendError::NotResponding) => {
                 if end.let_go() {
-                    self.0.insert(id.to_owned(), end);
+                    self.0 = Some(end);
                 }
                 Err(BackendError::NotResponding)
             }
