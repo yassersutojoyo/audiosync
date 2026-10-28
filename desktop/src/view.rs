@@ -7180,15 +7180,25 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn the_end_of_a_windows_session_gives_a_removed_exe_its_bak_back_and_keeps_the_record() {
-        let app = app_over(MockBackend::new());
-        *app.updater.borrow_mut() = Some(crate::updater::tests::swapped_exe_gone("session-end"));
+        let backend = MockBackend::new();
+        let saved_views = backend.saved_views.clone();
+        let app = app_over(backend);
+        let (updater, exe) = crate::updater::tests::swapped_exe_gone("session-end");
+        *app.updater.borrow_mut() = Some(updater);
         app.at_session_end();
+        assert!(exe.exists(), "the .bak is audiosync.exe again");
+        let saved: Vec<_> = saved_views
+            .borrow()
+            .iter()
+            .map(|view| view.update_record.clone())
+            .collect();
         assert_eq!(
-            app.backend.borrow().view_settings().update_record,
-            Some(ui_model::UpdateRecord {
+            saved,
+            [Some(ui_model::UpdateRecord {
                 version: "0.9.0".to_owned(),
                 reason: ui_model::UpdateRecordReason::Blocked,
-            })
+            })],
+            "the one save already holds the record"
         );
     }
 

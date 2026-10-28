@@ -1135,11 +1135,13 @@ pub mod tests {
         updater
     }
 
-    /// [`swapped`], then Windows security removed the installed exe.
-    pub(crate) fn swapped_exe_gone(name: &str) -> Updater {
+    /// [`swapped`], then Windows security removed the installed exe, whose
+    /// path comes along.
+    pub(crate) fn swapped_exe_gone(name: &str) -> (Updater, PathBuf) {
         let updater = swapped(name, Arc::new(Never));
-        std::fs::remove_file(updater.env.install_dir.join(archive::EXE_NAME)).unwrap();
-        updater
+        let exe = updater.env.install_dir.join(archive::EXE_NAME);
+        std::fs::remove_file(&exe).unwrap();
+        (updater, exe)
     }
 
     fn folder(updater: &Updater) -> Vec<(String, Vec<u8>)> {
