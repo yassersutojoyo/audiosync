@@ -87,7 +87,9 @@ cd "$root/cast"
 cells_from_tests "--test fake_cells" \
     "a_device_that_rounds_levels_to_its_step_moves_one_step_per_press_and_shows_its_own_level=C12" \
     "mute_and_level_changed_on_the_device_reach_the_host_and_nothing_goes_back=C2.device-volume" \
+    "a_slider_level_the_device_rounds_onto_its_own_is_sent_once_and_not_chased=C12.slider36" \
     "a_sender_suspended_past_the_devices_ping_timeout_reconnects_and_plays_on=C13" \
+    "the_level_set_stays_shown_after_a_reconnect_whose_first_status_has_no_level=C13.level" \
     "current_time_in_any_form_changes_nothing_but_the_diagnostics=C19" \
     "txt_keys_that_change_with_the_devices_state_keep_one_entry_of_the_same_kind=C16" \
     "a_tls_1_2_only_device_back_with_a_new_certificate_is_reconnected_and_plays_on=C10" \
