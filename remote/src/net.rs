@@ -199,6 +199,25 @@ mod tests {
     }
 
     #[test]
+    fn a_carrier_nat_peer_is_let_in() {
+        let loopback = v4(127, 0, 0, 1);
+        for allowed in [
+            v4(100, 64, 0, 1),
+            v4(100, 100, 1, 1),
+            v4(100, 127, 255, 255),
+        ] {
+            assert!(admits_peer(allowed, loopback), "{allowed}");
+        }
+        let mapped = IpAddr::V6(Ipv4Addr::new(100, 100, 1, 1).to_ipv6_mapped());
+        assert!(admits_peer(mapped, loopback));
+        for refused in [v4(100, 63, 255, 255), v4(100, 128, 0, 1)] {
+            assert!(!admits_peer(refused, loopback), "{refused}");
+        }
+        // The address shown for the phone to open stays a home network's.
+        assert!(!is_private_peer(v4(100, 100, 1, 1)));
+    }
+
+    #[test]
     fn every_address_is_a_peer_of_its_own() {
         let phone = v6("2001:db8:1:2:aaaa:bbbb:cccc:dddd");
         let laptop = v6("2001:db8:1:2:1111:2222:3333:4444");

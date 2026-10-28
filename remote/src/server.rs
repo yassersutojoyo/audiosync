@@ -1460,6 +1460,60 @@ mod tests {
         IpAddr::V4(Ipv4Addr::new(10, 0, subnet, host))
     }
 
+    /// Admits a loopback connection as if accept had reported `peer`; the
+    /// client has already sent a request.
+    fn admit_as(server: &RemoteServer, peer: IpAddr) -> TcpStream {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client.write_all(b"GET / HTTP/1.1\r\n\r\n").unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        assert!(admit(stream, SocketAddr::new(peer, 50000), &server.shared).is_none());
+        client
+    }
+
+    fn not_private_events(server: &RemoteServer) -> Vec<IpAddr> {
+        std::iter::from_fn(|| server.poll_event())
+            .filter_map(|event| match event {
+                ServerEvent::NotPrivate { from } => Some(from),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn only_home_network_peers_get_an_answer_and_a_refusal_is_logged_once() {
+        let config = Config {
+            port: 0,
+            listen: vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            ..Config::default()
+        };
+        let server = RemoteServer::start(config, |_| {}).unwrap();
+        let public = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
+        let mapped = IpAddr::V6(Ipv4Addr::new(8, 8, 8, 8).to_ipv6_mapped());
+        for peer in [public, mapped, public] {
+            let mut client = admit_as(&server, peer);
+            let mut answer = Vec::new();
+            let _ = client.read_to_end(&mut answer);
+            assert!(answer.is_empty(), "{peer} got an answer");
+        }
+        assert_eq!(not_private_events(&server), [public]);
+        let carrier_nat = IpAddr::V4(Ipv4Addr::new(100, 100, 1, 1));
+        for peer in [
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)),
+            address("fe80::1"),
+            carrier_nat,
+        ] {
+            let mut client = admit_as(&server, peer);
+            let mut answer = Vec::new();
+            let _ = client.read_to_end(&mut answer);
+            assert!(answer.starts_with(b"HTTP/1.1 "), "{peer} got no answer");
+        }
+        assert!(not_private_events(&server).is_empty());
+    }
+
     #[test]
     fn two_ipv6_hosts_in_one_64_have_a_connection_cap_each() {
         let capacity = Capacity::default();
