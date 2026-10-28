@@ -37,6 +37,8 @@ const HANDSHAKE_POLL: Duration = Duration::from_millis(5);
 /// Events kept for a host that doesn't poll: beyond this, the oldest
 /// status and drop reports go first; launch results and the end are kept.
 pub const MAX_EVENTS: usize = 64;
+/// The most addresses one connect tries (C109).
+pub const MAX_CONNECT_ADDRESSES: usize = 8;
 /// The longest teardown at host quit (C88).
 pub const QUIT_BUDGET: Duration = Duration::from_secs(3);
 
@@ -732,5 +734,51 @@ mod tests {
         }
         let took = started.elapsed();
         assert!(took < limit * 2, "the write took {took:?}");
+    }
+
+    // covers: C109
+    #[test]
+    fn a_connect_tries_at_most_eight_addresses() {
+        let listeners: Vec<TcpListener> = (0..40)
+            .map(|_| TcpListener::bind("127.0.0.1:0").expect("listener"))
+            .collect();
+        let mut addresses: Vec<SocketAddr> = listeners
+            .iter()
+            .map(|listener| listener.local_addr().expect("address"))
+            .collect();
+        addresses.insert(1, addresses[0]);
+        let done = Arc::new(AtomicBool::new(false));
+        let stop = Arc::clone(&done);
+        // Each connection is closed unanswered, so its TLS handshake fails
+        // at once.
+        let device = thread::spawn(move || {
+            let mut accepted = vec![0usize; listeners.len()];
+            for listener in &listeners {
+                listener.set_nonblocking(true).expect("non-blocking");
+            }
+            while !stop.load(Ordering::SeqCst) {
+                for (count, listener) in accepted.iter_mut().zip(&listeners) {
+                    if let Ok((tcp, _)) = listener.accept() {
+                        *count += 1;
+                        drop(tcp);
+                    }
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            accepted
+        });
+        let result = CastClient::connect(&addresses, RequestIds::random());
+        done.store(true, Ordering::SeqCst);
+        let accepted = device.join().expect("device");
+        assert!(result.is_err());
+        assert_eq!(
+            accepted[..MAX_CONNECT_ADDRESSES],
+            [1; MAX_CONNECT_ADDRESSES]
+        );
+        assert!(
+            accepted[MAX_CONNECT_ADDRESSES..]
+                .iter()
+                .all(|&count| count == 0)
+        );
     }
 }
