@@ -972,6 +972,12 @@ mod tests {
             ("ASC_CORRECTION_OVERRUN", CORRECTION_OVERRUN.to_string()),
             ("ASC_CORRECTION_STEP_BACK", CORRECTION_STEP_BACK.to_string()),
             ("ASC_STOP_FADE_CAP_MS", STOP_FADE_CAP_MS.to_string()),
+            (
+                "ASC_BRIEF_LOSS_HOLD_MS",
+                crate::policy::delay::BRIEF_LOSS_HOLD
+                    .as_millis()
+                    .to_string(),
+            ),
             ("ASC_FADE_CLOSED", FADE_CLOSED.to_string()),
             ("ASC_FADE_FADING_IN", FADE_FADING_IN.to_string()),
             ("ASC_FADE_OPEN", FADE_OPEN.to_string()),
@@ -1526,6 +1532,10 @@ mod tests {
             ("ASC_CAST_EVENT_FAILED", CAST_EVENT_FAILED.to_string()),
             ("ASC_CAST_EVENT_MEMBERS", CAST_EVENT_MEMBERS.to_string()),
             ("ASC_CAST_EVENT_GROUP_LOG", CAST_EVENT_GROUP_LOG.to_string()),
+            (
+                "ASC_CAST_EVENT_CERTIFICATE_CHANGED",
+                CAST_EVENT_CERTIFICATE_CHANGED.to_string(),
+            ),
             ("ASC_CAST_END_STOPPED", CAST_END_STOPPED.to_string()),
             ("ASC_CAST_END_TAKEN_OVER", CAST_END_TAKEN_OVER.to_string()),
             ("ASC_CAST_END_DESELECTED", CAST_END_DESELECTED.to_string()),
@@ -1547,6 +1557,7 @@ mod tests {
             ("ASC_CAST_ERROR_VOLUME", CAST_ERROR_VOLUME.to_string()),
             ("ASC_CAST_ERROR_ARTWORK", CAST_ERROR_ARTWORK.to_string()),
             ("ASC_CAST_ERROR_GROUP", CAST_ERROR_GROUP.to_string()),
+            ("ASC_CAST_ERROR_INTERNAL", CAST_ERROR_INTERNAL.to_string()),
             ("ASC_CAST_FORMAT_WAV", CAST_FORMAT_WAV.to_string()),
             ("ASC_CAST_FORMAT_FLAC", CAST_FORMAT_FLAC.to_string()),
             ("ASC_REMOTE_DEFAULT_PORT", REMOTE_DEFAULT_PORT.to_string()),

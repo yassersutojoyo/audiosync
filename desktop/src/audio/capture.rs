@@ -17,7 +17,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
 use audiosync_core::channels::{InputPair, pair_to_stereo};
@@ -633,6 +633,9 @@ pub struct CaptureConverter {
     resampled: Box<[f32]>,
     /// The channels that play as L and R.
     pair: InputPair,
+    zero_runs: ZeroRuns,
+    /// Where the holes found are published, for a capture that counts them.
+    counters: Option<Arc<CaptureCounters>>,
 }
 
 impl CaptureConverter {
@@ -640,6 +643,16 @@ impl CaptureConverter {
     /// first two.
     pub fn reading(mut self, pair: InputPair) -> CaptureConverter {
         self.pair = pair;
+        self
+    }
+
+    /// The converter publishing the [`ZeroHoles`] it finds to `counters`.
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        allow(dead_code, reason = "only the WASAPI loopback counts its packets")
+    )]
+    pub fn counting(mut self, counters: Arc<CaptureCounters>) -> CaptureConverter {
+        self.counters = Some(counters);
         self
     }
 
@@ -676,6 +689,8 @@ impl CaptureConverter {
             stereo: vec![0.0; CONVERT_CHUNK * 2].into_boxed_slice(),
             resampled: vec![0.0; resampled_frames * 2].into_boxed_slice(),
             pair: InputPair::FIRST,
+            zero_runs: ZeroRuns::new(format.rate),
+            counters: None,
         })
     }
 
@@ -690,6 +705,22 @@ impl CaptureConverter {
     /// with the time it closes on the core's clock (S207), so the outputs
     /// can follow the capture's clock.
     pub fn push(&mut self, data: &[u8], frames: usize, silent: bool) {
+        self.push_marked(data, frames, silent, None);
+    }
+
+    /// Converts a chunk of a mix as [`CaptureConverter::push`] converts a
+    /// packet of data; `filled` tells per frame whether every lane's share
+    /// was flagged or filled silence, or no lane had a frame, for the zero
+    /// holes.
+    #[cfg_attr(
+        not(windows),
+        allow(dead_code, reason = "only the WASAPI loopback calls it")
+    )]
+    pub fn push_mixed(&mut self, data: &[u8], frames: usize, filled: &[bool]) {
+        self.push_marked(data, frames, false, Some(filled));
+    }
+
+    fn push_marked(&mut self, data: &[u8], frames: usize, silent: bool, filled: Option<&[bool]>) {
         let arrived = Instant::now();
         let block = self.format.block_align();
         let frames = if silent {
@@ -706,6 +737,7 @@ impl CaptureConverter {
             let n = (frames - done).min(CONVERT_CHUNK);
             if silent {
                 self.stereo[..n * 2].fill(0.0);
+                self.zero_runs.observe_silence(n);
             } else {
                 let bytes = &data[done * block..(done + n) * block];
                 decode(self.format.sample, bytes, &mut self.decoded[..n * channels]);
@@ -717,9 +749,19 @@ impl CaptureConverter {
                 );
                 // A pair beyond the format's channels converts nothing: silence, not stale samples.
                 self.stereo[converted * 2..n * 2].fill(0.0);
+                let stereo = &self.stereo[..n * 2];
+                match filled {
+                    Some(filled) => self
+                        .zero_runs
+                        .observe_mixed(stereo, filled.get(done..done + n).unwrap_or(&[])),
+                    None => self.zero_runs.observe(stereo),
+                }
             }
             written += self.write_stereo(n, arrived, &mut signal);
             done += n;
+        }
+        if let Some(counters) = &self.counters {
+            counters.publish_zero_holes(self.zero_runs.holes(), self.format.rate);
         }
         let closed = clock::now_ns();
         self.writer.end_block_at(closed);
@@ -960,11 +1002,12 @@ impl GapFill {
 }
 
 /// What a loopback capture counts for the debug log's status line: the
-/// frames Windows delivered, the packets it flagged as a discontinuity, and
-/// the silence [`GapFill`] put before a packet whose position jumped. The
-/// silence written while nothing comes is left out: process loopback
-/// delivers nothing whenever its app is quiet. Written by the capture
-/// thread, read by the status timer.
+/// frames Windows delivered, the packets it flagged as a discontinuity or
+/// as silent, the silence [`GapFill`] put before a packet whose position
+/// jumped, and the [`ZeroHoles`] its converter found. The silence written
+/// while nothing comes is left out: process loopback delivers nothing
+/// whenever its app is quiet. Written by the capture thread, read by the
+/// status timer.
 #[derive(Debug, Default)]
 #[cfg_attr(
     all(not(windows), not(test)),
@@ -974,6 +1017,13 @@ pub struct CaptureCounters {
     captured: AtomicU64,
     discontinuities: AtomicU64,
     gap_fill_frames: AtomicU64,
+    silent_packets: AtomicU64,
+    zero_holes: AtomicU64,
+    zero_hole_frames: AtomicU64,
+    longest_zero_hole: AtomicU64,
+    flagged_zero_holes: AtomicU64,
+    /// The rate of the frames the holes count, for their length in ms.
+    zero_hole_rate: AtomicU32,
 }
 
 #[cfg_attr(
@@ -997,17 +1047,48 @@ impl CaptureCounters {
         }
     }
 
+    /// Counts a packet Windows flagged as silent. Never allocates, locks or
+    /// blocks.
+    #[cfg_attr(
+        not(windows),
+        allow(dead_code, reason = "only the WASAPI loopback calls it")
+    )]
+    pub fn count_silent_packet(&self) {
+        self.silent_packets.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Publishes the holes found so far in frames at `rate`. Never
+    /// allocates, locks or blocks. Separate relaxed stores: a status read can
+    /// mix two pushes, which the next status line corrects (debug only).
+    pub fn publish_zero_holes(&self, holes: ZeroHoles, rate: u32) {
+        self.zero_holes.store(holes.holes, Ordering::Relaxed);
+        self.zero_hole_frames.store(holes.frames, Ordering::Relaxed);
+        self.longest_zero_hole
+            .store(holes.longest, Ordering::Relaxed);
+        self.zero_hole_rate.store(rate, Ordering::Relaxed);
+        self.flagged_zero_holes
+            .store(holes.flagged, Ordering::Relaxed);
+    }
+
     /// The frames Windows delivered, without any silence filled.
     #[cfg(test)]
     pub fn frames_captured(&self) -> u64 {
         self.captured.load(Ordering::Relaxed)
     }
 
-    /// The discontinuities and gap fill counted so far.
+    /// The glitches counted so far.
     pub fn glitches(&self) -> CaptureGlitches {
         CaptureGlitches {
             discontinuities: self.discontinuities.load(Ordering::Relaxed),
             gap_fill_frames: self.gap_fill_frames.load(Ordering::Relaxed),
+            silent_packets: self.silent_packets.load(Ordering::Relaxed),
+            zero_holes: ZeroHoles {
+                holes: self.zero_holes.load(Ordering::Relaxed),
+                frames: self.zero_hole_frames.load(Ordering::Relaxed),
+                longest: self.longest_zero_hole.load(Ordering::Relaxed),
+                flagged: self.flagged_zero_holes.load(Ordering::Relaxed),
+            },
+            zero_hole_rate: self.zero_hole_rate.load(Ordering::Relaxed),
         }
     }
 }
@@ -1020,6 +1101,130 @@ pub struct CaptureGlitches {
     pub discontinuities: u64,
     /// Silent frames put before a packet whose position jumped.
     pub gap_fill_frames: u64,
+    /// Packets Windows flagged as silent; they come all along while an
+    /// endpoint plays nothing.
+    pub silent_packets: u64,
+    pub zero_holes: ZeroHoles,
+    /// The rate of `zero_holes`' frames; 0 before any was published.
+    pub zero_hole_rate: u32,
+}
+
+impl CaptureGlitches {
+    /// The longest zero hole in ms, 0 without a rate.
+    pub fn longest_zero_hole_ms(&self) -> f64 {
+        if self.zero_hole_rate == 0 {
+            return 0.0;
+        }
+        self.zero_holes.longest as f64 * 1000.0 / f64::from(self.zero_hole_rate)
+    }
+}
+
+/// The holes of exact digital silence a capture's stereo frames had inside
+/// sound: runs of frames whose samples are all 0 that follow sound, end in
+/// sound and last [`ZeroRuns::MIN_MS`] to [`ZeroRuns::MAX_MS`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ZeroHoles {
+    pub holes: u64,
+    pub frames: u64,
+    /// The longest hole's frames.
+    pub longest: u64,
+    /// The holes that had frames of flagged or filled silence in them.
+    pub flagged: u64,
+}
+
+/// Finds [`ZeroHoles`] in a capture's stereo frames as they pass. Plain
+/// integers: never allocates, locks or blocks.
+#[derive(Debug)]
+pub struct ZeroRuns {
+    min: usize,
+    max: usize,
+    /// Whether sound came since the last pause, so zeros now may be a hole.
+    after_sound: bool,
+    /// The zero frames since the last sound.
+    run: usize,
+    /// Whether the run holds flagged or filled silence.
+    flagged: bool,
+    holes: ZeroHoles,
+}
+
+impl ZeroRuns {
+    /// The shortest hole counted: shorter zero runs are zero crossings.
+    pub const MIN_MS: u32 = 5;
+    /// The longest: anything longer is a pause, not a hole.
+    pub const MAX_MS: u32 = 500;
+
+    /// A finder for frames at `rate`.
+    pub fn new(rate: u32) -> ZeroRuns {
+        let frames = |ms: u32| (u64::from(rate) * u64::from(ms) / 1000) as usize;
+        ZeroRuns {
+            min: frames(Self::MIN_MS).max(1),
+            max: frames(Self::MAX_MS),
+            after_sound: false,
+            run: 0,
+            flagged: false,
+            holes: ZeroHoles::default(),
+        }
+    }
+
+    /// Looks at interleaved stereo frames that came as data.
+    pub fn observe(&mut self, stereo: &[f32]) {
+        for frame in stereo.as_chunks::<2>().0 {
+            if frame[0] == 0.0 && frame[1] == 0.0 {
+                self.zeros(1, false);
+            } else {
+                self.sound();
+            }
+        }
+    }
+
+    /// Looks at interleaved stereo frames of a mix, `filled` telling per
+    /// frame whether every lane's share was flagged or filled silence.
+    pub fn observe_mixed(&mut self, stereo: &[f32], filled: &[bool]) {
+        for (frame, &filled) in stereo.as_chunks::<2>().0.iter().zip(filled) {
+            if frame[0] == 0.0 && frame[1] == 0.0 {
+                self.zeros(1, filled);
+            } else {
+                self.sound();
+            }
+        }
+    }
+
+    /// Looks at `frames` frames of flagged or filled silence.
+    pub fn observe_silence(&mut self, frames: usize) {
+        self.zeros(frames, true);
+    }
+
+    fn zeros(&mut self, frames: usize, flagged: bool) {
+        if !self.after_sound {
+            return;
+        }
+        self.run += frames;
+        self.flagged |= flagged;
+        if self.run > self.max {
+            self.after_sound = false;
+            self.run = 0;
+            self.flagged = false;
+        }
+    }
+
+    fn sound(&mut self) {
+        if self.run >= self.min {
+            self.holes.holes += 1;
+            self.holes.frames += self.run as u64;
+            self.holes.longest = self.holes.longest.max(self.run as u64);
+            if self.flagged {
+                self.holes.flagged += 1;
+            }
+        }
+        self.after_sound = true;
+        self.run = 0;
+        self.flagged = false;
+    }
+
+    /// The holes found so far.
+    pub fn holes(&self) -> ZeroHoles {
+        self.holes
+    }
 }
 
 /// Decodes little-endian samples into floats in -1.0..=1.0.
@@ -2098,6 +2303,7 @@ mod tests {
         assert_eq!(gaps.idle(start + 20 * HNS_PER_MS), 0);
     }
 
+    // covers: S332
     #[test]
     fn a_jump_or_a_discontinuity_gets_silence_for_the_time_between() {
         let mut gaps = GapFill::new(SESSION_RATE);
@@ -2110,6 +2316,26 @@ mod tests {
         assert_eq!(
             gaps.packet(3_600_000 * HNS_PER_MS, 480, false),
             (21 * 48_000, 0, true)
+        );
+    }
+
+    // covers: S332
+    #[test]
+    fn an_idle_wake_two_hours_on_writes_21_s_and_keeps_pace_from_now() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        gaps.packet(0, 480, false);
+        assert_eq!(gaps.idle(50 * HNS_PER_MS), 1_440);
+        // The PC slept two hours: the first wake after it writes 21 s.
+        let woke = 2 * 3_600_000 * HNS_PER_MS;
+        assert_eq!(gaps.idle(woke), 21 * 48_000);
+        // Then only the time since, with nothing for the rest of the gap.
+        assert_eq!(gaps.idle(woke + 10 * HNS_PER_MS), 480);
+        assert_eq!(gaps.idle(woke + 30 * HNS_PER_MS), 960);
+        // The silence ends 10 ms before the last wake: a packet from there
+        // on follows it with no gap.
+        assert_eq!(
+            gaps.packet(woke + 20 * HNS_PER_MS, 480, false),
+            (0, 0, false)
         );
     }
 
@@ -2135,6 +2361,7 @@ mod tests {
             CaptureGlitches {
                 discontinuities: 2,
                 gap_fill_frames: 576,
+                ..CaptureGlitches::default()
             }
         );
         assert_eq!(counters.frames_captured(), 5 * 480);
@@ -2159,6 +2386,113 @@ mod tests {
         let (fill, _, jumped) = gaps.packet(80 * HNS_PER_MS, 480, false);
         counters.count_packet(480, false, fill, jumped);
         assert_eq!(counters.glitches().gap_fill_frames, 480);
+    }
+
+    /// `frames` stereo frames of a 1 kHz tone at 48 kHz, which never holds
+    /// two zero frames in a row.
+    fn tone(frames: usize) -> Vec<f32> {
+        (0..frames)
+            .flat_map(|i| {
+                let v = (i as f32 * 2.0 * std::f32::consts::PI / 48.0 + 0.1).sin() * 0.5;
+                [v, v]
+            })
+            .collect()
+    }
+
+    // covers: S229 (zero holes)
+    #[test]
+    fn a_10_ms_zero_hole_inside_a_tone_is_one_hole() {
+        let mut runs = ZeroRuns::new(48_000);
+        // A 6 ms hole first: the 10 ms one is the longest.
+        runs.observe(&tone(480));
+        runs.observe(&[0.0; 288 * 2]);
+        runs.observe(&tone(4_800));
+        runs.observe(&[0.0; 480 * 2]);
+        runs.observe(&tone(4_800));
+        assert_eq!(
+            runs.holes(),
+            ZeroHoles {
+                holes: 2,
+                frames: 768,
+                longest: 480,
+                flagged: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn long_silence_short_gaps_and_leading_silence_are_no_holes() {
+        let mut runs = ZeroRuns::new(48_000);
+        // Silence before any sound, then a long pause between two tones.
+        runs.observe(&[0.0; 4_800 * 2]);
+        runs.observe(&tone(4_800));
+        runs.observe_silence(48_000);
+        runs.observe(&tone(4_800));
+        // 4 ms of zeros is under the 5 ms floor.
+        runs.observe(&[0.0; 192 * 2]);
+        runs.observe(&tone(480));
+        // Trailing silence that never ends in sound.
+        runs.observe(&[0.0; 960 * 2]);
+        assert_eq!(runs.holes(), ZeroHoles::default());
+        let mut silence = ZeroRuns::new(48_000);
+        silence.observe(&[0.0; 48_000 * 2]);
+        assert_eq!(silence.holes(), ZeroHoles::default());
+    }
+
+    #[test]
+    fn a_hole_split_across_packets_and_partly_flagged_counts_once_as_flagged() {
+        let mut runs = ZeroRuns::new(48_000);
+        runs.observe(&tone(480));
+        runs.observe(&[0.0; 240 * 2]);
+        runs.observe_silence(480);
+        runs.observe(&[0.0; 240 * 2]);
+        runs.observe(&tone(480));
+        // One channel silent while the other plays is sound.
+        let mut one_side = tone(480);
+        for frame in one_side.chunks_mut(2) {
+            frame[0] = 0.0;
+        }
+        runs.observe(&one_side);
+        assert_eq!(
+            runs.holes(),
+            ZeroHoles {
+                holes: 1,
+                frames: 960,
+                longest: 960,
+                flagged: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn the_converter_publishes_the_holes_in_what_it_captures() {
+        let (_ring, writer) = session_ring();
+        let (_control, processor) = equalizer();
+        let counters = Arc::new(CaptureCounters::default());
+        let mut converter = CaptureConverter::new(
+            CAPTURE_ATTEMPTS[0].format,
+            writer,
+            processor,
+            Feeds::default(),
+        )
+        .unwrap()
+        .counting(Arc::clone(&counters));
+        // A data hole of 10 ms inside one packet, then a silent packet
+        // between two packets of sound.
+        let mut packet = tone(1_440);
+        packet[480 * 2..960 * 2].fill(0.0);
+        converter.push(&f32_bytes(&packet), 1_440, false);
+        converter.push(&[], 480, true);
+        converter.push(&f32_bytes(&tone(480)), 480, false);
+        assert_eq!(
+            counters.glitches().zero_holes,
+            ZeroHoles {
+                holes: 2,
+                frames: 960,
+                longest: 480,
+                flagged: 1,
+            }
+        );
     }
 
     #[test]

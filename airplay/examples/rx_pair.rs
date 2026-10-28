@@ -12,14 +12,23 @@
 //! per receiver after the first: PASS when every click sent with 3 s of the
 //! run left has a stated time on each receiver, and those times differ by
 //! the delay difference within one frame (P102). Exits 3 when that line
-//! fails and every receiver played.
+//! fails and every receiver played. A `latency` line per receiver then shows
+//! how far its first stated click lies past c(n) + d_s + L beside the
+//! `Audio-Latency` it reported (P203); it informs and never fails the run.
 //!
 //! ```text
 //! cargo run --release -p audiosync-airplay --example rx_pair -- \
-//!     --rx <host:port>[,ap1|ap2][,delay=<ms>] [--rx ...] [--seconds <n>] [--tone|--click] [--verbose]
+//!     --rx <host:port>[,ap1|ap2|both][,delay=<ms>] [--rx ...] [--seconds <n>] [--tone|--click] [--verbose] [--auto]
 //! ```
 //!
-//! `ap2` (the default) takes the AirPlay 2 path, `ap1` the AirPlay 1 path.
+//! `ap2` (the default) offers the receiver's AirPlay 2 service only, `ap1`
+//! its AirPlay 1 service only, `both` the two on one address and port.
+//! Without `--auto` the AirPlay 2 path is always on, so `ap2` takes it.
+//! With `--auto` the sender is built as the apps build it (S312): the flag
+//! from `AUDIOSYNC_AIRPLAY2_AUTO` (off by default), the switch from
+//! `AUDIOSYNC_AIRPLAY2` with no saved setting, and each summary line ends
+//! with the protocol the sender planned for that receiver and why; `path=`
+//! is the one it ended on.
 //! `delay=<ms>` is the speaker's d_s (P99), set through the speaker options
 //! as a host sets it, so the click shows the sender's own timing; the
 //! example `rx_onset` and `scripts/two_speaker_sync_wsl.sh` measure it.
@@ -34,6 +43,8 @@
 //! root or a lowered `net.ipv4.ip_unprivileged_port_start` on Linux.
 //! Development only.
 
+#[path = "rx_pair/auto_choice.rs"]
+mod auto_choice;
 #[path = "rx_pair/sync_check.rs"]
 mod sync_check;
 
@@ -47,18 +58,18 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::audio::PACKET_FRAMES;
-use audiosync_airplay::discovery::{
-    Device, DeviceId, DeviceKey, ProtocolPath, ScopedAddr, ServiceKind, ServiceRecord,
-};
+use audiosync_airplay::discovery::{DeviceKey, ProtocolPath};
 use audiosync_airplay::input::InputWriter;
 use audiosync_airplay::sender::{
-    Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
-    random_airplay2_device_id,
+    AIRPLAY2_AUTO_ENV, AIRPLAY2_SWITCH_ENV, Sender, SenderConfig, SenderEvent, SpeakerEvent,
+    SpeakerOptions, SpeakerState, random_airplay2_device_id,
 };
 use audiosync_airplay::stream::SpeakerCounters;
 use audiosync_airplay::volume::Volume;
+use auto_choice::{AutoMode, Services};
 use sync_check::{
-    CLICK_FIRST_FRAME, CLICK_PERIOD_FRAMES, RATE, RxSpec, WireLog, click_sample, parse_rx_spec,
+    CLICK_FIRST_FRAME, CLICK_PERIOD_FRAMES, ClickPair, RATE, RxSpec, WireLog, click_sample,
+    pair_clicks, parse_rx_spec,
 };
 
 const BLOCK_FRAMES: usize = 441;
@@ -68,7 +79,7 @@ const TONE_LEVEL: f64 = 0.031_622_776;
 
 struct Rx {
     address: SocketAddr,
-    path: ProtocolPath,
+    services: Services,
     delay: Duration,
 }
 
@@ -84,6 +95,7 @@ struct Args {
     seconds: u64,
     source: Source,
     verbose: bool,
+    auto: bool,
 }
 
 #[derive(Default)]
@@ -92,6 +104,8 @@ struct Outcome {
     played: bool,
     state: Option<SpeakerState>,
     first_sound: Option<f64>,
+    /// The `Audio-Latency` of its RECORD answer, in frames (P110, P196).
+    receiver_latency_frames: Option<u32>,
     errors: Vec<String>,
     warnings: usize,
     /// Sender clock seconds when it first reached Playing.
@@ -100,13 +114,14 @@ struct Outcome {
 }
 
 fn usage() -> &'static str {
-    "usage: rx_pair --rx <host:port>[,ap1|ap2][,delay=<ms>] [--rx ...] [--seconds <n>] [--tone|--click] [--verbose]"
+    "usage: rx_pair --rx <host:port>[,ap1|ap2|both][,delay=<ms>] [--rx ...] [--seconds <n>] [--tone|--click] [--verbose] [--auto]"
 }
 
 fn parse_rx(text: &str) -> Result<Rx, String> {
     let RxSpec {
         host_port,
         path,
+        both,
         delay,
     } = parse_rx_spec(text)?;
     let address = host_port
@@ -116,7 +131,7 @@ fn parse_rx(text: &str) -> Result<Rx, String> {
         .ok_or_else(|| format!("--rx {text}: no address"))?;
     Ok(Rx {
         address,
-        path,
+        services: Services::new(path, both),
         delay,
     })
 }
@@ -127,6 +142,7 @@ fn parse_args() -> Result<Args, String> {
         seconds: 20,
         source: Source::Silence,
         verbose: false,
+        auto: false,
     };
     let mut items = std::env::args().skip(1);
     while let Some(item) = items.next() {
@@ -147,6 +163,7 @@ fn parse_args() -> Result<Args, String> {
             "--tone" => args.source = Source::Tone,
             "--click" => args.source = Source::Click,
             "--verbose" => args.verbose = true,
+            "--auto" => args.auto = true,
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
@@ -157,50 +174,6 @@ fn parse_args() -> Result<Args, String> {
         return Err("at most 200 receivers".to_owned());
     }
     Ok(args)
-}
-
-/// The device discovery would have built for this receiver, from the one
-/// service record of its path.
-fn device(rx: &Rx, n: u8) -> Device {
-    let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, n]);
-    let (kind, instance, txt): (_, _, &[&str]) = match rx.path {
-        ProtocolPath::AirPlay1 => (
-            ServiceKind::Raop,
-            format!("{device_id}@Receiver {n}"),
-            &[
-                "txtvers=1",
-                "ch=2",
-                "cn=0,1",
-                "et=0",
-                "sr=44100",
-                "ss=16",
-                "tp=UDP",
-                "md=0,1,2",
-            ],
-        ),
-        ProtocolPath::AirPlay2 => (
-            ServiceKind::AirPlay,
-            format!("Receiver {n}"),
-            &["features=0x0,0x10040", "flags=0x4", "model=Receiver1,1"],
-        ),
-    };
-    let mut txt: Vec<Vec<u8>> = txt.iter().map(|s| s.as_bytes().to_vec()).collect();
-    if rx.path == ProtocolPath::AirPlay2 {
-        txt.push(format!("deviceid={device_id}").into_bytes());
-    }
-    let record = ServiceRecord {
-        kind,
-        instance,
-        host: format!("receiver-{n}.local"),
-        port: rx.address.port(),
-        txt,
-        addresses: vec![ScopedAddr::new(rx.address.ip())],
-    };
-    let (raop, airplay) = match rx.path {
-        ProtocolPath::AirPlay1 => (Some(&record), None),
-        ProtocolPath::AirPlay2 => (None, Some(&record)),
-    };
-    Device::from_records(DeviceKey::Id(device_id), raop, airplay).expect("a device from a record")
 }
 
 /// A capture thread at real-time pace, as a host's would be.
@@ -245,7 +218,13 @@ fn path_name(path: Option<ProtocolPath>) -> &'static str {
     }
 }
 
-fn summary(rx: &Rx, outcome: &Outcome, counters: &SpeakerCounters, ok: bool) -> String {
+fn summary(
+    rx: &Rx,
+    outcome: &Outcome,
+    counters: &SpeakerCounters,
+    ok: bool,
+    choice: Option<&str>,
+) -> String {
     let first_sound = outcome
         .first_sound
         .map_or("none".to_owned(), |seconds| format!("{seconds:.6}"));
@@ -256,7 +235,7 @@ fn summary(rx: &Rx, outcome: &Outcome, counters: &SpeakerCounters, ok: bool) -> 
     };
     format!(
         "rx {} {} path={} delay_ms={} state={:?} frames_sent={} packets_sent={} first_sound_s={} \
-         resend_requests={} packets_resent={} late_packets={} warnings={} errors={}",
+         resend_requests={} packets_resent={} late_packets={} warnings={} errors={}{}",
         rx.address,
         if ok { "OK" } else { "FAIL" },
         path_name(outcome.path),
@@ -270,6 +249,7 @@ fn summary(rx: &Rx, outcome: &Outcome, counters: &SpeakerCounters, ok: bool) -> 
         counters.late_packets(),
         outcome.warnings,
         errors,
+        choice.map_or(String::new(), |choice| format!(" choice: {choice}")),
     )
 }
 
@@ -292,14 +272,16 @@ fn sender_check(args: &Args, order: &[DeviceKey], outcomes: &BTreeMap<DeviceKey,
             .first_packet
             .map_or("none".to_owned(), |(packet, rtp)| format!("{packet}/{rtp}"));
         let clicks = outcome.wire.clicks();
-        for (index, (rtp, play)) in clicks.iter().enumerate() {
-            let play = play.map_or("none".to_owned(), |s| format!("{s:.9}"));
+        for (index, click) in clicks.iter().enumerate() {
+            let play = click.play.map_or("none".to_owned(), |s| format!("{s:.9}"));
             println!(
-                "stated {} delay_ms={} joined_s={joined} first_packet/rtp={first} syncs={} click={} rtp={rtp} play_s={play}",
+                "stated {} delay_ms={} joined_s={joined} first_packet/rtp={first} syncs={} click={} frame={} rtp={} play_s={play}",
                 rx.address,
                 rx.delay.as_millis(),
                 outcome.wire.syncs(),
                 index + 1,
+                click.frame,
+                click.rtp,
             );
         }
         stated.push(clicks);
@@ -308,11 +290,14 @@ fn sender_check(args: &Args, order: &[DeviceKey], outcomes: &BTreeMap<DeviceKey,
     let reference = &args.receivers[0];
     for (rx, clicks) in args.receivers.iter().zip(&stated).skip(1) {
         let wanted = rx.delay.as_secs_f64() - reference.delay.as_secs_f64();
-        let diffs: Vec<f64> = stated[0]
+        let pairs = pair_clicks(&stated[0], clicks);
+        let positions = &pairs[..pairs.len().min(expected)];
+        let diffs: Vec<f64> = positions.iter().filter_map(ClickPair::diff).collect();
+        let unjudged: Vec<String> = positions
             .iter()
-            .zip(clicks)
-            .take(expected)
-            .map_while(|((_, a), (_, b))| Some((*b)? - (*a)?))
+            .enumerate()
+            .filter(|(_, pair)| pair.diff().is_none())
+            .map(|(index, pair)| format!("{} (frame {})", index + 1, pair.frame))
             .collect();
         let worst = diffs
             .iter()
@@ -330,15 +315,63 @@ fn sender_check(args: &Args, order: &[DeviceKey], outcomes: &BTreeMap<DeviceKey,
             .first()
             .map_or("none".to_owned(), |diff| format!("{:.3}", diff * 1000.0));
         println!(
-            "SENDER {} {} vs {}: stated play times differ by {first} ms on the first click, expected {:.0} ms; worst error {worst:.2} frames over {} of {expected} clicks (limit 1 frame)",
+            "SENDER {} {} vs {}: stated play times differ by {first} ms on the first judged click, expected {:.0} ms; worst error {worst:.2} frames over {} of {expected} clicks (limit 1 frame); not judged: {}",
             if ok { "PASS" } else { "FAIL" },
             reference.address,
             rx.address,
             wanted * 1000.0,
             diffs.len(),
+            if unjudged.is_empty() {
+                "none".to_owned()
+            } else {
+                unjudged.join(", ")
+            },
         );
     }
     pass
+}
+
+/// Prints, per receiver, how far its first stated click play time lies past
+/// c(n) + d_s + L, next to the `Audio-Latency` it reported (P203). Information
+/// only: it never fails the run.
+fn latency_lines(
+    args: &Args,
+    order: &[DeviceKey],
+    outcomes: &BTreeMap<DeviceKey, Outcome>,
+    sender: &Sender,
+) {
+    let clock = sender.clock();
+    let latency_ms = sender.latency().as_secs_f64() * 1000.0;
+    for (rx, key) in args.receivers.iter().zip(order) {
+        let outcome = &outcomes[key];
+        let clicks = outcome.wire.clicks();
+        let judged = clicks.iter().enumerate().find_map(|(index, click)| {
+            let play = click.play?;
+            let arrival = sender.arrival_time(click.frame as i64)?;
+            let excess = play - clock.seconds(arrival) - rx.delay.as_secs_f64();
+            Some((index + 1, excess * 1000.0 - latency_ms))
+        });
+        let reported = outcome
+            .receiver_latency_frames
+            .map(|frames| (frames, f64::from(frames) / RATE * 1000.0));
+        let reported_ms = reported.map(|(_, ms)| ms);
+        let excess = judged.map_or("none".to_owned(), |(click, ms)| {
+            format!("{ms:.3} ms on click {click}")
+        });
+        let audio_latency = reported.map_or("none".to_owned(), |(frames, ms)| {
+            format!("{frames} frames ({ms:.3} ms)")
+        });
+        let gap = judged
+            .zip(reported_ms)
+            .map_or("none".to_owned(), |((_, ms), r)| {
+                format!("{:.3} ms", ms - r)
+            });
+        println!(
+            "latency {} delay_ms={}: stated play past c(n) + d_s + L (L = {latency_ms:.3} ms) by {excess}; Audio-Latency {audio_latency}; excess minus Audio-Latency {gap} (information only, P203)",
+            rx.address,
+            rx.delay.as_millis(),
+        );
+    }
 }
 
 fn main() -> ExitCode {
@@ -349,10 +382,28 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let auto = args.auto.then(|| {
+        let auto_env = std::env::var(AIRPLAY2_AUTO_ENV).ok();
+        let switch_env = std::env::var(AIRPLAY2_SWITCH_ENV).ok();
+        let mode = AutoMode::from_env(auto_env.as_deref(), switch_env.as_deref());
+        eprintln!(
+            "auto: {AIRPLAY2_AUTO_ENV}={} -> flag {}, {AIRPLAY2_SWITCH_ENV}={} -> switch {}",
+            auto_env.as_deref().unwrap_or("unset"),
+            if mode.auto { "on" } else { "off" },
+            switch_env.as_deref().unwrap_or("unset"),
+            if mode.switch { "on" } else { "off" },
+        );
+        mode
+    });
     let config = SenderConfig {
-        airplay2: true,
         airplay2_device_id: random_airplay2_device_id(),
-        ..SenderConfig::default()
+        ..auto.map_or(
+            SenderConfig {
+                airplay2: true,
+                ..SenderConfig::default()
+            },
+            AutoMode::config,
+        )
     };
     let (sender, writer) = match Sender::start(config) {
         Ok(started) => started,
@@ -369,8 +420,10 @@ fn main() -> ExitCode {
     let mut keys = BTreeMap::new();
     let mut outcomes: BTreeMap<DeviceKey, Outcome> = BTreeMap::new();
     let mut counters = Vec::new();
+    let mut choices = Vec::new();
     for (index, rx) in args.receivers.iter().enumerate() {
-        let device = device(rx, index as u8 + 1);
+        let device = auto_choice::device(rx.address, rx.services, index as u8 + 1);
+        choices.push(auto.map(|mode| mode.choice(&device)));
         let key = device.key.clone();
         let mut options = SpeakerOptions::new(Volume::Db(-20.0));
         options.delay = rx.delay;
@@ -416,6 +469,7 @@ fn main() -> ExitCode {
                     }
                     SpeakerEvent::Latency(latency) => {
                         outcome.first_sound = Some(clock.seconds(latency.first_sound));
+                        outcome.receiver_latency_frames = latency.receiver_latency_frames;
                     }
                     SpeakerEvent::Error(error) => {
                         eprintln!("{address}: error {:?}", error.error);
@@ -444,13 +498,22 @@ fn main() -> ExitCode {
     }
 
     let mut failed = false;
-    for ((rx, key), counters) in args.receivers.iter().zip(&order).zip(&counters) {
+    for (((rx, key), counters), choice) in args
+        .receivers
+        .iter()
+        .zip(&order)
+        .zip(&counters)
+        .zip(&choices)
+    {
         let outcome = &outcomes[key];
         let ok = outcome.played && outcome.errors.is_empty();
         failed |= !ok;
-        println!("{}", summary(rx, outcome, counters, ok));
+        println!("{}", summary(rx, outcome, counters, ok, choice.as_deref()));
     }
     let sender_failed = args.source == Source::Click && !sender_check(&args, &order, &outcomes);
+    if args.source == Source::Click {
+        latency_lines(&args, &order, &outcomes, &sender);
+    }
     stop.store(true, Ordering::Relaxed);
     let _ = audio.join();
     sender.shutdown();

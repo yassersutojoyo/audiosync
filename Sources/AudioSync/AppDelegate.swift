@@ -110,7 +110,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
     /// Local speakers the user wants on, by device UID.
     var enabledLocal: Set<String> {
-        didSet { if enabledLocal != oldValue { store.save(ids: enabledLocal, forKey: Keys.enabledLocal) } }
+        didSet {
+            guard enabledLocal != oldValue else { return }
+            store.save(ids: enabledLocal, forKey: Keys.enabledLocal)
+            briefLoss.followSwitches(from: oldValue, to: enabledLocal)   // switched off, a lost one no longer counts (S328)
+        }
     }
     var masterVolume: Double {
         didSet {
@@ -248,6 +252,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var localBoundDevices: [String: AudioObjectID] = [:]
     /// Bluetooth outputs that started on a link that just came up (S325).
     let freshLinks = FreshLinkWatch()
+    /// Speakers whose devices left the list a moment ago, still counted (S328).
+    var briefLoss = LocalBriefLoss()
+    /// Local outputs whose render callback stopped, until a stream plays 5 s (S334).
+    var stallRetry = OutputStallRetry()
     /// The microphone calibration under way, if any (S232).
     var calibrationRun: CalibrationRun?
     /// Calibrate All Speakers under way, its sheet and the Undo of its Apply (S235 to S240).
@@ -410,14 +418,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// What the session engine and the Local Network probe report. Both
     /// report on the main thread (S113).
     private func handleEngineEvents() {
-        engine.onOutputGone = { [weak self] lostUID in
+        engine.onOutputGone = { [weak self] lostUID, loss in
             // The speaker stays on; a reconcile attaches it again once its
             // device is listed again (S68, EC1). One runs now, as for a
             // device-list change: a device that lingers in Core Audio's list
             // without being alive leaves the speaker list at once.
-            DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
-            self?.devicesChanged()
+            guard let self else { return }
+            switch loss {
+            case .formatChanged:
+                // Its device stays listed: it starts again now, in the new format (S330).
+                self.syncLocalOutputs(origin: .automatic, formatReopens: [lostUID])
+            case .stalled:
+                self.outputStalled(lostUID)
+                self.devicesChanged()
+            case .deviceGone:
+                DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
+                self.devicesChanged()
+            }
+            self.checkBriefLosses()   // its start lead counts for 10 s at most (S328)
         }
+        engine.sourcePlayingReadAt = { [weak self] in self?.sourcePlayingReading()?.position?.readAt }
         engine.onAppQuit = { [weak self] bundleID, pids in
             self?.appQuit(bundleID: bundleID, pids: pids, seenByCapture: true)
         }
@@ -571,6 +591,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             self?.devicesChanged()
         }
         if status != noErr { DebugTrace.log("[AudioSync] device list listener not added: \(status)") }
+        observeServiceRestart()
+    }
+
+    /// Core Audio's server restarted (S335): every device object is new, and
+    /// a running session lost its capture and its outputs' IO with it.
+    private func observeServiceRestart() {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyServiceRestarted,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address,
+                                                         DispatchQueue.main) { [weak self] _, _ in
+            guard let self else { return }
+            DebugTrace.log("[AudioSync] Core Audio's service restarted"
+                           + (self.engine.isRunning ? "; the session reopens its capture and outputs" : ""))
+            self.engine.serviceRestarted()
+            self.devicesChanged()
+        }
+        if status != noErr { DebugTrace.log("[AudioSync] service restart listener not added: \(status)") }
     }
 
     /// Devices change in bursts (a dock, the capture's own aggregate device):

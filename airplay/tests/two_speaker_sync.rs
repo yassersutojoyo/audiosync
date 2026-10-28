@@ -15,8 +15,9 @@ use audiosync_airplay::sender::{Sender, SenderConfig, SpeakerEvent, SpeakerOptio
 use audiosync_airplay::volume::Volume;
 use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
 use sync_check::{
-    CLICK_FIRST_FRAME, CLICK_FRAMES, CLICK_PERIOD_FRAMES, DEFAULT_THRESHOLD, Detector, Onset, RATE,
-    WireLog, click_sample, fit_timeline, parse_rx_spec, stated_play, trace_field, verdict,
+    CLICK_FIRST_FRAME, CLICK_FRAMES, CLICK_PERIOD_FRAMES, ClickPair, DEFAULT_THRESHOLD, Detector,
+    Onset, RATE, WireClick, WireLog, click_sample, fit_timeline, pair_clicks, parse_rx_spec,
+    stated_play, trace_field, verdict,
 };
 
 const PACKET: usize = 352;
@@ -77,6 +78,8 @@ fn a_receiver_option_carries_the_speakers_delay() {
     );
     assert!(parse_rx_spec("h:1,delay=20001").is_err());
     assert!(parse_rx_spec("h:1,delay=-1").is_err());
+    assert!(parse_rx_spec("h:1,both,ap1").unwrap().both);
+    assert!(!plain.both);
     assert!(parse_rx_spec("h:1,ap3").is_err());
     assert!(parse_rx_spec(",ap1").is_err());
 }
@@ -417,14 +420,15 @@ fn a_click_is_timed_by_the_syncs_its_speaker_was_sent() {
     let k_b = u32::MAX - 100_000;
     let b = wire(&traced(k_b, 0.5, 2.0)).clicks();
     assert_eq!(a.len(), 1, "one click over two packets: {a:?}");
-    assert_eq!(a[0].0, 1_000 + 264_650);
-    assert_eq!(b[0].0, k_b.wrapping_add(264_650));
-    let diff = b[0].1.unwrap() - a[0].1.unwrap();
+    assert_eq!(a[0].rtp, 1_000 + 264_650);
+    assert_eq!(b[0].rtp, k_b.wrapping_add(264_650));
+    assert_eq!((a[0].frame, b[0].frame), (264_650, 264_650));
+    let diff = b[0].play.unwrap() - a[0].play.unwrap();
     assert!((diff - 0.5).abs() * RATE < 0.01, "{diff}");
 
     // Syncs stated a packet late show as 352 frames.
     let late = wire(&traced(k_b, 0.5 + PACKET as f64 / RATE, 2.0)).clicks();
-    let error = (late[0].1.unwrap() - a[0].1.unwrap() - 0.5) * RATE;
+    let error = (late[0].play.unwrap() - a[0].play.unwrap() - 0.5) * RATE;
     assert!((error - PACKET as f64).abs() < 0.01, "{error}");
 
     // A flush starts a new numbering: the old syncs no longer time a click.
@@ -433,8 +437,49 @@ fn a_click_is_timed_by_the_syncs_its_speaker_was_sent() {
     flushed.push(format!("audio seq=9 rtp={} sound_at=0", 7 + 400_000));
     let clicks = wire(&flushed).clicks();
     assert_eq!(clicks.len(), 2);
-    assert_eq!(clicks[1], (400_007, None));
+    assert_eq!(
+        clicks[1],
+        WireClick {
+            frame: 900 * PACKET as u64 + 400_000,
+            rtp: 400_007,
+            play: None,
+        }
+    );
     assert_eq!(stated_play(&[(10, 1.0)], 9), None);
+}
+
+// A receiver that lost the first click and traced an extra one must not
+// shift the other clicks onto their neighbours.
+#[test]
+fn clicks_pair_by_frame_when_a_speaker_lost_one_and_has_an_extra() {
+    let click = |frame: u64, delay: f64| WireClick {
+        frame,
+        rtp: frame as u32,
+        play: Some(2.0 + delay + frame as f64 / RATE),
+    };
+    let frames: Vec<u64> = (0..5).map(|k| 1_000 + k * CLICK_PERIOD_FRAMES).collect();
+    let extra = frames[2] + CLICK_PERIOD_FRAMES / 2;
+    let a: Vec<WireClick> = frames.iter().map(|&f| click(f, 0.0)).collect();
+    let mut b: Vec<WireClick> = frames[1..].iter().map(|&f| click(f, 0.5)).collect();
+    b.insert(2, click(extra, 0.5));
+
+    let pairs = pair_clicks(&a, &b);
+    let unmatched: Vec<(u64, bool, bool)> = pairs
+        .iter()
+        .filter(|pair| pair.diff().is_none())
+        .map(|pair| (pair.frame, pair.reference.is_some(), pair.other.is_some()))
+        .collect();
+    assert_eq!(
+        unmatched,
+        vec![(frames[0], true, false), (extra, false, true)],
+        "{pairs:?}"
+    );
+    let diffs: Vec<f64> = pairs.iter().filter_map(ClickPair::diff).collect();
+    assert_eq!(diffs.len(), 4, "{pairs:?}");
+    assert!(
+        diffs.iter().all(|diff| (diff - 0.5).abs() * RATE < 0.01),
+        "{diffs:?}"
+    );
 }
 
 /// A receiver that takes PCM only.

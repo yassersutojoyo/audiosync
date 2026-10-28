@@ -7,7 +7,12 @@ use std::path::PathBuf;
 
 fn main() {
     // The Windows look on every host, so the UI previewed elsewhere matches.
-    let config = slint_build::CompilerConfiguration::new().with_style("fluent".into());
+    // Tests find elements by their accessible label, which needs Slint's debug
+    // info; release builds go without it.
+    let debug_info = env::var("PROFILE").is_ok_and(|profile| profile != "release");
+    let config = slint_build::CompilerConfiguration::new()
+        .with_style("fluent".into())
+        .with_debug_info(debug_info);
     slint_build::compile_with_config("ui/main.slint", config).expect("the Slint UI compiles");
 
     // `os_backend`: the target has an audio backend in src/os, so the engine,

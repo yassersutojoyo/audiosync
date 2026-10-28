@@ -29,9 +29,7 @@ use audiosync_core::eq::EqProcessor;
 use audiosync_core::ring::RingWriter;
 
 use crate::audio::capture::Feeds;
-use windows::Win32::Foundation::{
-    E_ACCESSDENIED, E_FAIL, HANDLE, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT,
-};
+use windows::Win32::Foundation::{E_FAIL, HANDLE, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
@@ -58,7 +56,7 @@ use super::com::{
     wave_format,
 };
 use super::devices::enumerator;
-use super::processes::ProcessWatch;
+use super::processes::{ProcessWatch, Watch};
 use crate::audio::SESSION_RATE;
 use crate::audio::backend::{BackendError, TIMED_OUT};
 use crate::audio::capture::{
@@ -93,12 +91,15 @@ pub struct LoopbackCapture {
     /// The HRESULT that ended the capture, once `ended` is set.
     failure: Arc<AtomicI32>,
     ended: Arc<AtomicBool>,
-    /// The frames Windows delivered, the discontinuities and the gap fill.
+    /// The frames Windows delivered, the discontinuities, silent packets,
+    /// gap fill and zero holes.
     counters: Arc<CaptureCounters>,
     thread: Worker,
     /// The captured apps, to notice when they quit; empty when one can't be
     /// watched or the capture isn't of apps.
     sources: Vec<ProcessWatch>,
+    /// The error the single app captured refused a watch with (S327).
+    watch_refused: Option<i32>,
     /// What a mix shares with its threads, to follow its apps while it
     /// runs.
     mix: Option<Arc<MixShare>>,
@@ -155,6 +156,10 @@ impl CaptureHandle for LoopbackCapture {
     fn glitches(&self) -> CaptureGlitches {
         self.counters.glitches()
     }
+
+    fn watch_refused(&self) -> Option<i32> {
+        self.watch_refused
+    }
 }
 
 #[cfg(test)]
@@ -181,12 +186,17 @@ pub(super) fn start(
     feeds: Feeds,
 ) -> Result<LoopbackCapture, BackendError> {
     let input = matches!(target, CaptureTarget::Input { .. });
+    let mut watch_refused = None;
     let (sources, call) = match &target {
         CaptureTarget::Loopback(activation) => (
             match activation.mode {
-                LoopbackMode::IncludeTree => ProcessWatch::open(activation.target_pid)?
-                    .into_iter()
-                    .collect(),
+                LoopbackMode::IncludeTree => match ProcessWatch::open(activation.target_pid)? {
+                    Watch::Watching(watch) => vec![watch],
+                    Watch::Refused(code) => {
+                        watch_refused = Some(code.0);
+                        Vec::new()
+                    }
+                },
                 LoopbackMode::ExcludeTree => Vec::new(),
             },
             "process loopback capture",
@@ -238,6 +248,7 @@ pub(super) fn start(
         counters,
         thread,
         sources,
+        watch_refused,
         mix,
         mix_pids,
         setup,
@@ -260,9 +271,9 @@ fn watch_all(activations: &[Activation]) -> Vec<ProcessWatch> {
     let mut watches = Vec::with_capacity(activations.len());
     for activation in activations {
         match ProcessWatch::open(activation.target_pid) {
-            Ok(Some(watch)) => watches.push(watch),
+            Ok(Watch::Watching(watch)) => watches.push(watch),
             Err(_) => {}
-            Ok(None) => return Vec::new(),
+            Ok(Watch::Refused(_)) => return Vec::new(),
         }
     }
     watches
@@ -309,13 +320,15 @@ fn run(
         Err(error) => return ready.fail(error),
     };
     let mut converter = match CaptureConverter::new(stream.format, writer, equalizer, feeds) {
-        Ok(converter) => converter.reading(stream.pair),
+        Ok(converter) => converter
+            .reading(stream.pair)
+            .counting(Arc::clone(counters)),
         Err(error) => return ready.fail(error),
     };
     let _task = ProAudioTask::join();
     // SAFETY: starts the stream initialized above.
     if let Err(error) = unsafe { stream.client.Start() } {
-        return ready.fail(system_error("IAudioClient::Start", &error));
+        return ready.fail(capture_error(target, "IAudioClient::Start", error.code()));
     }
     let waited = ready.ok(CaptureAttempt {
         format: stream.format,
@@ -408,19 +421,30 @@ fn open_stream(target: &CaptureTarget) -> Result<CaptureStream, BackendError> {
         };
         match initialized {
             Ok(()) => return finish_stream(client, attempt),
-            // No other format gets past the privacy settings.
-            Err(error)
-                if matches!(target, CaptureTarget::Input { .. })
-                    && error.code() == E_ACCESSDENIED =>
-            {
-                return Err(BackendError::MicrophoneBlocked);
-            }
-            Err(error) => {
-                first_error.get_or_insert(system_error("IAudioClient::Initialize", &error));
-            }
+            Err(error) => match capture_error(target, "IAudioClient::Initialize", error.code()) {
+                // No other format gets past the privacy settings, or a
+                // device another app holds (S333).
+                error @ (BackendError::MicrophoneBlocked | BackendError::DeviceBusy) => {
+                    return Err(error);
+                }
+                error => {
+                    first_error.get_or_insert(error);
+                }
+            },
         }
     }
     Err(first_error.unwrap_or(BackendError::UnsupportedFormat))
+}
+
+/// How a capture reads a failed `IAudioClient` call on its stream: as a
+/// failed call on its device, as an output's are (S333), and an input's
+/// `E_ACCESSDENIED` as the privacy settings' block (S141).
+fn capture_error(target: &CaptureTarget, call: &'static str, code: HRESULT) -> BackendError {
+    if matches!(target, CaptureTarget::Input { .. }) {
+        input_code_error(call, code)
+    } else {
+        device_code_error(call, code)
+    }
 }
 
 /// Connects an initialized client to its event and capture service.
@@ -724,6 +748,9 @@ fn drain(
         }
         let skip = skip.min(count);
         let silent = data.is_null() || flags & (AUDCLNT_BUFFERFLAGS_SILENT.0 as u32) != 0;
+        if silent {
+            counters.count_silent_packet();
+        }
         let bytes: &[u8] = if silent {
             &[]
         } else {
@@ -787,7 +814,7 @@ impl LoopbackLane {
             pid,
             stream: LoopbackLane {
                 stream,
-                watch: ProcessWatch::open(pid).ok().flatten(),
+                watch: ProcessWatch::open(pid).ok().and_then(Watch::watching),
                 frequency,
                 counters: Arc::clone(counters),
             },
@@ -970,7 +997,7 @@ fn run_mix(
     ready: Ready<CaptureAttempt>,
 ) {
     let mut converter = match CaptureConverter::new(MIX_FORMAT, writer, equalizer, feeds) {
-        Ok(converter) => converter,
+        Ok(converter) => converter.counting(Arc::clone(counters)),
         Err(error) => return ready.fail(error),
     };
     let mut frequency = 0_i64;
@@ -1062,7 +1089,9 @@ fn mix_loop(
     let mut planned = [0_u32; MAX_MIX_APPS];
     let mut wanted = lanes.held(&mut planned);
     let (mut before, mut after) = ([0_u32; MAX_MIX_APPS], [0_u32; MAX_MIX_APPS]);
-    let mut sink = |stereo: &[f32], frames: usize| converter.push(as_bytes(stereo), frames, false);
+    let mut sink = |stereo: &[f32], frames: usize, filled: &[bool]| {
+        converter.push_mixed(as_bytes(stereo), frames, filled);
+    };
     let mut handed = |lane| {
         // A full mailbox means the opener is stuck; this one is freed here.
         if let Err(lane) = MixShare::post(&share.retired, lane) {
@@ -1233,6 +1262,7 @@ mod tests {
             counters: Arc::new(CaptureCounters::default()),
             thread,
             sources: Vec::new(),
+            watch_refused: None,
             mix: None,
             mix_pids: Vec::new(),
             setup: CAPTURE_ATTEMPTS[0],
@@ -1253,6 +1283,53 @@ mod tests {
         assert_eq!(done.recv_timeout(HANG * 3), Ok(()));
         assert!(STUCK.none_within(HANG), "the thread ends");
         answers.join().expect("the answer comes");
+    }
+
+    fn microphone() -> CaptureTarget {
+        CaptureTarget::Input {
+            endpoint_id: "{0.0.1.00000000}.{mic}".to_owned(),
+            pair: 0,
+        }
+    }
+
+    // covers: S333
+    #[test]
+    fn an_input_held_exclusively_is_busy_at_initialize_and_at_start() {
+        use windows::Win32::Media::Audio::AUDCLNT_E_DEVICE_IN_USE;
+        for call in ["IAudioClient::Initialize", "IAudioClient::Start"] {
+            assert_eq!(
+                capture_error(&microphone(), call, AUDCLNT_E_DEVICE_IN_USE),
+                BackendError::DeviceBusy,
+                "{call}"
+            );
+        }
+    }
+
+    // covers: S333
+    #[test]
+    fn an_input_whose_device_went_away_is_gone_at_initialize() {
+        use windows::Win32::Media::Audio::AUDCLNT_E_DEVICE_INVALIDATED;
+        assert_eq!(
+            capture_error(
+                &microphone(),
+                "IAudioClient::Initialize",
+                AUDCLNT_E_DEVICE_INVALIDATED
+            ),
+            BackendError::DeviceGone
+        );
+    }
+
+    // covers: S333, S141
+    #[test]
+    fn an_input_blocked_by_privacy_settings_stays_microphone_blocked() {
+        use windows::Win32::Foundation::E_ACCESSDENIED;
+        for call in ["IAudioClient::Initialize", "IAudioClient::Start"] {
+            assert_eq!(
+                capture_error(&microphone(), call, E_ACCESSDENIED),
+                BackendError::MicrophoneBlocked,
+                "{call}"
+            );
+        }
     }
 
     #[test]

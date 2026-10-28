@@ -85,7 +85,9 @@ struct PermissionAsks: Equatable {
             used = usedBefore { defaults.object(forKey: $0) != nil }
             defaults.set(used, forKey: usedBeforeKey)
         }
-        return PermissionAsks(explained: defaults.stringArray(forKey: defaultsKey) ?? [], usedBefore: used)
+        // stringArray(forKey:) is nil when one entry isn't a string, which would forget them all.
+        let stored = (defaults.array(forKey: defaultsKey) ?? []).compactMap { $0 as? String }
+        return PermissionAsks(explained: stored, usedBefore: used)
     }
 
     func step(_ permission: Permission, state: PermissionState, userAction: Bool) -> PermissionStep {

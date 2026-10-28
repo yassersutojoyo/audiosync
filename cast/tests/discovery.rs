@@ -11,7 +11,7 @@ use audiosync_cast::discovery::mdns::{MdnsBrowser, browse_event};
 use audiosync_cast::discovery::reach::{CHECK_INTERVAL, Reachability, connects};
 use audiosync_cast::discovery::{
     BrowseEvent, CastDevice, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent,
-    SERVICE_TYPE, ServiceRecord, Skipped, Txt,
+    MAX_DEVICES, SERVICE_TYPE, ServiceRecord, Skipped, Txt,
 };
 use mdns_sd::{ServiceEvent, ServiceInfo, TxtProperty};
 
@@ -323,6 +323,65 @@ fn a_goodbye_during_a_session_keeps_the_device_listed_as_offline() {
     list.apply(BrowseEvent::Resolved(device));
     assert_eq!(list.apply(goodbye), ListEvent::Removed(key));
     assert!(list.entries().is_empty());
+}
+
+fn numbered(n: u32) -> (DeviceKey, BrowseEvent) {
+    let id = format!("{n:032x}");
+    let key = DeviceKey::Id(DeviceId::parse(&id).expect("id"));
+    let record = ServiceRecord {
+        fullname: format!("D{n}._googlecast._tcp.local."),
+        port: DEVICE_PORT,
+        txt: vec![format!("id={id}").into_bytes()],
+        addresses: vec![v4(10)],
+    };
+    (key, BrowseEvent::Resolved(record))
+}
+
+// covers: C108
+#[test]
+fn a_flood_of_devices_keeps_the_list_at_its_cap() {
+    let mut list = DeviceList::new();
+    let manual = SocketAddr::from(([192, 0, 2, 200], DEVICE_PORT));
+    list.add_manual(manual);
+    let (playing, event) = numbered(1);
+    list.apply(event);
+    list.set_in_session(playing, true);
+    let (selected, event) = numbered(2);
+    list.apply(event);
+    let (member, event) = numbered(3);
+    list.apply(event);
+    list.set_kept([selected, member]);
+    let (oldest, event) = numbered(4);
+    list.apply(event);
+    let last = 10_002;
+    let mut dropped = Vec::new();
+    for n in 5..=last {
+        match list.apply(numbered(n).1) {
+            ListEvent::Displaced {
+                dropped: key,
+                added,
+            } => {
+                assert_eq!(added, numbered(n).0);
+                dropped.push(key);
+            }
+            ListEvent::Added(_) => assert!(dropped.is_empty(), "added after the list was full"),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(list.entries().len(), MAX_DEVICES);
+    assert_eq!(dropped.len(), 1 + last as usize - MAX_DEVICES);
+    assert_eq!(dropped[0], oldest);
+    for key in [
+        playing,
+        selected,
+        member,
+        DeviceKey::Manual(manual),
+        numbered(last).0,
+    ] {
+        assert!(list.get(key).is_some(), "{key:?} stays listed");
+    }
+    assert!(list.get(oldest).is_none(), "the oldest other device went");
+    assert!(list.get(numbered(last - 1).0).is_some());
 }
 
 // covers: C18

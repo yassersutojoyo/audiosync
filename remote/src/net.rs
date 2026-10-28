@@ -48,7 +48,7 @@ fn native_global(address: Ipv6Addr) -> bool {
 /// Splits `host[:port]` (RFC 9110 §7.2) into the host, without brackets
 /// around an IPv6 literal, and the port. Brackets hold only an IPv6 literal,
 /// an IPv6 literal needs them, and the port is bare ASCII digits.
-fn split_host(value: &str) -> Option<(&str, Option<u16>)> {
+pub(crate) fn split_host(value: &str) -> Option<(&str, Option<u16>)> {
     let (host, port) = match value.strip_prefix('[') {
         Some(rest) => {
             let (host, after) = rest.split_once(']')?;

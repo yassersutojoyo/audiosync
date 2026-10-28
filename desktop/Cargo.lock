@@ -593,6 +593,7 @@ dependencies = [
  "ed25519-dalek",
  "embed-resource",
  "hkdf",
+ "i-slint-backend-testing",
  "image",
  "libc",
  "md-5 0.11.0",

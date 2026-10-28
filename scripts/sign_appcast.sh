@@ -4,7 +4,7 @@
 # GitHub release next to it (RELEASE.md). The app's SUFeedURL points at
 # releases/latest/download/appcast.xml, so each release carries its own.
 #
-#   scripts/sign_appcast.sh VERSION [ZIP]
+#   scripts/sign_appcast.sh [--mac-only] VERSION [ZIP]
 #
 # ZIP defaults to AudioSync-VERSION.zip in the repository root, and
 # appcast.xml lands there too. Sparkle's generate_appcast signs the zip with
@@ -12,12 +12,16 @@
 # generate_keys); the key never leaves the keychain.
 #
 # It runs generate_appcast as a copy named "AudioSync Release Signing", so the
-# keychain prompt should name AudioSync (not yet confirmed on a Mac). The copy keeps Sparkle's signature; docs/DEVELOPMENT.md ("Signing")
-# says why, and why to click Allow rather than Always Allow.
+# keychain prompt should name AudioSync (not yet confirmed on a Mac). The copy
+# keeps Sparkle's signature; docs/DEVELOPMENT.md ("Signing") says why, and why
+# to click Allow rather than Always Allow.
 #
-# When AudioSync-VERSION-windows-x64.zip and -arm64.zip sit next to ZIP, each
+# AudioSync-VERSION-windows-x64.zip and -arm64.zip must sit next to ZIP: each
 # gets its own item, signed by Sparkle's sign_update (run under the same name)
-# with the same key, and scripts/check_appcast.py checks the result.
+# with the same key, and scripts/check_appcast.py checks the result. Without
+# them it stops, since Windows users would never see the release; --mac-only
+# writes a Mac-only appcast instead and refuses when Windows zips are there.
+# The final check gets the same choice, so it fails an appcast missing either OS.
 # covers: S311
 #
 # Environment:
@@ -36,13 +40,32 @@ absolute() {
   case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s\n' "$caller_dir/$1" ;; esac
 }
 
-usage="usage: scripts/sign_appcast.sh VERSION [ZIP]"
+usage="usage: scripts/sign_appcast.sh [--mac-only] VERSION [ZIP]"
 case "${1:-}" in -h|--help) echo "$usage"; exit 0 ;; esac
+mac_only=no
+if [ "${1:-}" = --mac-only ]; then mac_only=yes; shift; fi
+case "${1:-}" in -*) die "$usage" ;; esac
 [ $# -ge 1 ] && [ $# -le 2 ] || die "$usage"
-[ "$(uname -s)" = Darwin ] || die "Sparkle's tools run on macOS only"
 version=$1
 if [ $# = 2 ]; then zip=$(absolute "$2"); else zip="$ROOT/AudioSync-$version.zip"; fi
 [ -f "$zip" ] || die "$zip not found (RELEASE.md makes it with ditto)"
+
+# Checked before anything else, so Tests/signappcasttest.sh reaches it off a Mac.
+zip_dir=$(dirname -- "$zip")
+x64_zip="$zip_dir/AudioSync-$version-windows-x64.zip"
+arm64_zip="$zip_dir/AudioSync-$version-windows-arm64.zip"
+missing=""
+for windows_zip in "$x64_zip" "$arm64_zip"; do
+  if [ "$mac_only" = yes ] && [ -f "$windows_zip" ]; then
+    die "--mac-only, but $windows_zip is there: leave out --mac-only to add the Windows items, or move the Windows zips away"
+  elif [ "$mac_only" = no ] && [ ! -f "$windows_zip" ]; then
+    missing="$missing${missing:+ and }$windows_zip"
+  fi
+done
+[ -z "$missing" ] \
+  || die "$missing not found: put both Windows zips next to $zip (RELEASE.md names them), or pass --mac-only for a release without Windows"
+
+[ "$(uname -s)" = Darwin ] || die "Sparkle's tools run on macOS only"
 
 if [ -n "${SPARKLE_BIN:-}" ]; then
   tool="$(absolute "$SPARKLE_BIN")/generate_appcast"
@@ -55,20 +78,8 @@ sign_tool="$(dirname -- "$tool")/sign_update"
 [ -x "$sign_tool" ] || die "sign_update not found next to $tool"
 python3 -I -c 'pass' 2>/dev/null || die "python3 not found: install the Command Line Tools"
 
-# Both Windows zips or neither: Windows users of the missing arch would
-# otherwise never see this release.
-zip_dir=$(dirname -- "$zip")
-x64_zip="$zip_dir/AudioSync-$version-windows-x64.zip"
-arm64_zip="$zip_dir/AudioSync-$version-windows-arm64.zip"
 python3 -I scripts/check_appcast.py --strays "$zip_dir" "$version" \
   || die "a Windows zip next to $zip has another name (RELEASE.md names them)"
-windows=no
-if [ -f "$x64_zip" ] && [ -f "$arm64_zip" ]; then
-  windows=yes
-elif [ -f "$x64_zip" ] || [ -f "$arm64_zip" ]; then
-  die "only one Windows zip next to $zip: attach both, or neither"
-fi
-
 mkdir -p "$ROOT/.build"
 work=$(mktemp -d "$ROOT/.build/appcast.XXXXXX")
 trap 'rm -rf -- "$work"' EXIT
@@ -95,7 +106,7 @@ cp -p "$tool" "$signer"
 [ -f "$work/archives/appcast.xml" ] || die "generate_appcast wrote no appcast.xml"
 grep -q 'sparkle:edSignature=' "$work/archives/appcast.xml" || die "appcast.xml carries no EdDSA signature"
 
-if [ "$windows" = yes ]; then
+if [ "$mac_only" = no ]; then
   mkdir "$work/bin/sign"
   zip_signer="$work/bin/sign/AudioSync Release Signing"
   cp -p "$sign_tool" "$zip_signer"
@@ -111,9 +122,9 @@ if [ "$windows" = yes ]; then
     || die "appcast.xml with the Windows items fails the S311 checks above"
   signed_for="$(basename "$zip") and both Windows zips"
 else
-  python3 -I scripts/check_appcast.py "$work/archives/appcast.xml" "$version" "$zip" \
+  python3 -I scripts/check_appcast.py --mac-only "$work/archives/appcast.xml" "$version" "$zip" \
     || die "appcast.xml fails the S311 checks above"
-  signed_for="$(basename "$zip") only (no Windows zips next to it)"
+  signed_for="$(basename "$zip") only (--mac-only)"
 fi
 cp "$work/archives/appcast.xml" "$ROOT/appcast.xml"
 

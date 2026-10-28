@@ -247,6 +247,11 @@ pub enum ServerEvent {
     DevicesNotSaved(String),
     /// The paired-device file couldn't be read at start; no device is paired.
     DevicesNotRead(String),
+    /// Some devices in the paired-device file didn't read and pair again;
+    /// the first save copies the file aside before writing over it.
+    DevicesPartlyRead {
+        skipped: usize,
+    },
     /// Accepting a connection failed.
     AcceptFailed(String),
     /// A connection's thread panicked; only that connection ended.
@@ -298,6 +303,12 @@ impl fmt::Display for ServerEvent {
                     "remote: the paired devices were not read, starting with none: {error}"
                 )
             }
+            ServerEvent::DevicesPartlyRead { skipped } => write!(
+                f,
+                "remote: {skipped} paired devices didn't read and pair again; \
+                 the file is copied aside before it is written again, \
+                 and isn't written while that copy fails"
+            ),
             ServerEvent::AcceptFailed(error) => write!(f, "remote: accepting failed: {error}"),
             ServerEvent::ConnectionPanicked => f.write_str("remote: a connection ended in a panic"),
             ServerEvent::PairingCode(code) => {
@@ -615,6 +626,9 @@ impl RemoteServer {
                 shared.report(ServerEvent::DevicesNotRead(
                     "not in the expected format".to_owned(),
                 ));
+            }
+            Some(LoadProblem::Skipped { skipped }) => {
+                shared.report(ServerEvent::DevicesPartlyRead { skipped });
             }
             None => {}
         }
@@ -1129,13 +1143,17 @@ fn static_route(request: &Request, path: &str) -> Answer {
 
 /// A path segment with its `%XX` escapes decoded (RFC 3986 §2.1); none
 /// when an escape is broken or the result isn't UTF-8.
-fn percent_decode(segment: &str) -> Option<String> {
+pub(crate) fn percent_decode(segment: &str) -> Option<String> {
     let bytes = segment.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' {
             let pair = segment.get(index + 1..index + 3)?;
+            // from_str_radix would also take "+F".
+            if !pair.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
             out.push(u8::from_str_radix(pair, 16).ok()?);
             index += 3;
         } else {

@@ -34,6 +34,8 @@ const LANE_FRAMES: usize = MAX_LAG_FRAMES + CONVERT_CHUNK;
 /// One stream's frames waiting to be mixed, stereo, in a ring buffer.
 struct Lane {
     samples: Box<[f32]>,
+    /// Per waiting frame, whether it is flagged or filled silence.
+    filled: Box<[bool]>,
     /// The first waiting frame.
     start: usize,
     /// Waiting frames.
@@ -51,6 +53,7 @@ impl Lane {
     fn new() -> Lane {
         Lane {
             samples: vec![0.0; LANE_FRAMES * 2].into_boxed_slice(),
+            filled: vec![false; LANE_FRAMES].into_boxed_slice(),
             start: 0,
             len: 0,
             owed: 0,
@@ -69,40 +72,50 @@ impl Lane {
     fn append_silence(&mut self, frames: usize) {
         let frames = frames - self.pay(frames);
         for _ in 0..frames {
-            let at = (self.start + self.len) % LANE_FRAMES * 2;
-            self.samples[at..at + 2].fill(0.0);
+            let frame = (self.start + self.len) % LANE_FRAMES;
+            self.samples[frame * 2..frame * 2 + 2].fill(0.0);
+            self.filled[frame] = true;
             self.len += 1;
         }
     }
 
-    /// Appends whole frames from `stereo`; the caller keeps them within room.
-    fn append(&mut self, stereo: &[f32]) {
+    /// Appends whole frames from `stereo`, fill when `filled`; the caller
+    /// keeps them within room.
+    fn append(&mut self, stereo: &[f32], filled: bool) {
         let frames = stereo.as_chunks::<2>().0;
         let paid = self.pay(frames.len());
         for frame in &frames[paid..] {
-            let at = (self.start + self.len) % LANE_FRAMES * 2;
-            self.samples[at..at + 2].copy_from_slice(frame);
+            let at = (self.start + self.len) % LANE_FRAMES;
+            self.samples[at * 2..at * 2 + 2].copy_from_slice(frame);
+            self.filled[at] = filled;
             self.len += 1;
         }
     }
 
-    /// Adds the first `frames` waiting frames into `out` and drops them.
-    fn take_into(&mut self, out: &mut [f32], frames: usize) {
-        for frame in out.as_chunks_mut::<2>().0.iter_mut().take(frames) {
+    /// Adds the first `frames` waiting frames into `out` and drops them,
+    /// clearing `filled` for each frame of data.
+    fn take_into(&mut self, out: &mut [f32], filled: &mut [bool], frames: usize) {
+        let pairs = out.as_chunks_mut::<2>().0.iter_mut().zip(filled.iter_mut());
+        for (frame, filled) in pairs.take(frames) {
             let at = self.start * 2;
             frame[0] += self.samples[at];
             frame[1] += self.samples[at + 1];
+            *filled &= self.filled[self.start];
             self.start = (self.start + 1) % LANE_FRAMES;
             self.len -= 1;
         }
     }
 }
 
-/// Mixes several streams of stereo frames at the session rate.
+/// Mixes several streams of stereo frames at the session rate. Its sinks
+/// get each chunk with its frame count and, per frame, whether it is fill.
 pub struct StreamMixer {
     lanes: Box<[Lane]>,
     /// One chunk of the mix.
     out: Box<[f32]>,
+    /// Per frame of `out`, whether no lane gave it a frame of data: every
+    /// lane's share was flagged or filled silence, or none had a frame.
+    filled: Box<[bool]>,
 }
 
 impl StreamMixer {
@@ -111,19 +124,27 @@ impl StreamMixer {
         StreamMixer {
             lanes: (0..streams).map(|_| Lane::new()).collect(),
             out: vec![0.0; CONVERT_CHUNK * 2].into_boxed_slice(),
+            filled: vec![false; CONVERT_CHUNK].into_boxed_slice(),
         }
     }
 
-    /// Adds `stereo`'s whole frames to `lane` and hands every frame of the
-    /// mix that is ready to `sink`, in chunks of at most [`CONVERT_CHUNK`].
-    pub fn push(&mut self, lane: usize, stereo: &[f32], sink: &mut impl FnMut(&[f32], usize)) {
+    /// Adds `stereo`'s whole frames to `lane`, as flagged or filled silence
+    /// when `filled`, and hands every frame of the mix that is ready to
+    /// `sink`, in chunks of at most [`CONVERT_CHUNK`].
+    pub fn push(
+        &mut self,
+        lane: usize,
+        stereo: &[f32],
+        filled: bool,
+        sink: &mut impl FnMut(&[f32], usize, &[bool]),
+    ) {
         if self.lanes.get(lane).is_none_or(|lane| !lane.open) {
             return;
         }
         let mut rest = &stereo[..stereo.len() / 2 * 2];
         while !rest.is_empty() {
             let piece = (rest.len() / 2).min(CONVERT_CHUNK);
-            self.lanes[lane].append(&rest[..piece * 2]);
+            self.lanes[lane].append(&rest[..piece * 2], filled);
             rest = &rest[piece * 2..];
             self.mix(sink);
         }
@@ -134,7 +155,7 @@ impl StreamMixer {
         &mut self,
         lane: usize,
         frames: usize,
-        sink: &mut impl FnMut(&[f32], usize),
+        sink: &mut impl FnMut(&[f32], usize, &[bool]),
     ) {
         if self.lanes.get(lane).is_none_or(|lane| !lane.open) {
             return;
@@ -194,7 +215,7 @@ impl StreamMixer {
 
     /// Hands on what every lane has reached, then cuts back a lead past the
     /// allowed lag.
-    fn mix(&mut self, sink: &mut impl FnMut(&[f32], usize)) {
+    fn mix(&mut self, sink: &mut impl FnMut(&[f32], usize, &[bool])) {
         let ready = self.slowest().unwrap_or(0);
         self.emit(ready, sink);
         // Drift rule: once a lane leads the slowest by over MAX_LAG, the mix moves on to half that lead, padding short lanes with silence they later skip.
@@ -212,20 +233,22 @@ impl StreamMixer {
 
     /// Mixes `frames` frames, each lane adding what it has of them; an open
     /// lane that runs short owes the rest.
-    fn emit(&mut self, frames: usize, sink: &mut impl FnMut(&[f32], usize)) {
+    fn emit(&mut self, frames: usize, sink: &mut impl FnMut(&[f32], usize, &[bool])) {
         let mut done = 0;
         while done < frames {
             let n = (frames - done).min(CONVERT_CHUNK);
             let out = &mut self.out[..n * 2];
             out.fill(0.0);
+            let filled = &mut self.filled[..n];
+            filled.fill(true);
             for lane in self.lanes.iter_mut() {
                 let take = lane.len.min(n);
-                lane.take_into(out, take);
+                lane.take_into(out, filled, take);
                 if lane.open {
                     lane.owed += n - take;
                 }
             }
-            sink(out, n);
+            sink(out, n, &self.filled[..n]);
             done += n;
         }
     }
@@ -416,7 +439,7 @@ impl<S: LaneStream> MixLanes<S> {
     pub fn read(
         &mut self,
         now: u64,
-        sink: &mut impl FnMut(&[f32], usize),
+        sink: &mut impl FnMut(&[f32], usize, &[bool]),
         retired: &mut impl FnMut(Box<Opened<S>>),
     ) -> Result<(), i32> {
         if self.any_open() {
@@ -435,8 +458,8 @@ impl<S: LaneStream> MixLanes<S> {
             let Opened { stream, input, .. } = &mut *slot.opened;
             let gaps = &mut slot.gaps;
             let mut deliver = |data: &[u8], frames: usize, silent: bool| {
-                input.convert(data, frames, silent, &mut |stereo: &[f32]| {
-                    mixer.push(index + 1, stereo, sink);
+                input.convert(data, frames, silent, &mut |stereo: &[f32], filled: bool| {
+                    mixer.push(index + 1, stereo, filled, sink);
                 });
             };
             match stream.drain(gaps, &mut deliver) {
@@ -510,13 +533,15 @@ impl LaneInput {
 
     /// Converts a packet of `frames` frames in the lane's format (silence
     /// when `silent`, whatever `data` holds) and hands the stereo frames to
-    /// `out` piece by piece.
+    /// `out` piece by piece, with whether they came from silence.
+    /// Resampled frames take the packet's flag, so a few at a switch between
+    /// data and silence carry the wrong one (it only feeds the zero holes).
     pub fn convert(
         &mut self,
         data: &[u8],
         frames: usize,
         silent: bool,
-        out: &mut impl FnMut(&[f32]),
+        out: &mut impl FnMut(&[f32], bool),
     ) {
         let block = self.format.block_align();
         let frames = if silent {
@@ -540,13 +565,13 @@ impl LaneInput {
                 );
             }
             match self.resampler.as_mut() {
-                None => out(&self.stereo[..n * 2]),
+                None => out(&self.stereo[..n * 2], silent),
                 Some(resampler) => {
                     let mut consumed = 0;
                     while consumed < n {
                         let (used, produced) = resampler
                             .process(&self.stereo[consumed * 2..n * 2], &mut self.resampled);
-                        out(&self.resampled[..produced * 2]);
+                        out(&self.resampled[..produced * 2], silent);
                         consumed += used;
                         if used == 0 && produced == 0 {
                             break;
@@ -585,9 +610,14 @@ mod tests {
         let mut mixed = Vec::new();
         for &(lane, value, frames) in pushes {
             let block = vec![value; frames * 2];
-            mixer.push(lane, &block, &mut |out: &[f32], n: usize| {
-                mixed.extend(out[..n * 2].iter().step_by(2));
-            });
+            mixer.push(
+                lane,
+                &block,
+                false,
+                &mut |out: &[f32], n: usize, _: &[bool]| {
+                    mixed.extend(out[..n * 2].iter().step_by(2));
+                },
+            );
         }
         mixed
     }
@@ -659,11 +689,11 @@ mod tests {
         let mut quiet = GapFill::started(SESSION_RATE, 0);
         let (mut playing, mut mixed) = (0, 0);
         for tick in 1..=500_u64 {
-            let mut sink = |out: &[f32], n: usize| {
+            let mut sink = |out: &[f32], n: usize, _: &[bool]| {
                 assert!(out[..n * 2].iter().all(|&v| (v - 0.25).abs() < 1e-6));
                 mixed += n;
             };
-            mixer.push(0, &[0.25; 960], &mut sink);
+            mixer.push(0, &[0.25; 960], false, &mut sink);
             playing += 480;
             let fill = quiet.idle(tick * 100_000);
             mixer.push_silence(1, fill, &mut sink);
@@ -780,7 +810,7 @@ mod tests {
             let (mixed, loud, retired) = (&mut self.mixed, &mut self.loud, &mut self.retired);
             self.lanes.read(
                 tick * 100_000,
-                &mut |out: &[f32], n: usize| {
+                &mut |out: &[f32], n: usize, _: &[bool]| {
                     *mixed += n;
                     *loud += out[..n * 2].iter().step_by(2).filter(|&&v| v > 0.0).count();
                 },
@@ -927,7 +957,7 @@ mod tests {
         let packet = vec![0u8; 441 * 4];
         let mut frames = 0;
         for _ in 0..100 {
-            input.convert(&packet, 441, false, &mut |stereo: &[f32]| {
+            input.convert(&packet, 441, false, &mut |stereo: &[f32], _| {
                 frames += stereo.len() / 2
             });
         }
@@ -940,6 +970,25 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    // covers: S229 (zero holes in a mix)
+    #[test]
+    fn a_mix_marks_frames_whose_every_lane_gave_flagged_or_filled_silence() {
+        let mut mixer = StreamMixer::new(2);
+        let mut filled = Vec::new();
+        let mut sink = |_: &[f32], n: usize, flags: &[bool]| filled.extend_from_slice(&flags[..n]);
+        // Lane 1 is a quiet app, filled; lane 0 plays, gets 10 ms of gap
+        // fill, plays again, then sends 10 ms of data zeros.
+        mixer.push(1, &[0.0; 1_920 * 2], true, &mut sink);
+        mixer.push(0, &[0.25; 480 * 2], false, &mut sink);
+        mixer.push(0, &[0.0; 480 * 2], true, &mut sink);
+        mixer.push(0, &[0.25; 480 * 2], false, &mut sink);
+        mixer.push(0, &[0.0; 480 * 2], false, &mut sink);
+        assert_eq!(filled.len(), 1_920);
+        assert!(filled[..480].iter().all(|&f| !f), "sound");
+        assert!(filled[480..960].iter().all(|&f| f), "the gap fill");
+        assert!(filled[960..].iter().all(|&f| !f), "sound, then data zeros");
     }
 
     #[test]

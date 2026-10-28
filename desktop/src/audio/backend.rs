@@ -7,7 +7,7 @@
 //! because of them, stays the UI's decision (the session rules in
 //! `audiosync_core::policy::session`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -496,6 +496,37 @@ pub enum BackendEvent {
         /// The endpoint ID.
         id: String,
     },
+    /// A lost capture's input device is held by another app in exclusive
+    /// mode (S333). Streaming stays on and the input is tried again every
+    /// few seconds; [`BackendEvent::CaptureFree`] tells once it no longer
+    /// waits.
+    CaptureBusy,
+    /// A capture reported busy no longer waits for its input: it captures
+    /// again, or its session ended.
+    CaptureFree,
+    /// An output's stream stopped taking frames again before it had played
+    /// five seconds since the last time (S326). The output stays on, its
+    /// device still listed, and is opened again every ten seconds;
+    /// [`BackendEvent::OutputPlaysAgain`] tells once a stream plays.
+    OutputStalled {
+        /// The endpoint ID.
+        id: String,
+    },
+    /// An output whose device Windows still lists has refused to open for
+    /// about thirty seconds (S331). The output stays on and is tried again
+    /// every few seconds; [`BackendEvent::OutputPlaysAgain`] tells once it
+    /// plays.
+    OutputRefused {
+        /// The endpoint ID.
+        id: String,
+    },
+    /// An output reported stalled has played five seconds since it was
+    /// opened again, or one reported refused plays, or either no longer
+    /// waits: it was switched off, failed, or streaming stopped.
+    OutputPlaysAgain {
+        /// The endpoint ID.
+        id: String,
+    },
     /// Playback stopped on its own.
     Stopped {
         /// Why it stopped.
@@ -893,6 +924,10 @@ pub trait AudioBackend {
 
     /// The password prompt to show, if one waits and no PIN prompt is open.
     fn airplay_password_prompt(&self) -> Option<AirPlayPasswordPrompt>;
+
+    /// The AirPlay speakers whose pairing runs or whose password prompt
+    /// waits, shown or queued, with the target a member's prompt switches on.
+    fn airplay_waiting_for_user(&self) -> BTreeSet<String>;
 
     /// The stereo pair or home theater group that holds the AirPlay speaker
     /// `id` (see [`AirPlayProblem::PlaysInGroup`]).

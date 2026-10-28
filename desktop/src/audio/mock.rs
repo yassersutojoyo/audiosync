@@ -22,6 +22,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, SystemTime};
 
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::reader::Reader;
@@ -31,12 +32,15 @@ use audiosync_core::volume::SharedGain;
 
 use super::backend::{BackendError, OutputKind};
 use super::capture::{CAPTURE_ATTEMPTS, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode};
-use super::controller::{CaptureHandle, CaptureState, Controller, Driver, RendererHandle};
+use super::controller::{
+    CaptureHandle, CaptureState, Controller, Driver, PowerNotice, RendererHandle,
+};
 use super::outputs::{
     DeviceTraits, Endpoint, EndpointProperties, EndpointReading, Listing, RenderFormat,
     StreamSetup, list_endpoints,
 };
 use super::process::{ProcessEntry, ProcessTable};
+use super::render::{Stall, StallSlot};
 use super::routing::{EndpointAudio, EndpointVolume};
 
 /// AudioSync's process ID in the mock.
@@ -56,6 +60,10 @@ pub const MOCK_STREAM: StreamSetup = StreamSetup {
 
 /// The mock's Explorer, which started AudioSync and every mock app.
 const EXPLORER_PID: u32 = 900;
+
+/// `E_ACCESSDENIED`: what Windows answers when a process running as
+/// administrator is opened for a wait.
+const ACCESS_DENIED: i32 = 0x8007_0005_u32 as i32;
 
 /// How a mock output starts: unmuted, at full volume.
 const FULL_VOLUME: EndpointVolume = EndpointVolume {
@@ -141,6 +149,11 @@ struct CaptureLink {
     missing: bool,
     /// How often a mix was moved onto new apps.
     retargets: u32,
+    /// The format it captures in.
+    setup: CaptureAttempt,
+    /// The error code its app's process refused a wait with, as an app
+    /// running as administrator does (S327).
+    watch_refused: Option<i32>,
 }
 
 fn lock(link: &Mutex<CaptureLink>) -> std::sync::MutexGuard<'_, CaptureLink> {
@@ -157,9 +170,9 @@ impl CaptureHandle for MockCapture {
         lock(&self.link).state.clone()
     }
 
-    /// The first way a real capture tries.
+    /// The first way a real capture tries, unless a test chose another.
     fn setup(&self) -> Option<CaptureAttempt> {
-        Some(CAPTURE_ATTEMPTS[0])
+        Some(lock(&self.link).setup)
     }
 
     /// A mix follows its apps, as a real one does.
@@ -179,6 +192,10 @@ impl CaptureHandle for MockCapture {
 
     fn holds_all(&self) -> bool {
         !lock(&self.link).missing
+    }
+
+    fn watch_refused(&self) -> Option<i32> {
+        lock(&self.link).watch_refused
     }
 }
 
@@ -200,6 +217,10 @@ pub struct MockRenderer {
     /// While set, no fade-out has played yet.
     hold_fades: Arc<AtomicBool>,
     stop_requested: bool,
+    stall: Arc<StallSlot>,
+    /// How its stream was opened: in its device's format then.
+    setup: StreamSetup,
+    invalidated: Arc<AtomicBool>,
 }
 
 impl Drop for MockRenderer {
@@ -215,6 +236,11 @@ struct RendererLink {
     ring: Arc<Ring>,
     ended: Arc<AtomicBool>,
     dropped: Arc<AtomicBool>,
+    stall: Arc<StallSlot>,
+    /// The format its stream was opened in.
+    format: RenderFormat,
+    /// Set when its audio session says it was disconnected.
+    invalidated: Arc<AtomicBool>,
 }
 
 impl RendererLink {
@@ -241,7 +267,15 @@ impl RendererHandle for MockRenderer {
     }
 
     fn setup(&self) -> Option<StreamSetup> {
-        Some(MOCK_STREAM)
+        Some(self.setup)
+    }
+
+    fn stall(&self) -> Option<Stall> {
+        self.stall.get()
+    }
+
+    fn invalidated(&self) -> bool {
+        self.invalidated.load(Ordering::Relaxed)
     }
 }
 
@@ -259,9 +293,20 @@ pub struct MockDriver {
     changed: bool,
     listing_error: Option<BackendError>,
     output_errors: BTreeMap<String, BackendError>,
+    /// The mix formats of the outputs whose device isn't in
+    /// [`MOCK_STREAM`]'s format.
+    output_formats: BTreeMap<String, RenderFormat>,
+    /// The outputs whose device format Windows said changed, not yet taken.
+    format_notices: Vec<String>,
     capture_error: Option<BackendError>,
     /// The error only the next capture start fails with.
     next_capture_error: Option<BackendError>,
+    /// The format the next captures start in.
+    capture_setup: CaptureAttempt,
+    /// The processes that can't be opened to wait for their exit.
+    unwatchable: BTreeSet<u32>,
+    /// The creation time of the process started last.
+    last_created: u64,
     capture: Option<Arc<Mutex<CaptureLink>>>,
     /// Every output started that hasn't ended by itself.
     renderers: Vec<RendererLink>,
@@ -280,6 +325,14 @@ pub struct MockDriver {
     renderers_started: Vec<String>,
     /// Every capture start asked for, refused ones included.
     capture_attempts: usize,
+    /// Windows' suspend and resume notices not yet taken.
+    power_notices: Vec<PowerNotice>,
+    /// The system clock: it stands still between polls unless a test moves
+    /// it, as across a sleep.
+    wall_clock: SystemTime,
+    /// How far the system clock moves while an output start that doesn't
+    /// answer holds the caller.
+    hang_cost: Duration,
     /// The endpoint ID of every output start asked for, refused ones
     /// included.
     renderer_attempts: Vec<String>,
@@ -318,8 +371,13 @@ impl MockDriver {
             changed: false,
             listing_error: None,
             output_errors: BTreeMap::new(),
+            output_formats: BTreeMap::new(),
+            format_notices: Vec::new(),
             capture_error: None,
             next_capture_error: None,
+            capture_setup: CAPTURE_ATTEMPTS[0],
+            unwatchable: BTreeSet::new(),
+            last_created: 0,
             capture: None,
             renderers: Vec::new(),
             active_sessions: BTreeMap::new(),
@@ -332,6 +390,9 @@ impl MockDriver {
             renderers_started: Vec::new(),
             capture_attempts: 0,
             renderer_attempts: Vec::new(),
+            power_notices: Vec::new(),
+            wall_clock: SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000),
+            hang_cost: Duration::ZERO,
         }
     }
 
@@ -451,6 +512,14 @@ impl MockDriver {
         self.volumes.get(id).copied().unwrap_or(Some(FULL_VOLUME))
     }
 
+    /// The mix format of output `id`'s device.
+    fn device_format(&self, id: &str) -> RenderFormat {
+        self.output_formats
+            .get(id)
+            .copied()
+            .unwrap_or(MOCK_STREAM.format)
+    }
+
     fn is_connected(&self, id: &str) -> bool {
         self.outputs.iter().any(|output| output.id == id)
     }
@@ -525,6 +594,25 @@ impl Driver for MockDriver {
 
     fn outputs_changed(&mut self) -> bool {
         std::mem::take(&mut self.changed)
+    }
+
+    fn format_notices(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.format_notices)
+    }
+
+    fn power_notices(&mut self) -> Vec<PowerNotice> {
+        std::mem::take(&mut self.power_notices)
+    }
+
+    fn wall_clock(&self) -> SystemTime {
+        self.wall_clock
+    }
+
+    fn output_format(&mut self, id: &str) -> Result<RenderFormat, BackendError> {
+        if !self.is_connected(id) {
+            return Err(BackendError::DeviceGone);
+        }
+        Ok(self.device_format(id))
     }
 
     fn inputs(&mut self) -> Result<Vec<EndpointReading>, BackendError> {
@@ -649,6 +737,15 @@ impl Driver for MockDriver {
             return Err(BackendError::InputGone);
         }
         self.captures_started.push(target.clone());
+        let watch_refused = match &target {
+            CaptureTarget::Loopback(activation)
+                if activation.mode == LoopbackMode::IncludeTree
+                    && self.unwatchable.contains(&activation.target_pid) =>
+            {
+                Some(ACCESS_DENIED)
+            }
+            _ => None,
+        };
         let link = Arc::new(Mutex::new(CaptureLink {
             target,
             state: CaptureState::Running,
@@ -657,6 +754,8 @@ impl Driver for MockDriver {
             feeds,
             missing: false,
             retargets: 0,
+            setup: self.capture_setup,
+            watch_refused,
         }));
         self.capture = Some(Arc::clone(&link));
         Ok(MockCapture { link })
@@ -674,17 +773,26 @@ impl Driver for MockDriver {
             return Err(BackendError::DeviceGone);
         }
         if let Some(error) = self.output_errors.get(&endpoint.id) {
+            if *error == BackendError::NotResponding {
+                self.wall_clock += self.hang_cost;
+            }
             return Err(error.clone());
         }
         self.renderers
             .retain(|renderer| !renderer.ended.load(Ordering::Relaxed));
         let ended = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicBool::new(false));
+        let stall = Arc::new(StallSlot::default());
+        let invalidated = Arc::new(AtomicBool::new(false));
+        let format = self.device_format(&endpoint.id);
         self.renderers.push(RendererLink {
             id: endpoint.id.clone(),
             ring: Arc::clone(reader.ring()),
             ended: Arc::clone(&ended),
             dropped: Arc::clone(&dropped),
+            stall: Arc::clone(&stall),
+            format,
+            invalidated: Arc::clone(&invalidated),
         });
         self.renderers_started.push(endpoint.id.clone());
         Ok(MockRenderer {
@@ -693,6 +801,12 @@ impl Driver for MockDriver {
             faded: Arc::clone(&self.faded),
             hold_fades: Arc::clone(&self.hold_fades),
             stop_requested: false,
+            stall,
+            setup: StreamSetup {
+                format,
+                ..MOCK_STREAM
+            },
+            invalidated,
         })
     }
 }
@@ -749,13 +863,16 @@ impl Controller<MockDriver> {
 
     fn add_process(&mut self, pid: u32, parent_pid: u32, executable: &str, audio: bool) {
         let driver = self.driver_mut();
+        // A process started after one that quit is still a later one.
         let created = driver
             .processes
             .iter()
             .filter_map(|process| process.created)
+            .chain([driver.last_created])
             .max()
             .unwrap_or(0)
             + 1;
+        driver.last_created = created;
         driver.processes.retain(|process| process.pid != pid);
         driver.processes.push(ProcessEntry {
             pid,
@@ -768,7 +885,24 @@ impl Controller<MockDriver> {
         }
     }
 
-    /// Quits a process. A capture of its tree reports that its source quit.
+    /// Makes process `pid` one AudioSync can't open to wait for its exit,
+    /// as an app running as administrator: a capture of its tree then
+    /// doesn't notice when it quits.
+    pub fn refuse_watch(&mut self, pid: u32) {
+        self.driver_mut().unwatchable.insert(pid);
+    }
+
+    /// Makes the creation time of process `pid` one that can't be read.
+    pub fn hide_start_time(&mut self, pid: u32) {
+        for process in &mut self.driver_mut().processes {
+            if process.pid == pid {
+                process.created = None;
+            }
+        }
+    }
+
+    /// Quits a process. A capture of its tree reports that its source quit,
+    /// unless it couldn't watch it.
     pub fn quit_app(&mut self, pid: u32) {
         let driver = self.driver_mut();
         driver.processes.retain(|process| process.pid != pid);
@@ -793,7 +927,7 @@ impl Controller<MockDriver> {
                 }
                 CaptureTarget::Input { .. } => false,
             };
-            if captures_app && link.state == CaptureState::Running {
+            if captures_app && link.watch_refused.is_none() && link.state == CaptureState::Running {
                 link.state = CaptureState::SourceQuit;
             }
         }
@@ -947,6 +1081,55 @@ impl Controller<MockDriver> {
         self.driver_mut().end_renderers_of(id);
     }
 
+    /// Ends the output playing on `id` as a render thread ends a stream
+    /// that stopped taking frames (S326), while the device stays listed.
+    pub fn stall_renderer(&mut self, id: &str, stall: Stall) {
+        for renderer in &self.driver().renderers {
+            if renderer.id == id && renderer.plays() {
+                renderer.stall.record(stall);
+                renderer.ended.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Changes the mix format of output `id`'s device, and Windows says so
+    /// (S330).
+    pub fn change_output_format(&mut self, id: &str, format: RenderFormat) {
+        let driver = self.driver_mut();
+        driver.output_formats.insert(id.to_owned(), format);
+        driver.format_notices.push(id.to_owned());
+    }
+
+    /// Windows says output `id`'s device format changed while it didn't.
+    pub fn notify_output_format(&mut self, id: &str) {
+        self.driver_mut().format_notices.push(id.to_owned());
+    }
+
+    /// The audio session of the output playing on `id` says it was
+    /// disconnected, before its render thread notices (S330).
+    pub fn disconnect_session(&mut self, id: &str) {
+        for renderer in &self.driver().renderers {
+            if renderer.id == id && renderer.plays() {
+                renderer.invalidated.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// The format the output playing on `id` opened its stream in.
+    pub fn playing_format(&self, id: &str) -> Option<RenderFormat> {
+        self.driver()
+            .renderers
+            .iter()
+            .rev()
+            .find(|renderer| renderer.id == id && renderer.plays())
+            .map(|renderer| renderer.format)
+    }
+
+    /// Makes the captures started from now on deliver `setup`'s format.
+    pub fn set_capture_setup(&mut self, setup: CaptureAttempt) {
+        self.driver_mut().capture_setup = setup;
+    }
+
     /// Makes every later capture start fail with `error`, or succeed again
     /// with `None`.
     pub fn refuse_captures(&mut self, error: Option<BackendError>) {
@@ -956,6 +1139,23 @@ impl Controller<MockDriver> {
     /// Makes only the next capture start fail with `error`.
     pub fn refuse_next_capture(&mut self, error: BackendError) {
         self.driver_mut().next_capture_error = Some(error);
+    }
+
+    /// Windows tells of a suspend or a resume, as the next poll finds out.
+    pub fn notify_power(&mut self, notice: PowerNotice) {
+        self.driver_mut().power_notices.push(notice);
+    }
+
+    /// The system clock moves on by `span` before the next poll, as when the
+    /// PC sleeps that long.
+    pub fn pass_wall_time(&mut self, span: Duration) {
+        self.driver_mut().wall_clock += span;
+    }
+
+    /// Makes each output start that doesn't answer hold the caller for
+    /// `span` of wall time.
+    pub fn hang_output_starts_for(&mut self, span: Duration) {
+        self.driver_mut().hang_cost = span;
     }
 
     /// Makes the running capture fail with `error`.

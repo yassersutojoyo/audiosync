@@ -238,23 +238,36 @@ struct PanelResize: Equatable {
 struct PanelRest: Equatable {
     private(set) var frame: CGRect
     private(set) var content: CGSize
+    /// The menu bar icon's middle (screen x) when `frame` was set; nil if unknown.
+    private(set) var icon: CGFloat?
 
-    init(frame: CGRect, content: CGSize) {
+    init(frame: CGRect, content: CGSize, icon: CGFloat? = nil) {
         self.frame = frame
         self.content = content
+        self.icon = icon
     }
 
     /// Where the next resize aims from: the window as it is when no step
     /// runs, as AppKit may have moved the open panel since; else the rest.
-    static func next(_ rest: PanelRest?, stepRunning: Bool, window: CGRect, content: CGSize) -> PanelRest {
-        guard stepRunning, let rest else { return PanelRest(frame: window, content: content) }
+    static func next(_ rest: PanelRest?, stepRunning: Bool, window: CGRect, content: CGSize,
+                     icon: CGFloat? = nil) -> PanelRest {
+        guard stepRunning, let rest else { return PanelRest(frame: window, content: content, icon: icon) }
         return rest
     }
 
-    /// The frame for content of `size`, which becomes the new rest.
-    mutating func move(to size: CGSize) -> CGRect {
-        frame = PanelResize.windowFrame(frame, content: content, to: size)
+    /// The frame for content of `size`, with the icon's middle now at `now`,
+    /// which becomes the new rest.
+    mutating func move(to size: CGSize, icon now: CGFloat? = nil) -> CGRect {
+        var aim = PanelResize.windowFrame(frame, content: content, to: size)
+        // Once it learns the size the popover re-centers the window on the icon, as far as a screen edge lets it.
+        if let then = icon, let now {
+            let off = frame.midX - then
+            let mid = abs(off) <= 1 ? aim.midX + now - then : off < 0 ? min(now, aim.midX) : max(now, aim.midX)
+            aim.origin.x += mid - aim.midX
+        }
+        frame = aim
         content = size
+        icon = now ?? icon
         return frame
     }
 }

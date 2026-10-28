@@ -15,6 +15,7 @@
 use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use audiosync_core::reader::Reader;
 use audiosync_core::render::{RendererControl, STOP_FADE_CAP};
@@ -23,12 +24,15 @@ use windows::Win32::Foundation::{WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
     AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_NOPERSIST,
-    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, IAudioClient, IAudioClock, IAudioRenderClient,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, AudioSessionDisconnectReason, AudioSessionState,
+    DisconnectReasonDeviceRemoval, DisconnectReasonFormatChanged, IAudioClient, IAudioClock,
+    IAudioRenderClient, IAudioSessionControl, IAudioSessionEvents, IAudioSessionEvents_Impl,
     WAVEFORMATEX,
 };
 use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::Win32::System::Threading::{WaitForMultipleObjects, WaitForSingleObject};
-use windows::core::HSTRING;
+use windows::core::{BOOL, GUID, HSTRING, PCWSTR};
+use windows_core::implement;
 
 use super::com::{
     Apartment, ComMemory, Event, ProAudioTask, Ready, Worker, device_error, float_format,
@@ -41,7 +45,9 @@ use crate::audio::controller::RendererHandle;
 use crate::audio::outputs::{
     RenderFormat, StreamSetup, period_frames, render_buffer_hns, render_format,
 };
-use crate::audio::render::{EndpointQueue, RenderPipeline, WakeCounters, WakeCounts};
+use crate::audio::render::{
+    EndpointQueue, RenderPipeline, Stall, StallSign, StallSlot, WakeCounters, WakeCounts,
+};
 
 /// The flags of every render stream: event-driven, and without volume
 /// settings that Windows would remember for AudioSync's session.
@@ -58,6 +64,11 @@ const WAIT_MS: u32 = 500;
 /// device that stops asking for audio then just stops.
 const FADE_WAIT_MS: u32 = 100;
 
+/// How long a running stream may take no frame before it counts as stalled
+/// and ends (S326): four of the loop's [`WAIT_MS`] waits, so a late event or
+/// two never ends a healthy stream.
+const STALL_SPAN: Duration = Duration::from_secs(2);
+
 /// A running output.
 pub struct EndpointRenderer {
     stop: Arc<Event>,
@@ -73,9 +84,17 @@ pub struct EndpointRenderer {
     probe: Option<Arc<ClockProbe>>,
     /// The render thread's late and empty wakes.
     wakes: Arc<WakeCounters>,
+    /// The stall that ended the stream, if one did.
+    stall: Arc<StallSlot>,
+    /// Set when its audio session says it was disconnected (S330).
+    invalidated: Arc<AtomicBool>,
 }
 
 impl RendererHandle for EndpointRenderer {
+    fn invalidated(&self) -> bool {
+        self.invalidated.load(Ordering::Acquire)
+    }
+
     fn request_stop(&mut self) {
         self.control.request_fade_out();
         self.stop.set();
@@ -99,6 +118,10 @@ impl RendererHandle for EndpointRenderer {
 
     fn wakes(&self) -> WakeCounts {
         self.wakes.counts()
+    }
+
+    fn stall(&self) -> Option<Stall> {
+        self.stall.get()
     }
 }
 
@@ -126,6 +149,8 @@ pub(super) fn start(
     let ended = Arc::new(AtomicBool::new(false));
     let probe = ClockProbe::from_env();
     let wakes = Arc::new(WakeCounters::default());
+    let stall = Arc::new(StallSlot::default());
+    let invalidated = Arc::new(AtomicBool::new(false));
     let (thread, setup) = {
         let stop = Arc::clone(&stop);
         let abort = Arc::clone(&abort);
@@ -133,12 +158,16 @@ pub(super) fn start(
         let control = control.clone();
         let probe = probe.clone();
         let wakes = Arc::clone(&wakes);
+        let stall = Arc::clone(&stall);
+        let invalidated = Arc::clone(&invalidated);
         spawn_worker("audiosync-output", move |ready| {
             let signals = Signals {
                 stop: &stop,
                 abort: &abort,
                 ended: &ended,
                 wakes: &wakes,
+                stall: &stall,
+                invalidated: &invalidated,
             };
             run(&id, reader, &control, gain, probe, &signals, ready);
         })?
@@ -152,7 +181,139 @@ pub(super) fn start(
         setup,
         probe,
         wakes,
+        stall,
+        invalidated,
     })
+}
+
+/// The format an output on the endpoint `id` would open in now: its
+/// current mix format, as [`open_stream`] reads it (S330).
+pub(super) fn current_format(id: &str) -> Result<RenderFormat, BackendError> {
+    let _apartment = Apartment::enter()?;
+    let client = activate(id)?;
+    // SAFETY: a call on the client made above; ComMemory frees the format
+    // after its last use.
+    let mix = ComMemory::new(
+        unsafe { client.GetMixFormat() }
+            .map_err(|error| device_error("IAudioClient::GetMixFormat", &error))?,
+    );
+    // SAFETY: the mix format lives until `mix` drops.
+    render_format(unsafe { read_mix_format(mix.as_ptr()) })
+}
+
+/// An audio client on the endpoint `id`.
+fn activate(id: &str) -> Result<IAudioClient, BackendError> {
+    let enumerator = enumerator()?;
+    // SAFETY: calls on COM objects this thread owns.
+    unsafe {
+        let device = enumerator
+            .GetDevice(&HSTRING::from(id))
+            .map_err(|error| device_error("IMMDeviceEnumerator::GetDevice", &error))?;
+        device
+            .Activate(CLSCTX_ALL, None)
+            .map_err(|error| device_error("IMMDevice::Activate", &error))
+    }
+}
+
+/// Sets a flag when Windows disconnects an output's audio session because
+/// its format changed or its device went away (S330). Windows calls it on
+/// its own threads, so it only stores the flag.
+#[implement(IAudioSessionEvents)]
+struct SessionWatch {
+    invalidated: Arc<AtomicBool>,
+}
+
+impl IAudioSessionEvents_Impl for SessionWatch_Impl {
+    fn OnDisplayNameChanged(
+        &self,
+        _name: &PCWSTR,
+        _context: *const GUID,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnIconPathChanged(
+        &self,
+        _path: &PCWSTR,
+        _context: *const GUID,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnSimpleVolumeChanged(
+        &self,
+        _volume: f32,
+        _mute: BOOL,
+        _context: *const GUID,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnChannelVolumeChanged(
+        &self,
+        _count: u32,
+        _volumes: *const f32,
+        _changed: u32,
+        _context: *const GUID,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnGroupingParamChanged(
+        &self,
+        _grouping: *const GUID,
+        _context: *const GUID,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnStateChanged(&self, _state: AudioSessionState) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn OnSessionDisconnected(
+        &self,
+        reason: AudioSessionDisconnectReason,
+    ) -> windows::core::Result<()> {
+        if reason == DisconnectReasonFormatChanged || reason == DisconnectReasonDeviceRemoval {
+            self.invalidated.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+}
+
+/// A [`SessionWatch`] registered on a stream's audio session, unregistered
+/// on drop.
+struct SessionRegistration {
+    control: IAudioSessionControl,
+    events: IAudioSessionEvents,
+}
+
+impl SessionRegistration {
+    /// Registers a watch on `client`'s session; `None` when Windows refuses,
+    /// and the render loop's own check then finds an invalidated stream.
+    fn new(client: &IAudioClient, invalidated: &Arc<AtomicBool>) -> Option<SessionRegistration> {
+        // SAFETY: calls on an initialized client this thread owns.
+        let control = unsafe { client.GetService::<IAudioSessionControl>() }.ok()?;
+        let events: IAudioSessionEvents = SessionWatch {
+            invalidated: Arc::clone(invalidated),
+        }
+        .into();
+        // SAFETY: the watch stays alive and registered until this value
+        // unregisters it on drop.
+        unsafe { control.RegisterAudioSessionNotification(&events) }.ok()?;
+        Some(SessionRegistration { control, events })
+    }
+}
+
+impl Drop for SessionRegistration {
+    fn drop(&mut self) {
+        // SAFETY: unregisters the watch registered on this session.
+        let _ = unsafe {
+            self.control
+                .UnregisterAudioSessionNotification(&self.events)
+        };
+    }
 }
 
 /// What the render thread shares with its [`EndpointRenderer`].
@@ -165,6 +326,10 @@ struct Signals<'a> {
     ended: &'a AtomicBool,
     /// Counted by the thread at each wake that isn't part of a stop.
     wakes: &'a WakeCounters,
+    /// Set by the thread before it marks the output ended for a stall.
+    stall: &'a StallSlot,
+    /// Set by the stream's session watch.
+    invalidated: &'a Arc<AtomicBool>,
 }
 
 /// The render thread.
@@ -185,6 +350,8 @@ fn run(
         Ok(stream) => stream,
         Err(error) => return ready.fail(error),
     };
+    // Dropped before the stream, at the end of this thread.
+    let _session = SessionRegistration::new(&stream.client, signals.invalidated);
     let channels = usize::from(stream.format.channels);
     // Every buffer the loop uses is allocated here, before it starts.
     let mut pipeline =
@@ -244,17 +411,11 @@ struct RenderStream {
 /// mix format when that is float, or in float at the mix format's rate and
 /// channels, converted by Windows, otherwise.
 fn open_stream(id: &str) -> Result<RenderStream, BackendError> {
-    let enumerator = enumerator()?;
+    let client = activate(id)?;
     // SAFETY: calls on COM objects this thread owns. The mix format is freed
     // by ComMemory after the last use of its pointer, and the format passed
     // to Initialize lives through the call, which copies it.
     unsafe {
-        let device = enumerator
-            .GetDevice(&HSTRING::from(id))
-            .map_err(|error| device_error("IMMDeviceEnumerator::GetDevice", &error))?;
-        let client: IAudioClient = device
-            .Activate(CLSCTX_ALL, None)
-            .map_err(|error| device_error("IMMDevice::Activate", &error))?;
         let mix = ComMemory::new(
             client
                 .GetMixFormat()
@@ -350,7 +511,9 @@ fn prefill_silence(stream: &RenderStream) -> Result<(), BackendError> {
 /// Real-time: waits for the device's event, then fills the free part of the
 /// buffer. When the device hasn't asked for [`WAIT_MS`], it does the same:
 /// the padding call fails once Windows invalidated the stream, which ends the
-/// loop as lost. Never allocates, locks or logs. With a `sampler`, it
+/// loop as lost. So does a stream that took no frame for [`STALL_SPAN`]
+/// while it isn't stopping (S326), its stall left in the signals. Never
+/// allocates, locks or logs. With a `sampler`, it
 /// samples the clock queue at the probe times, counted in frames written
 /// past the silent prefill.
 fn render_loop(
@@ -367,6 +530,7 @@ fn render_loop(
     let mut stopping: Option<u32> = None;
     // Frames written since the start, the silent prefill included.
     let mut written_total = u64::from(stream.buffer_frames);
+    let mut watch = StallWatch::default();
     loop {
         let wait = match stopping {
             // SAFETY: both handles live as long as this loop.
@@ -402,6 +566,13 @@ fn render_loop(
             signals
                 .wakes
                 .count_wake(padding, stream.buffer_frames, stream.period_frames);
+            let position = clock_position(stream);
+            if let Some(stall) =
+                watch.observe(Instant::now(), padding, stream.buffer_frames, position)
+            {
+                signals.stall.record(stall);
+                return true;
+            }
         }
         if stopping.is_some()
             && pipeline.has_played_its_fade(EndpointQueue {
@@ -453,6 +624,81 @@ fn render_loop(
     }
 }
 
+/// Watches a running stream for frames it stops taking (S326), counted as
+/// frames the device accepted against wall time rather than as wakes: only
+/// a stream that took none for [`STALL_SPAN`] stalls, and the clock only
+/// names the sign.
+#[derive(Debug, Default)]
+struct StallWatch {
+    /// When the stream last took frames: a padding read below a full buffer,
+    /// or a clock that moved. `None` until it first did: a link still coming
+    /// up isn't checked.
+    took: Option<Instant>,
+    /// Whether the clock has moved since the start, so that a still one
+    /// says the device stopped too.
+    clock_runs: bool,
+    /// The clock's position at the last read.
+    position: Option<u64>,
+    /// When the last read was.
+    read: Option<Instant>,
+}
+
+impl StallWatch {
+    /// Takes one wake's padding read of a stream whose buffer holds
+    /// `buffer_frames`, and its clock position when there is one, at `now`;
+    /// returns the stall once the stream counts as stalled. Real-time: no
+    /// allocation.
+    fn observe(
+        &mut self,
+        now: Instant,
+        padding: u32,
+        buffer_frames: u32,
+        position: Option<u64>,
+    ) -> Option<Stall> {
+        // Reads come at least every 500 ms while the thread runs, so a longer
+        // gap is time it didn't run, a sleep of the PC say, and never counts
+        // toward a stall (S332).
+        if self
+            .read
+            .is_some_and(|read| now.saturating_duration_since(read) >= STALL_SPAN)
+            && self.took.is_some()
+        {
+            self.took = Some(now);
+        }
+        self.read = Some(now);
+        if padding < buffer_frames {
+            self.took = Some(now);
+        }
+        if let Some(position) = position {
+            if self.position.is_some_and(|last| last != position) {
+                self.took = Some(now);
+                self.clock_runs = true;
+            }
+            self.position = Some(position);
+        }
+        let span = now.saturating_duration_since(self.took?);
+        if span < STALL_SPAN {
+            return None;
+        }
+        let sign = if self.clock_runs && position.is_some() {
+            StallSign::FrozenClock
+        } else {
+            StallSign::FullPadding
+        };
+        Some(Stall { span, sign })
+    }
+}
+
+/// The position of the stream's clock, unless it has none or can't tell.
+/// Real-time: no allocation.
+fn clock_position(stream: &RenderStream) -> Option<u64> {
+    let (clock, _) = stream.clock.as_ref()?;
+    let mut position = 0u64;
+    // SAFETY: a call on the clock of the stream this thread owns.
+    unsafe { clock.GetPosition(&raw mut position, None) }.ok()?;
+    Some(position)
+}
+
 /// The frames of `written` the stream's clock says the endpoint hasn't
 /// played yet, or `None` without a clock reading. Real-time: no allocation.
 fn clock_queued(stream: &RenderStream, written: u64) -> Option<u64> {
@@ -483,6 +729,121 @@ mod tests {
     /// How long a test waits for an answer.
     const TIMEOUT: Duration = Duration::from_millis(200);
 
+    /// The stream buffer of the stall tests, in frames.
+    const BUFFER: u32 = 960;
+
+    /// One device period, in frames.
+    const PERIOD: u32 = 480;
+
+    /// The time `ms` after `start`.
+    fn at(start: Instant, ms: u64) -> Instant {
+        start + Duration::from_millis(ms)
+    }
+
+    // covers: S326
+    #[test]
+    fn a_stream_that_never_signals_with_full_padding_ends_as_stalled_within_2_s() {
+        let start = Instant::now();
+        let mut watch = StallWatch::default();
+        // A Bluetooth link still coming up takes nothing for 10 s: it isn't
+        // checked before it has taken frames once.
+        for ms in (0..10_000).step_by(500) {
+            assert_eq!(watch.observe(at(start, ms), BUFFER, BUFFER, None), None);
+        }
+        // It plays: each wake finds a period taken.
+        for ms in (10_000..12_000).step_by(10) {
+            let stall = watch.observe(at(start, ms), BUFFER - PERIOD, BUFFER, None);
+            assert_eq!(stall, None);
+        }
+        // Then Windows stops signalling while the padding stays full: only
+        // the 500 ms timeouts wake the loop. The last frames went at 11 990.
+        for ms in [12_490, 12_990, 13_490] {
+            assert_eq!(
+                watch.observe(at(start, ms), BUFFER, BUFFER, None),
+                None,
+                "{ms} ms"
+            );
+        }
+        assert_eq!(
+            watch.observe(at(start, 13_990), BUFFER, BUFFER, None),
+            Some(Stall {
+                span: Duration::from_secs(2),
+                sign: StallSign::FullPadding,
+            })
+        );
+    }
+
+    // covers: S326
+    #[test]
+    fn a_frozen_clock_with_full_padding_ends_as_stalled_within_2_s() {
+        let start = Instant::now();
+        let mut watch = StallWatch::default();
+        // The padding never shows a free frame, but the clock moves: the
+        // stream plays.
+        let mut position = 0;
+        for ms in (0..1_000).step_by(10) {
+            position += u64::from(PERIOD);
+            let stall = watch.observe(at(start, ms), BUFFER, BUFFER, Some(position));
+            assert_eq!(stall, None);
+        }
+        // The clock stops at 990 while the buffer stays full, the device's
+        // events still coming.
+        for ms in (1_000..2_990).step_by(10) {
+            let stall = watch.observe(at(start, ms), BUFFER, BUFFER, Some(position));
+            assert_eq!(stall, None, "{ms} ms");
+        }
+        assert_eq!(
+            watch.observe(at(start, 2_990), BUFFER, BUFFER, Some(position)),
+            Some(Stall {
+                span: Duration::from_secs(2),
+                sign: StallSign::FrozenClock,
+            })
+        );
+    }
+
+    // covers: S326
+    #[test]
+    fn a_stream_that_takes_frames_is_never_stalled_by_a_clock_that_sticks() {
+        let start = Instant::now();
+        let mut watch = StallWatch::default();
+        // The clock moves once, then a driver's position sticks while every
+        // wake still finds a period taken.
+        let stuck = u64::from(PERIOD);
+        assert_eq!(watch.observe(at(start, 0), BUFFER, BUFFER, Some(0)), None);
+        for ms in (10..10_000).step_by(10) {
+            let stall = watch.observe(at(start, ms), BUFFER - PERIOD, BUFFER, Some(stuck));
+            assert_eq!(stall, None, "{ms} ms");
+        }
+    }
+
+    // covers: S332, S326
+    #[test]
+    fn a_wake_hours_after_the_last_read_starts_the_stall_span_over() {
+        let start = Instant::now();
+        let mut watch = StallWatch::default();
+        for ms in (0..1_000).step_by(10) {
+            let stall = watch.observe(at(start, ms), BUFFER - PERIOD, BUFFER, None);
+            assert_eq!(stall, None);
+        }
+        // The PC sleeps two hours in a wait; at the first read after the
+        // wake the device hasn't taken a frame yet.
+        let woke = 2 * 3_600_000;
+        for ms in (woke..woke + 2_000).step_by(500) {
+            assert_eq!(
+                watch.observe(at(start, ms), BUFFER, BUFFER, None),
+                None,
+                "{ms} ms"
+            );
+        }
+        assert_eq!(
+            watch.observe(at(start, woke + 2_000), BUFFER, BUFFER, None),
+            Some(Stall {
+                span: Duration::from_secs(2),
+                sign: StallSign::FullPadding,
+            })
+        );
+    }
+
     #[test]
     fn a_render_thread_that_hangs_stopping_its_stream_doesnt_hold_quitting() {
         static STUCK: StuckThreads = StuckThreads::new();
@@ -511,6 +872,7 @@ mod tests {
             .expect("it starts")
         };
         let renderer = EndpointRenderer {
+            invalidated: Arc::new(AtomicBool::new(false)),
             stop,
             abort,
             ended: Arc::new(AtomicBool::new(false)),
@@ -527,6 +889,7 @@ mod tests {
             },
             probe: None,
             wakes: Arc::default(),
+            stall: Arc::default(),
         };
         let answers = thread::spawn(move || {
             thread::sleep(HANG);

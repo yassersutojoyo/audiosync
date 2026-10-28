@@ -269,8 +269,7 @@ component FlyoutZoneHeader inherits Rectangle {
                     accessible-role: button;
                     accessible-label: root.item.expanded ? Strings.hide-zone-speakers(root.item.name) : Strings.show-zone-speakers(root.item.name);
                     accessible-value: root.live ? "" : root.count;
-                    accessible-expandable: true;
-                    accessible-expanded: root.item.expanded;
+                    // No expanded state, as on the main window's arrow: UI Automation offers Invoke.
                     accessible-action-default => {
                         root.expanded-changed(!root.item.expanded);
                     }
@@ -441,9 +440,9 @@ export component TrayFlyout inherits Window {
     // gets, set by the app when the list is at its floor or absent and the
     // screen is still too short; that part scrolls.
     in property <length> body-cut;
-    // For the layout tests (src/view.rs): where the buttons end, and the
-    // height Windows makes the window at.
+    // Where the buttons end, which `fit-height` reads.
     out property <length> footer-bottom: footer.absolute-position.y + footer.height;
+    // For the layout tests (src/view.rs): the height Windows makes the window at.
     out property <length> made-height: root.preferred-height;
 
     // Called each time the flyout opens (the last focused control may be

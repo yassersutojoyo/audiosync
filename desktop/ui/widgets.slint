@@ -725,6 +725,11 @@ export component SpeakerBadge inherits Rectangle {
     accessible-action-default => {
         root.toggled();
     }
+    accessible-action-expand => {
+        if root.expandable && !root.expanded {
+            root.expanded-changed(true);
+        }
+    }
 
     focus := FocusScope {
         enabled: root.enabled;
@@ -1903,7 +1908,7 @@ export component SpeakerRow inherits Rectangle {
                             state: root.item.state;
                             enabled: !root.item.missing;
                             label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : root.item.cast-added-by-address ? Strings.cast-group-label(Strings.speaker-label(root.item.name, root.item.kind, false, root.item.system-name), Strings.cast-added-by-address) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind, root.item.system-name);
-                            description: Strings.with-group-note(root.item.group-note, root.availability-note != "" ? root.availability-note : Strings.help(root.item.state));
+                            description: Strings.with-group-note(root.item.group-note, root.item.zone-note != "" ? root.item.zone-note : root.availability-note != "" ? root.availability-note : Strings.help(root.item.state));
                             toggled => {
                                 root.toggled();
                             }
@@ -2725,8 +2730,8 @@ export component ZoneHeader inherits Rectangle {
                         accessible-role: button;
                         accessible-label: root.item.expanded ? Strings.hide-zone-speakers(root.item.name) : Strings.show-zone-speakers(root.item.name);
                         accessible-value: root.live ? "" : count-text.text;
-                        accessible-expandable: true;
-                        accessible-expanded: root.item.expanded;
+                        // No expanded state: UI Automation then offers Invoke,
+                        // and Slint 1.18 drops the Collapse that state would ask for.
                         accessible-action-default => {
                             root.expanded-changed(!root.item.expanded);
                         }

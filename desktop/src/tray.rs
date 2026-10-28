@@ -418,8 +418,8 @@ fn place_flyout(app: &App, icon: Bounds) {
     let height = f64::from(app.fit_flyout(room as f32)) * scale;
     let (x, y) =
         placement::flyout_origin(icon, f64::from(flyout.size().width), height, work_area, gap);
-    flyout.set_position(slint::PhysicalPosition::new(
-        x.round() as i32,
-        y.round() as i32,
-    ));
+    let origin = slint::PhysicalPosition::new(x.round() as i32, y.round() as i32);
+    if flyout.position() != origin {
+        flyout.set_position(origin);
+    }
 }

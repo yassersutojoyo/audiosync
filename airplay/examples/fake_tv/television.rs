@@ -7,7 +7,7 @@
 use audiosync_airplay::discovery::DeviceId;
 use plist::Value;
 
-use crate::common::ap2::{FakeAp2, dict, int, plist};
+use crate::common::ap2::{FakeAp2, dict, int, plist, read_dict};
 
 /// Bits 38 (CoreUtils pairing) and 48 (transient pairing): AirPlay 2 capable.
 pub const FEATURES_HIGH: u64 = 0x1_0040;
@@ -20,6 +20,9 @@ pub const NAME: &str = "AudioSync Test TV";
 pub const MODEL: &str = "Speaker1,1";
 /// A locally administered address in the documentation block of RFC 7042.
 pub const DEVICE_ID: [u8; 6] = [0x02, 0x00, 0x5E, 0x00, 0x53, 0x55];
+/// The environment variable that sets the output latency it reports, in
+/// microseconds.
+pub const LATENCY_VAR: &str = "FAKE_TV_LATENCY_US";
 /// Status flags as the television sends them without a PIN (bit 2).
 const FLAGS_PLAIN: u64 = 0x4;
 /// Bit 3: a PIN on every connection, and every pair-verify turned down.
@@ -115,4 +118,34 @@ pub fn television(name: &str, pin: Pin, code: &str, features_low: u64, id: [u8; 
         ("deviceID", Value::String(device_id_text(id))),
     ]));
     fake
+}
+
+/// Reads [`LATENCY_VAR`]: unset or empty reports nothing, as before it
+/// existed; otherwise whole microseconds.
+pub fn latency_from(value: Option<&str>) -> Result<Option<u64>, String> {
+    match value {
+        None | Some("") => Ok(None),
+        Some(text) => text
+            .parse()
+            .ok()
+            .filter(|_| text.bytes().all(|b| b.is_ascii_digit()))
+            .map(Some)
+            .ok_or_else(|| {
+                format!("{LATENCY_VAR} takes whole microseconds such as 250000, not {text:?}")
+            }),
+    }
+}
+
+/// Adds `micros` to its `/info` answer as the `outputLatencyMicros` of
+/// `audioLatencies`, which the sender reads as R_s (P197).
+pub fn report_latency(fake: &mut FakeAp2, micros: u64) {
+    let mut info = read_dict(&fake.info_body).expect("the television's /info is a dictionary");
+    let entry = dict(&[
+        ("type", int(100)),
+        ("audioType", Value::String("default".to_owned())),
+        ("inputLatencyMicros", int(0)),
+        ("outputLatencyMicros", Value::Integer(micros.into())),
+    ]);
+    info.insert("audioLatencies".to_owned(), Value::Array(vec![entry]));
+    fake.info_body = plist(Value::Dictionary(info));
 }

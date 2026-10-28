@@ -1441,6 +1441,16 @@ impl CastSpeakers {
 
     /// Handles what discovery and the sender reported since the last poll.
     pub fn poll(&mut self) -> Vec<BackendEvent> {
+        let selected = self.enabled.map(|id| self.key_of(id));
+        let members = self
+            .attempt
+            .as_ref()
+            .and_then(|attempt| self.members.get(&attempt.device))
+            .into_iter()
+            .flatten()
+            .filter_map(|member| member.id.map(DeviceKey::Id));
+        let kept: Vec<DeviceKey> = selected.into_iter().chain(members).collect();
+        self.list.set_kept(kept);
         for _ in 0..MAX_BROWSE_PER_POLL {
             let Some(event) = self.link.as_mut().and_then(|link| link.poll_browse()) else {
                 break;
@@ -1449,8 +1459,12 @@ impl CastSpeakers {
                 ListEvent::Skipped(_) => {}
                 change => {
                     self.log.log(|| format!("Cast discovery: {change:?}"));
-                    if let ListEvent::Added(DeviceKey::Id(id)) | ListEvent::Identified { id, .. } =
-                        change
+                    if let ListEvent::Added(DeviceKey::Id(id))
+                    | ListEvent::Displaced {
+                        added: DeviceKey::Id(id),
+                        ..
+                    }
+                    | ListEvent::Identified { id, .. } = change
                     {
                         self.log_group(id);
                     }
@@ -1608,6 +1622,12 @@ impl CastSpeakers {
             SessionEvent::Rebuffering => self.log.log(|| "Cast: the device ran dry".to_owned()),
             SessionEvent::Stream(event) => self.log.log(|| format!("Cast stream: {event:?}")),
             SessionEvent::GroupMessage(kind) => self.log.log(|| format!("Cast group: {kind}")),
+            SessionEvent::CertificateChanged { before, after } => self.log.log(|| {
+                format!(
+                    "Cast: {}'s certificate changed from {before} to {after}",
+                    self.name(device)
+                )
+            }),
             SessionEvent::Members(members) => {
                 self.log.log(|| {
                     let names: Vec<String> = self
@@ -1681,7 +1701,9 @@ fn problem_of(end: &SessionEnd) -> Option<CastProblem> {
         SessionEnd::Failed(SessionError::Launch(_) | SessionError::Media(_)) => {
             Some(CastProblem::Refused)
         }
-        SessionEnd::Failed(SessionError::Stream(_)) => Some(CastProblem::ConnectionLost),
+        SessionEnd::Failed(SessionError::Stream(_) | SessionError::Internal) => {
+            Some(CastProblem::ConnectionLost)
+        }
     }
 }
 
@@ -1699,7 +1721,8 @@ pub mod tests {
     use std::collections::VecDeque;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-    use audiosync_cast::discovery::{DEVICE_PORT, ServiceRecord};
+    use audiosync_cast::client::Fingerprint;
+    use audiosync_cast::discovery::{DEVICE_PORT, MAX_DEVICES, ServiceRecord};
     use audiosync_cast::error::ConnectError;
 
     use super::*;
@@ -1894,11 +1917,34 @@ pub mod tests {
     }
 
     #[test]
+    fn the_selected_speaker_stays_listed_through_a_flood_of_devices() {
+        let fake = FakeCast::default();
+        let selected = format!("{:032x}", 1);
+        fake.announce(&selected, "Kitchen", DEVICE_PORT);
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.poll();
+        cast.set_enabled(&selected, true).expect("switched on");
+        for n in 2..=MAX_DEVICES + 10 {
+            fake.announce(&format!("{n:032x}"), &format!("Speaker {n}"), DEVICE_PORT);
+        }
+        cast.poll();
+        let speakers = cast.speakers();
+        assert_eq!(speakers.len(), MAX_DEVICES);
+        assert!(speakers.iter().any(|speaker| speaker.id == selected));
+    }
+
+    #[test]
     fn a_stream_the_speaker_couldnt_fetch_reads_as_blocked() {
         let blocked = SessionEnd::Failed(SessionError::Media(MediaError::NoFetch));
         assert_eq!(problem_of(&blocked), Some(CastProblem::Blocked));
         let refused = SessionEnd::Failed(SessionError::Media(MediaError::LoadCancelled));
         assert_eq!(problem_of(&refused), Some(CastProblem::Refused));
+    }
+
+    #[test]
+    fn a_fault_inside_the_sender_reads_as_a_lost_connection() {
+        let internal = SessionEnd::Failed(SessionError::Internal);
+        assert_eq!(problem_of(&internal), Some(CastProblem::ConnectionLost));
     }
 
     #[test]
@@ -2104,6 +2150,26 @@ pub mod tests {
     }
 
     #[test]
+    fn a_member_of_the_playing_group_stays_listed_through_a_flood_of_devices() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        fake.report(members(ATTIC, vec![member(KITCHEN, "Kitchen")]));
+        cast.poll();
+        for n in 1..=MAX_DEVICES {
+            fake.announce(&format!("{n:032x}"), &format!("Speaker {n}"), DEVICE_PORT);
+        }
+        cast.poll();
+        let listed: Vec<String> = cast.speakers().into_iter().map(|s| s.id).collect();
+        assert_eq!(listed.len(), MAX_DEVICES);
+        assert!(listed.iter().any(|id| id == KITCHEN));
+        assert!(
+            !listed.iter().any(|id| id == LIVING),
+            "the oldest other one went"
+        );
+    }
+
+    #[test]
     fn a_new_group_session_starts_with_its_members_unknown() {
         let (fake, mut cast) = listed();
         cast.set_streaming(true);
@@ -2211,6 +2277,34 @@ pub mod tests {
                 "Cast group Attic members: 2 (Garage, unnamed, deviceId porch-7)",
                 "Cast group: CASTING_GROUPS",
             ],
+        );
+    }
+
+    // covers: C21
+    #[test]
+    fn a_changed_certificate_reaches_the_debug_log() {
+        let dir = test_dir("cast-certificate-log");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let fake = FakeCast::default();
+        fake.announce(ATTIC, "Attic", 32_123);
+        let mut cast = CastSpeakers::new(fake.link(), log.clone());
+        cast.poll();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        let before = Fingerprint([0xAB; 32]);
+        let after = Fingerprint([0xCD; 32]);
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(ATTIC),
+            event: SessionEvent::CertificateChanged { before, after },
+        });
+        cast.poll();
+        assert!(log.flush(TEST_FLUSH));
+        assert_in_order(
+            &read_messages(&dir.join(FILE_NAME)),
+            &[&format!(
+                "Cast: Attic's certificate changed from {before} to {after}"
+            )],
         );
     }
 
@@ -2935,5 +3029,39 @@ pub mod tests {
             [0.4, 0.8],
             "a fixed volume sends nothing (C68)"
         );
+    }
+
+    fn volume_fixed(cast: &CastSpeakers, id: &str) -> bool {
+        cast.speakers()
+            .into_iter()
+            .find(|speaker| speaker.id == id)
+            .expect("listed")
+            .volume_fixed
+    }
+
+    // covers: C68
+    #[test]
+    fn a_fixed_volume_report_marks_only_that_speaker_fixed() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        assert!(!volume_fixed(&cast, KITCHEN), "unknown until reported");
+        let report = |control_type| HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.6,
+                control_type,
+                ..DeviceVolume::default()
+            }),
+        };
+        fake.report(report(ControlType::Fixed));
+        cast.poll();
+        assert!(volume_fixed(&cast, KITCHEN));
+        assert!(!volume_fixed(&cast, ATTIC));
+
+        fake.report(report(ControlType::Attenuation));
+        cast.poll();
+        assert!(!volume_fixed(&cast, KITCHEN));
     }
 }

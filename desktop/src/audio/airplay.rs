@@ -792,6 +792,11 @@ const VOLUME_TOLERANCE_DB: f64 = 0.5;
 /// and a remote press later can land that close too (S271).
 const VOLUME_SETTLE: Duration = Duration::from_secs(3);
 
+/// How long a slider that started editing holds its row with no move: a
+/// screen reader's set never sends the release (S271). It mirrors
+/// [`VOLUME_SETTLE`], a design value, not a measurement.
+const DRAG_IDLE: Duration = Duration::from_secs(3);
+
 /// The address a receiver announces first, AirPlay service before RAOP.
 fn first_address(device: &Device) -> Option<IpAddr> {
     device
@@ -813,9 +818,11 @@ const MAX_LISTED_PER_ADDRESS: usize = 64;
 struct VolumeRead {
     /// A read was asked since the volume was last set.
     reading: bool,
-    /// The row's slider is held, so a reading must not move it (S271).
+    /// The row's slider started editing and wasn't released; it holds the
+    /// row only while [`VolumeRead::held`] (S271).
     dragging: bool,
-    /// When the volume was last set: its own, the master or a calibration.
+    /// When the volume was last set (its own, the master or a calibration)
+    /// or the held slider last moved.
     set_at: Instant,
     /// It turned a read down, or its AirPlay 2 reads stopped (P184): it
     /// isn't asked again.
@@ -838,6 +845,19 @@ impl VolumeRead {
     /// The last set is recent enough for a reading near it to be its echo.
     fn recent(&self, now: Instant) -> bool {
         now.saturating_duration_since(self.set_at) < VOLUME_SETTLE
+    }
+
+    /// The slider is held, so a reading must not move the row: it started
+    /// editing and moved within [`DRAG_IDLE`] (S271).
+    fn held(&self, now: Instant) -> bool {
+        self.dragging && now.saturating_duration_since(self.set_at) < DRAG_IDLE
+    }
+
+    /// The held slider moved without a set, so its hold restarts.
+    fn moved(&mut self, now: Instant) {
+        if self.dragging {
+            self.set_at = now;
+        }
     }
 
     /// The volume was set: an answer to a read asked before is old.
@@ -958,6 +978,9 @@ struct PairingRun {
     /// When its PIN first showed (counts up), so the prompt stays with the
     /// Apple TV that asked first while another one asks too.
     shown_order: u64,
+    /// A stream ended while it ran: failing, it leaves the speaker needing a
+    /// PIN, since the click's PIN session went with that stream (S223).
+    outlived_stream: bool,
 }
 
 /// A password prompt waiting for the user.
@@ -972,6 +995,8 @@ struct PasswordAsk {
     /// The stereo pair or home theater group whose member asks: the
     /// password typed switches that target on.
     target: Option<String>,
+    /// For a pairing whose stream ended: as [`PairingRun::outlived_stream`].
+    outlived_stream: bool,
 }
 
 /// What the sender plays for one row: a speaker, or a stereo pair or home
@@ -1144,10 +1169,13 @@ pub struct AirPlaySpeakers {
     /// PIN pairing that stored nothing: paired until their session ends or
     /// they leave the sender (P182).
     paired_for_session: BTreeSet<String>,
-    /// The speakers a pairing the user started turned on this run: they
-    /// count as switched on by the user, so a lapsed session pairing
+    /// The speakers a pairing the user started turned on in this stream:
+    /// they count as switched on by the user, so a lapsed session pairing
     /// doesn't turn them off (S223).
     paired_by_user: BTreeSet<String>,
+    /// A stream that ran stopped since the last poll, which ends the PIN
+    /// sessions the user's clicks bought (S223).
+    stream_ended: bool,
     /// How the last AirPlay 1 attempt of a speaker ended when that moved it
     /// to AirPlay 2, as the sender keeps it while the speaker stays added.
     airplay1_outcome: BTreeMap<String, ErrorKind>,
@@ -1255,6 +1283,7 @@ impl AirPlaySpeakers {
             paired_in_attempt: BTreeSet::new(),
             paired_for_session: BTreeSet::new(),
             paired_by_user: BTreeSet::new(),
+            stream_ended: false,
             airplay1_outcome: BTreeMap::new(),
             session_paths: BTreeMap::new(),
             streaming: false,
@@ -1390,6 +1419,8 @@ impl AirPlaySpeakers {
             && self.added.is_empty()
             && self.pairings.is_empty()
             && self.password_asks.is_empty());
+        // Retry starts a new stream, so this one ends here.
+        self.every_time_stream_ended(events);
         self.listed.clear();
         self.added.clear();
         self.targets.clear();
@@ -1415,6 +1446,56 @@ impl AirPlaySpeakers {
         }
         self.mark_stopped(events);
         changed
+    }
+
+    /// A stream ended: the PIN session each click bought ends with it, so a
+    /// speaker asking for a code every time that is still on goes off with
+    /// the notice that it needs a PIN, and the next click asks again (S223).
+    /// One whose pairing or prompt is under way waits for it instead.
+    fn every_time_stream_ended(&mut self, events: &mut Vec<BackendEvent>) -> bool {
+        self.paired_by_user.clear();
+        // Stopped and started again before this ran: a failure now comes
+        // within the new stream.
+        if !self.streaming {
+            let outliving: Vec<String> = self
+                .pairings
+                .keys()
+                .chain(self.password_asks.keys())
+                .filter(|id| self.asks_every_time(id))
+                .cloned()
+                .collect();
+            for id in outliving {
+                self.mark_outlived_stream(&id, true);
+            }
+        }
+        let waiting = self.waiting_for_user();
+        let asking: Vec<String> = self
+            .settings
+            .iter()
+            .filter(|(id, settings)| {
+                settings.enabled && !waiting.contains(*id) && self.asks_every_time(id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &asking {
+            self.log.log(|| {
+                format!(
+                    "AirPlay speaker {} turned off: it asks for a code every time and its stream ended",
+                    self.label(id)
+                )
+            });
+            self.turn_off(id, AirPlayProblem::NeedsPin, events);
+        }
+        !asking.is_empty()
+    }
+
+    fn mark_outlived_stream(&mut self, id: &str, outlived: bool) {
+        if let Some(run) = self.pairings.get_mut(id) {
+            run.outlived_stream = outlived;
+        }
+        if let Some(ask) = self.password_asks.get_mut(id) {
+            ask.outlived_stream = ask.pair && outlived;
+        }
     }
 
     /// The sender's discovery couldn't start, so it lists nothing: reported
@@ -2139,6 +2220,7 @@ impl AirPlaySpeakers {
                 wrong_pin: false,
                 shown: false,
                 shown_order: 0,
+                outlived_stream: false,
             },
         );
         Ok(())
@@ -2352,11 +2434,11 @@ impl AirPlaySpeakers {
     /// Queues the speaker's password prompt; one already waiting keeps its
     /// place.
     fn queue_password_ask(&mut self, id: &str, wrong: bool, pair: bool, target: Option<&str>) {
-        let order = match self.password_asks.get(id) {
-            Some(ask) => ask.order,
+        let (order, outlived_stream) = match self.password_asks.get(id) {
+            Some(ask) => (ask.order, ask.outlived_stream),
             None => {
                 self.next_ask_order += 1;
-                self.next_ask_order
+                (self.next_ask_order, false)
             }
         };
         self.password_asks.insert(
@@ -2366,6 +2448,7 @@ impl AirPlaySpeakers {
                 order,
                 pair,
                 target: target.map(str::to_owned),
+                outlived_stream,
             },
         );
         self.log.log(|| {
@@ -2400,7 +2483,11 @@ impl AirPlaySpeakers {
                     self.label(id)
                 )
             });
-            return self.start_pairing(id).is_ok();
+            let started = self.start_pairing(id).is_ok();
+            if ask.outlived_stream {
+                self.mark_outlived_stream(id, true);
+            }
+            return started;
         }
         if let Some(target) = ask.target {
             self.log.log(|| {
@@ -2464,6 +2551,17 @@ impl AirPlaySpeakers {
         !askers.is_empty()
     }
 
+    /// The speakers whose pairing runs or whose password prompt waits, shown
+    /// or queued, with the target a member's prompt switches on.
+    pub fn waiting_for_user(&self) -> BTreeSet<String> {
+        let mut waiting: BTreeSet<String> = self.pairings.keys().cloned().collect();
+        for (id, ask) in &self.password_asks {
+            waiting.insert(id.clone());
+            waiting.extend(ask.target.clone());
+        }
+        waiting
+    }
+
     /// The password prompt to show: the oldest one waiting, while no PIN
     /// prompt is open, so one dialog asks at a time.
     pub fn password_prompt(&self) -> Option<AirPlayPasswordPrompt> {
@@ -2516,6 +2614,10 @@ impl AirPlaySpeakers {
     pub fn move_row(&mut self, id: &str, row: f64) {
         let (zone, master) = (self.zone(id), self.master);
         let Some(moved) = row_move(row, zone, master) else {
+            // Nothing is sent, but the move still keeps the slider's hold.
+            if let Some(added) = self.added.get_mut(id) {
+                added.read.moved(Instant::now());
+            }
             return;
         };
         let entry = self.entry(id);
@@ -2555,6 +2657,9 @@ impl AirPlaySpeakers {
         if let Some(added) = self.added.get_mut(id) {
             added.read.dragging = dragging;
             added.read.reading = false;
+            if dragging {
+                added.read.set_at = Instant::now();
+            }
         }
     }
 
@@ -2826,7 +2931,7 @@ impl AirPlaySpeakers {
             return own;
         };
         own.level = self.device_level_of(row);
-        own.dragging = added.read.dragging;
+        own.dragging = added.read.held(now);
         if let Command::DeviceVolume(db) = command {
             // The level the speaker has, the held one with k at 0 (S290).
             let has = match self.calibration_solo.as_deref() {
@@ -2901,7 +3006,7 @@ impl AirPlaySpeakers {
         let Some(added) = self.added.get_mut(&row) else {
             return false;
         };
-        if !added.read.answered() || added.read.dragging || solo {
+        if !added.read.answered() || added.read.held(Instant::now()) || solo {
             return false;
         }
         if !added.read.echo.set_on_speaker(db) {
@@ -3015,6 +3120,18 @@ impl AirPlaySpeakers {
         if !streaming {
             let step = self.pause.clear();
             self.apply_pause(step, "streaming stopped");
+            self.stream_ended |= self.streaming;
+        } else if !self.streaming {
+            // A pairing that fails from now on fails within this stream (S223).
+            let ids: Vec<String> = self
+                .pairings
+                .keys()
+                .chain(self.password_asks.keys())
+                .cloned()
+                .collect();
+            for id in ids {
+                self.mark_outlived_stream(&id, false);
+            }
         }
         self.streaming = streaming;
         self.reconcile();
@@ -3373,6 +3490,9 @@ impl AirPlaySpeakers {
         if let Some(file) = self.store_kept_aside.take() {
             events.push(BackendEvent::PairingsKeptAside { file });
         }
+        if std::mem::take(&mut self.stream_ended) {
+            changed |= self.every_time_stream_ended(&mut events);
+        }
         changed |= self.turn_off_uninvited(&mut events);
         if changed {
             events.insert(0, BackendEvent::AirPlayChanged);
@@ -3482,22 +3602,30 @@ impl AirPlaySpeakers {
                     ErrorKind::PasswordRequired | ErrorKind::WrongPassword
                 ) =>
             {
-                if self.pairings.remove(id).is_none() {
+                let Some(run) = self.pairings.remove(id) else {
                     return false;
-                }
+                };
                 let wrong = self.passwords.remove(id).is_some()
                     || matches!(error.kind, ErrorKind::WrongPassword);
                 self.queue_password_ask(id, wrong, true, None);
+                if run.outlived_stream {
+                    self.mark_outlived_stream(id, true);
+                }
                 true
             }
             PairingEvent::Failed { .. } => {
-                if self.pairings.remove(id).is_none() {
+                let Some(run) = self.pairings.remove(id) else {
                     return false;
-                }
+                };
                 self.off_after_pairing(id);
+                let problem = if run.outlived_stream {
+                    AirPlayProblem::NeedsPin
+                } else {
+                    AirPlayProblem::PairingFailed
+                };
                 events.push(BackendEvent::AirPlayFailed {
                     id: id.to_owned(),
-                    problem: AirPlayProblem::PairingFailed,
+                    problem,
                 });
                 true
             }
@@ -5467,6 +5595,34 @@ pub mod tests {
         assert_eq!(
             airplay.speakers()[0].availability,
             AirPlayAvailability::NeedsPin
+        );
+    }
+
+    // covers: S223
+    #[test]
+    fn an_every_time_pairing_failing_after_a_stop_and_start_before_a_poll_says_pairing_failed() {
+        let tv = airplay2_every_time_tv(9, "Den");
+        let id = id_of(&tv);
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        airplay.set_streaming(true);
+        pin_shown(&fake, &mut airplay, &tv);
+
+        // The poll that takes in the ended stream runs once the new one has
+        // started.
+        airplay.set_streaming(false);
+        airplay.set_streaming(true);
+        airplay.poll();
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(&tv, pairing_failed(ErrorKind::PairingFailed, false));
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayFailed {
+                id: id.clone(),
+                problem: AirPlayProblem::PairingFailed,
+            }),
+            "it failed within the new stream: {events:?}"
         );
     }
 
@@ -7839,6 +7995,7 @@ pub mod tests {
         assert_eq!(pause_calls(&fake), [Call::Resume]);
     }
 
+    // covers: S292
     #[test]
     fn the_debug_log_names_what_resumed_a_pause() {
         let path = crate::debug_log::test_dir("airplay-resume-cause").join("log.txt");
@@ -7885,6 +8042,54 @@ pub mod tests {
         assert_eq!(pause_calls(&fake), [], "the app shows paused");
         read(&mut airplay, spotify(true), at + STALE_READING * 2);
         assert_eq!(pause_calls(&fake), [Call::Resume]);
+    }
+
+    // covers: S292
+    #[test]
+    fn the_debug_log_names_a_button_remote_capture_or_stop_resume() {
+        let path = crate::debug_log::test_dir("airplay-resume-causes").join("log.txt");
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, _) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_debug_log(DebugLog::new(Some(path.clone())));
+        let t0 = Instant::now();
+        read(&mut airplay, spotify(true), t0);
+        airplay.play_pause_pressed("Spotify.exe", true, t0);
+        airplay.play_pause_pressed("Spotify.exe", false, t0);
+
+        remote(&fake, &kitchen, RemoteCommand::Pause);
+        airplay.poll();
+        read(&mut airplay, spotify(false), t0);
+        remote(&fake, &kitchen, RemoteCommand::Play);
+        airplay.poll();
+
+        read(&mut airplay, spotify(true), t0);
+        airplay.play_pause_pressed("Spotify.exe", true, t0);
+        airplay.capture_started();
+
+        airplay.play_pause_pressed("Spotify.exe", true, t0);
+        airplay.set_streaming(false);
+        assert_eq!(
+            pause_calls(&fake),
+            (0..4)
+                .flat_map(|_| [Call::Pause, Call::Resume])
+                .collect::<Vec<_>>(),
+            "every pause resumed"
+        );
+        assert!(airplay.log.flush(crate::debug_log::TEST_FLUSH));
+        let causes: Vec<String> = crate::debug_log::read_messages(&path)
+            .into_iter()
+            .filter(|message| message.contains("resumed after a pause"))
+            .collect();
+        let expected = [
+            "(app button)",
+            "(speaker remote)",
+            "(new capture)",
+            "(streaming stopped)",
+        ];
+        assert_eq!(causes.len(), expected.len(), "{causes:?}");
+        for (line, cause) in causes.iter().zip(expected) {
+            assert!(line.ends_with(cause), "{causes:?}");
+        }
     }
 
     // covers: P213
@@ -8036,6 +8241,58 @@ pub mod tests {
         report_volume(&fake, &kitchen, -9.0);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
         assert_eq!(airplay.speakers()[0].volume, 70.0);
+    }
+
+    // covers: S271, S291
+    #[test]
+    fn a_slider_set_with_no_release_stops_holding_the_row_once_idle() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        // A screen reader sets the value: the slider starts editing but
+        // never sees a release.
+        airplay.set_volume_dragging(&id, true);
+        airplay.move_row(&id, 30.0);
+        fake.take_calls();
+        settle(&mut airplay, &id);
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -21.0);
+        assert!(airplay.poll().is_empty(), "the echo of the level sent");
+        // The television's remote then moves it to −24 dB: level 20.
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -24.0);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(airplay.speakers()[0].volume, 20.0);
+    }
+
+    // covers: S271
+    #[test]
+    fn a_slider_that_keeps_moving_past_the_idle_time_keeps_holding_the_row() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_volume_dragging(&id, true);
+        settle(&mut airplay, &id);
+        airplay.move_row(&id, 30.0);
+        fake.take_calls();
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -9.0);
+        assert!(airplay.poll().is_empty());
+        assert_eq!(airplay.speakers()[0].volume, 30.0);
+    }
+
+    // covers: S271, S290
+    #[test]
+    fn a_slider_moved_at_master_0_keeps_holding_the_row() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_master(0.0);
+        airplay.set_volume_dragging(&id, true);
+        settle(&mut airplay, &id);
+        // With k at 0 the move sends nothing, but the slider still moved.
+        airplay.move_row(&id, 40.0);
+        fake.take_calls();
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -9.0);
+        assert!(airplay.poll().is_empty());
     }
 
     // covers: S250, S290, S291
@@ -8190,7 +8447,7 @@ pub mod tests {
         row_level(info.device_level)
     }
 
-    // covers: S289, S290
+    // covers: S290
     #[test]
     fn the_row_shows_the_device_level_rounded_down() {
         let fake = FakeAirPlay::new();

@@ -5,4 +5,3 @@
 
 # Timing: hardware.
 C74 Latency of seconds: hardware, G7.
-C75 Growing latency: hardware, G7 (partly done: drops and rebuffers are counted, C79).

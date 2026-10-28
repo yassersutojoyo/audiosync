@@ -7,7 +7,7 @@
 
 mod common;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,6 +15,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::ap2::{StreamKey, Timing};
+use audiosync_airplay::audio::Frame;
 use audiosync_airplay::clock::{NTP_ORIGIN_SECONDS, SenderClock};
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
@@ -27,6 +28,7 @@ use audiosync_airplay::sender::{
     Sender, SenderConfig, SpeakerEvent, SpeakerOptions, SpeakerState, TimingMemory,
 };
 use audiosync_airplay::stream::{Ap2Audio, PacketKind, SpeakerConfig, StreamEvent};
+use audiosync_airplay::targets::{Member, Target, TargetId, TargetKind};
 use audiosync_airplay::volume::Volume;
 
 use common::ap2::{
@@ -854,6 +856,83 @@ fn ap2_audio_reaches_the_receiver() {
     assert_ne!(second, shk);
     assert_eq!(open_packet(&second, &again).expect("opens").counter, 0);
     assert!(open_packet(&shk, &again).is_none());
+    sender.shutdown();
+}
+
+/// Each frame a member's sealed ALAC packets carry, by the host frame it
+/// came from, asserted to run on by one within every packet.
+fn member_frames(key: &[u8; 32], datagrams: &[Datagram]) -> BTreeMap<u64, Frame> {
+    let mut frames = BTreeMap::new();
+    for (_, _, bytes) in datagrams {
+        let opened = open_packet(key, bytes).expect("the member's own key opens it");
+        let decoded = decode(Codec::Alac, &opened.payload);
+        let numbered: Vec<(u64, Frame)> = decoded
+            .iter()
+            .filter_map(|frame| Some((host_frame_of(*frame)?, *frame)))
+            .collect();
+        assert!(
+            numbered.windows(2).all(|pair| pair[1].0 == pair[0].0 + 1),
+            "a frame that is not the host's stereo frame"
+        );
+        frames.extend(numbered);
+    }
+    frames
+}
+
+// covers: P178
+#[test]
+fn ap2_a_pair_sends_every_member_the_same_full_stereo_audio() {
+    let _serial = serial();
+    let (udp_a, udp_b) = (Udp::bind(), Udp::bind());
+    let a = Ap2Server::start(udp_a.fake(FakeAp2::new()));
+    let b = Ap2Server::start(udp_b.fake(FakeAp2::new()));
+    let clock = SenderClock::new(Instant::now());
+    let (sender, _host) = start(clock, free_ptp_ports(), udp_a.ptp_ports());
+    let mut events = Events::default();
+    let (da, db) = (device(&a, 71, "0x0,0x10040"), device(&b, 72, "0x0,0x10040"));
+    let member = |device: &Device, name: &str| Member {
+        key: device.key.clone(),
+        name: name.to_owned(),
+        device: Some(Box::new(device.clone())),
+    };
+    let target = Target {
+        id: TargetId {
+            kind: TargetKind::StereoPair,
+            key: "a1b2c3d4".to_owned(),
+        },
+        name: "Kitchen".to_owned(),
+        members: vec![member(&da, "Left"), member(&db, "Right")],
+        leader: Some(da.key.clone()),
+        control: None,
+        expected_members: Some(2),
+        partner_unreachable: false,
+    };
+    sender.add_target(target, options(), |_, _| {});
+    for key in [&da.key, &db.key] {
+        assert!(
+            playing(&mut events, &sender, key, 1),
+            "{:?}",
+            events.of(key)
+        );
+    }
+
+    let heard_a = udp_a.data.after(Duration::from_millis(1_500));
+    let heard_b = udp_b.data.take();
+    let shk_a = stream_key(&a.fake()).expect("shk");
+    let shk_b = stream_key(&b.fake()).expect("shk");
+    assert_ne!(shk_a, shk_b, "every member keeps its own key");
+    let (frames_a, frames_b) = (
+        member_frames(&shk_a, &heard_a),
+        member_frames(&shk_b, &heard_b),
+    );
+    let mut shared = 0;
+    for (frame, samples) in &frames_a {
+        if let Some(other) = frames_b.get(frame) {
+            assert_eq!(samples, other, "host frame {frame}");
+            shared += 1;
+        }
+    }
+    assert!(shared > 10_000, "{shared}");
     sender.shutdown();
 }
 

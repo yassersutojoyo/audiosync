@@ -164,6 +164,7 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] going to sleep")
             guard let self else { return }
             self.macAsleep = true
+            self.engine.macWillSleep()
             self.endNativePinSessions(.sleep, streaming: self.engine.isRunning)
         }
         center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -179,6 +180,7 @@ extension AppDelegate {
     private func wokeFromSleep() {
         DebugTrace.log("[AudioSync] woke from sleep")
         macAsleep = false
+        engine.macWoke()
         reconcileAirPlaySpeakers()
         // Devices may have come or gone during the sleep. Its model update
         // also arms again what fell due meanwhile (`scheduleDueReconcile`).

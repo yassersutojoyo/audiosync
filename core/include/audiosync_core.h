@@ -244,6 +244,7 @@ extern "C" {
 #define ASC_CAST_EVENT_FAILED 16           /* the sender stopped working (a bug); destroy it, create a new one; .detail where a panic was, or "" */
 #define ASC_CAST_EVENT_MEMBERS 17          /* the playing group's members changed: asc_cast_member_count, asc_cast_member */
 #define ASC_CAST_EVENT_GROUP_LOG 18        /* a line about a Cast group for the debug log in .detail */
+#define ASC_CAST_EVENT_CERTIFICATE_CHANGED 19 /* the device's certificate changed since its last connect: "<before> to <after>" in .detail, for the debug log */
 
 /* How a Cast attempt ended (AscCastEvent.reason). */
 #define ASC_CAST_END_STOPPED 1     /* the sender's own teardown */
@@ -263,6 +264,7 @@ extern "C" {
 #define ASC_CAST_ERROR_VOLUME 8       /* the device was not ready, or has no volume step */
 #define ASC_CAST_ERROR_ARTWORK 9      /* artwork that is not PNG or JPEG, or over 1280 by 720 */
 #define ASC_CAST_ERROR_GROUP 10       /* no longer reported: a Cast group plays like a device */
+#define ASC_CAST_ERROR_INTERNAL 11    /* a fault inside the sender; the next start runs (C107) */
 
 /* A Cast stream's format (AscCastEvent.format). */
 #define ASC_CAST_FORMAT_WAV 1
@@ -824,6 +826,35 @@ void asc_renderer_set_bluetooth(AscRenderer *renderer, bool bluetooth);
 /* Any thread: what the start lead adds for a Bluetooth device, in capture
    frames (S230); 0 for any other device or a NULL handle. */
 int64_t asc_renderer_extra_lead_frames(const AscRenderer *renderer);
+
+/* Any thread: the start lead the renderer published for the session lead
+   (S208), in capture-rate frames, into *frames; false, leaving it alone,
+   before it published one or for a NULL handle. */
+bool asc_renderer_start_lead_frames(const AscRenderer *renderer, int64_t *frames);
+
+/*
+ * A renderer's start lead kept counting in its ring's session lead after the
+ * renderer is gone, for an output whose device went away while it stays
+ * switched on (S328). asc_held_lead_set_hold_back_frames runs on any thread
+ * and is a lock-free atomic operation.
+ */
+typedef struct AscHeldLead AscHeldLead;
+
+/* How long a switched-on output whose device left the list still counts toward the other outputs' timing (S328). */
+#define ASC_BRIEF_LOSS_HOLD_MS 10000
+
+/*
+ * Control thread: keeps `renderer`'s published start lead counting at its
+ * current hold-back; the renderer may then be destroyed. NULL for a NULL
+ * handle, a renderer that published no lead yet, or no slot free.
+ */
+AscHeldLead *asc_renderer_hold_lead(const AscRenderer *renderer);
+
+/* Any thread: the hold-back now counted for the lost output, in capture-rate frames (negative counts as 0). */
+void asc_held_lead_set_hold_back_frames(AscHeldLead *held, int64_t frames);
+
+/* Ends a held lead: it no longer counts. */
+void asc_held_lead_destroy(AscHeldLead *held);
 
 /*
  * Control thread, after asc_renderer_set_bluetooth: the output latency the
@@ -2104,6 +2135,13 @@ bool asc_cast_add_device(AscCast *cast, const char *address);
  * browse found stays listed under its id.
  */
 bool asc_cast_remove_device(AscCast *cast, const char *id);
+
+/*
+ * Names the device the user selected, by its ID, or none with a NULL or empty
+ * id, whether or not it plays: the list's cap of 128 devices never drops it
+ * (C108). Returns false for a NULL or dead handle, or an ID that doesn't read.
+ */
+bool asc_cast_set_selected(AscCast *cast, const char *id);
 
 /*
  * Takes the next device change, if one is waiting, into *device and returns

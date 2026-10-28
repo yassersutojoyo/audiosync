@@ -32,11 +32,13 @@ pub const REARM_FRAMES: u64 = 44_100;
 /// leading silence and after a receiver's start-up flush, set the anchor.
 pub const ANCHOR_WINDOW_FRAMES: u64 = 3 * 44_100;
 
-/// One `--rx` value: `host:port[,ap1|ap2][,delay=<ms>]`.
+/// One `--rx` value: `host:port[,ap1|ap2|both][,delay=<ms>]`. `both` offers
+/// the AirPlay 1 and AirPlay 2 services together and leaves `path` as is.
 #[derive(Debug, PartialEq)]
 pub struct RxSpec {
     pub host_port: String,
     pub path: ProtocolPath,
+    pub both: bool,
     pub delay: Duration,
 }
 
@@ -49,12 +51,14 @@ pub fn parse_rx_spec(text: &str) -> Result<RxSpec, String> {
     let mut spec = RxSpec {
         host_port,
         path: ProtocolPath::AirPlay2,
+        both: false,
         delay: Duration::ZERO,
     };
     for part in parts {
         match part {
             "ap1" => spec.path = ProtocolPath::AirPlay1,
             "ap2" => spec.path = ProtocolPath::AirPlay2,
+            "both" => spec.both = true,
             _ => {
                 let Some(value) = part.strip_prefix("delay=") else {
                     return Err(format!("unknown option '{part}' in --rx {text}"));
@@ -259,8 +263,10 @@ pub fn trace_field<T: std::str::FromStr>(line: &str, name: &str) -> Option<T> {
 
 /// One RTP numbering of a speaker, from its first packet after RECORD or a
 /// flush: the syncs that went out and the clicks' onsets, as RTP timestamps.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Numbering {
+    /// Its first packet on the stream's timeline and that packet's RTP timestamp.
+    start: (u64, u32),
     syncs: Vec<(u32, f64)>,
     clicks: Vec<u32>,
     /// The frame after the last sounding packet.
@@ -281,7 +287,14 @@ impl WireLog {
         let kind = line.split(' ').next().unwrap_or_default();
         if kind == "first_sound" {
             self.first_packet = trace_field(line, "packet").zip(trace_field(line, "rtptime"));
-            self.numberings.push(Numbering::default());
+            if let Some(start) = self.first_packet {
+                self.numberings.push(Numbering {
+                    start,
+                    syncs: Vec::new(),
+                    clicks: Vec::new(),
+                    sound_end: None,
+                });
+            }
             return;
         }
         let Some(numbering) = self.numberings.last_mut() else {
@@ -317,18 +330,80 @@ impl WireLog {
         self.numberings.iter().map(|n| n.syncs.len()).sum()
     }
 
-    /// Each click's onset RTP timestamp and the play time the syncs of its
-    /// numbering state for it.
-    pub fn clicks(&self) -> Vec<(u32, Option<f64>)> {
+    /// Each click's frame, onset RTP timestamp and the play time the syncs
+    /// of its numbering state for it.
+    pub fn clicks(&self) -> Vec<WireClick> {
         self.numberings
             .iter()
             .flat_map(|n| {
-                n.clicks
-                    .iter()
-                    .map(|&rtp| (rtp, stated_play(&n.syncs, rtp)))
+                let (packet, rtptime) = n.start;
+                n.clicks.iter().map(move |&rtp| WireClick {
+                    frame: packet * PACKET_FRAMES + u64::from(rtp.wrapping_sub(rtptime)),
+                    rtp,
+                    play: stated_play(&n.syncs, rtp),
+                })
             })
             .collect()
     }
+}
+
+/// A click one speaker's traces show on the wire.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WireClick {
+    /// Its onset on the stream's timeline: the same frame on every speaker,
+    /// whatever their RTP numberings.
+    pub frame: u64,
+    pub rtp: u32,
+    pub play: Option<f64>,
+}
+
+/// One click position and what each speaker traced there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClickPair {
+    pub frame: u64,
+    pub reference: Option<WireClick>,
+    pub other: Option<WireClick>,
+}
+
+impl ClickPair {
+    /// How much later the other speaker was told to play the click.
+    pub fn diff(&self) -> Option<f64> {
+        Some(self.other?.play? - self.reference?.play?)
+    }
+}
+
+/// Pairs two speakers' clicks by frame, so a click one of them lost or an
+/// extra one stays a position of its own instead of shifting the rest.
+pub fn pair_clicks(reference: &[WireClick], other: &[WireClick]) -> Vec<ClickPair> {
+    let mut all: Vec<(bool, WireClick)> = reference
+        .iter()
+        .map(|&click| (false, click))
+        .chain(other.iter().map(|&click| (true, click)))
+        .collect();
+    all.sort_by_key(|(_, click)| click.frame);
+    let mut pairs: Vec<ClickPair> = Vec::new();
+    for (is_other, click) in all {
+        let slot = pairs
+            .last_mut()
+            .filter(|pair| click.frame - pair.frame < REARM_FRAMES / 2)
+            .map(|pair| {
+                if is_other {
+                    &mut pair.other
+                } else {
+                    &mut pair.reference
+                }
+            })
+            .filter(|slot| slot.is_none());
+        match slot {
+            Some(slot) => *slot = Some(click),
+            None => pairs.push(ClickPair {
+                frame: click.frame,
+                reference: (!is_other).then_some(click),
+                other: is_other.then_some(click),
+            }),
+        }
+    }
+    pairs
 }
 
 /// P102 on the two streams: the k-th onset of each is the k-th click; their

@@ -412,19 +412,21 @@ enum RemoteDevicesFile {
     /// The core forgets a device after this long without a request.
     static let idleLimit: TimeInterval = 90 * 24 * 60 * 60
 
-    /// The devices the core would load at `now`: the newest 8, less those idle
-    /// for 90 days. The core starts empty from a file it can't read, so such a
-    /// file counts as none; one without a "seen" list counts every device as seen now.
+    /// The devices the core would load at `now`: the newest 8 whose hash reads,
+    /// less those idle for 90 days. A file the core can't read counts as none. A
+    /// time not written as a whole number counts its device as seen now, and so
+    /// does a "seen" list that is missing or of another length for every device.
     static func count(_ data: Data?, now: Date = Date()) -> Int {
         guard let data, let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let version = object["version"] as? NSNumber, !isBool(version),
-              version.doubleValue == 1, let devices = object["devices"] as? [Any],
-              devices.allSatisfy({ ($0 as? String).map(isHash) ?? false }) else { return 0 }
-        guard let listed = object["seen"] else { return min(devices.count, maxDevices) }
-        guard let seen = listed as? [Any], seen.count == devices.count else { return 0 }
-        let times = seen.compactMap(unixSeconds)
-        guard times.count == seen.count else { return 0 }
-        let cutoff = now.timeIntervalSince1970 - idleLimit
+              let version = integer(object["version"]), version.int64Value == 1,
+              let devices = object["devices"] as? [Any] else { return 0 }
+        let seen = (object["seen"] as? [Any]).flatMap { $0.count == devices.count ? $0 : nil }
+        let nowSeconds = now.timeIntervalSince1970
+        let times = devices.indices.compactMap { index -> Double? in
+            guard (devices[index] as? String).map(isHash) ?? false else { return nil }
+            return seen.flatMap { unixSeconds($0[index]) } ?? nowSeconds
+        }
+        let cutoff = nowSeconds - idleLimit
         return times.suffix(maxDevices).filter { $0 > cutoff }.count
     }
 
@@ -432,11 +434,18 @@ enum RemoteDevicesFile {
 
     private static func isBool(_ number: NSNumber) -> Bool { CFGetTypeID(number) == CFBooleanGetTypeID() }
 
-    /// A whole number of seconds that fits the core's u64, or nil as the core would reject it.
+    /// A number written as a JSON integer, as the core's serde_json `as_u64` wants:
+    /// 1.0 and 1e9 parse as floats there and don't read.
+    private static func integer(_ value: Any?) -> NSNumber? {
+        guard let number = value as? NSNumber, !isBool(number),
+              "cCsSiIlLqQ".utf8.contains(UInt8(bitPattern: number.objCType.pointee)) else { return nil }
+        return number
+    }
+
+    /// Past Int64 the core reads a time ahead of now; counting it as seen now gives the same count.
     private static func unixSeconds(_ value: Any) -> Double? {
-        guard let number = value as? NSNumber, !isBool(number) else { return nil }
-        let seconds = number.doubleValue
-        return seconds >= 0 && seconds == seconds.rounded() && seconds < 0x1p64 ? seconds : nil
+        guard let number = integer(value), number.int64Value >= 0 else { return nil }
+        return Double(number.int64Value)
     }
 
     /// The core empties its list before the save that failed, so the count reads 0 then;

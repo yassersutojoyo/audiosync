@@ -21,6 +21,7 @@ use crate::channel::{Channel, Event, STOP_STEP_TIMEOUT};
 use crate::discovery::{CastDevice, DeviceId, DeviceKind};
 use crate::error::{ConnectError, EndReason, LaunchError};
 use crate::framing::{FrameReader, encode_frame};
+use crate::group::MultizoneMessage;
 use crate::ids::RequestIds;
 use crate::media::{LoadRequest, MediaError, VolumeError};
 use crate::status::{AppSession, ReceiverStatus};
@@ -35,8 +36,11 @@ const READ_SLICE: Duration = Duration::from_millis(50);
 /// How often a TLS handshake waiting on the device looks again.
 const HANDSHAKE_POLL: Duration = Duration::from_millis(5);
 /// Events kept for a host that doesn't poll: beyond this, the oldest
-/// status and drop reports go first; launch results and the end are kept.
+/// status and drop reports go first, then group messages and stall reports
+/// (C110); launch and load results and the end are kept.
 pub const MAX_EVENTS: usize = 64;
+/// The most addresses one connect tries (C109).
+pub const MAX_CONNECT_ADDRESSES: usize = 8;
 /// The longest teardown at host quit (C88).
 pub const QUIT_BUDGET: Duration = Duration::from_secs(3);
 
@@ -244,8 +248,9 @@ impl CastClient {
         self.flush();
     }
 
-    /// Tries each address in turn (IPv4 first, C16) and returns once the
-    /// first `RECEIVER_STATUS` arrived (C33).
+    /// Tries each address in turn (IPv4 first, C16), at most
+    /// [`MAX_CONNECT_ADDRESSES`] of them (C109), and returns once the first
+    /// `RECEIVER_STATUS` arrived (C33).
     pub fn connect(addresses: &[SocketAddr], ids: RequestIds) -> Result<CastClient, ConnectError> {
         CastClient::connect_while(addresses, ids, &AtomicBool::new(true))
     }
@@ -258,8 +263,15 @@ impl CastClient {
         ids: RequestIds,
         selected: &AtomicBool,
     ) -> Result<CastClient, ConnectError> {
-        let mut ordered = addresses.to_vec();
+        let mut ordered: Vec<SocketAddr> = Vec::new();
+        for &address in addresses {
+            if !ordered.contains(&address) {
+                ordered.push(address);
+            }
+        }
         ordered.sort_by_key(SocketAddr::is_ipv6);
+        // Each address may take a TCP and a TLS timeout of its own (C109).
+        ordered.truncate(MAX_CONNECT_ADDRESSES);
         // The first error is the one reported: it belongs to the preferred
         // address, usually IPv4.
         let mut first = None;
@@ -513,7 +525,7 @@ impl CastClient {
     }
 
     /// The next event the channel reported. A host that doesn't poll loses
-    /// the oldest status and drop reports beyond [`MAX_EVENTS`].
+    /// the oldest droppable reports beyond [`MAX_EVENTS`] (C110).
     pub fn poll_event(&mut self) -> Option<Event> {
         self.events.pop_front().map(|(_, event)| event)
     }
@@ -580,19 +592,8 @@ impl CastClient {
             if let Event::Ended(reason) = &event {
                 self.ended.get_or_insert_with(|| reason.clone());
             }
-            self.events.push_back((self.next_event, event));
+            queue_event(&mut self.events, (self.next_event, event));
             self.next_event += 1;
-            if self.events.len() > MAX_EVENTS {
-                let routine = self.events.iter().position(|(_, event)| {
-                    matches!(
-                        event,
-                        Event::Status(_) | Event::Dropped(_) | Event::MediaStatus(_)
-                    )
-                });
-                if let Some(index) = routine {
-                    self.events.remove(index);
-                }
-            }
         }
     }
 
@@ -637,11 +638,155 @@ impl CastClient {
     }
 }
 
+/// Queues an event for the owner, keeping the queue to [`MAX_EVENTS`]
+/// whatever the kinds in it (C110).
+fn queue_event(events: &mut VecDeque<(u64, Event)>, event: (u64, Event)) {
+    events.push_back(event);
+    if events.len() <= MAX_EVENTS {
+        return;
+    }
+    let routine = events.iter().position(|(_, event)| {
+        matches!(
+            event,
+            Event::Status(_)
+                | Event::Dropped(_)
+                | Event::MediaStatus(_)
+                | Event::Multizone(MultizoneMessage::Other(_))
+        )
+    });
+    let oldest = routine.or_else(|| moot_membership(events)).or_else(|| {
+        events.iter().position(|(_, event)| {
+            matches!(
+                event,
+                Event::Rebuffering | Event::Resumed | Event::Multizone(_)
+            )
+        })
+    });
+    if let Some(index) = oldest {
+        events.remove(index);
+    }
+}
+
+/// The oldest multizone membership message a later one makes moot: a later
+/// `MULTIZONE_STATUS` replaces the whole list, and a later message about the
+/// same member replaces what this one said about it.
+fn moot_membership(events: &VecDeque<(u64, Event)>) -> Option<usize> {
+    let last_status = events
+        .iter()
+        .rposition(|(_, event)| matches!(event, Event::Multizone(MultizoneMessage::Status(_))));
+    if let Some(last) = last_status {
+        let before = events.iter().take(last).position(|(_, event)| {
+            matches!(
+                event,
+                Event::Multizone(
+                    MultizoneMessage::Status(_)
+                        | MultizoneMessage::Upsert(_)
+                        | MultizoneMessage::Removed(_)
+                )
+            )
+        });
+        if before.is_some() {
+            return before;
+        }
+    }
+    // Parsed once: the scan compares every pair.
+    let named: Vec<Option<MemberName<'_>>> = events
+        .iter()
+        .map(|(_, event)| MemberName::of(event))
+        .collect();
+    named.iter().enumerate().find_map(|(index, member)| {
+        let member = member.as_ref()?;
+        named[index + 1..]
+            .iter()
+            .flatten()
+            .any(|later| member.same(later))
+            .then_some(index)
+    })
+}
+
+/// The `deviceId` a `DEVICE_ADDED`, `DEVICE_UPDATED` or `DEVICE_REMOVED`
+/// names.
+struct MemberName<'a> {
+    text: &'a str,
+    id: Option<DeviceId>,
+}
+
+impl<'a> MemberName<'a> {
+    fn of(event: &'a Event) -> Option<MemberName<'a>> {
+        let text = match event {
+            Event::Multizone(MultizoneMessage::Upsert(member)) => &member.device_id,
+            Event::Multizone(MultizoneMessage::Removed(device_id)) => device_id,
+            _ => return None,
+        };
+        Some(MemberName {
+            text,
+            id: DeviceId::parse(text),
+        })
+    }
+
+    /// Compared as [`GroupMember::is`] does (C95).
+    ///
+    /// [`GroupMember::is`]: crate::group::GroupMember::is
+    fn same(&self, other: &MemberName<'_>) -> bool {
+        match (self.id, other.id) {
+            (Some(mine), Some(theirs)) => mine == theirs,
+            _ => self.text.eq_ignore_ascii_case(other.text),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::group::GroupMember;
     use std::net::{Shutdown, TcpListener};
     use std::thread;
+
+    fn upsert(device_id: &str) -> Event {
+        Event::Multizone(MultizoneMessage::Upsert(GroupMember {
+            device_id: device_id.to_owned(),
+            id: None,
+            name: None,
+        }))
+    }
+
+    fn names(event: &Event, device_id: &str) -> bool {
+        matches!(event, Event::Multizone(MultizoneMessage::Upsert(member)) if member.device_id == device_id)
+    }
+
+    // covers: C110
+    #[test]
+    fn the_event_queue_stays_at_its_cap_whatever_the_kind() {
+        let mut events = VecDeque::new();
+        queue_event(
+            &mut events,
+            (
+                0,
+                Event::Loaded {
+                    media_session_id: 1,
+                },
+            ),
+        );
+        queue_event(&mut events, (1, upsert("kitchen")));
+        for n in 0..1000 {
+            let member = if n % 2 == 0 { "attic" } else { "hall" };
+            queue_event(&mut events, (n + 2, upsert(member)));
+        }
+        assert!(events.len() <= MAX_EVENTS, "{} queued", events.len());
+        assert!(matches!(events[0].1, Event::Loaded { .. }));
+        assert!(events.iter().any(|(_, event)| names(event, "kitchen")));
+        assert!(events.iter().any(|(_, event)| names(event, "attic")));
+        let (last, newest) = events.back().expect("queued");
+        assert_eq!(*last, 1001);
+        assert!(names(newest, "hall"));
+
+        let mut events = VecDeque::new();
+        for n in 0..1000 {
+            queue_event(&mut events, (n, upsert(&format!("member {n}"))));
+        }
+        assert!(events.len() <= MAX_EVENTS, "{} queued", events.len());
+        assert_eq!(events.back().map(|(n, _)| *n), Some(999));
+    }
 
     const SLICE: Duration = Duration::from_millis(20);
 
@@ -732,5 +877,51 @@ mod tests {
         }
         let took = started.elapsed();
         assert!(took < limit * 2, "the write took {took:?}");
+    }
+
+    // covers: C109
+    #[test]
+    fn a_connect_tries_at_most_eight_addresses() {
+        let listeners: Vec<TcpListener> = (0..40)
+            .map(|_| TcpListener::bind("127.0.0.1:0").expect("listener"))
+            .collect();
+        let mut addresses: Vec<SocketAddr> = listeners
+            .iter()
+            .map(|listener| listener.local_addr().expect("address"))
+            .collect();
+        addresses.insert(1, addresses[0]);
+        let done = Arc::new(AtomicBool::new(false));
+        let stop = Arc::clone(&done);
+        // Each connection is closed unanswered, so its TLS handshake fails
+        // at once.
+        let device = thread::spawn(move || {
+            let mut accepted = vec![0usize; listeners.len()];
+            for listener in &listeners {
+                listener.set_nonblocking(true).expect("non-blocking");
+            }
+            while !stop.load(Ordering::SeqCst) {
+                for (count, listener) in accepted.iter_mut().zip(&listeners) {
+                    if let Ok((tcp, _)) = listener.accept() {
+                        *count += 1;
+                        drop(tcp);
+                    }
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            accepted
+        });
+        let result = CastClient::connect(&addresses, RequestIds::random());
+        done.store(true, Ordering::SeqCst);
+        let accepted = device.join().expect("device");
+        assert!(result.is_err());
+        assert_eq!(
+            accepted[..MAX_CONNECT_ADDRESSES],
+            [1; MAX_CONNECT_ADDRESSES]
+        );
+        assert!(
+            accepted[MAX_CONNECT_ADDRESSES..]
+                .iter()
+                .all(|&count| count == 0)
+        );
     }
 }

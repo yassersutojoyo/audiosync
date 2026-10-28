@@ -1782,6 +1782,8 @@ pub struct MockBackend {
     /// Each play-pause of the now-playing card: its app and whether it
     /// showed playing.
     pub play_pauses: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
+    /// Each AirPlay delay applied, as asked.
+    pub airplay_delays: std::rc::Rc<std::cell::RefCell<Vec<f64>>>,
     /// The speaker that asks for its password once it is turned on.
     password_on: Option<String>,
 }
@@ -1953,6 +1955,7 @@ impl MockBackend {
             presets: Vec::new(),
             preset_notice: None,
             play_pauses: std::rc::Rc::default(),
+            airplay_delays: std::rc::Rc::default(),
             password_on: None,
         }
     }
@@ -2374,6 +2377,7 @@ impl Backend for MockBackend {
     }
 
     fn set_airplay_delay(&mut self, ms: f64) {
+        self.airplay_delays.borrow_mut().push(ms);
         if !ms.is_nan() && self.state.airplay_delay_ms.is_some() {
             self.state.airplay_delay_ms = Some(ms.clamp(0.0, MAX_DELAY_MS).round());
         }

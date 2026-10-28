@@ -535,6 +535,20 @@ do {
     stored.values[Keys.zones] = Data("not json".utf8)
     check(store.load().zones.isEmpty && stored.values[Keys.zonesMigrated] as? Bool == true,
           "zones: unreadable zones read as none and never migrate again")
+    // covers: S245 (a stored volume is clamped to 0 to 100; one that isn't a number starts at 100, for that zone only)
+    stored.values[Keys.zones] = Data(#"""
+        [{"id":"z1","name":"Kitchen","members":["lc:a",7,"ap:b"],"volume":"loud","memberNames":{"lc:a":"Desk","ap:b":5}},
+         {"id":"z2","name":"Den","members":["lc:c"],"volume":null},
+         {"id":"z3","members":[]},
+         "junk",
+         {"id":"z4","name":"Fine","members":[],"volume":40}]
+        """#.utf8)
+    let oneBadZone = store.load().zones
+    check(oneBadZone == [SpeakerZone(id: "z1", name: "Kitchen", members: ["lc:a", "ap:b"], volume: 100,
+                                     memberNames: ["lc:a": "Desk"]),
+                         SpeakerZone(id: "z2", name: "Den", members: ["lc:c"], volume: 100),
+                         SpeakerZone(id: "z4", name: "Fine", members: [], volume: 40)],
+          "zones: a stored value that can't be read loses only that value, or its zone, never the others", "\(oneBadZone)")
 
     let unnamed = [SpeakerZone(id: "z1", name: "Kitchen", members: ["ap:native:X", "lc:blank"], volume: 80),
                    SpeakerZone(id: "z2", name: "Den", members: [], volume: 100)]
@@ -627,6 +641,25 @@ do {
                                                  gains: [0.5, 12, -12, 0, 0, 0, 0, 0, 0, 0])],
           "presets: stored presets keep one Cast key, one preset per ID, levels within range (an AirPlay own volume may pass 100)",
           "\(store.load().presets)")
+
+    // covers: S251 (an own volume that isn't a number is none, a master that isn't one is 100, a preset without ten gains is dropped alone)
+    stored.values[Keys.presets] = Data(#"""
+        [{"id":"p1","name":"Bad levels","members":[{"key":"lc:a","volume":"loud"},{"key":7,"volume":5},{"key":"lc:b","volume":40}],
+          "zones":[{"id":"z1","volume":"half"},{"id":"z2","volume":30}],"master":null,"gains":[0,0,0,0,0,0,0,0,0,0]},
+         {"id":"p2","name":"No gains","members":[],"zones":[],"master":50},
+         {"id":"p3","name":"Bad gain","members":[],"zones":[],"master":50,"gains":[0,0,0,0,"x",0,0,0,0,0]},
+         "junk",
+         {"id":"p4","name":"Fine","members":[{"key":"lc:c","volume":null}],"zones":[],"master":60,"gains":[0,0,0,0,0,0,0,0,0,0]}]
+        """#.utf8)
+    let oneBad = store.load().presets
+    check(oneBad == [SpeakerPreset(id: "p1", name: "Bad levels",
+                                   members: [.init(key: "lc:a", volume: nil), .init(key: "lc:b", volume: 40)],
+                                   zones: [.init(id: "z1", volume: 100), .init(id: "z2", volume: 30)], master: 100, gains: flat),
+                     SpeakerPreset(id: "p4", name: "Fine", members: [.init(key: "lc:c", volume: nil)], zones: [],
+                                   master: 60, gains: flat)],
+          "presets: a stored value that can't be read loses only that value, or its preset, never the others", "\(oneBad)")
+    stored.values[Keys.presets] = Data(#"{"id":"p1"}"#.utf8)
+    check(store.load().presets.isEmpty, "presets: stored presets that aren't a list read as none")
 }
 
 // MARK: Output devices — virtual ones hidden unless asked for or chosen
@@ -1404,6 +1437,45 @@ do {
               "\(String(describing: host.volumes.hints)), writes: \(host.access.writes.count)")
     }
 
+    // covers: S193
+    do {
+        let access = FakeAccess()
+        // Settable main controls win over the channels, whatever those say.
+        access.set(80, .volume, 0.8)
+        access.set(80, .volume, channel: 1, 0.1)
+        access.set(80, .volume, channel: 2, 0.2)
+        access.set(80, .mute, 0)
+        access.set(80, .mute, channel: 1, 1)
+        access.set(80, .mute, channel: 2, 1)
+        // A main volume that can't be set counts as absent; only channel 1 has
+        // a mute, so its mute alone decides.
+        access.set(81, .volume, 0.8, settable: false)
+        access.set(81, .volume, channel: 1, 0.3)
+        access.set(81, .volume, channel: 2, 0.5)
+        access.set(81, .mute, channel: 1, 1)
+        // A stereo list naming the main element and a channel twice reads each channel once.
+        access.stereo[82] = [main, 2, 2, 5]
+        access.set(82, .volume, channel: 1, 0.9)
+        access.set(82, .volume, channel: 2, 0.2)
+        access.set(82, .volume, channel: 5, 0.6)
+        let mainFirst = DeviceVolumeControls.find(on: 80, access)
+        let fallback = DeviceVolumeControls.find(on: 81, access)
+        let named = DeviceVolumeControls.find(on: 82, access)
+        let mainReading = mainFirst.read(80, access)
+        let fallbackReading = fallback.read(81, access)
+        let namedReading = named.read(82, access)
+        func near(_ value: Double?, _ expected: Double) -> Bool { value.map { abs($0 - expected) < 1e-9 } ?? false }
+        check(mainFirst == DeviceVolumeControls(volume: [main], mute: [main])
+                && near(mainReading.volume, 0.8) && mainReading.muted == false
+                && fallback == DeviceVolumeControls(volume: [1, 2], mute: [1])
+                && near(fallbackReading.volume, 0.4) && fallbackReading.muted == true
+                && named == DeviceVolumeControls(volume: [2, 5], mute: [])
+                && near(namedReading.volume, 0.4) && namedReading.muted == nil,
+              "device volume: the main element's settable control wins, else the mean of the preferred stereo channels",
+              "main \(mainFirst.logText) \(mainReading.logText); fallback \(fallback.logText) \(fallbackReading.logText); "
+                + "named \(named.logText) \(namedReading.logText)")
+    }
+
     do {
         let listed = [AudioDevices.Device(id: builtIn, name: speakers, uid: uid, transport: kAudioDeviceTransportTypeBuiltIn),
                       AudioDevices.Device(id: 52, name: "USB DAC", uid: "usb", transport: kAudioDeviceTransportTypeUSB)]
@@ -1669,6 +1741,120 @@ do {
                                       reportsPlaying: step.isMultiple(of: 2), position: step < 7 ? nil : paused))
     }
     check(verdicts.allSatisfy { $0 == .waiting }, "capture: silent zeros with nothing live → waiting")
+}
+
+// MARK: Capture watch: a capture that stops calling back is opened again, the capture only
+// covers: S335 (the 2 s span while Now Playing reads the source playing, the service restart and a quiet source, through the main queue's 0.5 s ticks)
+do {
+    // Callbacks at 0 and 0.5 s, then none while the source plays: 2 s after the last one the capture counts as stopped.
+    var watch = CaptureFlowWatch()
+    var steps: [CaptureFlowWatch.Step] = []
+    for (uptime, count) in [(100.0, 4 as UInt64), (100.5, 9), (101, 9), (101.5, 9), (102, 9), (102.5, 9)] {
+        steps.append(watch.tick(callbacks: count, reading: true, playingReadAt: uptime, at: uptime))
+    }
+    let stall = steps.dropLast().allSatisfy { $0 == .none } && steps.last == .stopped(.noCallback(2))
+
+    // A service restart stops a capture that flows, at once.
+    var restarted = CaptureFlowWatch()
+    _ = restarted.tick(callbacks: 3, reading: true, playingReadAt: nil, at: 10)
+    let atOnce = restarted.report(.serviceRestarted, at: 10.2) == .stopped(.serviceRestarted)
+
+    // A tap stops calling back when its source goes quiet: with Now Playing showing
+    // no play, or unable to read it, that is never a stop; nor is a tap that never called back.
+    var quietened = CaptureFlowWatch()
+    var never = CaptureFlowWatch()
+    var quietSteps: [CaptureFlowWatch.Step] = []
+    for tick in 0..<40 {
+        let uptime = 50 + 0.5 * Double(tick)
+        quietSteps.append(quietened.tick(callbacks: UInt64(min(tick, 4) * 47), reading: true, playingReadAt: nil, at: uptime))
+        quietSteps.append(never.tick(callbacks: 0, reading: true, playingReadAt: uptime, at: uptime))
+    }
+    let quiet = quietSteps.allSatisfy { $0 == .none }
+    check(stall && atOnce && quiet,
+          "capture watch: no callback for 2 s after the first asks for a capture reopen, a service restart asks at once, a quiet source never does",
+          "\(steps) \(atOnce) \(quiet)")
+}
+// covers: S335 (D3: a Mac sitting counted 0 capture callbacks with Spotify paused)
+do {
+    // Spotify plays until 3 s, then pauses; Now Playing reads it every 2 s, so it
+    // still shows playing until its reading at 4 s.
+    func playingReadAt(_ uptime: Double) -> Double? {
+        let readAt = (uptime / 2).rounded(.down) * 2
+        return readAt < 3 ? readAt : nil
+    }
+    var watch = CaptureFlowWatch()
+    var steps: [CaptureFlowWatch.Step] = []
+    for tick in 0...120 {
+        let uptime = 0.5 * Double(tick)
+        steps.append(watch.tick(callbacks: UInt64(min(tick, 6) * 10), reading: true, playingReadAt: playingReadAt(uptime),
+                                at: uptime))
+    }
+    // A service restart while paused: the reopened tap calls back nothing, and its try is kept all the same.
+    var restarted = CaptureFlowWatch()
+    _ = restarted.tick(callbacks: 10, reading: true, playingReadAt: nil, at: 0)
+    var afterRestart = [restarted.report(.serviceRestarted, at: 0)]
+    for tick in 1...120 {
+        afterRestart.append(restarted.tick(callbacks: 0, reading: true, playingReadAt: nil, at: 0.5 * Double(tick)))
+    }
+    check(steps.allSatisfy { $0 == .none }
+            && afterRestart.filter { $0 != .none } == [.stopped(.serviceRestarted), .tryOpen(1), .kept(1)],
+          "capture watch: a tap that stops calling back while the source is paused never ends the session",
+          "\(steps.filter { $0 != .none }) \(afterRestart.filter { $0 != .none })")
+}
+// covers: S335 (5 tries 1 s apart, a try kept after 5 s, the last failed try stops the session)
+do {
+    var watch = CaptureFlowWatch()
+    _ = watch.tick(callbacks: 1, reading: true, playingReadAt: 0, at: 0)
+    let stop = watch.report(.aggregateDied, at: 0.5)
+    let early = watch.tick(callbacks: nil, reading: false, playingReadAt: 1, at: 1)
+    let first = watch.tick(callbacks: nil, reading: false, playingReadAt: 1.5, at: 1.5)
+    // The reopened capture's counter starts again at 0.
+    var trial: [CaptureFlowWatch.Step] = []
+    for tick in 1...10 {
+        let uptime = 1.5 + 0.5 * Double(tick)
+        trial.append(watch.tick(callbacks: UInt64(tick * 10), reading: true, playingReadAt: uptime, at: uptime))
+    }
+    check(stop == .stopped(.aggregateDied) && early == .none && first == .tryOpen(1)
+            && trial.dropLast().allSatisfy { $0 == .none } && trial.last == .kept(1),
+          "capture watch: the first try comes 1 s after the stop and is kept once it delivered for 5 s",
+          "\(stop) \(early) \(first) \(trial)")
+    let again = watch.tick(callbacks: 100, reading: true, playingReadAt: 8.5, at: 8.5)
+    check(again == .stopped(.noCallback(2)), "capture watch: a kept capture is watched on until the session ends", "\(again)")
+
+    // Every try fails while the source plays: two that can't open, three that open and never call back.
+    var failing = CaptureFlowWatch()
+    _ = failing.tick(callbacks: 1, reading: true, playingReadAt: 0, at: 0)
+    var seen = [failing.report(.serviceRestarted, at: 0)]
+    var now = 0.0
+    while now < 60, seen.last != .giveUp {
+        now += 0.5
+        let step = failing.tick(callbacks: 0, reading: true, playingReadAt: now, at: now)
+        seen.append(step)
+        if case .tryOpen(let n) = step, n <= 2 { seen.append(failing.failed(at: now)) }
+    }
+    let tries = seen.compactMap { step -> Int? in if case .tryOpen(let n) = step { return n } else { return nil } }
+    check(tries == [1, 2, 3, 4, 5] && seen.last == .giveUp && seen.filter({ $0 == .giveUp }).count == 1,
+          "capture watch: 5 tries, then the session stops as S21 says", "\(seen)")
+
+    // A stop the host is told of while the capture is already closed asks for nothing more.
+    var closed = CaptureFlowWatch()
+    _ = closed.tick(callbacks: 1, reading: true, playingReadAt: nil, at: 0)
+    _ = closed.report(.aggregateDied, at: 0)
+    check(closed.report(.serviceRestarted, at: 0.2) == .none,
+          "capture watch: a second stop while the capture is closed changes nothing")
+
+    // An app tap waiting for an audio process has no IOProc by design.
+    var waiting = CaptureFlowWatch()
+    _ = waiting.tick(callbacks: 5, reading: true, playingReadAt: 0, at: 0)
+    let idle = (1...20).map { waiting.tick(callbacks: 5, reading: false, playingReadAt: 0.5 * Double($0), at: 0.5 * Double($0)) }
+    check(idle.allSatisfy { $0 == .none }, "capture watch: an app tap waiting for an audio process is never a stop")
+
+    check(CaptureFlowWatch.retries(after: .aggregateDeviceFailed(kAudioHardwareBadDeviceError))
+            && CaptureFlowWatch.retries(after: .tapNotCreated(kAudioHardwareNotRunningError))
+            && !CaptureFlowWatch.retries(after: .appNotRunning("com.example.player"))
+            && !CaptureFlowWatch.retries(after: .inputNotFound("input"))
+            && !CaptureFlowWatch.retries(after: .inputHandsFree("input")),
+          "capture watch: an app that quit or an input device that left ends the tries at once")
 }
 
 // MARK: Calibration fill: a quiet tap still carries the test signal (CalibrationTap.swift)
@@ -1981,6 +2167,13 @@ do {
           "app tap: the app gone means the source is lost")
     check(AppTapFollow.candidates([9, 3, 9, 42], own: 42) == [3, 9] && AppTapFollow.candidates([3], own: nil) == [3],
           "app tap: AudioSync's own process is never tapped, even when the app launched it")
+
+    // covers: S13 (every tap mutes what it taps and is private to AudioSync)
+    let tapSetup = CATapDescription(stereoMixdownOfProcesses: [])
+    SourceCapture.configureTap(tapSetup)
+    check(tapSetup.muteBehavior == .muted && tapSetup.isPrivate,
+          "app tap: every tap mutes the app it taps, and only AudioSync sees it",
+          "mute \(tapSetup.muteBehavior.rawValue), private \(tapSetup.isPrivate)")
 
     // covers: S13 (a retap keeps the app muted throughout)
     // Moving the tap to new processes: the steps it takes, in order. "old"
@@ -4510,6 +4703,43 @@ do {
           "track info wiring: a sender start before Now Playing's first reading schedules one look, sends nothing")
 }
 
+// MARK: Track info call sites: AppDelegate hands a Now Playing change and a sender start to TrackInfoHost
+do {
+    // AppDelegate needs AppKit's whole app to build, so the suite reads its source for the two calls the
+    // checks above drive through the recorder.
+    // A commented-out call must not count as the call.
+    func read(_ path: String) -> String {
+        let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        return text.components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+    }
+    func count(_ text: String, _ needle: String) -> Int { text.components(separatedBy: needle).count - 1 }
+    func body(_ text: String, after marker: String, until end: String = "\n    }\n") -> String {
+        text.components(separatedBy: marker).dropFirst().first?.components(separatedBy: end).first ?? ""
+    }
+    let names = ((try? FileManager.default.contentsOfDirectory(atPath: "Sources/AudioSync")) ?? [])
+        .filter { $0.hasPrefix("AppDelegate") && $0.hasSuffix(".swift") }
+    let app = names.sorted().map { read("Sources/AudioSync/" + $0) }.joined(separator: "\n")
+    let windows = read("Sources/AudioSync/AppDelegate+Windows.swift")
+    let native = read("Sources/AudioSync/AppDelegate+NativeAirPlay.swift")
+
+    let setUp = body(windows, after: "func setUpMenuBar() {")
+    check(count(setUp, "nowPlaying.onChange = { [weak self] track in self?.nowPlayingChanged(track) }") == 1
+            && count(app, "nowPlaying.onChange =") == 1,
+          "track info call site: Now Playing's change callback runs nowPlayingChanged, set once at setup",
+          "setUpMenuBar \(setUp.isEmpty ? "not found" : "found"), \(count(app, "nowPlaying.onChange =")) assignments")
+    let started = body(body(native, after: "func nativeStartFinished("), after: "if started {",
+                       until: "\n        } else")
+    check(count(started, "resendTrackInfo()") == 1,
+          "track info call site: a native sender that started gets the track info again through resendTrackInfo",
+          started.isEmpty ? "the started branch of nativeStartFinished not found" : "no resendTrackInfo() in it")
+    check(!app.isEmpty && count(app, "extension AppDelegate: TrackInfoHost") == 1
+            && count(app, "func nowPlayingChanged(") == 0 && count(app, "func resendTrackInfo(") == 0
+            && count(app, "func sendTrackInfo(") == 0,
+          "track info call site: AppDelegate takes the tested TrackInfoHost wiring and shadows none of it")
+}
+
 // MARK: Track info — Spotify paused, read as empty every 2 s for 11 minutes, never sends the fallback
 do {
     let spotify = NowPlayingMonitor.spotify
@@ -5084,6 +5314,26 @@ do {
     let midStep = PanelRest.next(rest, stepRunning: true, window: shifted, content: CGSize(width: 280, height: 428))
     check(midStep == rest && PanelRest.next(nil, stepRunning: true, window: shifted, content: CGSize(width: 280, height: 359)) == afresh,
           "menu bar panel: while a resize runs, a fold aims from the rest frame, not the half-grown window")
+    // The icon moved since the open (its badge widened it, or an item beside it changed width).
+    let unfoldedSize = CGSize(width: 280, height: 428), restSize = CGSize(width: 280, height: 359)
+    var centered = PanelRest(frame: window, content: restSize, icon: window.midX)
+    let reanchored = centered.move(to: unfoldedSize, icon: window.midX - 2)
+    check(reanchored.midX == window.midX - 2 && reanchored.maxY == window.maxY && reanchored.size == grown.size,
+          "menu bar panel: a resize ends where the popover re-anchors on the icon, so learning the size never shifts it sideways",
+          "\(reanchored)")
+    check(centered.move(to: restSize, icon: window.midX - 2) == window.offsetBy(dx: -2, dy: 0),
+          "menu bar panel: the next resize aims from the re-anchored frame")
+    var edgeHeld = PanelRest(frame: window, content: restSize, icon: window.midX + 60)
+    check(edgeHeld.move(to: unfoldedSize, icon: window.midX + 58).minX == window.minX,
+          "menu bar panel: a panel the screen edge holds off the icon's middle stays where it is")
+    var leftHeld = PanelRest(frame: window, content: restSize, icon: window.midX - 60)
+    check(edgeHeld.move(to: restSize, icon: window.midX - 10).midX == window.midX - 10
+            && leftHeld.move(to: unfoldedSize, icon: window.midX + 10).midX == window.midX + 10,
+          "menu bar panel: once the icon moves in from the screen edge, a resize centers the panel on it again",
+          "\(edgeHeld.frame) \(leftHeld.frame)")
+    check(PanelRest.next(nil, stepRunning: false, window: shifted, content: restSize, icon: 900)
+            == PanelRest(frame: shifted, content: restSize, icon: 900),
+          "menu bar panel: a resize with no step running aims from the icon where it is now")
     let closeAsked = PopoverCloseRequest.answer
     check(closeAsked(false, true, 30, nil) == .closeOurWay && closeAsked(true, true, 30, nil) == .allow,
           "menu bar panel: an open panel the popover wants closed shrinks away its own way")
@@ -5329,6 +5579,15 @@ do {
           "settings: unreadable groups, IDs or appearance fall back to the defaults; an AirPlay own volume above 100 stays (S290)")
     stored.values = [Keys.master: 130]
     check(store.load().master == 100, "settings: a master above 100 is clamped")
+    // covers: S212 (unreadable groups fall back to their defaults, one group or member at a time)
+    stored.values = [Keys.groups: Data(#"""
+        [{"id":"g1","name":"A","members":["lc:a",7]},{"id":"g2","members":["lc:b"]},"junk",{"id":"g3","name":"C","members":["lc:c"]}]
+        """#.utf8)]
+    let oneBadGroup = store.load().groups
+    check(oneBadGroup == [SpeakerGroup(id: "g1", name: "A", members: ["lc:a"]),
+                          SpeakerGroup(id: "g3", name: "C", members: ["lc:c"])],
+          "settings: a stored group value that can't be read loses only that member, or its group, never the others",
+          "\(oneBadGroup)")
 
     stored.values = [Keys.legacyLocalGains: ["a": 3.49, "b": 150.0, "c": Double.nan] as [String: Any],
                      Keys.legacyDelayMs: 1500.0]
@@ -5443,6 +5702,58 @@ do {
     check(LocalDelay.retimes(applied: withBT, holdBacks: holds([r, usb, bt], offsets: edited)) == [r: 300, usb: 450],
           "local delay: editing the lowest offset re-times the others",
           "\(LocalDelay.retimes(applied: withBT, holdBacks: holds([r, usb, bt], offsets: edited)))")
+
+    // covers: S328 (a speaker whose device leaves the list for a moment)
+    let on: Set<String> = [r, usb, bt]
+    func flapped(at lostAt: Double = 5) -> LocalBriefLoss {
+        var flap = LocalBriefLoss()
+        flap.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
+        flap.noteListing([r, usb], enabled: on, reference: r, now: lostAt)
+        return flap
+    }
+    var flap = flapped()
+    let duringLoss = holds([r, usb] + flap.held.sorted())
+    let runningOthers = withBT.filter { $0.key != bt }
+    flap.noteListing([r, usb, bt], enabled: on, reference: r, now: 6)
+    check(duringLoss == withBT && LocalDelay.retimes(applied: runningOthers, holdBacks: duringLoss).isEmpty
+            && flap.held.isEmpty && LocalDelay.retimes(applied: runningOthers, holdBacks: holds([r, usb, bt])).isEmpty,
+          "local delay: an output lost for one poll keeps the others' hold-backs", "\(duringLoss)")
+    flap = flapped()
+    let early = flap.expire(now: 14.9), nextEnd = flap.nextExpiry
+    let ended = flap.expire(now: 15), again = flap.expire(now: 16)
+    let afterLoss = holds([r, usb] + flap.held.sorted())
+    check(LocalBriefLoss.holdSeconds == 10 && !early && nextEnd == 15 && ended && !again && flap.nextExpiry == nil
+            && LocalDelay.retimes(applied: runningOthers, holdBacks: afterLoss) == [r: 0, usb: 150],
+          "local delay: an output still lost after 10 s re-times the others once", "\(afterLoss)")
+    flap = flapped()
+    let offHeld = flap.switchedOff(bt), offListed = flap.switchedOff(usb)
+    check(offHeld && !offListed && flap.held.isEmpty,
+          "local delay: a lost output switched off re-times the others at once")
+    flap = flapped()
+    flap.restart()
+    var lostReference = LocalBriefLoss()
+    lostReference.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
+    lostReference.noteListing([usb, bt], enabled: on, reference: nil, now: 5)
+    var offFirst = LocalBriefLoss()
+    offFirst.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
+    offFirst.noteListing([r, usb], enabled: [r, usb], reference: r, now: 5)
+    check(flap.held.isEmpty && lostReference.held.isEmpty && offFirst.held.isEmpty && flapped().held == [bt],
+          "local delay: a session restart, a lost reference or a speaker already off holds nothing")
+    flap = flapped()
+    flap.followSwitches(from: on, to: [r, usb])
+    flap.followSwitches(from: [r, usb], to: on)
+    flap.noteListing([r, usb], enabled: on, reference: r, now: 6)
+    check(flap.held.isEmpty,
+          "local delay: a lost output switched off and on again within 10 s while still missing isn't held again",
+          "\(flap.held)")
+    let lostBT = flapped()
+    func keeps(listed: Bool, published: Bool, now: Double = 8) -> Bool {
+        lostBT.keepsLead(of: bt, lostAt: 5, now: now, listed: listed, enabled: true, isReference: false,
+                         publishedAgain: published)
+    }
+    check(keeps(listed: false, published: false) && keeps(listed: true, published: false)
+            && !keeps(listed: true, published: true) && !keeps(listed: false, published: false, now: 15),
+          "local delay: a lost output's start lead counts until its new renderer publishes one, 10 s at most")
 
     // covers: S178, S181 (the AirPlay delay field)
     var native = AirPlayDelay(adjustmentMs: 250)
@@ -6169,6 +6480,7 @@ do {
 }
 
 // MARK: Status line: what capture and each output counted since the previous 5 s line (SessionTally, S229)
+// covers: S334 (each output's frames over the span)
 do {
     typealias Out = SessionTally.Output
     var numbers: [String: Int] = [:]
@@ -6183,9 +6495,9 @@ do {
     let bt = tokens.byUID["BT-AA:BB"] ?? 0
     let builtInBefore = tokens.byUID["Built-in"] ?? 0
     let old = SessionTally(capture: CaptureCounts(callbacks: 1_000, frames: 512_000, silentCallbacks: 4),
-                           outputs: ["BT-AA:BB": Out(number: 1, attach: bt, starvedRenders: 2, starvedFrames: 900, driftSkips: 1,
+                           outputs: ["BT-AA:BB": Out(number: 1, attach: bt, frames: 100_000, starvedRenders: 2, starvedFrames: 900, driftSkips: 1,
                                                      driftSilences: 4, lateCallbacks: 7, overloads: 1),
-                                     "Built-in": Out(number: 2, attach: builtInBefore, starvedRenders: 5, starvedFrames: 2_000,
+                                     "Built-in": Out(number: 2, attach: builtInBefore, frames: 900_000, starvedRenders: 5, starvedFrames: 2_000,
                                                      lateCallbacks: 3, overloads: 0)])
     // Built-in is detached and attached again within one tick (a replug), and its new renderer counts
     // past the old totals; USB joins.
@@ -6195,30 +6507,193 @@ do {
     check(builtInAfter != builtInBefore && tokens.byUID["BT-AA:BB"] == bt,
           "status line: a re-attach gets a new token, the other outputs keep theirs", "\(tokens.byUID)")
     let new = SessionTally(capture: CaptureCounts(callbacks: 1_500, frames: 752_000, silentCallbacks: 4),
-                           outputs: ["BT-AA:BB": Out(number: 1, attach: bt, starvedRenders: 3, starvedFrames: 1_412, driftSkips: 3,
+                           outputs: ["BT-AA:BB": Out(number: 1, attach: bt, frames: 340_000, starvedRenders: 3, starvedFrames: 1_412, driftSkips: 3,
                                                      driftSilences: 4, lateCallbacks: 7, overloads: 2),
-                                     "Built-in": Out(number: 2, attach: builtInAfter, starvedRenders: 7, starvedFrames: 3_360,
+                                     "Built-in": Out(number: 2, attach: builtInAfter, frames: 48_000, starvedRenders: 7, starvedFrames: 3_360,
                                                      driftSkips: 1, driftSilences: 2, lateCallbacks: 0, overloads: 0),
                                      "USB": Out(number: 3, attach: tokens.byUID["USB"] ?? 0, starvedRenders: 0, starvedFrames: 0,
                                                 lateCallbacks: 1, overloads: 0)])
     let line = SessionTally.statusText(since: old, now: new, seconds: 5.0)
     check(line == "status over 5.0 s: capture 240000 frames (48000 frames/s), 500 callbacks, 0 without usable channels"
-              + "; output 1: starved 1 (512 frames), drift skips 2, drift silences 0, late callbacks 0, IO overloads 1"
-              + "; output 2: starved 7 (3360 frames), drift skips 1, drift silences 2, late callbacks 0, IO overloads 0"
-              + "; output 3: starved 0 (0 frames), drift skips 0, drift silences 0, late callbacks 1, IO overloads 0",
-          "status line: deltas since the last line; a re-attached output's counts are all new, a new output counts from 0",
+              + "; output 1: 240000 frames, starved 1 (512 frames), drift skips 2, drift silences 0, late callbacks 0, IO overloads 1"
+              + "; output 2: 48000 frames, starved 7 (3360 frames), drift skips 1, drift silences 2, late callbacks 0, IO overloads 0"
+              + "; output 3: 0 frames, starved 0 (0 frames), drift skips 0, drift silences 0, late callbacks 1, IO overloads 0",
+          "status line: deltas since the last line, frames rendered per output; a re-attached output's counts are all new, a new output counts from 0",
           line)
     check(!line.contains("BT-AA") && !line.contains("Built-in") && !line.contains("USB"),
           "status line: outputs are numbered, never named", line)
     // BT-AA:BB left: the others keep their numbers in the line.
     let later = SessionTally(capture: new.capture, outputs: ["Built-in": new.outputs["Built-in"]!, "USB": new.outputs["USB"]!])
     let next = SessionTally.statusText(since: new, now: later, seconds: 5.0)
-    check(next.contains("; output 2: starved 0") && next.contains("; output 3: starved 0") && !next.contains("output 1"),
+    check(next.contains("; output 2: 0 frames, starved 0") && next.contains("; output 3: 0 frames, starved 0") && !next.contains("output 1"),
           "status line: an output leaving keeps the others' numbers", next)
     let idle = SessionTally.statusText(since: new, now: SessionTally(capture: new.capture), seconds: 0)
     check(idle == "status over 0.0 s: capture 0 frames (0 frames/s), 0 callbacks, 0 without usable channels"
               + "; no local outputs",
           "status line: no time passed gives a rate of 0, and no outputs say so", idle)
+}
+
+// MARK: Output stall: a render callback that stops while its device stays alive (OutputStall.swift, S334)
+// covers: S334 (frames against the uptime clock, per output; the reopen, its retries and the debug line)
+do {
+    typealias R = OutputStallWatch.Reading
+    var watch = OutputStallWatch()
+    var seen: [String: Double] = [:]   // uptime of each output's stall
+    // A plays, then its frames stop at 12.0; B keeps taking frames; C never took one (a link still coming up).
+    var a: Int64 = 0
+    var b: Int64 = 0
+    for tick in 0...8 {
+        let now = 10.0 + 0.5 * Double(tick)
+        if tick > 0 && now <= 12.0 { a += 512 }
+        if tick > 0 { b += 512 }
+        for stall in watch.check(["A": R(attach: 1, frames: a), "B": R(attach: 2, frames: b), "C": R(attach: 3, frames: 0)],
+                                 nowS: now) {
+            seen[stall.uid] = now
+        }
+    }
+    // D takes frames while the uptime clock sticks; E stops while it sticks (the Mac asleep), then wakes.
+    var sticky = OutputStallWatch()
+    var stuck: [OutputStallWatch.Stall] = []
+    var d: Int64 = 0
+    for _ in 0..<20 {
+        d += 512
+        stuck += sticky.check(["D": R(attach: 1, frames: d), "E": R(attach: 2, frames: 4_096)], nowS: 20.0)
+    }
+    let awake = sticky.check(["D": R(attach: 1, frames: d + 512), "E": R(attach: 2, frames: 4_096)], nowS: 21.5)
+    let late = sticky.check(["D": R(attach: 1, frames: d + 1_024), "E": R(attach: 2, frames: 4_096)], nowS: 22.0)
+    check(seen == ["A": 14.0] && stuck.isEmpty,
+          "output stall: frames that stop for 2 s after the first stall the output, a clock that sticks while they move never does",
+          "stalls \(seen), with the clock stuck \(stuck)")
+    check(awake.isEmpty && late == [OutputStallWatch.Stall(uid: "E", quietS: 2.0)],
+          "output stall: the 2 s count only uptime, so a sleep never counts toward them", "\(awake) \(late)")
+    var again = OutputStallWatch()
+    _ = again.check(["A": R(attach: 1, frames: 9_000)], nowS: 0)
+    let reattached = again.check(["A": R(attach: 2, frames: 0)], nowS: 3)
+    let fresh = again.check(["A": R(attach: 2, frames: 0)], nowS: 6)
+    check(reattached.isEmpty && fresh.isEmpty,
+          "output stall: a re-attached output is watched from its new renderer, not before it takes frames",
+          "\(reattached) \(fresh)")
+
+    let hog = OutputStallSign.read(hogOwner: 812, ownPID: 100, running: true)
+    check(hog == .hogMode(pid: 812) && OutputStallSign.read(hogOwner: -1, ownPID: 100, running: false) == .deviceNotRunning
+            && OutputStallSign.read(hogOwner: 100, ownPID: 100, running: true) == OutputStallSign.none
+            && OutputStallSign.read(hogOwner: nil, ownPID: 100, running: nil) == OutputStallSign.none,
+          "output stall: the sign is another process's hog mode with its PID, a device no longer running, or none")
+    let line = OutputStallSign.line(number: 2, quietS: 2.0, sign: hog)
+    check(line == "output 2 stalled: no frame for 2.0 s, another process (PID 812) holds its device in hog mode"
+            && OutputStallSign.line(number: 1, quietS: 2.5, sign: .none) == "output 1 stalled: no frame for 2.5 s, no sign",
+          "output stall: one debug line names the output's number, how long it stalled and the sign", line)
+    check(OutputLoss.stalled(quietS: 2, sign: .none).reason == "stalled" && OutputLoss.deviceGone.reason == "device lost",
+          "output stall: the stop line tells a stall from a lost device")
+
+    var retry = OutputStallRetry()
+    let first = retry.stalled("A", nowS: 100)
+    let notHeld = retry.held(nowS: 100)
+    retry.started("A", nowS: 100.5)
+    let second = retry.stalled("A", nowS: 103)
+    let heldWhile = retry.held(nowS: 112.9)
+    let heldAfter = retry.held(nowS: 113.1)
+    let refusedAt = retry.refused("A", nowS: 113.1)
+    let stillTracked = retry.tracked
+    retry.started("A", nowS: 123.2)
+    let afterPlaying = retry.stalled("A", nowS: 130)
+    check(first == .reopenNow && notHeld.isEmpty && second == .retry(atS: 113) && heldWhile == ["A"] && heldAfter.isEmpty
+            && refusedAt.map({ approx($0, 123.1, 1e-9) }) == true && stillTracked == ["A"] && afterPlaying == .reopenNow,
+          "output stall: a first stall reopens at once; a second within 5 s of play, or a refused start, retries every 10 s",
+          "\(first) \(second) \(heldWhile) \(String(describing: refusedAt)) \(afterPlaying)")
+    var other = OutputStallRetry()
+    let unstalled = other.refused("B", nowS: 5)
+    _ = other.stalled("B", nowS: 10)
+    other.started("B", nowS: 10.5)
+    other.settle(enabled: ["B"], nowS: 15.4)
+    let playing = other.tracked
+    other.settle(enabled: ["B"], nowS: 15.6)
+    let settled = other.tracked
+    _ = other.stalled("C", nowS: 20)
+    other.settle(enabled: ["B"], nowS: 20.1)
+    check(unstalled == nil && playing == ["B"] && settled.isEmpty && other.tracked.isEmpty,
+          "output stall: a refused start that followed no stall is switched off as before; 5 s of play or a switch-off ends a stall",
+          "\(String(describing: unstalled)) \(playing) \(settled) \(other.tracked)")
+}
+// covers: S334, S335 (a Mac sitting on 2026-10-28: both watches fired between the will-sleep notice and the sleep)
+do {
+    typealias R = OutputStallWatch.Reading
+    var outputs = OutputStallWatch()
+    var capture = CaptureFlowWatch()
+    var frames: Int64 = 0
+    var stalls: [Double] = []
+    var steps: [CaptureFlowWatch.Step] = []
+    func tick(_ now: Double) {
+        if !outputs.check(["A": R(attach: 1, frames: frames)], nowS: now).isEmpty { stalls.append(now) }
+        steps.append(capture.tick(callbacks: UInt64(frames / 512), reading: true, playingReadAt: now, at: now))
+    }
+    // Both flow until the will-sleep notice at 10; nothing moves after it while uptime runs on until the
+    // Mac sleeps at 16, then the clock stands still; the wake comes at 16 and nothing moves after it either.
+    for n in 0...20 {
+        frames += 512
+        tick(0.5 * Double(n))
+    }
+    outputs.pause()
+    capture.pause()
+    for n in 21...32 { tick(0.5 * Double(n)) }
+    let asleepStalls = stalls
+    let asleepSteps = steps.filter { $0 != .none }
+    outputs.resume(nowS: 16)
+    capture.resume(at: 16)
+    steps = []
+    for n in 33...36 { tick(0.5 * Double(n)) }
+    check(asleepStalls.isEmpty && asleepSteps.isEmpty && stalls == [18.0]
+            && steps.filter({ $0 != .none }) == [.stopped(.noCallback(2))] && steps.last == .stopped(.noCallback(2)),
+          "output stall and capture watch: neither fires from the will-sleep notice to the wake, and both count 2 s from the wake",
+          "asleep \(asleepStalls) \(asleepSteps), awake \(stalls) \(steps)")
+
+    // A service restart during the sleep still closes the capture; its first try comes 1 s after the wake.
+    var restarted = CaptureFlowWatch()
+    _ = restarted.tick(callbacks: 10, reading: true, playingReadAt: 0, at: 0)
+    restarted.pause()
+    let stop = restarted.report(.serviceRestarted, at: 0.5)
+    let held = (2...20).map { restarted.tick(callbacks: nil, reading: false, playingReadAt: nil, at: 0.5 * Double($0)) }
+    restarted.resume(at: 10)
+    let early = restarted.tick(callbacks: nil, reading: false, playingReadAt: nil, at: 10.5)
+    let first = restarted.tick(callbacks: nil, reading: false, playingReadAt: nil, at: 11)
+    check(stop == .stopped(.serviceRestarted) && held.allSatisfy { $0 == .none } && early == .none && first == .tryOpen(1),
+          "capture watch: a service restart during the sleep still closes the capture, and its first try comes 1 s after the wake",
+          "\(stop) \(held.filter { $0 != .none }) \(early) \(first)")
+}
+
+// MARK: Output format: a device whose rate or channels change under a running output (OutputFormatWatch.swift, S330)
+// covers: S330 (the Mac host's reopen decision and its debug line)
+do {
+    typealias F = OutputDeviceFormat
+    let stereo48 = F(rate: 48_000, channels: 2)
+    func decide(_ now: F?, from started: F? = F(rate: 48_000, channels: 2), fadingOut: Bool = false) -> OutputFormatWatch.Verdict {
+        OutputFormatWatch.decide(started: started, now: now, fadingOut: fadingOut)
+    }
+    let rate = decide(F(rate: 44_100, channels: 2))
+    let mono = decide(F(rate: 48_000, channels: 1))
+    let same = decide(F(rate: 48_000.0001, channels: 2))
+    check(rate == .reopen(old: stereo48, new: F(rate: 44_100, channels: 2))
+            && mono == .reopen(old: stereo48, new: F(rate: 48_000, channels: 1)) && same == .keep,
+          "output format: a running output reopens once its device reports another rate or channel count, never for a notice that changes neither",
+          "\(rate) \(mono) \(same)")
+    let quiet = [decide(F(rate: 44_100, channels: 2), fadingOut: true), decide(nil), decide(stereo48, from: nil),
+                 decide(F(rate: 0, channels: 0))]
+    check(quiet.allSatisfy { $0 == .keep },
+          "output format: an output fading out, or a format the start or the notice can't read, is never reopened", "\(quiet)")
+    let line = OutputFormatWatch.line(number: 2, old: stereo48, new: F(rate: 24_000, channels: 1))
+    check(line == "output 2: its device's format changed from 48000 Hz, 2 ch to 24000 Hz, 1 ch; reopening it",
+          "output format: one debug line names the output's number and the old and the new format", line)
+    check(OutputLoss.formatChanged(old: stereo48, new: stereo48).reason == "format changed",
+          "output format: the stop line tells a format change from a stall or a lost device")
+    var trial = OutputStallRetry()
+    _ = trial.stalled("A", nowS: 100)
+    trial.started("A", nowS: 100.5)
+    let asFormat = trial.afterStall(formatReopens: ["A"])
+    let asStall = trial.afterStall(formatReopens: [])
+    let inARow = trial.stalled("A", nowS: 103)
+    check(asFormat.isEmpty && asStall == ["A"] && inARow == .retry(atS: 113),
+          "output format: a format change during a stall trial reopens as a format change and leaves the trial as it was",
+          "\(asFormat) \(asStall) \(inARow)")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
@@ -6696,7 +7171,7 @@ do {
     let setGain: (StreamEngine) -> (String, Double) -> Void = StreamEngine.setGain(uid:g:)
     let setDelay: (StreamEngine) -> (String, Double) -> Void = StreamEngine.setDelay(uid:ms:)
     let equalizer: (StreamEngine) -> (Equalizer.Settings) -> Void = StreamEngine.updateEqualizer(_:)
-    let gone: ReferenceWritableKeyPath<StreamEngine, ((String) -> Void)?> = \.onOutputGone
+    let gone: ReferenceWritableKeyPath<StreamEngine, ((String, OutputLoss) -> Void)?> = \.onOutputGone
     let interrupted: ReferenceWritableKeyPath<StreamEngine, ((SourceCapture.Interruption) -> Void)?> = \.onInterrupted
     _ = (start, stop, running, attach, detach, detachTogether, active, setGain, setDelay, equalizer, gone, interrupted)
 
@@ -7163,9 +7638,11 @@ do {
           "source quit: the same quit reported again (the capture, then macOS) acts once (S227 f)")
     check(WhenSourceQuits(defaultsValue: nil) == .system && WhenSourceQuits(defaultsValue: "system") == .system,
           "source quit: nothing stored reads as system, the Mac's default (S227)")
-    check(WhenSourceQuits(defaultsValue: "stop") == .stop && WhenSourceQuits(defaultsValue: "System") == .stop
-            && WhenSourceQuits(defaultsValue: "switch") == .stop,
-          "source quit: a stored stop, or a value this copy doesn't know, reads as stop (S227)")
+    check(WhenSourceQuits(defaultsValue: "stop") == .stop,
+          "source quit: a stored stop reads as stop (S227)")
+    check(WhenSourceQuits(defaultsValue: "System") == .system && WhenSourceQuits(defaultsValue: "switch") == .system
+            && WhenSourceQuits(defaultsValue: "") == .system,
+          "source quit: a value this copy doesn't know reads as system, the default, like nothing stored (S227)")
     let t = UIStrings()
     let switched = t.sourceSwitchedToSystem(name: "Music", started: true)
     let notStarted = t.sourceSwitchedToSystem(name: "Music", started: false)
@@ -8210,6 +8687,26 @@ do {
             && CastEnd.failed(nil).problem == .notResponding
             && CastEnd.stopped.problem == nil && CastEnd.deselected.problem == nil,
           "cast: each way a session ends maps to its notice, or none")
+    check(CastEnd.failed(CastError(ASC_CAST_ERROR_INTERNAL)).problem == .connectionLost,
+          "cast: a fault inside the sender reads as a lost connection, as on Windows (C107)")
+
+    // C108: the sender hears the selection at its start and at every change, played or not.
+    var naming = CastModel()
+    naming.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
+    let firstNamed = naming.selectionToName()
+    let unchanged = naming.selectionToName()
+    _ = naming.turnOn(den)
+    let selectedNamed = naming.selectionToName()
+    let selectedAgain = naming.selectionToName()
+    _ = naming.turnOff(den)
+    let deselectedNamed = naming.selectionToName()
+    _ = naming.apply(.failed(detail: ""))
+    let afterFailure = naming.selectionToName()
+    check(firstNamed == CastSelection(id: nil) && unchanged == nil
+            && selectedNamed == CastSelection(id: den) && selectedAgain == nil
+            && deselectedNamed == CastSelection(id: nil)
+            && afterFailure == CastSelection(id: nil),
+          "cast: the selection is named to the sender once at start and again only when it changes (C108)")
 
     var failed = m
     check(failed.apply(.failed(detail: "")) == .senderFailed(wasOn: kitchen) && failed.enabled == nil && failed.rows.isEmpty
@@ -8458,6 +8955,15 @@ do {
     }
     check(logged == .groupLog("group Home announced") && logged?.attempt == nil,
           "cast group: a group log event carries its line for the debug log")
+    raw = AscCastEvent()
+    raw.kind = ASC_CAST_EVENT_CERTIFICATE_CHANGED
+    raw.attempt = 6
+    let changed: CastEvent? = "AB to CD".withCString { line in
+        raw.detail = line
+        return CastEvent(raw)
+    }
+    check(changed == .note(attempt: 6, "the device's certificate changed from AB to CD"),
+          "cast: a changed certificate becomes a debug log line of its attempt")
     check(CastRefusal.problem(ASC_CAST_REFUSED_GROUP) == .notResponding
             && CastEnd.failed(CastError(ASC_CAST_ERROR_GROUP)).problem == .notResponding,
           "cast group: the retired group refusal and error map to nothing group-specific")
@@ -8803,7 +9309,7 @@ do {
     defer { try? FileManager.default.removeItem(at: dir) }
     let url = CastMemoryFile.file(in: dir)
     check(url.lastPathComponent == "cast-devices.json" && url.deletingLastPathComponent().lastPathComponent == "AudioSync"
-            && CastMemoryFile.load(from: url) == nil, "cast memory: in AudioSync's folder, nothing before a save")
+            && CastMemoryStore(url: url).json == nil, "cast memory: in AudioSync's folder, nothing before a save")
     let id = "0123456789abcdef0123456789abcdef"
     var first = asc_cast_create(nil)
     check(first != nil && asc_cast_offset_ms(first, id) == -1 && asc_cast_set_offset(first, id, 1234.4)
@@ -8812,11 +9318,79 @@ do {
     asc_cast_destroy(&first)
     var saved = false
     if let json { saved = (try? CastMemoryFile.save(json, to: url)) != nil }
-    let loaded = CastMemoryFile.load(from: url)
+    let loaded = CastMemoryStore(url: url).json
     check(saved && loaded == json && first == nil, "cast memory: the JSON is written and read back whole")
     var second = asc_cast_create(loaded)
     check(asc_cast_offset_ms(second, id) == 1234, "cast memory: a new sender starts with the stored offset")
     asc_cast_destroy(&second)
+}
+
+// MARK: Google Cast device memory: a file that doesn't read is kept aside before the first save
+do {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-cast-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = CastMemoryFile.file(in: dir)
+    let folder = url.deletingLastPathComponent()
+    func copies() -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+            .filter { $0.hasPrefix("cast-devices.ignored-") && $0.hasSuffix(".json") }.sorted()
+    }
+    var missing = CastMemoryStore(url: url)
+    let none = try? missing.save("{}")
+    check(missing.json == nil && none == .some(nil) && copies().isEmpty,
+          "cast memory: with no file at launch, the first save keeps nothing aside")
+
+    let damaged = Data("{\"0123456789abcdef0123456789abcdef\": {\"offsetMs\": 12".utf8)
+    try? damaged.write(to: url)
+    var store = CastMemoryStore(url: url)
+    check(copies().isEmpty, "cast memory: reading a file that doesn't read keeps nothing aside yet")
+    let kept = try? store.save("{}")
+    let copy = copies().first.map { folder.appendingPathComponent($0) }
+    let mode = copy.flatMap { try? FileManager.default.attributesOfItem(atPath: $0.path)[.posixPermissions] as? Int }
+    check(copies().count == 1 && copy.flatMap { try? Data(contentsOf: $0) } == damaged
+            && kept?.lastPathComponent == copy?.lastPathComponent && mode == 0o600
+            && CastMemoryStore(url: url).json == "{}",
+          "cast memory: a file that doesn't read is kept aside, whole and owner-only, before it is saved over",
+          "\(copies()) mode \(mode.map { String($0, radix: 8) } ?? "nil")")
+    let second = try? store.save("{\"a\":1}")
+    check(second == .some(nil) && copies().count == 1, "cast memory: only the first save of a run keeps a copy")
+
+    if let first = copies().first, let copy {
+        let seconds = first.dropFirst("cast-devices.ignored-".count).prefix { $0.isNumber }
+        let at = Date(timeIntervalSince1970: TimeInterval(Int(seconds) ?? 0))
+        let next = try? CastMemoryFile.keepAside(Data("x".utf8), next: url, now: at)
+        check(next?.lastPathComponent == "cast-devices.ignored-\(seconds)-2.json"
+                && (try? Data(contentsOf: copy)) == damaged,
+              "cast memory: a taken name gets -2 after the time and the copy holding it is left alone",
+              next?.lastPathComponent ?? "nil")
+    }
+
+    let good = "0123456789abcdef0123456789abcdef"
+    let mixed = "{\"\(good)\": {\"offsetMs\": 700}, \"fedcba9876543210fedcba9876543210\": {\"offsetMs\": \"soon\"}, \"not-an-id\": 5}"
+    try? Data(mixed.utf8).write(to: url)
+    let before = copies().count
+    var lossy = CastMemoryStore(url: url)
+    var sender = asc_cast_create(lossy.json)
+    check(asc_cast_offset_ms(sender, good) == 700, "cast memory: one damaged entry costs only itself")
+    asc_cast_destroy(&sender)
+    _ = try? lossy.save("{}")
+    check(copies().count == before, "cast memory: a JSON object with a damaged entry reads, so nothing is kept aside")
+
+    check(!CastMemoryFile.reads(Data("\u{FEFF}{}".utf8)) && !CastMemoryFile.reads(Data("[]".utf8))
+            && !CastMemoryFile.reads(Data([0xFF, 0x7B, 0x7D])) && CastMemoryFile.reads(Data("{}".utf8)),
+          "cast memory: only UTF-8 text holding a JSON object, without a byte order mark, reads")
+
+    try? damaged.write(to: url)
+    try? FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
+    // Skipped when running as root, where the mode doesn't stop the read.
+    if (try? Data(contentsOf: url)) == nil {
+        let count = copies().count
+        var blocked = CastMemoryStore(url: url)
+        let refused = (try? blocked.save("{}")) == nil
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        check(blocked.json == nil && refused && copies().count == count && (try? Data(contentsOf: url)) == damaged,
+              "cast memory: a file that can't be read at all is not replaced")
+    }
 }
 
 // MARK: Guide illustrations: each finds its place in the text, in order (GuideLayout)
@@ -9185,7 +9759,7 @@ do {
         RemoteDevicesFile.count(devicesJSON("not json")),
         RemoteDevicesFile.count(devicesJSON("{\"version\":2,\"devices\":[\"\(hashA)\"]}")),
         RemoteDevicesFile.count(devicesJSON("{\"version\":true,\"devices\":[\"\(hashA)\"]}")),
-        RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"short\"]}")),
+        RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":\"\(hashA)\"}")),
     ]
     check(twoDevices == 2 && tenDevices == RemoteDevicesFile.maxDevices && unreadable.allSatisfy { $0 == 0 },
           "web remote: the paired count comes from the devices file, capped at 8; a file the core can't read counts as none")
@@ -9202,11 +9776,29 @@ do {
     let eightIdle = Array(repeating: String(idle), count: 8).joined(separator: ",")
     let newestEight = RemoteDevicesFile.count(
         devicesJSON("{\"version\":1,\"devices\":[\(nineHashes)],\"seen\":[\(recent),\(eightIdle)]}"), now: seenNow)
-    let mismatched: [Int] = [seenFile("[\(recent)]"), seenFile("[\(recent),-1]"), seenFile("[\(recent),1.5]"),
-                             seenFile("[\(recent),true]"), seenFile("{}")]
-    check(seenFile("[\(recent),\(idle)]") == 1 && seenFile("[\(ahead),\(recent)]") == 2 && newestEight == 0
-            && mismatched.allSatisfy { $0 == 0 },
-          "web remote: a device idle for 90 days isn't counted, only the newest 8 are; a seen list that doesn't match the devices counts as none")
+    check(seenFile("[\(recent),\(idle)]") == 1 && seenFile("[\(ahead),\(recent)]") == 2 && newestEight == 0,
+          "web remote: a device idle for 90 days isn't counted, only the newest 8 are")
+    let seenAsNow: [Int] = [seenFile("[\(idle)]"), seenFile("[\(idle),\(idle),\(idle)]"), seenFile("{}"),
+                            seenFile("\"x\""), seenFile("[\(recent),-1]"), seenFile("[\(recent),1.5]"),
+                            seenFile("[\(recent),true]")]
+    check(seenAsNow.allSatisfy { $0 == 2 } && seenFile("[\(idle),\"x\"]") == 1,
+          "web remote: a seen list of another length counts every device as seen now, an unreadable time only its own device")
+    let floatVersions = ["1.0", "1e0"].map {
+        RemoteDevicesFile.count(devicesJSON("{\"version\":\($0),\"devices\":[\"\(hashA)\"]}"))
+    }
+    let floatTimes = ["\(idle).0", "1.792224e9"].map { seenFile("[\(recent),\($0)]") }
+    check(floatVersions == [0, 0] && floatTimes == [2, 2],
+          "web remote: a version or time written as a float doesn't read, as in the core")
+
+    let sixIdle = Array(repeating: String(idle), count: 6).joined(separator: ",")
+    let sixHashes = Array(repeating: "\"\(hashA)\"", count: 6).joined(separator: ",")
+    let oneBad = RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"zz\",5,\"\(hashB)\",\"\(hashA)\"],"
+        + "\"seen\":[\(recent),\(recent),\(recent),\"yesterday\",\(idle)]}"), now: seenNow)
+    let badNewest = RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"\(hashA)\",\(sixHashes),"
+        + "\"\(hashB)\",\"short\"],\"seen\":[\(recent),\(recent),\(sixIdle),\(recent),\(recent)]}"), now: seenNow)
+    let noSeen = RemoteDevicesFile.count(devicesJSON("{\"version\":1,\"devices\":[\"\(hashA)\",\"short\",null,\"+\(hashA.dropFirst())\"]}"))
+    check(oneBad == 2 && badNewest == 2 && noSeen == 1,
+          "web remote: a device whose hash doesn't read costs only that device, and the newest 8 are those that read")
 
     let devicesFolder = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-remote-\(UUID().uuidString)")
     try? FileManager.default.createDirectory(at: devicesFolder, withIntermediateDirectories: true)
@@ -9779,6 +10371,9 @@ do {
         defaults.removeObject(forKey: AppSettings.Keys.master)
         check(updated.usedBefore && PermissionAsks.load(defaults).usedBefore,
               "permissions: an update from a version without explanations is recognized once and remembered")
+        defaults.set(["microphone", 7] as [Any], forKey: PermissionAsks.defaultsKey)
+        check(PermissionAsks.load(defaults).stored == ["microphone"],
+              "permissions: a stored entry that isn't a name is dropped alone")
         defaults.removePersistentDomain(forName: suite)
     } else {
         check(false, "permissions: a test defaults suite opens")
@@ -10148,6 +10743,45 @@ do {
     check(worstChip >= 4.5 && worstSecondary >= 4.5,
           "zone look: the chip's text and a member's secondary text keep 4.5:1 in the zone box, both themes",
           String(format: "chip %.2f, secondary %.2f", worstChip, worstSecondary))
+}
+
+// MARK: The Presets card's colors in light and dark (MainWindow.swift PresetsCard)
+do {
+    // covers: S268 (the Mac host)
+    let window = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let card = window.components(separatedBy: "private struct PresetsCard").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(card.contains("Brand.tealText") && card.contains("Brand.secondaryText")
+            && !card.contains("Color(") && !card.contains("NSColor("),
+          "presets: the card's colors are brand tokens, never a literal color")
+
+    // The card's fill is the system control background, which the brand surfaces stand for.
+    func luminance(_ c: BrandRGB) -> Double {
+        func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear(c.red) + 0.7152 * linear(c.green) + 0.0722 * linear(c.blue)
+    }
+    func contrast(_ a: BrandRGB, _ b: BrandRGB) -> Double {
+        let (x, y) = (luminance(a), luminance(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+    func over(_ ink: Double, _ alpha: Double, _ below: BrandRGB) -> BrandRGB {
+        BrandRGB(red: ink * alpha + below.red * (1 - alpha), green: ink * alpha + below.green * (1 - alpha),
+                 blue: ink * alpha + below.blue * (1 - alpha))
+    }
+    var worst: [String] = []
+    for (name, dark, cards) in [("light", false, [BrandTokens.Light.surface]),
+                                ("dark", true, [BrandTokens.Dark.background, BrandTokens.Dark.surface])] {
+        let teal = dark ? BrandTokens.Dark.tealText : BrandTokens.Light.tealText
+        for fill in cards {
+            let secondary = over(dark ? 1 : 0, BrandTokens.Opacity.secondaryText, fill)
+            let ratios = (contrast(teal, fill), contrast(secondary, fill))
+            if min(ratios.0, ratios.1) < 4.5 {
+                worst.append(String(format: "%@: teal %.2f, secondary %.2f", name, ratios.0, ratios.1))
+            }
+        }
+    }
+    check(worst.isEmpty, "presets: the teal marks and the empty-state text reach 4.5:1 in light and dark",
+          worst.joined(separator: "; "))
 }
 
 // MARK: About panel shows the version without the build number (AboutPanel.options)

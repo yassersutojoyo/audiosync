@@ -2,10 +2,10 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
@@ -212,7 +212,8 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn from_hex(text: &str) -> Option<TokenHash> {
-    if text.len() != 64 || !text.is_ascii() {
+    // from_str_radix alone would read a leading "+", which the Mac's count rejects.
+    if text.len() != 64 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
     let mut hash = [0u8; 32];
@@ -261,13 +262,21 @@ pub struct TokenStore {
     /// The file as read differs from the store: no last-seen times, idle
     /// devices or times ahead of the clock.
     rewrite: bool,
+    /// The file as read, when a device in it didn't: copied aside by the
+    /// first save that writes over it, never by a read alone.
+    damaged: Option<Arc<[u8]>>,
 }
 
-/// Why the paired-device file was not read at start; the store starts empty.
+/// Why the paired-device file was not read at start, or not all of it.
 #[derive(Debug)]
 pub enum LoadProblem {
+    /// The store starts empty.
     Unreadable(io::Error),
+    /// The store starts empty.
     NotInFormat,
+    /// `skipped` devices didn't read and pair again; the others are kept.
+    /// The first save copies the file aside before it writes over it.
+    Skipped { skipped: usize },
 }
 
 /// The devices as one change left them, for [`DeviceFile::save`].
@@ -277,13 +286,22 @@ pub struct Snapshot {
     path: Option<PathBuf>,
     devices: Vec<(TokenHash, u64)>,
     generation: u64,
+    /// The damaged file as read, to keep aside before writing over it.
+    keep_first: Option<Arc<[u8]>>,
 }
 
 /// Writes snapshots to the paired-device file one at a time; one older
 /// than the last written is skipped, so the file never goes back.
 #[derive(Debug, Default)]
 pub struct DeviceFile {
-    written: Mutex<u64>,
+    written: Mutex<Written>,
+}
+
+#[derive(Debug, Default)]
+struct Written {
+    generation: u64,
+    /// The damaged file was kept aside, so later writes needn't again.
+    kept_aside: bool,
 }
 
 impl DeviceFile {
@@ -292,15 +310,22 @@ impl DeviceFile {
             return Ok(());
         };
         let mut written = self.written.lock().unwrap_or_else(PoisonError::into_inner);
-        if snapshot.generation <= *written {
+        if snapshot.generation <= written.generation {
             return Ok(());
+        }
+        if let Some(bytes) = snapshot.keep_first.as_deref()
+            && !written.kept_aside
+        {
+            // While the copy fails, the damaged file is not written over.
+            keep_aside(path, bytes, unix_seconds(SystemTime::now()))?;
+            written.kept_aside = true;
         }
         let hashes: Vec<String> = snapshot.devices.iter().map(|(hash, _)| hex(hash)).collect();
         let seen: Vec<u64> = snapshot.devices.iter().map(|(_, seen)| *seen).collect();
         // "seen" sits beside "devices" so a reader of the older layout still counts them.
         let text = json!({ "version": FILE_VERSION, "devices": hashes, "seen": seen }).to_string();
         write_replacing(path, text.as_bytes())?;
-        *written = snapshot.generation;
+        written.generation = snapshot.generation;
         Ok(())
     }
 }
@@ -321,14 +346,15 @@ impl TokenStore {
             devices: Vec::new(),
             generation: 0,
             rewrite: false,
+            damaged: None,
         };
-        let Some(path) = store.path.as_deref() else {
+        let Some(path) = store.path.clone() else {
             return (store, None);
         };
         let now = unix_seconds(now);
-        let problem = match fs::read(path) {
+        let problem = match fs::read(&path) {
             Ok(bytes) => match parse_file(&bytes, now) {
-                Some((mut devices, upgraded)) => {
+                Some((mut devices, upgraded, skipped)) => {
                     let read = devices.len();
                     devices.retain(|device| !device.idle_too_long(now));
                     for device in &mut devices {
@@ -340,7 +366,11 @@ impl TokenStore {
                             .iter()
                             .any(|device| device.seen != device.seen_saved);
                     store.devices = devices;
-                    None
+                    (skipped > 0).then(|| {
+                        store.damaged = Some(Arc::from(bytes));
+                        store.rewrite = true;
+                        LoadProblem::Skipped { skipped }
+                    })
                 }
                 None => Some(LoadProblem::NotInFormat),
             },
@@ -444,9 +474,11 @@ impl TokenStore {
         (self.devices.len() != before).then(|| self.snapshot())
     }
 
-    /// Forgets every device.
+    /// Forgets every device; a damaged file is not kept aside, since the
+    /// user asked to forget what it holds.
     pub fn clear(&mut self) -> Snapshot {
         self.devices.clear();
+        self.damaged = None;
         self.snapshot()
     }
 
@@ -463,48 +495,80 @@ impl TokenStore {
                 .map(|device| (device.hash, device.seen))
                 .collect(),
             generation: self.generation,
+            keep_first: self.damaged.clone(),
         }
     }
 }
 
-/// The devices in `bytes`, and whether the file had no "seen" list, in which
-/// case every one counts as seen at `now`.
-fn parse_file(bytes: &[u8], now: u64) -> Option<(Vec<Device>, bool)> {
+/// The devices in `bytes`, whether the file needs writing again, and how
+/// many devices didn't read. A device whose hash isn't hex is skipped; one
+/// whose time isn't a whole number counts as seen at `now`, and so does
+/// every device when the "seen" list is missing or of another length.
+fn parse_file(bytes: &[u8], now: u64) -> Option<(Vec<Device>, bool, usize)> {
     let value: Value = serde_json::from_slice(bytes).ok()?;
     if value.get("version")?.as_u64()? != FILE_VERSION {
         return None;
     }
-    let hashes: Vec<TokenHash> = value
-        .get("devices")?
-        .as_array()?
-        .iter()
-        .map(|item| item.as_str().and_then(from_hex))
-        .collect::<Option<_>>()?;
-    let upgraded = value.get("seen").is_none();
-    let seen: Vec<u64> = match value.get("seen") {
-        None => vec![now; hashes.len()],
-        Some(seen) => seen
-            .as_array()?
-            .iter()
-            .map(Value::as_u64)
-            .collect::<Option<_>>()?,
-    };
-    if seen.len() != hashes.len() {
-        return None;
-    }
-    let mut devices: Vec<Device> = hashes
-        .into_iter()
-        .zip(seen)
-        .map(|(hash, seen)| Device {
+    let entries = value.get("devices")?.as_array()?;
+    let seen = value
+        .get("seen")
+        .and_then(Value::as_array)
+        .filter(|seen| seen.len() == entries.len());
+    let mut rewrite = seen.is_none();
+    let mut skipped = 0;
+    let mut devices = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
+        let Some(hash) = entry.as_str().and_then(from_hex) else {
+            skipped += 1;
+            continue;
+        };
+        let seen = match seen.map(|seen| seen[index].as_u64()) {
+            Some(Some(seen)) => seen,
+            Some(None) => {
+                rewrite = true;
+                now
+            }
+            None => now,
+        };
+        devices.push(Device {
             hash,
             seen,
             seen_saved: seen,
-        })
-        .collect();
+        });
+    }
     if devices.len() > MAX_DEVICES {
         devices.drain(..devices.len() - MAX_DEVICES);
     }
-    Some((devices, upgraded))
+    Some((devices, rewrite, skipped))
+}
+
+/// Keeps `bytes`, the file at `path` as read, in a new file beside it,
+/// `remote-devices.ignored-<seconds>.json` (`-2` and on when taken), which
+/// nothing later replaces.
+fn keep_aside(path: &Path, bytes: &[u8], now: u64) -> io::Result<PathBuf> {
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    for attempt in 1..=100u32 {
+        let suffix = if attempt == 1 {
+            String::new()
+        } else {
+            format!("-{attempt}")
+        };
+        let copy = path.with_file_name(format!("{stem}.ignored-{now}{suffix}.json"));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&copy)
+        {
+            Ok(mut file) => {
+                file.write_all(bytes)?;
+                file.sync_all()?;
+                return Ok(copy);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::ErrorKind::AlreadyExists.into())
 }
 
 /// Writes next to `path` and renames over it, so a crash leaves the old
@@ -1031,25 +1095,145 @@ mod tests {
     }
 
     #[test]
-    fn a_last_seen_list_that_does_not_match_the_devices_is_damage() {
+    fn a_last_seen_value_that_isnt_a_list_counts_every_device_as_seen_now() {
         let path = scratch("auth-seen-damaged");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let hash = hex(&token_hash(&random_token().unwrap()));
-        let text = json!({ "version": 1, "devices": [hash], "seen": [] }).to_string();
+        let token = random_token().unwrap();
+        let text =
+            json!({ "version": 1, "devices": [hex(&token_hash(&token))], "seen": "x" }).to_string();
         fs::write(&path, text).unwrap();
-        let (store, problem) = TokenStore::open(Some(path));
-        assert!(store.is_empty());
-        assert!(matches!(problem, Some(LoadProblem::NotInFormat)));
+        let (mut store, problem) = TokenStore::open_at(Some(path), day_zero());
+        assert!(problem.is_none());
+        assert!(store.contains(&token, day_zero() + DAY * 89));
+        assert!(store.take_rewrite().is_some());
+    }
+
+    #[test]
+    fn a_hash_reads_only_as_two_hex_digits_per_byte() {
+        let hash = token_hash("phone");
+        let text = hex(&hash);
+        assert_eq!(from_hex(&text), Some(hash));
+        assert_eq!(from_hex(&text.to_uppercase()), Some(hash));
+        let signed = format!("+{}", &text[1..]);
+        assert_eq!(from_hex(&signed), None, "{signed}");
+        let file = json!({ "version": 1, "devices": [text, signed] }).to_string();
+        let (devices, _, skipped) = parse_file(file.as_bytes(), 0).unwrap();
+        assert_eq!((devices.len(), skipped), (1, 1));
+    }
+
+    #[test]
+    fn a_whole_number_written_as_a_float_doesnt_read() {
+        let hash = hex(&token_hash("phone"));
+        for version in ["1.0", "1e0"] {
+            let file = format!(r#"{{"version":{version},"devices":["{hash}"]}}"#);
+            assert!(parse_file(file.as_bytes(), 5).is_none(), "{version}");
+        }
+        for seen in ["1.8e9", "1800000000.0", "-1"] {
+            let file = format!(r#"{{"version":1,"devices":["{hash}"],"seen":[{seen}]}}"#);
+            let (devices, rewrite, _) = parse_file(file.as_bytes(), 5).unwrap();
+            assert_eq!(devices[0].seen, 5, "{seen} counts as seen now");
+            assert!(rewrite, "{seen}");
+        }
+    }
+
+    /// What the copies kept aside next to `path` hold.
+    fn copies_kept_aside(path: &Path) -> Vec<Vec<u8>> {
+        let mut copies: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|copy| {
+                copy.file_name().is_some_and(|name| {
+                    name.to_string_lossy().starts_with("remote-devices.ignored")
+                })
+            })
+            .collect();
+        copies.sort();
+        copies.iter().map(|copy| fs::read(copy).unwrap()).collect()
+    }
+
+    #[test]
+    fn opening_a_file_with_an_unreadable_device_without_saving_leaves_no_copy() {
+        let path = scratch("auth-bad-device-only-counted");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let token = random_token().unwrap();
+        let text = json!({ "version": 1, "devices": [hex(&token_hash(&token)), "zz"] }).to_string();
+        fs::write(&path, &text).unwrap();
+        // The Web Remote window opens the store only to count, while the
+        // remote is off, every time it shows.
+        for _ in 0..2 {
+            let (store, _) = TokenStore::open_at(Some(path.clone()), day_zero());
+            assert_eq!(store.len(), 1);
+        }
+        assert!(copies_kept_aside(&path).is_empty());
+        assert_eq!(fs::read(&path).unwrap(), text.into_bytes());
+
+        // Forget every device, from the window while the remote is off:
+        // what the user asked to forget isn't kept in a copy.
+        let (mut store, _) = TokenStore::open_at(Some(path.clone()), day_zero());
+        DeviceFile::default().save(store.clear()).unwrap();
+        assert!(copies_kept_aside(&path).is_empty());
+        assert!(TokenStore::open_at(Some(path), day_zero()).0.is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_device_costs_only_that_device_and_the_file_is_kept_aside_first() {
+        let path = scratch("auth-one-bad-device");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let now = day_zero();
+        let seen = unix_seconds(now);
+        let first = random_token().unwrap();
+        let second = random_token().unwrap();
+        let third = random_token().unwrap();
+        let text = json!({
+            "version": 1,
+            "devices": [hex(&token_hash(&first)), "zz", 5, hex(&token_hash(&second)), hex(&token_hash(&third))],
+            "seen": [seen, seen, seen, "yesterday", seen]
+        })
+        .to_string();
+        fs::write(&path, &text).unwrap();
+        let (mut store, _) = TokenStore::open_at(Some(path.clone()), now);
+        assert_eq!(store.len(), 3);
+        for token in [&first, &second, &third] {
+            assert!(store.contains(token, now + DAY * 89));
+        }
+        DeviceFile::default()
+            .save(
+                store
+                    .take_rewrite()
+                    .expect("the bad entries are written out"),
+            )
+            .unwrap();
+        assert_eq!(copies_kept_aside(&path), [text.into_bytes()]);
+        let (reopened, problem) = TokenStore::open_at(Some(path.clone()), now);
+        assert!(problem.is_none());
+        assert_eq!(reopened.len(), 3);
+
+        // A last-seen list of another length: every device counts as seen now.
+        let text =
+            json!({ "version": 1, "devices": [hex(&token_hash(&first))], "seen": [] }).to_string();
+        fs::write(&path, text).unwrap();
+        let (store, _) = TokenStore::open_at(Some(path), now);
+        assert!(store.contains(&first, now + DAY * 89));
     }
 
     #[test]
     fn a_damaged_file_starts_empty() {
         let path = scratch("auth-damaged");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for damaged in [
+            &b"not json"[..],
+            b"{\"version\": \"1\", \"devices\": []}",
+            b"{\"version\": 1, \"devices\": \"zz\"}",
+        ] {
+            fs::write(&path, damaged).unwrap();
+            let (store, problem) = TokenStore::open(Some(path.clone()));
+            assert!(store.is_empty());
+            assert!(matches!(problem, Some(LoadProblem::NotInFormat)));
+        }
         fs::write(&path, b"{\"version\": 1, \"devices\": [\"zz\"]}").unwrap();
         let (store, problem) = TokenStore::open(Some(path));
         assert!(store.is_empty());
-        assert!(matches!(problem, Some(LoadProblem::NotInFormat)));
+        assert!(matches!(problem, Some(LoadProblem::Skipped { skipped: 1 })));
     }
 
     #[test]

@@ -467,13 +467,30 @@ pub(crate) fn plan_with(
     has_credentials: bool,
     airplay2: bool,
 ) -> Result<(), ErrorKind> {
-    match device.choose_path(airplay2, None) {
+    match planned_path(device, airplay2, false, None) {
         Ok(ProtocolPath::AirPlay1) => device.airplay1_plan(has_credentials),
         // The driver starts an AirPlay 2 session before it asks for this
         // plan, so only a host's view of the device lands here.
         Ok(ProtocolPath::AirPlay2) => Err(ErrorKind::Unsupported(UnsupportedReason::AirPlay2Only)),
         Err(reason) => Err(ErrorKind::Unsupported(reason)),
     }
+}
+
+/// The path the driver plans for a device without HomeKit credentials,
+/// outside a target and with an AirPlay 2 place free (P2, P214).
+pub fn planned_path(
+    device: &Device,
+    airplay2: bool,
+    airplay2_preferred: bool,
+    airplay1_outcome: Option<ErrorKind>,
+) -> Result<ProtocolPath, UnsupportedReason> {
+    if airplay2
+        && device.choose_path_preferring(true, airplay2_preferred, airplay1_outcome, false)
+            == Ok(ProtocolPath::AirPlay2)
+    {
+        return Ok(ProtocolPath::AirPlay2);
+    }
+    device.choose_path(airplay2, airplay1_outcome)
 }
 
 /// A change discovery saw (P7, P18, P19).

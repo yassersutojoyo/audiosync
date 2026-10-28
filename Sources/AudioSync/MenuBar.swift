@@ -904,6 +904,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     func popoverWillClose(_ notification: Notification) { finishClose(lasting: systemClose) }
 
+    /// The menu bar icon's middle on screen (x), which the popover's arrow points at.
+    private var iconMiddle: CGFloat? {
+        guard let button = statusItem.button, let item = button.window else { return nil }
+        return item.convertToScreen(button.convert(button.bounds, to: nil)).midX
+    }
+
     /// The popover window's outermost layer, which carries its arrow, edge and
     /// background, and the point under the menu bar icon, from that layer's
     /// anchor point.
@@ -1194,7 +1200,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // Once per open: a didShow after `show()` stood in for it, or one left from an earlier open, does nothing.
         guard host.sizing.finishOpen() else { return }
         if let window = host.view.window {
-            rest = PanelRest(frame: window.frame, content: popover.contentSize)
+            rest = PanelRest(frame: window.frame, content: popover.contentSize, icon: iconMiddle)
             watchTopEdge(window)
         }
         model.actions.refreshExternalState()
@@ -1263,13 +1269,14 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             setHeight(size.height)
             popover.contentSize = size
             resizeEndsAt = nil
-            if let window = view.window { rest = PanelRest(frame: window.frame, content: size) }
+            if let window = view.window { rest = PanelRest(frame: window.frame, content: size, icon: iconMiddle) }
             return
         }
         setHeight(max(view.frame.height, size.height))
+        let icon = iconMiddle
         var aim = PanelRest.next(rest, stepRunning: resizeEndsAt != nil, window: window.frame,
-                                 content: popover.contentSize)
-        let frame = aim.move(to: size)
+                                 content: popover.contentSize, icon: icon)
+        let frame = aim.move(to: size, icon: icon)
         rest = aim
         resizeEndsAt = Self.uptime + duration
         let session = closing, step = resizeStep
@@ -1289,7 +1296,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 self.popover.animates = normal
                 self.setHeight(size.height)
                 if let moved = self.host.view.window?.frame, moved != frame {
-                    DebugTrace.log("[AudioSync] panel resize: the popover moved the window from \(frame) to \(moved)")
+                    DebugTrace.log("[AudioSync] panel resize: the popover moved the window from \(frame) to \(moved); "
+                                   + String(format: "icon middle %.1f at the start, %.1f now",
+                                            icon ?? .nan, self.iconMiddle ?? .nan))
                 }
             }
         })

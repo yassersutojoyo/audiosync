@@ -1069,7 +1069,7 @@ fn spec_device_volume_wording() -> Vec<(String, String, String)> {
 /// names the output; the fix a link-style button whose label starts with its
 /// visible text and then names the output; both right after the slider in
 /// reading order; the glyph decorative.
-// covers: S198, S200
+// covers: S199, S200
 #[test]
 fn the_hint_and_the_fix_name_the_output_for_narrator() {
     let wording = spec_device_volume_wording();
@@ -1214,6 +1214,35 @@ fn the_fix_keeps_the_keyboard_focus_in_the_row() {
     let link = component_body(widgets, "LinkButton");
     assert!(link.contains("out property <bool> keyboard-focused: focus.has-focus;"));
     assert!(link.contains("focus-on-click: false;"));
+}
+
+/// A zone card's speaker row shows why a zone click left it off ("Stayed
+/// off, since one Cast speaker plays at a time"); its toggle hands Narrator
+/// the same note, as the compact row under "In zones" does.
+#[test]
+fn a_zone_cards_row_reads_its_zone_note_to_narrator() {
+    let widgets = include_str!("../ui/widgets.slint");
+    for component in ["SpeakerRow", "ZoneMemberRow"] {
+        let row = component_body(widgets, component);
+        assert!(
+            row.contains(
+                "property <string> note: root.item.zone-note != \"\" ? root.item.zone-note"
+            ),
+            "{component} shows the zone note first"
+        );
+        let badge = &row[row
+            .find("badge := SpeakerBadge {")
+            .expect("the row's toggle")..];
+        let description = badge
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("description:"))
+            .expect("the toggle has a description");
+        assert!(
+            description.contains("root.item.zone-note") || description.contains("root.note"),
+            "{component}'s toggle reads the zone note: {description}"
+        );
+    }
 }
 
 /// The tray flyout's row of a switched-on local output shows the state as a
@@ -1477,7 +1506,10 @@ fn only_a_flyout_zone_badge_switches_the_zone() {
         "Left and Right fold it"
     );
     assert_eq!(header.matches("TouchArea {").count(), 1, "the row only");
-    assert!(header.contains("accessible-expanded: root.item.expanded;"));
+    assert!(
+        !header.contains("accessible-expanded:"),
+        "UI Automation offers Invoke only on an arrow with no expanded state"
+    );
     assert!(flyout.contains("for speaker in zone.expanded ? zone.members : []: FlyoutRow {"));
     assert!(flyout.contains("root.zone-expanded-changed(zone.id, open);"));
 }

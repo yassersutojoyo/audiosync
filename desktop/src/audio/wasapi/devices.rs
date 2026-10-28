@@ -1,8 +1,9 @@
 //! Render and capture endpoints: listing them, and noticing when they
 //! change.
 
-use std::sync::Arc;
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use windows::Win32::Devices::FunctionDiscovery::{
@@ -196,14 +197,33 @@ fn u32_property(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<u32> {
 }
 
 /// Watches for render and capture endpoints being added, removed, enabled,
-/// disabled or renamed, and for a new default render endpoint. A thread of
-/// its own holds the registration, so the watcher can be used from any
-/// thread. Dropping it waits for that thread as a [`Worker`] does:
-/// unregistering can hang while Windows audio doesn't answer.
+/// disabled or renamed, for a new default render endpoint, and for a
+/// device whose format changed (S330). A thread of its own holds the
+/// registration, so the watcher can be used from any thread. Dropping it
+/// waits for that thread as a [`Worker`] does: unregistering can hang while
+/// Windows audio doesn't answer.
 pub(super) struct DeviceWatcher {
-    changed: Arc<AtomicBool>,
+    notes: Arc<DeviceNotes>,
     stop: Arc<Event>,
     thread: Worker,
+}
+
+/// What the listener noted since the watcher's owner last looked.
+#[derive(Default)]
+pub(super) struct DeviceNotes {
+    /// Endpoints changed.
+    changed: AtomicBool,
+    /// The endpoints whose device format Windows said changed.
+    formats: Mutex<BTreeSet<String>>,
+}
+
+impl DeviceNotes {
+    fn note_format(&self, id: String) {
+        self.formats
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id);
+    }
 }
 
 impl DeviceWatcher {
@@ -211,25 +231,25 @@ impl DeviceWatcher {
         DeviceWatcher::start_with(READY_TIMEOUT, &WINDOWS_AUDIO, watch)
     }
 
-    /// A watcher whose thread runs `body`, which sets the flag it's given
-    /// when endpoints change and ends once the event it's given is set. See
+    /// A watcher whose thread runs `body`, which notes what changed in the
+    /// notes it's given and ends once the event it's given is set. See
     /// [`spawn_worker_within`] for `timeout` and `stuck`.
     fn start_with(
         timeout: Duration,
         stuck: &'static StuckThreads,
-        body: impl FnOnce(&Arc<AtomicBool>, &Event, Ready) + Send + 'static,
+        body: impl FnOnce(&Arc<DeviceNotes>, &Event, Ready) + Send + 'static,
     ) -> Result<DeviceWatcher, BackendError> {
-        let changed = Arc::new(AtomicBool::new(false));
+        let notes = Arc::new(DeviceNotes::default());
         let stop = Arc::new(Event::manual_reset()?);
         let (thread, ()) = {
-            let changed = Arc::clone(&changed);
+            let notes = Arc::clone(&notes);
             let stop = Arc::clone(&stop);
             spawn_worker_within("audiosync-devices", timeout, stuck, move |ready| {
-                body(&changed, &stop, ready);
+                body(&notes, &stop, ready);
             })?
         };
         Ok(DeviceWatcher {
-            changed,
+            notes,
             stop,
             thread,
         })
@@ -237,7 +257,21 @@ impl DeviceWatcher {
 
     /// Whether endpoints changed since the last call.
     pub(super) fn take_changed(&self) -> bool {
-        self.changed.swap(false, Ordering::AcqRel)
+        self.notes.changed.swap(false, Ordering::AcqRel)
+    }
+
+    /// The endpoints whose device format Windows said changed since the
+    /// last call.
+    pub(super) fn take_format_changes(&self) -> Vec<String> {
+        std::mem::take(
+            &mut *self
+                .notes
+                .formats
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
+        .into_iter()
+        .collect()
     }
 }
 
@@ -250,12 +284,12 @@ impl Drop for DeviceWatcher {
 }
 
 /// The watcher thread: registers, waits for the stop request, unregisters.
-fn watch(changed: &Arc<AtomicBool>, stop: &Event, ready: Ready) {
+fn watch(notes: &Arc<DeviceNotes>, stop: &Event, ready: Ready) {
     let _apartment = match Apartment::enter() {
         Ok(apartment) => apartment,
         Err(error) => return ready.fail(error),
     };
-    let registration = match Registration::new(changed) {
+    let registration = match Registration::new(notes) {
         Ok(registration) => registration,
         Err(error) => return ready.fail(error),
     };
@@ -275,10 +309,10 @@ struct Registration {
 }
 
 impl Registration {
-    fn new(changed: &Arc<AtomicBool>) -> Result<Registration, BackendError> {
+    fn new(notes: &Arc<DeviceNotes>) -> Result<Registration, BackendError> {
         let enumerator = enumerator()?;
         let listener: IMMNotificationClient = DeviceListener {
-            changed: Arc::clone(changed),
+            notes: Arc::clone(notes),
         }
         .into();
         // SAFETY: the listener stays alive and registered until this value
@@ -306,19 +340,19 @@ impl Drop for Registration {
     }
 }
 
-/// Raises a flag when endpoints change. Windows calls it on its own
-/// threads and asks it not to wait or call back into the enumerator, so it
-/// only stores the flag. `#[implement]` objects are agile (they answer
-/// `IAgileObject` and use the free-threaded marshaler), so the calls reach it
-/// directly.
+/// Raises a flag when endpoints change, and notes the ID of a device whose
+/// format changed. Windows calls it on its own threads and asks it not to
+/// wait or call back into the enumerator, so it only stores what it was
+/// told. `#[implement]` objects are agile (they answer `IAgileObject` and use
+/// the free-threaded marshaler), so the calls reach it directly.
 #[implement(IMMNotificationClient)]
 struct DeviceListener {
-    changed: Arc<AtomicBool>,
+    notes: Arc<DeviceNotes>,
 }
 
 impl DeviceListener {
     fn note(&self) {
-        self.changed.store(true, Ordering::Release);
+        self.notes.changed.store(true, Ordering::Release);
     }
 }
 
@@ -356,11 +390,17 @@ impl IMMNotificationClient_Impl for DeviceListener_Impl {
 
     fn OnPropertyValueChanged(
         &self,
-        _device_id: &PCWSTR,
+        device_id: &PCWSTR,
         key: &PROPERTYKEY,
     ) -> windows_core::Result<()> {
         if *key == PKEY_Device_FriendlyName {
             self.note();
+        } else if *key == PKEY_AudioEngine_DeviceFormat && !device_id.is_null() {
+            // SAFETY: Windows passes a NUL-terminated ID that lives through
+            // the call.
+            if let Ok(id) = unsafe { device_id.to_string() } {
+                self.notes.note_format(id);
+            }
         }
         Ok(())
     }

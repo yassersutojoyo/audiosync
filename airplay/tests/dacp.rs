@@ -128,12 +128,24 @@ fn play(
     (key, remote)
 }
 
-fn header_values(receiver: &NetReceiver, name: &str) -> Vec<Option<String>> {
+// One lock for all names: the sender may still be sending (a keepalive), so
+// separate reads can see different request counts.
+fn header_rows<const N: usize>(
+    receiver: &NetReceiver,
+    names: [&str; N],
+) -> Vec<[Option<String>; N]> {
     receiver
         .log()
         .requests
         .iter()
-        .map(|(_, request)| request.headers.get(name).map(str::to_owned))
+        .map(|(_, request)| names.map(|name| request.headers.get(name).map(str::to_owned)))
+        .collect()
+}
+
+fn header_values(receiver: &NetReceiver, name: &str) -> Vec<Option<String>> {
+    header_rows(receiver, [name])
+        .into_iter()
+        .map(|[value]| value)
         .collect()
 }
 
@@ -440,14 +452,20 @@ fn dacp_headers_both_paths() {
     let mut ids = Vec::new();
     let mut remotes_by_receiver = Vec::new();
     for receiver in [&a, &b] {
-        let dacp = header_values(receiver, "DACP-ID");
-        let client = header_values(receiver, "Client-Instance");
-        assert!(dacp.iter().all(Option::is_some), "on every request");
-        assert_eq!(dacp, client, "Client-Instance carries the DACP ID");
-        ids.extend(dacp.into_iter().flatten());
-        let remotes = header_values(receiver, "Active-Remote");
-        assert!(remotes.iter().all(Option::is_some), "on every request");
-        let mut distinct: Vec<String> = remotes.into_iter().flatten().collect();
+        let rows = header_rows(receiver, ["DACP-ID", "Client-Instance", "Active-Remote"]);
+        assert!(!rows.is_empty());
+        let mut remotes = Vec::new();
+        for [dacp, client, remote] in rows {
+            let dacp = dacp.expect("DACP-ID on every request");
+            assert_eq!(
+                client.as_deref(),
+                Some(dacp.as_str()),
+                "Client-Instance carries the DACP ID"
+            );
+            ids.push(dacp);
+            remotes.push(remote.expect("Active-Remote on every request"));
+        }
+        let mut distinct = remotes;
         distinct.dedup();
         remotes_by_receiver.push(distinct);
     }
@@ -1242,6 +1260,19 @@ fn dacp_never_ends_a_session() {
     let mut events = Events::default();
     let (a_key, a_remote) = play(&sender, &mut events, &a, 1);
     let (b_key, _) = play(&sender, &mut events, &b, 2);
+    // Latency follows the first sound, after Playing: count only once it is in.
+    for key in [&a_key, &b_key] {
+        let latency = events.wait_for(&sender, LONG, |event| {
+            matches!(
+                event,
+                SenderEvent::Speaker {
+                    key: seen,
+                    event: SpeakerEvent::Latency(_),
+                } if seen == key
+            )
+        });
+        assert!(latency.is_some(), "{:?}", events.of(key));
+    }
     let port = sender.dacp_counters().port();
     let a_events = events.of(&a_key).len();
     let b_events = events.of(&b_key).len();

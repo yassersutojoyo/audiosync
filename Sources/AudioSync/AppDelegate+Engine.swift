@@ -66,6 +66,8 @@ extension AppDelegate {
             midRebuild = true
         }
         var outcome = CaptureSwitch.Outcome.switched
+        briefLoss.restart()   // a new session counts only the devices listed now (S328)
+        stallRetry.reset()
         do {
             try engine.start(source: audioSource, inputPair: currentInputPair, rebuild: rebuild)
         } catch {
@@ -443,7 +445,7 @@ extension AppDelegate {
     /// Now Playing's latest reading when it reports the selected source as
     /// playing. Only Spotify and Music are known; for any other app or an
     /// input device this is nil.
-    private func sourcePlayingReading() -> NowPlayingMonitor.Track? {
+    func sourcePlayingReading() -> NowPlayingMonitor.Track? {
         // Only a live reading counts: the monitor polls while the window is
         // open or AirPlay receivers show the track, and a stopped monitor
         // keeps its last (possibly stale) track.

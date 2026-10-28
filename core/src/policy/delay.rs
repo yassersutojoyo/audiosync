@@ -1,22 +1,20 @@
-//! Local output delays (S8, S79, S81, S124, S178), the superseded AirPlay sync rule, and
-//! the local delay model that replaces that rule (S172 to S179).
+//! Local output delays (S8, S79, S124, S178) and the local delay model
+//! (S172 to S179).
 //!
 //! AirPlay speakers play about two seconds late because of the AirPlay
 //! engine's buffer; AudioSync adds no delay on that path (S8).
 //!
-//! Under the old rule (S77, S78, S80) local outputs are delayed to line up
-//! with them, but only while an AirPlay speaker is actually chosen; otherwise
-//! they play at once. Under the local delay model one local output, the
-//! reference, defines time 0; every other local output has an offset relative
-//! to it that always applies, and the host turns the offsets of the outputs
-//! taking part into hold-backs ([`hold_backs`], S176), adding the AirPlay
-//! latency L while an AirPlay speaker is chosen. [`Retimer`] tells which
-//! running outputs need a new hold-back when anything changes (S177), and
-//! [`migrate_mac_delays`] turns the Mac's stored absolute delays into the
-//! model's values once (S179). Delays here are in ms; the renderer converts
-//! them to capture-rate frames (S3, S66).
+//! One local output, the reference, defines time 0; every other local output
+//! has an offset relative to it that always applies, and the host turns the
+//! offsets of the outputs taking part into hold-backs ([`hold_backs`], S176),
+//! adding the AirPlay latency L while an AirPlay speaker is chosen.
+//! [`Retimer`] tells which running outputs need a new hold-back when anything
+//! changes (S177), and [`migrate_mac_delays`] turns the Mac's stored absolute
+//! delays into the model's values once (S179). Delays here are in ms; the
+//! renderer converts them to capture-rate frames (S3, S66).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 /// Delay of a local output the user has never set, in ms (S179).
 pub const DEFAULT_DELAY_MS: f64 = 2000.0;
@@ -47,50 +45,6 @@ pub fn airplay_chosen<E: AsRef<str>, L: AsRef<str>>(enabled: &[E], listed: &[L])
     enabled
         .iter()
         .any(|id| listed.iter().any(|listed| listed.as_ref() == id.as_ref()))
-}
-
-/// A local output's effective delay: its configured delay while an AirPlay
-/// speaker is chosen, otherwise 0. The configured value is kept either way (S78).
-pub fn effective_delay_ms(configured_ms: f64, airplay_chosen: bool) -> f64 {
-    if airplay_chosen { configured_ms } else { 0.0 }
-}
-
-/// Tracks whether an AirPlay speaker is chosen and reports flips (S80).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SyncRule {
-    chosen: bool,
-}
-
-impl SyncRule {
-    /// Whether an AirPlay speaker is chosen, as of the last update.
-    pub fn chosen(&self) -> bool {
-        self.chosen
-    }
-
-    /// Recomputes the condition after the enabled set or the listed set changed.
-    /// Returns true when it flipped: the host then gives every running local
-    /// output its new effective delay, live (S80; a flip to 0 skips forward, a
-    /// flip back inserts silence). A listed set that a failed poll left
-    /// unchanged (S81) never causes a flip.
-    pub fn update<E: AsRef<str>, L: AsRef<str>>(&mut self, enabled: &[E], listed: &[L]) -> bool {
-        let chosen = airplay_chosen(enabled, listed);
-        let flipped = chosen != self.chosen;
-        self.chosen = chosen;
-        flipped
-    }
-
-    /// The effective delay of a local output with this configured delay (S78).
-    pub fn effective_delay_ms(&self, configured_ms: f64) -> f64 {
-        effective_delay_ms(configured_ms, self.chosen)
-    }
-
-    /// The new effective delay of every running local output, after a flip (S80).
-    pub fn retime<'a, U: AsRef<str>>(&self, outputs: &'a [(U, f64)]) -> Vec<(&'a str, f64)> {
-        outputs
-            .iter()
-            .map(|(uid, configured)| (uid.as_ref(), self.effective_delay_ms(*configured)))
-            .collect()
-    }
 }
 
 /// Smallest offset of a local output relative to the reference, in ms: a
@@ -268,6 +222,83 @@ impl Retimer {
     /// it didn't take part.
     pub fn hold_back_ms(&self, id: &str) -> Option<f64> {
         self.held.get(id).copied()
+    }
+}
+
+/// How long a switched-on output whose device left the list still counts
+/// toward the other outputs' timing (S328).
+pub const BRIEF_LOSS_HOLD: Duration = Duration::from_secs(10);
+
+/// The switched-on outputs whose devices left the list less than
+/// [`BRIEF_LOSS_HOLD`] ago (S328). The host counts each of them among the
+/// outputs taking part, at its offset and never as the reference, so a
+/// brief loss and return re-time nothing. Times are the host's own clock.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BriefLosses {
+    /// The outputs that took part at the last listing, the reference left out.
+    listed: BTreeSet<String>,
+    /// Each held output, with the time of the listing that no longer had it.
+    lost: BTreeMap<String, Duration>,
+}
+
+impl BriefLosses {
+    /// Takes in a device list made at `now`. An output that took part at the
+    /// last listing, wasn't the reference then, is still switched on
+    /// (`is_on`) and is missing now is held from `now`; one listed again, or
+    /// switched off, no longer is. `reference` is the reference among
+    /// `listed`.
+    pub fn note_listing<'a>(
+        &mut self,
+        listed: impl IntoIterator<Item = &'a str>,
+        is_on: impl Fn(&str) -> bool,
+        reference: Option<&str>,
+        now: Duration,
+    ) {
+        let listed: BTreeSet<&str> = listed.into_iter().collect();
+        for id in &self.listed {
+            if !listed.contains(id.as_str()) && is_on(id) {
+                self.lost.insert(id.clone(), now);
+            }
+        }
+        self.lost
+            .retain(|id, _| !listed.contains(id.as_str()) && is_on(id));
+        self.listed = listed
+            .into_iter()
+            .filter(|id| is_on(id) && Some(*id) != reference)
+            .map(str::to_owned)
+            .collect();
+    }
+
+    /// Output `id` was switched off: it stops counting at once. Returns
+    /// whether it was held, so the host re-times the others.
+    pub fn switched_off(&mut self, id: &str) -> bool {
+        self.listed.remove(id);
+        self.lost.remove(id).is_some()
+    }
+
+    /// Ends the holds that are [`BRIEF_LOSS_HOLD`] old at `now`. Returns
+    /// whether any ended, so the host re-times the others once.
+    pub fn expire(&mut self, now: Duration) -> bool {
+        let before = self.lost.len();
+        self.lost
+            .retain(|_, lost_at| now.saturating_sub(*lost_at) < BRIEF_LOSS_HOLD);
+        self.lost.len() != before
+    }
+
+    /// A session restart (S20): no output is held any longer, and the new
+    /// session counts only the devices listed then.
+    pub fn restart(&mut self) {
+        self.lost.clear();
+    }
+
+    /// Whether output `id` is held.
+    pub fn holds(&self, id: &str) -> bool {
+        self.lost.contains_key(id)
+    }
+
+    /// The held outputs, sorted by ID.
+    pub fn held(&self) -> impl Iterator<Item = &str> {
+        self.lost.keys().map(String::as_str)
     }
 }
 

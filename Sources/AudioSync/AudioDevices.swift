@@ -189,6 +189,11 @@ struct AudioDevices: Sendable {
             .filter { HALProperty.channelCount(of: $0, in: kAudioObjectPropertyScopeInput) > 0 }
             .map { HALProperty.uint32(of: $0, kAudioDevicePropertyTransportType) ?? 0 }
     }
+
+    /// Channel count of a device in one scope (0 when it doesn't answer).
+    static func channelCount(of device: AudioObjectID, in scope: AudioObjectPropertyScope) -> Int {
+        HALProperty.channelCount(of: device, in: scope)
+    }
 }
 
 /// Typed reads of Core Audio object properties (main element). Each returns nil,

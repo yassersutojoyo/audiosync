@@ -19,7 +19,8 @@
 //! since ([`RenderPipeline::has_played_its_fade`]).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::time::Duration;
 
 use audiosync_core::clock;
 use audiosync_core::reader::Reader;
@@ -207,6 +208,68 @@ pub struct WakeCounts {
     pub late: u64,
     /// Wakes that found the device's buffer empty.
     pub empty: u64,
+}
+
+/// What the log names as the sign of an output stream that took no frame
+/// (S326): every padding read showed the whole buffer still queued, and
+/// with a clock that had run, it stood still too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StallSign {
+    /// The buffer stayed full.
+    FullPadding,
+    /// The buffer stayed full and the device clock, which had run, stopped.
+    FrozenClock,
+}
+
+/// An output stream that stopped taking frames (S326): for how long, and
+/// what showed it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stall {
+    pub span: Duration,
+    pub sign: StallSign,
+}
+
+/// Where a render thread leaves the [`Stall`] that ended its stream, for the
+/// controller to log once the stream is released.
+#[derive(Debug, Default)]
+#[cfg_attr(
+    all(not(windows), not(test)),
+    allow(dead_code, reason = "only the WASAPI render loop watches for stalls")
+)]
+pub struct StallSlot {
+    span_ms: AtomicU64,
+    /// 0 while there is none, then 1 + the sign's index.
+    sign: AtomicU8,
+}
+
+#[cfg_attr(
+    all(not(windows), not(test)),
+    allow(dead_code, reason = "only the WASAPI render loop watches for stalls")
+)]
+impl StallSlot {
+    /// Keeps `stall`. Never allocates, locks or blocks.
+    pub fn record(&self, stall: Stall) {
+        let span_ms = u64::try_from(stall.span.as_millis()).unwrap_or(u64::MAX);
+        self.span_ms.store(span_ms, Ordering::Relaxed);
+        let sign = match stall.sign {
+            StallSign::FullPadding => 1,
+            StallSign::FrozenClock => 2,
+        };
+        self.sign.store(sign, Ordering::Release);
+    }
+
+    /// The stall kept, if any.
+    pub fn get(&self) -> Option<Stall> {
+        let sign = match self.sign.load(Ordering::Acquire) {
+            1 => StallSign::FullPadding,
+            2 => StallSign::FrozenClock,
+            _ => return None,
+        };
+        Some(Stall {
+            span: Duration::from_millis(self.span_ms.load(Ordering::Relaxed)),
+            sign,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -414,6 +477,80 @@ mod tests {
             2_400 - 480 - LATENCY as i64,
             "the change landed exactly after the fade-out"
         );
+    }
+
+    /// The runs of silence in `played`, as (first frame, frames).
+    fn silences(played: &[f32]) -> Vec<(usize, usize)> {
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for (i, &sample) in played.iter().enumerate() {
+            if sample != 0.0 {
+                continue;
+            }
+            match runs.last_mut() {
+                Some((first, frames)) if *first + *frames == i => *frames += 1,
+                _ => runs.push((i, 1)),
+            }
+        }
+        runs
+    }
+
+    /// A live output at 50 ms raised by 100 ms, as an AirPlay switch-on
+    /// raises it by L, then by `raise` frames `after` callbacks later; what
+    /// it played from the first raise on.
+    fn raised_twice(after: usize, raise: i64) -> Vec<f32> {
+        let mut s = setup(SESSION_RATE, 2, 2_400, 1.0);
+        let block = vec![0.5f32; 480 * 2];
+        let tick = |s: &mut Setup| {
+            s.writer.write(&block, 480);
+            play(s, 480, 480)
+        };
+        for _ in 0..20 {
+            tick(&mut s);
+        }
+        s.control.set_delay_frames(2_400 + 4_800);
+        let mut played = Vec::new();
+        for _ in 0..after {
+            played.extend(tick(&mut s));
+        }
+        s.control.set_delay_frames(2_400 + 4_800 + raise);
+        for _ in 0..40 {
+            played.extend(tick(&mut s));
+        }
+        played
+    }
+
+    // covers: S281
+    #[test]
+    fn a_raise_during_the_inserted_silence_lengthens_it_and_a_later_one_inserts_more() {
+        let len = fade_len(SESSION_RATE);
+        // The fade-out's last frame is silent, then the converter's latency.
+        let gap = |raise: usize| raise + LATENCY + 1;
+        assert_eq!(silences(&raised_twice(0, 0)), [(len - 1, gap(4_800))]);
+        assert_eq!(
+            silences(&raised_twice(3, 960)),
+            [(len - 1, gap(4_800 + 960))],
+            "one silence, longer by the raise"
+        );
+
+        let played = raised_twice(20, 960);
+        let later = 20 * 480;
+        assert_eq!(
+            silences(&played),
+            [(len - 1, gap(4_800)), (later + len - 1, gap(960))]
+        );
+        let back = later + len - 1 + gap(960);
+        for i in 0..len {
+            let out = 0.5 * fade_out(i, len);
+            assert!(
+                (f64::from(played[later + i]) - out).abs() <= 1e-6,
+                "out {i}"
+            );
+            let fade_in = 0.5 * fade_in(i, len);
+            assert!(
+                (f64::from(played[back + i]) - fade_in).abs() <= 1e-6,
+                "in {i}"
+            );
+        }
     }
 
     /// What the endpoint holds, as the render loop reads it at 48 kHz.
@@ -770,6 +907,44 @@ mod tests {
         assert!(late > on_time, "{late} after a late wake, {on_time} before");
         assert_eq!(s.pipeline.lead_frames(), on_time);
         assert_eq!(s.control.counters().starved_renders, 0);
+    }
+
+    /// The capture frames the converter was sped up by over five seconds of
+    /// 10 ms callbacks against a capture 1000 ppm faster than the device,
+    /// its blocks stamped on the core's clock when `stamped`.
+    fn sped_against_a_slow_device(device_rate: u32, stamped: bool) -> u64 {
+        let mut s = primed(device_rate);
+        let period = device_rate as usize / 100;
+        for _ in 0..500 {
+            s.owed += period as f64 * f64::from(SESSION_RATE) / f64::from(device_rate) * 1.001;
+            let write = s.owed.floor();
+            s.owed -= write;
+            let write = write as usize;
+            let block = vec![0.5f32; write * 2];
+            if stamped {
+                s.writer.write_at(&block, write, clock::now_ns());
+            } else {
+                s.writer.write(&block, write);
+            }
+            play(&mut s, period, period);
+        }
+        s.control.sped_frames()
+    }
+
+    // covers: S207, S226
+    #[test]
+    fn each_callback_reads_on_the_stamps_clock_so_the_trim_follows_the_capture() {
+        for device_rate in [SESSION_RATE, 44_100] {
+            assert!(
+                sped_against_a_slow_device(device_rate, true) > 0,
+                "{device_rate} Hz with stamps"
+            );
+            assert_eq!(
+                sped_against_a_slow_device(device_rate, false),
+                0,
+                "{device_rate} Hz without stamps"
+            );
+        }
     }
 
     #[test]

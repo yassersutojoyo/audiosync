@@ -55,9 +55,10 @@ impl DebugLog {
     /// nothing otherwise: `audiosync-debug.log` in the temporary folder, or
     /// on Linux `debug.log` in the state folder (the temporary folder only
     /// when that can't be made, which the log's first line then says).
-    pub fn from_env() -> DebugLog {
+    /// A `relaunched` start keeps what the file holds (spec S309).
+    pub fn from_env(relaunched: bool) -> DebugLog {
         let (path, warning) = env_path();
-        let log = DebugLog::new(path);
+        let log = DebugLog::at_launch(path, relaunched);
         if let Some(warning) = warning {
             log.log(|| warning);
         }
@@ -72,6 +73,16 @@ impl DebugLog {
     )]
     pub fn appending_from_env() -> DebugLog {
         DebugLog::open(env_path().0, MAX_BYTES, false)
+    }
+
+    /// The launch log at `path`, emptied unless the old copy relaunched this
+    /// one after an update, whose lines (the signature check among them) stay.
+    fn at_launch(path: Option<PathBuf>, relaunched: bool) -> DebugLog {
+        if relaunched {
+            DebugLog::open(path, MAX_BYTES, false)
+        } else {
+            DebugLog::new(path)
+        }
     }
 
     /// A log written to `path`, emptied first, or one that writes nothing
@@ -91,10 +102,16 @@ impl DebugLog {
         let Some(file) = path.and_then(|path| open_file(&path, empty)) else {
             return DebugLog::default();
         };
+        // An append counts what the file already holds toward the limit.
+        let written = if empty {
+            0
+        } else {
+            file.metadata().map_or(max_bytes, |meta| meta.len())
+        };
         let (writer, requests) = mpsc::channel();
         let started = thread::Builder::new()
             .name("audiosync-debug-log".to_owned())
-            .spawn(move || write_requests(&requests, file, max_bytes));
+            .spawn(move || write_requests(&requests, file, written, max_bytes));
         DebugLog {
             writer: started.ok().map(|_| writer),
         }
@@ -240,12 +257,12 @@ impl<W: Write> Write for Counted<W> {
 
 /// The writer thread: appends each line and flushes whenever no request
 /// waits, until every clone of the log is gone. A line that can't be
-/// written is dropped. Once the file holds `max_bytes`, one last line says
-/// so and later lines are dropped.
-fn write_requests(requests: &Receiver<Request>, file: File, max_bytes: u64) {
+/// written is dropped. Once the file holds `max_bytes`, `written` of them
+/// before the first line, one last line says so and later lines are dropped.
+fn write_requests(requests: &Receiver<Request>, file: File, written: u64, max_bytes: u64) {
     let mut out = Counted {
         inner: BufWriter::new(file),
-        written: 0,
+        written,
     };
     while let Ok(request) = requests.recv() {
         let mut next = Some(request);
@@ -419,6 +436,7 @@ mod tests {
 
     use super::*;
 
+    // covers: S170
     #[test]
     fn the_log_is_on_only_when_audiosync_debug_is_exactly_1() {
         let dir = Path::new("logs");
@@ -432,6 +450,7 @@ mod tests {
         assert_eq!(log_path(None, dir), None);
     }
 
+    // covers: S170
     #[test]
     fn a_log_that_is_off_creates_no_file_and_builds_no_message() {
         let dir = test_dir("log-off");
@@ -491,6 +510,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    // covers: S170
     #[test]
     fn each_launch_empties_the_last_log() {
         let dir = test_dir("log-truncate");
@@ -502,6 +522,30 @@ mod tests {
         log.log(|| "this launch".to_owned());
         assert!(log.flush(TEST_FLUSH));
         assert_eq!(read_messages(&path), ["this launch"]);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_relaunched_start_keeps_the_log_and_a_plain_start_empties_it() {
+        let dir = test_dir("log-relaunch");
+        let path = dir.join(FILE_NAME);
+        let old = DebugLog::new(Some(path.clone()));
+        old.log(|| "updater: signature of 0.7.2 verified".to_owned());
+        assert!(old.flush(TEST_FLUSH));
+        let relaunched = DebugLog::at_launch(Some(path.clone()), true);
+        relaunched.log(|| "the relaunched copy".to_owned());
+        assert!(relaunched.flush(TEST_FLUSH));
+        assert_eq!(
+            read_messages(&path),
+            [
+                "updater: signature of 0.7.2 verified",
+                "the relaunched copy"
+            ]
+        );
+        let plain = DebugLog::at_launch(Some(path.clone()), false);
+        plain.log(|| "a plain start".to_owned());
+        assert!(plain.flush(TEST_FLUSH));
+        assert_eq!(read_messages(&path), ["a plain start"]);
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -519,6 +563,24 @@ mod tests {
             read_messages(&path),
             ["the running copy", "the second launch"]
         );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_append_to_a_full_log_adds_nothing() {
+        let dir = test_dir("log-limit-append");
+        let path = dir.join(FILE_NAME);
+        let full = DebugLog::with_limit(Some(path.clone()), 200);
+        for n in 0..20 {
+            full.log(|| format!("line {n:02} of the old copy"));
+        }
+        assert!(full.flush(TEST_FLUSH));
+        let before = fs::read_to_string(&path).unwrap();
+        assert!(before.len() >= 200, "{} bytes", before.len());
+        let appended = DebugLog::open(Some(path.clone()), 200, false);
+        appended.log(|| "the relaunched copy".to_owned());
+        assert!(appended.flush(TEST_FLUSH));
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
         let _ = fs::remove_dir_all(dir);
     }
 

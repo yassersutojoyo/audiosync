@@ -4046,16 +4046,20 @@ impl App {
                 flyout.set_body_cut(cut);
             }
         };
-        set_list_cut(0.0);
-        set_body_cut(0.0);
+        let cut = flyout.get_list_cut() > 0.0 || flyout.get_body_cut() > 0.0;
         let mut height = flyout.get_fit_height();
-        if height > room {
-            set_list_cut(height - room);
+        if !flyout_fit_holds(height, room, cut) {
+            set_list_cut(0.0);
+            set_body_cut(0.0);
             height = flyout.get_fit_height();
-        }
-        if height > room {
-            set_body_cut(height - room);
-            height = flyout.get_fit_height();
+            if height > room {
+                set_list_cut(height - room);
+                height = flyout.get_fit_height();
+            }
+            if height > room {
+                set_body_cut(height - room);
+                height = flyout.get_fit_height();
+            }
         }
         let height = height.min(room);
         let window = flyout.window();
@@ -4064,6 +4068,17 @@ impl App {
             window.set_size(slint::LogicalSize::new(size.width, height));
         }
         height
+    }
+}
+
+/// Whether the flyout's cuts still fit its content in `room`, so the
+/// refresh every 500 ms makes no layout pass: with a cut it fills the room
+/// exactly, without one it fits.
+fn flyout_fit_holds(fit: f32, room: f32, cut: bool) -> bool {
+    if cut {
+        (fit - room).abs() < 0.5
+    } else {
+        fit <= room
     }
 }
 
@@ -5952,6 +5967,7 @@ mod tests {
             .expect("the desk has a row")
     }
 
+    // covers: S220
     #[test]
     fn a_draft_is_typed_text_other_than_the_applied_value() {
         assert!(!is_draft(None, "+120"), "nothing typed");
@@ -7792,6 +7808,7 @@ mod tests {
         assert_eq!(desk_delay_text(&app), "+120");
     }
 
+    // covers: S220
     #[test]
     fn escape_in_the_airplay_delay_field_leaves_the_applied_delay() {
         let app = app_over(MockBackend::new());
@@ -7824,6 +7841,40 @@ mod tests {
             "leaving the field after Escape applies nothing"
         );
         assert_eq!(shown(), format_ms(1750.0));
+    }
+
+    // covers: S220
+    #[test]
+    fn an_airplay_delay_over_its_range_applies_clamped_once() {
+        let backend = MockBackend::new();
+        let applied = backend.airplay_delays.clone();
+        let app = app_over(backend);
+        let shown = || app.main.get_airplay_delay_text().to_string();
+        app.main.invoke_airplay_delay_edited("25000".into());
+        assert_eq!(app.snapshot().airplay_delay_ms, Some(1750.0));
+
+        app.main.invoke_airplay_delay_committed();
+        assert_eq!(
+            app.snapshot().airplay_delay_ms,
+            Some(ui_model::MAX_DELAY_MS)
+        );
+        assert_eq!(
+            shown(),
+            format_ms(ui_model::MAX_DELAY_MS),
+            "the field shows it clamped"
+        );
+        assert!(!app.main.get_airplay_delay_pending());
+        assert!(
+            app.ui.borrow().airplay_delay_draft.draft.is_none(),
+            "a focus loss after it has nothing to apply"
+        );
+
+        app.main.invoke_airplay_delay_committed();
+        assert_eq!(
+            applied.borrow().len(),
+            1,
+            "a focus loss after Return applies nothing"
+        );
     }
 
     #[test]
@@ -8240,6 +8291,34 @@ mod tests {
         assert_eq!(row.volume_step, 1.0);
     }
 
+    // covers: C68
+    #[test]
+    fn a_cast_row_with_a_fixed_volume_says_it_cannot_be_changed() {
+        let app = app_over(MockBackend::new());
+        let state = MockBackend::new().snapshot();
+        let mut speaker = state.speaker("local:desk").unwrap().clone();
+        speaker.kind = ui_model::SpeakerKind::Cast;
+        speaker.cast = Some(ui_model::CastRow {
+            state: ui_model::CastState::Playing,
+            muted: false,
+            volume_fixed: true,
+            volume_step: 1.0,
+            group: None,
+            added_by_address: false,
+        });
+        let row = speaker_item(&state, &speaker, true, false, None);
+        // The slider's `enabled` and the hint in widgets.slint key off this flag.
+        assert!(row.cast && row.volume_fixed);
+        assert_eq!(
+            app.strings().get_cast_volume_fixed().as_str(),
+            "This speaker's volume can't be changed from AudioSync."
+        );
+
+        speaker.cast.as_mut().unwrap().volume_fixed = false;
+        let row = speaker_item(&state, &speaker, true, false, None);
+        assert!(row.cast && !row.volume_fixed);
+    }
+
     #[test]
     fn a_cast_group_row_names_its_members_or_says_they_are_unknown() {
         let app = app_over(MockBackend::new());
@@ -8558,6 +8637,7 @@ mod tests {
         assert_eq!(row.delay_ms, 120);
     }
 
+    // covers: S220
     #[test]
     fn a_typed_airplay_delay_applies_only_when_committed() {
         // With a sender latency above 2 s the delay can't go under 2100 ms,
@@ -8588,6 +8668,7 @@ mod tests {
         );
     }
 
+    // covers: S220
     #[test]
     fn escape_drops_the_typed_airplay_delay() {
         let shown = Some(2100.0);
@@ -8693,6 +8774,56 @@ mod tests {
         let bottom = flyout.get_footer_bottom();
         assert!(bottom + 16.0 <= room, "buttons end at {bottom} in {room}");
         assert_eq!(app.fit_flyout(1000.0), full, "the list gets its room back");
+    }
+
+    /// The refresh refits the flyout every 500 ms: a cut that still fits
+    /// stays, and a change in content or room starts over.
+    #[test]
+    fn the_flyout_keeps_its_cuts_while_they_still_fit() {
+        assert!(flyout_fit_holds(300.0, 300.0, true), "cut, fills the room");
+        assert!(flyout_fit_holds(300.2, 300.0, true), "rounding");
+        assert!(!flyout_fit_holds(340.0, 300.0, true), "the content grew");
+        assert!(
+            !flyout_fit_holds(260.0, 300.0, true),
+            "it shrank or the room grew"
+        );
+        assert!(flyout_fit_holds(260.0, 300.0, false), "no cut, fits");
+        assert!(!flyout_fit_holds(340.0, 300.0, false), "no cut, too tall");
+
+        let app = app_over(MockBackend::zones_preview());
+        app.refresh();
+        draw_frames();
+        let flyout = &app.flyout;
+        flyout
+            .window()
+            .set_size(slint::LogicalSize::new(340.0, 400.0));
+        let room = app.fit_flyout(1000.0) - 40.0;
+        assert_eq!(app.fit_flyout(room), room);
+        let cuts = (flyout.get_list_cut(), flyout.get_body_cut());
+        assert!(cuts.0 > 0.0, "the list is cut");
+        app.refresh();
+        draw_frames();
+        assert_eq!(app.fit_flyout(room), room);
+        assert_eq!(
+            (flyout.get_list_cut(), flyout.get_body_cut()),
+            cuts,
+            "nothing changed, the cuts stay"
+        );
+
+        let shorter = room - 40.0;
+        assert_eq!(app.fit_flyout(shorter), shorter);
+        let grown = flyout.get_list_cut() + flyout.get_body_cut();
+        assert!(grown > cuts.0 + cuts.1, "less room, a deeper cut");
+        assert!(
+            flyout.get_footer_bottom() + 16.0 <= shorter + 0.5,
+            "the buttons still show"
+        );
+        assert_eq!(app.fit_flyout(room), room);
+        assert_eq!(
+            (flyout.get_list_cut(), flyout.get_body_cut()),
+            cuts,
+            "the room back, the cuts as before"
+        );
     }
 
     /// A flyout with two notices, presets and an input's channel pairs, on a
@@ -8982,6 +9113,102 @@ mod tests {
         assert!(!expanded(), "Space folded the zone");
         press(app.main.window(), Key::Return);
         assert!(expanded(), "Enter unfolded it");
+    }
+
+    #[test]
+    fn a_zone_header_folds_and_unfolds_through_its_accessibility_actions() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::zones_preview());
+        app.main.show().unwrap();
+        draw_frames();
+        let expanded = || {
+            app.models
+                .zones
+                .iter()
+                .find(|zone| zone.id == "zone:living")
+                .expect("the zone is listed")
+                .expanded
+        };
+        let element = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .unwrap_or_else(|| panic!("nothing is labeled {label}"))
+        };
+        assert!(expanded());
+
+        // UI Automation offers Invoke only on a node with no expanded state,
+        // and Slint 1.18 passes no collapse action on.
+        let arrow = element("Hide speakers in Living Room");
+        assert_ne!(
+            arrow.accessible_expandable(),
+            Some(true),
+            "UI Automation can't fold through an expandable arrow"
+        );
+        arrow.invoke_accessible_default_action();
+        draw_frames();
+        assert!(!expanded(), "Invoke on the arrow folded the zone");
+
+        let arrow = element("Show speakers in Living Room");
+        assert_ne!(arrow.accessible_expandable(), Some(true));
+        arrow.invoke_accessible_default_action();
+        draw_frames();
+        assert!(expanded(), "Invoke on the arrow unfolded it");
+
+        app.main
+            .invoke_zone_expanded_changed("zone:living".into(), false);
+        draw_frames();
+        let toggle = element("Living Room, zone");
+        assert_eq!(toggle.accessible_expanded(), Some(false));
+        toggle.invoke_accessible_expand_action();
+        draw_frames();
+        assert!(expanded(), "Expand on the zone's toggle unfolded it");
+    }
+
+    #[test]
+    fn a_flyout_zone_header_folds_and_unfolds_through_its_accessibility_actions() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::zones_preview());
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let expanded = || {
+            app.models
+                .zones
+                .iter()
+                .find(|zone| zone.id == "zone:living")
+                .expect("the zone is listed")
+                .expanded
+        };
+        let element = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.flyout, label)
+                .next()
+                .unwrap_or_else(|| panic!("nothing in the flyout is labeled {label}"))
+        };
+        assert!(expanded());
+
+        let arrow = element("Hide speakers in Living Room");
+        assert_ne!(
+            arrow.accessible_expandable(),
+            Some(true),
+            "UI Automation can't fold through an expandable arrow"
+        );
+        arrow.invoke_accessible_default_action();
+        draw_frames();
+        assert!(!expanded(), "Invoke on the flyout's arrow folded the zone");
+
+        let arrow = element("Show speakers in Living Room");
+        assert_ne!(arrow.accessible_expandable(), Some(true));
+        arrow.invoke_accessible_default_action();
+        draw_frames();
+        assert!(expanded(), "Invoke on the flyout's arrow unfolded it");
+
+        app.flyout
+            .invoke_zone_expanded_changed("zone:living".into(), false);
+        draw_frames();
+        let toggle = element("Living Room, zone");
+        assert_eq!(toggle.accessible_expanded(), Some(false));
+        toggle.invoke_accessible_expand_action();
+        draw_frames();
+        assert!(expanded(), "Expand on the flyout zone's toggle unfolded it");
     }
 
     #[test]

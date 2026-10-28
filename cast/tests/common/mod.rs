@@ -117,6 +117,10 @@ pub struct Behavior {
     /// A new self-signed certificate for every connection, as a device
     /// that made one at a reboot (G4).
     pub new_certificate_each_connection: bool,
+    /// The stream is read at this fraction of a 48 kHz stereo 16-bit WAV
+    /// stream's byte rate, as a device whose output clock runs slow (C75);
+    /// `None` reads as fast as the audio arrives.
+    pub read_pace: Option<f64>,
 }
 
 impl Default for Behavior {
@@ -141,6 +145,7 @@ impl Default for Behavior {
             volume_answer: None,
             device_ping: None,
             new_certificate_each_connection: false,
+            read_pace: None,
         }
     }
 }
@@ -211,6 +216,8 @@ pub struct Fetch {
     pub head: String,
     /// The raw body bytes, chunk framing included, up to a cap.
     pub body: Vec<u8>,
+    /// Every body byte read, chunk framing included, past the cap too.
+    pub received: usize,
     pub ended: bool,
 }
 
@@ -435,6 +442,12 @@ impl FakeDevice {
         self.fetches.lock().expect("fetches").clone()
     }
 
+    /// Body bytes read over every fetch, without copying the bodies.
+    pub fn bytes_read(&self) -> usize {
+        let fetches = self.fetches.lock().expect("fetches");
+        fetches.iter().map(|fetch| fetch.received).sum()
+    }
+
     pub fn negotiated_suites(&self) -> Vec<CipherSuite> {
         self.suites.lock().expect("suites").clone()
     }
@@ -635,8 +648,9 @@ impl Device {
                 let stop = Arc::clone(&self.stop_fetching);
                 let fetches = Arc::clone(&self.fetches);
                 let commands = self.commands.clone();
+                let pace = self.behavior.read_pace;
                 thread::spawn(move || {
-                    fetch(&url, &fetches, &stop, || {
+                    fetch(&url, &fetches, &stop, pace, || {
                         if play {
                             let playing = media_status(&transport, 0, session, "PLAYING", None);
                             let _ = commands.send(Command::Send(playing));
@@ -651,8 +665,16 @@ impl Device {
 }
 
 /// GETs `url` as the device would, records what came back and calls
-/// `on_first_audio` once the headers and the first chunk arrived.
-fn fetch(url: &str, fetches: &Mutex<Vec<Fetch>>, stop: &AtomicBool, on_first_audio: impl FnOnce()) {
+/// `on_first_audio` once the headers and the first chunk arrived. With a
+/// `pace`, reads no faster than that fraction of a WAV stream's byte rate.
+fn fetch(
+    url: &str,
+    fetches: &Mutex<Vec<Fetch>>,
+    stop: &AtomicBool,
+    pace: Option<f64>,
+    on_first_audio: impl FnOnce(),
+) {
+    const WAV_BYTES_PER_SECOND: f64 = 192_000.0;
     let Some((address, path)) = http::split_url(url) else {
         return;
     };
@@ -672,8 +694,19 @@ fn fetch(url: &str, fetches: &Mutex<Vec<Fetch>>, stop: &AtomicBool, on_first_aud
     let mut head_done = false;
     let mut notify = Some(on_first_audio);
     let mut buffer = [0u8; 8192];
+    let started = Instant::now();
+    let mut taken = 0usize;
     while !stop.load(Ordering::SeqCst) {
-        let count = match http::read_timed(&mut stream, &mut buffer) {
+        let mut room = buffer.len();
+        if let Some(pace) = pace {
+            let allowed = (started.elapsed().as_secs_f64() * pace * WAV_BYTES_PER_SECOND) as usize;
+            room = room.min(allowed.saturating_sub(taken));
+            if room == 0 {
+                thread::sleep(Duration::from_millis(5));
+                continue;
+            }
+        }
+        let count = match http::read_timed(&mut stream, &mut buffer[..room]) {
             Ok(0) => break,
             Ok(count) => count,
             Err(error)
@@ -686,9 +719,11 @@ fn fetch(url: &str, fetches: &Mutex<Vec<Fetch>>, stop: &AtomicBool, on_first_aud
             }
             Err(_) => break,
         };
+        taken += count;
         let mut fetches = fetches.lock().expect("fetches");
         let record = &mut fetches[index];
         if head_done {
+            record.received += count;
             if record.body.len() < 4 << 20 {
                 record.body.extend_from_slice(&buffer[..count]);
             }
@@ -698,6 +733,7 @@ fn fetch(url: &str, fetches: &Mutex<Vec<Fetch>>, stop: &AtomicBool, on_first_aud
                 head_done = true;
                 record.head = String::from_utf8_lossy(&data[..end]).into_owned();
                 record.body = data[end + 4..].to_vec();
+                record.received = record.body.len();
             }
         }
         // The WAV header chunk and one block of audio.

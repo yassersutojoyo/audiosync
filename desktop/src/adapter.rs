@@ -448,9 +448,12 @@ pub struct AudioAdapter<A: AudioBackend> {
     left_behind: BTreeSet<String>,
     /// The AirPlay speaker IDs of the last listing, to tell which appeared.
     airplay_listed: BTreeSet<String>,
-    /// The AirPlay speakers the user switched on this run: one that asks for
-    /// a code every time stays on while listed.
+    /// The AirPlay speakers the user switched on in this stream: one that
+    /// asks for a code every time stays on while listed. The marks go when
+    /// a stream that ran stops (S223).
     airplay_on_by_hand: BTreeSet<String>,
+    /// Whether streaming ran at the last look, to tell when it stopped.
+    streamed: bool,
     /// The last name of every AirPlay speaker listed.
     airplay_names: BTreeMap<String, String>,
     /// Polls in a row with AirPlay discovery running and no AirPlay speaker
@@ -467,6 +470,12 @@ pub struct AudioAdapter<A: AudioBackend> {
     cast_file: Option<PathBuf>,
     /// What that file holds as last written or read.
     cast_saved: Option<String>,
+    /// The file was checked before its first save this run, and a copy of
+    /// it kept aside if it didn't read ([`keep_unread_cast_file_aside`]).
+    cast_file_checked: bool,
+    /// The file was there at launch but couldn't be read, so the Cast
+    /// memory started without it.
+    cast_unread_at_launch: bool,
     /// The Cast speakers the user added by address, as the settings keep
     /// them (spec C18).
     cast_addresses: Vec<String>,
@@ -620,6 +629,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let settings_file_has_path = settings_file.path().is_some();
         if settings_file_has_path {
             log.log(|| format!("settings: {loaded}"));
+            if let settings::Loaded::Read { unreadable, .. } = &loaded {
+                for field in unreadable {
+                    log.log(|| format!("settings: field {field} unreadable, using default"));
+                }
+            }
         } else {
             log.log(|| "settings: no app data folder; kept until AudioSync quits".to_owned());
         }
@@ -639,12 +653,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
             left_behind: BTreeSet::new(),
             airplay_listed: BTreeSet::new(),
             airplay_on_by_hand: BTreeSet::new(),
+            streamed: false,
             airplay_quiet_polls: 0,
             airplay_names: BTreeMap::new(),
             cast_names: BTreeMap::new(),
             cast_quiet_polls: 0,
             cast_file: None,
             cast_saved: None,
+            cast_file_checked: false,
+            cast_unread_at_launch: false,
             cast_addresses: Vec::new(),
             cast_probe: cast_address::answers,
             auto_connect: BTreeSet::new(),
@@ -1808,13 +1825,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Keeps the Cast speakers' offsets and formats in `path` from now on.
+    /// `unread_at_launch` says the file was there but couldn't be read into
+    /// the Cast memory at launch, so its first save keeps a copy aside.
     #[cfg_attr(
         all(not(os_backend), not(test)),
         expect(dead_code, reason = "only the Windows app keeps a file")
     )]
-    pub fn set_cast_file(&mut self, path: Option<PathBuf>) {
+    pub fn set_cast_file(&mut self, path: Option<PathBuf>, unread_at_launch: bool) {
         self.cast_file = path;
         self.cast_saved = self.audio.cast_memory_json();
+        self.cast_file_checked = false;
+        self.cast_unread_at_launch = unread_at_launch;
     }
 
     /// Writes the Cast speakers' offsets and formats to their file when they
@@ -1830,6 +1851,28 @@ impl<A: AudioBackend> AudioAdapter<A> {
         };
         if self.cast_saved.as_ref() == Some(&json) {
             return;
+        }
+        if !self.cast_file_checked {
+            match keep_unread_cast_file_aside(path, self.cast_unread_at_launch) {
+                Ok(kept) => {
+                    self.cast_file_checked = true;
+                    if let Some(copy) = kept {
+                        self.log.log(|| {
+                            format!(
+                                "Cast: the speakers' file didn't read; kept aside as {}",
+                                copy.display()
+                            )
+                        });
+                    }
+                }
+                // It is left alone until it can be read and kept.
+                Err(error) => {
+                    self.log
+                        .log(|| format!("Cast: the speakers' file couldn't be kept: {error}"));
+                    self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
+                    return;
+                }
+            }
         }
         match data_folder::write_atomically(path, json.as_bytes()) {
             Ok(()) => self.cast_saved = Some(json),
@@ -2738,7 +2781,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// and switches on the auto-connect speakers that appeared. One that
     /// asks for a code every time and doesn't play goes off instead, when
     /// it appears (also on from the last run) and when a listed one starts
-    /// asking, unless the user turned it on this run.
+    /// asking, unless the user turned it on in this stream.
     fn airplay_listed(&mut self) {
         let mut listed = BTreeSet::new();
         let mut appeared = Vec::new();
@@ -3415,7 +3458,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// streaming stopped, its next start is a new attempt that hasn't waited
     /// yet.
     fn forget_stale_waits(&mut self) {
-        if !self.running() {
+        let running = self.running();
+        if std::mem::replace(&mut self.streamed, running) && !running {
+            self.end_hand_marks();
+        }
+        if !running {
             self.busy.clear();
             self.reconnecting.clear();
             return;
@@ -3424,6 +3471,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.busy.retain(|id| outputs.contains(id));
         let airplay = self.audio.enabled_airplay();
         self.reconnecting.retain(|id, _| airplay.contains(id));
+    }
+
+    /// The stream ended, and with it the PIN session each click bought
+    /// (S223). A speaker whose pairing or prompt is still open, shown or
+    /// queued, keeps its mark, as the backend keeps it, so the pairing turns
+    /// it on.
+    fn end_hand_marks(&mut self) {
+        let waiting = self.audio.airplay_waiting_for_user();
+        self.airplay_on_by_hand.retain(|id| waiting.contains(id));
     }
 
     fn handle(&mut self, event: BackendEvent) {
@@ -3442,6 +3498,19 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     self.post(speaker_subject(&id), NoticeMessage::SpeakerLost { speaker });
                 }
             }
+            // Its stream stalled twice in a row while its device stays
+            // listed (S326), or its listed device refused to open for 30 s
+            // (S331): it stays on and is opened again, and the notice clears
+            // once a stream plays.
+            BackendEvent::OutputStalled { id } | BackendEvent::OutputRefused { id } => {
+                let speaker = self.output_name(&id);
+                self.post(speaker_subject(&id), NoticeMessage::SpeakerLost { speaker });
+            }
+            BackendEvent::OutputPlaysAgain { id } => {
+                self.clear_if(speaker_subject(&id), |message| {
+                    matches!(message, NoticeMessage::SpeakerLost { .. })
+                });
+            }
             BackendEvent::OutputFailed { id, .. } => {
                 self.busy.remove(&id);
                 self.output_failed(&id, false);
@@ -3458,6 +3527,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.busy.remove(&id);
                 self.clear_if(speaker_subject(&id), |message| {
                     matches!(message, NoticeMessage::SpeakerBusy { .. })
+                });
+            }
+            // Streaming stays on while another app holds the input (S333).
+            // The existing capture notice stands in until the maintainer
+            // approves a busy-specific text.
+            BackendEvent::CaptureBusy => {
+                self.post(NoticeSubject::Source, NoticeMessage::CaptureFailed);
+            }
+            BackendEvent::CaptureFree => {
+                self.clear_if(NoticeSubject::Source, |message| {
+                    matches!(message, NoticeMessage::CaptureFailed)
                 });
             }
             BackendEvent::Stopped { reason } => {
@@ -3558,6 +3638,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             BackendEvent::AirPlayFailed { id, problem } => {
                 self.reconnecting.remove(&id);
+                // It is off, so the click that turned it on is spent (S223).
+                self.airplay_on_by_hand.remove(&id);
                 let raises = problem == AirPlayProblem::TimingUnavailable
                     && self
                         .ptp_taken
@@ -3589,6 +3671,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             // Its Retry starts a new sender (`retry_airplay`).
             BackendEvent::AirPlayStopped => {
                 self.reconnecting.clear();
+                // Retry starts a new stream, though capture runs on.
+                self.end_hand_marks();
                 self.post(NoticeSubject::AirPlay, NoticeMessage::AirPlayStopped);
             }
             BackendEvent::AirPlayPtpFree => {
@@ -4665,6 +4749,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 self.airplay_name(&airplay_id)
             )
         });
+        self.airplay_on_by_hand.remove(&airplay_id);
         self.audio.cancel_airplay_pairing(&airplay_id);
         self.take_events();
     }
@@ -4699,6 +4784,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 self.airplay_name(&airplay_id)
             )
         });
+        self.airplay_on_by_hand.remove(&airplay_id);
         self.audio.cancel_airplay_password(&airplay_id);
         self.stop_if_idle();
         self.take_events();
@@ -5177,6 +5263,34 @@ fn input_key(endpoint_id: &str) -> String {
 
 #[cfg(test)]
 mod device_volume_tests;
+
+/// The name a Cast speakers' file that didn't read is kept aside under,
+/// with the time added (`cast-speakers.ignored-<time>.json`).
+const CAST_IGNORED_FILE_NAME: &str = "cast-speakers.ignored.json";
+
+/// Copies the Cast speakers' file at `path` aside when this run's Cast
+/// memory didn't come from it: it was `unread_at_launch`, or it isn't a
+/// JSON object ([`DeviceMemory::read_json`](audiosync_cast::host::DeviceMemory::read_json),
+/// read as the launch reads it). An object whose entries are all damaged
+/// reads as an empty memory and is not kept. Returns the copy's path;
+/// `None` when there is no file or nothing to keep. A file that can't be
+/// read is an error, and must not be replaced.
+fn keep_unread_cast_file_aside(
+    path: &std::path::Path,
+    unread_at_launch: bool,
+) -> std::io::Result<Option<PathBuf>> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let reads =
+        audiosync_cast::host::DeviceMemory::read_json(&String::from_utf8_lossy(&bytes)).is_some();
+    if reads && !unread_at_launch {
+        return Ok(None);
+    }
+    data_folder::keep_bytes_aside(path, CAST_IGNORED_FILE_NAME, &bytes).map(Some)
+}
 
 #[cfg(test)]
 mod tests {
@@ -6280,6 +6394,28 @@ mod tests {
         assert_eq!(playing(&adapter), [SPEAKERS]);
     }
 
+    // covers: S333
+    #[test]
+    fn a_lost_capture_whose_input_is_busy_shows_the_capture_notice_until_it_runs() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().fail_capture(BackendError::DeviceGone);
+        adapter
+            .audio_mut()
+            .refuse_captures(Some(BackendError::DeviceBusy));
+        for _ in 0..10 {
+            adapter.poll();
+            assert!(adapter.snapshot().running, "streaming stays on");
+        }
+        assert_eq!(messages(&adapter), [NoticeMessage::CaptureFailed]);
+        adapter.audio_mut().refuse_captures(None);
+        for _ in 0..10 {
+            adapter.poll();
+        }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert!(adapter.snapshot().running);
+    }
+
     #[test]
     fn capture_that_cant_start_leaves_streaming_off_with_a_notice() {
         let mut adapter = adapter();
@@ -6389,6 +6525,69 @@ mod tests {
         assert_eq!(playing(&adapter), [SPEAKERS]);
     }
 
+    // covers: S326
+    #[test]
+    fn a_stream_that_stalls_twice_in_a_row_is_reported_until_one_plays_five_seconds() {
+        use crate::audio::render::{Stall, StallSign};
+        let stall = Stall {
+            span: std::time::Duration::from_secs(2),
+            sign: StallSign::FullPadding,
+        };
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().stall_renderer(SPEAKERS, stall);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "a first stall isn't told");
+        adapter.poll();
+        adapter.audio_mut().stall_renderer(SPEAKERS, stall);
+        adapter.poll();
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "Speakers".into(),
+        };
+        assert_eq!(messages(&adapter), [lost]);
+        assert!(enabled(&adapter, SPEAKERS), "it stays on");
+
+        // Ten seconds on it plays again, and after five more the notice goes.
+        for _ in 0..20 {
+            adapter.poll();
+        }
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+        assert_eq!(messages(&adapter).len(), 1, "not yet");
+        for _ in 0..10 {
+            adapter.poll();
+        }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    // covers: S331
+    #[test]
+    fn a_speaker_windows_keeps_refusing_shows_the_lost_notice_until_it_plays() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().end_renderer(SPEAKERS);
+        adapter
+            .audio_mut()
+            .fail_output(SPEAKERS, Some(BackendError::DeviceGone));
+        for _ in 0..60 {
+            adapter.poll();
+        }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        adapter.poll();
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "Speakers".into(),
+        };
+        assert_eq!(messages(&adapter), [lost]);
+        assert!(enabled(&adapter, SPEAKERS), "it stays on");
+
+        // It answers at the try three seconds on, and the notice goes.
+        adapter.audio_mut().fail_output(SPEAKERS, None);
+        for _ in 0..6 {
+            adapter.poll();
+        }
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
     #[test]
     fn a_stream_that_resets_while_its_device_stays_gets_no_notice() {
         let mut adapter = adapter();
@@ -6453,6 +6652,7 @@ mod tests {
         adapter.poll();
     }
 
+    // covers: S162
     #[test]
     fn a_speaker_on_that_wasnt_listed_since_launch_doesnt_count_as_on() {
         let mut audio = MockBackend::empty();
@@ -7715,6 +7915,341 @@ mod tests {
         assert!(state.running, "the session the user started goes on");
     }
 
+    // covers: S223, P182
+    #[test]
+    fn an_every_time_speaker_turned_on_by_hand_goes_off_with_a_notice_when_streaming_stops() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&den, PairingEvent::PairedForSession);
+        adapter.poll();
+        fake.state(&den, AirPlayState::Playing);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&id).unwrap().enabled);
+
+        adapter.set_running(false);
+        adapter.poll();
+        adapter.set_running(true);
+        adapter.poll();
+        fake.take_calls();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(state.running, "Speakers still play");
+        let row = state.speaker(&id).unwrap();
+        assert!(
+            !row.enabled,
+            "the PIN session ended with the stream: on, it would stay silent"
+        );
+        assert_eq!(state.pin_prompt, None, "no prompt opens by itself");
+        assert!(
+            !starts_a_pairing(&fake.take_calls()),
+            "never paired by itself"
+        );
+        assert!(
+            messages(&adapter).contains(&NoticeMessage::AirPlayCantPlay {
+                speaker: "Den".to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPin,
+            }),
+            "{:?}",
+            messages(&adapter)
+        );
+
+        adapter.set_speaker_enabled(&id, true);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::StartPairing(id_of(&den))],
+            "the next click asks for a new code"
+        );
+    }
+
+    // covers: S223
+    #[test]
+    fn an_every_time_speaker_whose_pin_prompt_outlives_the_stream_turns_on_once_paired() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+
+        adapter.set_running(false);
+        adapter.poll();
+        assert!(
+            adapter.snapshot().pin_prompt.is_some(),
+            "the prompt waits for its PIN"
+        );
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&den, PairingEvent::PairedForSession);
+        adapter.poll();
+        assert!(
+            adapter.snapshot().speaker(&id).unwrap().enabled,
+            "the user's pairing turns it on"
+        );
+    }
+
+    // covers: S223
+    #[test]
+    fn an_every_time_pairing_that_fails_after_the_stream_ended_says_it_needs_a_pin() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.set_running(false);
+        adapter.poll();
+
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(
+            &den,
+            PairingEvent::Failed {
+                error: SessionError::new(ErrorKind::PairingFailed),
+                wrong_pin: false,
+            },
+        );
+        adapter.poll();
+        assert!(!adapter.snapshot().speaker(&id).unwrap().enabled);
+        assert!(
+            messages(&adapter).contains(&NoticeMessage::AirPlayCantPlay {
+                speaker: "Den".to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPin,
+            }),
+            "{:?}",
+            messages(&adapter)
+        );
+        assert!(
+            !adapter.airplay_on_by_hand.contains(&id_of(&den)),
+            "the click's mark ends with its pairing"
+        );
+    }
+
+    // covers: S223
+    #[test]
+    fn closing_the_pin_prompt_after_the_stream_ended_drops_the_by_hand_mark() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.set_running(false);
+        adapter.poll();
+
+        adapter.cancel_pairing(&id);
+        adapter.poll();
+        assert!(!adapter.snapshot().speaker(&id).unwrap().enabled);
+        assert!(
+            !adapter.airplay_on_by_hand.contains(&id_of(&den)),
+            "closing the prompt cancels the click"
+        );
+    }
+
+    fn fail_pairing(fake: &FakeAirPlay, tv: &Device, kind: ErrorKind) {
+        fake.pairing(
+            tv,
+            PairingEvent::Failed {
+                error: SessionError::new(kind),
+                wrong_pin: false,
+            },
+        );
+    }
+
+    fn says_cant_play(adapter: &AudioAdapter<MockBackend>, problem: ui_model::AirPlayProblem) {
+        assert!(
+            messages(adapter).contains(&NoticeMessage::AirPlayCantPlay {
+                speaker: "Den".to_owned(),
+                problem,
+            }),
+            "{:?}",
+            messages(adapter)
+        );
+    }
+
+    /// Types the password, then the PIN the Apple TV asks for next, which
+    /// it turns down.
+    fn type_password_and_fail_the_pin(
+        adapter: &mut AudioAdapter<MockBackend>,
+        fake: &FakeAirPlay,
+        tv: &Device,
+    ) {
+        let id = ap(tv);
+        adapter.submit_password(&id, "hunter2");
+        fake.pairing(tv, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fail_pairing(fake, tv, ErrorKind::PairingFailed);
+        adapter.poll();
+    }
+
+    // covers: S223
+    #[test]
+    fn an_every_time_pairing_whose_password_prompt_outlived_the_stream_says_it_needs_a_pin() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fail_pairing(&fake, &den, ErrorKind::PasswordRequired);
+        adapter.poll();
+        adapter.set_running(false);
+        adapter.poll();
+        adapter
+            .audio
+            .refuse_captures(Some(BackendError::DeviceGone));
+
+        type_password_and_fail_the_pin(&mut adapter, &fake, &den);
+        assert!(!adapter.running(), "no new stream started");
+        assert!(!adapter.snapshot().speaker(&id).unwrap().enabled);
+        says_cant_play(&adapter, ui_model::AirPlayProblem::NeedsPin);
+    }
+
+    // covers: S223
+    #[test]
+    fn an_every_time_pairing_that_asks_for_a_password_after_the_stream_ended_says_it_needs_a_pin() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        adapter.set_running(false);
+        adapter.poll();
+        adapter
+            .audio
+            .refuse_captures(Some(BackendError::DeviceGone));
+
+        fail_pairing(&fake, &den, ErrorKind::PasswordRequired);
+        adapter.poll();
+        type_password_and_fail_the_pin(&mut adapter, &fake, &den);
+        assert!(!adapter.running(), "no new stream started");
+        says_cant_play(&adapter, ui_model::AirPlayProblem::NeedsPin);
+    }
+
+    // covers: S223
+    #[test]
+    fn an_every_time_pairing_whose_password_starts_a_new_stream_says_pairing_failed() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fail_pairing(&fake, &den, ErrorKind::PasswordRequired);
+        adapter.poll();
+        adapter.set_running(false);
+        adapter.poll();
+
+        type_password_and_fail_the_pin(&mut adapter, &fake, &den);
+        assert!(adapter.running(), "the typed password started a new stream");
+        says_cant_play(&adapter, ui_model::AirPlayProblem::PairingFailed);
+    }
+
+    // covers: S223
+    #[test]
+    fn an_every_time_pairing_that_fails_once_a_new_stream_runs_says_pairing_failed() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.set_running(false);
+        adapter.poll();
+        adapter.set_running(true);
+        adapter.poll();
+        assert!(adapter.running(), "the new stream runs");
+
+        adapter.submit_pin(&id, "4821");
+        fail_pairing(&fake, &den, ErrorKind::PairingFailed);
+        adapter.poll();
+        says_cant_play(&adapter, ui_model::AirPlayProblem::PairingFailed);
+    }
+
+    // covers: S223
+    #[test]
+    fn an_every_time_speaker_whose_password_prompt_waits_in_line_turns_on_once_paired() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let study = airplay2_every_time_tv(11, "Study");
+        fake.appear(&study);
+        adapter.poll();
+        turn_on(&mut adapter, SPEAKERS);
+        for tv in [&study, &den] {
+            adapter.set_speaker_enabled(&ap(tv), true);
+            fake.pairing(
+                tv,
+                PairingEvent::Failed {
+                    error: SessionError::new(ErrorKind::PasswordRequired),
+                    wrong_pin: false,
+                },
+            );
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().password_prompt.unwrap().name, "Study");
+
+        adapter.set_running(false);
+        adapter.poll();
+        let id = ap(&den);
+        adapter.submit_password(&id, "hunter2");
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&den, PairingEvent::PairedForSession);
+        adapter.poll();
+        assert!(
+            adapter.snapshot().speaker(&id).unwrap().enabled,
+            "the prompt waiting behind another one still counts"
+        );
+    }
+
+    // covers: S223, P182
+    #[test]
+    fn an_every_time_speaker_turned_on_by_hand_goes_off_with_a_notice_when_the_sender_fails() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&den, PairingEvent::PairedForSession);
+        adapter.poll();
+        fake.state(&den, AirPlayState::Playing);
+        adapter.poll();
+
+        fake.stop_running();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(
+            !state.speaker(&id).is_some_and(|row| row.enabled),
+            "Retry starts a new stream, which needs a new PIN"
+        );
+        assert!(
+            messages(&adapter).contains(&NoticeMessage::AirPlayCantPlay {
+                speaker: "Den".to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPin,
+            }),
+            "{:?}",
+            messages(&adapter)
+        );
+
+        let next = FakeAirPlay::new();
+        next.set_airplay2(true);
+        let started = next.clone();
+        adapter.audio.set_airplay_starter(Box::new(move || {
+            Some(StartedSender::browsing(started.link(), None))
+        }));
+        adapter.retry_airplay();
+        next.appear(&den);
+        adapter.poll();
+        assert!(!adapter.snapshot().speaker(&id).unwrap().enabled);
+        next.take_calls();
+        adapter.set_speaker_enabled(&id, true);
+        assert_eq!(
+            next.take_calls(),
+            [Call::StartPairing(id_of(&den))],
+            "after Retry the next click asks for a new code"
+        );
+    }
+
     #[test]
     fn an_every_time_speaker_whose_pin_prompt_is_open_keeps_it_when_it_appears_again() {
         let (mut adapter, fake, den) = every_time_adapter();
@@ -7971,6 +8506,19 @@ mod tests {
                 "{kind:?}: {:?}",
                 messages(&adapter)
             );
+            if kind == ErrorKind::PairingFailed {
+                assert!(
+                    messages(&adapter).iter().any(|message| matches!(
+                        message,
+                        NoticeMessage::AirPlayCantPlay {
+                            problem: ui_model::AirPlayProblem::Refused,
+                            ..
+                        }
+                    )),
+                    "{:?}",
+                    messages(&adapter)
+                );
+            }
         }
     }
 
@@ -10411,7 +10959,8 @@ mod tests {
             found,
             settings::Loaded::Read {
                 version: settings::VERSION,
-                adjusted: false
+                adjusted: false,
+                unreadable: Vec::new(),
             }
         );
         assert_eq!(settings::VERSION, 3);
@@ -10845,6 +11394,46 @@ mod tests {
             ],
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_settings_field_that_does_not_read_is_logged_by_name_never_by_value() {
+        let launch_with = |name: &str, contents: &str| {
+            let dir = test_dir(name);
+            let path = dir.join(settings::FILE_NAME);
+            std::fs::write(&path, contents).expect("written");
+            let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+            let file = SettingsFile::at(path);
+            let _adapter = AudioAdapter::with_settings(
+                launch_audio(),
+                || "09.41".to_owned(),
+                log.clone(),
+                file,
+            );
+            assert!(log.flush(TEST_FLUSH));
+            let messages = read_messages(&dir.join(FILE_NAME));
+            let _ = std::fs::remove_dir_all(dir);
+            messages
+        };
+        let messages = launch_with(
+            "adapter-settings-unreadable",
+            r#"{"version": 3, "master_volume": "loud-9731"}"#,
+        );
+        assert_in_order(
+            &messages,
+            &[
+                "settings: read (format version 3",
+                "settings: field master_volume unreadable, using default",
+            ],
+        );
+        assert!(!messages.iter().any(|m| m.contains("loud-9731")));
+
+        let clean = launch_with(
+            "adapter-settings-clean",
+            &settings::Settings::default().to_json(),
+        );
+        assert!(clean.iter().any(|m| m.starts_with("settings: read")));
+        assert!(!clean.iter().any(|m| m.contains("unreadable")), "{clean:?}");
     }
 
     #[test]
@@ -11654,7 +12243,7 @@ mod tests {
         ended_as_a_change(&mut adapter);
     }
 
-    // covers: S240
+    // covers: S240, S255
     #[test]
     fn deleting_the_measured_zone_ends_the_run() {
         let mut adapter = zone_adapter(&["bluetooth", "tv"]);
@@ -12644,7 +13233,7 @@ mod tests {
     fn quitting_keeps_a_cast_offset_set_since_the_last_poll() {
         let (mut adapter, fake) = cast_adapter();
         let file = test_dir("cast-memory-quit").join("cast-speakers.json");
-        adapter.set_cast_file(Some(file.clone()));
+        adapter.set_cast_file(Some(file.clone()), false);
         adapter.save_settings();
         assert!(!file.exists(), "nothing changed, nothing is written");
 
@@ -12656,6 +13245,77 @@ mod tests {
             DeviceMemory::from_json(&saved).offset(&cast_device(CAST_KITCHEN)),
             Some(std::time::Duration::from_millis(250))
         );
+    }
+
+    #[test]
+    fn a_cast_speakers_file_that_didnt_read_is_kept_aside_once_before_it_is_saved_over() {
+        let (mut adapter, _fake) = cast_adapter();
+        let folder = test_dir("cast-memory-ignored");
+        let file = folder.join("cast-speakers.json");
+        std::fs::write(&file, b"{ not json").expect("written");
+        adapter.set_cast_file(Some(file.clone()), false);
+        adapter.poll();
+        adapter.save_settings();
+        let kept = || crate::data_folder::copies_kept_aside(&folder, "cast-speakers.ignored");
+        assert!(kept().is_empty(), "opening it keeps nothing aside");
+        assert_eq!(std::fs::read(&file).expect("the file"), b"{ not json");
+
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.save_settings();
+        assert_eq!(kept(), [b"{ not json".to_vec()]);
+        let saved = std::fs::read_to_string(&file).expect("the file is written");
+        assert_eq!(
+            DeviceMemory::from_json(&saved).offset(&cast_device(CAST_KITCHEN)),
+            Some(std::time::Duration::from_millis(250))
+        );
+
+        std::fs::write(&file, b"not json either").expect("written");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 300.0);
+        adapter.save_settings();
+        assert_eq!(kept().len(), 1, "one copy a run");
+    }
+
+    #[test]
+    fn a_cast_speakers_file_unread_at_launch_is_kept_aside_before_it_is_saved_over() {
+        let (mut adapter, _fake) = cast_adapter();
+        let folder = test_dir("cast-memory-unread-at-launch");
+        let file = folder.join("cast-speakers.json");
+        let earlier = format!(r#"{{"{}":{{"offsetMs":120}}}}"#, cast_device(CAST_LIVING));
+        std::fs::write(&file, &earlier).expect("written");
+        // Locked at launch, it reads again by the first save.
+        adapter.set_cast_file(Some(file.clone()), true);
+        adapter.poll();
+        adapter.save_settings();
+        let kept = || crate::data_folder::copies_kept_aside(&folder, "cast-speakers.ignored");
+        assert!(kept().is_empty(), "opening it keeps nothing aside");
+        assert_eq!(std::fs::read_to_string(&file).expect("the file"), earlier);
+
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.save_settings();
+        assert_eq!(kept(), [earlier.into_bytes()]);
+        let saved = std::fs::read_to_string(&file).expect("the file is written");
+        assert_eq!(
+            DeviceMemory::from_json(&saved).offset(&cast_device(CAST_KITCHEN)),
+            Some(std::time::Duration::from_millis(250))
+        );
+    }
+
+    #[test]
+    fn a_cast_speakers_file_with_a_stray_byte_the_launch_reads_isnt_kept_aside() {
+        let (mut adapter, _fake) = cast_adapter();
+        let folder = test_dir("cast-memory-stray-byte");
+        let file = folder.join("cast-speakers.json");
+        let mut bytes =
+            format!(r#"{{"{}":{{"offsetMs":120,"x":""#, cast_device(CAST_LIVING)).into_bytes();
+        bytes.extend_from_slice(&[0xff, b'"', b'}', b'}']);
+        assert!(DeviceMemory::read_json(&String::from_utf8_lossy(&bytes)).is_some());
+        std::fs::write(&file, &bytes).expect("written");
+        adapter.set_cast_file(Some(file.clone()), false);
+
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.save_settings();
+        let kept = crate::data_folder::copies_kept_aside(&folder, "cast-speakers.ignored");
+        assert!(kept.is_empty(), "{} copies kept", kept.len());
     }
 
     #[test]
@@ -12731,7 +13391,7 @@ mod tests {
     fn a_cast_delay_is_its_offset_that_local_outputs_wait_for_and_is_saved() {
         let (mut adapter, fake) = cast_adapter();
         let file = test_dir("cast-memory").join("cast-speakers.json");
-        adapter.set_cast_file(Some(file.clone()));
+        adapter.set_cast_file(Some(file.clone()), false);
         turn_on(&mut adapter, SPEAKERS);
         adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
         adapter.set_speaker_delay(&cc(CAST_KITCHEN), 400.0);

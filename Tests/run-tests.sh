@@ -38,7 +38,7 @@ trap cleanup EXIT
 CORE=(-I Sources/CAudioSyncCore -L core/target/universal-apple-darwin/release -laudiosync_core
   -framework Security -framework CoreFoundation)
 # The engine's parts on the core, with what they need to compile.
-ENGINE_PARTS=(EngineParts.swift CoreEngine.swift OutputRenderer.swift OutputFades.swift Equalizer.swift Diagnostics.swift
+ENGINE_PARTS=(EngineParts.swift CoreEngine.swift OutputRenderer.swift OutputFades.swift OutputFormatWatch.swift Equalizer.swift Diagnostics.swift
   NativeAirPlayTap.swift CastTap.swift CalibrationTap.swift)
 
 build() {   # [SWIFT_OPT=-Onone] build <name> <test file> <source files…> [-- <more swiftc arguments…>]
@@ -200,12 +200,14 @@ else
 fi
 
 echo "▶ the engine's callbacks start on the main queue"
-# covers: S113 (onInterrupted comes from the capture's listeners and timers, onOutputGone from a renderer's alive listener)
+# covers: S113 (onInterrupted comes from the capture's listeners and timers, onOutputGone from a renderer's alive and format listeners)
 # No suite can make a device vanish without hardware, so this checks the
 # queues those callbacks start on; the logic suite checks the control calls.
 main_sources=$(grep -hE 'AudioObjectAddPropertyListenerBlock\(|makeTimerSource\(' \
   "$SRC/ProcessTapCapture.swift" "$SRC/SyncEngine.swift")
 alive_listener=$(awk '/func installDeviceAliveListener/ { f = 1 } f { print } f && /^    }$/ { exit }' \
+  "$SRC/OutputRenderer.swift")
+format_listener=$(awk '/func installFormatListener/ { f = 1 } f { print } f && /^    }$/ { exit }' \
   "$SRC/OutputRenderer.swift")
 workspace_hop=$(grep -A1 'NSWorkspace\.shared\.observe' "$SRC/ProcessTapCapture.swift" || true)
 if [ "$(grep -c . <<< "$main_sources")" -lt 3 ] \
@@ -214,6 +216,9 @@ if [ "$(grep -c . <<< "$main_sources")" -lt 3 ] \
     || [ "$(grep -c 'onOutputGone?(' "$SRC/SyncEngine.swift")" -ne 1 ] \
     || ! grep -q 'self\.onDeviceGone?()' <<< "$alive_listener" \
     || ! grep -q 'AudioObjectAddPropertyListenerBlock(device, &address, DispatchQueue\.main, block)' <<< "$alive_listener" \
+    || ! grep -q 'self\.onFormatChanged?(old, new)' <<< "$format_listener" \
+    || ! grep -q 'DispatchQueue\.main\.asyncAfter' <<< "$format_listener" \
+    || ! grep -q 'AudioObjectAddPropertyListenerBlock(device, &address, DispatchQueue\.main, block)' <<< "$format_listener" \
     || ! grep -q 'DispatchQueue\.main\.async' <<< "$workspace_hop"; then
   echo "FAIL: a source of onInterrupted or onOutputGone no longer starts on the main queue"
   status=1
@@ -267,6 +272,9 @@ Tests/shellchecktest.sh || status=1
 echo "▶ disk image detach (Tests/dmgdetachtest.sh)"
 Tests/dmgdetachtest.sh || status=1
 
+echo "▶ appcast signing choice (Tests/signappcasttest.sh)"
+Tests/signappcasttest.sh || status=1
+
 echo "▶ updater words (Tests/updatertexttest.sh)"
 Tests/updatertexttest.sh || status=1
 
@@ -301,11 +309,11 @@ if scripts/build_core.sh > "$OUT/core.log" 2>&1; then
     AirPlayPairing.swift Notices.swift PermissionFlow.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift \
     AudioDevices.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift PanelColors.swift \
     NativeReceiver.swift NativeAirPlayModel.swift CastModel.swift CastSender.swift WindowRules.swift FieldEditor.swift AppSettings.swift Zones.swift Presets.swift HiddenSpeakers.swift SpeakerNames.swift AppLifecycle.swift UpdateGate.swift MicrophoneRequestGate.swift LocalDelay.swift InputLevel.swift DeviceVolume.swift \
-    Localization.swift AboutPanel.swift MenuNote.swift MenuActions.swift BrandTokens.swift WebRemoteModel.swift CalibrationFlow.swift CalibrateAllFlow.swift GuideArtwork.swift GuideLayout.swift ProcessTapCapture.swift SyncEngine.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
+    Localization.swift AboutPanel.swift MenuNote.swift MenuActions.swift BrandTokens.swift WebRemoteModel.swift CalibrationFlow.swift CalibrateAllFlow.swift GuideArtwork.swift GuideLayout.swift ProcessTapCapture.swift SyncEngine.swift OutputStall.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
   echo "logic compile: $((SECONDS - logic_start)) s"
   "$OUT/logic/run" || status=1
   echo "▶ core (the app's wrappers of the core)"
-  build core Tests/coretest.swift "${ENGINE_PARTS[@]}" -- "${CORE[@]}"
+  build core Tests/coretest.swift "${ENGINE_PARTS[@]}" AudioDevices.swift -- "${CORE[@]}"
   "$OUT/core/run" || status=1
 else
   tail -n 20 "$OUT/core.log"

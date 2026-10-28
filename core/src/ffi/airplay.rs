@@ -2321,8 +2321,23 @@ pub extern "C" fn asc_airplay2_auto() -> bool {
 /// `AUDIOSYNC_AIRPLAY2`, and `AUDIOSYNC_AIRPLAY2_AUTO` (or the build's flag)
 /// decides what it means (S312).
 fn sender_config(setting: bool, switch: Option<&str>, auto: Option<&str>) -> SenderConfig {
-    SenderConfig::default()
-        .with_airplay2_switch(airplay2_auto(auto), setting || airplay2_switch(switch))
+    SenderConfig {
+        on_driver_thread: Some(raise_driver_thread),
+        ..SenderConfig::default()
+    }
+    .with_airplay2_switch(airplay2_auto(auto), setting || airplay2_switch(switch))
+}
+
+/// The driver thread's setup (P226): user-interactive QoS on macOS (S323).
+/// A refusal leaves the thread at its default class; the class ends with the
+/// thread, so there is nothing to hold.
+fn raise_driver_thread() -> Box<dyn std::any::Any> {
+    #[cfg(target_os = "macos")]
+    // SAFETY: changes only the calling thread's own QoS class.
+    unsafe {
+        libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE, 0);
+    }
+    Box::new(())
 }
 
 fn create_configured(open_browser: OpenBrowser, airplay2_setting: bool) -> *mut AscAirPlay {
@@ -3790,13 +3805,15 @@ pub unsafe extern "C" fn asc_airplay_forget_pairing(
             airplay.pump();
             let homekit = airplay.forget_homekit(id);
             airplay.credentials_turned_down.remove(id);
-            if !airplay.store.contains(id) && !homekit {
-                return false;
-            }
-            // Forgotten for this handle even when the file can't be written.
+            let paired = airplay.store.contains(id) || homekit;
+            // Also when it isn't paired, so a copy kept aside that holds it
+            // goes; forgotten for this handle even when the file can't be
+            // written.
             let _ = airplay.store.remove(id);
-            airplay.relist(id);
-            true
+            if paired {
+                airplay.relist(id);
+            }
+            paired
         })
     }
 }
@@ -4363,6 +4380,31 @@ mod tests {
             assert!(config.airplay2);
             assert!(!config.airplay2_preferred, "the flag is off");
         }
+    }
+
+    // covers: S323
+    #[test]
+    fn the_sender_config_installs_the_driver_thread_hook() {
+        assert!(sender_config(false, None, None).on_driver_thread.is_some());
+    }
+
+    // covers: S323
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_driver_thread_setup_gives_the_thread_user_interactive_qos() {
+        let class = std::thread::spawn(|| {
+            let _held = raise_driver_thread();
+            let mut class = libc::qos_class_t::QOS_CLASS_UNSPECIFIED;
+            let mut relative = 0;
+            // SAFETY: reads the calling thread's QoS into two locals.
+            unsafe {
+                libc::pthread_get_qos_class_np(libc::pthread_self(), &mut class, &mut relative)
+            };
+            class as u32
+        })
+        .join()
+        .expect("the thread ends");
+        assert_eq!(class, libc::qos_class_t::QOS_CLASS_USER_INTERACTIVE as u32);
     }
 
     // covers: S312
@@ -9373,6 +9415,37 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&folder);
     }
+
+    // covers: S224
+    #[test]
+    fn forget_deletes_a_kept_aside_copy_that_holds_a_receiver_the_store_no_longer_pairs() {
+        let folder = scratch("ffi-forget-copy");
+        std::fs::create_dir_all(&folder).expect("folder");
+        let path = folder.join("airplay-pairings.dat");
+        let id = "02005E005322";
+        let mut copy = crate::airplay_pairings::MAGIC.to_vec();
+        copy.push(crate::airplay_pairings::VERSION);
+        copy.extend_from_slice(&u16::try_from(id.len()).expect("short").to_le_bytes());
+        copy.extend_from_slice(id.as_bytes());
+        copy.extend_from_slice(&[3, 0, 1, 2, 3]);
+        let kept = folder.join("airplay-pairings.ignored-1.dat");
+        std::fs::write(&kept, &copy).expect("written");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let c_id = CString::new(id).expect("no NUL");
+        let mut handle = asc_airplay_create();
+        // SAFETY: a live handle, used by this thread only; local C strings.
+        unsafe {
+            assert_eq!(asc_airplay_open_pairings(handle, c_path.as_ptr()), 0);
+            assert!(
+                !asc_airplay_forget_pairing(handle, c_id.as_ptr()),
+                "it wasn't paired"
+            );
+            asc_airplay_destroy(&mut handle);
+        }
+        assert!(!kept.exists(), "the copy holding its ID is deleted");
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
     fn pair_member(last: u8, flags: &str) -> Device {
         let mut record = airplay2_only();
         record.instance = format!("HomePod {last}");

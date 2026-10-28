@@ -6,12 +6,19 @@
 //! speaker at +150 ms, a Bluetooth speaker at −250 ms and, with an AirPlay
 //! speaker chosen, L = 2000 ms (S176), unless the test says otherwise.
 
+use std::sync::Arc;
+use std::time::Duration;
+
+use audiosync_core::lead::HeldLead;
 use audiosync_core::policy::delay::{
-    DEFAULT_AIRPLAY_DELAY_MS, DelayMigration, MAX_HOLD_BACK_MS, MAX_OFFSET_MS, MIN_OFFSET_MS,
-    Participant, Retimer, StoredDelay, airplay_chosen, hold_backs, migrate_mac_delays,
-    native_airplay_adjustment_ms, native_airplay_latency_ms, offset_ms, sanitize_airplay_delay_ms,
-    sanitize_offset_ms,
+    BRIEF_LOSS_HOLD, BriefLosses, DEFAULT_AIRPLAY_DELAY_MS, DelayMigration, MAX_HOLD_BACK_MS,
+    MAX_OFFSET_MS, MIN_OFFSET_MS, Participant, Retimer, StoredDelay, airplay_chosen, hold_backs,
+    migrate_mac_delays, native_airplay_adjustment_ms, native_airplay_latency_ms, offset_ms,
+    sanitize_airplay_delay_ms, sanitize_offset_ms,
 };
+use audiosync_core::reader::Reader;
+use audiosync_core::render::RendererControl;
+use audiosync_core::ring::Ring;
 use proptest::prelude::*;
 
 const L: f64 = 2000.0;
@@ -118,7 +125,7 @@ fn a_lone_output_plays_at_once_whatever_its_offset() {
     assert!(hold_backs(&[], Some(L)).is_empty());
 }
 
-// covers: S176
+// covers: S8, S176
 #[test]
 fn an_airplay_speaker_chosen_adds_l_on_top() {
     assert_eq!(
@@ -641,4 +648,184 @@ fn migration_counts_only_the_first_entry_marked_as_the_reference() {
     );
     assert_eq!(migration.airplay_delay_ms, 2500.0);
     assert_eq!(migration.offsets_ms, [Some(-100.0), None, Some(-1000.0)]);
+}
+
+/// The time `seconds` after the host's clock started.
+fn at(seconds: f64) -> Duration {
+    Duration::from_secs_f64(seconds)
+}
+
+/// Every output switched on.
+fn all_on(_: &str) -> bool {
+    true
+}
+
+/// R, USB and Bluetooth, all switched on, as the host counts them under
+/// S328: those whose devices `listed` shows, and those `losses` holds.
+fn counted(listed: &[&str], losses: &BriefLosses) -> Vec<Participant<'static>> {
+    [r(), usb(), bluetooth()]
+        .into_iter()
+        .filter(|output| listed.contains(&output.id) || losses.holds(output.id))
+        .collect()
+}
+
+const ALL: [&str; 3] = ["builtin", "usb", "bluetooth"];
+const WITHOUT_BLUETOOTH: [&str; 2] = ["builtin", "usb"];
+
+/// R, USB and Bluetooth taking part since 0 s, and the Bluetooth speaker's
+/// device gone from the listing at 5 s.
+fn bluetooth_lost_at_5_s() -> (BriefLosses, Retimer) {
+    let mut losses = BriefLosses::default();
+    let mut retimer = Retimer::default();
+    losses.note_listing(ALL, all_on, Some("builtin"), at(0.0));
+    retimer.update(&counted(&ALL, &losses), None);
+    losses.note_listing(WITHOUT_BLUETOOTH, all_on, Some("builtin"), at(5.0));
+    (losses, retimer)
+}
+
+// covers: S328, S176, S208
+#[test]
+fn a_lost_output_keeps_its_offset_and_lead_for_10_s() {
+    let (mut losses, mut retimer) = bluetooth_lost_at_5_s();
+    assert!(losses.holds("bluetooth"));
+    assert!(!losses.expire(at(14.9)), "held until 10 s after the loss");
+    assert!(losses.holds("bluetooth"));
+    assert_eq!(losses.held().collect::<Vec<_>>(), ["bluetooth"]);
+    assert!(
+        retimer
+            .update(&counted(&WITHOUT_BLUETOOTH, &losses), None)
+            .is_empty(),
+        "its offset still sets the base"
+    );
+    assert_eq!(retimer.hold_back_ms("builtin"), Some(250.0));
+    assert_eq!(retimer.hold_back_ms("usb"), Some(400.0));
+
+    // Its start lead counts in K after its renderer stopped.
+    let ring = Ring::for_rate(48_000).unwrap();
+    let leads = ring.session_leads();
+    let built_in = leads.claim(12_000).unwrap();
+    leads.set_lead(built_in, 960);
+    let reader = Reader::new(Arc::clone(&ring), 48_000);
+    let lost = RendererControl::new(&reader);
+    let slot = (0..2).find(|&slot| slot != built_in).unwrap();
+    leads.set_lead(slot, 1786);
+    assert_eq!(leads.session_lead(), 1786);
+    let held = lost.hold_lead().expect("its lead was published");
+    lost.request_fade_out();
+    drop(lost);
+    drop(reader);
+    assert_eq!(leads.session_lead(), 1786, "a stopped renderer's lead held");
+    // Re-timed during the hold, it counts at its new hold-back.
+    held.set_hold_back(786);
+    assert_eq!(leads.session_lead(), 1000);
+    drop(held);
+    assert_eq!(leads.session_lead(), 0, "the hold ended");
+    let direct = HeldLead::new(&ring, 1786, 0).expect("a slot is free");
+    assert_eq!(leads.session_lead(), 1786);
+    drop(direct);
+    assert_eq!(leads.session_lead(), 0);
+}
+
+// covers: S328
+#[test]
+fn a_lost_output_listed_again_within_10_s_moves_no_hold_back() {
+    let (mut losses, mut retimer) = bluetooth_lost_at_5_s();
+    assert!(
+        retimer
+            .update(&counted(&WITHOUT_BLUETOOTH, &losses), None)
+            .is_empty()
+    );
+    losses.note_listing(ALL, all_on, Some("builtin"), at(8.0));
+    assert!(!losses.holds("bluetooth"), "listed, it takes part again");
+    assert!(retimer.update(&counted(&ALL, &losses), None).is_empty());
+    // Lost again later, the 10 s count from that loss.
+    losses.note_listing(WITHOUT_BLUETOOTH, all_on, Some("builtin"), at(20.0));
+    assert!(!losses.expire(at(29.9)));
+    assert!(losses.holds("bluetooth"));
+    assert!(
+        retimer
+            .update(&counted(&WITHOUT_BLUETOOTH, &losses), None)
+            .is_empty()
+    );
+}
+
+// covers: S328, S177
+#[test]
+fn a_lost_output_still_missing_after_10_s_retimes_once() {
+    let (mut losses, mut retimer) = bluetooth_lost_at_5_s();
+    retimer.update(&counted(&WITHOUT_BLUETOOTH, &losses), None);
+    assert_eq!(BRIEF_LOSS_HOLD, Duration::from_secs(10));
+    assert!(losses.expire(at(15.0)));
+    assert!(!losses.holds("bluetooth"));
+    assert_eq!(
+        retimer.update(&counted(&WITHOUT_BLUETOOTH, &losses), None),
+        [("builtin".to_owned(), 0.0), ("usb".to_owned(), 150.0)]
+    );
+    assert!(!losses.expire(at(16.0)), "once");
+    losses.note_listing(WITHOUT_BLUETOOTH, all_on, Some("builtin"), at(17.0));
+    assert!(
+        !losses.holds("bluetooth"),
+        "a later listing doesn't hold it again"
+    );
+    assert!(
+        retimer
+            .update(&counted(&WITHOUT_BLUETOOTH, &losses), None)
+            .is_empty()
+    );
+}
+
+// covers: S328, S177
+#[test]
+fn switching_off_a_lost_output_retimes_at_once() {
+    let (mut losses, mut retimer) = bluetooth_lost_at_5_s();
+    retimer.update(&counted(&WITHOUT_BLUETOOTH, &losses), None);
+    assert!(!losses.switched_off("usb"), "a listed output isn't held");
+    assert!(losses.switched_off("bluetooth"));
+    assert!(!losses.holds("bluetooth"));
+    assert_eq!(
+        retimer.update(&counted(&WITHOUT_BLUETOOTH, &losses), None),
+        [("builtin".to_owned(), 0.0), ("usb".to_owned(), 150.0)]
+    );
+    // Switched on again while its device is still missing, it isn't held.
+    losses.note_listing(WITHOUT_BLUETOOTH, all_on, Some("builtin"), at(6.0));
+    assert!(!losses.holds("bluetooth"));
+}
+
+// covers: S328
+#[test]
+fn an_output_switched_off_before_its_device_left_isnt_held() {
+    let mut losses = BriefLosses::default();
+    losses.note_listing(ALL, all_on, Some("builtin"), at(0.0));
+    losses.note_listing(
+        WITHOUT_BLUETOOTH,
+        |id| id != "bluetooth",
+        Some("builtin"),
+        at(5.0),
+    );
+    assert!(!losses.holds("bluetooth"));
+    assert_eq!(losses.held().count(), 0);
+}
+
+// covers: S328
+#[test]
+fn a_lost_reference_retimes_at_once() {
+    let mut losses = BriefLosses::default();
+    losses.note_listing(ALL, all_on, Some("builtin"), at(0.0));
+    losses.note_listing(["usb", "bluetooth"], all_on, None, at(5.0));
+    assert!(!losses.holds("builtin"));
+}
+
+// covers: S328
+#[test]
+fn a_session_restart_clears_the_hold() {
+    let (mut losses, mut retimer) = bluetooth_lost_at_5_s();
+    retimer.update(&counted(&WITHOUT_BLUETOOTH, &losses), None);
+    losses.restart();
+    assert!(!losses.holds("bluetooth"));
+    assert!(!losses.expire(at(15.0)), "nothing left to end");
+    // The new session counts only the devices listed then.
+    let mut restarted = Retimer::default();
+    restarted.update(&counted(&WITHOUT_BLUETOOTH, &losses), None);
+    assert_eq!(restarted.hold_back_ms("builtin"), Some(0.0));
+    assert_eq!(restarted.hold_back_ms("bluetooth"), None);
 }

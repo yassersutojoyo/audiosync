@@ -1083,7 +1083,7 @@ mod tests {
         mock
     }
 
-    // covers: S257
+    // covers: S257, S266
     #[test]
     fn phone_zone_and_preset_commands_apply_without_showing_the_main_window() {
         let app = over_loopback(downstairs());

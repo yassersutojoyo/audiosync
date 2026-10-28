@@ -130,7 +130,11 @@ fn main() -> ExitCode {
         }
         return ExitCode::SUCCESS;
     };
-    let log = DebugLog::from_env();
+    #[cfg(windows)]
+    let relaunched = updater::relaunch::marked_parent(std::env::args_os()).is_some();
+    #[cfg(not(windows))]
+    let relaunched = false;
+    let log = DebugLog::from_env(relaunched);
     log.log(|| {
         format!(
             "AudioSync for Windows {} (audiosync-core {}), process {}; times are UTC",

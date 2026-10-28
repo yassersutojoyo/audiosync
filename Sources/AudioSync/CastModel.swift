@@ -116,7 +116,7 @@ enum CastProblem: Equatable {
 }
 
 enum CastError: Equatable {
-    case connect, launch, media, noFetch, stream, noSession, volumeFixed, volume, artwork
+    case connect, launch, media, noFetch, stream, noSession, volumeFixed, volume, artwork, `internal`
     case other(Int32)
 
     init?(_ code: Int32) {
@@ -131,6 +131,7 @@ enum CastError: Equatable {
         case ASC_CAST_ERROR_VOLUME_FIXED: self = .volumeFixed
         case ASC_CAST_ERROR_VOLUME: self = .volume
         case ASC_CAST_ERROR_ARTWORK: self = .artwork
+        case ASC_CAST_ERROR_INTERNAL: self = .internal
         default: self = .other(code)
         }
     }
@@ -154,7 +155,7 @@ enum CastEnd: Equatable {
         case .failed(.connect): return .notResponding
         case .failed(.launch), .failed(.media): return .refused
         case .failed(.noFetch): return .blocked
-        case .failed(.stream): return .connectionLost
+        case .failed(.stream), .failed(.internal): return .connectionLost
         case .failed: return .notResponding
         }
     }
@@ -260,6 +261,8 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_STREAM: self = .note(attempt: a, "stream: " + detail)
         case ASC_CAST_EVENT_MEMBERS: self = .members(attempt: a, members())
         case ASC_CAST_EVENT_GROUP_LOG: self = .groupLog(detail)
+        case ASC_CAST_EVENT_CERTIFICATE_CHANGED:
+            self = .note(attempt: a, "the device's certificate changed from " + detail)
         case ASC_CAST_EVENT_MEMORY_CHANGED: self = .memoryChanged
         case ASC_CAST_EVENT_DISCOVERY_STOPPED: self = .discoveryStopped
         case ASC_CAST_EVENT_FAILED: self = .failed(detail: detail)
@@ -306,6 +309,11 @@ extension CastDeviceChange {
         default: return nil
         }
     }
+}
+
+/// The device the user selected, or none, as the sender is told of it (C108).
+struct CastSelection: Equatable {
+    let id: String?
 }
 
 /// Why `asc_cast_start` refused, as a notice.
@@ -393,6 +401,8 @@ struct CastModel {
     private(set) var devices: [String: CastDevice] = [:]
     /// The one device the user turned on.
     private(set) var enabled: String?
+    /// The selection the sender was last told of; nil until it heard one.
+    private var namedSelection: CastSelection?
     /// The current session; its events are the only ones that count.
     private(set) var attempt: Attempt?
     /// A start sent to the sender whose attempt number hasn't come back yet.
@@ -582,6 +592,15 @@ struct CastModel {
         return attempt?.status == .playing ? .unknown : .notReported
     }
 
+    /// The selection to name to the sender, nil while it already knows it:
+    /// the list's cap keeps the selected device even while nothing plays (C108).
+    mutating func selectionToName() -> CastSelection? {
+        let current = CastSelection(id: enabled)
+        guard namedSelection != current else { return nil }
+        namedSelection = current
+        return current
+    }
+
     /// `asc_cast_start`'s answer for `id`: its attempt number, 0 when it
     /// refused with `refusal`. A refused device goes off.
     mutating func started(_ id: String, attempt number: UInt64, refusal: Int32) -> CastOutcome {
@@ -613,6 +632,7 @@ struct CastModel {
             starting = nil
             enabled = nil
             members = nil
+            namedSelection = nil
             return .senderFailed(wasOn: wasOn)
         default: break
         }
@@ -895,17 +915,114 @@ enum CastMemoryFile {
             .appendingPathComponent(fileName)
     }
 
-    /// The stored JSON, or nil when there is none or it isn't text.
-    static func load(from url: URL) -> String? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
     /// Writes through a temporary file, so a crash mid-write leaves the
     /// previous memory whole.
     static func save(_ json: String, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(json.utf8).write(to: url, options: .atomic)
+    }
+
+    /// Whether the core reads `data` as device memory: UTF-8 text holding a
+    /// JSON object. Entries it can't use are skipped by the core alone.
+    static func reads(_ data: Data) -> Bool {
+        // The core's JSON reader refuses a byte order mark, which Foundation's skips.
+        guard !data.starts(with: [0xEF, 0xBB, 0xBF]), String(data: data, encoding: .utf8) != nil else { return false }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] != nil
+    }
+
+    /// Copies `bytes` next to the file at `url` as
+    /// `cast-devices.ignored-<seconds since 1970>.json`, owner-only, with
+    /// `-2`, `-3` and so on after the time when that name is taken.
+    static func keepAside(_ bytes: Data, next url: URL, now: Date = Date()) throws -> URL {
+        let seconds = max(0, Int(now.timeIntervalSince1970))
+        let stem = url.deletingPathExtension().lastPathComponent
+        for number in 1...100 {
+            let suffix = number == 1 ? "" : "-\(number)"
+            let copy = url.deletingLastPathComponent().appendingPathComponent("\(stem).ignored-\(seconds)\(suffix).json")
+            let fd = open(copy.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+            if fd < 0 {
+                if errno == EEXIST { continue }
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+            do {
+                try handle.write(contentsOf: bytes)
+                try handle.close()
+            } catch {
+                try? handle.close()
+                unlink(copy.path)
+                throw error
+            }
+            return copy
+        }
+        throw POSIXError(.EEXIST)
+    }
+}
+
+/// The device memory file over one run: what launch read for the core, and
+/// a file that didn't read kept aside before the first save replaces it.
+struct CastMemoryStore {
+    enum Problem: Error {
+        /// The file is there but couldn't be read, so it isn't replaced.
+        case unreadable(Error)
+    }
+
+    let url: URL
+    /// The text for the core; nil when there is no file or it isn't text.
+    let json: String?
+    private var pending: Pending
+
+    private enum Pending {
+        case none
+        /// Bytes read at launch that the core doesn't read.
+        case keep(Data)
+        /// Launch couldn't read the file; the next save tries again.
+        case recheck
+    }
+
+    init(url: URL) {
+        self.url = url
+        switch Self.read(url) {
+        case .success(let data?):
+            json = String(data: data, encoding: .utf8)
+            pending = CastMemoryFile.reads(data) ? .none : .keep(data)
+        case .success(nil):
+            json = nil
+            pending = .none
+        case .failure:
+            json = nil
+            pending = .recheck
+        }
+    }
+
+    /// Writes `json` over the file; returns the copy kept aside, which only
+    /// the first save of a run whose file didn't read makes.
+    mutating func save(_ json: String) throws -> URL? {
+        if case .recheck = pending {
+            switch Self.read(url) {
+            case .success(let data?): pending = CastMemoryFile.reads(data) ? .none : .keep(data)
+            case .success(nil): pending = .none
+            case .failure(let error): throw Problem.unreadable(error)
+            }
+        }
+        var kept: URL?
+        if case .keep(let bytes) = pending {
+            kept = try CastMemoryFile.keepAside(bytes, next: url)
+            pending = .none
+        }
+        try CastMemoryFile.save(json, to: url)
+        return kept
+    }
+
+    /// The file's bytes, nil when there is none.
+    private static func read(_ url: URL) -> Result<Data?, Error> {
+        do {
+            return .success(try Data(contentsOf: url))
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return .success(nil)
+        } catch {
+            return .failure(error)
+        }
     }
 }
 

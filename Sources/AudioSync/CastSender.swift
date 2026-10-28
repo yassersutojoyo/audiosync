@@ -30,6 +30,7 @@ final class CastSender {
     private let onEvents: ([CastEvent]) -> Void
     private let queue = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.cast", qos: .userInitiated)
     private let memoryURL: URL?
+    private var memory: CastMemoryStore?
     /// The feed's hold-back last asked for (main queue).
     private(set) var holdBackMs = 0.0
     /// What the device was given to show, and when to give it more (main queue).
@@ -60,8 +61,8 @@ final class CastSender {
     func start(completion: @escaping (_ running: Bool, _ discovering: Bool) -> Void) {
         queue.async { [weak self] in
             guard let self else { return }
-            let stored = self.memoryURL.flatMap(CastMemoryFile.load)
-            guard let created = asc_cast_create(stored) else {
+            self.memory = self.memoryURL.map(CastMemoryStore.init(url:))
+            guard let created = asc_cast_create(self.memory?.json) else {
                 DispatchQueue.main.async { completion(false, false) }
                 return
             }
@@ -196,6 +197,14 @@ final class CastSender {
             if let handle = self.handle { _ = asc_cast_set_hold_back(handle, ms) }
         }
         return true
+    }
+
+    /// Names the device the user selected, or none with nil (C108).
+    func setSelected(_ id: String?) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            _ = asc_cast_set_selected(handle, id)
+        }
     }
 
     /// Stores the user's offset for `id` and writes the memory.
@@ -353,11 +362,13 @@ final class CastSender {
     }
 
     private func saveMemory() {
-        guard !LaunchAutoConnect.skipped, let handle, let url = memoryURL,
+        guard !LaunchAutoConnect.skipped, let handle, memory != nil,
               let raw = asc_cast_memory_json(handle) else { return }
         let json = String(cString: raw)   // valid only until the next call of its kind
         do {
-            try CastMemoryFile.save(json, to: url)
+            if let kept = try memory?.save(json) {
+                DispatchQueue.main.async { DebugTrace.log("[AudioSync] Cast: the device memory didn't read; kept aside as \(kept.lastPathComponent)") }
+            }
         } catch {
             DispatchQueue.main.async { DebugTrace.log("[AudioSync] Cast: the device memory couldn't be saved: \(error)") }
         }

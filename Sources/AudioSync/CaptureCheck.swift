@@ -79,6 +79,174 @@ struct CaptureWatch {
     }
 }
 
+/// A running session's capture, watched from its first callback until the
+/// session ends (S335). Fed on the main queue every 0.5 s with the capture's
+/// callback count, Now Playing's latest reading and the uptime clock, which
+/// stands still while the Mac sleeps.
+struct CaptureFlowWatch {
+    /// Seconds without a callback that make a stopped capture, the span S326 and S334 give an output.
+    static let stallSpan: TimeInterval = 2
+    static let trySpacing: TimeInterval = 1
+    /// Seconds a reopened capture delivers before its try is kept.
+    static let trialSpan: TimeInterval = 5
+    static let tries = 5
+
+    enum Sign: Equatable {
+        case noCallback(TimeInterval)
+        case serviceRestarted
+        case aggregateDied
+
+        /// For the debug log.
+        var description: String {
+            switch self {
+            case .noCallback(let seconds): return "no callback for \((seconds * 10).rounded() / 10) s"
+            case .serviceRestarted: return "Core Audio's service restarted"
+            case .aggregateDied: return "the aggregate device is no longer alive"
+            }
+        }
+    }
+
+    enum Step: Equatable {
+        case none
+        /// Close the capture now; tries to open it again follow.
+        case stopped(Sign)
+        /// Open the capture again, try `n` of `tries`.
+        case tryOpen(Int)
+        /// Try `n` delivered for `trialSpan`.
+        case kept(Int)
+        /// Every try failed: the session stops (S21).
+        case giveUp
+    }
+
+    private enum Phase: Equatable {
+        case watching
+        /// The capture is closed; try `next` is due at uptime `at`.
+        case waiting(next: Int, at: TimeInterval)
+        case trial(Int, since: TimeInterval)
+    }
+
+    private var phase = Phase.watching
+    private var lastCount: UInt64?
+    /// When the count last moved; nil until this capture's first callback.
+    private var movedAt: TimeInterval?
+    /// The first reading of Now Playing's current stretch showing the source playing.
+    private var playingSince: TimeInterval?
+    private var paused = false
+
+    /// `callbacks` is nil while the capture has no IOProc; `reading` is false
+    /// while an app tap waits for an audio process, which is no stop.
+    /// `playingReadAt` is when Now Playing last read the captured source as
+    /// playing, nil while it shows it paused or can't read it: a tap of a
+    /// paused source calls back nothing (S335 D3), so only a source known to
+    /// play can be missing callbacks.
+    mutating func tick(callbacks: UInt64?, reading: Bool, playingReadAt: TimeInterval?, at uptime: TimeInterval) -> Step {
+        guard !paused else { return .none }
+        playingSince = playingReadAt.map { playingSince ?? $0 }
+        if case .waiting(let next, let due) = phase {
+            guard uptime >= due else { return .none }
+            phase = .trial(next, since: uptime)
+            forgetCount()
+            return .tryOpen(next)
+        }
+        guard reading else {
+            forgetCount()
+            if case .trial(let number, _) = phase {
+                phase = .watching
+                return .kept(number)
+            }
+            return .none
+        }
+        if let callbacks {
+            // A reopened capture counts from 0 again, so any change is a callback.
+            let moved = lastCount.map { callbacks != $0 } ?? (callbacks > 0)
+            lastCount = callbacks
+            if moved { movedAt = uptime }
+        }
+        switch phase {
+        case .waiting:
+            return .none
+        case .watching:
+            guard let movedAt, quietWhilePlaying(since: movedAt, readAt: playingReadAt) else { return .none }
+            return stop(.noCallback(uptime - movedAt), at: uptime)
+        case .trial(let number, let since):
+            let lastHeard = movedAt ?? since
+            if quietWhilePlaying(since: lastHeard, readAt: playingReadAt) {
+                return stop(.noCallback(uptime - lastHeard), at: uptime)
+            }
+            guard uptime - since >= Self.trialSpan else { return .none }
+            phase = .watching
+            // Watched from its opening, so a reopened tap that never calls back while the source plays still counts.
+            if movedAt == nil { movedAt = since }
+            return .kept(number)
+        }
+    }
+
+    /// A reading taken `stallSpan` after the last callback, and after the
+    /// source was first seen playing, still shows it playing: Now Playing
+    /// reads every 2 s, so a pause it hasn't read yet never counts.
+    private func quietWhilePlaying(since lastHeard: TimeInterval, readAt: TimeInterval?) -> Bool {
+        guard let readAt, let playingSince else { return false }
+        return readAt - max(lastHeard, playingSince) >= Self.stallSpan
+    }
+
+    /// A stop the host was told of: Core Audio's service restarted, or the
+    /// tap's aggregate device died.
+    mutating func report(_ sign: Sign, at uptime: TimeInterval) -> Step {
+        if case .waiting = phase { return .none }
+        return stop(sign, at: uptime)
+    }
+
+    /// From the Mac's will-sleep notice to its wake `tick` asks for nothing:
+    /// uptime still runs between the notice and the sleep itself. A stop the
+    /// host is told of still closes the capture.
+    mutating func pause() {
+        paused = true
+    }
+
+    /// At the wake: the 2 s, a try's 1 s spacing and its 5 s trial start over at `uptime`.
+    mutating func resume(at uptime: TimeInterval) {
+        paused = false
+        if movedAt != nil { movedAt = uptime }
+        switch phase {
+        case .watching: break
+        case .waiting(let next, _): phase = .waiting(next: next, at: uptime + Self.trySpacing)
+        case .trial(let number, _): phase = .trial(number, since: uptime)
+        }
+    }
+
+    /// The try `tick` asked for could not open the capture.
+    mutating func failed(at uptime: TimeInterval) -> Step {
+        guard case .trial = phase else { return .none }
+        return stop(.noCallback(0), at: uptime) == .giveUp ? .giveUp : .none
+    }
+
+    /// Whether a try that threw `error` leaves room for the next one: an app
+    /// that quit (S142, S164) and an input device that left keep their own handling.
+    static func retries(after error: SourceCapture.CaptureError) -> Bool {
+        switch error {
+        case .appNotRunning, .inputNotFound, .inputHandsFree, .inputDisconnected: return false
+        case .ownProcessUnknown, .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted: return true
+        }
+    }
+
+    private mutating func stop(_ sign: Sign, at uptime: TimeInterval) -> Step {
+        var next = 1
+        if case .trial(let number, _) = phase { next = number + 1 }
+        forgetCount()
+        guard next <= Self.tries else {
+            phase = .watching
+            return .giveUp
+        }
+        phase = .waiting(next: next, at: uptime + Self.trySpacing)
+        return .stopped(sign)
+    }
+
+    private mutating func forgetCount() {
+        lastCount = nil
+        movedAt = nil
+    }
+}
+
 /// The capture's sample rate changed under a running session: the tap's format
 /// can follow an output device's rate, and an input device can be switched to
 /// another rate.
