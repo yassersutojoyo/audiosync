@@ -78,10 +78,11 @@ final class OutputRenderer: FadingOutput {
             }
         }
 
+        // -10851 is the HAL output unit's invalid-device status; the SDK headers only name it kAudioUnitErr_InvalidPropertyValue.
         private static let refusals: Set<OSStatus> = [
             OSStatus(kAudioHardwareBadDeviceError), OSStatus(kAudioHardwareBadObjectError),
             OSStatus(kAudioHardwareBadStreamError), OSStatus(kAudioHardwareNotRunningError),
-            OSStatus(kAudioDevicePermissionsError), OSStatus(kAudioOutputUnitErr_InvalidDevice),
+            OSStatus(kAudioDevicePermissionsError), OSStatus(kAudioUnitErr_InvalidPropertyValue),
         ]
 
         /// The status, and its four-character code when all four bytes are printable.

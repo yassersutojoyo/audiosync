@@ -7116,7 +7116,7 @@ do {
           "\(String(describing: refusedReport))")
     let mixedEngine = RefusingEngine(active: [], refusing: ["usb", "bt"],
                                      refusal: OutputRenderer.StartFailure.formatRefused(OSStatus(kAudioUnitErr_FormatNotSupported)))
-    mixedEngine.errors["bt"] = OutputRenderer.StartFailure.deviceNotBound(OSStatus(kAudioOutputUnitErr_InvalidDevice))
+    mixedEngine.errors["bt"] = OutputRenderer.StartFailure.deviceNotBound(OSStatus(kAudioUnitErr_InvalidPropertyValue))
     let mixedStart = LocalOutputSync.apply(enabled: ["usb", "bt", "tv"], listing: [usb, bt], to: mixedEngine,
                                            holdBacks: [:], gain: { _ in 1 })
     let mixedReport = LocalOutputSync.report(mixedStart.failures, enabled: ["usb", "bt", "tv"], origin: .user)
@@ -7129,7 +7129,7 @@ do {
           "S331 refused start: a refusal carries the device's answer for the debug log, a hard error none",
           "\(refusedOnly.failures)")
     typealias SF = OutputRenderer.StartFailure
-    let refusalKinds: [SF] = [.deviceNotBound(OSStatus(kAudioOutputUnitErr_InvalidDevice)),
+    let refusalKinds: [SF] = [.deviceNotBound(OSStatus(kAudioUnitErr_InvalidPropertyValue)),
                               .deviceDidNotStart(OSStatus(kAudioHardwareBadDeviceError)),
                               .unitNotInitialized(OSStatus(kAudioHardwareBadObjectError)),
                               .formatRefused(OSStatus(kAudioHardwareBadStreamError)),
