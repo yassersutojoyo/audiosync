@@ -3410,9 +3410,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Picking the source or pair already in use answers its notice while
     /// streaming; while stopped the notice says why streaming stopped (S163).
+    /// While streaming a capture notice means another app still holds the
+    /// input (S333), which no pick answers.
     fn clear_source_notice_if_running(&mut self) {
         if self.running() {
-            self.notices.clear(&[NoticeSubject::Source]);
+            self.clear_if(NoticeSubject::Source, |message| {
+                !matches!(message, NoticeMessage::CaptureFailed)
+            });
         }
     }
 
