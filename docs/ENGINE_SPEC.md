@@ -2178,6 +2178,40 @@ The release side:
 |---|---|
 | `scripts/check_appcast.py --self-test` (fixture appcasts and zips built in a temp folder: one Mac item and one item per Windows arch with one enclosure each carrying a well-formed `sparkle:edSignature`, the same short version and build number, URLs and lengths matching the zips, each Windows zip holding only `audiosync.exe` and `THIRD-PARTY-NOTICES.txt`; each break fails with its own line; the Windows items its writer adds pass; a Windows zip under another name is reported as a stray; `--assets` fails on an attached zip without an item and on an item whose zip is not attached). `Tests/signappcasttest.sh` (off a Mac, before any signing: `scripts/sign_appcast.sh` refuses a release missing either Windows zip and names it, and refuses `--mac-only` when Windows zips are there). `scripts/sign_appcast.sh` adds the Windows items through it and runs the same check on each release appcast, on the release Mac | S311 |
 
+### Start steps and late Windows wakes: core (`cargo test` in `core/`)
+
+| Test | Clauses |
+|---|---|
+| two_stray_early_stamps_inside_the_start_window_make_no_start_step (`core/src/render.rs`) | S209, S318, S320 |
+| a_jittery_late_start_steps_once_and_lands_on_its_twin (`core/src/render.rs`) | S207, S209, S318, S321, S322 |
+| a_gradual_return_to_time_steps_once_and_lands_on_its_twin (`core/src/render.rs`) | S321, S322 |
+| wander_and_a_late_start_past_the_window_make_no_start_step (`core/src/render.rs`) | S321 |
+| an_anchor_between_blocks_lands_where_the_capture_is (`core/src/render.rs`) | S322 |
+| an_anchor_lands_at_the_estimated_capture_and_counts_a_block_once (`core/src/reader.rs`) | S44, S322 |
+| a_speaker_clock_3_ppm_fast_loses_11_ms_of_lag_in_an_hour_without_a_correction (`core/tests/drift_hour.rs`) | S50, S57, S322 |
+| only_a_late_start_makes_a_start_step (`core/tests/timing_matrix.rs`) | S318, S320, S321 |
+| a_480_frame_output_that_starts_45_ms_late_plays_on_its_twins_delay_from_3_s (`core/tests/timing_matrix.rs`) | S317, S318, S320 |
+| late_first_cases_on_draws_of_their_own_hold_every_invariant (`core/tests/timing_matrix.rs`) | S207, S209, S320 |
+| a_windows_wake_that_comes_after_the_buffer_ran_dry_moves_no_output_and_corrects_no_drift (`core/tests/timing_matrix.rs`) | S207, S324 |
+| a_windows_endpoint_whose_wakes_jitter_by_up_to_3_ms_makes_no_start_step (`core/tests/render_start.rs`) | S324 |
+
+### Pro Audio threads, stalled outputs and capture loss: Windows (`cargo test` in `desktop/`)
+
+| Test | Clauses |
+|---|---|
+| the_app_raises_the_airplay_driver_thread_on_windows (`desktop/src/audio/airplay.rs`) | S323 |
+| a_refused_pro_audio_registration_is_noted_once (`desktop/src/audio/wasapi/mod.rs`) | S323 |
+| a_stream_that_never_signals_with_full_padding_ends_as_stalled_within_2_s (`desktop/src/audio/wasapi/endpoint.rs`) | S326 |
+| a_frozen_clock_with_full_padding_ends_as_stalled_within_2_s (`desktop/src/audio/wasapi/endpoint.rs`) | S326 |
+| a_stream_that_takes_frames_is_never_stalled_by_a_clock_that_sticks (`desktop/src/audio/wasapi/endpoint.rs`) | S326 |
+| a_stalled_output_reopens_at_the_next_poll_with_a_debug_line (`desktop/src/audio/controller.rs`) | S326 |
+| a_second_stall_in_a_row_posts_the_lost_notice_and_keeps_the_output_on (`desktop/src/audio/controller.rs`) | S326 |
+| a_stream_that_stalls_twice_in_a_row_is_reported_until_one_plays_five_seconds (`desktop/src/adapter.rs`) | S326 |
+| a_capture_device_gone_reopens_only_the_capture_and_keeps_every_output_running (`desktop/src/audio/controller.rs`) | S329 |
+| a_capture_reopen_waits_while_the_lost_capture_still_holds_the_ring (`desktop/src/audio/controller.rs`) | S329 |
+| a_capture_back_in_another_format_restarts_the_session (`desktop/src/audio/controller.rs`) | S329 |
+| a_capture_that_fails_its_last_try_stops_as_before (`desktop/src/audio/controller.rs`) | S21, S329 |
+
 ## 19. Windows updater
 
 The Windows app updates itself from the same Sparkle appcast the Mac app reads, through its own small updater written in Rust. This section is the whole behavior; a writer needs nothing else. Sources named below are public documentation: Sparkle's "Publishing an update" (sparkle-project.org/documentation/publishing/) and its "Documentation" basic setup on EdDSA keys (sparkle-project.org/documentation/), WinSparkle's "Publishing updates" guide for the Windows values of `sparkle:os` (winsparkle.org/guides/publishing-updates/), RFC 8032 for Ed25519, and Microsoft Learn's MoveFileExW page (learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw), its WinHTTP overview (learn.microsoft.com/en-us/windows/win32/winhttp/about-winhttp), its PE format page (learn.microsoft.com/en-us/windows/win32/debug/pe-format), its SmartScreen reputation page (learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation), its Smart App Control overview (learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/overview), the Zone.Identifier stream in MS-FSCC (learn.microsoft.com/en-us/openspecs/windows_protocols/ms-fscc/6e3f7352-d11c-4d76-8c39-2516a9df36e8), IAttachmentExecute::Save (learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iattachmentexecute-save), Microsoft Defender Antivirus protection features (learn.microsoft.com/en-us/defender-endpoint/configure-protection-features-microsoft-defender-antivirus) and System Error Codes 0 to 499 (learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-). No updater project's code was read for it, and none may be copied from.
