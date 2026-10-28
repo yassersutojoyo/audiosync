@@ -34,6 +34,9 @@ file name) or, with --assets-file, from a file holding the output of
 `gh release view TAG --json assets` or one name per line. It also wants a
 Mac item and, without --mac-only, an item for each Windows architecture.
 With the gh output, each item's length must also be its zip's attached size.
+An appcast with Windows items also needs the S310 Mac check on record: the
+date it passed in S310_MAC_CHECK_PASSED below or in the
+AUDIOSYNC_S310_MAC_CHECK environment variable (YYYY-MM-DD).
 
 Usage:
     scripts/check_appcast.py [--mac-only] APPCAST VERSION [ZIP...]
@@ -47,6 +50,7 @@ Usage:
 import argparse
 import base64
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -63,6 +67,23 @@ MAC_OS = ("", "macos")
 MAC_ONLY_HINT = "pass --mac-only for a release without Windows"
 WINDOWS_ZIP_FILES = {"audiosync.exe", "THIRD-PARTY-NOTICES.txt"}
 ED25519_SIGNATURE_BYTES = 64
+# The S310 check runs once: set this to the date it passed, so later releases need no variable.
+S310_MAC_CHECK_PASSED = ""
+S310_VARIABLE = "AUDIOSYNC_S310_MAC_CHECK"
+S310_REFUSAL = (f"the appcast carries Windows items, but no S310 Mac check is on record: point the "
+                f"Mac app at this appcast and check that it offers the Mac update only (RELEASE.md), "
+                f"then set {S310_VARIABLE} to that check's date (YYYY-MM-DD) and record the date as "
+                f"S310_MAC_CHECK_PASSED in scripts/check_appcast.py")
+
+
+def s310_mac_check():
+    """The date the S310 Mac check passed, from the constant or the variable; None without one."""
+    for text in (S310_MAC_CHECK_PASSED, os.environ.get(S310_VARIABLE, "")):
+        try:
+            return datetime.date.fromisoformat(text.strip())
+        except ValueError:
+            continue
+    return None
 
 
 def sparkle(name):
@@ -310,6 +331,8 @@ def asset_problems(appcast, version, assets, mac_only=False):
     if not mac_only:
         problems += [f"no {arch} item in the appcast, so Windows users never see this release "
                      f"({MAC_ONLY_HINT})" for arch in WINDOWS_ARCHES if arch not in item_oses]
+    if item_oses & set(WINDOWS_ARCHES) and s310_mac_check() is None:
+        problems.append(S310_REFUSAL)
     return problems
 
 
@@ -420,7 +443,8 @@ def fixture_item(zip_path, version="0.8.0", build="80", os_attr=None, sig=True,
 
 
 def self_test():
-    # covers: S311
+    # covers: S311, S310
+    global S310_MAC_CHECK_PASSED
     failures = []
     cases = 0
     with tempfile.TemporaryDirectory() as folder:
@@ -601,6 +625,17 @@ def self_test():
         names = [os.path.basename(path) for path in everything]
         other_assets = ["AudioSync-0.8.0.dmg", "SHA256SUMS.txt", "appcast.xml"]
         x64_name, arm_name = names[1], names[2]
+        S310_MAC_CHECK_PASSED = ""
+        os.environ.pop(S310_VARIABLE, None)
+        against_assets("Windows items without the S310 Mac check on record", good(),
+                       names + other_assets, "no S310 Mac check is on record")
+        against_assets("a Mac-only release without the S310 record", good()[:1],
+                       names[:1] + other_assets, None, mac_only=True)
+        S310_MAC_CHECK_PASSED = "2026-11-01"
+        against_assets("Windows items with the S310 check recorded in the script", good(),
+                       names + other_assets, None)
+        S310_MAC_CHECK_PASSED = ""
+        os.environ[S310_VARIABLE] = "2026-11-01"
         against_assets("assets of a full release", good(), names + other_assets, None)
         against_assets("assets of a Mac-only release", good()[:1], names[:1] + other_assets, None,
                        mac_only=True)
