@@ -416,6 +416,17 @@ mod tests {
         );
     }
 
+    /// Exit, then a launch at once: the old copy holds the mutex through the
+    /// updater's quit waits and the session's quit budget.
+    #[cfg(windows)]
+    #[test]
+    fn a_launch_waits_out_the_longest_teardown_of_a_quitting_copy() {
+        let budget = Duration::from_secs_f64(audiosync_core::policy::session::QUIT_BUDGET);
+        let gone = crate::updater::QUIT_WAIT + crate::updater::files::QUIT_RETRY_BUDGET + budget;
+        let (_, first, _, _) = run_second_launch(HandOver::NoAnswer, ANSWER_WAIT, Some(gone));
+        assert!(first.is_some(), "gave up before the old copy was gone");
+    }
+
     #[test]
     fn a_request_that_cannot_be_sent_also_waits_for_the_old_copy() {
         let gone = Duration::from_millis(1000);
