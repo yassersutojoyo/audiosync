@@ -163,8 +163,9 @@ extension AppDelegate {
             }
             pushModel()   // the row says it waits, or no longer
         case .volumeChanged(let id, let position, let level):
-            // Calibrate All Speakers keeps it silent and sets its volume back when the run ends.
-            guard calibrateAllRun?.silences(airPlay: id) != true else { return }
+            let silenced = calibrateAllRun?.silences(airPlay: id) == true
+            guard let receiver = NativeAirPlayID.receiver(id),
+                  nativeAirPlay?.volumeEvents.applies(receiver, silenced: silenced) == true else { return }
             airplayVolume[id] = position
             airplayHeldLevel[id] = AirPlayDeviceLevel.held(level: level, zone: airPlayZoneVolume(id), master: masterVolume)
             pushModel()
