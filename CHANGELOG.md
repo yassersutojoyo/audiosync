@@ -159,7 +159,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, recalling a preset leaves on the stereo pair or home theater that plays one of the preset's speakers.
 - On Windows, when the only Google Cast speaker that's on ends its session on its own without a problem, streaming stops. Before, AudioSync went on capturing with nothing to play to.
 - On Windows, when the PC goes to sleep, an AirPlay speaker set to ask for a code every time that you turned on yourself goes off with the notice that it needs a PIN, as when streaming stops. Before, it stayed on through the sleep.
-- On Windows, a Google Cast speaker that's on but not playing goes off with the notice that it isn't responding as soon as it leaves the list, or as soon as its session ends after it left, as on the Mac. Before, it stayed on with no row until discovery stopped, and every other Cast speaker was refused as busy.
+- On Windows, a Google Cast speaker that's on but not playing goes off with the notice that it isn't responding as soon as it leaves the list, or as soon as its session ends after it left, as on the Mac. Before, it stayed on with no row, and every other Cast speaker was refused as busy.
 - On the web remote, the error under a speaker, zone or preset goes away once it changes from the computer or another phone. Before, it stayed until you changed something from that phone. On the Mac and on Windows.
 - On Windows, a source of several apps is named "Chrome and Spotify" in its notices, as in the source list. Before, the notices read "Chrome, Spotify".
 - On Windows, an offset you set on an output that you unplug before AudioSync saves its settings is kept at the next launch. Before, it was lost.
