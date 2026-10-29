@@ -480,9 +480,11 @@ struct CastModel {
 
     /// The slider position, 0 to 100: the own level the user set until a
     /// status answers it, else the one kept, else the reported level.
-    func volume(of id: String) -> Double {
-        let level = ownLevel(of: id) ?? volumes[id]?.level ?? 1
-        return min(100, max(0, level * 100))
+    func volume(of id: String) -> Double { knownVolume(of: id) ?? 100 }
+
+    /// `volume(of:)`, nil while no status reported a level and the user set none.
+    func knownVolume(of id: String) -> Double? {
+        (ownLevel(of: id) ?? volumes[id]?.level).map { min(100, max(0, $0 * 100)) }
     }
 
     private func ownLevel(of id: String) -> Double? {
