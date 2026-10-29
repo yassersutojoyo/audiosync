@@ -1266,8 +1266,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Results that no longer describe the stored delays go: a measured
     /// speaker's delay changed before Apply (its new value would undo that
-    /// change), or a value Apply wrote changed since (Undo would undo it).
-    /// Returns whether the card changed.
+    /// change) or the reference changed before Apply, or a value Apply wrote
+    /// changed since (Undo would undo it). Returns whether the card changed.
     fn follow_calibrate_all(&mut self) -> bool {
         if self.calibrate_all.run.is_some() {
             return false;
@@ -1308,18 +1308,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if kept.sheet.applied() || kept.sheet.ended().is_some() {
             return false;
         }
+        let reference = self.audio.calibration_engine().reference;
         let moved = kept
             .sheet
             .rows()
             .iter()
             .zip(&kept.members)
-            .filter(|(row, _)| row.state != RowState::Reference)
-            .any(|(_, m)| !holds(self.calibrated_now(m.class, &m.id), m.offset_ms));
+            .any(|(row, m)| match row.state {
+                RowState::Reference => reference.as_deref() != Some(m.id.as_str()),
+                _ => !holds(self.calibrated_now(m.class, &m.id), m.offset_ms),
+            });
         if !moved {
             return false;
         }
-        self.log
-            .log(|| "Calibrate All: a delay changed before Apply, the results go".to_owned());
+        self.log.log(|| {
+            "Calibrate All: a delay or the reference changed before Apply, the results go"
+                .to_owned()
+        });
         self.calibrate_all.sheet = None;
         self.calibrate_all.phase = AllPhase::Stale;
         self.calibrate_all.endings += 1;
