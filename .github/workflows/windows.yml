@@ -2,7 +2,7 @@ name: Windows
 
 on:
   push:
-    branches: ['**']
+    branches: ['**', '!wip/**']
   pull_request:
 
 # A newer push to a feature branch cancels that branch's older run; every
@@ -23,10 +23,40 @@ env:
   AUDIOSYNC_LAN_TESTS: '1'
 
 jobs:
+  proven:
+    # main skips the rest for a commit this workflow already passed on an integ/* train.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Was this commit green on an integ/* train?
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          SHA: ${{ github.sha }}
+        # Any API error leaves skip=false, so main runs everything.
+        run: |
+          skip=false
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+            wf=${WORKFLOW_REF%@*}
+            if n=$(gh api "repos/$REPO/actions/workflows/${wf##*/}/runs?head_sha=$SHA&status=success&per_page=100" \
+                --jq '[.workflow_runs[] | select(.head_branch | startswith("integ/"))] | length') &&
+              [ "$n" -gt 0 ] 2>/dev/null; then
+              skip=true
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   test:
     name: Format, clippy and tests
     # Windows runs on main, integ/* trains and release/ branches; other pushes test on Linux only.
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/')
+    needs: proven
+    if: needs.proven.outputs.skip != 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/'))
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -55,6 +85,8 @@ jobs:
   # tests and the capture's smoke test.
   linux:
     name: Linux (format, clippy and tests)
+    needs: proven
+    if: needs.proven.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
@@ -199,8 +231,8 @@ jobs:
   build:
     name: Release build (${{ matrix.arch }})
     # No artifact from a run whose tests or license check failed.
-    needs: [test, licenses]
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/')
+    needs: [proven, test, licenses]
+    if: needs.proven.outputs.skip != 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/'))
     strategy:
       fail-fast: false
       matrix:
@@ -264,6 +296,8 @@ jobs:
 
   licenses:
     name: Licenses
+    needs: proven
+    if: needs.proven.outputs.skip != 'true'
     runs-on: ubuntu-latest
     defaults:
       run:

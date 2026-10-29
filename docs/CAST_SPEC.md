@@ -257,8 +257,8 @@ The sender's tests run against a fake receiver in the same process: a TLS server
 | a_cast_speakers_wait_is_its_offset_and_hold_back_or_a_guess_by_format, only_a_cast_speaker_without_an_offset_waits_for_the_unknown_start_guess | C77a | a device with no stored offset, or 0 ms, waits its feed's hold-back plus 3000 ms for WAV, or 6000 ms for FLAC and while no format is reported; a stored offset replaces the guess; only a Cast speaker without an offset waits for the guess |
 | a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops | C64, C75, C79 | a fake device that reads at half real time: the queue never passes its 2 s cap and drops once full, the audio is all sent, queued or counted as dropped except what the 1 s ring holds, the drift only grows, a restart is offered exactly while the drift is over 250 ms, and no new `LOAD` or restart follows (`cast/tests/fake_cells.rs`) |
 | a_device_that_reports_playing_after_13_s_is_waited_for | C74 | a fake device that fetches the stream at once but reports `PLAYING` only after 13 s, longer than the 10 s fetch timeout, which fires only when no fetch arrives: the session waits with one `LAUNCH`, one `LOAD` and one fetch and never restarts (`cast/tests/fake_cells.rs`) |
-| hardware_latency | C74 to C76 | *hardware*: G7, G8 and G9; for C74, the `PLAYING` delay of a real device stays untested |
-| hardware_groups | C89 to C103 | *hardware*: G1 |
+| manual receiver check, no test function | C74 to C76 | *hardware*: G7, G8 and G9; for C74, the `PLAYING` delay of a real device stays untested |
+| manual receiver check, no test function | C89 to C103 | *hardware*: G1 |
 
 ## Sources
 
