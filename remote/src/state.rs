@@ -36,6 +36,8 @@ pub struct NowPlaying {
     pub artist: String,
     /// The app the audio comes from.
     pub source: String,
+    /// False while the app is paused; true when the snapshot leaves it out.
+    pub playing: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -81,6 +83,9 @@ pub struct ZoneCounts {
     pub total: u32,
     /// Members on that wait for an AirPlay 2 place or for PTP.
     pub waiting: u32,
+    /// Every member the app's zone header counts, present or not; `total`
+    /// when the snapshot leaves it out.
+    pub all: u32,
 }
 
 /// A speaker preset as the page shows it.
@@ -239,10 +244,14 @@ fn zone_from(
         on: count_field(counts, "on", &at_counts)?,
         total: count_field(counts, "total", &at_counts)?,
         waiting: count_field(counts, "waiting", &at_counts)?,
+        all: match counts.get("all") {
+            None => count_field(counts, "total", &at_counts)?,
+            Some(_) => count_field(counts, "all", &at_counts)?,
+        },
     };
-    if counts.on > counts.total || counts.waiting > counts.on {
+    if counts.on > counts.total || counts.waiting > counts.on || counts.total > counts.all {
         return Err(invalid(format!(
-            "{at}counts are not waiting <= on <= total"
+            "{at}counts are not waiting <= on <= total <= all"
         )));
     }
     Ok(Zone {
@@ -337,6 +346,10 @@ impl State {
                 title: text_field(playing, "title", "now_playing.")?,
                 artist: text_field(playing, "artist", "now_playing.")?,
                 source: text_field(playing, "source", "now_playing.")?,
+                playing: match playing.get("playing") {
+                    None => true,
+                    Some(_) => bool_field(playing, "playing", "now_playing.")?,
+                },
             }),
             Some(_) => return Err(invalid("now_playing is not an object or null")),
         };
@@ -462,6 +475,7 @@ impl State {
                 "title": playing.title,
                 "artist": playing.artist,
                 "source": playing.source,
+                "playing": playing.playing,
             })
         });
         let zones: Vec<Value> = self
@@ -477,6 +491,7 @@ impl State {
                         "on": zone.counts.on,
                         "total": zone.counts.total,
                         "waiting": zone.counts.waiting,
+                        "all": zone.counts.all,
                     },
                 })
             })
@@ -1092,7 +1107,8 @@ mod tests {
             ZoneCounts {
                 on: 1,
                 total: 2,
-                waiting: 0
+                waiting: 0,
+                all: 2
             }
         );
         let written: Value = serde_json::from_str(&state.to_json(3)).unwrap();

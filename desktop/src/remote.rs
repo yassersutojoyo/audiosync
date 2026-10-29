@@ -245,6 +245,7 @@ pub fn snapshot(
             title: track.title.clone(),
             artist: track.artist.clone(),
             source: app_name(&track.app_id),
+            playing: track.playing,
         }),
         speakers,
         zones: zones(state, &listed_now),
@@ -290,16 +291,19 @@ fn zones(state: &AppState, listed_now: &[&Speaker]) -> Vec<RemoteZone> {
                 u32::try_from(members.iter().filter(|speaker| test(speaker)).count())
                     .unwrap_or(u32::MAX)
             };
+            // As the speaker's own switch shows it.
+            let on = |speaker: &Speaker| !state.speaker_state(speaker).click_turns_on();
             RemoteZone {
                 id: zone.id.clone(),
                 name: zone.name.clone(),
                 volume: volume(zone.volume),
                 members: members.iter().map(|speaker| speaker.id.clone()).collect(),
                 counts: ZoneCounts {
-                    on: count(&|speaker| speaker.enabled),
+                    on: count(&on),
                     total: count(&|_| true),
+                    all: u32::try_from(state.zone_counts(zone).total).unwrap_or(u32::MAX),
                     waiting: count(&|speaker| {
-                        speaker.enabled
+                        on(speaker)
                             && matches!(
                                 speaker.waiting,
                                 Some(Waiting::ForAirPlay2Slot | Waiting::ForPtp)
@@ -1127,7 +1131,8 @@ mod tests {
             ZoneCounts {
                 on: 2,
                 total: 3,
-                waiting: 1
+                waiting: 1,
+                all: 4
             }
         );
         assert_eq!(snapshot.zones[1].counts.total, 0);

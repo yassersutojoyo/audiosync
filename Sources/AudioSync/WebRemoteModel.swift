@@ -121,6 +121,8 @@ struct RemoteZoneRow: Equatable {
     var members: [String]
     var on = 0
     var waiting = 0
+    /// Every member of `zone`, listed or not, for "None of 3 found".
+    var all = 0
 
     init(id: String, name: String, volume: Double, members: [String], on: Int = 0, waiting: Int = 0) {
         self.id = id
@@ -135,11 +137,12 @@ struct RemoteZoneRow: Equatable {
         let present = zone.members.compactMap { key in listed.first { $0.key == key } }
         self.init(id: zone.id, name: zone.name, volume: zone.volume, members: present.map(\.id),
                   on: present.filter(\.on).count, waiting: present.filter { $0.on && $0.waiting }.count)
+        all = zone.members.count
     }
 
     var json: [String: Any] {
         ["id": id, "name": name, "volume": RemoteSnapshot.volume(volume), "members": members,
-         "counts": ["on": on, "total": members.count, "waiting": waiting]]
+         "counts": ["on": on, "total": members.count, "waiting": waiting, "all": all]]
     }
 }
 
