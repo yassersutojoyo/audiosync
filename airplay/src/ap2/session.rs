@@ -425,6 +425,9 @@ pub struct Ap2Session {
     /// The sequence number and timestamp the next FLUSH names (P34, P42).
     flush_point: (u16, u32),
     flush_pending: bool,
+    /// A delay FLUSH waits for this session (P100): no other request starts.
+    /// Once set, every way out ends in a FLUSH, or the session stays silent.
+    flush_wanted: bool,
     /// Unreachable UDP sends in a row (P141).
     udp_failures: u8,
     /// The host asked for a read since the last one went out (P184).
@@ -547,6 +550,7 @@ impl Ap2Session {
             server: None,
             flush_point: (0, 0),
             flush_pending: false,
+            flush_wanted: false,
             udp_failures: 0,
             volume_read_asked: false,
             volume_read_wanted: false,
@@ -656,6 +660,7 @@ impl Ap2Session {
     /// on (P156).
     /// False when the stream is not ready, so no FLUSH goes out.
     pub fn flush(&mut self, seq: u16, rtptime: u32, now: Instant) -> bool {
+        self.flush_wanted = false;
         if self.state != Ap2State::Ready {
             return false;
         }
@@ -663,6 +668,14 @@ impl Ap2Session {
         self.flush_pending = true;
         self.drive(now);
         true
+    }
+
+    /// A delay FLUSH waits for this session (P100): until [`Ap2Session::flush`]
+    /// no other request starts. True when a FLUSH would go out at once, or
+    /// none would go out at all.
+    pub fn flush_slot(&mut self) -> bool {
+        self.flush_wanted = true;
+        self.state != Ap2State::Ready || self.in_flight.is_none()
     }
 
     /// A FLUSH is queued or waiting for its answer (P213).
@@ -733,7 +746,13 @@ impl Ap2Session {
         }
         if self.state != Ap2State::TearingDown {
             times.extend(self.feedback_due);
-            times.extend(self.peers_update_at);
+            // An update waiting behind an answer or a FLUSH has nothing to
+            // wake for; its past deadline would spin the driver.
+            let blocked =
+                self.in_flight.is_some() || (self.state == Ap2State::Ready && self.flush_wanted);
+            if !blocked {
+                times.extend(self.peers_update_at);
+            }
         }
         if self.state == Ap2State::Ready {
             times.extend(self.read_due);
@@ -1432,6 +1451,13 @@ impl Ap2Session {
                 }
             }
             Ap2State::Starting | Ap2State::Ready => {
+                if self.state == Ap2State::Ready && self.flush_pending {
+                    self.flush_pending = false;
+                    return self.send(Kind::Flush, now, false);
+                }
+                if self.state == Ap2State::Ready && self.flush_wanted {
+                    return;
+                }
                 if self.feedback_wanted {
                     self.feedback_wanted = false;
                     return self.send(Kind::Feedback, now, false);
@@ -1439,10 +1465,6 @@ impl Ap2Session {
                 if self.stream_setup_waiting && self.events.is_some() {
                     self.stream_setup_waiting = false;
                     return self.send(Kind::StreamSetup, now, false);
-                }
-                if self.state == Ap2State::Ready && self.flush_pending {
-                    self.flush_pending = false;
-                    return self.send(Kind::Flush, now, false);
                 }
                 if self.peers_update_at.is_some_and(|at| at <= now) {
                     self.peers_update_at = None;
@@ -1671,7 +1693,14 @@ impl Ap2Session {
                 Kind::TeardownSession => self.finish(),
                 Kind::TeardownStream => self.stream_torn_down = true,
                 Kind::StreamSetup if response.is_success() => self.record_stream(&response),
-                Kind::SessionSetup if response.is_success() => self.set_up = true,
+                Kind::SessionSetup if response.is_success() => {
+                    self.set_up = true;
+                    self.session_header = response
+                        .headers
+                        .get("Session")
+                        .and_then(rtsp::session_id)
+                        .map(str::to_owned);
+                }
                 Kind::SessionSetup => self.finish(),
                 _ => {}
             }
