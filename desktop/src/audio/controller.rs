@@ -1310,6 +1310,10 @@ impl<D: Driver> Controller<D> {
         // waited behind them doesn't wait behind them again.
         let mut attach = plan.attach;
         attach.sort_by_key(|endpoint| self.hung.contains(&endpoint.id));
+        // Each try may hold the UI thread for seconds (S332).
+        if self.power.suspended.is_some() {
+            attach.clear();
+        }
         // Whether a start in this pass didn't answer in time.
         let mut held = false;
         for endpoint in attach {
@@ -1359,12 +1363,26 @@ impl<D: Driver> Controller<D> {
                 &endpoint.id,
                 params.gain,
             )));
-            let failed = match self.driver.start_renderer(
-                &endpoint,
-                reader,
-                control.clone(),
-                Arc::clone(&gain),
-            ) {
+            let started =
+                self.driver
+                    .start_renderer(&endpoint, reader, control.clone(), Arc::clone(&gain));
+            // A device that now refuses or doesn't answer is no longer held
+            // by another app, so the busy notice would mislead.
+            if let Err(BackendError::DeviceGone | BackendError::NotResponding) = started
+                && self.busy.remove(&endpoint.id).is_some()
+            {
+                self.log.log(|| {
+                    format!(
+                        "output {}: the other app let go of its device, but the device doesn't \
+                         open yet; it is no longer busy and stays on",
+                        label(&self.names, &endpoint.id)
+                    )
+                });
+                self.pending.push(BackendEvent::OutputFree {
+                    id: endpoint.id.clone(),
+                });
+            }
+            let failed = match started {
                 Ok(handle) => {
                     if let Some(trial) = self.stall_trials.get_mut(&endpoint.id) {
                         trial.polls = RESTART_TRIAL_POLLS;
@@ -5691,6 +5709,33 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
+    // covers: S331
+    #[test]
+    fn a_busy_output_whose_device_then_refuses_to_open_is_no_longer_busy() {
+        for refusal in [BackendError::DeviceGone, BackendError::NotResponding] {
+            let mut backend = backend();
+            backend.fail_output(HEADPHONES, Some(BackendError::DeviceBusy));
+            backend.start(&SourceId::WholeSystem).unwrap();
+            assert_eq!(
+                backend.poll(),
+                [BackendEvent::OutputBusy {
+                    id: HEADPHONES.to_owned(),
+                }]
+            );
+            // The other app let go while Windows rebuilds the endpoint.
+            backend.fail_output(HEADPHONES, Some(refusal));
+            let events: Vec<BackendEvent> =
+                (0..BUSY_RETRY_POLLS).flat_map(|_| backend.poll()).collect();
+            assert_eq!(
+                events,
+                [BackendEvent::OutputFree {
+                    id: HEADPHONES.to_owned(),
+                }]
+            );
+            assert!(backend.policy().settings(HEADPHONES).enabled);
+        }
+    }
+
     #[test]
     fn turning_on_an_output_whose_device_is_busy_keeps_it_on() {
         let mut backend = backend();
@@ -6805,6 +6850,27 @@ mod tests {
         );
         poll_quietly(&mut suspended, 1 + RESTART_DELAY_POLLS);
         assert!(suspended.driver().capture_running());
+    }
+
+    // covers: S332
+    #[test]
+    fn an_output_lost_after_a_suspend_notice_is_tried_at_the_resume() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.notify_power(PowerNotice::Suspend);
+        poll_quietly(&mut backend, 1);
+        let tries = backend.driver().renderer_attempts(HEADPHONES);
+        backend.end_renderer(HEADPHONES);
+        backend.poll();
+        assert_eq!(
+            backend.driver().renderer_attempts(HEADPHONES),
+            tries,
+            "no try while it sleeps"
+        );
+        backend.pass_wall_time(Duration::from_secs(2 * 3600));
+        backend.notify_power(PowerNotice::Resume);
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
     // covers: S332, S329
