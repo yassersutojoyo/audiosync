@@ -1371,8 +1371,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Results that no longer describe the stored delays go: a measured
     /// speaker's delay changed before Apply (its new value would undo that
-    /// change), or a value Apply wrote changed since (Undo would undo it).
-    /// Returns whether the card changed.
+    /// change) or the reference changed before Apply, or a value Apply wrote
+    /// changed since (Undo would undo it). Returns whether the card changed.
     fn follow_calibrate_all(&mut self) -> bool {
         if self.calibrate_all.run.is_some() {
             return false;
@@ -1413,18 +1413,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if kept.sheet.applied() || kept.sheet.ended().is_some() {
             return false;
         }
+        let reference = self.audio.calibration_engine().reference;
         let moved = kept
             .sheet
             .rows()
             .iter()
             .zip(&kept.members)
-            .filter(|(row, _)| row.state != RowState::Reference)
-            .any(|(_, m)| !holds(self.calibrated_now(m.class, &m.id), m.offset_ms));
+            .any(|(row, m)| match row.state {
+                RowState::Reference => reference.as_ref().is_some_and(|now| *now != m.id),
+                _ => !holds(self.calibrated_now(m.class, &m.id), m.offset_ms),
+            });
         if !moved {
             return false;
         }
-        self.log
-            .log(|| "Calibrate All: a delay changed before Apply, the results go".to_owned());
+        self.log.log(|| {
+            "Calibrate All: a delay or the reference changed before Apply, the results go"
+                .to_owned()
+        });
         self.calibrate_all.sheet = None;
         self.calibrate_all.phase = AllPhase::Stale;
         self.calibrate_all.endings += 1;
@@ -5133,6 +5138,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn apply_calibrate_all(&mut self) {
+        if self.follow_calibrate_all() {
+            return;
+        }
         if self.calibrate_all.run.is_some() {
             return;
         }
@@ -11182,6 +11190,66 @@ mod tests {
         assert_eq!(state.sheet, None, "Apply would undo the new delay");
         assert_eq!(state.phase, AllPhase::Stale);
         assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(95.0));
+    }
+
+    // covers: S238
+    #[test]
+    fn calibrate_all_results_go_once_the_reference_changes_before_apply() {
+        let mut audio = reference_audio();
+        audio.connect_output_as("builtin2", "Headphones", OutputKind::BuiltIn);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        for id in ["builtin", "bluetooth", "builtin2"] {
+            turn_on(&mut adapter, id);
+        }
+        adapter.set_speaker_delay(&key("bluetooth"), 80.0);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::local_sheet(&[
+                ("builtin", 0.0, 2010.0),
+                ("bluetooth", 80.0, 2190.0),
+            ]),
+        );
+        adapter.poll();
+        assert!(adapter.snapshot().calibrate_all.sheet.is_some());
+
+        // Its endpoint disabled in Windows Sound, the other built-in output
+        // becomes the reference (S174).
+        unplug(&mut adapter, "builtin");
+        adapter.apply_calibrate_all();
+        let state = adapter.snapshot().calibrate_all;
+        assert_eq!(state.sheet, None, "measured against a reference that went");
+        assert_eq!(state.phase, AllPhase::Stale);
+        assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
+    }
+
+    // covers: S238
+    #[test]
+    fn an_apply_before_the_next_poll_writes_nothing_once_the_reference_changed() {
+        let mut audio = reference_audio();
+        audio.connect_output_as("builtin2", "Headphones", OutputKind::BuiltIn);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        for id in ["builtin", "bluetooth", "builtin2"] {
+            turn_on(&mut adapter, id);
+        }
+        adapter.set_speaker_delay(&key("bluetooth"), 80.0);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::local_sheet(&[
+                ("builtin", 0.0, 2010.0),
+                ("bluetooth", 80.0, 2190.0),
+            ]),
+        );
+        adapter.poll();
+        assert!(adapter.snapshot().calibrate_all.sheet.is_some());
+
+        // Listing the devices again by hand takes the change in between polls.
+        adapter.audio_mut().disconnect_output("builtin");
+        adapter.refresh_devices();
+        adapter.apply_calibrate_all();
+        let state = adapter.snapshot().calibrate_all;
+        assert_eq!(state.sheet, None, "measured against a reference that went");
+        assert_eq!(state.phase, AllPhase::Stale);
+        assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
     }
 
     fn keep(
