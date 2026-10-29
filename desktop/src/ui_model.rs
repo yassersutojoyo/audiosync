@@ -14,6 +14,7 @@ use audiosync_core::eq::{self, CurveMatch, EqSettings, UserCurve};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::presets::{self as policy_presets, Preset, Scene, SpeakerNow};
 use audiosync_core::policy::source_quit::WhenSourceQuits;
+use audiosync_core::policy::speakers::{NoticeSubject, SpeakerKey};
 use audiosync_core::policy::zones::{self, ClickAction, MemberKind, Situation, Zone, Zones};
 #[cfg(any(test, feature = "mock-backend"))]
 use audiosync_core::volume;
@@ -1193,6 +1194,25 @@ impl AppState {
         self.absent.iter().find(|member| member.id == id)
     }
 
+    /// Whether another app took Cast speaker `id` over: only its notice
+    /// records it, in the subject the adapter writes.
+    fn cast_taken_over(&self, id: &str) -> bool {
+        let Some(device) = SpeakerKey::cast_id(id) else {
+            return false;
+        };
+        let subject = format!("{:?}", NoticeSubject::Cast(device.to_owned()));
+        self.notices.iter().any(|notice| {
+            notice.subject == subject
+                && matches!(
+                    notice.message,
+                    NoticeMessage::CastCantPlay {
+                        problem: CastProblem::TakenOver,
+                        ..
+                    }
+                )
+        })
+    }
+
     /// A zone is on when a click with streaming on would switch it off
     /// (spec S246), so a Cast member the click leaves off counts toward
     /// neither. Playing, it waits when each member it counts waits.
@@ -1215,7 +1235,8 @@ impl AppState {
                 },
                 listed: true,
                 on: s.enabled,
-                busy: s.cast.as_ref().is_some_and(|cast| cast.offline),
+                busy: s.cast.as_ref().is_some_and(|cast| cast.offline)
+                    || self.cast_taken_over(&s.id),
                 needs_airplay2: false,
                 in_target: s.in_target.is_some(),
             })
@@ -2824,7 +2845,6 @@ pub fn picked_curve(index: i32, saved: usize) -> Option<CurveMatch> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use audiosync_core::policy::speakers::NoticeSubject;
 
     #[test]
     fn a_delay_field_takes_digits_after_one_leading_sign_and_blocks_the_rest() {
