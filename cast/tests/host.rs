@@ -233,7 +233,8 @@ fn a_failing_cast_session_never_blocks_the_host_or_its_audio() {
     working.join();
 }
 
-// covers: C65 (the host's commands run in order, so a level waits for the launch)
+// The host's commands run in order, so a level waits for the launch.
+// covers: C65
 #[test]
 fn a_level_set_while_starting_reaches_the_device_after_the_launch() {
     let device = FakeDevice::start(Behavior::default());
