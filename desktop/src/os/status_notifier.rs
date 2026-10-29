@@ -37,10 +37,12 @@ const POLL_EVERY: Duration = Duration::from_secs(2);
 
 pub type Tray = Rc<tray::Tray>;
 
+/// The app, its log and the watcher thread's mode, for what that thread
+/// reports.
+type Target = (Weak<App>, DebugLog, mpsc::Sender<bool>);
+
 thread_local! {
-    /// The app, its log and the watcher thread's mode, for what that
-    /// thread reports.
-    static TARGET: RefCell<Option<(Weak<App>, DebugLog, mpsc::Sender<bool>)>> = const { RefCell::new(None) };
+    static TARGET: RefCell<Option<Target>> = const { RefCell::new(None) };
     /// The icon added after launch.
     static LATE_TRAY: RefCell<Option<Tray>> = const { RefCell::new(None) };
 }
