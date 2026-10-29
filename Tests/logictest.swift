@@ -10458,6 +10458,15 @@ do {
           "presets: a recall that swaps the Cast speaker while streaming gives the new one the preset's volume",
           "\(String(describing: swapSent)) \(swap.volume(of: castY))")
 
+    // covers: C2
+    var expired = CastModel()
+    expired.apply(.appeared(CastDevice(id: castX, name: "Kitchen"), offsetMs: nil))
+    expired.apply(.appeared(CastDevice(id: castY, name: "Den"), offsetMs: nil))
+    _ = expired.turnOn(castX)
+    expired.apply(.gone(id: castX))
+    check(expired.rows == [castY] && expired.enabled == nil && expired.turnOn(castY) == nil,
+          "cast model: a speaker that is on with no session leaves the list and no longer blocks another")
+
     check(t.castAddProblem(.notFound)
             == "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
             && t.castAddProblem(.unreadable) == t.castAddInvalid
