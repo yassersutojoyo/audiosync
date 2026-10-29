@@ -5134,6 +5134,29 @@ do {
                                               inputSubTransports: [kAudioDeviceTransportTypeBluetoothLE, kAudioDeviceTransportTypeUSB])
             && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeAggregate),
           "sources: a classic Bluetooth input, or an aggregate recording from one, counts as hands-free")
+    // covers: S341 (a Mac on 2026-10-29: soundcore dropped out while the default was a Sony XM6)
+    do {
+        let bt = kAudioDeviceTransportTypeBluetooth, le = kAudioDeviceTransportTypeBluetoothLE
+        let driven = [(transport: bt, uid: "soundcore"), (transport: le, uid: "buds-le"),
+                      (transport: kAudioDeviceTransportTypeUSB, uid: "usb-dac")]
+        check(AudioDevices.bluetoothBesideDefault(default: (transport: bt, uid: "xm6"), driven: driven) == ["soundcore", "buds-le"]
+                && AudioDevices.bluetoothBesideDefault(default: (transport: le, uid: "xm6"), driven: driven) == ["soundcore", "buds-le"],
+              "bluetooth default: a Bluetooth default beside a driven Bluetooth output marks that output")
+        check(AudioDevices.bluetoothBesideDefault(default: (transport: kAudioDeviceTransportTypeBuiltIn, uid: "built-in"), driven: driven).isEmpty
+                && AudioDevices.bluetoothBesideDefault(default: nil, driven: driven).isEmpty,
+              "bluetooth default: a built-in default marks nothing")
+        check(AudioDevices.bluetoothBesideDefault(default: (transport: bt, uid: "soundcore"), driven: [driven[0]]).isEmpty,
+              "bluetooth default: the driven Bluetooth output being the default marks nothing")
+        check(AudioDevices.bluetoothBesideDefault(default: (transport: bt, uid: "xm6"), driven: [driven[2]]).isEmpty
+                && AudioDevices.bluetoothBesideDefault(default: (transport: bt, uid: "xm6"), driven: []).isEmpty,
+              "bluetooth default: no driven Bluetooth output marks nothing")
+        let t = UIStrings()
+        check(t.rowNote(cast: nil, waitingForAirPlay2: false, unannounced: false, target: nil, bluetoothDefault: "WH-1000XM6")
+                == "macOS is also playing to WH-1000XM6 over Bluetooth. Set the Mac's output to its speakers or turn that device off."
+                && t.rowNote(cast: nil, waitingForAirPlay2: false, unannounced: true, target: nil, bluetoothDefault: "WH-1000XM6")
+                == t.notOnNetwork,
+              "bluetooth default: the row note names the default device, below a lost speaker's note")
+    }
     let inputLog = SourceList.logLines(headsetInputs)
     check(inputLog.count == 6 && inputLog[1].contains("transport blue: left out: a Bluetooth hands-free input")
             && inputLog[4].contains("transport grup (sub-device inputs bltn, blue): left out")

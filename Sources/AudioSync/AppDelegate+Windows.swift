@@ -666,6 +666,8 @@ extension AppDelegate {
                                                                      offsets: localOffsetMs),
                                     autoConnect: autoConnect.contains(SpeakerKey.make(id: uid, airplay: false)),
                                     systemName: text.deviceName(device.name),
+                                    bluetoothDefault: bluetoothBesideDefault?.outputs.contains(uid) == true
+                                        ? bluetoothBesideDefault?.name : nil,
                                     calibrationLeftOut: calibrationLeftOut(uid),
                                     isReference: uid == localReference)
         }

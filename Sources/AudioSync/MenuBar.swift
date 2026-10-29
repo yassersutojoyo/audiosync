@@ -39,6 +39,9 @@ final class AppModel: ObservableObject {
         /// An AirPlay speaker in the sender that is out of view on the
         /// network, waiting to be announced again (P215).
         var unannounced = false
+        /// A Bluetooth output the session drives while macOS plays to another
+        /// Bluetooth device: that device's name (S341).
+        var bluetoothDefault: String? = nil
         /// An AirPlay speaker AudioSync keeps a PIN pairing for.
         var paired = false
         /// An AirPlay speaker with stored credentials, also ones it turned
@@ -1815,7 +1818,8 @@ struct MenuBarView: View {
                           text: t, height: rowHeight,
                           hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
                                           waitingForPtp: speaker.waitingForPtp,
-                                          unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? note,
+                                          unannounced: speaker.unannounced, target: speaker.airPlayTarget,
+                                          bluetoothDefault: speaker.bluetoothDefault) ?? note,
                           renamedFrom: speaker.renamedFrom, kind: speaker.tag, airPlay2: speaker.airPlay2,
                           availability: speaker.availability,
                           deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {

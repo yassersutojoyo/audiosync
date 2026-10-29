@@ -894,7 +894,8 @@ private struct ZoneMemberCompactRow: View {
     private var note: String? {
         model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
                            waitingForPtp: speaker.waitingForPtp,
-                           unannounced: speaker.unannounced, target: speaker.airPlayTarget)
+                           unannounced: speaker.unannounced, target: speaker.airPlayTarget,
+                           bluetoothDefault: speaker.bluetoothDefault)
             ?? zone.members.first { $0.key == speaker.key }?.note
     }
 
@@ -1272,7 +1273,8 @@ struct SpeakerRow: View {
     private var note: String? {
         model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
                            waitingForPtp: speaker.waitingForPtp,
-                           unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? zoneNote
+                           unannounced: speaker.unannounced, target: speaker.airPlayTarget,
+                           bluetoothDefault: speaker.bluetoothDefault) ?? zoneNote
     }
 
     /// The device's own volume moves only while a session reaches it.

@@ -1,4 +1,5 @@
 import AppKit
+import CoreAudio
 
 // Speaker and source state, the local output list and output sync.
 
@@ -434,6 +435,7 @@ extension AppDelegate {
         let report = LocalOutputSync.report(failures, enabled: enabledLocal, origin: origin)
         if let report { enabledLocal = report.enabled }
         retimeLocalOutputs()   // a joined, left or failed output can move the others' hold-back (S177)
+        checkBluetoothDefault()
 
         guard let report else { return }
         if report.alertNames != nil {   // the failures' names, for a click of the user's
@@ -449,6 +451,37 @@ extension AppDelegate {
         }
         stopIfIdle()   // the failed speaker may have been the only output
         pushModel()
+    }
+
+    /// Reads macOS's default output again at every change of it (S341).
+    func observeDefaultOutput() {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address,
+                                                         DispatchQueue.main) { [weak self] _, _ in
+            self?.checkBluetoothDefault()
+        }
+        if status != noErr { DebugTrace.log("[AudioSync] default output listener not added: \(status)") }
+    }
+
+    /// Whether macOS plays to a Bluetooth device beside Bluetooth outputs the
+    /// session drives; their rows say so while it does (S341).
+    func checkBluetoothDefault() {
+        let output = devices.defaultOutputDevice()
+        let running: Set<String> = engine.isRunning ? Set(engine.activeOutputUIDs) : []
+        let driven = localDevices.values.filter { running.contains($0.uid) }.map { (transport: $0.transport, uid: $0.uid) }
+        let outputs = AudioDevices.bluetoothBesideDefault(default: output.map { (transport: $0.transport, uid: $0.uid) },
+                                                          driven: driven)
+        var now: (name: String, uid: String, outputs: Set<String>)?
+        if let output, !outputs.isEmpty { now = (text.deviceName(output.name), output.uid, outputs) }
+        let before = bluetoothBesideDefault
+        bluetoothBesideDefault = now
+        if now?.uid != before?.uid {
+            if let before { DebugTrace.log("[AudioSync] default output \(before.uid) no longer plays over Bluetooth beside ours") }
+            if let now { DebugTrace.log("[AudioSync] default output \(now.uid) plays over Bluetooth beside ours") }
+        }
+        if now?.outputs != before?.outputs || now?.name != before?.name { pushModel() }
     }
 
     /// The engine dropped local output `uid`, whose render callback stopped

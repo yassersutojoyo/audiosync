@@ -250,6 +250,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The device ID each local output was last started on, by UID, so a
     /// sync notices a device that came back under a new ID (EC1).
     var localBoundDevices: [String: AudioObjectID] = [:]
+    /// macOS's default output while it is a Bluetooth device beside driven
+    /// Bluetooth outputs, and those outputs' UIDs (S341).
+    var bluetoothBesideDefault: (name: String, uid: String, outputs: Set<String>)?
     /// Bluetooth outputs that started on a link that just came up (S325).
     let freshLinks = FreshLinkWatch()
     /// Speakers whose devices left the list a moment ago, still counted (S328).
@@ -391,6 +394,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         observeSleepAndWake()
         observeApps()
         observeDeviceList()
+        observeDefaultOutput()
         observeSecondLaunch()
 
         reconcileLocal()   // lists the local speakers; auto-connect may start streaming

@@ -96,6 +96,16 @@ struct AudioDevices: Sendable {
         kAudioDeviceTransportTypeAggregate, kAudioDeviceTransportTypeAutoAggregate,
     ]
 
+    /// The driven outputs that are Bluetooth while macOS's default output is
+    /// another Bluetooth device (S341): measured, such an output drops out
+    /// within seconds, which moving the default to the built-in speakers heals.
+    static func bluetoothBesideDefault(default output: (transport: UInt32, uid: String)?,
+                                       driven: [(transport: UInt32, uid: String)]) -> Set<String> {
+        let bluetooth: Set<UInt32> = [kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE]
+        guard let output, bluetooth.contains(output.transport) else { return [] }
+        return Set(driven.filter { bluetooth.contains($0.transport) && $0.uid != output.uid }.map { $0.uid })
+    }
+
     /// A transport as its four-character code ("blue", "usb ", "bltn") for
     /// the debug log, or its number when it isn't printable.
     static func transportCode(_ transport: UInt32) -> String {

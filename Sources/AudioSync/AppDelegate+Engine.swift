@@ -403,6 +403,7 @@ extension AppDelegate {
         // About this session's audio, which just ended; a notice about why it
         // ended is posted after this.
         clearNotices(wasRunning ? [Notice.capture, Notice.source] : [Notice.capture])
+        checkBluetoothDefault()
         refreshStreamingViews()
     }
 

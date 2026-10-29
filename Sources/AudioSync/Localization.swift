@@ -1234,14 +1234,20 @@ struct UIStrings {
     /// The note under a speaker's name, also read in its VoiceOver hint:
     /// what a Cast speaker does, that an AirPlay 2 speaker waits, that an
     /// AirPlay speaker is off the network, or what a stereo pair or home
-    /// theater group is made of.
+    /// theater group is made of, or that macOS plays to another Bluetooth
+    /// device beside this one (`bluetoothDefault`, its name; S341).
     func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, waitingForPtp: Bool = false,
-                 unannounced: Bool, target: AirPlayTargetRow?) -> String? {
+                 unannounced: Bool, target: AirPlayTargetRow?, bluetoothDefault: String? = nil) -> String? {
         if let cast { return castNote(cast) }
         if waitingForPtp { return self.waitingForPtp }
         if waitingForAirPlay2 { return self.waitingForAirPlay2 }
         if unannounced { return notOnNetwork }
+        if let bluetoothDefault { return alsoPlayingOverBluetooth(bluetoothDefault) }
         return target.map(airPlayTargetNote)
+    }
+    /// Proposed wording, pending the maintainer's OK.
+    func alsoPlayingOverBluetooth(_ device: String) -> String {
+        "macOS is also playing to \(device) over Bluetooth. Set the Mac's output to its speakers or turn that device off."
     }
     /// A stereo pair or home theater group: its kind and members, or the
     /// members that are missing (P176, P181).

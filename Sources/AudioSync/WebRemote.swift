@@ -278,7 +278,7 @@ final class WebRemote {
                 needsCode: s.availability != .open, paired: s.paired,
                 note: t.rowNote(cast: s.cast, waitingForAirPlay2: s.waitingForAirPlay2,
                                 waitingForPtp: s.waitingForPtp, unannounced: s.unannounced,
-                                target: s.airPlayTarget),
+                                target: s.airPlayTarget, bluetoothDefault: s.bluetoothDefault),
                 key: s.key, waiting: s.enabled && (s.waitingForAirPlay2 || s.waitingForPtp)), text: t)
         }
     }
