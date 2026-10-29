@@ -6780,6 +6780,46 @@ do {
           "status line: no time passed gives a rate of 0, and no outputs say so", idle)
 }
 
+// MARK: Status line: each output's device anchor over the span (DeviceAnchor, AnchorSpan, S334)
+// covers: S334 (the device anchor in the status line)
+do {
+    // 32 kHz keeps every time a whole ns, so the anchors are exact.
+    let nsPerFrame = 1e9 / 32_000
+    // 400 callbacks of 512 frames on time; with `stepAt`, the host time steps 150 ms there and stays.
+    func span(stepAt: Int?) -> AnchorSpan? {
+        var anchors: [Int64] = []
+        for i in 0..<400 {
+            var stamp = AudioTimeStamp()
+            stamp.mSampleTime = Double(i * 512)
+            stamp.mFlags = [.sampleTimeValid, .hostTimeValid]
+            let stepNs: Double = stepAt.map { i >= $0 ? 150e6 : 0 } ?? 0
+            let hostNs = UInt64((5e12 + Double(i * 512) * nsPerFrame + stepNs).rounded())
+            if let anchor = DeviceAnchor.ns(stamp, hostNs: hostNs, nsPerFrame: nsPerFrame) { anchors.append(anchor) }
+        }
+        guard let first = anchors.first, let low = anchors.min(), let high = anchors.max(), let last = anchors.last else { return nil }
+        return AnchorSpan(first: first, low: low, high: high, last: last)
+    }
+    let steady = span(stepAt: nil)
+    check(steady.map { $0.high - $0.low < 10_000 } == true && steady?.text == "device anchor min +0.0 max +0.0 last +0.0 ms",
+          "device anchor: a device on time holds its anchor flat", "\(String(describing: steady))")
+    let stepped = span(stepAt: 200)
+    check(stepped.map { abs(Double($0.high - $0.low) / 1e6 - 150) < 0.01 } == true
+              && stepped?.text == "device anchor min +0.0 max +150.0 last +150.0 ms",
+          "device anchor: a 150 ms step that stays reads as max - min of 150 ms", "\(String(describing: stepped))")
+    var untimed = AudioTimeStamp()
+    untimed.mSampleTime = 512
+    untimed.mFlags = [.sampleTimeValid]
+    check(DeviceAnchor.ns(untimed, hostNs: 5_000_000_000, nsPerFrame: nsPerFrame) == nil
+              && DeviceAnchor.ns(AudioTimeStamp(), hostNs: 5_000_000_000, nsPerFrame: 0) == nil,
+          "device anchor: none without a host time or a rate")
+    let line = SessionTally.statusText(
+        since: SessionTally(),
+        now: SessionTally(outputs: ["BT": SessionTally.Output(number: 1, anchor: stepped)]), seconds: 5)
+    check(line.hasSuffix("; output 1: 0 frames, starved 0 (0 frames), drift skips 0, drift silences 0, "
+                         + "late callbacks 0, IO overloads 0, device anchor min +0.0 max +150.0 last +150.0 ms"),
+          "status line: an output with timed callbacks carries its device anchor", line)
+}
+
 // MARK: Output stall: a render callback that stops while its device stays alive (OutputStall.swift, S334)
 // covers: S334 (frames against the uptime clock, per output; the reopen, its retries and the debug line)
 do {
