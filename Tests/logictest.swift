@@ -10474,6 +10474,24 @@ do {
     check(manualOn.enabled == realID,
           "cast model: a speaker added by address that is on with no session stays on under the id a browse finds")
 
+    // covers: C18
+    let byAddress = CastID.key(manualID), byID = CastID.key(realID)
+    var hiddenByAddress = HiddenSpeakers()
+    hiddenByAddress.hide(key: CastID.app(manualID), name: "Patio", kind: "Google Cast")
+    let kept = CastUserSettings(
+        names: SpeakerNames(custom: [byAddress: "Patio"]),
+        zones: [SpeakerZone(id: "z1", name: "Outside", members: ["lc:usb", byAddress], volume: 60,
+                            memberNames: [byAddress: "192.0.2.9"])],
+        presets: [SpeakerPreset(id: "p1", name: "Party", members: [.init(key: byAddress, volume: 40)], zones: [],
+                                master: 100, gains: [Double](repeating: 0, count: 10))],
+        hidden: hiddenByAddress
+    ).moved(from: manualID, to: realID)
+    check(kept.names.renamed(key: byID) == "Patio" && kept.names.renamed(key: byAddress) == nil
+            && kept.zones.map(\.members) == [["lc:usb", byID]] && kept.zones.first?.memberNames == [byID: "192.0.2.9"]
+            && kept.presets.first?.members == [.init(key: byID, volume: 40)]
+            && kept.hidden.contains(CastID.app(realID)) && !kept.hidden.contains(CastID.app(manualID)),
+          "cast: a device added by address that a browse finds keeps its name, zone and presets")
+
     check(t.castAddProblem(.notFound)
             == "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
             && t.castAddProblem(.unreadable) == t.castAddInvalid
