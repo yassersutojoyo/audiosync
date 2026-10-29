@@ -1089,6 +1089,10 @@ pub trait AudioBackend {
     /// can't find it (spec C18); a host name is looked up off this thread.
     fn add_cast_address(&mut self, _address: CastAddress) {}
 
+    /// Lists the speaker added at `address` as device `id`, the one a browse
+    /// found there before a relaunch (spec C18).
+    fn set_cast_found(&mut self, _address: &CastAddress, _id: &str) {}
+
     /// Takes back a speaker added by address, turning it off first.
     fn remove_cast_address(&mut self, _address: &CastAddress) {}
 

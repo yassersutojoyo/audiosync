@@ -3961,6 +3961,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn set_cast_found(&mut self, address: &CastAddress, id: &str) {
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_found(address, id);
+        }
+    }
+
     fn remove_cast_address(&mut self, address: &CastAddress) {
         if let Some(cast) = self.cast.as_mut() {
             cast.remove_address(address);

@@ -559,6 +559,9 @@ struct Attempt {
     heard_volume: bool,
     /// Connect failures before the first connect (C80).
     connect_failures: u32,
+    /// The list entry marked in session at the start, cleared at the end
+    /// even if a browse has since listed the device under its ID.
+    key: DeviceKey,
 }
 
 /// The Cast side of the backend.
@@ -679,6 +682,19 @@ impl CastSpeakers {
         self.keep_manual_listed();
         self.check_manual();
         self.pending.push(BackendEvent::CastChanged);
+    }
+
+    /// Lists the speaker added at `address` as device `id`, the one a browse
+    /// found there before a relaunch (C18).
+    pub fn set_found(&mut self, address: &CastAddress, id: &str) {
+        if let Some(manual) = self
+            .manual
+            .iter_mut()
+            .find(|manual| manual.address == *address)
+        {
+            manual.found = DeviceId::parse(id);
+            self.pending.push(BackendEvent::CastChanged);
+        }
     }
 
     /// Takes in what the checks of the speakers added by address found,
@@ -887,7 +903,7 @@ impl CastSpeakers {
     fn key_of(&self, id: DeviceId) -> DeviceKey {
         self.manual
             .iter()
-            .find(|manual| manual.listed_id() == id)
+            .find(|manual| manual.listed_id() == id && !self.found_listed(manual))
             .and_then(|manual| manual.resolved)
             .map(DeviceKey::Manual)
             .filter(|&key| self.list.get(key).is_some())
@@ -903,8 +919,17 @@ impl CastSpeakers {
                 manual
                     .resolved
                     .is_some_and(|socket| entry.addresses.contains(&socket))
+                    || manual.found.map(DeviceKey::Id) == Some(entry.key)
             })
             .map(|manual| manual.address.text())
+    }
+
+    /// Whether a browse lists the device found at `manual`'s address, whose
+    /// row then stands for the address too.
+    fn found_listed(&self, manual: &Manual) -> bool {
+        manual
+            .found
+            .is_some_and(|found| self.list.get(DeviceKey::Id(found)).is_some())
     }
 
     pub fn set_debug_log(&mut self, log: DebugLog) {
@@ -950,10 +975,10 @@ impl CastSpeakers {
         speakers.extend(
             self.manual
                 .iter()
-                .filter(|manual| manual.resolved.is_none())
+                .filter(|manual| manual.resolved.is_none() && !self.found_listed(manual))
                 .map(|manual| {
                     let text = manual.address.text();
-                    self.row(manual.id, text.clone(), None, Some(text), &memory)
+                    self.row(manual.listed_id(), text.clone(), None, Some(text), &memory)
                 }),
         );
         speakers.sort_by_key(|speaker| speaker.name.to_lowercase());
@@ -977,7 +1002,8 @@ impl CastSpeakers {
                 let manual = self
                     .manual
                     .iter()
-                    .find(|manual| manual.resolved == Some(socket))?;
+                    .find(|manual| manual.resolved == Some(socket))
+                    .filter(|manual| !self.found_listed(manual))?;
                 (manual.listed_id(), manual.address.text(), None)
             }
         };
@@ -1241,6 +1267,7 @@ impl CastSpeakers {
                     self.log
                         .log(|| "Cast: the capture's handoff is full; the new session's feed waits for the next poll".to_owned());
                 }
+                let key = self.key_of(id);
                 self.attempt = Some(Attempt {
                     id: attempt,
                     device: id,
@@ -1248,12 +1275,12 @@ impl CastSpeakers {
                     codec: None,
                     heard_volume: false,
                     connect_failures: 0,
+                    key,
                 });
                 if group {
                     self.members.remove(&id);
                 }
                 self.records = records;
-                let key = self.key_of(id);
                 self.list.set_in_session(key, true);
                 self.log
                     .log(|| format!("Cast: {} connects (attempt {})", self.name(id), attempt.0));
@@ -1283,7 +1310,7 @@ impl CastSpeakers {
             link.stop();
         }
         self.feed.hand(None);
-        let key = self.key_of(attempt.device);
+        let key = attempt.key;
         let listed = self.list.get(key).is_some();
         self.list.set_in_session(key, false);
         self.log.log(|| {
@@ -1728,13 +1755,12 @@ impl CastSpeakers {
                     });
                     return;
                 }
-                self.attempt = None;
+                let key = self.attempt.take().map_or(DeviceKey::Id(device), |a| a.key);
                 self.records = None;
                 self.sent = None;
                 self.requested = None;
                 self.unanswered.clear();
                 self.feed.hand(None);
-                let key = self.key_of(device);
                 self.list.set_in_session(key, false);
                 self.log
                     .log(|| format!("Cast: {} ended: {}", self.name(device), describe_end(&end)));
@@ -3565,6 +3591,73 @@ pub mod tests {
         assert_eq!(speakers[0].address.as_deref(), Some("speaker.local"));
         cast.remove_address(&address("speaker.local"));
         assert!(cast.speakers().is_empty());
+    }
+
+    // covers: C18
+    #[test]
+    fn a_host_name_with_a_saved_id_that_a_browse_lists_before_it_resolves_has_one_row() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_resolver(|_, _| Err(io::Error::new(io::ErrorKind::NotFound, "unknown")));
+        cast.add_address(address("speaker.local"));
+        cast.set_found(&address("speaker.local"), KITCHEN);
+        assert_eq!(cast.speakers()[0].id, KITCHEN);
+
+        fake.announce(KITCHEN, "Kitchen", DEVICE_PORT);
+        for _ in 0..20 {
+            cast.poll();
+            thread::sleep(Duration::from_millis(5));
+        }
+        let speakers = cast.speakers();
+        assert_eq!(speakers.len(), 1, "{speakers:?}");
+        assert_eq!(speakers[0].id, KITCHEN);
+        assert_eq!(speakers[0].address.as_deref(), Some("speaker.local"));
+
+        cast.remove_address(&address("speaker.local"));
+        let speakers = cast.speakers();
+        assert_eq!(speakers.len(), 1, "the browse still lists it");
+        assert_eq!(speakers[0].address, None);
+    }
+
+    // covers: C18
+    #[test]
+    fn an_address_with_a_saved_id_that_a_browse_lists_elsewhere_has_one_row_that_plays_there() {
+        let (fake, mut cast) = listed();
+        cast.add_address(address("192.0.2.20"));
+        cast.set_found(&address("192.0.2.20"), KITCHEN);
+        cast.poll();
+        let speakers = cast.speakers();
+        let kitchen: Vec<_> = speakers.iter().filter(|row| row.id == KITCHEN).collect();
+        assert_eq!(kitchen.len(), 1, "{speakers:?}");
+        assert_eq!(kitchen[0].address.as_deref(), Some("192.0.2.20"));
+
+        assert_eq!(cast.set_enabled(KITCHEN, true), Ok(()));
+        cast.set_streaming(true);
+        poll_until_started(&fake, &mut cast);
+        assert_eq!(
+            fake.state().targets,
+            [vec![SocketAddr::from(([192, 0, 2, 10], DEVICE_PORT))]]
+        );
+    }
+
+    // covers: C18
+    #[test]
+    fn a_session_at_a_typed_address_frees_that_address_when_a_browse_lists_its_saved_id_first() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_probe(|_| true);
+        cast.add_address(address("192.0.2.20"));
+        cast.set_found(&address("192.0.2.20"), KITCHEN);
+        assert_eq!(cast.set_enabled(KITCHEN, true), Ok(()));
+        cast.set_streaming(true);
+        poll_until_started(&fake, &mut cast);
+        let typed = DeviceKey::Manual(SocketAddr::from(([192, 0, 2, 20], 8009)));
+        assert!(cast.list.get(typed).is_some_and(|entry| entry.in_session));
+
+        fake.announce(KITCHEN, "Kitchen", DEVICE_PORT);
+        cast.poll();
+        assert_eq!(cast.set_enabled(KITCHEN, false), Ok(()));
+        assert!(cast.list.get(typed).is_some_and(|entry| !entry.in_session));
     }
 
     // covers: C2, C18

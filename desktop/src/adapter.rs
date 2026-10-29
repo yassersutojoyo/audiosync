@@ -490,6 +490,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The Cast speakers the user added by address, as the settings keep
     /// them (spec C18).
     cast_addresses: Vec<String>,
+    /// The device ID a browse found at each of those addresses, kept for the
+    /// next launch (spec C18).
+    cast_found_ids: BTreeMap<String, String>,
     /// Whether something answers at an address the user adds.
     cast_probe: fn(&CastAddress) -> bool,
     /// The speaker keys marked auto-connect.
@@ -688,6 +691,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             cast_file_checked: false,
             cast_unread_at_launch: false,
             cast_addresses: Vec::new(),
+            cast_found_ids: BTreeMap::new(),
             cast_probe: cast_address::answers,
             auto_connect: BTreeSet::new(),
             auto_connect_skipped: skip_auto_connect,
@@ -851,12 +855,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.cast_addresses.push(address);
             }
         }
+        self.cast_found_ids.extend(
+            saved
+                .cast_found_ids
+                .iter()
+                .filter(|(address, _)| self.cast_addresses.contains(address))
+                .map(|(address, id)| (address.clone(), id.clone())),
+        );
         for address in saved
             .cast_addresses
             .iter()
             .filter_map(|text| CastAddress::parse(text))
         {
-            self.audio.add_cast_address(address);
+            let found = self.cast_found_ids.get(&address.text()).cloned();
+            self.audio.add_cast_address(address.clone());
+            if let Some(id) = found {
+                self.audio.set_cast_found(&address, &id);
+            }
         }
         if let Some(id) = &saved.cast_on
             && !self.is_hidden(&cast_key(id))
@@ -1035,6 +1050,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             when_source_quits: self.when_source_quits.stored().to_owned(),
             remote: self.view.remote,
             cast_addresses: self.cast_addresses.clone(),
+            cast_found_ids: self.cast_found_ids.clone(),
             cast_on: self
                 .audio
                 .cast_on_to_save()
@@ -2980,6 +2996,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// where the device's own records win; with none under `from`, nothing
     /// is saved.
     fn cast_identified(&mut self, from: &str, to: &str) {
+        if let Some(address) = self
+            .cast_addresses
+            .iter()
+            .filter_map(|text| CastAddress::parse(text))
+            .find(|address| address.device_id().to_string() == from)
+        {
+            let before = self.cast_found_ids.insert(address.text(), to.to_owned());
+            self.must_save |= before.as_deref() != Some(to);
+        }
         let (from_key, to_key) = (cast_key(from), cast_key(to));
         if !self.key_kept(&from_key) {
             return;
@@ -4741,6 +4766,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             return;
         };
         cast_address::remove(&mut self.cast_addresses, &address);
+        self.cast_found_ids.remove(&address.text());
         self.audio.remove_cast_address(&address);
         self.take_events();
         // Hidden rows are left out of the snapshot, so ask the sender.
@@ -6768,7 +6794,7 @@ mod tests {
     fn a_zone_switched_off_turns_its_gone_cast_member_off() {
         let (mut adapter, fake) = cast_adapter();
         turn_on(&mut adapter, SPEAKERS);
-        // Switched on before a browse found it: unlisted, yet on (S339).
+        // Switched on after the browse lost it: unlisted, yet on (S339).
         fake.withdraw(CAST_KITCHEN, "Kitchen");
         adapter.poll();
         adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
@@ -13664,6 +13690,68 @@ mod tests {
         adapter.poll();
         assert!(!adapter.audio.cast_on());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: C18
+    #[test]
+    fn a_speaker_added_by_address_keeps_the_id_a_browse_found_across_a_relaunch_with_no_browse() {
+        let dir = test_dir("adapter-cast-found-kept");
+        let path = dir.join(settings::FILE_NAME);
+        let at = |fake: &FakeCast, id: &str| {
+            fake.announce_at(
+                id,
+                "Den",
+                DEVICE_PORT,
+                std::net::Ipv4Addr::new(192, 0, 2, 31),
+            );
+        };
+        let (mut adapter, fake) = cast_launch(&path, &[], false);
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        at(&fake, DEN);
+        adapter.poll();
+        adapter.rename_speaker(&cc(DEN), "Study");
+        assert!(adapter.save_settings());
+
+        let (mut adapter, fake) = cast_launch(&path, &[], false);
+        let state = adapter.snapshot();
+        assert!(state.speaker(&cc_address("192.0.2.31")).is_none());
+        assert_eq!(speaker_of(&adapter, &cc(DEN)).name, "Study");
+
+        at(&fake, CAST_KITCHEN);
+        adapter.poll();
+        assert!(adapter.save_settings());
+        let (mut adapter, _fake) = cast_launch(&path, &[], false);
+        assert!(adapter.snapshot().speaker(&cc(CAST_KITCHEN)).is_some());
+
+        adapter.remove_cast_address(&cc(CAST_KITCHEN));
+        assert!(adapter.save_settings());
+        let saved = std::fs::read_to_string(&path).expect("saved");
+        assert!(!saved.contains("192.0.2.31"), "{saved}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: C18
+    #[test]
+    fn an_address_whose_saved_id_a_browse_lists_elsewhere_can_be_removed_with_its_id() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.restore(Settings {
+            cast_addresses: vec!["192.0.2.20".to_owned()],
+            cast_found_ids: BTreeMap::from([("192.0.2.20".to_owned(), CAST_KITCHEN.to_owned())]),
+            ..Settings::default()
+        });
+        adapter.poll();
+        let state = adapter.snapshot();
+        let kitchen = state
+            .speakers
+            .iter()
+            .filter(|row| row.id == cc(CAST_KITCHEN));
+        assert_eq!(kitchen.count(), 1);
+
+        adapter.remove_cast_address(&cc(CAST_KITCHEN));
+        let saved = adapter.current_settings();
+        assert!(saved.cast_addresses.is_empty() && saved.cast_found_ids.is_empty());
+        assert!(adapter.snapshot().speaker(&cc(CAST_KITCHEN)).is_some());
     }
 
     /// The UI's ID of a Google Cast speaker.
