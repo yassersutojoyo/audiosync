@@ -14,7 +14,7 @@ use audiosync_core::eq::{self, CurveMatch, EqSettings, UserCurve};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::presets::{self as policy_presets, Preset, Scene, SpeakerNow};
 use audiosync_core::policy::source_quit::WhenSourceQuits;
-use audiosync_core::policy::zones::{Zone, Zones};
+use audiosync_core::policy::zones::{self, ClickAction, MemberKind, Situation, Zone, Zones};
 #[cfg(any(test, feature = "mock-backend"))]
 use audiosync_core::volume;
 
@@ -1193,10 +1193,9 @@ impl AppState {
         self.absent.iter().find(|member| member.id == id)
     }
 
-    /// A zone is on when a click would switch it off (spec S246): each
-    /// present member it switches on is on, which is every one but those
-    /// playing as part of a stereo pair or home theater, and one Cast
-    /// member when it has any. Playing, it waits when each of those waits.
+    /// A zone is on when a click with streaming on would switch it off
+    /// (spec S246), so a Cast member the click leaves off counts toward
+    /// neither. Playing, it waits when each member it counts waits.
     pub fn zone_state(&self, zone: &Zone) -> SpeakerState {
         let switched: Vec<&Speaker> = self
             .zone_members(zone)
@@ -1205,9 +1204,31 @@ impl AppState {
         let (cast, others): (Vec<&Speaker>, Vec<&Speaker>) =
             switched.iter().partition(|s| s.kind == SpeakerKind::Cast);
         let cast_on: Vec<&Speaker> = cast.iter().copied().filter(|s| s.enabled).collect();
-        let on = !switched.is_empty()
-            && others.iter().all(|s| s.enabled)
-            && (cast.is_empty() || !cast_on.is_empty());
+        let members: Vec<zones::Member> = self
+            .zone_members(zone)
+            .map(|s| zones::Member {
+                // The action tells only Cast members apart.
+                kind: if s.kind == SpeakerKind::Cast {
+                    MemberKind::Cast
+                } else {
+                    MemberKind::Local
+                },
+                listed: true,
+                on: s.enabled,
+                busy: s.cast.as_ref().is_some_and(|cast| cast.offline),
+                needs_airplay2: false,
+                in_target: s.in_target.is_some(),
+            })
+            .collect();
+        let situation = Situation {
+            streaming: true,
+            cast_on_elsewhere: self
+                .speakers
+                .iter()
+                .any(|s| s.kind == SpeakerKind::Cast && s.enabled && !zone.members.contains(&s.id)),
+            ..Situation::default()
+        };
+        let on = zones::click_plan(&members, situation).action == ClickAction::TurnOff;
         match SpeakerState::new(on, self.running) {
             SpeakerState::Playing => {
                 let waiting: Option<Vec<Waiting>> = others
