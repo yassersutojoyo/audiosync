@@ -131,6 +131,9 @@ struct UiState {
     collapsed: HashSet<String>,
     /// Whether the source was a mix at the last refresh.
     source_was_mix: bool,
+    /// The equalizer curve last picked or saved, so the picker tells it from
+    /// a curve with the same gains (spec S270).
+    chosen_curve: Option<CurveMatch>,
 }
 
 /// The virtual outputs the speaker lists have shown this session. With Show
@@ -2195,7 +2198,7 @@ impl App {
                     .map(|c| c.name.as_str().into()),
             )
             .collect();
-        let shown = ui_model::shown_curve(state);
+        let shown = self.shown_curve(state);
         let preset_index = ui_model::picker_index(shown);
         let curve_name = usize::try_from(preset_index)
             .ok()
@@ -2685,6 +2688,7 @@ impl App {
         let w = weak.clone();
         eq_window.on_gain_changed(move |band, db| {
             with_app(&w, |app| {
+                app.ui.borrow_mut().chosen_curve = None;
                 app.change_equalizer(|s| {
                     if let Some(gain) = usize::try_from(band)
                         .ok()
@@ -2699,11 +2703,13 @@ impl App {
         eq_window.on_preset_selected(move |index| {
             with_app(&w, |app| {
                 let curves = app.snapshot().equalizer_curves;
-                let gains_db = match ui_model::picked_curve(index, curves.len()) {
+                let picked = ui_model::picked_curve(index, curves.len());
+                let gains_db = match picked {
                     Some(CurveMatch::Preset(i)) => eq::PRESETS[i].gains_db,
                     Some(CurveMatch::User(i)) => curves[i].gains_db,
                     None => return,
                 };
+                app.ui.borrow_mut().chosen_curve = picked;
                 // Like the Mac: picking a curve turns the equalizer on.
                 app.change_equalizer(|s| {
                     s.gains_db = gains_db;
@@ -2719,15 +2725,21 @@ impl App {
         eq_window.on_delete_curve(move || {
             with_app(&w, |app| {
                 let state = app.snapshot();
-                if let Some(CurveMatch::User(index)) = ui_model::shown_curve(&state) {
+                if let Some(CurveMatch::User(index)) = app.shown_curve(&state) {
                     let mut curves = state.equalizer_curves;
                     eq::delete_curve(&mut curves, index);
+                    app.ui.borrow_mut().chosen_curve = None;
                     app.update(|b| b.set_equalizer_curves(curves));
                 }
             })
         });
         let w = weak.clone();
-        eq_window.on_reset(move || with_app(&w, |app| app.change_equalizer(EqSettings::reset)));
+        eq_window.on_reset(move || {
+            with_app(&w, |app| {
+                app.ui.borrow_mut().chosen_curve = None;
+                app.change_equalizer(EqSettings::reset);
+            })
+        });
         let w = weak;
         eq_window.on_close_requested(move || {
             with_app(&w, |app| {
@@ -3629,6 +3641,10 @@ impl App {
         }
     }
 
+    fn shown_curve(&self, state: &AppState) -> Option<CurveMatch> {
+        ui_model::shown_curve(state, self.ui.borrow().chosen_curve)
+    }
+
     fn change_equalizer(&self, change: impl FnOnce(&mut EqSettings)) {
         let mut settings = self.snapshot().equalizer;
         change(&mut settings);
@@ -3692,7 +3708,7 @@ impl App {
         let state = self.snapshot();
         let strings = self.strings();
         let dialog = &self.zone_dialog;
-        let shown = match ui_model::shown_curve(&state) {
+        let shown = match self.shown_curve(&state) {
             Some(CurveMatch::User(index)) => Some(&state.equalizer_curves[index]),
             _ => None,
         };
@@ -3721,7 +3737,7 @@ impl App {
 
     fn ask_rename_curve(&self) {
         let state = self.snapshot();
-        let Some(CurveMatch::User(index)) = ui_model::shown_curve(&state) else {
+        let Some(CurveMatch::User(index)) = self.shown_curve(&state) else {
             return;
         };
         let name = state.equalizer_curves[index].name.as_str();
@@ -3965,7 +3981,8 @@ impl App {
                 if eq::curve_name(name).is_none() {
                     return;
                 }
-                if eq::save_curve(&mut curves, name, &state.equalizer.gains_db).is_some() {
+                if let Some(index) = eq::save_curve(&mut curves, name, &state.equalizer.gains_db) {
+                    self.ui.borrow_mut().chosen_curve = Some(CurveMatch::User(index));
                     self.update(|b| b.set_equalizer_curves(curves));
                 } else {
                     let strings = self.strings();
@@ -10051,6 +10068,55 @@ mod tests {
         eq_window.invoke_reset();
         let state = app.snapshot();
         assert_eq!(state.equalizer.preamp_db, 0.0);
+        assert_eq!(eq_window.get_preset_index(), 0, "Reset reads Flat");
+    }
+
+    #[test]
+    fn a_saved_curve_with_a_presets_gains_can_be_picked_renamed_and_deleted() {
+        let app = app_over(MockBackend::new());
+        let eq_window = &app.equalizer;
+        let presets = eq::PRESETS.len() as i32;
+        let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
+        eq_window.invoke_preset_selected(rock);
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Mine".into());
+        assert_eq!(
+            eq_window.get_preset_index(),
+            presets,
+            "a save shows the curve"
+        );
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Twin".into());
+        assert_eq!(eq_window.get_preset_index(), presets + 1);
+
+        eq_window.invoke_preset_selected(rock);
+        assert_eq!(eq_window.get_preset_index(), rock);
+        assert!(!eq_window.get_saved_curve_shown());
+        eq_window.invoke_preset_selected(presets);
+        assert_eq!(eq_window.get_preset_index(), presets);
+        assert_eq!(app.main.get_equalizer_curve(), "Mine");
+        assert!(eq_window.get_saved_curve_shown());
+        eq_window.invoke_rename_curve();
+        assert_eq!(app.zone_dialog.get_name(), "Mine");
+        app.zone_dialog.invoke_confirmed("Ours".into());
+        assert_eq!(
+            app.main.get_equalizer_curve(),
+            "Ours",
+            "a rename keeps it shown"
+        );
+
+        eq_window.invoke_delete_curve();
+        let names: Vec<_> = app
+            .snapshot()
+            .equalizer_curves
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(names, ["Twin"]);
+        assert_eq!(eq_window.get_preset_index(), rock, "the gains stay");
+
+        eq_window.invoke_preset_selected(presets);
+        eq_window.invoke_reset();
         assert_eq!(eq_window.get_preset_index(), 0, "Reset reads Flat");
     }
 

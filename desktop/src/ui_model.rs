@@ -2734,10 +2734,17 @@ impl Backend for MockBackend {
     }
 }
 
-/// The curve the equalizer picker shows: the first preset, then the first
-/// saved curve, with the current gains (spec S270).
-pub fn shown_curve(state: &AppState) -> Option<CurveMatch> {
-    eq::matching_curve(&state.equalizer.gains_db, &state.equalizer_curves)
+/// The curve the equalizer picker shows: `chosen`, the curve last picked or
+/// saved, while it has the current gains; else the first preset, then the
+/// first saved curve, with them (spec S270).
+pub fn shown_curve(state: &AppState, chosen: Option<CurveMatch>) -> Option<CurveMatch> {
+    let gains_db = |curve| match curve {
+        CurveMatch::Preset(index) => eq::PRESETS.get(index).map(|p| p.gains_db),
+        CurveMatch::User(index) => state.equalizer_curves.get(index).map(|c| c.gains_db),
+    };
+    chosen
+        .filter(|&curve| gains_db(curve) == Some(state.equalizer.gains_db))
+        .or_else(|| eq::matching_curve(&state.equalizer.gains_db, &state.equalizer_curves))
 }
 
 /// `curve`'s entry in the picker, presets first; -1 for none ("Custom").
@@ -3342,14 +3349,14 @@ mod tests {
     fn the_equalizer_is_quantized_and_matches_presets() {
         let mut backend = MockBackend::new();
         assert_eq!(
-            shown_curve(&backend.snapshot()),
+            shown_curve(&backend.snapshot(), None),
             Some(CurveMatch::Preset(0))
         );
         let mut settings = EqSettings::default();
         settings.gains_db[0] = 3.3;
         backend.set_equalizer(settings);
         assert_eq!(backend.snapshot().equalizer.gains_db[0], 3.5);
-        assert_eq!(shown_curve(&backend.snapshot()), None);
+        assert_eq!(shown_curve(&backend.snapshot(), None), None);
         assert_eq!(picker_index(None), -1, "Custom is not an entry");
     }
 
@@ -3375,7 +3382,7 @@ mod tests {
             preamp_db: -4.0,
             gains_db: gains,
         });
-        let shown = shown_curve(&backend.snapshot());
+        let shown = shown_curve(&backend.snapshot(), None);
         assert_eq!(shown, Some(CurveMatch::User(0)), "the preamp never counts");
         let index = picker_index(shown);
         assert_eq!(index, i32::try_from(eq::PRESETS.len()).unwrap());
