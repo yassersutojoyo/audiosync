@@ -4246,6 +4246,14 @@ impl App {
         }
     }
 
+    /// Puts the flyout's content where its opening starts: below its place
+    /// for the slide, or in place at once while Windows' Animation effects
+    /// are off.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn prepare_flyout_open(&self, animate: bool) {
+        self.flyout.set_revealed(!animate);
+    }
+
     pub fn hide_flyout(&self) {
         let _ = self.flyout.hide();
     }
@@ -9292,6 +9300,40 @@ mod tests {
         assert!(
             !only_virtual_outputs_hidden(&[&cable, desk], hiding),
             "another speaker is listed"
+        );
+    }
+
+    /// The flyout's content slides up into place as it opens, from the start
+    /// each time, and the flyout's height doesn't follow the slide.
+    #[test]
+    fn the_flyout_content_slides_up_as_it_opens() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let height = app.flyout.get_fit_height();
+        app.prepare_flyout_open(true);
+        assert_eq!(
+            app.flyout.get_content_offset(),
+            8.0,
+            "back to the start at once"
+        );
+        assert_eq!(app.flyout.get_fit_height(), height);
+        app.flyout.set_revealed(true);
+        draw_frames();
+        advance_clock(Duration::from_millis(80));
+        draw_frames();
+        let offset = app.flyout.get_content_offset();
+        assert!(offset > 0.0 && offset < 8.0, "it slides: {offset}");
+        advance_clock(Duration::from_millis(200));
+        draw_frames();
+        assert_eq!(app.flyout.get_content_offset(), 0.0);
+
+        app.prepare_flyout_open(false);
+        assert_eq!(
+            app.flyout.get_content_offset(),
+            0.0,
+            "with Animation effects off it opens in place"
         );
     }
 

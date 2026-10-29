@@ -411,6 +411,9 @@ export component TrayFlyout inherits Window {
     width: 340px;
     // True once Windows draws the flyout's rounded frame (border and shadow).
     in property <bool> rounded;
+    // Set false then true by the app as the flyout opens: the content
+    // slides up and fades in, as Windows 11's flyouts open.
+    in property <bool> revealed: true;
     background: Tokens.surface;
     default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
@@ -441,9 +444,11 @@ export component TrayFlyout inherits Window {
     // screen is still too short; that part scrolls.
     in property <length> body-cut;
     // Where the buttons end, which `fit-height` reads.
-    out property <length> footer-bottom: footer.absolute-position.y + footer.height;
+    out property <length> footer-bottom: footer.absolute-position.y - focus.y + footer.height;
     // For the layout tests (src/view.rs): the height Windows makes the window at.
     out property <length> made-height: root.preferred-height;
+    // For the motion test: how far the content sits below its place.
+    out property <length> content-offset: focus.y;
 
     // Called each time the flyout opens (the last focused control may be
     // gone, and Escape must work before anything inside is clicked), and
@@ -470,6 +475,14 @@ export component TrayFlyout inherits Window {
     }
 
     focus := FocusScope {
+        y: root.revealed ? 0px : 8px;
+        opacity: root.revealed ? 1 : 0;
+        // Back to the start at once, so the next open plays in full.
+        animate y, opacity {
+            duration: root.revealed ? Fluent.normal : 0ms;
+            easing: ease-out;
+        }
+
         key-pressed(event) => {
             if event.text == Key.Escape {
                 root.close-requested();
