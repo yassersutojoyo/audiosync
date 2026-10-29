@@ -1728,6 +1728,10 @@ mod tests {
                     "Desk".to_owned(),
                 )]),
             }],
+            zone_member_kinds: BTreeMap::from([(
+                "lc:{0.0.0.00000000}.{speakers}".to_owned(),
+                OutputKind::Usb,
+            )]),
             speaker_zones_migrated: true,
             speaker_presets: vec![SavedPreset {
                 id: "p1".to_owned(),
@@ -2174,6 +2178,7 @@ mod tests {
             hidden_speakers,
             groups,
             speaker_zones,
+            zone_member_kinds,
             speaker_zones_migrated: _,
             speaker_presets,
             speaker_presets_migrated: _,
@@ -2205,6 +2210,7 @@ mod tests {
         assert_ne!(hidden_speakers, default.hidden_speakers);
         assert_ne!(groups, default.groups);
         assert_ne!(speaker_zones, default.speaker_zones);
+        assert_ne!(zone_member_kinds, default.zone_member_kinds);
         assert_ne!(speaker_presets, default.speaker_presets);
         assert_ne!(last_zone_id, default.last_zone_id);
         assert_ne!(last_preset_id, default.last_preset_id);
