@@ -25,6 +25,8 @@ env:
 jobs:
   test:
     name: Format, clippy and tests
+    # Windows runs on main, integ/* trains and release/ branches; other pushes test on Linux only.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/')
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -198,6 +200,7 @@ jobs:
     name: Release build (${{ matrix.arch }})
     # No artifact from a run whose tests or license check failed.
     needs: [test, licenses]
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/')
     strategy:
       fail-fast: false
       matrix:
