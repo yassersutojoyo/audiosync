@@ -1331,8 +1331,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn write_calibrated(&mut self, members: &[Member], target: &Target, value: Option<f64>) {
         match target {
             Target::AirPlay => {
-                if let Some(ms) = value {
-                    <Self as Backend>::set_airplay_delay(self, ms);
+                let sender = members.iter().find(|m| m.class == Class::AirPlay);
+                if let Some(adjustment) = value
+                    .zip(sender)
+                    .and_then(|(ms, m)| native_airplay_adjustment_ms(ms, m.sender_ms))
+                {
+                    self.audio.set_airplay_adjustment(adjustment);
                 }
             }
             Target::Speaker(key) => {
@@ -1420,7 +1424,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .iter()
             .zip(&kept.members)
             .any(|(row, m)| match row.state {
-                RowState::Reference => reference.as_ref().is_some_and(|now| *now != m.id),
+                RowState::Reference => reference.as_deref() != Some(m.id.as_str()),
+                // Against the L_s the run read, so a new L_s alone is no change.
+                _ if m.class == Class::AirPlay => !holds(
+                    self.audio.airplay_sender_latency_ms().map(|_| {
+                        native_airplay_latency_ms(m.sender_ms, self.audio.airplay_adjustment())
+                    }),
+                    m.offset_ms,
+                ),
                 _ => !holds(self.calibrated_now(m.class, &m.id), m.offset_ms),
             });
         if !moved {
@@ -1534,6 +1545,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// present members, and those that don't play with their stored delays.
     fn zone_scope(&self, zone: &zones::Zone) -> ZoneScope {
         let state = self.snapshot();
+        let sender_ms = self.audio.airplay_adjustment_base_ms();
         let playing: Vec<String> = calibrate_all::lineup(&self.audio)
             .members
             .iter()
@@ -1570,6 +1582,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     class,
                     offset_ms,
                     latency_ms: 0.0,
+                    sender_ms,
                 })
             })
             .collect();
@@ -2207,6 +2220,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         zone: &Zone,
         keep_off: &[String],
     ) -> Vec<(SpeakerKey, bool, zones::Member)> {
+        let enabled_outputs = self.audio.enabled_outputs();
+        let enabled_airplay = self.audio.enabled_airplay();
+        let enabled_cast = self.audio.cast_enabled();
         zone.members
             .iter()
             .filter_map(|text| {
@@ -2219,7 +2235,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     (SpeakerKey::AirPlay(id), _) if is_airplay_target(id) => MemberKind::AirPlay2,
                     (SpeakerKey::AirPlay(_), _) => MemberKind::AirPlay,
                 };
-                let on = listed.is_some_and(|speaker| speaker.enabled);
+                // An unplugged output or a gone speaker stays on until its zone goes off.
+                let on = match (listed, &key) {
+                    (Some(speaker), _) => speaker.enabled,
+                    (None, SpeakerKey::Local(id)) => enabled_outputs.contains(id),
+                    (None, SpeakerKey::AirPlay(id)) => enabled_airplay.contains(id),
+                    (None, SpeakerKey::Cast(id)) => enabled_cast.as_ref() == Some(id),
+                };
                 let member = zones::Member {
                     kind,
                     listed: listed.is_some() && !keep_off.contains(text),
@@ -2892,6 +2914,29 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if result.is_err() {
             self.output_failed(to, false);
         }
+    }
+
+    /// A browse found the device Cast speaker `from`, added by address, is
+    /// (S341): its name, hidden entry, zone and preset entries move to `to`,
+    /// where the device's own records win; with none under `from`, nothing
+    /// is saved.
+    fn cast_identified(&mut self, from: &str, to: &str) {
+        let (from_key, to_key) = (cast_key(from), cast_key(to));
+        if !self.key_kept(&from_key) {
+            return;
+        }
+        self.custom_names.move_key(&from_key, &to_key);
+        if self.hidden.iter().any(|entry| entry.key == to_key) {
+            self.hidden.retain(|entry| entry.key != from_key);
+        } else if let Some(entry) = self.hidden.iter_mut().find(|entry| entry.key == from_key) {
+            entry.key = to_key.clone();
+        }
+        self.zones.rename_key(&from_key, &to_key);
+        for preset in &mut self.presets {
+            preset.rename_key(&from_key, &to_key);
+        }
+        self.push_zone_volumes();
+        self.must_save = true;
     }
 
     /// Takes in the AirPlay speakers as last listed: remembers their names,
@@ -3742,6 +3787,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 names.extend(listed);
                 self.cast_names = names;
             }
+            BackendEvent::CastIdentified { from, to } => self.cast_identified(&from, &to),
             BackendEvent::CastPlaying { id } => {
                 self.notices.clear(&[NoticeSubject::Cast(id)]);
                 self.note_speakers();
@@ -5156,7 +5202,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 return;
             }
         };
-        let members = kept.members.clone();
+        // An off row's L_s was read while it didn't play: convert with a measured row's.
+        let members: Vec<Member> = kept
+            .members
+            .iter()
+            .enumerate()
+            .filter(|(row, _)| !kept.sheet.is_off(*row))
+            .map(|(_, member)| member.clone())
+            .collect();
         self.log
             .log(|| format!("Calibrate All applied: {:?}", applied.changes));
         let before = self.audio.airplay_adjustment();
@@ -5973,6 +6026,7 @@ mod tests {
         );
     }
 
+    // covers: S122
     #[test]
     fn turning_a_speaker_on_starts_streaming_to_it() {
         let mut adapter = adapter();
@@ -6129,6 +6183,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S122
     #[test]
     fn switching_streaming_off_keeps_the_speakers_on() {
         let mut adapter = adapter();
@@ -6332,13 +6387,63 @@ mod tests {
         assert_eq!(state.zone_state(&zone), SpeakerState::Playing);
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
 
-        // An absent member is left alone.
+        // An absent member goes off with its zone, so it stays off when it is back.
         adapter.audio_mut().disconnect_output(HEADPHONES);
         adapter.poll();
         adapter.toggle_zone(&zone.id);
         assert!(!enabled(&adapter, SPEAKERS));
-        assert_eq!(adapter.audio.enabled_outputs(), [HEADPHONES]);
-        assert!(adapter.snapshot().running, "the absent member is still on");
+        assert!(adapter.audio.enabled_outputs().is_empty());
+        assert!(!adapter.snapshot().running);
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_switched_off_turns_its_gone_airplay_member_off() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.poll();
+        adapter.add_zone("Lounge", &[key(SPEAKERS), ap(&kitchen)]);
+        // Gone while streaming is down: the sender drops it, so it isn't listed.
+        adapter.audio_mut().fail_capture(BackendError::System {
+            call: "IAudioCaptureClient::GetBuffer",
+            code: 1,
+        });
+        adapter.poll();
+        fake.gone(&kitchen);
+        adapter.poll();
+        turn_on(&mut adapter, HEADPHONES);
+        assert!(adapter.snapshot().running);
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_none());
+        assert_eq!(adapter.audio.enabled_airplay(), [id_of(&kitchen)]);
+        adapter.toggle_zone("zone:1");
+        assert!(!enabled(&adapter, SPEAKERS));
+        assert!(adapter.audio.enabled_airplay().is_empty());
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_switched_off_turns_its_gone_cast_member_off() {
+        let (mut adapter, fake) = cast_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.poll();
+        adapter.add_zone("Lounge", &[key(SPEAKERS), cc(CAST_KITCHEN)]);
+        // Gone with no session: it leaves the list but stays on.
+        adapter.audio_mut().fail_capture(BackendError::System {
+            call: "IAudioCaptureClient::GetBuffer",
+            code: 1,
+        });
+        adapter.poll();
+        fake.withdraw(CAST_KITCHEN, "Kitchen");
+        adapter.poll();
+        turn_on(&mut adapter, HEADPHONES);
+        assert!(adapter.snapshot().running);
+        assert!(adapter.snapshot().speaker(&cc(CAST_KITCHEN)).is_none());
+        assert!(adapter.audio.cast_on());
+        adapter.toggle_zone("zone:1");
+        assert!(!enabled(&adapter, SPEAKERS));
+        assert!(!adapter.audio.cast_on());
     }
 
     #[test]
@@ -6416,6 +6521,7 @@ mod tests {
         assert_eq!(adapter.current_settings().speaker_zones[0].volume, 100.0);
     }
 
+    // covers: S142
     #[test]
     fn an_app_that_quits_stops_streaming_and_stays_chosen() {
         let mut adapter = adapter();
@@ -6664,6 +6770,7 @@ mod tests {
         assert!(adapter.snapshot().running);
     }
 
+    // covers: S121
     #[test]
     fn capture_that_cant_start_leaves_streaming_off_with_a_notice() {
         let mut adapter = adapter();
@@ -9039,6 +9146,7 @@ mod tests {
         assert!(state.running);
     }
 
+    // covers: S312
     #[test]
     fn an_airplay2_speaker_row_says_airplay_2_only_with_the_switch_on() {
         let (adapter, _, loft) = airplay2_adapter(false);
@@ -9065,6 +9173,7 @@ mod tests {
     /// Under the AirPlay 2 flag (spec S312) the sender's path is on with the
     /// switch off: an AirPlay 2 only receiver plays over AirPlay 2, one that
     /// speaks both stays on AirPlay 1 until the switch prefers AirPlay 2.
+    // covers: S312
     #[test]
     fn under_the_airplay2_flag_only_the_switch_moves_a_dual_receiver_to_airplay2() {
         for (preferred, dual_kind) in [(false, SpeakerKind::AirPlay), (true, SpeakerKind::AirPlay2)]
@@ -11263,10 +11372,156 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
     }
 
+    // covers: S238
+    #[test]
+    fn apply_writes_nothing_once_the_reference_is_gone() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        for id in ["builtin", "bluetooth"] {
+            turn_on(&mut adapter, id);
+        }
+        adapter.set_speaker_delay(&key("bluetooth"), 80.0);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::local_sheet(&[
+                ("builtin", 0.0, 2010.0),
+                ("bluetooth", 80.0, 2190.0),
+            ]),
+        );
+        adapter.poll();
+        assert!(adapter.snapshot().calibrate_all.sheet.is_some());
+
+        adapter.audio_mut().disconnect_output("builtin");
+        adapter.refresh_devices();
+        assert_eq!(adapter.audio.calibration_engine().reference, None);
+        adapter.apply_calibrate_all();
+        let state = adapter.snapshot().calibrate_all;
+        assert_eq!(state.sheet, None, "measured against a reference that went");
+        assert_eq!(state.phase, AllPhase::Stale);
+        assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
+    }
+
+    /// Sets the L_s the kept results' AirPlay rows were read with.
+    fn read_with_sender(adapter: &mut AudioAdapter<MockBackend>, sender_ms: f64) {
+        let kept = adapter.calibrate_all.sheet.as_mut().expect("results");
+        for member in &mut kept.members {
+            if member.class == Class::AirPlay {
+                member.sender_ms = sender_ms;
+            }
+        }
+    }
+
+    fn applied_airplay_ms(adapter: &AudioAdapter<MockBackend>) -> f64 {
+        adapter
+            .calibrate_all
+            .sheet
+            .as_ref()
+            .and_then(|kept| kept.applied.as_ref())
+            .and_then(|applied| applied.changes.iter().find(|c| c.target == Target::AirPlay))
+            .expect("an AirPlay change")
+            .new_ms
+    }
+
+    // covers: S238
+    #[test]
+    fn a_sender_latency_that_moves_before_apply_keeps_the_results_and_applies_the_runs_l() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        let fake = FakeAirPlay::new();
+        adapter.audio_mut().set_airplay(fake.link(), None);
+        fake.set_latency(std::time::Duration::from_millis(2000));
+        adapter.poll();
+        adapter.audio.set_airplay_adjustment(100.0);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::sheet_of(&[
+                (Class::Local, SPEAKERS, Some(0.0), 2010.0),
+                (Class::Local, HEADPHONES, Some(0.0), 2060.0),
+                (Class::AirPlay, "kitchen", Some(2100.0), 2150.0),
+            ]),
+        );
+        read_with_sender(&mut adapter, 2000.0);
+
+        fake.set_latency(std::time::Duration::from_millis(2100));
+        adapter.poll();
+        assert_eq!(adapter.audio.airplay_sender_latency_ms(), Some(2100.0));
+        let shown = adapter.snapshot().calibrate_all.sheet.expect("results");
+        assert!(shown.can_apply, "the user changed nothing, only L_s moved");
+
+        adapter.apply_calibrate_all();
+        let wanted = applied_airplay_ms(&adapter);
+        assert_eq!(
+            adapter.audio.airplay_adjustment(),
+            100.0 + (wanted - 2100.0),
+            "A moves by what the run measured against its own L"
+        );
+    }
+
+    // covers: S238
+    #[test]
+    fn an_airplay_delay_clamped_at_0_applies_against_the_runs_sender_latency() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        let fake = FakeAirPlay::new();
+        adapter.audio_mut().set_airplay(fake.link(), None);
+        adapter.poll();
+        assert_eq!(adapter.audio.airplay_sender_latency_ms(), Some(1750.0));
+        adapter.audio.set_airplay_adjustment(-2000.0);
+        assert_eq!(adapter.snapshot().airplay_delay_ms, Some(0.0));
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::sheet_of(&[
+                (Class::Local, SPEAKERS, Some(0.0), 2010.0),
+                (Class::Local, HEADPHONES, Some(0.0), 2060.0),
+                (Class::AirPlay, "kitchen", Some(0.0), 2310.0),
+            ]),
+        );
+        read_with_sender(&mut adapter, 1750.0);
+
+        fake.set_latency(std::time::Duration::from_millis(1800));
+        adapter.poll();
+        adapter.apply_calibrate_all();
+        assert_eq!(applied_airplay_ms(&adapter), 300.0);
+        assert_eq!(adapter.audio.airplay_adjustment(), -1450.0);
+    }
+
+    // covers: S238, S255
+    #[test]
+    fn an_off_airplay_row_first_in_a_zone_leaves_apply_on_the_measured_rows_l_s() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        turn_on(&mut adapter, "builtin");
+        assert_eq!(adapter.audio.airplay_sender_latency_ms(), None);
+        let base = adapter.audio.airplay_adjustment_base_ms();
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::zone_sheet_with_an_off_airplay_row_first(base),
+        );
+        adapter.apply_calibrate_all();
+        assert_eq!(
+            adapter.audio.airplay_adjustment(),
+            applied_airplay_ms(&adapter) - base
+        );
+    }
+
+    /// Keeps a run's results, its reference row's output made the reference
+    /// of S174 (built in), since a run starts only with one.
     fn keep(
         adapter: &mut AudioAdapter<MockBackend>,
         (sheet, members, rate): (Sheet, Vec<Member>, u32),
     ) {
+        let reference = members[0].id.clone();
+        let name = adapter.output_name(&reference);
+        adapter
+            .audio_mut()
+            .connect_output_as(&reference, &name, OutputKind::BuiltIn);
+        adapter.refresh_devices();
         adapter.calibrate_all.sheet = Some(KeptSheet {
             sheet,
             members,
@@ -11322,6 +11577,10 @@ mod tests {
                 (Class::AirPlay, "kitchen", Some(2000.0), 2050.0),
             ]),
         );
+        read_with_sender(
+            &mut adapter,
+            crate::audio::outputs::DEFAULT_SENDER_LATENCY_MS,
+        );
         assert_eq!(adapter.audio.airplay_sender_latency_ms(), None);
         assert!(
             adapter
@@ -11375,6 +11634,7 @@ mod tests {
                 (Class::AirPlay, "kitchen", Some(2100.0), 2150.0),
             ]),
         );
+        read_with_sender(&mut adapter, 2000.0);
         adapter.apply_calibrate_all();
         let written = adapter.audio.airplay_adjustment();
         assert_ne!(written, 100.0, "Apply wrote a new adjustment");
@@ -12869,6 +13129,145 @@ mod tests {
         );
     }
 
+    fn hidden_cast(key: &str, name: &str) -> SavedHidden {
+        SavedHidden {
+            key: key.to_owned(),
+            name: name.to_owned(),
+            kind: "Google Cast".to_owned(),
+        }
+    }
+
+    /// Adds 192.0.2.31 by address, then lets a browse find Den there.
+    fn browse_finds_den(adapter: &mut AudioAdapter<MockBackend>, fake: &FakeCast) {
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        adapter.poll();
+        fake.announce_at(
+            DEN,
+            "Den",
+            DEVICE_PORT,
+            std::net::Ipv4Addr::new(192, 0, 2, 31),
+        );
+        adapter.poll();
+    }
+
+    const DEN: &str = "00112233445566778899aabbccddeeff";
+
+    // covers: S341
+    #[test]
+    fn a_speaker_added_by_address_that_a_browse_finds_keeps_its_zone_presets_name_and_hidden_mark()
+    {
+        let (mut adapter, fake) = cast_adapter();
+        let address = cc_address("192.0.2.31");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), address.clone()])],
+            speaker_presets: vec![saved_preset(&[
+                (key(SPEAKERS), None),
+                (address.clone(), Some(40.0)),
+            ])],
+            speaker_names: BTreeMap::from([(address.clone(), "Study".to_owned())]),
+            hidden_speakers: vec![hidden_cast(&address, "Study")],
+            ..Settings::default()
+        });
+        browse_finds_den(&mut adapter, &fake);
+
+        let saved = adapter.current_settings();
+        assert_eq!(saved.speaker_zones[0].members, [key(SPEAKERS), cc(DEN)]);
+        let preset: Vec<(String, Option<f64>)> = saved.speaker_presets[0]
+            .members
+            .iter()
+            .map(|member| (member.key.clone(), member.volume))
+            .collect();
+        assert_eq!(preset, [(key(SPEAKERS), None), (cc(DEN), Some(40.0))]);
+        assert_eq!(
+            saved.speaker_names,
+            BTreeMap::from([(cc(DEN), "Study".to_owned())])
+        );
+        assert_eq!(saved.hidden_speakers, [hidden_cast(&cc(DEN), "Study")]);
+    }
+
+    // covers: S341
+    #[test]
+    fn a_found_speaker_that_the_browse_loses_keeps_its_name_zone_and_hidden_mark() {
+        let (mut adapter, fake) = cast_adapter();
+        let address = cc_address("192.0.2.31");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), address.clone()])],
+            speaker_names: BTreeMap::from([(address.clone(), "Study".to_owned())]),
+            ..Settings::default()
+        });
+        browse_finds_den(&mut adapter, &fake);
+        fake.withdraw(DEN, "Den");
+        adapter.poll();
+
+        let state = adapter.snapshot();
+        assert!(state.speaker(&address).is_none());
+        assert_eq!(
+            state.speaker(&cc(DEN)).map(|row| row.name.as_str()),
+            Some("Study")
+        );
+        assert_eq!(
+            adapter.current_settings().speaker_zones[0].members,
+            [key(SPEAKERS), cc(DEN)]
+        );
+
+        adapter.hide_speaker(&cc(DEN), "Google Cast");
+        let state = adapter.snapshot();
+        assert!(state.speaker(&cc(DEN)).is_none() && state.speaker(&address).is_none());
+    }
+
+    // covers: S341
+    #[test]
+    fn identifying_a_speaker_again_writes_no_settings() {
+        let (mut adapter, fake) = cast_adapter();
+        let address = cc_address("192.0.2.31");
+        adapter.restore(Settings {
+            speaker_names: BTreeMap::from([(address.clone(), "Study".to_owned())]),
+            ..Settings::default()
+        });
+        browse_finds_den(&mut adapter, &fake);
+        adapter.must_save = false;
+        adapter.handle(BackendEvent::CastIdentified {
+            from: address["cc:".len()..].to_owned(),
+            to: DEN.to_owned(),
+        });
+        assert!(!adapter.must_save);
+    }
+
+    // covers: S341
+    #[test]
+    fn where_the_id_a_browse_found_has_a_zone_name_or_hidden_mark_its_own_wins() {
+        let (mut adapter, fake) = cast_adapter();
+        let address = cc_address("192.0.2.31");
+        let upstairs = SavedZone {
+            id: "zone:2".to_owned(),
+            name: "Upstairs".to_owned(),
+            ..zone(vec![cc(DEN), cc(CAST_LIVING)])
+        };
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), address.clone()]), upstairs],
+            speaker_names: BTreeMap::from([
+                (address.clone(), "Study".to_owned()),
+                (cc(DEN), "Den TV".to_owned()),
+            ]),
+            hidden_speakers: vec![
+                hidden_cast(&address, "Study"),
+                hidden_cast(&cc(DEN), "Den TV"),
+            ],
+            ..Settings::default()
+        });
+        browse_finds_den(&mut adapter, &fake);
+
+        let saved = adapter.current_settings();
+        assert_eq!(saved.speaker_zones[0].members, [key(SPEAKERS)]);
+        assert_eq!(saved.speaker_zones[1].members, [cc(DEN), cc(CAST_LIVING)]);
+        assert_eq!(
+            saved.speaker_names,
+            BTreeMap::from([(cc(DEN), "Den TV".to_owned())])
+        );
+        assert_eq!(saved.hidden_speakers, [hidden_cast(&cc(DEN), "Den TV")]);
+    }
+
     // covers: S246
     #[test]
     fn only_this_speaker_on_an_offline_cast_row_changes_nothing() {
@@ -13047,6 +13446,7 @@ mod tests {
         assert_eq!(state.cast_list, CastList::Quiet);
     }
 
+    // covers: S243
     #[test]
     fn a_cast_rows_id_is_the_cores_cast_key() {
         let (adapter, _) = cast_adapter();
@@ -13355,6 +13755,7 @@ mod tests {
         ended_as_a_change(&mut adapter);
     }
 
+    // covers: S71, S249
     #[test]
     fn a_zone_volume_change_reaches_the_playing_members_as_a_master_change_does() {
         let (mut adapter, fake) = cast_adapter();

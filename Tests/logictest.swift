@@ -2399,6 +2399,12 @@ do {
             && InputChannelPair.change(from: 1, to: 1, streaming: true) == .none
             && InputChannelPair.change(from: 1, to: -1, streaming: true) == .none,
           "channel pairs: choosing another pair restarts a running session, the same one does nothing")
+    check(InputChannelPair.change(from: 3, to: 0, channels: 4, streaming: true) == .none
+            && InputChannelPair.change(from: 3, to: 1, channels: 4, streaming: true) == .restart
+            && InputChannelPair.change(from: 1, to: 0, channels: 4, streaming: true) == .restart
+            && InputChannelPair.stores(0, over: 3) && !InputChannelPair.stores(1, over: 1)
+            && !InputChannelPair.stores(-1, over: 3),
+          "channel pairs: picking the pair a saved pair fell back to restarts nothing and keeps the pick")
     check(UIStrings().inputChannelPair(four[1]) == "Channels 3-4" && UIStrings().inputChannelPair(five[2]) == "Channel 5",
           "channel pairs: shown as the device counts its channels")
 
@@ -4162,12 +4168,11 @@ do {
     var fromPhone = listedPair()
     fromPhone.apply(.appeared(NativeReceiver(id: "D4", name: "Den", model: "", availability: .available, reason: nil,
                                              hints: [])))
-    let phoneOutcomes = ["D4", pair].compactMap { id in
-        StartOrigin.remote.beginsAttempts ? fromPhone.turnedOnByUser(id) : nil
-    }
+    let phoneOutcomes = (StartOrigin.remote.attemptsToBegin(["D4", pair]) ?? []).compactMap { fromPhone.turnedOnByUser($0) }
     fromPhone.added("D4")
     fromPhone.added(pair)
-    check(phoneOutcomes.isEmpty && StartOrigin.user.beginsAttempts
+    check(phoneOutcomes.isEmpty && StartOrigin.automatic.attemptsToBegin(["D4"]) == nil
+            && StartOrigin.user.attemptsToBegin(["D4", pair]) == ["D4", pair]
             && fromPhone.apply(.error(id: "D4", .pairingRequired, retryMs: nil, detail: "")) == .turnOff(app("D4"), .needsCode)
             && fromPhone.apply(.error(id: right, .passwordRequired, retryMs: nil, detail: ""))
                 == .turnOff(app(pair), .memberNeedsPassword(right))
@@ -5705,6 +5710,9 @@ do {
     let gone = zonePlan([local(false, listed: false)], streaming: true)
     check(gone.action == .nothing && gone.steps == [.absent],
           "zones: a zone with no member listed does nothing on a click")
+    let unplugged = zonePlan([local(true), local(true, listed: false)], streaming: true)
+    check(unplugged.action == .turnOff && unplugged.steps == [.off, .off],
+          "zones: a zone switched off turns its unplugged members off too, so they stay off when plugged back")
 
     // covers: S259, S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel)
     let presetText = UIStrings()
@@ -7447,12 +7455,12 @@ do {
     let unstalled = other.refused("B", nowS: 5)
     _ = other.stalled("B", nowS: 10)
     other.started("B", nowS: 10.5)
-    other.settle(enabled: ["B"], nowS: 15.4)
+    other.settle(enabled: ["B"], listed: ["B"], nowS: 15.4)
     let playing = other.tracked
-    other.settle(enabled: ["B"], nowS: 15.6)
+    other.settle(enabled: ["B"], listed: ["B"], nowS: 15.6)
     let settled = other.tracked
     _ = other.stalled("C", nowS: 20)
-    other.settle(enabled: ["B"], nowS: 20.1)
+    other.settle(enabled: ["B"], listed: ["B", "C"], nowS: 20.1)
     check(unstalled == nil && playing == ["B"] && settled.isEmpty && other.tracked.isEmpty,
           "output stall: a refused start that followed no stall is switched off as before; 5 s of play or a switch-off ends a stall",
           "\(String(describing: unstalled)) \(playing) \(settled) \(other.tracked)")
@@ -7464,16 +7472,16 @@ do {
     let afterSecond = notice.lost
     _ = notice.refused("A", nowS: 113.1)
     notice.started("A", nowS: 123.2)
-    let whilePlaying = notice.settle(enabled: ["A"], nowS: 128.1)
+    let whilePlaying = notice.settle(enabled: ["A"], listed: ["A"], nowS: 128.1)
     let keptLost = notice.lost
-    let played = notice.settle(enabled: ["A"], nowS: 128.3)
+    let played = notice.settle(enabled: ["A"], listed: ["A"], nowS: 128.3)
     _ = notice.stalled("B", nowS: 130)
     notice.started("B", nowS: 130.5)
     _ = notice.stalled("B", nowS: 131)
-    let switchedOff = notice.settle(enabled: [], nowS: 131.1)
+    let switchedOff = notice.settle(enabled: [], listed: ["B"], nowS: 131.1)
     _ = notice.stalled("C", nowS: 140)
     notice.started("C", nowS: 140.5)
-    let firstOnly = notice.settle(enabled: ["C"], nowS: 146)
+    let firstOnly = notice.settle(enabled: ["C"], listed: ["C"], nowS: 146)
     _ = notice.stalled("D", nowS: 150)
     notice.started("D", nowS: 150.5)
     _ = notice.stalled("D", nowS: 151)
@@ -7490,10 +7498,33 @@ do {
     failed.started("E", nowS: 211.2)
     failed.forget("E")
     let failedLost = failed.lost
-    let failedEnds = failed.settle(enabled: [], nowS: 212)
+    let failedEnds = failed.settle(enabled: [], listed: ["E"], nowS: 212)
     check(failedLost.isEmpty && failedEnds.isEmpty,
           "output stall: an output switched off for a failed start leaves its stall, so its could-not-start notice stays",
           "\(failedLost) \(failedEnds)")
+    // covers: S331 (a device that leaves the list ends a stall, so listed again a refusal is tried every 3 s)
+    var left = OutputStallRetry()
+    _ = left.stalled("G", nowS: 300)
+    left.settle(enabled: ["G"], listed: [], nowS: 300.5)
+    let leftTracked = left.tracked
+    let back = left.failed(LocalOutputSync.Failure(uid: "G", deviceName: "Desk", refusal: "!dev"),
+                           afterStall: left.afterStall(formatReopens: []).contains("G"), nowS: 301)
+    check(leftTracked.isEmpty && back == .refused("!dev"),
+          "output stall: a stalled output whose device leaves the list ends its stall; listed again, a refusal is tried every 3 s",
+          "\(leftTracked) \(back)")
+    var hard = OutputStallRetry()
+    _ = hard.stalled("H", nowS: 400)
+    _ = hard.stalled("I", nowS: 400)
+    let formatFailure = LocalOutputSync.Failure(uid: "H", deviceName: "Desk")
+    let hardStep = hard.failed(formatFailure, afterStall: true, nowS: 400.1)
+    let refusedStep = hard.failed(LocalOutputSync.Failure(uid: "I", deviceName: "Den", refusal: "!hog"),
+                                  afterStall: true, nowS: 400.1)
+    let hardReport = LocalOutputSync.report(hardStep == .hard ? [formatFailure] : [], enabled: ["H", "I"],
+                                            origin: .automatic)
+    check(hardStep == .hard && hard.tracked == ["I"] && refusedStep == .retry(atS: 400.1 + OutputStallRetry.retryEveryS)
+            && hardReport?.enabled == ["I"] && hardReport?.notices == [formatFailure],
+          "output stall: a start failing for good after a stall ends the stall and is switched off with its notice; a refusal retries",
+          "\(hardStep) \(refusedStep) \(hard.tracked)")
 }
 // covers: S334, S335 (a Mac sitting on 2026-10-28: both watches fired between the will-sleep notice and the sleep)
 do {
@@ -9197,6 +9228,13 @@ do {
     check(CalibrateAllFlow.end(start: connecting, now: connecting, taking: taking) == nil
             && CalibrateAllFlow.end(start: connecting, now: connected, taking: taking) == .speakersChanged,
           "calibrate all: a speaker still connecting at the start that begins playing stops the run, unmuted (S240)")
+    var referenced = started
+    referenced.reference = "mac"
+    var otherReference = referenced
+    otherReference.reference = "usb"
+    check(CalibrateAllFlow.end(start: referenced, now: referenced, taking: taking) == nil
+            && CalibrateAllFlow.end(start: referenced, now: otherReference, taking: taking) == .speakersChanged,
+          "calibrate all: a new local reference stops the run as a change of the speakers (S240)")
     check(t.calibrateAllLine(.ended(.rateChanged))
                 == "The audio's sample rate changed during the measurement. No delay was changed."
             && t.calibrateAllLine(.cannotMeasureAgain(name: "Desk", missing: .all))
@@ -9359,9 +9397,34 @@ do {
     // The stored values must still be the ones measured from.
     let measuredFrom = [CalibrateAllSpeaker(id: "mac", name: "Mac", kind: .local, offsetMs: nil, latencyMs: 0),
                         CalibrateAllSpeaker(id: "usb", name: "Desk", kind: .local, offsetMs: 150, latencyMs: 0)]
-    check(CalibrateAllFlow.unchanged(measuredFrom, current: { $0.id == "usb" ? 150 : 9 })
-            && !CalibrateAllFlow.unchanged(measuredFrom, current: { $0.id == "usb" ? 120 : nil }),
+    check(CalibrateAllFlow.unchanged(measuredFrom, reference: "mac", airPlayAdjustmentMs: 0,
+                                     current: { $0.id == "usb" ? 150 : 9 })
+            && !CalibrateAllFlow.unchanged(measuredFrom, reference: "mac", airPlayAdjustmentMs: 0,
+                                           current: { $0.id == "usb" ? 120 : nil }),
           "calibrate all: Apply writes nothing once a delay moved after the measurement")
+    // L_old 2000 with A 100; the sender's latency then moves L to 2300 while A stays.
+    let withAirPlay = measuredFrom + [CalibrateAllSpeaker(id: "native:a", name: "Den", kind: .airPlay, offsetMs: 2000,
+                                                          latencyMs: 0, adjustmentMs: 100, senderMs: 1900)]
+    let storedNow: (CalibrateAllSpeaker) -> Double? = { $0.kind == .airPlay ? 2300 : 150 }
+    check(CalibrateAllFlow.unchanged(withAirPlay, reference: "mac", airPlayAdjustmentMs: 100, current: storedNow)
+            && !CalibrateAllFlow.unchanged(withAirPlay, reference: "mac", airPlayAdjustmentMs: 140, current: storedNow),
+          "calibrate all: a new sender latency alone keeps Apply, a moved AirPlay setting refuses it (S238)")
+    check(!CalibrateAllFlow.unchanged(measuredFrom, reference: "usb", airPlayAdjustmentMs: 0,
+                                      current: { $0.id == "usb" ? 150 : 9 }),
+          "calibrate all: Apply writes nothing once the reference moved after the measurement")
+    var applied = AirPlayDelay(adjustmentMs: 100)
+    let enteredWithAirPlay = applied.enter(2150, senderMs: CalibrateAllFlow.airPlaySenderMs(old: 2000, speakers: withAirPlay) ?? 2200)
+    check(enteredWithAirPlay && applied.adjustmentMs == 250,
+          "calibrate all: Apply moves A by as much as the run moved L, whatever the sender's latency is now (S238)",
+          "A \(applied.adjustmentMs)")
+    // L_s 1750 and A −2000 clamp L to 0; the run then asks for 300.
+    let clamped = [measuredFrom[0], CalibrateAllSpeaker(id: "native:a", name: "Den", kind: .airPlay, offsetMs: 0,
+                                                        latencyMs: 0, adjustmentMs: -2000, senderMs: 1750)]
+    var fromClamped = AirPlayDelay(adjustmentMs: -2000)
+    let enteredClamped = fromClamped.enter(300, senderMs: CalibrateAllFlow.airPlaySenderMs(old: 0, speakers: clamped) ?? 0)
+    check(enteredClamped && fromClamped.latencyMs(senderMs: 1750) == 300,
+          "calibrate all: Apply from a clamped AirPlay delay writes the delay the run asked for (S238)",
+          "A \(fromClamped.adjustmentMs)")
 
     // Undo puts back what Apply replaced, and forgets a delay that wasn't stored (S238).
     let previous = AirPlayDelay(adjustmentMs: 250)
@@ -10633,6 +10696,10 @@ do {
     let pairedTV = RemoteRow(Facts(id: "tv2", name: "TV 2", kind: "AirPlay", on: false, volume: 50, isAirPlay: true,
                                    needsCode: true, paired: true), text: t)
     let rows = [reference, usb, homePod, castIdle, castGroup, locked, pairedTV]
+    let heldPassword = RemoteRow(Facts(id: "tv3", name: "TV 3", kind: "AirPlay", on: false, volume: 50,
+                                       isAirPlay: true, needsCode: true, paired: false, holdsPassword: true), text: t)
+    check(heldPassword.available && heldPassword.notice == nil && !heldPassword.asksForCode,
+          "web remote: a password speaker whose password this run holds can be turned on from the phone")
 
     let snapshot = RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows)
     let object = (try? JSONSerialization.jsonObject(with: Data(snapshot.json.utf8))) as? [String: Any]
@@ -11251,6 +11318,16 @@ do {
     check(cameBackOutcome == .changed && cameBack.enabled == nil,
           "cast model: a speaker that left the list and came back off gets no search-stopped notice when discovery stops",
           "\(String(describing: cameBackOutcome))")
+    // Hours later, with no Cast event between, its not-responding notice stays the one it has.
+    var neverBack = CastModel()
+    neverBack.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    _ = neverBack.turnOn(realID)
+    let leftAt = Date()
+    neverBack.apply(.gone(id: realID), now: leftAt)
+    let neverBackOutcome = neverBack.apply(.discoveryStopped, now: leftAt.addingTimeInterval(3 * 3600))
+    check(neverBackOutcome == .changed && neverBack.enabled == nil,
+          "cast model: a speaker that left the list long before discovery stops gets no search-stopped notice",
+          "\(String(describing: neverBackOutcome))")
 
     var startStopped = CastModel()
     startStopped.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
@@ -12210,6 +12287,28 @@ do {
     check(options[.version] as? String == "", "about: no build number in parentheses",
           String(describing: options[.version]))
     check(options[.credits] is NSAttributedString, "about: the license credits stay")
+}
+
+// MARK: Panel status counts only the AirPlay speakers it shows (StreamingPolicy.activeSpeakers)
+do {
+    let running = StreamingPolicy.activeSpeakers(airPlay: [true, true, false], senderFailed: false, others: [true, false])
+    check(running == 3, "status count: AirPlay and local speakers that are on", "\(running)")
+    let failed = StreamingPolicy.activeSpeakers(airPlay: [true, true], senderFailed: true, others: [true])
+    check(failed == 1, "status count: AirPlay rows hidden while the sender has failed don't count", "\(failed)")
+    let hintOn = StreamingPolicy.activeSpeakers(airPlay: [true], senderFailed: true, others: []) > 0
+    check(!hintOn, "status count: no live input AirPlay note for a hidden AirPlay speaker")
+}
+
+// MARK: Panel keeps room for what its compact notices show (PanelChrome.height)
+do {
+    let bare = PanelChrome.height(notices: 0)
+    let oneNotice = PanelChrome.height(notices: 1)
+    let twoNotices = PanelChrome.height(notices: 2)
+    check(oneNotice > bare && twoNotices - oneNotice <= 30 && PanelChrome.height(notices: 5) == twoNotices,
+          "panel chrome: one banner however many notices wait, plus its footer line",
+          "\(bare) \(oneNotice) \(twoNotices)")
+    let card = PanelChrome.height(notices: 0, permissionCard: true) - bare
+    check(card >= 120, "panel chrome: the permission card's room is kept", "\(card)")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

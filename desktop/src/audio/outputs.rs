@@ -1265,6 +1265,7 @@ mod tests {
         policy
     }
 
+    // covers: S161
     #[test]
     fn enabled_connected_outputs_play_sorted_by_id() {
         let policy = policy_with(&["c", "a", "b"]);
@@ -1274,6 +1275,7 @@ mod tests {
         assert!(plan.detach.is_empty());
     }
 
+    // covers: S161
     #[test]
     fn an_output_that_already_plays_is_not_added_again() {
         let policy = policy_with(&["a", "b"]);
@@ -1288,6 +1290,7 @@ mod tests {
         assert!(plan.is_empty());
     }
 
+    // covers: S161
     #[test]
     fn an_output_turned_off_is_removed() {
         let mut policy = policy_with(&["a", "b"]);
@@ -1297,12 +1300,14 @@ mod tests {
         assert_eq!(plan.detach, ["b"]);
     }
 
+    // covers: S161
     #[test]
     fn an_enabled_output_that_is_not_connected_waits() {
         let policy = policy_with(&["gone"]);
         assert!(policy.plan(true, &[endpoint("other")], &[]).is_empty());
     }
 
+    // covers: S161
     #[test]
     fn a_renderer_whose_device_disappeared_is_kept_until_the_output_is_turned_off() {
         // The renderer stops by itself when its device goes away (S68); the
@@ -1311,6 +1316,7 @@ mod tests {
         assert!(policy.plan(true, &[], &["a"]).is_empty());
     }
 
+    // covers: S161
     #[test]
     fn a_device_removed_and_added_again_plays_again() {
         let policy = policy_with(&["a"]);
@@ -1323,6 +1329,7 @@ mod tests {
         assert!(policy.settings("a").enabled);
     }
 
+    // covers: S71
     #[test]
     fn a_new_output_starts_off_at_volume_60_and_no_delay() {
         let policy = OutputPolicy::new(AirPlay::Unavailable);

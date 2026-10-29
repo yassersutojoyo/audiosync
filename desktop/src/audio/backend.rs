@@ -624,6 +624,14 @@ pub enum BackendEvent {
     /// Google Cast speakers appeared, changed or went away, or one's state
     /// changed: list them again.
     CastChanged,
+    /// A browse found the device a Cast speaker added by address is (S341):
+    /// what is kept under the ID `from` moves to the device's ID `to`.
+    CastIdentified {
+        /// The ID the speaker had as an address.
+        from: String,
+        /// The device's own ID.
+        to: String,
+    },
     /// A Google Cast speaker plays.
     CastPlaying {
         /// The speaker's ID.
@@ -1005,6 +1013,11 @@ pub trait AudioBackend {
     /// A Cast speaker is on, listed or not: turning on another is refused.
     fn cast_on(&self) -> bool {
         false
+    }
+
+    /// The ID of the Cast speaker that is on, listed or not.
+    fn cast_enabled(&self) -> Option<String> {
+        None
     }
 
     /// Turns a Cast speaker on or off. One plays at a time: turning one on

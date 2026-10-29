@@ -3685,6 +3685,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.cast.as_ref().is_some_and(CastSpeakers::is_on)
     }
 
+    fn cast_enabled(&self) -> Option<String> {
+        self.cast.as_ref().and_then(CastSpeakers::enabled_id)
+    }
+
     fn set_cast_enabled(&mut self, id: &str, enabled: bool) -> Result<(), CastProblem> {
         let Some(cast) = self.cast.as_mut() else {
             return if enabled {
@@ -4670,6 +4674,9 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
             format!("output {}: its own volume changed", label(names, id))
         }
         BackendEvent::CastChanged => "the Google Cast speakers changed".to_owned(),
+        BackendEvent::CastIdentified { from, to } => {
+            format!("Google Cast speaker {from}, added by address, is {to}")
+        }
         BackendEvent::CastPlaying { id } => format!("Google Cast speaker ({id}) plays"),
         BackendEvent::CastFailed { id, problem } => {
             format!("Google Cast speaker ({id}) can't play ({problem:?}); it is turned off")
@@ -4973,7 +4980,7 @@ mod tests {
         assert_eq!(backend.driver().renderers_faded(), 2);
     }
 
-    // covers: S114
+    // covers: S114, S121
     #[test]
     fn a_failed_start_leaves_nothing_running_and_every_feed_free() {
         use crate::audio::cast::tests::{FakeCast, KITCHEN};
@@ -7894,6 +7901,7 @@ mod tests {
         assert_eq!(backend.driver().renderers_faded(), 2);
     }
 
+    // covers: S17
     #[test]
     fn frames_captured_count_from_each_start() {
         let mut backend = backend();

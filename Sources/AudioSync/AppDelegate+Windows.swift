@@ -323,7 +323,7 @@ extension AppDelegate {
         a.setPower = { [weak self] on in self?.setStreaming(on) }
         a.selectSource = { [weak self] id, origin in
             self?.setSource(AudioSource(defaultsValue: id), origin: origin)
-            self?.pushSources()   // remembers a picked input device's name
+            self?.pushSources()
         }
         a.selectInputPair = { [weak self] index in self?.setInputPair(index) }
         a.toggleMixApp = { [weak self] id in self?.toggleMixApp(id) }
