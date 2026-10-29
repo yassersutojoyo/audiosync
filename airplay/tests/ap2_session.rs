@@ -22,6 +22,7 @@ use common::ap2::{
     Ap2Rig, DATA_PORT, EVENT_PORT, FakeAp2, FakeFraming, RECEIVER_CONTROL_PORT, STREAM_ID,
     TestEntropy, ap2_config, dict, int, plist, read_dict, read_value, request_key,
 };
+use common::hap::Answer;
 use common::{CONTROL_PORT, RECEIVER, SENDER, TIMING_PORT, connection, ids};
 
 const SECRET: [u8; 32] = [7; 32];
@@ -428,6 +429,22 @@ fn pairing_goes_on_the_session_connection() {
     ));
     let rig = Ap2Rig::new(ap2_config(), fake);
     assert_eq!(kind(&rig), Some(ErrorKind::PasswordRequired));
+}
+
+// Outside a PIN pairing a back-off ends the pairing; its wait still
+// reaches the host's event and debug log, as a PIN pairing's does.
+// covers: P150
+#[test]
+fn a_back_off_outside_a_pin_pairing_tells_the_host_its_wait() {
+    let mut fake = FakeAp2::new();
+    fake.hap
+        .answers
+        .push((("/pair-setup", 1), Answer::Error(3)));
+    fake.hap.back_off = Some(30);
+    let rig = Ap2Rig::new(ap2_config(), fake);
+    let error = rig.failure().expect("the pairing fails");
+    assert_eq!(error.kind, ErrorKind::PairingFailed);
+    assert!(error.to_string().contains("30 s"), "{error}");
 }
 
 // covers: P70

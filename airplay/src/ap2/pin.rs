@@ -163,6 +163,16 @@ impl PinPairing {
         self.outputs.push_back(Output::Event(event));
     }
 
+    /// M6 credentials whose verify failed still reach the host (P153);
+    /// with flags bit 3 there is nothing to store (P182).
+    fn hand_over_unverified(&mut self) {
+        if let Some(credentials) = self.credentials.take()
+            && !self.every_time
+        {
+            self.event(PairingEvent::PairedUnverified(credentials));
+        }
+    }
+
     fn pump(&mut self) {
         while let Some(output) = self.session.poll_output() {
             match output {
@@ -222,6 +232,7 @@ impl PinPairing {
                 let event = if self.cancelled {
                     PairingEvent::Stopped
                 } else {
+                    self.hand_over_unverified();
                     PairingEvent::Failed {
                         error,
                         wrong_pin: false,
@@ -234,6 +245,7 @@ impl PinPairing {
                 let event = if self.cancelled {
                     PairingEvent::Stopped
                 } else {
+                    self.hand_over_unverified();
                     PairingEvent::Failed {
                         error: unfinished(),
                         wrong_pin: false,
