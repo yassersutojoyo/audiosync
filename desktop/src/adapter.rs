@@ -6381,13 +6381,21 @@ mod tests {
         adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
         adapter.poll();
         adapter.add_zone("Lounge", &[key(SPEAKERS), cc(CAST_KITCHEN)]);
+        // Gone with no session: it leaves the list but stays on.
+        adapter.audio_mut().fail_capture(BackendError::System {
+            call: "IAudioCaptureClient::GetBuffer",
+            code: 1,
+        });
+        adapter.poll();
         fake.withdraw(CAST_KITCHEN, "Kitchen");
         adapter.poll();
-        // Offline, a Cast speaker that is on stays listed, so the click counts it.
-        assert!(adapter.snapshot().speaker(&cc(CAST_KITCHEN)).is_some());
+        turn_on(&mut adapter, HEADPHONES);
+        assert!(adapter.snapshot().running);
+        assert!(adapter.snapshot().speaker(&cc(CAST_KITCHEN)).is_none());
+        assert!(adapter.audio.cast_on());
         adapter.toggle_zone("zone:1");
-        assert!(!adapter.audio.cast_speakers().iter().any(|s| s.enabled));
-        assert!(!adapter.snapshot().running);
+        assert!(!enabled(&adapter, SPEAKERS));
+        assert!(!adapter.audio.cast_on());
     }
 
     #[test]
