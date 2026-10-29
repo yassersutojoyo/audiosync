@@ -256,6 +256,8 @@ final class OutputRenderer: FadingOutput {
         if let owner = Self.hogOwner(device), owner != getpid() {
             throw StartFailure.deviceDidNotStart(OSStatus(kAudioDevicePermissionsError))
         }
+        // Read before the bind: a rate the device moves to while the unit starts sends no notice (S325's relink).
+        let boundFormat = Self.deviceFormat(device)
         let fresh = try Self.makeUnit()
         let bluetooth = BluetoothIOBuffer.isBluetooth(
             transport: Self.uint32(device, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal) ?? 0)
@@ -281,7 +283,6 @@ final class OutputRenderer: FadingOutput {
         formatChanged = false
         formatCheckQueued = false
         startedDevice = device
-        startedFormat = Self.deviceFormat(device)
         stopNote = "running"
         let reportedNs = Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
         let uid = Self.deviceString(device, kAudioDevicePropertyDeviceUID)
@@ -293,6 +294,12 @@ final class OutputRenderer: FadingOutput {
         installDeviceAliveListener(device)
         installOverloadListener(device)
         installFormatListener(device)
+        let check = OutputFormatWatch.atStart(bound: boundFormat, now: Self.deviceFormat(device))
+        startedFormat = check.baseline
+        if case .reopen = check.verdict, let listener = formatListener {   // checked as a notice would be
+            var address = Self.formatAddresses[0]
+            listener.block(1, &address)
+        }
         startDebugReport()
         startLateCallbackReport(device: device)
         let extraLeadMs = target?.renderer.extraLeadMs ?? 0

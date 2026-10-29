@@ -28,6 +28,15 @@ enum OutputFormatWatch {
         return same ? .keep : .reopen(old: started, new: now)
     }
 
+    /// A start's check once its watch listens: `bound` is the device's format
+    /// as the unit was bound to it, `now` the one read after. A move in between
+    /// sends the watch no notice, so it is checked here; `baseline` is what
+    /// later notices compare with.
+    static func atStart(bound: OutputDeviceFormat?,
+                        now: OutputDeviceFormat?) -> (baseline: OutputDeviceFormat?, verdict: Verdict) {
+        (bound ?? now, decide(started: bound, now: now, fadingOut: false))
+    }
+
     /// The debug line for output `number` (its status-line number, never its device's name).
     static func line(number: Int, old: OutputDeviceFormat, new: OutputDeviceFormat) -> String {
         "output \(number): its device's format changed from \(old.text) to \(new.text); reopening it"
