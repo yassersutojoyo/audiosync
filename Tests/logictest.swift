@@ -9778,6 +9778,21 @@ do {
     check(still.volume(of: tv) == 0 && still.setMaster(100) == 0,
           "cast master: a level the device already has is not waited for, so its buttons' 0 is read back and a muted speaker stays silent")
 
+    var back = session(master: 100, attempt: 9)
+    _ = back.apply(.volume(attempt: 9, reported(0.1)))
+    for position in [30.0, 50, 30] { _ = back.setVolume(tv, position: position) }
+    _ = back.apply(.volume(attempt: 9, reported(0.3)))
+    _ = back.apply(.volume(attempt: 9, reported(0.5)))
+    check(approx(back.volume(of: tv), 30, 1e-9),
+          "cast master: a status answers the oldest level it matches, so 30, 50, 30 sent never jumps the slider to 50 (C70)")
+
+    var resent = session(master: 100, attempt: 10)
+    _ = resent.setVolume(tv, position: 30)
+    _ = resent.apply(.volume(attempt: 10, reported(0.8)))
+    for level in [0.3, 0.7, 0.3] { _ = resent.apply(.volume(attempt: 10, reported(level))) }
+    check(approx(resent.volume(of: tv), 30, 1e-9),
+          "cast master: a level re-sent at the first status is awaited once, so a later change to it from elsewhere moves the speaker (C70)")
+
     var quiet = session(master: 100, attempt: 5)
     _ = quiet.apply(.volume(attempt: 5, reported(0.5)))
     _ = quiet.setVolume(tv, position: 80)
