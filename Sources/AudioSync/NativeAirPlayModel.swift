@@ -190,7 +190,7 @@ enum NativeSpeakerEvent: Equatable {
         /// stays on (`NativeAirPlayModel.apply`).
         var retried: Bool {
             switch self {
-            case .notResponding, .connectionLost, .busy, .refused: return true
+            case .notResponding, .connectionLost, .busy, .refused, .incompatible: return true
             default: return false
             }
         }
@@ -629,11 +629,11 @@ struct NativeAirPlayModel {
     /// doesn't play: they go off unless switched on by hand, also when they
     /// were on from the last run or start asking once listed (a late TXT
     /// update), so no code request comes by itself. One that plays keeps
-    /// its session.
-    func askingEveryTime(_ rows: [String]) -> [String] {
+    /// its session, unless `streamEnded` (the Mac sleeps with it playing, S223).
+    func askingEveryTime(_ rows: [String], streamEnded: Bool = false) -> [String] {
         rows.filter { id in
             guard let receiver = NativeAirPlayID.receiver(id) else { return false }
-            return asksEveryTime(receiver) && !isPlaying(receiver)
+            return asksEveryTime(receiver) && (streamEnded || !isPlaying(receiver))
         }
     }
 
