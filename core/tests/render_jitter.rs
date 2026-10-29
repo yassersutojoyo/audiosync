@@ -92,6 +92,8 @@ struct Run {
     counters: Vec<(ReaderCounters, ReaderCounters)>,
     /// Each output's largest lateness in ns and its late callbacks.
     late: Vec<(u64, u64)>,
+    /// Each output's re-anchors after a lasting lateness (S207).
+    late_reanchors: Vec<u64>,
     /// Each output's settled delays, in ms.
     delays: Vec<Vec<f64>>,
     /// When each of those delays played, in s.
@@ -224,6 +226,7 @@ fn run(setups: &[Setup], seconds: u128, timed: bool) -> Run {
             .iter()
             .map(|o| (o.control.late_max_ns(), o.control.late_callbacks()))
             .collect(),
+        late_reanchors: outputs.iter().map(|o| o.control.late_reanchors()).collect(),
         played: outputs.iter().map(|o| o.played.clone()).collect(),
         delays: outputs.into_iter().map(|output| output.delays).collect(),
     }
@@ -271,6 +274,7 @@ const BLUETOOTH_PAIR: [Setup; 4] = [
 #[test]
 fn late_bluetooth_callbacks_never_run_an_output_dry_or_correct_drift_once_settled() {
     let seen = run(&BLUETOOTH_PAIR, 60, true);
+    assert_eq!(seen.late_reanchors, vec![0; BLUETOOTH_PAIR.len()]);
     let retimes = (60_000 / RETIME_MS) as u64;
     for (setup, (early, end)) in BLUETOOTH_PAIR.iter().zip(&seen.counters) {
         assert!(
@@ -360,6 +364,7 @@ fn one_stray_early_callback_never_moves_an_output() {
     };
     let late = stray(&BLUETOOTH_PAIR);
     let seen = run(&late, 60, true);
+    assert_eq!(seen.late_reanchors, vec![0; late.len()]);
     for (setup, (early, end)) in late.iter().zip(&seen.counters) {
         assert_eq!(
             (
@@ -379,6 +384,7 @@ fn one_stray_early_callback_never_moves_an_output() {
         })
         .collect();
     let with_stray = run(&stray(&steady), 20, true);
+    assert_eq!(with_stray.late_reanchors, vec![0; steady.len()]);
     let without = run(&steady, 20, true);
     assert_eq!(with_stray.delays, without.delays);
     assert!(with_stray.late.iter().all(|&late| late == (0, 0)));
@@ -410,6 +416,7 @@ fn two_early_callbacks_in_a_row_move_an_output_at_most_the_cap_until_the_floor_l
             .collect();
         let without = run(&setups, 60, true);
         let seen = run(&two_early, 60, true);
+        assert_eq!(seen.late_reanchors, vec![0; two_early.len()]);
         for (i, setup) in two_early.iter().enumerate() {
             let (early, end) = &seen.counters[i];
             assert_eq!(
