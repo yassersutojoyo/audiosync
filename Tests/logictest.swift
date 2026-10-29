@@ -5070,6 +5070,8 @@ do {
 do {
     final class Host: TrackInfoHost {
         var trackInfoFeed = TrackInfoFeed()
+        var castTrackInfoFeed: TrackInfoFeed?
+        var castSending = false
         var sendsTrackInfo = true
         var nowPlayingPollingSince: Date?
         var nowPlayingHasReading = true
@@ -5092,7 +5094,11 @@ do {
             return (ReceiverInfo(fields: fields, artwork: .track), track == nil ? nil : cover)
         }
         func sendPlayback() { playbacks += 1 }
-        func sendCastTrackInfo(now: Date) { castLooks += 1 }
+        func sendCastTrackInfo(now: Date) {
+            castLooks += 1
+            _ = castTrackInfoFeed?.send(sending: castSending, now: now, pollingSince: nowPlayingPollingSince,
+                                        hasReading: nowPlayingHasReading, icon: nil, shows: { receiverShows() })
+        }
         func recheckTrackInfo(at date: Date) { rechecks.append(date) }
         func setSenderTrackInfo(fields: TrackMetadata.Fields?, artwork: NSImage?, sendsPosition: Bool,
                                 position: NowPlayingMonitor.Position?) {
@@ -5151,6 +5157,47 @@ do {
     check(waiting.sent.isEmpty && waiting.looks == 0
             && waiting.rechecks == [polling.addingTimeInterval(ReceiverInfo.readingWait)],
           "track info wiring: a sender start before Now Playing's first reading schedules one look, sends nothing")
+
+    let starting = Host()
+    starting.trackInfoModelUpdated(sending: true, casting: false)
+    check(starting.sent.count == 1 && starting.looks == 1,
+          "track info wiring: AirPlay receivers that start showing track info get all of it at once")
+    starting.trackInfoModelUpdated(sending: true, casting: false)
+    check(starting.sent.count == 1 && starting.playbacks == 1,
+          "track info wiring: a model update while already sending sends nothing again")
+
+    let castOnly = Host()
+    castOnly.sendsTrackInfo = false
+    castOnly.castTrackInfoFeed = TrackInfoFeed()
+    castOnly.castSending = true
+    castOnly.trackInfoModelUpdated(sending: false, casting: true)
+    check(castOnly.castLooks == 1 && castOnly.sent.isEmpty,
+          "track info wiring: a Cast device switched on alone gets its look, the AirPlay sender nothing")
+    castOnly.trackInfoModelUpdated(sending: false, casting: true)
+    check(castOnly.castLooks == 1, "track info wiring: a Cast device already on gets no second look from a model update")
+    let noCastSender = Host()
+    noCastSender.sendsTrackInfo = false
+    noCastSender.trackInfoModelUpdated(sending: false, casting: true)
+    check(noCastSender.castLooks == 0, "track info wiring: with no Cast sender running, a model update looks at nothing")
+
+    let rechecking = Host()
+    let since = Date()
+    rechecking.nowPlayingPollingSince = since
+    rechecking.nowPlayingHasReading = false
+    rechecking.castTrackInfoFeed = TrackInfoFeed()
+    rechecking.castSending = true
+    rechecking.trackInfoModelUpdated(sending: true, casting: true)
+    let due = since.addingTimeInterval(ReceiverInfo.readingWait)
+    check(rechecking.sent.isEmpty && rechecking.trackInfoFeed.sent?.recheckAt == due
+            && rechecking.castTrackInfoFeed?.sent?.recheckAt == due,
+          "track info wiring: before Now Playing's first reading both feeds wait for the same date")
+    rechecking.nowPlayingHasReading = true
+    rechecking.track = song("First")
+    rechecking.trackInfoRecheckFired(at: due)
+    check(rechecking.trackInfoFeed.sent?.recheckAt == nil && rechecking.castTrackInfoFeed?.sent?.recheckAt == nil,
+          "track info wiring: a wait that ends frees its date in both feeds, so a later wait schedules again")
+    check(rechecking.sent.count == 1 && rechecking.sent[0].fields == first,
+          "track info wiring: a wait that ends looks again and sends what plays")
 }
 
 // MARK: Track info call sites: AppDelegate hands a Now Playing change and a sender start to TrackInfoHost
@@ -5186,8 +5233,29 @@ do {
           started.isEmpty ? "the started branch of nativeStartFinished not found" : "no resendTrackInfo() in it")
     check(!app.isEmpty && count(app, "extension AppDelegate: TrackInfoHost") == 1
             && count(app, "func nowPlayingChanged(") == 0 && count(app, "func resendTrackInfo(") == 0
-            && count(app, "func sendTrackInfo(") == 0,
+            && count(app, "func sendTrackInfo(") == 0 && count(app, "func trackInfoModelUpdated(") == 0
+            && count(app, "func trackInfoRecheckFired(") == 0,
           "track info call site: AppDelegate takes the tested TrackInfoHost wiring and shadows none of it")
+
+    let airPlay = read("Sources/AudioSync/AppDelegate+AirPlay.swift")
+    check(count(body(airPlay, after: "func setSenderTrackInfo("), "nativeAirPlay?.setTrackInfo(") == 1,
+          "track info call site: what the wiring sends reaches the native AirPlay sender")
+    check(count(body(airPlay, after: "func syncTrackInfo() {"),
+                "trackInfoModelUpdated(sending: sending, casting: casting)") == 1,
+          "track info call site: every model update tells the wiring whether AirPlay and Cast show track info")
+    check(count(body(airPlay, after: "func recheckTrackInfo(at date: Date) {"), "trackInfoRecheckFired(at: date)") == 1,
+          "track info call site: a scheduled wait that ends runs the wiring's look again")
+    check(count(body(windows, after: "func pushModel() {"), "syncTrackInfo()") == 1,
+          "track info call site: every model push syncs track info")
+    check(count(windows, "remote.onNowPlayingNeedChange = { [weak self] in self?.syncTrackInfo() }") == 1,
+          "track info call site: a paired phone that starts or stops showing Now Playing syncs track info")
+    let source = body(read("Sources/AudioSync/AppDelegate+Outputs.swift"), after: "func updateNowPlayingTarget() {")
+    check(count(body(source, after: "if nowPlaying.noteSource(audioSource) {", until: "nowPlaying.refresh()"),
+                "self?.sendTrackInfo()") == 1,
+          "track info call site: a source change that Now Playing notes sends track info again")
+    let cast = body(read("Sources/AudioSync/AppDelegate+Cast.swift"), after: "func sendCastTrackInfo(now: Date) {")
+    check(count(cast, "sender.setTrack(fields)") == 1 && count(cast, "sender.setArtwork(") == 1,
+          "track info call site: the Cast device gets the track and artwork its feed gives")
 }
 
 // MARK: Track info — Spotify paused, read as empty every 2 s for 11 minutes, never sends the fallback

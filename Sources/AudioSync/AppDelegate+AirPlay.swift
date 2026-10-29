@@ -226,9 +226,7 @@ extension AppDelegate {
                 nativeAirPlay?.clearPause()
             }
         }
-        let airPlayStarts = trackInfoFeed.modelUpdated(sending: sending)
-        let castStarts = castSender?.trackInfo.modelUpdated(sending: casting) ?? false
-        if airPlayStarts || castStarts { sendTrackInfo() }
+        trackInfoModelUpdated(sending: sending, casting: casting)
     }
 
     /// Tells the native sender which player a speaker's remote controls and
@@ -282,10 +280,7 @@ extension AppDelegate {
     /// Runs `sendTrackInfo` again at `date`, when a wait ends.
     func recheckTrackInfo(at date: Date) {
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, date.timeIntervalSinceNow) + 0.05) { [weak self] in
-            guard let self else { return }
-            self.trackInfoFeed.recheckFired(at: date)
-            self.castSender?.trackInfo.recheckFired(at: date)
-            self.sendTrackInfo()
+            self?.trackInfoRecheckFired(at: date)
         }
     }
 }
@@ -294,6 +289,10 @@ extension AppDelegate: TrackInfoHost {
     var nowPlayingPollingSince: Date? { nowPlaying.startedAt }
     var nowPlayingHasReading: Bool { nowPlaying.hasReading }
     var trackInfoIcon: NSImage? { NSApp.applicationIconImage }
+    var castTrackInfoFeed: TrackInfoFeed? {
+        get { castSender?.trackInfo }
+        set { if let newValue { castSender?.trackInfo = newValue } }
+    }
 
     func showNowPlaying(_ track: NowPlayingMonitor.Track?) {
         if appModel.nowPlaying != track { appModel.nowPlaying = track }
