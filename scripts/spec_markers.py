@@ -39,6 +39,7 @@ _TEST_MAP = re.compile(r"## [0-9]+\. Test map")
 _FN = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 # Snake case with at least one underscore, not part of a path or a longer word.
 _TEST_NAME = re.compile(r"(?<![\w./-])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![\w./-])")
+_ONE_WORD = re.compile(r"[a-z][a-z0-9]*")
 
 
 def in_scope(path):
@@ -138,9 +139,15 @@ def test_map_problems(spec, text, fns):
             continue
         if len(cells) > 3 and cells[3].strip().startswith("*hardware*"):
             continue
+        names = _outside_parens(cells[1])
+        # A one-word name has no underscore for _TEST_NAME, so it counts only in a cell
+        # that is nothing but a list of names; prose cells say "once" or "max" too.
+        items = [item.strip() for item in names.split(",")]
+        listed = all(_ONE_WORD.fullmatch(item) or _TEST_NAME.fullmatch(item) for item in items)
+        words = [item for item in items if listed and _ONE_WORD.fullmatch(item)]
         found += [
             f"docs/{spec}:{number}: the test map names {name}, which no tracked Rust file defines"
-            for name in _TEST_NAME.findall(_outside_parens(cells[1]))
+            for name in _TEST_NAME.findall(names) + words
             if name not in fns
         ]
     return found
@@ -223,10 +230,14 @@ def self_test():
     doc = (
         "## 9. Notes\n| a_gone_name | S1 |\n## 10. Test map\n| Test | Clauses |\n|---|---|\n"
         "| a_real_test, a_gone_test (`x/y_z.rs`) | S1 |\n| a check (by a_note_name) | S2 |\n"
-        "| a_hand_check | P1 | *hardware*: by ear |\n## 11. After\n| another_gone | S1 |\n"
+        "| a_hand_check | P1 | *hardware*: by ear |\n| gone | S3 |\n| a_real_test, then once more | S4 |\n"
+        "## 11. After\n| another_gone | S1 |\n"
     )
     got = test_map_problems("X_SPEC.md", doc, {"a_real_test"})
-    want = ["docs/X_SPEC.md:6: the test map names a_gone_test, which no tracked Rust file defines"]
+    want = [
+        "docs/X_SPEC.md:6: the test map names a_gone_test, which no tracked Rust file defines",
+        "docs/X_SPEC.md:9: the test map names gone, which no tracked Rust file defines",
+    ]
     if got != want:
         failures.append(f"test_map_problems: expected {want}, got {got}")
     for failure in failures:

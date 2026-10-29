@@ -8342,6 +8342,7 @@ mod tests {
         );
     }
 
+    // covers: S227
     #[test]
     fn an_app_that_quit_while_its_capture_waits_to_start_again_gives_way_when_set() {
         let mut backend = backend();
@@ -8381,6 +8382,7 @@ mod tests {
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
     }
 
+    // covers: S227
     #[test]
     fn an_app_picked_while_the_last_session_fades_that_quits_before_its_start_gives_way_when_set() {
         let (mut backend, fake, kitchen) = with_airplay();
