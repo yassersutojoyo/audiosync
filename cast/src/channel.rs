@@ -605,6 +605,7 @@ impl Channel {
                         .is_none()
                     {
                         status.volume.level = known.level;
+                        status.volume.has_level = known.has_level;
                     }
                 }
                 self.on_status(id, status);

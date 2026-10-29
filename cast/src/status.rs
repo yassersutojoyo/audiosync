@@ -20,7 +20,10 @@ pub enum ControlType {
 /// The device volume of a status (C37).
 #[derive(Clone, Debug, PartialEq)]
 pub struct DeviceVolume {
+    /// Meaningful only with `has_level`.
     pub level: f64,
+    /// Whether a status gave the level; the first one may leave it out (C105).
+    pub has_level: bool,
     pub muted: bool,
     pub control_type: ControlType,
     pub step_interval: Option<f64>,
@@ -30,6 +33,7 @@ impl Default for DeviceVolume {
     fn default() -> DeviceVolume {
         DeviceVolume {
             level: 1.0,
+            has_level: false,
             muted: false,
             control_type: ControlType::Attenuation,
             step_interval: None,
@@ -144,6 +148,7 @@ impl ReceiverStatus {
         if let Some(object) = status.get("volume").and_then(Value::as_object) {
             if let Some(level) = object.get("level").and_then(Value::as_f64) {
                 volume.level = level;
+                volume.has_level = true;
             }
             if let Some(muted) = object.get("muted").and_then(Value::as_bool) {
                 volume.muted = muted;

@@ -1329,8 +1329,11 @@ impl CastSpeakers {
     /// A status's volume (C70, C104, C105): the answer to a level sent keeps
     /// the own level and any other level moves it by master × zone, except
     /// the session's first, which is set to master × zone × own level
-    /// instead.
+    /// instead. A status without a level is not the first.
     fn volume_reported(&mut self, device: DeviceId, volume: DeviceVolume) {
+        if !volume.has_level {
+            return;
+        }
         let shown = self.own_of(device);
         let zone = self.zone_of(device);
         let level = volume.level;
@@ -2559,6 +2562,7 @@ pub mod tests {
                 event: SessionEvent::Volume(DeviceVolume {
                     level,
                     step_interval: Some(0.05),
+                    has_level: true,
                     ..DeviceVolume::default()
                 }),
             });
@@ -2592,6 +2596,7 @@ pub mod tests {
             event: SessionEvent::Volume(DeviceVolume {
                 level: 0.35,
                 step_interval: Some(0.05),
+                has_level: true,
                 ..DeviceVolume::default()
             }),
         });
@@ -3042,6 +3047,7 @@ pub mod tests {
         assert_eq!(volume_step(None), 1.0);
         let reported = |step| DeviceVolume {
             step_interval: step,
+            has_level: true,
             ..DeviceVolume::default()
         };
         assert_eq!(volume_step(Some(&reported(None))), 1.0);
@@ -3080,6 +3086,7 @@ pub mod tests {
             event: SessionEvent::Volume(DeviceVolume {
                 level,
                 control_type,
+                has_level: true,
                 ..DeviceVolume::default()
             }),
         }
@@ -3207,6 +3214,7 @@ pub mod tests {
             device: id(KITCHEN),
             event: SessionEvent::Volume(DeviceVolume {
                 level: 0.8,
+                has_level: true,
                 ..DeviceVolume::default()
             }),
         });
@@ -3280,6 +3288,7 @@ pub mod tests {
             device: id(KITCHEN),
             event: SessionEvent::Volume(DeviceVolume {
                 level: 0.1,
+                has_level: true,
                 ..DeviceVolume::default()
             }),
         });
@@ -3307,6 +3316,7 @@ pub mod tests {
             event: SessionEvent::Volume(DeviceVolume {
                 level: 0.6,
                 control_type: ControlType::Fixed,
+                has_level: true,
                 ..DeviceVolume::default()
             }),
         });
@@ -3340,6 +3350,7 @@ pub mod tests {
             event: SessionEvent::Volume(DeviceVolume {
                 level: 0.6,
                 control_type,
+                has_level: true,
                 ..DeviceVolume::default()
             }),
         };

@@ -235,7 +235,7 @@ extern "C" {
 #define ASC_CAST_EVENT_RELOADED 7          /* the device saw the stream end; it was loaded again */
 #define ASC_CAST_EVENT_REBUFFERING 8       /* the receiver ran dry */
 #define ASC_CAST_EVENT_FORMAT_FALLBACK 9   /* the device refused WAV; .format is loaded instead */
-#define ASC_CAST_EVENT_VOLUME 10           /* the device's volume: .level, .muted, .volume_fixed, .step */
+#define ASC_CAST_EVENT_VOLUME 10           /* the device's volume: .level, .has_level, .muted, .volume_fixed, .step */
 #define ASC_CAST_EVENT_DIAGNOSTICS 11      /* once a second while playing: .drift_ms, .queued_ms, .underrun_frames, .resync_offered */
 #define ASC_CAST_EVENT_STREAM 12           /* the stream server's log line in .detail */
 #define ASC_CAST_EVENT_COMMAND_FAILED 13   /* a volume, artwork or Resync request failed: .error */
@@ -2096,6 +2096,7 @@ typedef struct AscCastEvent {
     double level;        /* the device's volume, 0 to 1 */
     bool muted;
     bool volume_fixed;   /* the device's volume can't be changed: show the control as unavailable */
+    bool has_level;      /* the status gave the level; .level means nothing without it */
     double step;         /* the device's volume step; 0 when it reports none */
     double drift_ms;     /* dropped audio plus rebuffering since the stream was loaded */
     double queued_ms;    /* audio waiting in the sender's queue */
