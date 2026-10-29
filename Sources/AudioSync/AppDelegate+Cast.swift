@@ -70,7 +70,11 @@ extension AppDelegate {
     private func castDevicesChanged(_ changes: [CastDeviceChange]) {
         for change in changes {
             DebugTrace.log("[AudioSync] Cast discovery: " + Self.castLogLine(change))
-            castModel.apply(change)
+            let name = castName(change.id)   // read before the change takes the row away
+            if case .turnedOff(let id, let problem?)? = castModel.apply(change) {
+                DebugTrace.log("[AudioSync] Cast: \(id) left the list, so it is off")
+                postNotice(text.castProblem(problem, name: name), subject: Notice.cast(id))
+            }
             if case .appeared(let device, _, let former?) = change {
                 moveCastNotices(from: former, to: device.id)
                 let moved = CastUserSettings(names: speakerNames, zones: zones, presets: presets, hidden: hiddenSpeakers)

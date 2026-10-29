@@ -10332,7 +10332,7 @@ do {
     let comesBack = m.apply(.changed(CastDevice(id: id, name: "", manual: true), offsetMs: nil))
     m.addedManually(id, address: den)
     let readded = m.apply(.changed(CastDevice(id: id, name: "", manual: true), offsetMs: nil))
-    check(replaced == nil && removedAddress == den && !comesBack && readded && m.devices[id] != nil
+    check(replaced == nil && removedAddress == den && comesBack == nil && readded == .changed && m.devices[id] != nil
             && m.removeManual("0123456789abcdef0123456789abcdef") == nil,
           "cast model: a removed manual device stays off the list until it is added again; only a manual one is removed")
     // covers: S245 (Remove on a Cast speaker added by address that leaves the list)

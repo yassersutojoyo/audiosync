@@ -452,22 +452,26 @@ struct CastModel {
         }.map(\.id)
     }
 
-    /// Whether the change altered what the list shows.
+    /// `.changed` when the change altered what the list shows, `.turnedOff`
+    /// when the device that is on left it with no session; else nil.
     @discardableResult
-    mutating func apply(_ change: CastDeviceChange) -> Bool {
+    mutating func apply(_ change: CastDeviceChange) -> CastOutcome? {
         switch change {
         case .appeared(let device, let offset, _), .changed(let device, let offset):
-            if removedManual.contains(device.id) { return false }
+            if removedManual.contains(device.id) { return nil }
             if case .appeared(_, _, let former?) = change { identified(former, as: device.id) }
             if let offset, !offsetsWritten.contains(device.id) { offsets[device.id] = offset > 0 ? offset : nil }
             let changed = devices[device.id] != device
             devices[device.id] = device
-            return changed
+            return changed ? .changed : nil
         case .gone(let id):
             let removed = devices.removeValue(forKey: id)
             // One added by address leaves only when a browse finds it, which moves it to its ID (C18).
-            if enabled == id, !isLive(id), removed?.manual != true { enabled = nil }
-            return removed != nil
+            if enabled == id, !isLive(id), removed?.manual != true {
+                enabled = nil
+                return .turnedOff(id, problem: .notResponding)
+            }
+            return removed == nil ? nil : .changed
         }
     }
 
