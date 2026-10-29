@@ -5436,8 +5436,10 @@ mod tests {
         assert!((peak - raised).abs() < 1e-4, "{peak}");
     }
 
-    /// How long a call on the UI thread may take without counting as a wait.
-    const NO_WAIT: Duration = Duration::from_millis(100);
+    /// How long a call on the UI thread may take without counting as a wait:
+    /// half the fade cap, so a preempted runner thread passes and a call that
+    /// waits out the cap still fails.
+    const NO_WAIT: Duration = Duration::from_millis(STOP_FADE_CAP.as_millis() as u64 / 2);
 
     #[test]
     fn a_speaker_switched_off_fades_out_before_its_stream_stops() {

@@ -951,8 +951,18 @@ mod tests {
         );
         track.follow(None);
         card.follow(None);
-        thread::sleep(poll * 3);
-        let resting = counts.lists();
+        // A listing a slow runner paused mid-way may still land; wait for two quiet polls.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut resting = counts.lists();
+        loop {
+            thread::sleep(poll * 2);
+            let now = counts.lists();
+            if now == resting {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the reader never rests");
+            resting = now;
+        }
         thread::sleep(poll * 6);
         assert_eq!(counts.lists(), resting, "nothing is read while unfollowed");
         drop(track);
