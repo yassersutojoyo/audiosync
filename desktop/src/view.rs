@@ -10121,6 +10121,25 @@ mod tests {
     }
 
     #[test]
+    fn a_preset_recall_lets_go_of_the_picked_curve() {
+        let app = app_over(MockBackend::new());
+        app.update(|b| b.set_speaker_enabled("local:desk", true));
+        app.save_preset("Flat");
+        let eq_window = &app.equalizer;
+        let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
+        eq_window.invoke_preset_selected(rock);
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Mine".into());
+        app.save_preset("Rock");
+        let ids = preset_ids(&app);
+
+        app.recall_preset(&ids[0]);
+        app.recall_preset(&ids[1]);
+        assert_eq!(eq_window.get_preset_index(), rock);
+        assert!(!eq_window.get_saved_curve_shown());
+    }
+
+    #[test]
     fn a_zone_name_longer_than_its_field_keeps_the_cursor_in_view() {
         let app = app_over(MockBackend::new());
         app.ask_new_zone();
