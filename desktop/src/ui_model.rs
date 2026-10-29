@@ -2102,6 +2102,14 @@ impl MockBackend {
         self.state.no_speaker_on = on;
     }
 
+    /// Speaker `id` asks for a code each time it connects.
+    #[cfg(test)]
+    pub fn set_code_every_time(&mut self, id: &str) {
+        if let Some(speaker) = self.speaker_mut(id) {
+            speaker.code_every_time = true;
+        }
+    }
+
     /// Keeps only the example speakers `keep` accepts, and the zones.
     #[cfg(test)]
     pub fn retain_speakers(&mut self, keep: impl Fn(&Speaker) -> bool) {

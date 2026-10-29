@@ -185,8 +185,9 @@ export global Strings {
 
     // What the dialog says while the TV is asked for a PIN, shows one, or
     // checks the one typed; after a wrong PIN the TV shows a PIN again,
-    // which may be the same one.
-    public pure function pin-message(speaker: string, phase: PinPhase, wrong-pin: bool) -> string {
+    // which may be the same one. A speaker that asks every time keeps no
+    // pairing, so its prompt doesn't promise one.
+    public pure function pin-message(speaker: string, phase: PinPhase, wrong-pin: bool, every-time: bool) -> string {
         if phase == PinPhase.checking {
             return @tr("Checking the PIN with {}…", speaker);
         }
@@ -198,6 +199,9 @@ export global Strings {
         }
         if wrong-pin {
             return @tr("That PIN didn't work. Enter the PIN {} shows now. Cancel turns the speaker off; turn it on again to retry.", speaker);
+        }
+        if every-time {
+            return @tr("{} shows a 4-digit PIN on its screen. Enter it to pair. Cancel turns the speaker off; turn it on again to retry.", speaker);
         }
         return @tr("{} shows a 4-digit PIN on its screen. Enter it to pair; after that, it connects without a PIN. Cancel turns the speaker off; turn it on again to retry.", speaker);
     }

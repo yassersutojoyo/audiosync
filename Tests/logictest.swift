@@ -3098,6 +3098,9 @@ do {
                                                               + "after that, it connects without a PIN.")
             && !kinds.nativePairWrongPINMessage(name: "Loft").contains("TV"),
           "native airplay: the PIN prompt reads as on Windows, for an Apple TV and an AirPlay 2 receiver alike")
+    check(kinds.nativePairPINMessage(name: "Loft", everyTime: true)
+            == "Loft shows a 4-digit PIN on its screen. Enter it to pair. Cancel turns the speaker off; turn it on again to retry.",
+          "native airplay: the PIN prompt of a receiver that asks every time promises no lasting pairing")
     paths.apply(.appeared(NativeReceiver(id: "K1", name: "Attic", model: "", availability: .needsPin, reason: nil,
                                          hints: ["airplay", "airplay2", "pairing", "over-airplay2"], overAirPlay2: true)))
     // covers: S223

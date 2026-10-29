@@ -789,9 +789,11 @@ struct UIStrings {
     }
 
     /// AudioSync's own AirPlay sender pairs a receiver with the PIN it shows:
-    /// an Apple TV, or a receiver reached over AirPlay 2.
-    func nativePairPINMessage(name: String) -> String {
-        "\(name) shows a 4-digit PIN on its screen. Enter it to pair; after that, it connects without a PIN. "
+    /// an Apple TV, or a receiver reached over AirPlay 2. A receiver that asks
+    /// for a code every time keeps no pairing, so its prompt doesn't promise one.
+    func nativePairPINMessage(name: String, everyTime: Bool = false) -> String {
+        let pair = everyTime ? "Enter it to pair. " : "Enter it to pair; after that, it connects without a PIN. "
+        return "\(name) shows a 4-digit PIN on its screen. " + pair
             + "Cancel turns the speaker off; turn it on again to retry."
     }
 
