@@ -589,6 +589,12 @@ impl Updater {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner) = true;
                 self.finish_install(&mut polled);
+            } else {
+                // A swap that ended before the quit may have a result not
+                // polled yet; a worker that stopped earlier may send none.
+                while let Ok(event) = self.events.try_recv() {
+                    self.apply(event, &mut polled);
+                }
             }
         }
         let Some((_, swapped)) = &self.swapped else {
@@ -1690,6 +1696,26 @@ pub mod tests {
         };
         let (updater, changed) = quit_during_swap("swap-ends-in-quit", files);
         assert!(changed, "the quit stores the record");
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::Blocked).as_ref()
+        );
+        assert_eq!(folder(&updater), old_folder());
+    }
+
+    // covers: S301, S315
+    #[test]
+    fn a_swap_that_ended_unpolled_before_the_quit_still_gets_the_removed_exe_check() {
+        let (mut updater, _) = updater("swap-ended-unpolled");
+        updater.check(Trigger::Manual);
+        updater.wait();
+        updater.press(UpdaterButton::Download);
+        // The worker drops its `env` once its result is sent.
+        while Arc::strong_count(&updater.env) > 1 {
+            std::thread::yield_now();
+        }
+        std::fs::remove_file(updater.env.install_dir.join(archive::EXE_NAME)).unwrap();
+        assert!(updater.at_quit(), "the quit stores the record");
         assert_eq!(
             updater.record(),
             record("0.9.0", UpdateRecordReason::Blocked).as_ref()
