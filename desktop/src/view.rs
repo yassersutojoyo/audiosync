@@ -7328,7 +7328,10 @@ mod tests {
         let every_time = "This speaker asks for a code each time it connects, so \
                           auto-connect leaves it off. AudioSync asks you for the code \
                           when you turn the speaker on.";
-        assert_eq!(help(Availability::NeedsCode, true, RowState::Off), every_time);
+        assert_eq!(
+            help(Availability::NeedsCode, true, RowState::Off),
+            every_time
+        );
         assert_eq!(help(Availability::Open, true, RowState::Off), every_time);
         assert_eq!(
             help(Availability::NeedsCode, false, RowState::Off),
