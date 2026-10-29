@@ -10493,6 +10493,22 @@ do {
             && kept.presets.first?.members == [SpeakerPreset.Member(key: byID, volume: 40)]
             && kept.hidden.contains(CastID.app(realID)) && !kept.hidden.contains(CastID.app(manualID)),
           "cast: a device added by address that a browse finds keeps its name, zone and presets")
+    var hiddenBoth = HiddenSpeakers()
+    hiddenBoth.hide(key: CastID.app(manualID), name: "Patio", kind: "Google Cast")
+    hiddenBoth.hide(key: CastID.app(realID), name: "Lounge", kind: "Google Cast")
+    let ownWins = CastUserSettings(
+        names: SpeakerNames(custom: [byAddress: "Patio", byID: "Lounge"]),
+        zones: [SpeakerZone(id: "z1", name: "Outside", members: [byAddress], volume: 60),
+                SpeakerZone(id: "z2", name: "Inside", members: [byID], volume: 80)],
+        presets: [SpeakerPreset(id: "p1", name: "Party",
+                                members: [.init(key: byAddress, volume: 40), .init(key: byID, volume: 70)], zones: [],
+                                master: 100, gains: [Double](repeating: 0, count: 10))],
+        hidden: hiddenBoth
+    ).moved(from: manualID, to: realID)
+    check(ownWins.names.custom == [byID: "Lounge"] && ownWins.zones.map(\.members) == [[], [byID]]
+            && ownWins.presets.first?.members == [SpeakerPreset.Member(key: byID, volume: 70)]
+            && ownWins.hidden.entries == [HiddenSpeakers.Entry(key: CastID.app(realID), name: "Lounge", kind: "Google Cast")],
+          "cast: a name, zone, preset place or hidden mark the id already has wins over the address's")
 
     // covers: S251, S252
     var unheard = CastModel()
