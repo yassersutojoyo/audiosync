@@ -9370,6 +9370,41 @@ mod tests {
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
 
+    // covers: S222
+    #[test]
+    fn the_reconnecting_notice_is_posted_once_and_goes_when_nothing_retries_the_speaker() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        fake.lose(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        adapter.dismiss_all_notices();
+        // Dismissed, it stays so through later failed retries.
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        // Switched off.
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        fake.lose(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        assert_eq!(messages(&adapter).len(), 1);
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        // Streaming stopped.
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        fake.lose(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        assert_eq!(messages(&adapter).len(), 1);
+        adapter.set_running(false);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
     // covers: P215, S222
     #[test]
     fn a_reconnecting_airplay_speaker_is_off_the_network_once_its_records_lapse() {

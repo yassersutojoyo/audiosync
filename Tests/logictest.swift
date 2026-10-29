@@ -2785,6 +2785,18 @@ do {
     let lapse = killed.apply(.state(id: "R1", .unannounced, retryMs: nil))
     check(lapse == .reconnecting("native:R1", nil) && !killed.isReconnecting("R1") && killed.isUnannounced("R1"),
           "native airplay: a reconnecting speaker whose records lapse is off the network, its notice gone", "\(String(describing: lapse))")
+    var dropped = NativeAirPlayModel()
+    dropped.apply(.appeared(receiver("R2", "Hall", .available)))
+    dropped.added("R2")
+    _ = dropped.apply(.state(id: "R2", .playing, retryMs: nil))
+    _ = dropped.apply(.error(id: "R2", .notResponding, retryMs: 1000, detail: "Unreachable"))
+    let quietLeaves = dropped.clearsNoticeOnRemoval("R2")
+    for retryMs: Int64 in [2000, 4000] {
+        _ = dropped.apply(.error(id: "R2", .notResponding, retryMs: retryMs, detail: "Unreachable"))
+    }
+    check(!quietLeaves && dropped.plan(streaming: true, enabled: []).remove == ["R2"]
+            && dropped.plan(streaming: false, enabled: ["native:R2"]).remove == ["R2"] && dropped.clearsNoticeOnRemoval("R2"),
+          "native airplay: switch-off after the third error clears the reconnecting notice")
     check(UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, reconnecting: true, unannounced: false, target: nil) == "Reconnecting…",
           "native airplay: a reconnecting speaker's row says so")
 
