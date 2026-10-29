@@ -32,7 +32,7 @@
 //! only one plain line per event a dry-run sheet judges, with its running
 //! count (the `summary` module). On stdin,
 //! `vol <dB>` moves the level as the television's remote does and `quit`
-//! stops it.
+//! stops it, as Ctrl+C does.
 
 #[path = "../tests/common/mod.rs"]
 mod common;
@@ -47,7 +47,7 @@ use std::io::BufRead;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -301,7 +301,7 @@ fn main() -> ExitCode {
         );
     }
     println!(
-        "{} stdin: vol <dB> moves the level, quit stops",
+        "{} stdin: vol <dB> moves the level, quit or Ctrl+C stops",
         stamp(start)
     );
     if let Some((daemon, fullname)) = &advertised {
@@ -317,9 +317,23 @@ fn main() -> ExitCode {
         let (server, stop, summary) = (server.clone(), stop.clone(), summary.clone());
         thread::spawn(move || log_requests(&server, start, &stop, summary.as_deref()))
     };
+    let (lines, input) = mpsc::channel();
+    let interrupt = lines.clone();
+    if let Err(error) = ctrlc::set_handler(move || {
+        let _ = interrupt.send("quit".to_string());
+    }) {
+        eprintln!("fake_tv: Ctrl+C stops it without the mDNS goodbye: {error}");
+    }
+    thread::spawn(move || {
+        for line in std::io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            if lines.send(line).is_err() {
+                break;
+            }
+        }
+    });
     let mut quit = false;
-    for line in std::io::stdin().lock().lines() {
-        let Ok(line) = line else { break };
+    for line in input {
         let mut words = line.split_whitespace();
         match (words.next(), words.next()) {
             (Some("quit"), _) => {
@@ -349,7 +363,7 @@ fn main() -> ExitCode {
             _ => println!("{} commands: vol <dB>, quit", stamp(start)),
         }
     }
-    // A run with no terminal sees stdin end at once: it serves until killed.
+    // Only reached when the Ctrl+C handler failed to install: it serves until killed.
     if !quit {
         loop {
             thread::sleep(Duration::from_secs(3600));
