@@ -311,6 +311,8 @@ final class WebRemote {
                                         calibrating: now.calibrating, sources: now.sources, sourceID: now.sourceID)
         DebugTrace.log("[AudioSync] web remote: \(actions.count) change(s) from a phone")
         actions.forEach(apply)
+        // Sent even when unchanged: the core streams it so the phone drops a value the app refused.
+        lastPublished = ""
         schedulePublish()
     }
 

@@ -15,7 +15,7 @@ pub mod version;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 
 use appcast::{Arch, Update};
 use flow::{Checked, Env, Installed};
@@ -28,13 +28,14 @@ pub use crate::ui_model::{UpdateRecord, UpdateRecordReason, UpdaterButton, Updat
 /// `SUFeedURL` in `Info.plist`.
 pub const FEED_URL: &str =
     "https://github.com/yassersutojoyo/audiosync/releases/latest/download/appcast.xml";
-/// How long a quit waits for a failed restart's undo (spec S303).
+/// How long a quit waits for a failed restart's undo (spec S303) or an
+/// ended swap's result (spec S301).
 const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub const RELEASE_PAGE: &str = "https://github.com/yassersutojoyo/audiosync/releases/latest";
 
 /// Whether this exe updates itself: only a build the release CI job made
-/// for a push to main, which sets `AUDIOSYNC_RELEASE_BUILD` to `1`.
+/// for a push to main or to a release/ branch, which sets `AUDIOSYNC_RELEASE_BUILD` to `1`.
 pub fn enabled() -> bool {
     marked(option_env!("AUDIOSYNC_RELEASE_BUILD")) && !cfg!(test)
 }
@@ -119,9 +120,9 @@ pub struct Updater {
     manual_waiting: bool,
     cancel: Arc<AtomicBool>,
     swapped: Option<(String, swap::Swapped)>,
-    /// Held by the restart's worker through its undo; a quit that stops
-    /// waiting for that worker sets it, so no undo starts that the end of
-    /// the process could cut in half.
+    /// Held by a worker through its swap (and that swap's restore) or a
+    /// restart's undo; a quit sets it, so no swap or undo starts that the
+    /// end of the process could cut in half.
     undo_closed: Arc<Mutex<bool>>,
     /// Runs on the worker right after it releases `undo_closed`.
     #[cfg(test)]
@@ -453,12 +454,13 @@ impl Updater {
         let env = self.env.clone();
         let sender = self.sender.clone();
         let cancel = self.cancel.clone();
+        let closed = self.undo_closed.clone();
         self.spawn(move || {
             let progress_sender = sender.clone();
             let progress = move |percent| {
                 let _ = progress_sender.send(Event::Progress(percent));
             };
-            let installed = flow::install(&env, &update, &progress, &cancel);
+            let installed = flow::install(&env, &update, &progress, &cancel, &closed);
             let _ = sender.send(Event::Installed(update.version_text.clone(), installed));
         });
     }
@@ -559,8 +561,8 @@ impl Updater {
         }));
     }
 
-    /// At quit, after a swap: a failed restart's undo still running ends
-    /// first (spec S303), and an exe Windows security removed gets the
+    /// At quit: a swap under way (spec S301) or a failed restart's undo
+    /// (spec S303) ends first, and an exe Windows security removed gets the
     /// `.bak` back, so the next start finds one (spec S315). Lock retries
     /// share [`files::QUIT_RETRY_BUDGET`]. True when the record changed.
     pub fn at_quit(&mut self) -> bool {
@@ -568,6 +570,32 @@ impl Updater {
         let mut polled = Polled::default();
         if self.work == Work::Restarting {
             self.finish_restart(&mut polled);
+        } else {
+            let swapping = match self.undo_closed.try_lock() {
+                Ok(mut closed) => {
+                    *closed = true;
+                    false
+                }
+                Err(TryLockError::Poisoned(closed)) => {
+                    *closed.into_inner() = true;
+                    false
+                }
+                Err(TryLockError::WouldBlock) => true,
+            };
+            if swapping {
+                // Waits for the swap under way, so an exe is in place (spec S301).
+                *self
+                    .undo_closed
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = true;
+                self.finish_install(&mut polled);
+            } else {
+                // A swap that ended before the quit may have a result not
+                // polled yet; a worker that stopped earlier may send none.
+                while let Ok(event) = self.events.try_recv() {
+                    self.apply(event, &mut polled);
+                }
+            }
         }
         let Some((_, swapped)) = &self.swapped else {
             return polled.record_changed;
@@ -583,6 +611,19 @@ impl Updater {
             &mut polled,
         );
         polled.record_changed
+    }
+
+    /// Waits up to [`QUIT_WAIT`] for the result of a swap that has ended,
+    /// which comes once the worker deleted its temp folder.
+    fn finish_install(&mut self, polled: &mut Polled) {
+        let deadline = std::time::Instant::now() + QUIT_WAIT;
+        while self.work == Work::Installing {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.events.recv_timeout(left) {
+                Ok(event) => self.apply(event, polled),
+                Err(_) => break,
+            }
+        }
     }
 
     /// Waits up to [`QUIT_WAIT`] for the restart's worker; past that, a
@@ -658,7 +699,7 @@ pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
     }
     let install_dir = install_dir()?;
     let arch = Arch::own();
-    let running = Version::parse(env!("CARGO_PKG_VERSION"))?;
+    let running = running_version(env!("CARGO_PKG_VERSION"), &log)?;
     let system = crate::platform::windows_version()
         .map(|v| Version::from_parts(&[v.major.into(), v.minor.into(), v.build.into()]))
         .unwrap_or_else(|| Version::from_parts(&[10, 0, 22000]));
@@ -683,6 +724,14 @@ pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
         start_wait: relaunch::START_WAIT,
         pause: Arc::new(files::Pause::real()),
     }))
+}
+
+fn running_version(text: &str, log: &DebugLog) -> Option<Version> {
+    let version = Version::parse(text);
+    if version.is_none() {
+        log.log(|| format!("updater: off: this exe's version {text:?} is not dotted numbers"));
+    }
+    version
 }
 
 #[cfg(test)]
@@ -915,6 +964,34 @@ pub mod tests {
         assert!(plist.contains(&format!("<string>{FEED_URL}</string>")));
     }
 
+    // covers: S296
+    #[test]
+    fn the_exe_version_is_the_mac_release_version() {
+        let plist =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../Info.plist"))
+                .expect("Info.plist is readable");
+        let short = plist
+            .split("<key>CFBundleShortVersionString</key>")
+            .nth(1)
+            .and_then(|rest| rest.split("<string>").nth(1))
+            .and_then(|rest| rest.split("</string>").next());
+        assert_eq!(short, Some(env!("CARGO_PKG_VERSION")));
+    }
+
+    // covers: S309
+    #[test]
+    fn a_version_the_updater_cannot_compare_is_logged() {
+        let path = crate::debug_log::test_dir("updater-version").join("log.txt");
+        let log = DebugLog::new(Some(path.clone()));
+        assert!(running_version("0.8.0", &log).is_some());
+        assert!(running_version("0.8.0-beta.1", &log).is_none());
+        assert!(log.flush(crate::debug_log::TEST_FLUSH));
+        assert_eq!(
+            crate::debug_log::read_messages(&path),
+            ["updater: off: this exe's version \"0.8.0-beta.1\" is not dotted numbers"]
+        );
+    }
+
     // covers: S305, S302
     #[test]
     fn offline_at_launch_is_quiet_and_a_manual_check_says_so() {
@@ -1033,6 +1110,10 @@ pub mod tests {
             std::fs::metadata(&exe).unwrap().modified().unwrap(),
             modified
         );
+        // The install worker drops its `env` just after its last event.
+        while Arc::strong_count(&updater.env) > 1 {
+            std::thread::yield_now();
+        }
         Arc::get_mut(&mut updater.env).unwrap().launch = Arc::new(Signals);
         assert_eq!(updater.press(UpdaterButton::RestartNow), Action::Nothing);
         assert!(
@@ -1061,7 +1142,12 @@ pub mod tests {
     // covers: S302, S306
     #[test]
     fn a_failed_install_reports_and_try_again_retries() {
-        let (mut updater, _) = updater("try-again");
+        let mut f = fixture("try-again", false, Arc::new(RealFiles), DebugLog::default());
+        // The held file below would otherwise sleep the real S315 backoff, 7.75 s.
+        f.env.pause = Arc::new(files::Pause::counted(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(1))
+        }));
+        let mut updater = Updater::new(f.env);
         updater.check(Trigger::Manual);
         updater.wait();
         let exe = updater.env.install_dir.join(archive::EXE_NAME);
@@ -1133,6 +1219,15 @@ pub mod tests {
             Some(UpdaterNotice::Installed { .. })
         ));
         updater
+    }
+
+    /// [`swapped`], then Windows security removed the installed exe, whose
+    /// path comes along.
+    pub(crate) fn swapped_exe_gone(name: &str) -> (Updater, PathBuf) {
+        let updater = swapped(name, Arc::new(Never));
+        let exe = updater.env.install_dir.join(archive::EXE_NAME);
+        std::fs::remove_file(&exe).unwrap();
+        (updater, exe)
     }
 
     fn folder(updater: &Updater) -> Vec<(String, Vec<u8>)> {
@@ -1555,6 +1650,116 @@ pub mod tests {
         assert_eq!(
             updater.record(),
             record("0.9.0", UpdateRecordReason::FailedStart).as_ref()
+        );
+        assert_eq!(folder(&updater), old_folder());
+    }
+
+    /// Real files, except that moving `audiosync.exe.new` into place meets
+    /// a sharing violation, as while Defender scans it: always, or with
+    /// `then_removed` once, after which Defender removes the exe moved in.
+    #[derive(Default)]
+    struct ScannedNew {
+        then_removed: bool,
+        tried: AtomicBool,
+    }
+
+    impl crate::updater::files::Files for ScannedNew {
+        fn create(
+            &self,
+            path: &Path,
+            exclusive: bool,
+        ) -> std::io::Result<Box<dyn crate::updater::files::Sink>> {
+            RealFiles.create(path, exclusive)
+        }
+        fn remove(&self, path: &Path) -> std::io::Result<()> {
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            if !from
+                .file_name()
+                .is_some_and(|name| name == "audiosync.exe.new")
+            {
+                return RealFiles.rename(from, to);
+            }
+            if !self.then_removed || !self.tried.swap(true, Ordering::Relaxed) {
+                return Err(std::io::Error::from_raw_os_error(32));
+            }
+            RealFiles.rename(from, to)?;
+            RealFiles.remove(to)
+        }
+    }
+
+    /// Download and Install over `files`, then a quit during step 4's
+    /// first retry wait; the updater and what the quit returned.
+    fn quit_during_swap(name: &str, files: ScannedNew) -> (Updater, bool) {
+        let (entered_sender, entered) = mpsc::channel();
+        let (release, gate) = mpsc::channel::<()>();
+        let (entered_sender, gate) = (Mutex::new(entered_sender), Mutex::new(gate));
+        let first = AtomicBool::new(true);
+        let mut f = fixture(name, false, Arc::new(files), DebugLog::default());
+        f.env.pause = Arc::new(files::Pause::counted(move |_| {
+            if first.swap(false, Ordering::Relaxed) {
+                let _ = entered_sender.lock().unwrap().send(());
+                let _ = gate.lock().unwrap().recv();
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }));
+        let mut updater = Updater::new(f.env);
+        updater.check(Trigger::Manual);
+        updater.wait();
+        updater.press(UpdaterButton::Download);
+        entered
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("step 4 waits to retry");
+        drop(release);
+        let changed = updater.at_quit();
+        (updater, changed)
+    }
+
+    // covers: S301, S315
+    #[test]
+    fn a_quit_while_the_swap_retries_its_step_4_leaves_an_exe_in_place() {
+        let (updater, _) = quit_during_swap("quit-during-swap", ScannedNew::default());
+        assert_eq!(
+            std::fs::read(updater.env.install_dir.join(archive::EXE_NAME)).ok(),
+            Some(b"old exe".to_vec()),
+            "the .bak is back before the quit goes on"
+        );
+    }
+
+    // covers: S301, S315
+    #[test]
+    fn a_swap_that_ends_during_the_quit_still_gets_the_removed_exe_check() {
+        let files = ScannedNew {
+            then_removed: true,
+            ..ScannedNew::default()
+        };
+        let (updater, changed) = quit_during_swap("swap-ends-in-quit", files);
+        assert!(changed, "the quit stores the record");
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::Blocked).as_ref()
+        );
+        assert_eq!(folder(&updater), old_folder());
+    }
+
+    // covers: S301, S315
+    #[test]
+    fn a_swap_that_ended_unpolled_before_the_quit_still_gets_the_removed_exe_check() {
+        let (mut updater, _) = updater("swap-ended-unpolled");
+        updater.check(Trigger::Manual);
+        updater.wait();
+        updater.press(UpdaterButton::Download);
+        // The worker drops its `env` once its result is sent.
+        while Arc::strong_count(&updater.env) > 1 {
+            std::thread::yield_now();
+        }
+        std::fs::remove_file(updater.env.install_dir.join(archive::EXE_NAME)).unwrap();
+        assert!(updater.at_quit(), "the quit stores the record");
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::Blocked).as_ref()
         );
         assert_eq!(folder(&updater), old_folder());
     }

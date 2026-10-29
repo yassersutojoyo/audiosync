@@ -246,6 +246,14 @@ struct LocalBriefLoss: Equatable {
 
     /// When the next hold ends, if any is held.
     var nextExpiry: Double? { lostAt.values.min().map { $0 + Self.holdSeconds } }
+
+    /// When the holds and the start leads `held` since their uptimes (S328)
+    /// need checking next, at `now`; nil when nothing is held. A held
+    /// speaker `playing` again lets its lead go once its renderer publishes one.
+    func nextCheck(now: Double, held: [String: Double], playing: [String]) -> Double? {
+        let replaying = held.keys.contains { playing.contains($0) } ? [now + 0.5] : []
+        return ([nextExpiry].compactMap { $0 } + replaying + held.values.map { $0 + Self.holdSeconds }).min()
+    }
 }
 
 /// The AirPlay delay (S178), which the window shows as one field (S181): an

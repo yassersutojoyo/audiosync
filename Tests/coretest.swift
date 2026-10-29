@@ -131,16 +131,21 @@ func equalizerChecks() {
         for i in (n / 2)..<n { acc += Double(signal[i * 2]) * Double(signal[i * 2]) }
         return 20 * log10(sqrt(acc / Double(n - n / 2)) / (0.25 / 2.0.squareRoot()))
     }
+    /// The gain at `hz` against 16 kHz, which these curves leave at 0 dB, so the
+    /// automatic headroom (S26) is added back.
+    func boostDB(_ hz: Double, _ settings: Equalizer.Settings, rate: Double = 48000) -> Double {
+        gainDB(hz, settings, rate: rate) - gainDB(16000, settings, rate: rate)
+    }
     var s = Equalizer.Settings()
     s.enabled = true
     check(approx(gainDB(1000, s), 0, 0.05), "eq: flat is transparent")
     s.gains[5] = 6
-    check(approx(gainDB(1000, s), 6, 0.2), "eq: +6 dB band at 1 kHz",
-          String(format: "%.2f", gainDB(1000, s)))
-    check(approx(gainDB(8000, s), 0, 0.5), "eq: 1 kHz band leaves 8 kHz alone")
-    check(approx(gainDB(1000, s, rate: 44100), 6, 0.2), "eq: same response at 44.1 kHz")
+    check(approx(boostDB(1000, s), 6, 0.2), "eq: +6 dB band at 1 kHz",
+          String(format: "%.2f", boostDB(1000, s)))
+    check(approx(boostDB(8000, s), 0, 0.5), "eq: 1 kHz band leaves 8 kHz alone")
+    check(approx(boostDB(1000, s, rate: 44100), 6, 0.2), "eq: same response at 44.1 kHz")
     s.gains = Equalizer.presets.first { $0.id == .bassBoost }!.gains
-    check(gainDB(40, s) > 5, "eq: Bass Boost lifts 40 Hz", String(format: "%.2f", gainDB(40, s)))
+    check(boostDB(40, s) > 5, "eq: Bass Boost lifts 40 Hz", String(format: "%.2f", boostDB(40, s)))
     s.preamp = -6
     s.gains = Equalizer.presets[0].gains
     check(approx(gainDB(1000, s), -6, 0.1), "eq: preamp −6 dB")

@@ -699,6 +699,78 @@ unsafe extern "system" fn color_set_procedure(
     result
 }
 
+/// Runs `ending` on this thread when Windows ends the session (sign-out,
+/// shutdown or restart), which may end the process as soon as it returns.
+/// Returns the hidden window that receives that message, `None` without one.
+#[cfg(windows)]
+pub fn on_session_end(ending: Box<dyn Fn()>) -> Option<isize> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, RegisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
+    };
+    use windows::core::w;
+
+    SESSION_ENDING.with(|slot| *slot.borrow_mut() = Some(ending));
+    let class = WNDCLASSW {
+        lpfnWndProc: Some(session_end_procedure),
+        lpszClassName: w!("AudioSyncSessionEnd"),
+        ..Default::default()
+    };
+    // SAFETY: the class names a procedure and a NUL-terminated literal that
+    // both live for the whole process; a second registration only fails.
+    unsafe { RegisterClassW(&class) };
+    // A hidden top-level window, not a message-only one: those miss the
+    // end-of-session broadcast.
+    // SAFETY: the class was registered above, and the window takes no
+    // parent, menu or creation data.
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("AudioSyncSessionEnd"),
+            w!("AudioSync"),
+            WINDOW_STYLE(0),
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+    .ok()?;
+    Some(hwnd.0 as isize)
+}
+
+#[cfg(windows)]
+thread_local! {
+    static SESSION_ENDING: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(windows)]
+unsafe extern "system" fn session_end_procedure(
+    hwnd: windows::Win32::Foundation::HWND,
+    message: u32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::LRESULT;
+    use windows::Win32::UI::WindowsAndMessaging::{DefWindowProcW, WM_ENDSESSION};
+
+    // A zero `wparam` means the end was called off.
+    if message == WM_ENDSESSION && wparam.0 != 0 {
+        let ending = SESSION_ENDING.with(|slot| slot.borrow_mut().take());
+        if let Some(ending) = ending {
+            ending();
+        }
+        return LRESULT(0);
+    }
+    // SAFETY: passes every other message on unchanged; WM_QUERYENDSESSION
+    // then answers that the session may end.
+    unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+}
+
 /// Whether the taskbar (and the notification area) uses the light theme, so
 /// the tray icon picks its dark-on-light variant. Dark when it can't be read,
 /// the Windows 11 default.
@@ -888,6 +960,38 @@ mod tests {
         assert!(!names_color_set(&wide("ImmersiveColorSetX")));
         assert!(!names_color_set(&wide("Environment")));
         assert!(!names_color_set(&[]));
+    }
+
+    // covers: S212
+    #[cfg(windows)]
+    #[test]
+    fn the_end_of_a_windows_session_runs_its_handler_once_and_never_holds_it_up() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        use windows::Win32::Foundation::{HWND, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DestroyWindow, GA_PARENT, GetAncestor, GetDesktopWindow, SendMessageW, WM_ENDSESSION,
+            WM_QUERYENDSESSION,
+        };
+
+        let runs = Rc::new(Cell::new(0));
+        let counted = runs.clone();
+        let window = on_session_end(Box::new(move || counted.set(counted.get() + 1)))
+            .expect("the hidden window");
+        let hwnd = HWND(window as *mut core::ffi::c_void);
+        // SAFETY: the window belongs to this thread, so each SendMessageW
+        // runs its procedure right here.
+        unsafe {
+            // A message-only window, which the broadcast misses, has the message root as parent.
+            assert_eq!(GetAncestor(hwnd, GA_PARENT), GetDesktopWindow());
+            let query = SendMessageW(hwnd, WM_QUERYENDSESSION, None, None);
+            assert_ne!(query.0, 0, "the session may end");
+            SendMessageW(hwnd, WM_ENDSESSION, Some(WPARAM(0)), None);
+            assert_eq!(runs.get(), 0, "an end that was called off runs nothing");
+            SendMessageW(hwnd, WM_ENDSESSION, Some(WPARAM(1)), None);
+            assert_eq!(runs.get(), 1);
+            let _ = DestroyWindow(hwnd);
+        }
     }
 
     #[test]
