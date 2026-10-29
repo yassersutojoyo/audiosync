@@ -30,6 +30,10 @@ struct CalibrateAllSpeaker: Equatable {
     let offsetMs: Double?
     /// When its sweep is expected after entering its path (S235).
     let latencyMs: Double
+    /// For an AirPlay row, the adjustment A of S178 stored when `offsetMs` was read.
+    var adjustmentMs: Double? = nil
+    /// For an AirPlay row, the sender's latency L_s that `offsetMs` was read with.
+    var senderMs: Double? = nil
 
     var core: AscCalibrationSpeaker {
         AscCalibrationSpeaker(kind: kind.core, has_offset: offsetMs != nil, offset_ms: offsetMs ?? 0,
@@ -110,6 +114,8 @@ struct CalibrateAllContext: Equatable {
     /// For Calibrate Zone, the measured zone's member keys; nil once it is
     /// deleted, and for a whole run (S240, S255).
     var zoneMembers: [String]? = nil
+    /// The local reference (S173), which a device-list change can move.
+    var reference: String? = nil
 }
 
 /// The results sheet as the window shows it.
@@ -296,6 +302,10 @@ enum CalibrateAllFlow {
         var airPlay: [(id: String, name: String)]
         /// L, the AirPlay delay as its field shows it (S178).
         var airPlayDelayMs: Double
+        /// A, the AirPlay setting that L comes from.
+        var airPlayAdjustmentMs = 0.0
+        /// The sender's latency that L counts now, its default until it reports one.
+        var airPlayBaseMs = 0.0
         /// How much longer than L the AirPlay sender holds its speakers back.
         var airPlayHoldBackMs: Double
         /// L_s, the latency the sender holds the session to, nil while it
@@ -351,7 +361,8 @@ enum CalibrateAllFlow {
                                                                  inputs.airPlayHoldBackMs,
                                                                  inputs.airPlayReportedMs[speaker.id] ?? 0)
             speakers.append(CalibrateAllSpeaker(id: speaker.id, name: speaker.name, kind: .airPlay,
-                                                offsetMs: inputs.airPlayDelayMs, latencyMs: airPlayLatency))
+                                                offsetMs: inputs.airPlayDelayMs, latencyMs: airPlayLatency,
+                                                adjustmentMs: inputs.airPlayAdjustmentMs, senderMs: inputs.airPlayBaseMs))
         }
         if speakers.count > 1 { return .success(speakers) }
         return .failure(sittingOut.isEmpty ? .noOtherSpeaker : .onlyLeftOut)
@@ -494,7 +505,9 @@ enum CalibrateAllFlow {
         // A speaker that was still connecting starts playing unmuted and would hear another's sweep.
         let joined = now.playing.subtracting(start.playing).subtracting(taking)
         if joined.contains(where: now.switchedOn.contains) { return .speakersChanged }
-        if now.session != start.session || now.switchedOn != start.switchedOn { return .speakersChanged }
+        if now.session != start.session || now.switchedOn != start.switchedOn || now.reference != start.reference {
+            return .speakersChanged
+        }
         if now.delays != start.delays { return .delaysChanged }
         if let members = start.zoneMembers {
             guard let kept = now.zoneMembers, members.allSatisfy(kept.contains) else { return .speakersChanged }
@@ -584,10 +597,21 @@ enum CalibrateAllFlow {
         }
     }
 
-    /// Whether the stored values are still the ones the run started from,
-    /// so Apply's new values build on them. `current` reads a speaker's.
-    static func unchanged(_ speakers: [CalibrateAllSpeaker], current: (CalibrateAllSpeaker) -> Double?) -> Bool {
-        speakers.dropFirst().allSatisfy { current($0) == $0.offsetMs }
+    /// Whether the reference and the stored values are still the ones the
+    /// run started from, so Apply's new values build on them. `current`
+    /// reads a speaker's; AirPlay compares the setting A, since L also moves
+    /// with the sender's latency (S238).
+    static func unchanged(_ speakers: [CalibrateAllSpeaker], reference: String?, airPlayAdjustmentMs: Double,
+                          current: (CalibrateAllSpeaker) -> Double?) -> Bool {
+        speakers.first?.id == reference && speakers.dropFirst().allSatisfy {
+            $0.kind == .airPlay ? $0.adjustmentMs == airPlayAdjustmentMs : current($0) == $0.offsetMs
+        }
+    }
+
+    /// The sender latency of the run that read L as `old`, which Apply enters
+    /// the new AirPlay delay against so A moves by as much as L (S238).
+    static func airPlaySenderMs(old: Double?, speakers: [CalibrateAllSpeaker]) -> Double? {
+        speakers.first { $0.kind == .airPlay && $0.offsetMs == old }?.senderMs
     }
 
     /// Whether Undo still only reverts Apply: every value Apply wrote is

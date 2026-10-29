@@ -181,7 +181,7 @@ final class CalibrationRun {
         if case .estimating = stage { return }
         let playing = app.engine.activeOutputUIDs
         guard app.engine.isRunning, app.session == session, app.engine.captureRate == captureRate,
-              playing.contains(chosen), playing.contains(reference),
+              app.localReference == reference, playing.contains(chosen), playing.contains(reference),
               app.localHoldBacks[chosen] == holdBacks[chosen], app.localHoldBacks[reference] == holdBacks[reference]
         else { return fail(.interrupted) }
         let now = clock.nowNs()

@@ -118,10 +118,11 @@ extension AppDelegate {
         pushModel()
     }
 
-    /// The user's AirPlay delay, as the field shows it (S178, S181).
-    func setAirPlayDelay(_ rawMs: Double) {
+    /// The user's AirPlay delay, as the field shows it (S178, S181), against
+    /// `senderMs` when given, else the sender's latency now.
+    func setAirPlayDelay(_ rawMs: Double, senderMs: Double? = nil) {
         var next = airPlayDelay
-        guard next.enter(rawMs, senderMs: nativeSenderLatencyMs) else { return }
+        guard next.enter(rawMs, senderMs: senderMs ?? nativeSenderLatencyMs) else { return }
         airPlayDelay = next
         retimeLocalOutputs()
         pushModel()
