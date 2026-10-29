@@ -9172,6 +9172,25 @@ mod tests {
         assert!(expanded(), "Expand on the zone's toggle unfolded it");
     }
 
+    /// With no speaker listed and AirPlay neither searching nor done, the
+    /// flyout says so, as Connected Speakers does, instead of a blank panel.
+    #[test]
+    fn a_flyout_with_no_speaker_and_no_search_says_no_connected_speakers() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        backend.retain_speakers(|_| false);
+        let app = app_over(backend);
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        assert!(!app.flyout.get_airplay_searching() && !app.flyout.get_airplay_none_found());
+        assert!(
+            ElementHandle::find_by_accessible_label(&app.flyout, "No connected speakers")
+                .next()
+                .is_some(),
+            "the empty list has a note"
+        );
+    }
+
     #[test]
     fn a_flyout_zone_header_folds_and_unfolds_through_its_accessibility_actions() {
         use i_slint_backend_testing::ElementHandle;
@@ -9714,6 +9733,31 @@ mod tests {
         draw_frames();
         app.main.invoke_focus_streaming_switch();
         app.main.invoke_speaker_toggled(id.into());
+    }
+
+    /// A speaker that asks for a code every time never connects without one,
+    /// so its PIN dialog leaves out the promise that the pairing lasts.
+    #[test]
+    fn the_pin_dialog_promises_a_lasting_pairing_only_to_a_speaker_that_keeps_one() {
+        use i_slint_backend_testing::ElementHandle;
+        for every_time in [false, true] {
+            let mut backend = MockBackend::new();
+            if every_time {
+                backend.ask_code_every_time("airplay:living");
+            }
+            let app = app_over(backend);
+            app.main.invoke_speaker_toggled("airplay:living".into());
+            draw_frames();
+            let message =
+                ElementHandle::find_by_accessible_label(&app.pin_dialog, "PIN for Living Room")
+                    .next()
+                    .and_then(|field| field.accessible_description())
+                    .expect("the PIN field describes the dialog");
+            let lasting = "Enter it to pair; after that, it connects without a PIN.";
+            let once = "Enter it to pair. Cancel";
+            assert_eq!(message.contains(lasting), !every_time, "{message}");
+            assert_eq!(message.contains(once), every_time, "{message}");
+        }
     }
 
     #[test]

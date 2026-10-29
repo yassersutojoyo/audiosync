@@ -411,6 +411,23 @@ fn component_body<'a>(source: &'a str, component: &str) -> &'a str {
     &rest[..end]
 }
 
+/// With the equalizer off only the band sliders fade: a band's gain and name
+/// keep full opacity, so they still read at 4.5:1 on the card.
+#[test]
+fn an_equalizer_turned_off_fades_the_sliders_not_their_text() {
+    let source = include_str!("../ui/equalizer.slint");
+    let band = component_body(source, "Band");
+    let fade = band.find("opacity:").expect("the band fades its slider");
+    let slider = band.find("slider := Slider").expect("a slider");
+    let gain = band.find("QuietText {").expect("the gain");
+    let name = band.rfind("QuietText {").expect("the name");
+    assert!(gain < fade && fade < slider && slider < name);
+    assert_eq!(source.matches("opacity:").count(), 1, "nothing else fades");
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        assert!(ratio("text@secondaryText", "surface", appearance) >= MIN_TEXT_CONTRAST);
+    }
+}
+
 /// The on/off toggles (streaming, the equalizer, each speaker and group) are
 /// keyboard focusable for Narrator too. Slint 1.18 tells Windows that only
 /// some roles take keyboard focus, and `switch` is not one of them, so a

@@ -2008,6 +2008,14 @@ impl MockBackend {
         self.password_on = Some(id.into());
     }
 
+    /// Has the speaker `id` ask for a code each time it is turned on.
+    #[cfg(test)]
+    pub fn ask_code_every_time(&mut self, id: &str) {
+        if let Some(speaker) = self.speaker_mut(id) {
+            speaker.code_every_time = true;
+        }
+    }
+
     /// AirPlay discovery has found nothing for a while: Connected Speakers
     /// shows its note.
     #[cfg(test)]
