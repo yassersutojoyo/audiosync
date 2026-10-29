@@ -36,6 +36,8 @@ struct Feed {
     /// Frames written more than [`LATE`] past their slot: a starved feed
     /// catching up, which the sender may drop as ring backlog (C64).
     late: Arc<AtomicU64>,
+    /// Runs of late writes, one per stall of the feed thread.
+    stalls: Arc<AtomicU64>,
 }
 
 /// How late a block may be written before the pump plays silence for it
@@ -49,6 +51,10 @@ impl Feed {
 
     fn late_frames(&self) -> u64 {
         self.late.load(Ordering::SeqCst)
+    }
+
+    fn stalls(&self) -> u64 {
+        self.stalls.load(Ordering::SeqCst)
     }
 }
 
@@ -69,15 +75,23 @@ fn feed(writer: AudioWriter) -> Feed {
     let count = Arc::clone(&frames);
     let late = Arc::new(AtomicU64::new(0));
     let late_count = Arc::clone(&late);
+    let stalls = Arc::new(AtomicU64::new(0));
+    let stall_count = Arc::clone(&stalls);
     let thread = thread::spawn(move || {
         let block = vec![9i16; 960];
         let start = Instant::now();
         let mut written = 0u32;
+        let mut stalled = false;
         while !flag.load(Ordering::SeqCst) {
             let slot = start + Duration::from_millis(10) * written;
-            if slot.elapsed() > LATE {
+            let is_late = slot.elapsed() > LATE;
+            if is_late {
                 late_count.fetch_add(480, Ordering::SeqCst);
+                if !stalled {
+                    stall_count.fetch_add(1, Ordering::SeqCst);
+                }
             }
+            stalled = is_late;
             writer.write_i16(&block);
             count.fetch_add(480, Ordering::SeqCst);
             written += 1;
@@ -90,6 +104,7 @@ fn feed(writer: AudioWriter) -> Feed {
         thread: Some(thread),
         frames,
         late,
+        stalls,
     }
 }
 
@@ -484,16 +499,19 @@ fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
     );
     let diagnostics = session.diagnostics();
     let late = feed.late_frames();
+    let stalls = feed.stalls();
     assert_eq!(diagnostics.current_time, Some(42.25));
     // Drift is dropped audio plus time stalled (C79), and no status here
     // stalls. A feed thread starved on a loaded machine catches up past the
     // ring backlog and drops some (up to 0.9 s seen under 16 busy loops), so
-    // drops may only cover audio the feed wrote late; on time, none.
+    // drops may only cover audio the feed wrote late, plus per stall up to
+    // the 100 ms ring backlog that filled before a block counted late; with
+    // no stall, none.
     assert_eq!(diagnostics.rebuffers, 0);
-    // A stall over the 100 ms ring backlog drops up to that much before a block counts late.
+    let backlog = 48_000 * LATE.as_millis() as u64 / 1000;
     assert!(
-        diagnostics.frames_dropped <= late + 48_000 * LATE.as_millis() as u64 / 1000,
-        "{late} late: {diagnostics:?}"
+        diagnostics.frames_dropped <= late + stalls * backlog,
+        "{late} late in {stalls} stalls: {diagnostics:?}"
     );
     assert_eq!(
         diagnostics.drift,
