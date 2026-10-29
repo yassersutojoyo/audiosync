@@ -529,15 +529,20 @@ extension AppDelegate {
     /// start it again at its current delay and gain. The other outputs keep
     /// playing untouched.
     private func restartOnSettledLink(_ uid: String, ticket: Int) {
-        guard engine.isRunning, engine.activeOutputUIDs.contains(uid),
-              freshLinks.begin(uid: uid, ticket: ticket, session: session) else { return }
+        guard freshLinks.begin(uid: uid, ticket: ticket, session: session) else { return }
+        guard engine.isRunning, engine.activeOutputUIDs.contains(uid) else {
+            freshLinks.release(uid: uid)
+            DebugTrace.log("[AudioSync] fresh link: restart of Bluetooth output \(uid) dropped, it is not playing")
+            return
+        }
         let device = localBoundDevices[uid]
         localHoldBacks[uid] = nil
         localBoundDevices[uid] = nil
         engine.detachOutputs(uids: [uid], keepingLeads: true) { [weak self] in
             DispatchQueue.main.asyncAfter(deadline: .now() + FreshLinkWatch.rejoinPauseS) {
                 guard let self else { return }
-                // Our restart stops only our own unit: a device another process keeps running never drops its link.
+                // Our restart stops only our own unit; the line below tests the guess that a device
+                // another process keeps running never drops its link.
                 let running = device.flatMap(OutputRenderer.isRunningSomewhere)
                     .map { $0 ? "yes" : "no" } ?? "unreadable"
                 DebugTrace.log("[AudioSync] fresh link: restarting Bluetooth output \(uid); "
