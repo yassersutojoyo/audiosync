@@ -904,6 +904,19 @@ impl GapFill {
             .map(|anchor| anchor.saturating_add(self.length(self.written)))
     }
 
+    /// Where a packet whose position Windows gave as `position` starts:
+    /// right after the last frame written when Windows flags that position
+    /// as wrong (`AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR`). `None`: nothing to
+    /// go by, so the caller counts it as captured just now; a flagged first
+    /// packet gets that only from [`GapFill::new`], while a tracker from
+    /// [`GapFill::started`] places it at the open or the idle fill's end.
+    pub fn packet_start(&self, position: u64, timestamp_error: bool) -> Option<u64> {
+        if timestamp_error {
+            return self.end();
+        }
+        (position != 0).then_some(position)
+    }
+
     /// The pace starts again from a packet of `frames` frames at `start`.
     fn rebase(&mut self, start: u64, frames: usize) {
         self.anchor = Some(start);
@@ -2319,6 +2332,21 @@ mod tests {
             gaps.packet(3_600_000 * HNS_PER_MS, 480, false),
             (21 * 48_000, 0, true)
         );
+    }
+
+    // covers: S332
+    #[test]
+    fn a_packet_whose_position_windows_flags_follows_the_last_one() {
+        let mut gaps = GapFill::new(SESSION_RATE);
+        gaps.packet(100 * HNS_PER_MS, 480, false);
+        // Flagged 20 ms late: no silence.
+        let start = gaps.packet_start(130 * HNS_PER_MS, true).unwrap();
+        assert_eq!(gaps.packet(start, 480, false), (0, 0, false));
+        // Flagged 20 ms early: the pace stays, so the next packet on time
+        // needs no silence either.
+        let start = gaps.packet_start(100 * HNS_PER_MS, true).unwrap();
+        assert_eq!(gaps.packet(start, 480, false), (0, 0, false));
+        assert_eq!(gaps.packet(130 * HNS_PER_MS, 480, false), (0, 0, false));
     }
 
     // covers: S332

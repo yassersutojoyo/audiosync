@@ -31,7 +31,8 @@ use audiosync_core::ring::RingWriter;
 use crate::audio::capture::Feeds;
 use windows::Win32::Foundation::{E_FAIL, HANDLE, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
-    AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT,
+    AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
     AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
     AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
@@ -734,12 +735,13 @@ fn drain(
         packets += 1;
         let count = frames as usize;
         // A packet without a position counts as captured just now.
-        let start = if position != 0 {
-            position
-        } else {
-            let length = count as u64 * 10_000_000 / u64::from(stream.format.rate);
-            now_hns(frequency).saturating_sub(length)
-        };
+        let timestamp_error = flags & (AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR.0 as u32) != 0;
+        let start = gaps
+            .packet_start(position, timestamp_error)
+            .unwrap_or_else(|| {
+                let length = count as u64 * 10_000_000 / u64::from(stream.format.rate);
+                now_hns(frequency).saturating_sub(length)
+            });
         let discontinuity = flags & (AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY.0 as u32) != 0;
         let (fill, skip, jumped) = gaps.packet(start, count, discontinuity);
         counters.count_packet(frames, discontinuity, fill, jumped);
