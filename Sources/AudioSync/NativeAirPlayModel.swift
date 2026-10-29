@@ -74,13 +74,23 @@ struct EveryTimeGuard: Equatable {
 
     /// When `cause` ends a stream that ran, it ends the PIN session each
     /// click bought, so every mark goes (a retry or a source change inside
-    /// the stream keeps them, S223). Of `asking`, the speakers still on go
+    /// the stream keeps them, S223). Of `everyTime`, the speakers still on go
     /// off with the notice that they need a PIN.
     mutating func streamEnded(_ cause: StreamEnd, streaming: Bool, midRebuild: Bool = false,
-                              asking: [String], enabled: Set<String>) -> [NativeAirPlayPlan.TurnOff] {
+                              everyTime: [String], enabled: Set<String>) -> [NativeAirPlayPlan.TurnOff] {
         guard cause.endsStream(streaming: streaming, midRebuild: midRebuild) else { return [] }
         byHand.removeAll()
-        return turnsOff(asking, enabled: enabled).map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
+        return turnsOff(everyTime, enabled: enabled).map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
+    }
+
+    /// The same for `model`'s rows that ask for a code every time, also one
+    /// that still plays: its PIN session ends at a stream end too (S223).
+    mutating func streamEnded(_ cause: StreamEnd, streaming: Bool, midRebuild: Bool = false,
+                              model: NativeAirPlayModel, enabled: Set<String>) -> [NativeAirPlayPlan.TurnOff] {
+        let everyTime = model.rows(enabled: enabled).filter { id in
+            NativeAirPlayID.receiver(id).map(model.asksEveryTime) == true
+        }
+        return streamEnded(cause, streaming: streaming, midRebuild: midRebuild, everyTime: everyTime, enabled: enabled)
     }
 }
 
@@ -629,11 +639,11 @@ struct NativeAirPlayModel {
     /// doesn't play: they go off unless switched on by hand, also when they
     /// were on from the last run or start asking once listed (a late TXT
     /// update), so no code request comes by itself. One that plays keeps
-    /// its session, unless `streamEnded` (the Mac sleeps with it playing, S223).
-    func askingEveryTime(_ rows: [String], streamEnded: Bool = false) -> [String] {
+    /// its session.
+    func askingEveryTime(_ rows: [String]) -> [String] {
         rows.filter { id in
             guard let receiver = NativeAirPlayID.receiver(id) else { return false }
-            return asksEveryTime(receiver) && (streamEnded || !isPlaying(receiver))
+            return asksEveryTime(receiver) && !isPlaying(receiver)
         }
     }
 

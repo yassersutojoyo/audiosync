@@ -3613,7 +3613,7 @@ do {
     _ = session.apply(.state(id: "S1", .playing, retryMs: nil))
     for id in session.plan(streaming: false, enabled: ["native:S1"]).remove { session.removed(id) }
     let ended = hand.streamEnded(.stopped(.powerSwitch), streaming: true,
-                                 asking: session.askingEveryTime(session.rows(enabled: ["native:S1"])),
+                                 everyTime: session.askingEveryTime(session.rows(enabled: ["native:S1"])),
                                  enabled: ["native:S1"])
     for off in ended { _ = session.turnedOff(off.id) }
     let enabledAfter: Set<String> = ended.isEmpty ? ["native:S1"] : []
@@ -3653,7 +3653,7 @@ do {
     for (cause, enabled, expected, what) in ends {
         var marked = EveryTimeGuard()
         marked.turnedOnByHand(["native:S1"])
-        let off = marked.streamEnded(cause, streaming: true, asking: ["native:S1"], enabled: enabled)
+        let off = marked.streamEnded(cause, streaming: true, everyTime: ["native:S1"], enabled: enabled)
         check(off == expected && marked.byHand.isEmpty,
               "every time: \(what) ends the stream: the by-hand mark is gone", "\(off), \(marked.byHand)")
     }
@@ -3665,9 +3665,7 @@ do {
     _ = asleep.turnedOnByUser("S3")
     asleep.added("S3")
     _ = asleep.apply(.state(id: "S3", .playing, retryMs: nil))
-    let sleepOff = sleeper.streamEnded(.sleep, streaming: true,
-                                       asking: asleep.askingEveryTime(asleep.rows(enabled: ["native:S3"]), streamEnded: true),
-                                       enabled: ["native:S3"])
+    let sleepOff = sleeper.streamEnded(.sleep, streaming: true, model: asleep, enabled: ["native:S3"])
     check(sleepOff == [.init(id: "native:S3", reason: .needsCode)] && sleeper.byHand.isEmpty,
           "every time: the Mac sleeping while it plays ends the stream: row off + notice", "\(sleepOff)")
     // A rebuild (a source change, say) stops the engine before it starts it
@@ -3675,14 +3673,14 @@ do {
     var rebuilt = EveryTimeGuard()
     rebuilt.turnedOnByHand(["native:S1"])
     let failedRebuild = rebuilt.streamEnded(.stopped(.startFailed), streaming: false, midRebuild: true,
-                                            asking: ["native:S1"], enabled: ["native:S1"])
+                                            everyTime: ["native:S1"], enabled: ["native:S1"])
     check(failedRebuild == [.init(id: "native:S1", reason: .needsCode)] && rebuilt.byHand.isEmpty,
           "every time: a rebuild after a source change that fails to start ends the stream: the by-hand mark is gone",
           "\(failedRebuild), \(rebuilt.byHand)")
     var quitMidRebuild = EveryTimeGuard()
     quitMidRebuild.turnedOnByHand(["native:S1"])
     let quitOff = quitMidRebuild.streamEnded(.stopped(.quitting), streaming: false, midRebuild: true,
-                                             asking: ["native:S1"], enabled: ["native:S1"])
+                                             everyTime: ["native:S1"], enabled: ["native:S1"])
     check(quitOff.isEmpty && quitMidRebuild.byHand == ["native:S1"],
           "every time: quitting during a rebuild keeps the by-hand mark", "\(quitOff)")
     // A source change rebuilds inside the stream, and quitting leaves the
@@ -3692,7 +3690,7 @@ do {
     for (cause, streaming) in keeps {
         var marked = EveryTimeGuard()
         marked.turnedOnByHand(["native:S1"])
-        let off = marked.streamEnded(cause, streaming: streaming, asking: ["native:S1"], enabled: ["native:S1"])
+        let off = marked.streamEnded(cause, streaming: streaming, everyTime: ["native:S1"], enabled: ["native:S1"])
         check(off.isEmpty && marked.byHand == ["native:S1"],
               "every time: \(cause) with streaming \(streaming) keeps the by-hand mark", "\(off)")
     }
@@ -8122,7 +8120,7 @@ do {
     var switchedOn = EveryTimeGuard()
     switchedOn.turnedOnByHand(["native:S1"])
     let allFailed = switchedOn.streamEnded(.stopped(.startFailed), streaming: false, midRebuild: true,
-                                           asking: ["native:S1"], enabled: ["native:S1"])
+                                           everyTime: ["native:S1"], enabled: ["native:S1"])
     check(allFailed == [.init(id: "native:S1", reason: .needsCode)] && switchedOn.byHand.isEmpty,
           "source quit: a switch to the whole system whose every attempt fails ends the stream: the by-hand mark is gone (S223)",
           "\(allFailed), \(switchedOn.byHand)")
