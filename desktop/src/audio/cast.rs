@@ -3216,6 +3216,32 @@ pub mod tests {
     }
 
     #[test]
+    fn a_first_status_without_a_level_keeps_the_own_level() {
+        let (fake, mut cast) = listed();
+        cast.set_master(50.0);
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        let before = shown(&cast, KITCHEN);
+        let payload = serde_json::json!({"status": {"volume": {"muted": false}}});
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(
+                audiosync_cast::status::ReceiverStatus::from_payload(
+                    payload.as_object().expect("object"),
+                )
+                .volume,
+            ),
+        });
+        cast.poll();
+        assert!(sent(&fake).is_empty(), "{:?}", sent(&fake));
+        assert_eq!(shown(&cast, KITCHEN), before);
+        report(&fake, &mut cast, 0.2);
+        assert!(sent(&fake).is_empty(), "{:?}", sent(&fake));
+        assert!((shown(&cast, KITCHEN) - 40.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn a_level_the_device_already_has_is_not_waited_for() {
         let (fake, mut cast) = listed();
         cast.set_streaming(true);
