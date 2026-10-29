@@ -2058,7 +2058,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let id = format!("zone:{}", self.last_zone_id);
         let name = self
             .zones
-            .new_zone(&id, typed, |n| format!("Zone {n}"))
+            .new_zone(&id, &crate::speaker_names::normalized(typed), |n| {
+                format!("Zone {n}")
+            })
             .name
             .clone();
         for member in members {

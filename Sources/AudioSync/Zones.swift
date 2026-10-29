@@ -178,13 +178,13 @@ enum ZoneEdit {
         return out
     }
 
-    /// `zones` with a new zone of `members` after them, at volume 100; each
-    /// member leaves the zone that held it.
+    /// `zones` with a new zone of `members` after them, at volume 100, named
+    /// `name` cleaned as a speaker name is; each member leaves the zone that held it.
     static func adding(id: String, name: String, members: [String], to zones: [SpeakerZone]) -> [SpeakerZone] {
         var out = zones
         for key in members { out = removing(key, from: out) }
         var seen = Set<String>()
-        out.append(SpeakerZone(id: id, name: name, members: members.filter { seen.insert($0).inserted },
+        out.append(SpeakerZone(id: id, name: SpeakerNames.clean(name), members: members.filter { seen.insert($0).inserted },
                                volume: SpeakerZone.defaultVolume))
         return out
     }
