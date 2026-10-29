@@ -9778,6 +9778,13 @@ do {
     check(still.volume(of: tv) == 0 && still.setMaster(100) == 0,
           "cast master: a level the device already has is not waited for, so its buttons' 0 is read back and a muted speaker stays silent")
 
+    var starting = session(master: 100, attempt: 9)
+    _ = starting.setVolume(tv, position: 30)
+    _ = starting.setVolume(tv, position: 40)
+    for level in [0.8, 0.3, 0.4] { _ = starting.apply(.volume(attempt: 9, reported(level))) }
+    check(approx(starting.volume(of: tv), 40, 1e-9),
+          "cast master: two levels set while the speaker starts are both sent, so their echoes leave it at the second")
+
     var quiet = session(master: 100, attempt: 5)
     _ = quiet.apply(.volume(attempt: 5, reported(0.5)))
     _ = quiet.setVolume(tv, position: 80)
