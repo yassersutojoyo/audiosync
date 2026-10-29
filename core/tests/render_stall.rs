@@ -179,3 +179,19 @@ fn a_gap_below_a_stall_or_an_output_that_stops_takes_no_re_anchor() {
         (0, 0)
     );
 }
+
+// covers: S207
+#[test]
+fn a_gap_of_89_ms_in_the_output_times_re_anchors_each_output_once() {
+    // The Mac's sitting of 2026-10-29: both Bluetooth outputs called back up
+    // to 89.2 ms late in one stall, and neither re-anchored.
+    for capture_gap_ms in [0, 40] {
+        let (delays, control) = run(capture_gap_ms, 89, false);
+        let worst = worst_offset(&delays, STALL_AT_S as f64 + 1.0);
+        let stalls = control.stall_reanchors();
+        assert!(
+            worst.abs() <= 2.0 && stalls == 1,
+            "capture gap {capture_gap_ms} ms: off by up to {worst:.2} ms, {stalls} re-anchors"
+        );
+    }
+}
