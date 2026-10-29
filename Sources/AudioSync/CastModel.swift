@@ -449,8 +449,8 @@ struct CastModel {
     private(set) var removedManual: Set<String> = []
     /// Devices another app took over, until the user turns one on again.
     private(set) var takenOver: Set<String> = []
-    /// A browsed device turned off by leaving the list with no session,
-    /// until another one goes on.
+    /// A browsed device turned off by leaving the list with no session, until a
+    /// device appears or changes, the sender fails or one goes on.
     private var leftOn: CastDevice?
 
     /// The devices listed, by name.
@@ -470,6 +470,7 @@ struct CastModel {
     mutating func apply(_ change: CastDeviceChange) -> CastOutcome? {
         switch change {
         case .appeared(let device, let offset, _), .changed(let device, let offset):
+            leftOn = nil
             if removedManual.contains(device.id) { return nil }
             if case .appeared(_, _, let former?) = change { identified(former, as: device.id) }
             if let offset, !offsetsWritten.contains(device.id) { offsets[device.id] = offset > 0 ? offset : nil }
@@ -656,6 +657,7 @@ struct CastModel {
             return .changed
         case .failed:
             let wasOn = enabled
+            leftOn = nil
             discovery = .failed
             devices = [:]
             attempt = nil
