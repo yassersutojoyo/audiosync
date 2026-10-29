@@ -840,12 +840,12 @@ pub fn show_presets(state: &mut AppState, presets: &[Preset]) {
         .collect();
 }
 
-/// An ID no preset in `presets` has.
-pub fn new_preset_id(presets: &[Preset]) -> String {
-    (presets.len() + 1..)
-        .map(|n| format!("preset:{n}"))
-        .find(|id| presets.iter().all(|preset| preset.id != *id))
-        .unwrap_or_default()
+/// The next N for a `<prefix>N` ID: above `last`, the highest given out, and
+/// above every ID in `ids`, so a deleted ID never comes back.
+pub fn next_id<'a>(prefix: &str, ids: impl Iterator<Item = &'a str>, last: u64) -> u64 {
+    ids.filter_map(|id| id.strip_prefix(prefix)?.parse::<u64>().ok())
+        .fold(last, u64::max)
+        .saturating_add(1)
 }
 
 /// The preset notice after a recall of `preset` (spec S265); `None` when
@@ -1786,6 +1786,7 @@ impl PresetsPreview {
 pub struct MockBackend {
     state: AppState,
     next_id: u64,
+    last_preset_id: u64,
     view: ViewSettings,
     /// The rows of the hidden speakers, to list them again as they were.
     hidden_rows: Vec<Speaker>,
@@ -1969,6 +1970,7 @@ impl MockBackend {
         MockBackend {
             state,
             next_id: 1,
+            last_preset_id: 0,
             view: ViewSettings::default(),
             hidden_rows: Vec::new(),
             presets: Vec::new(),
@@ -2628,8 +2630,10 @@ impl Backend for MockBackend {
         if self.presets.len() >= MAX_PRESETS {
             return Err(PresetError::Full);
         }
-        let id = new_preset_id(&self.presets);
-        let preset = self.capture_preset(&id, name)?;
+        let ids = self.presets.iter().map(|preset| preset.id.as_str());
+        let n = next_id("preset:", ids, self.last_preset_id);
+        let preset = self.capture_preset(&format!("preset:{n}"), name)?;
+        self.last_preset_id = n;
         self.presets.push(preset);
         Ok(())
     }
