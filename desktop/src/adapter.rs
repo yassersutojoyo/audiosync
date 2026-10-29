@@ -2209,6 +2209,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     ) -> Vec<(SpeakerKey, bool, zones::Member)> {
         let enabled_outputs = self.audio.enabled_outputs();
         let enabled_airplay = self.audio.enabled_airplay();
+        let enabled_cast = self.audio.cast_enabled();
         zone.members
             .iter()
             .filter_map(|text| {
@@ -2221,12 +2222,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     (SpeakerKey::AirPlay(id), _) if is_airplay_target(id) => MemberKind::AirPlay2,
                     (SpeakerKey::AirPlay(_), _) => MemberKind::AirPlay,
                 };
-                // An unplugged output or gone receiver stays on until its zone goes off.
+                // An unplugged output or a gone speaker stays on until its zone goes off.
                 let on = match (listed, &key) {
                     (Some(speaker), _) => speaker.enabled,
                     (None, SpeakerKey::Local(id)) => enabled_outputs.contains(id),
                     (None, SpeakerKey::AirPlay(id)) => enabled_airplay.contains(id),
-                    (None, SpeakerKey::Cast(_)) => false,
+                    (None, SpeakerKey::Cast(id)) => enabled_cast.as_ref() == Some(id),
                 };
                 let member = zones::Member {
                     kind,

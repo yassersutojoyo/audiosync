@@ -1007,6 +1007,11 @@ pub trait AudioBackend {
         false
     }
 
+    /// The ID of the Cast speaker that is on, listed or not.
+    fn cast_enabled(&self) -> Option<String> {
+        None
+    }
+
     /// Turns a Cast speaker on or off. One plays at a time: turning one on
     /// while another is on is refused with [`CastProblem::Busy`] (spec C2).
     /// While streaming, one turned on connects at once.
