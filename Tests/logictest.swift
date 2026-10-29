@@ -4151,12 +4151,11 @@ do {
     var fromPhone = listedPair()
     fromPhone.apply(.appeared(NativeReceiver(id: "D4", name: "Den", model: "", availability: .available, reason: nil,
                                              hints: [])))
-    let phoneOutcomes = ["D4", pair].compactMap { id in
-        StartOrigin.remote.beginsAttempts ? fromPhone.turnedOnByUser(id) : nil
-    }
+    let phoneOutcomes = (StartOrigin.remote.attemptsToBegin(["D4", pair]) ?? []).compactMap { fromPhone.turnedOnByUser($0) }
     fromPhone.added("D4")
     fromPhone.added(pair)
-    check(phoneOutcomes.isEmpty && StartOrigin.user.beginsAttempts
+    check(phoneOutcomes.isEmpty && StartOrigin.automatic.attemptsToBegin(["D4"]) == nil
+            && StartOrigin.user.attemptsToBegin(["D4", pair]) == ["D4", pair]
             && fromPhone.apply(.error(id: "D4", .pairingRequired, retryMs: nil, detail: "")) == .turnOff(app("D4"), .needsCode)
             && fromPhone.apply(.error(id: right, .passwordRequired, retryMs: nil, detail: ""))
                 == .turnOff(app(pair), .memberNeedsPassword(right))
