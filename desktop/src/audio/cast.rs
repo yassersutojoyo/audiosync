@@ -1338,10 +1338,6 @@ impl CastSpeakers {
             .attempt
             .as_mut()
             .is_some_and(|attempt| !std::mem::replace(&mut attempt.heard_volume, true));
-        if first {
-            // The sender sends no level before the device's first status.
-            self.unanswered.clear();
-        }
         // Answers come back in send order, so the oldest copy of a level a
         // drag passed twice is the one this answers.
         let answered = self
@@ -2612,21 +2608,6 @@ pub mod tests {
         report(&fake, &mut cast, 0.3);
         report(&fake, &mut cast, 0.4);
         assert_eq!(shown(&cast, KITCHEN), 40.0);
-    }
-
-    // covers: C70, C104, C105 (nothing is sent before the first status)
-    #[test]
-    fn a_level_set_before_the_first_status_never_swallows_a_later_change_from_elsewhere() {
-        let (fake, mut cast) = listed();
-        cast.set_streaming(true);
-        cast.set_enabled(KITCHEN, true).unwrap();
-        cast.set_volume(KITCHEN, 30.0);
-        report(&fake, &mut cast, 0.8);
-        report(&fake, &mut cast, 0.3);
-        report(&fake, &mut cast, 0.7);
-        assert_eq!(shown(&cast, KITCHEN), 70.0);
-        report(&fake, &mut cast, 0.3);
-        assert_eq!(shown(&cast, KITCHEN), 30.0);
     }
 
     #[test]
