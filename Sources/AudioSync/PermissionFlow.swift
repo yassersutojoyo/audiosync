@@ -77,18 +77,20 @@ struct PermissionAsks: Equatable {
          AppSettings.Keys.master].contains(where: stored)
     }
 
-    static func load(_ defaults: UserDefaults) -> PermissionAsks {
+    static func load(_ store: SettingsStore) -> PermissionAsks {
         let used: Bool
-        if defaults.object(forKey: usedBeforeKey) != nil {
-            used = defaults.bool(forKey: usedBeforeKey)
+        if let saved = store.read(usedBeforeKey) as? Bool {
+            used = saved
         } else {
-            used = usedBefore { defaults.object(forKey: $0) != nil }
-            defaults.set(used, forKey: usedBeforeKey)
+            used = usedBefore { store.read($0) != nil }
+            store.write(used, usedBeforeKey)
         }
-        // stringArray(forKey:) is nil when one entry isn't a string, which would forget them all.
-        let stored = (defaults.array(forKey: defaultsKey) ?? []).compactMap { $0 as? String }
+        // `as? [String]` is nil when one entry isn't a string, which would forget them all.
+        let stored = (store.read(defaultsKey) as? [Any] ?? []).compactMap { $0 as? String }
         return PermissionAsks(explained: stored, usedBefore: used)
     }
+
+    func save(_ store: SettingsStore) { store.write(stored, Self.defaultsKey) }
 
     func step(_ permission: Permission, state: PermissionState, userAction: Bool) -> PermissionStep {
         switch state {

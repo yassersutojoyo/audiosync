@@ -271,8 +271,8 @@ there, these reach the Windows executable on top of the ones above:
 build-time ones aren't compiled into it.
 
 The Windows app also contains AudioSync's own web remote (`remote/`,
-GPL-3.0-or-later), whose `getrandom`, `serde_json` and `sha2` the app already
-contained, and draws the remote's address as a QR code with `qrcode` (MIT OR
+GPL-3.0-or-later), whose `getrandom`, `serde_json`, `sha2` and `socket2` the app
+already contained, and draws the remote's address as a QR code with `qrcode` (MIT OR
 Apache-2.0), built without its optional features, so it brings in no other
 crate.
 

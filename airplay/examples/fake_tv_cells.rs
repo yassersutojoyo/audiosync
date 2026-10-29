@@ -4,7 +4,9 @@
 //! a cell that needs the app, a player or the real television prints
 //! MANUAL with its step. The sender plays the host's part: it asks for the
 //! level once a second, pauses and resumes, sends track info, and enters
-//! the PIN or the password. Exits 1 when a cell fails. Development only.
+//! the PIN or the password. A television that times with PTP only
+//! (`fake_tv --ptp-only`) gets the PTP cells. Exits 1 when a cell fails.
+//! Development only.
 //!
 //! ```text
 //! cargo run -p audiosync-airplay --example fake_tv_cells -- [--pause-minutes <n>]
@@ -31,21 +33,23 @@ use std::time::{Duration, Instant};
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
+use audiosync_airplay::error::ErrorKind;
 use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::metadata::TrackInfo;
 use audiosync_airplay::pairing::PairingEvent;
 use audiosync_airplay::rtsp::Method;
 use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
-    NowPlaying, Progress, Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions,
-    SpeakerState,
+    NowPlaying, Progress, PtpPorts, Sender, SenderConfig, SenderEvent, SpeakerEvent,
+    SpeakerOptions, SpeakerState,
 };
 use audiosync_airplay::volume::{MIN_DB, Volume, parse_reported};
 
-use cells::{Cell, PasswordStep, Pause, Status};
-use common::ap2::Ap2Server;
+use cells::{Cell, PasswordStep, Pause, PtpRun, Status};
+use common::ap2::{Ap2Server, read_dict, request_key};
 use common::hap::{item, untlv};
 use common::net::{Events, HostAudio, free_ptp_ports, recv_queued};
+use plist::Value;
 use television::{Pin, television};
 
 const NAME: &str = "AudioSync Test TV";
@@ -68,6 +72,7 @@ struct Tv {
     server: Ap2Server,
     pin: Pin,
     audio: Arc<AtomicUsize>,
+    ptp_only: bool,
 }
 
 /// What the television was sent so far, by kind.
@@ -112,23 +117,69 @@ impl Tv {
             server: Ap2Server::start(fake),
             pin,
             audio,
+            ptp_only: false,
+        }
+    }
+
+    /// A television that times with PTP only, as `fake_tv --ptp-only`.
+    fn start_ptp_only() -> Tv {
+        let tv = Tv::start(Pin::None);
+        television::ptp_only(&mut tv.server.fake());
+        Tv {
+            ptp_only: true,
+            ..tv
+        }
+    }
+
+    /// Stops serving, as a television switched off mid-stream, for `off`,
+    /// then serves again on the same port with the same identity.
+    fn switch_off_and_on(self, host: &mut Host, key: &DeviceKey, off: Duration) -> Tv {
+        let Tv {
+            server,
+            pin,
+            audio,
+            ptp_only,
+        } = self;
+        let (address, data_port) = (server.address, server.fake().data_port);
+        drop(server);
+        host.run(Some(key), off);
+        let mut fake = television(
+            NAME,
+            pin,
+            CODE,
+            television::FEATURES_METADATA,
+            television::DEVICE_ID,
+        );
+        fake.data_port = data_port;
+        if ptp_only {
+            television::ptp_only(&mut fake);
+        }
+        Tv {
+            server: Ap2Server::start_at(address, fake),
+            pin,
+            audio,
+            ptp_only,
         }
     }
 
     fn device(&self) -> Device {
+        let mut txt = television::txt(
+            self.pin,
+            television::FEATURES_METADATA,
+            television::DEVICE_ID,
+        );
+        if self.ptp_only {
+            txt = television::ptp_only_txt(txt);
+        }
         let record = ServiceRecord {
             kind: ServiceKind::AirPlay,
             instance: NAME.to_owned(),
             host: format!("{}.local", television::HOST_LABEL),
             port: self.server.address.port(),
-            txt: television::txt(
-                self.pin,
-                television::FEATURES_METADATA,
-                television::DEVICE_ID,
-            )
-            .into_iter()
-            .map(|(key, value)| format!("{key}={value}").into_bytes())
-            .collect(),
+            txt: txt
+                .into_iter()
+                .map(|(key, value)| format!("{key}={value}").into_bytes())
+                .collect(),
             addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
         };
         let key = DeviceKey::Id(DeviceId(television::DEVICE_ID));
@@ -226,22 +277,33 @@ impl Tv {
 struct Host {
     sender: Sender,
     _audio: HostAudio,
+    /// Where its PTP messages to the television go, unread, so none comes
+    /// back unreachable.
+    _ptp_sinks: [UdpSocket; 2],
     events: Events,
     next_ask: Instant,
 }
 
 impl Host {
     fn start() -> Host {
+        let sink = || UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("a loopback PTP port");
+        let sinks = [sink(), sink()];
+        let port = |socket: &UdpSocket| socket.local_addr().expect("its address").port();
         let (sender, writer) = Sender::start(SenderConfig {
             airplay2: true,
             airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
             ptp_ports: free_ptp_ports(),
+            ptp_receiver_ports: PtpPorts {
+                event: port(&sinks[0]),
+                general: port(&sinks[1]),
+            },
             ..SenderConfig::default()
         })
         .expect("the sender starts");
         Host {
             sender,
             _audio: HostAudio::start(writer),
+            _ptp_sinks: sinks,
             events: Events::default(),
             next_ask: Instant::now(),
         }
@@ -624,6 +686,95 @@ fn d3_track(tv: &Tv, host: &mut Host, key: &DeviceKey) -> Cell {
     )
 }
 
+/// What the PTP-only television saw from request `from` on, with the
+/// speaker's events since `since`.
+fn ptp_run(tv: &Tv, host: &Host, key: &DeviceKey, from: usize, since: Instant) -> PtpRun {
+    let mut run = PtpRun::default();
+    let fake = tv.server.fake();
+    for ((request, _), answered) in fake.requests.iter().zip(&fake.answered).skip(from) {
+        match request_key(request).as_str() {
+            "SETUP session" => {
+                let timing = read_dict(&request.body)
+                    .and_then(|body| body.get("timingProtocol").cloned())
+                    .and_then(Value::into_string)
+                    .unwrap_or_default();
+                let status = answered.as_ref().map_or(0, |answer| answer.status);
+                run.setups.push((timing, status));
+            }
+            "SETPEERS" => run.setpeers += 1,
+            _ => {}
+        }
+    }
+    let events = host.events_since(key, since);
+    run.playing = events
+        .iter()
+        .any(|event| matches!(event, SpeakerEvent::State(SpeakerState::Playing)));
+    run.unsupported = events.iter().any(|event| {
+        matches!(event, SpeakerEvent::Error(error)
+            if matches!(error.error.kind, ErrorKind::Unsupported(_)))
+    });
+    run
+}
+
+/// Waits until the speaker plays again after `since` and the television
+/// got a SETPEERS after the first `peers`.
+fn ptp_play(tv: &Tv, host: &mut Host, key: &DeviceKey, since: Instant, peers: usize) {
+    let playing =
+        |event: &SpeakerEvent| matches!(event, SpeakerEvent::State(SpeakerState::Playing));
+    host.run_until(Some(key), LONG, |host| {
+        host.events_since(key, since).iter().any(playing) && tv.count("SETPEERS") > peers
+    });
+}
+
+/// The PTP cells: the first switch-on of the PTP-only television, the
+/// television gone mid-stream and back, and a new sender handed the
+/// timing entry the first one stored.
+fn ptp(tv: Tv) -> [Cell; 3] {
+    let mut host = Host::start();
+    let device = tv.device();
+    let key = device.key.clone();
+    let since = Instant::now();
+    host.sender
+        .add_speaker(device.clone(), SpeakerOptions::new(volume_for_row(20)));
+    ptp_play(&tv, &mut host, &key, since, 0);
+    let first = ptp_run(&tv, &host, &key, 0, since);
+    let stored = host
+        .events
+        .seen
+        .iter()
+        .rev()
+        .find_map(|(_, event)| match event {
+            SenderEvent::Speaker {
+                key: k,
+                event: SpeakerEvent::TimingRemembered(memory),
+            } if *k == key => Some(memory.clone()),
+            _ => None,
+        });
+
+    host.run(Some(&key), Duration::from_secs(1));
+    let since = Instant::now();
+    let tv = tv.switch_off_and_on(&mut host, &key, Duration::from_secs(1));
+    ptp_play(&tv, &mut host, &key, since, 0);
+    let gone = ptp_run(&tv, &host, &key, 0, since);
+    host.sender.shutdown();
+
+    let mut again = Host::start();
+    let from = tv.server.fake().requests.len();
+    let peers = tv.count("SETPEERS");
+    let since = Instant::now();
+    let mut options = SpeakerOptions::new(volume_for_row(20));
+    options.timing = stored;
+    again.sender.add_speaker(device, options);
+    ptp_play(&tv, &mut again, &key, since, peers);
+    let remember = ptp_run(&tv, &again, &key, from, since);
+    again.sender.shutdown();
+    [
+        cells::ptp_first(&first),
+        cells::ptp_gone(&gone),
+        cells::ptp_remember(&remember),
+    ]
+}
+
 struct Report {
     manual: Vec<Cell>,
     failed: bool,
@@ -740,6 +891,10 @@ fn main() -> ExitCode {
     }
     host.sender.shutdown();
     report.show_manual(&["D4.cover", "D5", "D6", "W1", "W2", "W3", "W4", "W5", "W6"]);
+
+    for cell in ptp(Tv::start_ptp_only()) {
+        report.show(&cell);
+    }
 
     if report.failed {
         ExitCode::FAILURE

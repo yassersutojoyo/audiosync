@@ -157,6 +157,14 @@ final class NativeAirPlay {
         }
     }
 
+    /// Whether the speaker `id` stays muted while another one is measured.
+    func setSilenced(_ id: String, _ silenced: Bool) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            _ = asc_airplay_set_silenced(handle, id, silenced)
+        }
+    }
+
     /// Whether the user drags the slider of the speaker `id`.
     func setVolumeDragging(_ id: String, _ dragging: Bool) {
         queue.async { [weak self] in

@@ -134,12 +134,17 @@ struct OutputStallRetry {
     private struct Entry {
         var startedAtS: Double?
         var retryAtS: Double?
+        var lost = false
     }
 
     private var entries: [String: Entry] = [:]
 
     /// The outputs whose stall isn't over yet.
     var tracked: Set<String> { Set(entries.keys) }
+
+    /// The outputs that stalled in a row, whose disconnected notice is up
+    /// until their stall is over.
+    var lost: Set<String> { Set(entries.filter { $0.value.lost }.keys) }
 
     /// The outputs a sync starts again after a stall; `formatReopens` are
     /// starting again because their device's format changed (S330).
@@ -150,7 +155,7 @@ struct OutputStallRetry {
     mutating func stalled(_ uid: String, nowS: Double) -> Step {
         if let started = entries[uid]?.startedAtS, nowS - started < Self.trialS {
             let at = nowS + Self.retryEveryS
-            entries[uid] = Entry(startedAtS: nil, retryAtS: at)
+            entries[uid] = Entry(startedAtS: nil, retryAtS: at, lost: true)
             return .retry(atS: at)
         }
         entries[uid] = Entry(startedAtS: nil, retryAtS: nil)
@@ -160,7 +165,8 @@ struct OutputStallRetry {
     /// Output `uid` started again; nothing for one that didn't stall.
     mutating func started(_ uid: String, nowS: Double) {
         guard entries[uid] != nil else { return }
-        entries[uid] = Entry(startedAtS: nowS, retryAtS: nil)
+        entries[uid]?.startedAtS = nowS
+        entries[uid]?.retryAtS = nil
     }
 
     /// The device refused the start of `uid`: after a stall that is a stall
@@ -169,7 +175,8 @@ struct OutputStallRetry {
     mutating func refused(_ uid: String, nowS: Double) -> Double? {
         guard entries[uid] != nil else { return nil }
         let at = nowS + Self.retryEveryS
-        entries[uid] = Entry(startedAtS: nil, retryAtS: at)
+        entries[uid]?.startedAtS = nil
+        entries[uid]?.retryAtS = at
         return at
     }
 
@@ -178,13 +185,23 @@ struct OutputStallRetry {
         Set(entries.filter { ($0.value.retryAtS ?? -.infinity) > nowS }.keys)
     }
 
-    /// Forgets the outputs whose stream has played 5 s and those switched off.
-    mutating func settle(enabled: Set<String>, nowS: Double) {
+    /// Forgets the outputs whose stream has played 5 s and those switched
+    /// off. Returns those of them that were lost: their notice ends.
+    @discardableResult
+    mutating func settle(enabled: Set<String>, nowS: Double) -> Set<String> {
+        let before = lost
         entries = entries.filter { uid, entry in
             guard enabled.contains(uid) else { return false }
             guard let started = entry.startedAtS else { return true }
             return nowS - started < Self.trialS
         }
+        return before.subtracting(lost)
+    }
+
+    /// Output `uid` failed to start for good and is switched off: its stall
+    /// ends without clearing the notice that says why (S334).
+    mutating func forget(_ uid: String) {
+        entries[uid] = nil
     }
 
     mutating func reset() {

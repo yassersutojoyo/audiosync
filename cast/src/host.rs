@@ -95,8 +95,9 @@ impl DeviceMemory {
         self.offsets.get(device).copied()
     }
 
+    /// Stores `offset` capped at [`MAX_OFFSET`], as a restart reads it.
     pub fn set_offset(&mut self, device: DeviceId, offset: Duration) {
-        self.offsets.insert(device, offset);
+        self.offsets.insert(device, offset.min(MAX_OFFSET));
     }
 
     fn remember_format(&mut self, device: DeviceId, codec: Codec) -> bool {
@@ -169,6 +170,9 @@ pub struct CastTarget {
     /// Set when the target is a Cast group, which plays as one device
     /// (C3, C93); the host keeps it current from discovery (C90, C103).
     pub group: Option<GroupRecords>,
+    /// A single device's latest addresses, kept current by the host from
+    /// discovery (C111). A group's are in `group`.
+    pub records: Option<GroupRecords>,
 }
 
 /// Why [`CastHost::start`] refused at once, before any network call.
@@ -265,7 +269,6 @@ impl HostEvent {
                 event,
                 SessionEvent::Diagnostics(_)
                     | SessionEvent::Stream(_)
-                    | SessionEvent::Volume(_)
                     | SessionEvent::Rebuffering
                     | SessionEvent::GroupMessage(_)
             ),
@@ -284,6 +287,7 @@ enum Command {
         artwork: Option<Vec<u8>>,
         reader: AudioReader,
         selected: Arc<AtomicBool>,
+        announced: Arc<AtomicBool>,
     },
     Stop,
     SetVolume(f64),
@@ -299,6 +303,7 @@ struct Active {
     attempt: AttemptId,
     device: DeviceId,
     selected: Arc<AtomicBool>,
+    announced: Arc<AtomicBool>,
 }
 
 struct Shared {
@@ -464,6 +469,7 @@ impl CastHost {
         let codec = lock(&self.shared.memory).format(&target.id);
         let format = StreamFormat::new(codec, rate).ok_or(StartRefused::Rate(rate))?;
         let selected = Arc::new(AtomicBool::new(true));
+        let announced = Arc::new(AtomicBool::new(false));
         let attempt = AttemptId(self.next_attempt);
         {
             let mut active = lock(&self.shared.active);
@@ -476,6 +482,7 @@ impl CastHost {
                 attempt,
                 device: target.id,
                 selected: Arc::clone(&selected),
+                announced: Arc::clone(&announced),
             });
         }
         self.next_attempt += 1;
@@ -487,6 +494,7 @@ impl CastHost {
             artwork,
             reader,
             selected,
+            announced,
         };
         if self.commands.send(command).is_err() {
             self.shared.release(attempt);
@@ -517,6 +525,16 @@ impl CastHost {
     pub fn stop(&self) {
         self.deselect();
         let _ = self.commands.send(Command::Stop);
+    }
+
+    /// `device` announced itself on the network: a session reconnecting to
+    /// it retries at once and spaces its reconnects from the start (C81).
+    pub fn announced(&self, device: DeviceId) {
+        if let Some(active) = lock(&self.shared.active).as_ref()
+            && active.device == device
+        {
+            active.announced.store(true, Ordering::SeqCst);
+        }
     }
 
     fn deselect(&self) {
@@ -567,8 +585,8 @@ impl CastHost {
     }
 
     /// The next event. At most [`MAX_HOST_EVENTS`] wait; beyond that,
-    /// routine ones (diagnostics, volume, stream log, failed commands) are
-    /// dropped, never `Started`, `Ended` or `MemoryChanged`.
+    /// routine ones (diagnostics, stream log, failed commands) are dropped,
+    /// never `Started`, `Ended`, `MemoryChanged` or the latest volume.
     pub fn poll_event(&self) -> Option<HostEvent> {
         self.events.try_recv().ok()
     }
@@ -674,10 +692,22 @@ impl Worker {
             }
             return;
         }
+        // A level is reported once (C70): a newer one replaces it, nothing else pushes it out.
+        if let HostEvent::Session {
+            device,
+            event: SessionEvent::Volume(_),
+            ..
+        } = &event
+        {
+            let device = *device;
+            held.retain(|held| {
+                !matches!(held, HostEvent::Session { device: d, event: SessionEvent::Volume(_), .. } if *d == device)
+            });
+        }
         if held.len() >= MAX_HOST_EVENTS {
-            let oldest_session = held
-                .iter()
-                .position(|held| matches!(held, HostEvent::Session { .. }));
+            let oldest_session = held.iter().position(|held| {
+                matches!(held, HostEvent::Session { event, .. } if !matches!(event, SessionEvent::Volume(_)))
+            });
             if let Some(index) = oldest_session {
                 held.remove(index);
             }
@@ -758,13 +788,14 @@ impl Worker {
                 artwork,
                 reader,
                 selected,
+                announced,
             } => self.start(
                 attempt,
                 target,
                 format,
                 (metadata, artwork),
                 reader,
-                selected,
+                (selected, announced),
             ),
             Command::Stop => self.stop_running(),
             Command::SetVolume(level) => {
@@ -820,7 +851,7 @@ impl Worker {
         format: StreamFormat,
         (metadata, artwork): (Metadata, Option<Vec<u8>>),
         reader: AudioReader,
-        selected: Arc<AtomicBool>,
+        (selected, announced): (Arc<AtomicBool>, Arc<AtomicBool>),
     ) {
         let device = target.id;
         self.in_hand = Some((attempt, device));
@@ -841,6 +872,7 @@ impl Worker {
             metadata,
             artwork,
             group: target.group,
+            records: target.records,
             fingerprints: Some(Fingerprints {
                 id: device,
                 book: Arc::clone(&self.fingerprints),
@@ -870,6 +902,7 @@ impl Worker {
         match result {
             Ok(mut session) => {
                 session.set_recovery_sink(self.recovery_sink(attempt, device));
+                session.set_announcements(announced);
                 let format = session.format();
                 if lock(&self.shared.memory).remember_format(device, format.codec()) {
                     self.emit(HostEvent::MemoryChanged);
@@ -996,6 +1029,7 @@ mod tests {
             id: DeviceId([byte; 16]),
             addresses: Vec::new(),
             group: None,
+            records: None,
         }
     }
 

@@ -76,7 +76,6 @@ extension AppDelegate {
             nativeAirPlay = nil
             if news { notify(text.nativeAirPlayCouldNotStart, origin: .automatic, subject: Notice.airplaySender) }
             stopNativeLocalNetworkProbe()
-            retimeLocalOutputs()   // no native speaker is chosen any more
         }
         retimeLocalOutputs()   // L is known now
         pushModel()
@@ -175,6 +174,16 @@ extension AppDelegate {
             updatePtpPortNotice { $0.portsFree() }
         case .unannouncedChanged:
             pushModel()   // the row says it is off the network, or no longer
+        case .reconnecting(let id, let problem):
+            let subject = SpeakerKey.make(id: id, airplay: true)
+            if let problem {
+                let name = shownName(airPlay: id)
+                postNotice(text.nativeAirPlayRetrying(problem, name: name), subject: subject,
+                           title: text.nativeAirPlayReconnectingTitle(name: name))
+            } else {
+                clearNotices([subject])
+            }
+            pushModel()   // the row says it reconnects, or that it is off the network
         }
     }
 
@@ -327,8 +336,9 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] native AirPlay: the sender stopped after an internal error; Retry starts a new one")
         nativeAirPlay = nil
         nativeStarts.senderFailed()
-        // Nothing starts a waiting speaker once its sender is gone.
-        clearNotices(native.model.waiting.keys.map { SpeakerKey.make(id: NativeAirPlayID.app($0), airplay: true) })
+        // Nothing starts or retries a speaker once its sender is gone.
+        clearNotices(native.model.states.keys.filter { native.model.clearsNoticeOnRemoval($0) }
+            .map { SpeakerKey.make(id: NativeAirPlayID.app($0), airplay: true) })
         native.discard()
         if codePromptBusy { closeCodePrompt() }   // its prompt went with it
         airplayOrder = []
@@ -403,8 +413,8 @@ extension AppDelegate {
         let released = Set(plan.release.map(NativeAirPlayID.app))
         airplayOrder.removeAll { released.contains($0) }   // their target's row stands for them now
         for id in plan.remove {
-            // Its wait for the slot ends.
-            if native.model.isWaiting(id) { clearNotices([SpeakerKey.make(id: NativeAirPlayID.app(id), airplay: true)]) }
+            // Its wait for the slot, or its reconnecting, ends.
+            if native.model.clearsNoticeOnRemoval(id) { clearNotices([SpeakerKey.make(id: NativeAirPlayID.app(id), airplay: true)]) }
             native.remove(id)
             DebugTrace.log("[AudioSync] native AirPlay: removed \(nativeLabel(id))")
         }
@@ -573,6 +583,8 @@ extension AppDelegate {
             }
             return words
         case .unreachable: return text.airPlayTurnedOff(name: name, reason: .unreachable)
+        case .busy: return text.nativeAirPlayBusy(name: name)
+        case .refused: return text.nativeAirPlayRefused(name: name)
         case .cantPlay: return text.nativeAirPlayCantPlay(name: name)
         case .needsAirPlay2: return text.nativeAirPlayNeedsAirPlay2(name: name)
         case .timingUnavailable: return text.nativeAirPlayTimingUnavailable(name: name)

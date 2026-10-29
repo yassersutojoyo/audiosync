@@ -67,6 +67,7 @@ extension AppDelegate {
         }
         var outcome = CaptureSwitch.Outcome.switched
         briefLoss.restart()   // a new session counts only the devices listed now (S328)
+        clearNotices(stallRetry.lost.map { SpeakerKey.make(id: $0, airplay: false) })   // every output opens anew
         stallRetry.reset()
         refusalRetry.reset()
         do {
@@ -403,6 +404,7 @@ extension AppDelegate {
         // About this session's audio, which just ended; a notice about why it
         // ended is posted after this.
         clearNotices(wasRunning ? [Notice.capture, Notice.source] : [Notice.capture])
+        clearNotices(stallRetry.lost.map { SpeakerKey.make(id: $0, airplay: false) })   // nothing retries them now
         refreshStreamingViews()
     }
 

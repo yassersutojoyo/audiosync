@@ -145,7 +145,7 @@ extension AppDelegate {
 
     private func acceptPermission(_ permission: Permission) {
         permissions.accept(permission)
-        UserDefaults.standard.set(permissions.stored, forKey: PermissionAsks.defaultsKey)
+        permissions.save(store)
         showPermissionOffer()
         if permission == .automation { nowPlaying.mayRaisePrompt = true }
     }
@@ -646,6 +646,7 @@ extension AppDelegate {
                                     airPlay2: receiver.map { native?.reachedOverAirPlay2($0) == true } ?? false,
                                     waitingForAirPlay2: receiver.map { native?.waitReason($0) == .tooManyAirPlay2 } ?? false,
                                     waitingForPtp: receiver.map { native?.waitReason($0) == .ptpOtherNetwork } ?? false,
+                                    reconnecting: receiver.map { native?.isReconnecting($0) == true } ?? false,
                                     unannounced: receiver.map { native?.isUnannounced($0) == true } ?? false,
                                     paired: receiver.map { native?.isPaired($0) == true } ?? false,
                                     holdsCredentials: receiver.map { native?.keepsCredentials($0) == true } ?? false,

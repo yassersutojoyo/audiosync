@@ -281,7 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The microphone permission request a start has out, if any.
     var microphoneRequest = MicrophoneRequestGate()
     /// The permission explanations shown so far and the ones a feature waits on.
-    var permissions = PermissionAsks.load(.standard)
+    var permissions: PermissionAsks
     /// An automatic start failed: no more automatic starts until the user acts.
     var autoStartFailed = false
     /// Counts successful starts, so a check scheduled for one session ignores the next.
@@ -312,6 +312,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     override init() {
         store = LaunchAutoConnect.skipped ? SettingsStore.standard.memoryOnly() : .standard
         let readStore = store.read
+        permissions = PermissionAsks.load(store)
         freshInstall = !LaunchAutoConnect.skipped && !PermissionAsks.usedBefore { readStore($0) != nil }
         let saved = store.load().atLaunch(holdingSpeakersOff: LaunchAutoConnect.skipped)
         audioSource = saved.source
@@ -431,9 +432,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 // Its device stays listed: it starts again now, in the new format (S330).
                 self.syncLocalOutputs(origin: .automatic, formatReopens: [lostUID])
             case .stalled:
+                self.noteRelinked(lostUID)
                 self.outputStalled(lostUID)
                 self.devicesChanged()
             case .deviceGone:
+                self.noteRelinked(lostUID)   // it may return inside one rescan, never missing from a list
                 DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
                 self.devicesChanged()
             }

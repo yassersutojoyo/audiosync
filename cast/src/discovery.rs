@@ -8,6 +8,7 @@
 pub mod mdns;
 pub mod reach;
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
@@ -283,6 +284,36 @@ impl Entry {
         self.device
             .as_ref()
             .is_some_and(|device| device.kind == DeviceKind::Group)
+    }
+}
+
+/// Which list changes are a device announcing itself again (C81): found,
+/// back after its records went away (C17), or at other addresses, as a
+/// group whose leader handed over (C90). A re-resolve at the same
+/// addresses, such as a TXT change, is not.
+#[derive(Debug, Default)]
+pub struct Announcements(BTreeMap<DeviceId, Vec<SocketAddr>>);
+
+impl Announcements {
+    /// The device `change` announces, if any, read after `list` applied it.
+    pub fn note(&mut self, list: &DeviceList, change: &ListEvent) -> Option<DeviceId> {
+        let id_of = |key: DeviceKey| match key {
+            DeviceKey::Id(id) => Some(id),
+            DeviceKey::Manual(_) => None,
+        };
+        let (gone, found) = match *change {
+            ListEvent::Offline(key) | ListEvent::Removed(key) => (id_of(key), None),
+            ListEvent::Added(key) | ListEvent::Updated(key) => (None, id_of(key)),
+            ListEvent::Displaced { dropped, added } => (id_of(dropped), id_of(added)),
+            _ => (None, None),
+        };
+        if let Some(id) = gone {
+            self.0.remove(&id);
+        }
+        let id = found?;
+        let mut addresses = list.get(DeviceKey::Id(id))?.addresses.clone();
+        addresses.sort();
+        (self.0.insert(id, addresses.clone()) != Some(addresses)).then_some(id)
     }
 }
 

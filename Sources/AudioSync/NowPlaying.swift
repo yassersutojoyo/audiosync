@@ -189,6 +189,39 @@ final class NowPlayingMonitor {
         return paused.first { $0.bundleID == lastPlayed }
     }
 
+    /// The play state a play-pause promises, shown at once (S274): a player
+    /// can still read in its old state for a moment after the command returns.
+    struct PendingPlayPause {
+        /// How long after the command returned a reading of the old state counts as stale.
+        static let settle: TimeInterval = 1.5
+        private var bundleID: String?
+        private var playing = false
+        private var until: TimeInterval = 0
+
+        /// A play-pause to `target` returned at `uptime`: the track to show.
+        mutating func landed(_ shown: Track?, target: String, at uptime: TimeInterval) -> Track? {
+            guard let shown, shown.bundleID == target else { return shown }
+            bundleID = target
+            playing = !shown.isPlaying
+            until = uptime + Self.settle
+            return Self.track(shown, playing: playing)
+        }
+
+        /// The track to show for a reading started at `readAt`.
+        mutating func reconcile(_ reading: Track?, readAt: TimeInterval) -> Track? {
+            guard let reading, reading.bundleID == bundleID, readAt < until, reading.isPlaying != playing else {
+                bundleID = nil
+                return reading
+            }
+            return Self.track(reading, playing: playing)
+        }
+
+        private static func track(_ t: Track, playing: Bool) -> Track {
+            Track(bundleID: t.bundleID, appName: t.appName, title: t.title, artist: t.artist, album: t.album,
+                  isPlaying: playing, artwork: t.artwork, position: t.position, playerState: t.playerState)
+        }
+    }
+
     enum Command { case playPause, next, previous }
 
     static let spotify = "com.spotify.client"
@@ -220,6 +253,13 @@ final class NowPlayingMonitor {
     /// errAETimeout (a player busy or quitting) both mean "no track this time".
     static func meansNoTrack(_ code: Int?) -> Bool { code == -1728 || code == -1712 }
 
+    /// The debug-log line for a failed script; a refusal is the user's answer, not a fault.
+    static func scriptErrorLine(target: String, code: Int?, error: String) -> String {
+        code == notPermitted
+            ? "[AudioSync] Automation access to \(target) was denied"
+            : "[AudioSync] AppleScript error: \(error)"
+    }
+
     /// Which player to follow (main thread): the source app itself if it is a
     /// supported player, "" for none, nil for whichever player is playing.
     var preferredBundleID: String?
@@ -242,6 +282,7 @@ final class NowPlayingMonitor {
     private var holding = false
     private var emptyReadings = EmptyReadings()
     private var played = LastPlayed()
+    private var pending = PendingPlayPause()
     /// The player seen playing last since the source was chosen (`LastPlayed`).
     var lastPlayedBundleID: String? { played.bundleID }
 
@@ -304,14 +345,20 @@ final class NowPlayingMonitor {
                 DebugTrace.log("Now Playing: dropped a command to \(bundleID), which AudioSync may not control yet")
                 return
             }
-            _ = self.run(target: bundleID, command: true, """
+            let landed = self.run(target: bundleID, command: true, """
                 with timeout of 2 seconds
                     if application id "\(bundleID)" is running then
                         tell application id "\(bundleID)" to \(verb)
                     end if
                 end timeout
-                """)
-            DispatchQueue.main.async { self.refresh() }
+                """) != nil
+            DispatchQueue.main.async {
+                if command == .playPause, landed {
+                    let uptime = ProcessInfo.processInfo.systemUptime
+                    self.publish(self.pending.landed(self.track, target: bundleID, at: uptime), reading: false)
+                }
+                self.refresh()
+            }
         }
     }
 
@@ -325,6 +372,8 @@ final class NowPlayingMonitor {
         let mayAsk = mayRaisePrompt
         scripts.async { [weak self] in
             guard let self else { return }
+            // Here, not on main: a refresh queued behind a slow command reads after it landed.
+            let readAt = ProcessInfo.processInfo.systemUptime
             var found: Track?
             var paused: [Track] = []
             var empties: [String: EmptyReadings.Empty] = [:]
@@ -361,11 +410,12 @@ final class NowPlayingMonitor {
                 }
                 if held { self.onPromptHeld?() }
                 if self.isRunning { self.reading = next }
+                let promised = self.pending.reconcile(next, readAt: readAt)
                 let last = self.track
                 let lastPlayerRuns = last.map { self.candidates().contains($0.bundleID) && Self.isRunning($0.bundleID) }
                     ?? false
                 let lastPlayer = last.flatMap { empties[$0.bundleID] } ?? .unreadable
-                let shown = self.emptyReadings.next(reading: next, last: last, lastPlayerRuns: lastPlayerRuns,
+                let shown = self.emptyReadings.next(reading: promised, last: last, lastPlayerRuns: lastPlayerRuns,
                                                     lastPlayer: lastPlayer)
                 if let drop = self.emptyReadings.dropped, let last {
                     DebugTrace.log("Now Playing: dropped \(last.appName)'s track (\(drop.reason))")
@@ -526,7 +576,9 @@ final class NowPlayingMonitor {
         var error: NSDictionary?
         let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
         let code = error?[NSAppleScript.errorNumber] as? Int
-        if let error, command || !Self.meansNoTrack(code) { DebugTrace.log("[AudioSync] AppleScript error: \(error)") }
+        if let error, command || !Self.meansNoTrack(code) {
+            DebugTrace.log(Self.scriptErrorLine(target: target, code: code, error: "\(error)"))
+        }
         consent.noted(target, code: error == nil ? 0 : code ?? -1)
         return error == nil ? result : nil
     }
