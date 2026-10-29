@@ -789,13 +789,14 @@ final class OutputRenderer: FadingOutput {
 
     /// While the debug log is on: a line for each late callback of this
     /// start, within `LateCallbackLog`'s limit for the whole process, and for
-    /// each re-anchor after a stall (S207). Polls the render callback's slot
+    /// each re-anchor after a stall or a lasting lateness (S207). Polls the render callback's slot
     /// on that log's queue and reads only atomics.
     private func startLateCallbackReport(device: AudioObjectID) {
         guard DebugTrace.enabled, let target else { return }
         let name = Self.deviceName(device) ?? "device \(device)"
         var seen = target.lateCount.load(ordering: .acquiring)
         var reanchors = target.renderer.stallReanchors
+        var lateReanchors = target.renderer.lateReanchors
         let timer = DispatchSource.makeTimerSource(queue: LateCallbackLog.queue)
         timer.schedule(deadline: .now() + .milliseconds(20), repeating: .milliseconds(20),
                        leeway: .milliseconds(10))
@@ -812,6 +813,11 @@ final class OutputRenderer: FadingOutput {
             if stalls != reanchors {
                 reanchors = stalls
                 DebugTrace.log("[AudioSync] \"\(name)\" re-anchored at its delay after a stall")
+            }
+            let late = target.renderer.lateReanchors
+            if late != lateReanchors {
+                lateReanchors = late
+                DebugTrace.log("[AudioSync] \"\(name)\" re-anchored at its delay after a lasting lateness")
             }
         }
         timer.setCancelHandler {

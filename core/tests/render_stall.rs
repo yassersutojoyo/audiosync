@@ -224,7 +224,7 @@ fn an_output_late_by_a_gap_of_89_ms_is_back_at_its_delay_within_1_5_s() {
 fn a_second_lasting_lateness_within_5_s_waits_for_the_5_s() {
     let stalls = [
         (STALL_AT_S * 1000, 40, 89),
-        (STALL_AT_S * 1000 + 2000, 0, 89),
+        (STALL_AT_S * 1000 + 2000, 40, 75),
     ];
     let (delays, _, resyncs) = run_stalls(&stalls, false);
     assert_eq!(resyncs.len(), 2, "resyncs at {resyncs:?} s");

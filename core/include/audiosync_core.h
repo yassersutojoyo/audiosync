@@ -955,6 +955,10 @@ uint64_t asc_renderer_time_steps(const AscRenderer *renderer);
    (S207); 0 for a NULL handle. */
 uint64_t asc_renderer_stall_reanchors(const AscRenderer *renderer);
 
+/* Any thread: the times the reader re-anchored at its delay after a lasting
+   lateness (S207); 0 for a NULL handle. */
+uint64_t asc_renderer_late_reanchors(const AscRenderer *renderer);
+
 /* ---- Delay helpers ------------------------------------------------------- */
 
 /*

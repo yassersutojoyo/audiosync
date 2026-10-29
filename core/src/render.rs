@@ -176,6 +176,18 @@ pub const STALE_STAMP_BLOCKS: u64 = 4;
 /// long without frames from the renderer (S207).
 pub const STALL_GAP_MS: u64 = 100;
 
+/// An output whose fill has lain this many ms or more above its reference
+/// at every callback for [`LATE_HOLD_MS`] of device frames is re-anchored
+/// at its delay, at most once per [`LATE_REANCHOR_EVERY_MS`] (S207): a late
+/// callback's jitter is gone within that span, a lasting shift is not.
+pub const LATE_SHIFT_MS: u32 = 30;
+
+/// See [`LATE_SHIFT_MS`].
+pub const LATE_HOLD_MS: u32 = 1000;
+
+/// See [`LATE_SHIFT_MS`].
+pub const LATE_REANCHOR_EVERY_MS: u32 = 5000;
+
 /// The most a callback's lateness moves its reader's delay, in ms (S209).
 pub const LATE_CAP_MS: u64 = 50;
 
@@ -402,6 +414,8 @@ struct Shared {
     time_steps: AtomicU64,
     /// Re-anchors after a stall (S207).
     stall_reanchors: AtomicU64,
+    /// Re-anchors after a lasting lateness (S207).
+    late_reanchors: AtomicU64,
     /// Start steps made, and the capture frames they moved the output
     /// later by (S318).
     start_steps: AtomicU64,
@@ -493,6 +507,7 @@ impl RendererControl {
                 floor_drop_ns: AtomicU64::new(0),
                 time_steps: AtomicU64::new(0),
                 stall_reanchors: AtomicU64::new(0),
+                late_reanchors: AtomicU64::new(0),
                 start_steps: AtomicU64::new(0),
                 start_step_frames: AtomicU64::new(0),
                 bluetooth: AtomicBool::new(false),
@@ -667,6 +682,13 @@ impl RendererControl {
     /// The times the reader re-anchored at its delay after a stall (S207).
     pub fn stall_reanchors(&self) -> u64 {
         self.shared.stall_reanchors.load(Ordering::Relaxed)
+    }
+
+    /// The times the reader re-anchored at its delay after its fill lay
+    /// [`LATE_SHIFT_MS`] or more above its reference for [`LATE_HOLD_MS`]
+    /// (S207).
+    pub fn late_reanchors(&self) -> u64 {
+        self.shared.late_reanchors.load(Ordering::Relaxed)
     }
 
     /// The start steps the renderer made inside its start window (S318).
@@ -892,6 +914,11 @@ pub struct Renderer {
     /// A stall was found, by a stale stamp or a gap in the output times, and
     /// no fresh stamp came since.
     stalled: bool,
+    /// Device frames over which the fill has lain [`LATE_SHIFT_MS`] or more
+    /// above the reference at every callback.
+    late_held: u64,
+    /// Device frames left before a lasting lateness may re-anchor again.
+    late_wait: u64,
     /// A held correction waits for the fade-out; closed until the first
     /// read after it (S188).
     correction_due: bool,
@@ -1021,6 +1048,8 @@ impl Renderer {
             start_lead_fixed: false,
             awaiting_resync: false,
             stalled: false,
+            late_held: 0,
+            late_wait: 0,
             correction_due: false,
             frames_after_fade: None,
             tracking: RESTART,
@@ -1460,6 +1489,7 @@ impl Renderer {
     /// after a gap in the output times; a callback without a usable stamp
     /// changes nothing.
     fn follow(&mut self, now: u64, frames: usize, need: usize, next: &NextRead) -> i64 {
+        self.late_wait = self.late_wait.saturating_sub(frames as u64);
         // Before the floor forms Jt is 0, so a late callback's fill would
         // hold its whole lateness and raise the reference (S207, S209).
         if self.warming {
@@ -1502,6 +1532,7 @@ impl Renderer {
                 let minus_anchor = self
                     .anchor_floor
                     .map_or(0.0, |anchor| -(anchor as f64) * rate as f64 / 1e9);
+                self.late_held = 0;
                 let shift = if count == 0 { minus_anchor } else { shift };
                 let fill = fill + minus_anchor - shift;
                 let (sum, count, span) = (sum + fill, count + 1, span + frames as u64);
@@ -1522,6 +1553,23 @@ impl Renderer {
                 0
             }
             Tracking::Following { reference, average } => {
+                let late = fill - reference >= f64::from(LATE_SHIFT_MS) * rate as f64 / 1e3;
+                self.late_held = if late {
+                    self.late_held + frames as u64
+                } else {
+                    0
+                };
+                let device_rate = u64::from(self.device_rate);
+                if self.late_held * 1000 >= device_rate * u64::from(LATE_HOLD_MS)
+                    && self.late_wait == 0
+                    && self.stop == Stop::None
+                {
+                    self.late_held = 0;
+                    self.late_wait = device_rate * u64::from(LATE_REANCHOR_EVERY_MS) / 1000;
+                    self.shared.late_reanchors.fetch_add(1, Ordering::Relaxed);
+                    self.ask_reader_delay();
+                    return 0;
+                }
                 let alpha = 1.0 - (-(frames as f64) / track).exp();
                 let average = average + alpha * (fill - average);
                 self.tracking = Tracking::Following { reference, average };
