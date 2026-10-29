@@ -2,3 +2,4 @@
 # so no test covers them yet. One per line: the clause ID, a space, the reason.
 # tests/spec_coverage.rs fails if a clause listed here gains a `// covers:`
 # test, so this list only shrinks. "Partly done" names what already exists.
+C112 Cast selection kept across a relaunch: the desktop app does not apply it yet; the Mac app does, and its logic tests named (C112) in Tests/logictest.swift cover it.
