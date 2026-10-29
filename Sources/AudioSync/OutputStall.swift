@@ -180,18 +180,36 @@ struct OutputStallRetry {
         return at
     }
 
+    /// What a failed start of `uid` leads to.
+    enum Failed: Equatable {
+        /// A stall in a row, tried again at uptime `atS` (S334).
+        case retry(atS: Double)
+        /// A refusal that followed no stall (S331).
+        case refused(String)
+        /// Switched off with its could-not-start notice (S69).
+        case hard
+    }
+
+    mutating func failed(_ failure: LocalOutputSync.Failure, afterStall: Bool, nowS: Double) -> Failed {
+        if afterStall, failure.refusal != nil, let at = refused(failure.uid, nowS: nowS) { return .retry(atS: at) }
+        if let refusal = failure.refusal { return .refused(refusal) }
+        forget(failure.uid)
+        return .hard
+    }
+
     /// The outputs waiting for their next try, which no sync starts yet.
     func held(nowS: Double) -> Set<String> {
         Set(entries.filter { ($0.value.retryAtS ?? -.infinity) > nowS }.keys)
     }
 
-    /// Forgets the outputs whose stream has played 5 s and those switched
-    /// off. Returns those of them that were lost: their notice ends.
+    /// Forgets the outputs whose stream has played 5 s, those switched off
+    /// and those whose device left the list, which S68 covers. Returns those
+    /// of them that were lost: their notice ends.
     @discardableResult
-    mutating func settle(enabled: Set<String>, nowS: Double) -> Set<String> {
+    mutating func settle(enabled: Set<String>, listed: Set<String>, nowS: Double) -> Set<String> {
         let before = lost
         entries = entries.filter { uid, entry in
-            guard enabled.contains(uid) else { return false }
+            guard enabled.contains(uid), listed.contains(uid) else { return false }
             guard let started = entry.startedAtS else { return true }
             return nowS - started < Self.trialS
         }
