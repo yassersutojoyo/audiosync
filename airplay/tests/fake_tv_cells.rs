@@ -512,3 +512,24 @@ fn ptp_cells_pass_only_on_the_timing_path_they_name() {
         assert_eq!(cells::ptp_gone(&broken).status, Status::Fail);
     }
 }
+
+#[test]
+fn d6_flags_host_warnings_but_not_a_traced_500() {
+    let refused = "SET_PARAMETER text/parameters: status 500, body volume: -24.000000, \
+                   reply Internal Server Error [Content-Length: 0], reply body empty";
+    assert!(!cells::d6_flags(&format!(
+        "[AirPlay] trace AA:BB:CC:DD:EE:FF: {refused}"
+    )));
+    assert!(!cells::d6_flags(&format!(
+        "AirPlay speaker Living Room TV trace: {refused}"
+    )));
+    assert!(cells::d6_flags(
+        "[AudioSync] native AirPlay: Living Room TV (aa:bb) warning: the volume set was refused"
+    ));
+    assert!(cells::d6_flags(
+        "AirPlay speaker Living Room TV warning: VolumeRefused"
+    ));
+    assert!(cells::d6_flags(
+        "AirPlay speaker Living Room TV error: no answer (Timeout); it is turned off"
+    ));
+}

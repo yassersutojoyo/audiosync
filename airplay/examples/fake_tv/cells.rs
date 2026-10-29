@@ -484,6 +484,34 @@ pub fn ptp_remember(run: &PtpRun) -> Cell {
     ptp_cell("PTP.remember", run, &[("PTP", 200)])
 }
 
+/// D6 shows the hosts' warning and error lines, never the sender's traces,
+/// which carry receiver answers such as the 500 a refused volume set gets
+/// (P183).
+const D6_SHOWS: [&str; 2] = [" warning: ", " error: "];
+const D6_SKIPS: [&str; 2] = ["[AirPlay] trace ", " trace: "];
+
+/// Whether D6's grep shows a debug-log line.
+#[cfg(test)]
+pub fn d6_flags(line: &str) -> bool {
+    D6_SHOWS.iter().any(|text| line.contains(text))
+        && !D6_SKIPS.iter().any(|text| line.contains(text))
+}
+
+fn d6_step() -> String {
+    let args = |texts: &[&str]| {
+        texts
+            .iter()
+            .map(|text| format!("-e \"{text}\""))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    format!(
+        "Mac app: grep -F {} /tmp/audiosync-debug.log | grep -v -F {} prints nothing",
+        args(&D6_SHOWS),
+        args(&D6_SKIPS)
+    )
+}
+
 /// The cells only a person with the app, a player or the real television
 /// can judge, each with its step.
 pub fn manual() -> Vec<Cell> {
@@ -512,10 +540,7 @@ pub fn manual() -> Vec<Cell> {
             "D5",
             "Mac app: a failed switch notice clears when the playing source is picked again",
         ),
-        (
-            "D6",
-            "Mac app: grep -iE \"error|warn\" /tmp/audiosync-debug.log shows only the expected 500 volume lines",
-        ),
+        ("D6", &d6_step()),
         (
             "W1",
             "real TV at master 63: TV 20 by its remote reads 20 in AudioSync and AudioSync 20 reads 20 on the TV, within about 1 s; remote presses stay put",
