@@ -10431,6 +10431,33 @@ do {
     check(stopped.devices[manualID] != nil && stopped.devices[realID] == nil,
           "cast model: when discovery stops, a speaker added by address stays listed, as the sender keeps it")
 
+    // covers: S252, C105
+    let castX = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", castY = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    var swap = CastModel()
+    swap.apply(.appeared(CastDevice(id: castX, name: "Kitchen"), offsetMs: nil))
+    swap.apply(.appeared(CastDevice(id: castY, name: "Den"), offsetMs: nil))
+    _ = swap.turnOn(castX)
+    swap.startSent(castX)
+    _ = swap.started(castX, attempt: 1, refusal: 0)
+    _ = swap.apply(.playing(attempt: 1))
+    // As recallPreset: both switches, one sync that only stops X, then the preset's volume for Y.
+    swap.turnOff(castX)
+    _ = swap.turnOn(castY)
+    let swapStops = swap.plan(streaming: true) == .stop
+    swap.stopSent()
+    _ = swap.setVolume(castY, position: 30)
+    let swapStarts = swap.plan(streaming: true) == .start(castY)
+    swap.startSent(castY)
+    _ = swap.started(castY, attempt: 2, refusal: 0)
+    var swapSent: Double?
+    if case .setVolume(let level)? = swap.apply(.volume(attempt: 2, CastVolume(level: 0.8, muted: false, fixed: false))) {
+        swapSent = level
+    }
+    check(swapStops && swapStarts && swapSent.map { approx($0, 0.3, 1e-9) } == true
+            && approx(swap.volume(of: castY), 30, 1e-9),
+          "presets: a recall that swaps the Cast speaker while streaming gives the new one the preset's volume",
+          "\(String(describing: swapSent)) \(swap.volume(of: castY))")
+
     check(t.castAddProblem(.notFound)
             == "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
             && t.castAddProblem(.unreadable) == t.castAddInvalid
