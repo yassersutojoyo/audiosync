@@ -741,7 +741,7 @@ final class NativeAirPlay {
             return .passwordNeeded(id: id, wrong: raw.error == ASC_AIRPLAY_ERROR_WRONG_PASSWORD)
         case ASC_AIRPLAY_EVENT_PAIRING_FAILED:
             return .pairingFailed(id: id, wrongPin: raw.error == ASC_AIRPLAY_ERROR_WRONG_PIN,
-                                  Self.problem(raw.error), detail: text(raw.detail))
+                                  Self.problem(raw.error, reason: raw.unsupported), detail: text(raw.detail))
         case ASC_AIRPLAY_EVENT_PAIRED:
             return .paired(id: id, storeNote: text(raw.detail))
         case ASC_AIRPLAY_EVENT_VOLUME:

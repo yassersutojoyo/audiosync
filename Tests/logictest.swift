@@ -3411,6 +3411,16 @@ do {
         _ = c.turnedOnByUser("B2")
         check(c.apply(.pairingFailed(id: "B2", wrongPin: false, .busy, detail: "")) == .turnOff("native:B2", .pairingFailed),
               "native pairing: a pairing turned down turns the speaker off")
+        _ = c.turnedOnByUser("B2")
+        // covers: S223
+        check(c.apply(.pairingFailed(id: "B2", wrongPin: false, .airPlay2Only, detail: "")) == .turnOff("native:B2", .needsAirPlay2),
+              "native pairing: a pairing failed as AirPlay 2 only turns the speaker off as needing AirPlay 2")
+        // NativeAirPlay.swift needs the core to build, so the suite reads how it decodes the event.
+        let decoding = ((try? String(contentsOfFile: "Sources/AudioSync/NativeAirPlay.swift", encoding: .utf8)) ?? "")
+            .components(separatedBy: "case ASC_AIRPLAY_EVENT_PAIRING_FAILED:").dropFirst().first?
+            .components(separatedBy: "case ASC_AIRPLAY_EVENT_PAIRED:").first ?? ""
+        check(decoding.contains("reason: raw.unsupported"),
+              "native airplay: a pairing failure keeps its unsupported reason")
 
         // An Apple TV that also has a password.
         _ = c.turnedOnByUser("B2")

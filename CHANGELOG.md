@@ -172,6 +172,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, after you forget an AirPlay speaker's pairing, turning it on from the web remote no longer starts a PIN pairing.
 - A Google Cast speaker that doesn't answer when you turn it on, for example a TV that's switched off, turns off after a few tries and tells you it isn't responding. Before, its row said Connecting forever. On the Mac and on Windows.
 - On Windows, picking other input channels while the input device is unplugged no longer turns streaming off; the new channels play once the device is back.
+- On the Mac, an AirPlay speaker that plays only AirPlay 2 and that you turn on while AirPlay 2 is off now says so, and that AirPlay 2 needs to be on. Before, it said it couldn't play.
 
 ## [0.7.1] - 2026-10-27
 
