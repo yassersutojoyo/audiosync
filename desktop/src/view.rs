@@ -8771,6 +8771,36 @@ mod tests {
         assert!(height <= bottom + 16.5, "no room left under the buttons");
     }
 
+    /// Each opening slides the flyout's content up into place as it fades in;
+    /// the slide leaves the height the window is sized to alone.
+    #[test]
+    fn the_flyout_slides_in_on_opening_without_changing_its_fit() {
+        hold_clock();
+        let app = app_over(MockBackend::zones_preview());
+        let flyout = &app.flyout;
+        flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let fit = flyout.get_fit_height();
+        assert!(include_str!("tray.rs").contains("app.flyout.invoke_reveal();"));
+        flyout.invoke_reveal();
+        draw_frames();
+        assert_eq!(flyout.get_reveal_offset(), 8.0, "it starts below its place");
+        advance_clock(Duration::from_millis(20));
+        draw_frames();
+        advance_clock(Duration::from_millis(80));
+        draw_frames();
+        let sliding = flyout.get_reveal_offset();
+        assert!(
+            sliding > 0.0 && sliding < 8.0,
+            "halfway it sits at {sliding}"
+        );
+        assert_eq!(flyout.get_fit_height(), fit);
+        advance_clock(Duration::from_millis(200));
+        draw_frames();
+        assert_eq!(flyout.get_reveal_offset(), 0.0, "in place within 300 ms");
+        assert_eq!(flyout.get_fit_height(), fit);
+    }
+
     /// On a screen too short for the whole flyout, the list scrolls and the
     /// buttons still show.
     #[test]

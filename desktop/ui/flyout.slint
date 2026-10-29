@@ -377,8 +377,11 @@ export component TrayFlyout inherits Window {
     // gets, set by the app when the list is at its floor or absent and the
     // screen is still too short; that part scrolls.
     in property <length> body-cut;
-    // Where the buttons end, which `fit-height` reads.
-    out property <length> footer-bottom: footer.absolute-position.y + footer.height;
+    // Where the buttons end, which `fit-height` reads, left alone by the
+    // opening slide.
+    out property <length> footer-bottom: footer.absolute-position.y + footer.height - root.reveal-offset;
+    // How far the content still sits below its place as it slides in.
+    out property <length> reveal-offset: content.y;
     // For the layout tests (src/view.rs): the height Windows makes the window at.
     out property <length> made-height: root.preferred-height;
 
@@ -400,6 +403,32 @@ export component TrayFlyout inherits Window {
         source.current-index = root.source-index;
     }
 
+    // Each opening slides the content up a few pixels as it fades in, as
+    // Windows 11's own tray flyouts do. The timer waits a frame, so the
+    // content first draws in its start place and the slide has a start.
+    property <bool> revealed: true;
+    public function reveal() {
+        root.revealed = false;
+        reveal-start.running = true;
+    }
+    reveal-start := Timer {
+        interval: 16ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.revealed = true;
+        }
+    }
+    states [
+        hidden when !root.revealed: {
+            content.y: 8px;
+            content.opacity: 0;
+            out {
+                animate content.y, content.opacity { duration: Fluent.normal; easing: ease-out; }
+            }
+        }
+    ]
+
     // Without the system's rounded frame, draw the edge.
     Rectangle {
         border-width: root.rounded ? 0px : 1px;
@@ -419,7 +448,7 @@ export component TrayFlyout inherits Window {
             return reject;
         }
 
-        VerticalLayout {
+        content := VerticalLayout {
             alignment: start;
             padding: 16px;
             padding-top: 14px;
