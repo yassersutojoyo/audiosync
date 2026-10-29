@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
 use audiosync_cast::stream::{
-    BlockQueue, FetchHeaders, MAX_LOGGED_NAMES, MAX_LOGGED_TEXT, ResponseEnd, ServerEvent,
-    StreamConfig, StreamServer, image_size,
+    BlockQueue, FetchHeaders, MAX_LOGGED_NAMES, MAX_LOGGED_TEXT, Pace, Pacer, ResponseEnd,
+    ServerEvent, StreamConfig, StreamServer, image_size,
 };
 use common::http;
 
@@ -546,128 +546,61 @@ fn a_silent_input_keeps_the_response_open_with_silence() {
     server.stop();
 }
 
-/// How many frames the pump's output lags the clock since `origin`: the
-/// least over 100 ms, so its 20 ms steps fall away.
-fn lag(server: &StreamServer, origin: Instant) -> i64 {
-    let until = Instant::now() + Duration::from_millis(100);
-    let mut least = i64::MAX;
-    while Instant::now() < until {
-        let stats = server.stats();
-        let clock = (origin.elapsed().as_secs_f64() * 48_000.0) as i64;
-        least = least.min(clock - (stats.frames_sent + stats.frames_queued) as i64);
-        thread::sleep(Duration::from_millis(2));
+/// Steps a pacer through `ms` milliseconds on a test clock; `input(t)` is
+/// the audio, in ms, that reaches the ring at `t`. Returns the debt in
+/// blocks after each step and the silent blocks sent.
+fn pace(ms: u64, input: impl Fn(u64) -> u64) -> (Vec<u64>, u64) {
+    let mut pacer = Pacer::default();
+    let (mut ring, mut silent, mut debt) = (0, 0, Vec::new());
+    for t in 0..ms {
+        ring += input(t);
+        loop {
+            match pacer.next(Duration::from_millis(t), ring >= 20) {
+                Pace::Audio => ring -= 20,
+                Pace::Silence => silent += 1,
+                Pace::Wait => break,
+            }
+        }
+        debt.push(t / 20 - pacer.emitted());
     }
-    least
+    (debt, silent)
 }
 
-/// Feeds 10 ms of audio every 10 ms except while `paused` and reads the
-/// response as a device would, both until `stop`; returns once the pump
-/// streams, with the origin for `lag`.
-fn paced(
-    server: &StreamServer,
-    writer: AudioWriter,
-    paused: &Arc<AtomicBool>,
-    stop: &Arc<AtomicBool>,
-) -> (Instant, [thread::JoinHandle<()>; 2]) {
-    let feeder = {
-        let (paused, stop) = (Arc::clone(paused), Arc::clone(stop));
-        thread::spawn(move || {
-            let block = vec![7i16; 960];
-            let start = Instant::now();
-            let mut ticks = 0u32;
-            while !stop.load(Ordering::SeqCst) {
-                if !paused.load(Ordering::SeqCst) {
-                    writer.write_i16(&block);
-                }
-                ticks += 1;
-                let next = start + Duration::from_millis(10) * ticks;
-                thread::sleep(next.saturating_duration_since(Instant::now()));
-            }
-        })
-    };
-    let mut stream = streaming(server);
-    let origin = Instant::now();
-    let drain = {
-        let stop = Arc::clone(stop);
-        thread::spawn(move || {
-            let mut buffer = [0u8; 8192];
-            while !stop.load(Ordering::SeqCst) {
-                match http::read_timed(&mut stream, &mut buffer) {
-                    Ok(0) => break,
-                    Ok(_) => {}
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                    Err(error) if error.kind() == io::ErrorKind::TimedOut => {}
-                    Err(_) => break,
-                }
-            }
-        })
-    };
-    (origin, [feeder, drain])
+/// 10 ms of audio every 10 ms, none of it in `lost`.
+fn chunks_except(lost: std::ops::Range<u64>) -> impl Fn(u64) -> u64 {
+    move |t| {
+        if t % 10 == 0 && !lost.contains(&t) {
+            10
+        } else {
+            0
+        }
+    }
 }
 
 // covers: C52
 #[test]
 fn an_input_gap_past_100_ms_is_filled_with_silence_and_the_stream_stays_on_the_clock() {
-    let (server, writer) = server(vec![LOCAL]);
-    let paused = Arc::new(AtomicBool::new(false));
-    let stop = Arc::new(AtomicBool::new(false));
-    let (origin, threads) = paced(&server, writer, &paused, &stop);
-    thread::sleep(Duration::from_millis(200));
-    let before = lag(&server, origin);
-    paused.store(true, Ordering::SeqCst);
-    let silent = server.stats().underrun_frames;
-    thread::sleep(Duration::from_millis(500));
-    let during = lag(&server, origin);
-    assert!(
-        server.stats().underrun_frames > silent,
-        "the gap was not filled with silence"
-    );
-    paused.store(false, Ordering::SeqCst);
-    thread::sleep(Duration::from_millis(300));
-    let after = lag(&server, origin);
+    let (debt, silent) = pace(1000, chunks_except(200..700));
+    assert!(silent >= 24, "{silent} silent blocks for a 500 ms gap");
     // A debt left by the gap would go out as a burst once the input
     // resumes, ahead of the calibrated delay.
-    assert!(
-        during - before < 2 * 960,
-        "the gap left {} frames of debt",
-        during - before
-    );
-    assert!(
-        (after - before).abs() < 2 * 960,
-        "after the gap the stream lags {} frames more",
-        after - before
-    );
-    stop.store(true, Ordering::SeqCst);
-    for thread in threads {
-        thread.join().expect("joins");
-    }
-    server.stop();
+    assert!(debt[350..].iter().all(|blocks| *blocks == 0), "{debt:?}");
 }
 
 // covers: C52
 #[test]
 fn audio_lost_for_less_than_100_ms_leaves_no_debt_once_the_input_returns() {
-    let (server, writer) = server(vec![LOCAL]);
-    let paused = Arc::new(AtomicBool::new(false));
-    let stop = Arc::new(AtomicBool::new(false));
-    let (origin, threads) = paced(&server, writer, &paused, &stop);
-    thread::sleep(Duration::from_millis(200));
-    let before = lag(&server, origin);
-    paused.store(true, Ordering::SeqCst);
-    thread::sleep(Duration::from_millis(80));
-    paused.store(false, Ordering::SeqCst);
-    thread::sleep(Duration::from_millis(400));
-    let after = lag(&server, origin);
-    assert!(
-        after - before < 2 * 960,
-        "80 ms of lost audio left {} frames of debt",
-        after - before
-    );
-    stop.store(true, Ordering::SeqCst);
-    for thread in threads {
-        thread.join().expect("joins");
-    }
-    server.stop();
+    let (debt, _) = pace(1000, chunks_except(200..280));
+    assert!(debt[600..].iter().all(|blocks| *blocks == 0), "{debt:?}");
+}
+
+// covers: C52
+#[test]
+fn audio_late_by_less_than_100_ms_is_sent_without_silence() {
+    let late = chunks_except(200..260);
+    let (debt, silent) = pace(1000, |t| if t == 260 { 70 } else { late(t) });
+    assert_eq!(silent, 0);
+    assert!(debt[300..].iter().all(|blocks| *blocks == 0), "{debt:?}");
 }
 
 // covers: C64
