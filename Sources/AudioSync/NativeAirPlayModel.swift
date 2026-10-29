@@ -1009,6 +1009,8 @@ struct NativeAirPlayModel {
                 retriedErrors[id, default: 0] += 1
                 return retriedErrors[id] == 3 ? .reconnecting(NativeAirPlayID.app(id), problem) : nil
             }
+            // Its removal would otherwise clear the notice that says why it went off.
+            retriedErrors.removeValue(forKey: id)
             switch problem {
             case .passwordRequired, .wrongPassword, .pairingRequired:
                 return accessNeeded(id, problem)
