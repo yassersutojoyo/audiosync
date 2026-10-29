@@ -7,8 +7,8 @@
 import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark, ZoneArrowFocus } from "widgets.slint";
+import { DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
+import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, KindIcon, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark, ZoneArrowFocus } from "widgets.slint";
 
 // A compact row: the toggle and the name, with the note of a speaker or
 // zone that is on but can't play right now under it (a zone's count first) ("Waiting for device",
@@ -119,8 +119,11 @@ component FlyoutRow inherits HorizontalLayout {
     // toggle's value instead of its state.
     in property <string> caption;
     in property <string> value-text;
-    // A renamed speaker's own name, shown under the new one; else empty.
+    // A renamed speaker's own name, shown in the name's tooltip; else empty.
     in property <string> system-name;
+    // The kind's glyph after the name, where `show-kind` is set.
+    in property <SpeakerKind> kind;
+    in property <bool> show-kind;
     callback toggled();
     // The toggle gained (true) or lost (false) keyboard focus.
     callback focus-changed(bool);
@@ -145,27 +148,73 @@ component FlyoutRow inherits HorizontalLayout {
         }
     }
 
-    VerticalLayout {
-        alignment: center;
-        spacing: 1px;
+    // One line, as in the Mac's menu bar panel: the name and its kind, then
+    // the note at the right.
+    HorizontalLayout {
+        spacing: 6px;
         horizontal-stretch: 1;
 
-        Text {
-            text: root.name;
-            color: Tokens.text;
-            font-weight: root.state == RowState.playing ? 600 : 400;
-            overflow: elide;
-            accessible-role: none;
+        // No stretch, so a long note ends in "…" before the name does, as
+        // on the Mac.
+        Rectangle {
+            horizontal-stretch: 0;
+            min-width: 0px;
+            preferred-width: name-label.preferred-width;
+            max-width: name-label.preferred-width;
+            min-height: name-label.preferred-height;
+
+            name-label := Text {
+                width: 100%;
+                height: 100%;
+                text: root.name;
+                color: Tokens.text;
+                font-weight: root.state == RowState.playing ? 600 : 400;
+                vertical-alignment: center;
+                overflow: elide;
+                accessible-role: none;
+            }
+
+            // Narrator reads the device name from the toggle instead.
+            TouchArea {
+                Tooltip {
+                    Rectangle {
+                        width: name-tip.preferred-width + 16px;
+                        height: name-tip.preferred-height + 10px;
+                        border-radius: Fluent.radius-control;
+                        border-width: 1px;
+                        border-color: Fluent.stroke;
+                        background: Tokens.surface;
+                        drop-shadow-blur: 8px;
+                        drop-shadow-offset-y: 2px;
+                        drop-shadow-color: Tokens.text.with-alpha(0.18);
+                        accessible-role: none;
+
+                        name-tip := Text {
+                            x: 8px;
+                            text: Strings.speaker-tooltip(root.name, root.system-name);
+                            font-size: Tokens.font-size-caption;
+                            color: Tokens.text;
+                            vertical-alignment: center;
+                            accessible-role: none;
+                        }
+                    }
+                }
+            }
         }
 
-        if root.system-name != "": QuietText {
-            text: Strings.speaker-device-caption(root.system-name);
-            wrap: no-wrap;
-            overflow: elide;
+        if root.show-kind: KindIcon {
+            kind: root.kind;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
         }
 
         if Strings.speaker-caption(root.caption, Strings.row-note(root.state)) != "": QuietText {
             text: Strings.speaker-caption(root.caption, Strings.row-note(root.state));
+            horizontal-stretch: 1;
+            horizontal-alignment: right;
+            vertical-alignment: center;
             wrap: no-wrap;
             overflow: elide;
         }
@@ -202,53 +251,14 @@ component FlyoutZoneHeader inherits Rectangle {
             root.expanded-changed(!root.item.expanded);
         }
 
+        // The fold arrow first, then the badge, the name and the count at
+        // the right, as in the Mac panel.
         HorizontalLayout {
-            spacing: 10px;
+            spacing: 8px;
             padding-top: 4px;
             padding-bottom: 4px;
+            padding-left: 2px;
             padding-right: 8px;
-
-            SpeakerBadge {
-                size: 28px;
-                glyph: Glyphs.zone;
-                state: root.item.state;
-                enabled: root.live;
-                narrated: root.live;
-                label: Strings.zone-label(root.item.name);
-                value-text: Strings.zone-value(root.item.on, root.item.total, root.item.waiting);
-                description: Strings.row-note(root.item.state);
-                expandable: true;
-                expanded: root.item.expanded;
-                toggled => {
-                    root.toggled();
-                }
-                focus-changed(focused) => {
-                    root.focus-changed(focused);
-                }
-                expanded-changed(open) => {
-                    root.expanded-changed(open);
-                }
-            }
-
-            VerticalLayout {
-                alignment: center;
-                spacing: 1px;
-                horizontal-stretch: 1;
-
-                Text {
-                    text: root.item.name;
-                    color: Tokens.text;
-                    font-weight: root.item.state == RowState.playing ? 600 : 400;
-                    overflow: elide;
-                    accessible-role: none;
-                }
-
-                QuietText {
-                    text: root.count;
-                    wrap: no-wrap;
-                    overflow: elide;
-                }
-            }
 
             VerticalLayout {
                 alignment: center;
@@ -276,11 +286,62 @@ component FlyoutZoneHeader inherits Rectangle {
                     }
 
                     Glyph {
-                        glyph: root.item.expanded ? Glyphs.chevron-up : Glyphs.chevron-down;
+                        glyph: root.item.expanded ? Glyphs.chevron-down : Glyphs.chevron-right;
                         font-size: 12px;
                         color: Tokens.secondary-text;
                     }
                 }
+            }
+
+            SpeakerBadge {
+                size: 28px;
+                glyph: Glyphs.zone;
+                state: root.item.state;
+                enabled: root.live;
+                narrated: root.live;
+                label: Strings.zone-label(root.item.name);
+                value-text: Strings.zone-value(root.item.on, root.item.total, root.item.waiting);
+                description: Strings.row-note(root.item.state);
+                expandable: true;
+                expanded: root.item.expanded;
+                toggled => {
+                    root.toggled();
+                }
+                focus-changed(focused) => {
+                    root.focus-changed(focused);
+                }
+                expanded-changed(open) => {
+                    root.expanded-changed(open);
+                }
+            }
+
+            // No stretch, so the count ends in "…" before the name does.
+            Rectangle {
+                horizontal-stretch: 0;
+                min-width: 0px;
+                preferred-width: zone-name.preferred-width;
+                max-width: zone-name.preferred-width;
+                min-height: zone-name.preferred-height;
+
+                zone-name := Text {
+                    width: 100%;
+                    height: 100%;
+                    text: root.item.name;
+                    color: Tokens.text;
+                    font-weight: root.item.state == RowState.playing ? 600 : 400;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    accessible-role: none;
+                }
+            }
+
+            QuietText {
+                text: root.count;
+                horizontal-stretch: 1;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                wrap: no-wrap;
+                overflow: elide;
             }
         }
     }
@@ -298,6 +359,8 @@ export component TrayFlyout inherits Window {
     // AirPlay speaker; empty hides it.
     in property <string> live-input-hint;
     in property <float> master-volume;
+    // The speakers in no zone: this PC's, then the connected ones.
+    in property <[SpeakerItem]> this-pc;
     in property <[SpeakerItem]> speakers;
     in property <[ZoneItem]> zones;
     in property <[PresetItem]> presets;
@@ -557,11 +620,43 @@ export component TrayFlyout inherits Window {
                         }
                     }
 
-                    VolumeSlider {
-                        volume: root.master-volume;
-                        label: Strings.master-volume;
-                        changed(value) => {
-                            root.master-volume-changed(value);
+                    // This PC's speakers sit with the volume, above the divider, as
+                    // in the Mac panel; the zones and connected speakers come after.
+                    VerticalLayout {
+                        spacing: 2px;
+
+                        VolumeSlider {
+                            volume: root.master-volume;
+                            label: Strings.master-volume;
+                            changed(value) => {
+                                root.master-volume-changed(value);
+                            }
+                        }
+
+                        // Four rows, then it scrolls: with the list below it shares
+                        // the 260 px the list had alone, so a PC with many outputs
+                        // still fits a small screen.
+                        this-pc-view := ScrollView {
+                            height: min(this-pc-list.preferred-height, 144px);
+
+                            this-pc-list := VerticalLayout {
+                                for speaker in root.this-pc: FlyoutRow {
+                                    glyph: Glyphs.speaker(speaker.kind);
+                                    name: speaker.name;
+                                    label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
+                                    description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
+                                    system-name: speaker.system-name;
+                                    state: speaker.state;
+                                    device-volume: speaker.device-volume;
+
+                                    toggled => {
+                                        root.speaker-toggled(speaker.id);
+                                    }
+                                    focus-changed(focused) => {
+                                        root.speaker-focused = focused;
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -573,14 +668,14 @@ export component TrayFlyout inherits Window {
 
                     // "No speakers found" waits for 20 seconds of AirPlay discovery;
                     // until then it says it looks, as the main window's note does.
-                    if root.zones.length == 0 && root.speakers.length == 0 && (root.all-hidden || root.airplay-none-found || root.airplay-searching): SecondaryText {
+                    if root.zones.length == 0 && root.speakers.length == 0 && root.this-pc.length == 0 && (root.all-hidden || root.airplay-none-found || root.airplay-searching): SecondaryText {
                         text: root.all-hidden ? Strings.flyout-all-hidden : root.airplay-none-found ? Strings.no-speakers : Strings.looking-for-speakers;
                     }
 
                     if root.zones.length > 0 || root.speakers.length > 0: ScrollView {
-                        // Every row up to five or so, then it scrolls; three rows at
-                        // least.
-                        height: min(list.preferred-height, max(108px, 260px - root.list-cut));
+                        // Every row up to five or so, less this PC's rows above, then
+                        // it scrolls; three rows at least.
+                        height: min(list.preferred-height, max(108px, 260px - root.list-cut - this-pc-view.height));
 
                         list := VerticalLayout {
                             for zone in root.zones: VerticalLayout {
@@ -600,16 +695,18 @@ export component TrayFlyout inherits Window {
                                     }
                                 }
 
-                                // Its speakers while it is unfolded, indented by the
-                                // toggle's width.
+                                // Its speakers while it is unfolded, their toggles
+                                // under the zone's, past the arrow.
                                 for speaker in zone.expanded ? zone.members : []: FlyoutRow {
-                                    padding-left: 38px;
+                                    padding-left: 26px;
                                     glyph: Glyphs.speaker(speaker.kind);
                                     name: speaker.name;
                                     label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
                                     description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
                                     caption: speaker.zone-note;
                                     system-name: speaker.system-name;
+                                    kind: speaker.kind;
+                                    show-kind: speaker.show-kind && !speaker.cast-group;
                                     state: speaker.state;
                                     enabled: !speaker.missing;
                                     device-volume: speaker.device-volume;
@@ -628,6 +725,8 @@ export component TrayFlyout inherits Window {
                                 label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
                                 description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
                                 system-name: speaker.system-name;
+                                kind: speaker.kind;
+                                show-kind: speaker.show-kind && !speaker.cast-group;
                                 state: speaker.state;
                                 device-volume: speaker.device-volume;
 

@@ -171,6 +171,9 @@ fn channel_id(name: &str) -> u32 {
 
 /// The `EnumFormat` param for float audio at `target`'s rate and channels.
 fn enum_format(target: &Target) -> Result<Vec<u8>, BackendError> {
+    if target.channels > super::format::MAX_CHANNELS {
+        return Err(BackendError::UnsupportedFormat);
+    }
     let mut info = AudioInfoRaw::new();
     info.set_format(AudioFormat::F32LE);
     info.set_rate(target.rate);
@@ -545,7 +548,23 @@ pub fn target(graph: &graph::Graph, id: &str) -> Result<Target, BackendError> {
 
 #[cfg(test)]
 mod tests {
-    use super::latency_sum_ns;
+    use super::{BackendError, Target, enum_format, latency_sum_ns};
+
+    #[test]
+    fn more_channels_than_spa_positions_are_unsupported() {
+        let target = |channels| Target {
+            serial: "1".to_owned(),
+            rate: 48_000,
+            channels,
+            positions: Vec::new(),
+            bluetooth: false,
+        };
+        assert!(enum_format(&target(64)).is_ok());
+        assert_eq!(
+            enum_format(&target(65)),
+            Err(BackendError::UnsupportedFormat)
+        );
+    }
 
     #[test]
     fn the_latency_adds_the_delay_and_the_frames_ahead_less_the_age() {

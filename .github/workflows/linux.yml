@@ -2,7 +2,7 @@ name: Linux
 
 on:
   push:
-    branches: ['**']
+    branches: ['**', '!wip/**']
   pull_request:
 
 # A newer push to a feature branch cancels that branch's older run; every
@@ -31,9 +31,40 @@ env:
   FUSE_SOURCE_SHA256: 70589cfd5e1cff7ccd6ac91c86c01be340b227285c5e200baa284e401eea2ca0
 
 jobs:
+  proven:
+    # main skips the rest for a commit this workflow already passed on an integ/* train.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Was this commit green on an integ/* train?
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          SHA: ${{ github.sha }}
+        # Any API error leaves skip=false, so main runs everything.
+        run: |
+          skip=false
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+            wf=${WORKFLOW_REF%@*}
+            if n=$(gh api "repos/$REPO/actions/workflows/${wf##*/}/runs?head_sha=$SHA&status=success&per_page=100" \
+                --jq '[.workflow_runs[] | select(.head_branch | startswith("integ/"))] | length') &&
+              [ "$n" -gt 0 ] 2>/dev/null; then
+              skip=true
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   appimage:
     name: AppImage (x86_64) and tray smoke test
     # Ubuntu 24.04's glibc 2.39 is the oldest the AppImage runs on.
+    needs: proven
+    if: needs.proven.outputs.skip != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:

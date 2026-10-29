@@ -82,6 +82,8 @@ for key in CFBundleExecutable CFBundleIdentifier CFBundleShortVersionString CFBu
 done
 expect "CFBundleIdentifier is io.github.yassersutojoyo.audiosync" \
   test "$(plist CFBundleIdentifier || true)" = io.github.yassersutojoyo.audiosync
+expect "SUVerifyUpdateBeforeExtraction is true (Sparkle checks the signature before unpacking)" \
+  test "$(plist SUVerifyUpdateBeforeExtraction || true)" = true
 
 echo "▶ Layout"
 expect "Contents/MacOS/$exe is executable" test -x "$bin"

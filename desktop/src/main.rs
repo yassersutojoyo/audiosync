@@ -137,7 +137,8 @@ fn main() -> ExitCode {
     let log = DebugLog::from_env(relaunched);
     log.log(|| {
         format!(
-            "AudioSync for Windows {} (audiosync-core {}), process {}; times are UTC",
+            "AudioSync for {} {} (audiosync-core {}), process {}; times are UTC",
+            platform::host_name(std::env::consts::OS),
             env!("CARGO_PKG_VERSION"),
             audiosync_core::VERSION,
             std::process::id(),
@@ -736,6 +737,11 @@ mod tests {
                 "zone-focused",
             ),
             (
+                "for speaker in root.this-pc: FlyoutRow {",
+                "focus-changed(focused)",
+                "speaker-focused",
+            ),
+            (
                 "for speaker in root.speakers: FlyoutRow {",
                 "focus-changed(focused)",
                 "speaker-focused",
@@ -758,6 +764,28 @@ mod tests {
             .expect("refresh is there")..];
         assert!(refresh.contains("self.restore_flyout_focus(flyout_removed);"));
         assert!(view.contains("flyout.invoke_take_focus();"));
+    }
+
+    /// The flyout lists its speakers in the Mac panel's order, which is also
+    /// the Tab order: this PC's under the master volume and above the
+    /// divider, then the zones, then the connected speakers.
+    #[test]
+    fn the_flyout_lists_this_pc_under_the_volume_then_zones_then_connected() {
+        let flyout = include_str!("../ui/flyout.slint");
+        let at = |part: &str| flyout.find(part).unwrap_or_else(|| panic!("{part}"));
+        let volume = at("VolumeSlider {");
+        let this_pc = at("for speaker in root.this-pc: FlyoutRow {");
+        let divider = volume + flyout[volume..].find("Divider { }").expect("a divider");
+        let zones = at("for zone in root.zones: VerticalLayout {");
+        let connected = at("for speaker in root.speakers: FlyoutRow {");
+        assert!(
+            volume < this_pc && this_pc < divider,
+            "this PC sits with the volume"
+        );
+        assert!(
+            divider < zones && zones < connected,
+            "zones, then connected"
+        );
     }
 
     /// A click changes a switch or combo box before the engine answers; each

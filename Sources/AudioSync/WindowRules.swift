@@ -121,6 +121,26 @@ enum PanelSizing: Equatable {
     }
 }
 
+/// The menu bar panel's height outside its speaker list (header, source,
+/// volume, footer, margins), plus room for what may show around it.
+enum PanelChrome {
+    static func height(notices: Int, permissionCard: Bool = false, airPlayNote: Bool = false,
+                       castAddRow: Bool = false, presets: Bool = false, liveInputHint: Bool = false,
+                       noSpeakerOn: Bool = false) -> CGFloat {
+        var height: CGFloat = 220
+        // The compact panel shows the newest notice, with a footer line when others wait.
+        if notices > 0 { height += 90 }
+        if notices > 1 { height += 30 }
+        if permissionCard { height += 140 }
+        if airPlayNote { height += 70 }
+        if castAddRow { height += 20 }
+        if presets { height += 38 }
+        if liveInputHint { height += 48 }
+        if noSpeakerOn { height += 32 }
+        return height
+    }
+}
+
 /// The panel's Add by Address row. It is offered once the Cast search found
 /// nothing, and its room is kept while the search still runs: the search
 /// ends on a timer, often with the panel open, which must not grow then.

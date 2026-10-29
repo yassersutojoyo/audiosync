@@ -653,6 +653,9 @@ pub fn pairing_summary(event: &PairingEvent) -> String {
     match event {
         PairingEvent::PinRequested => "the Apple TV shows a PIN".to_owned(),
         PairingEvent::HomeKitPaired(_) => "paired on AirPlay 2".to_owned(),
+        PairingEvent::PairedUnverified(_) => {
+            "paired on AirPlay 2, but the verify after it failed".to_owned()
+        }
         PairingEvent::PairedForSession => {
             "paired on AirPlay 2 for this session, nothing stored".to_owned()
         }
@@ -3570,6 +3573,11 @@ impl AirPlaySpeakers {
                 }
                 true
             }
+            // Kept only: the Failed that follows ends the pairing (P153).
+            PairingEvent::PairedUnverified(credentials) => {
+                self.keep_homekit(id, credentials);
+                true
+            }
             PairingEvent::PairedForSession => {
                 if self.pairings.remove(id).is_none() {
                     return false;
@@ -3679,6 +3687,10 @@ impl AirPlaySpeakers {
             PairingEvent::HomeKitPaired(credentials) => {
                 self.keep_homekit(id, credentials);
                 true
+            }
+            PairingEvent::PairedUnverified(credentials) => {
+                self.keep_homekit(id, credentials);
+                return true;
             }
             // A wrong PIN starts nothing again: the user cancelled it. A
             // session-only pairing left with its connection.
@@ -5366,6 +5378,36 @@ pub mod tests {
             airplay.speakers()[0].availability,
             AirPlayAvailability::NeedsPin
         );
+    }
+
+    // covers: P153
+    #[test]
+    fn credentials_of_a_pin_pairing_whose_verify_failed_are_kept() {
+        use crate::audio::pairings::tests::homekit;
+
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        pin_shown(&fake, &mut airplay, &tv);
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(&tv, PairingEvent::PairedUnverified(homekit(0x33)));
+        fake.pairing(
+            &tv,
+            PairingEvent::Failed {
+                error: SessionError::new(ErrorKind::Lost),
+                wrong_pin: false,
+            },
+        );
+        let events = airplay.poll();
+        let failed = BackendEvent::AirPlayFailed {
+            id: id.clone(),
+            problem: AirPlayProblem::PairingFailed,
+        };
+        assert!(events.contains(&failed), "{events:?}");
+        assert_eq!(airplay.store.homekit(&id), Some(&homekit(0x33)));
+        assert!(!airplay.speakers()[0].enabled);
     }
 
     /// A speaker under the id of device 12 whose RAOP record, with `raop`
@@ -8601,7 +8643,7 @@ pub mod tests {
         row_level(info.device_level)
     }
 
-    // covers: S290
+    // covers: S289, S290
     #[test]
     fn the_row_shows_the_device_level_rounded_down() {
         let fake = FakeAirPlay::new();
@@ -8619,7 +8661,7 @@ pub mod tests {
         }
     }
 
-    // covers: S290
+    // covers: S289, S290
     #[test]
     fn a_row_move_sends_the_row_and_stores_the_row_over_k() {
         let fake = FakeAirPlay::new();
@@ -8846,6 +8888,7 @@ pub mod tests {
         );
     }
 
+    // covers: S249
     #[test]
     fn a_zone_volume_reaches_a_playing_speaker_and_its_read_back_goes_through_it() {
         let fake = FakeAirPlay::new();

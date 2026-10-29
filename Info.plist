@@ -40,5 +40,7 @@
 	<string>https://github.com/yassersutojoyo/audiosync/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>fkpBgn4AQq9fnyiDteOIOnL4XL9qvAzEifnx7JHzGs4=</string>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 </dict>
 </plist>

@@ -707,7 +707,7 @@ fn pair_verify_errors_about_the_receivers_state_are_retried() {
         panic!("a failure");
     };
     assert_eq!(failure.error.kind, ErrorKind::PairingFailed);
-    assert_eq!(failure.back_off, Some(Duration::from_secs(30)));
+    assert_eq!(failure.error.back_off, Some(Duration::from_secs(30)));
     assert_eq!(failure.error.retry_after, Some(Duration::from_secs(30)));
     for code in [1, 4, 5, 6] {
         let mut fake = FakeHomeKit::new(PIN);
@@ -828,7 +828,7 @@ fn pair_setup_error_items_map_to_session_errors() {
             );
             assert_eq!(failure.error.detail, Some(detail));
             let wait = (code == 3).then_some(Duration::from_secs(30));
-            assert_eq!(failure.back_off, wait);
+            assert_eq!(failure.error.back_off, wait);
         }
     }
     // An error item refuses the step whatever its state item says.

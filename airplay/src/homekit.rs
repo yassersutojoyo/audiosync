@@ -306,12 +306,10 @@ impl fmt::Debug for HomeKitCredentials {
     }
 }
 
-/// Why a pairing step failed, with the back-off a receiver asked for
-/// (P150, item 8).
+/// Why a pairing step failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingFailure {
     pub error: SessionError,
-    pub back_off: Option<Duration>,
 }
 
 impl PairingFailure {
@@ -319,10 +317,7 @@ impl PairingFailure {
         let mut error = SessionError::new(kind);
         error.method = Some(Method::Post);
         error.detail = Some(detail);
-        PairingFailure {
-            error,
-            back_off: None,
-        }
+        PairingFailure { error }
     }
 
     fn status(kind: ErrorKind, status: u16, detail: &'static str) -> PairingFailure {
@@ -733,7 +728,7 @@ impl PairSetup {
         };
         let mut failure = PairingFailure::new(kind, detail);
         if code == 3 {
-            failure.back_off = back_off(reply);
+            failure.error.back_off = back_off(reply);
         }
         self.fail(failure)
     }
@@ -1052,8 +1047,8 @@ fn receiver_state(code: u8, reply: &Tlv8) -> PairingFailure {
         _ => "unknown pairing error",
     };
     let mut failure = PairingFailure::new(ErrorKind::PairingFailed, detail);
-    failure.back_off = back_off(reply);
-    failure.error.retry_after = Some(failure.back_off.unwrap_or(Duration::ZERO));
+    failure.error.back_off = back_off(reply);
+    failure.error.retry_after = Some(failure.error.back_off.unwrap_or(Duration::ZERO));
     failure
 }
 

@@ -385,6 +385,9 @@ pub struct Session {
     /// Moves with each host volume; a read sent before it is old (P122).
     volume_generation: u32,
     pending_flush: Option<(u16, u32)>,
+    /// A delay FLUSH waits for this session (P100): no other request starts.
+    /// Once set, every way out ends in a FLUSH, or the session stays silent.
+    flush_wanted: bool,
     metadata_queue: VecDeque<Queued>,
     /// P185: an AirPlay 1 session sends the small image.
     artwork: ArtworkLadder,
@@ -428,6 +431,7 @@ impl Session {
             pending_read_volume: false,
             volume_generation: 0,
             pending_flush: None,
+            flush_wanted: false,
             metadata_queue: VecDeque::new(),
             artwork: ArtworkLadder::new(ArtworkSize::Small),
             late_answers: Vec::new(),
@@ -806,9 +810,18 @@ impl Session {
         true
     }
 
+    /// A delay FLUSH waits for this session (P100): until [`Session::flush`]
+    /// no other request starts. True when a FLUSH would go out at once, or
+    /// none would go out at all.
+    pub fn flush_slot(&mut self) -> bool {
+        self.flush_wanted = true;
+        self.state != State::Playing || self.in_flight.is_none()
+    }
+
     /// Sends FLUSH naming the first packet that will follow it (P34). Only
     /// while playing; a newer flush replaces one still queued.
     pub fn flush(&mut self, seq: u16, rtptime: u32, now: Instant) -> bool {
+        self.flush_wanted = false;
         if self.state != State::Playing {
             return false;
         }
@@ -909,6 +922,7 @@ impl Session {
             status,
             fallback: None,
             retry_after: None,
+            back_off: None,
             detail,
         });
     }
@@ -957,6 +971,9 @@ impl Session {
             State::Playing => {
                 if let Some((seq, rtptime)) = self.pending_flush.take() {
                     return self.send(Kind::Flush { seq, rtptime }, now, false);
+                }
+                if self.flush_wanted {
+                    return;
                 }
                 if let Some(volume) = self.pending_volume {
                     let ready = self

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Fails when a host `// covers:` marker names a clause its spec doesn't have.
 
-The core, cast and airplay crates check their own markers in their
-spec_coverage tests. This covers the rest: tracked Rust and Swift files
-outside those crates (desktop/, remote/, Tests/, Sources/), and shell and Python
-files, whose marker is `# covers:`. The letter picks
+The core, cast and airplay crates check the markers in their own src/ and
+tests/ in their spec_coverage tests. This covers the rest: tracked Rust, Swift
+and C files elsewhere (crate examples and benches included), and shell and
+Python files, whose marker is `# covers:`. The letter picks
 the spec: S is docs/ENGINE_SPEC.md, P is docs/AIRPLAY_SPEC.md, C is
 docs/CAST_SPEC.md. A withdrawn, retired or superseded clause counts as
 missing (one retired or superseded in part does not). Each ID may carry a note in parentheses, and a
@@ -26,7 +26,7 @@ import sys
 MARKER = "// covers:"
 HASH_MARKER = "# covers:"
 SPECS = {"S": "ENGINE_SPEC.md", "P": "AIRPLAY_SPEC.md", "C": "CAST_SPEC.md"}
-CRATES_WITH_OWN_CHECK = ("core/", "cast/", "airplay/")
+CRATES_WITH_OWN_CHECK = tuple(f"{c}/{d}/" for c in ("core", "cast", "airplay") for d in ("src", "tests"))
 _ID = re.compile(r"[SPC][1-9][0-9]*[a-z]?")
 _CLAUSE = re.compile(r"\s*- \*\*([SPC][1-9][0-9]*[a-z]?)\*\*(.*)")
 # Only the opening words: a live clause may mention withdrawn things later on.
@@ -34,7 +34,7 @@ _WITHDRAWN = re.compile(r"\s*[*(]*(withdrawn|(retired|superseded)(?! in part))",
 
 
 def in_scope(path):
-    return path.endswith((".rs", ".swift", ".sh", ".py")) and not path.startswith(CRATES_WITH_OWN_CHECK)
+    return path.endswith((".rs", ".swift", ".c", ".h", ".sh", ".py")) and not path.startswith(CRATES_WITH_OWN_CHECK)
 
 
 def marker_for(path):
@@ -167,7 +167,12 @@ def self_test():
         "airplay/src/transport.rs": False,
         "desktop/README.md": False,
         "Tests/shellchecktest.sh": True,
-        "core/ffi/build.sh": False,
+        "core/ffi/smoke.sh": True,
+        "core/ffi/swift-smoke/main.swift": True,
+        "airplay/examples/fake_tv/cells.rs": True,
+        "core/benches/eq.rs": True,
+        "Tests/panic-probe.c": True,
+        "core/tests/support/mod.rs": False,
         "scripts/check_appcast.py": True,
     }
     for path, want in scope.items():
