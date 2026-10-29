@@ -736,6 +736,9 @@ pub enum NoticeMessage {
         left_off: Vec<(String, PresetLeftOff)>,
         nothing_changed: bool,
     },
+    /// What the name dialog would have shown while it was open for a name,
+    /// its heading and text in the UI's words.
+    DialogMessage { title: String, text: String },
 }
 
 impl NoticeMessage {

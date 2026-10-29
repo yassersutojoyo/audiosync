@@ -155,7 +155,9 @@ Command-0 brings up the main window, which on Windows is where the menu bar is.
 
 Zone, preset and curve names and their messages share one dialog. While it is
 open, a second request for it (Ctrl+N during Save Curve, say) brings the open
-dialog to the front and does nothing else, so a name being typed stays.
+dialog to the front and does nothing else, so a name being typed stays. A
+message that would need the dialog meanwhile (an Update to Current Settings
+with no speaker on, say) shows as a notice instead, and Narrator says it.
 
 A focused control shows a ring in the focus color while it has keyboard focus.
 Escape in a dialog works wherever the focus is, on its buttons too. When an
