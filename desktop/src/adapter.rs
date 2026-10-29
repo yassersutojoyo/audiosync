@@ -3542,9 +3542,19 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::CaptureBusy => {
                 self.post(NoticeSubject::Source, NoticeMessage::CaptureFailed);
             }
+            BackendEvent::InputAway => {
+                let source = self.chosen_name();
+                self.post(
+                    NoticeSubject::Source,
+                    NoticeMessage::InputNotConnected { source },
+                );
+            }
             BackendEvent::CaptureFree => {
                 self.clear_if(NoticeSubject::Source, |message| {
-                    matches!(message, NoticeMessage::CaptureFailed)
+                    matches!(
+                        message,
+                        NoticeMessage::CaptureFailed | NoticeMessage::InputNotConnected { .. }
+                    )
                 });
             }
             BackendEvent::Stopped { reason } => {

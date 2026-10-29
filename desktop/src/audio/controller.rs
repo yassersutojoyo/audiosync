@@ -501,6 +501,9 @@ struct CaptureReopen {
     /// When a try first found the input held by another app; busy answers
     /// take no try (S333).
     busy_since: Option<Instant>,
+    /// A try found the input device no longer listed: no try is made until
+    /// it is listed again (S329).
+    away: bool,
 }
 
 /// Where the PC is in a sleep (S332).
@@ -1254,6 +1257,36 @@ impl<D: Driver> Controller<D> {
             if (force || notified) && listed.is_ok() {
                 self.renew_device_volumes();
             }
+            self.reopen_listed_input();
+        }
+    }
+
+    /// Lets a capture that waits for its input device try at the next poll
+    /// once the device is listed again (S329).
+    fn reopen_listed_input(&mut self) {
+        let Some(SourceId::Input { endpoint_id }) = self
+            .session
+            .as_ref()
+            .filter(|session| {
+                session
+                    .reopen
+                    .is_some_and(|reopen| reopen.away && reopen.wait == 0)
+            })
+            .map(|session| session.source.clone())
+        else {
+            return;
+        };
+        let listed = self.driver.inputs().is_ok_and(|readings| {
+            readings
+                .iter()
+                .any(|input| input.id.as_deref() == Ok(endpoint_id.as_str()))
+        });
+        if let Some(reopen) = self.session.as_mut().and_then(|s| s.reopen.as_mut())
+            && listed
+        {
+            reopen.wait = 1;
+            self.log
+                .log(|| "the capture's input device is listed again: it opens again".to_owned());
         }
     }
 
@@ -1778,8 +1811,9 @@ impl<D: Driver> Controller<D> {
             reopen,
             ..
         } = session;
-        // A capture told busy no longer waits (S333).
-        if reopen.is_some_and(|reopen| reopen.busy_since.is_some()) {
+        // A capture told busy, or waiting for its input device, no longer
+        // waits (S333, S329).
+        if reopen.is_some_and(|reopen| reopen.busy_since.is_some() || reopen.away) {
             self.pending.push(BackendEvent::CaptureFree);
         }
         let mut outputs: Vec<Playing<D::Renderer>> = outputs.into_values().collect();
@@ -2349,6 +2383,7 @@ impl<D: Driver> Controller<D> {
             wait: RESTART_DELAY_POLLS,
             tries_left: RESTART_TRIES - 1,
             busy_since: None,
+            away: false,
         });
         self.log.log(|| {
             "the capture was lost: Windows audio restarted or its device went away; it opens \
@@ -2365,7 +2400,9 @@ impl<D: Driver> Controller<D> {
     /// later; after the last, streaming stops (S21), unless the captured app
     /// quit and the setting moves to the whole system (S227). An input that
     /// another app holds takes no try: it is tried every
-    /// [`BUSY_RETRY_POLLS`] for as long as it stays held (S333). From a
+    /// [`BUSY_RETRY_POLLS`] for as long as it stays held (S333). An input
+    /// device no longer listed takes no try either: the capture waits until
+    /// it is listed again (S329). From a
     /// suspend notice until the resume no try is made; in a resume window,
     /// a try that fails as one that may pass, or doesn't answer in time, is
     /// followed by another until the window ends (S332).
@@ -2380,12 +2417,16 @@ impl<D: Driver> Controller<D> {
         let Some(reopen) = session.reopen.as_mut() else {
             return;
         };
+        if reopen.away && reopen.wait == 0 {
+            return;
+        }
         reopen.wait = reopen.wait.saturating_sub(1);
         if reopen.wait > 0 {
             return;
         }
         let tries_left = reopen.tries_left;
         let busy_since = reopen.busy_since;
+        let away = reopen.away;
         let source = session.source.clone();
         let ring = Arc::clone(&session.ring);
         let started_as = session.started_as;
@@ -2440,6 +2481,8 @@ impl<D: Driver> Controller<D> {
                         )
                     });
                     self.pending.push(BackendEvent::CaptureFree);
+                } else if away {
+                    self.pending.push(BackendEvent::CaptureFree);
                 }
                 self.log
                     .log(|| "the capture runs again; the outputs played on".to_owned());
@@ -2459,6 +2502,25 @@ impl<D: Driver> Controller<D> {
                         wait: BUSY_RETRY_POLLS,
                         tries_left,
                         busy_since: Some(busy_since.unwrap_or_else(Instant::now)),
+                        away,
+                    });
+                }
+            }
+            Err(BackendError::InputGone) => {
+                if !away {
+                    self.log.log(|| {
+                        "the capture's input device is no longer listed: it opens again once the \
+                         device is listed, while the outputs play on"
+                            .to_owned()
+                    });
+                    self.pending.push(BackendEvent::InputAway);
+                }
+                if let Some(session) = self.session.as_mut() {
+                    session.reopen = Some(CaptureReopen {
+                        wait: 0,
+                        tries_left,
+                        busy_since,
+                        away: true,
                     });
                 }
             }
@@ -2479,6 +2541,7 @@ impl<D: Driver> Controller<D> {
                         wait: RESTART_DELAY_POLLS,
                         tries_left,
                         busy_since,
+                        away,
                     });
                 }
             }
@@ -2494,6 +2557,7 @@ impl<D: Driver> Controller<D> {
                         wait: STALL_RETRY_POLLS,
                         tries_left,
                         busy_since,
+                        away,
                     });
                 }
             }
@@ -2515,6 +2579,7 @@ impl<D: Driver> Controller<D> {
                         wait: RESTART_DELAY_POLLS,
                         tries_left: tries_left - 1,
                         busy_since,
+                        away,
                     });
                 }
             }
@@ -4546,6 +4611,7 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
             format!("output {} no longer waits for its device", label(names, id))
         }
         BackendEvent::CaptureBusy => "capture busy: another app holds its input".to_owned(),
+        BackendEvent::InputAway => "the capture waits for its input device to be listed".to_owned(),
         BackendEvent::CaptureFree => "the capture no longer waits for its input".to_owned(),
         BackendEvent::OutputStalled { id } => {
             format!(
@@ -7333,7 +7399,10 @@ mod tests {
             pair: 0,
         };
         backend.start(&source).unwrap();
-        assert_eq!(backend.driver().captures_started(), [mic.clone()]);
+        assert_eq!(
+            backend.driver().captures_started(),
+            std::slice::from_ref(&mic)
+        );
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
         backend.disconnect_input("mic");
         // The first try finds the device gone from the list; none follows.
@@ -7348,7 +7417,11 @@ mod tests {
         );
         assert_eq!(backend.driver().capture_attempts(), 1 + 1);
         assert_eq!(backend.running_source(), Some(source.clone()));
-        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS], "the outputs play on");
+        assert_eq!(
+            playing(&backend),
+            [HEADPHONES, SPEAKERS],
+            "the outputs play on"
+        );
         backend.connect_input("mic", "Microphone", "USB");
         for _ in 0..2 * RESTART_DELAY_POLLS {
             backend.poll();
@@ -7412,10 +7485,16 @@ mod tests {
         };
         backend.start(&source).unwrap();
         backend.disconnect_input("mic");
-        poll_quietly(&mut backend, 2 * RESTART_DELAY_POLLS);
+        let events: Vec<BackendEvent> = (0..2 * RESTART_DELAY_POLLS)
+            .flat_map(|_| backend.poll())
+            .collect();
+        assert_eq!(events, [BackendEvent::InputAway]);
         assert_eq!(backend.driver().capture_attempts(), 1 + 1, "one try failed");
         backend.connect_input("mic", "Microphone", "USB");
-        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        let events: Vec<BackendEvent> = (0..RESTART_DELAY_POLLS)
+            .flat_map(|_| backend.poll())
+            .collect();
+        assert_eq!(events, [BackendEvent::CaptureFree]);
         assert_eq!(backend.driver().capture_attempts(), 1 + 2);
         assert!(backend.driver().capture_running());
         assert_eq!(backend.running_source(), Some(source));

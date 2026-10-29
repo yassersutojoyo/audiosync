@@ -503,8 +503,12 @@ pub enum BackendEvent {
     /// few seconds; [`BackendEvent::CaptureFree`] tells once it no longer
     /// waits.
     CaptureBusy,
-    /// A capture reported busy no longer waits for its input: it captures
-    /// again, or its session ended.
+    /// A lost capture's input device is no longer listed (S329). Streaming
+    /// stays on and the capture opens again once the device is listed;
+    /// [`BackendEvent::CaptureFree`] tells once it no longer waits.
+    InputAway,
+    /// A capture reported busy, or waiting for its input device, no longer
+    /// waits for its input: it captures again, or its session ended.
     CaptureFree,
     /// An output's stream stopped taking frames again before it had played
     /// five seconds since the last time (S326). The output stays on, its
