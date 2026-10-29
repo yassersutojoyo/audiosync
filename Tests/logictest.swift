@@ -10466,6 +10466,13 @@ do {
     expired.apply(.gone(id: castX))
     check(expired.rows == [castY] && expired.enabled == nil && expired.turnOn(castY) == nil,
           "cast model: a speaker that is on with no session leaves the list and no longer blocks another")
+    var manualOn = CastModel()
+    manualOn.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    _ = manualOn.turnOn(manualID)
+    manualOn.apply(.gone(id: manualID))
+    if let browsed { manualOn.apply(browsed) }
+    check(manualOn.enabled == realID,
+          "cast model: a speaker added by address that is on with no session stays on under the id a browse finds")
 
     check(t.castAddProblem(.notFound)
             == "AudioSync couldn't find a speaker at that address. Check that it's on and try again."

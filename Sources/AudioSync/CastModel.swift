@@ -464,7 +464,10 @@ struct CastModel {
             devices[device.id] = device
             return changed
         case .gone(let id):
-            return devices.removeValue(forKey: id) != nil
+            let removed = devices.removeValue(forKey: id)
+            // One added by address leaves only when a browse finds it, which moves it to its ID (C18).
+            if enabled == id, !isLive(id), removed?.manual != true { enabled = nil }
+            return removed != nil
         }
     }
 
