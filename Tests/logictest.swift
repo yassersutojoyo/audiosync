@@ -1197,6 +1197,11 @@ do {
           "native off: a speaker that turned the session down unasked says it didn't accept")
     check(text.nativeAirPlayAsksForCode(name: "Den", reason: .unreachable, unasked: false) == nil,
           "native off: other reasons keep their own notice")
+    let unreachableOff = text.airPlayTurnedOff(name: "Den", reason: .unreachable)
+    check(text.nativeAirPlayBusy(name: "Den").contains("busy with another device") && !text.nativeAirPlayBusy(name: "Den").contains("network")
+            && text.nativeAirPlayRefused(name: "Den") == text.castProblem(.refused, name: "Den")
+            && text.nativeAirPlayBusy(name: "Den") != unreachableOff && text.nativeAirPlayRefused(name: "Den") != unreachableOff,
+          "native off: a busy speaker names the other device and a refusing one says it declined, neither sends the user to the network")
 }
 
 // MARK: Device volume — a turned-down or muted output shows a hint and a one-click fix (S192 to S202)
@@ -2692,6 +2697,9 @@ do {
             && model.apply(.error(id: "A1", .airPlay2Only, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsAirPlay2)
             && model.apply(.error(id: "A1", .timingUnavailable, retryMs: nil, detail: "")) == .turnOff("native:A1", .timingUnavailable),
           "native airplay: an error the sender won't retry turns the speaker off, with why")
+    check(model.apply(.error(id: "A1", .busy, retryMs: nil, detail: "")) == .turnOff("native:A1", .busy)
+            && model.apply(.error(id: "A1", .refused, retryMs: nil, detail: "")) == .turnOff("native:A1", .refused),
+          "native airplay: a speaker that answered busy or refused is off for that reason, not as unreachable")
     model.removed("A1")
     check(model.apply(.state(id: "A1", .playing, retryMs: nil)) == nil
             && model.apply(.error(id: "A1", .notResponding, retryMs: nil, detail: "")) == nil,
