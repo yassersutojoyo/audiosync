@@ -3595,6 +3595,24 @@ mod tests {
         }
     }
 
+    /// The receiver's `_airplay._tcp` record, AirPlay 1 only, with `keys`.
+    fn kitchen_airplay(keys: &[&str]) -> crate::discovery::ServiceRecord {
+        use crate::discovery::{ScopedAddr, ServiceKind, ServiceRecord};
+        let mut txt = vec![
+            b"features=0x0".to_vec(),
+            b"deviceid=01:23:45:67:89:AB".to_vec(),
+        ];
+        txt.extend(keys.iter().map(|key| key.as_bytes().to_vec()));
+        ServiceRecord {
+            kind: ServiceKind::AirPlay,
+            instance: "Kitchen".to_owned(),
+            host: "kitchen.local".to_owned(),
+            port: 7000,
+            txt,
+            addresses: vec![ScopedAddr::new(KITCHEN.into())],
+        }
+    }
+
     fn connect_kitchen(port: u16) -> Output {
         Output::Connect(std::net::SocketAddr::from((KITCHEN, port)))
     }
@@ -3607,8 +3625,10 @@ mod tests {
         let (events, _events) = mpsc::channel();
         let latency = Arc::new(AtomicU32::new(0));
         let mut driver = Driver::new(stream, receiver, inputs, events, latency);
-        let changes = driver.directory.apply(BrowseEvent::Resolved(kitchen(5000)));
-        driver.report_changes(changes);
+        for record in [kitchen(5000), kitchen_airplay(&["flags=0x4"])] {
+            let changes = driver.directory.apply(BrowseEvent::Resolved(record));
+            driver.report_changes(changes);
+        }
         let device = driver.directory.devices().next().cloned().expect("listed");
         let key = device.key.clone();
         driver.add_speaker(
@@ -3628,7 +3648,16 @@ mod tests {
         port: u16,
         at: Instant,
     ) -> Option<Output> {
-        let changes = driver.directory.apply(BrowseEvent::Resolved(kitchen(port)));
+        relist(driver, key, kitchen(port), at)
+    }
+
+    fn relist(
+        driver: &mut Driver,
+        key: &DeviceKey,
+        record: crate::discovery::ServiceRecord,
+        at: Instant,
+    ) -> Option<Output> {
+        let changes = driver.directory.apply(BrowseEvent::Resolved(record));
         driver.report_changes(changes);
         driver.run_timers(at);
         driver.next_output(key)
@@ -3667,6 +3696,15 @@ mod tests {
         let soon = failed_at + Duration::from_secs(1);
         assert_eq!(relist_kitchen(&mut driver, &key, 5000, soon), None);
         assert!(matches!(driver.speakers[&key].phase, Phase::Waiting(at) if at == retry_at));
+        // Nor does another sender's session (flags bit 17) or a group the
+        // receiver joined (P15, P19).
+        for keys in [
+            &["flags=0x20004"][..],
+            &["flags=0x4", "gid=6F3D1B2A-0C4E-4A5B-9D8E-7F6A5B4C3D2E"][..],
+        ] {
+            assert_eq!(relist(&mut driver, &key, kitchen_airplay(keys), soon), None);
+            assert!(matches!(driver.speakers[&key].phase, Phase::Waiting(at) if at == retry_at));
+        }
         assert_eq!(
             relist_kitchen(&mut driver, &key, 5001, soon),
             Some(connect_kitchen(5001))
