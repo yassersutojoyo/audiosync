@@ -2245,6 +2245,28 @@ pub mod tests {
         assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
     }
 
+    // covers: C2, C17, S339
+    #[test]
+    fn a_speaker_whose_row_went_offline_goes_off_with_a_notice_when_its_session_stops() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        fake.withdraw(KITCHEN, "Kitchen");
+        cast.poll();
+        assert!(cast.speakers().iter().any(|speaker| speaker.id == KITCHEN));
+        cast.set_streaming(false);
+        let events = cast.poll();
+        assert!(
+            events.contains(&BackendEvent::CastFailed {
+                id: KITCHEN.to_owned(),
+                problem: CastProblem::NotResponding,
+            }),
+            "{events:?}"
+        );
+        assert!(!cast.is_on());
+        assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
+    }
+
     fn members(device: &str, members: Vec<GroupMember>) -> HostEvent {
         HostEvent::Session {
             attempt: AttemptId(1),
