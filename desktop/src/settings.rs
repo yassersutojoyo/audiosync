@@ -24,8 +24,9 @@
 //! tried once more at launch (another program may hold it for a moment),
 //! then every few seconds, and while it still can't be read nothing is
 //! saved over it, since it may hold the user's settings; once it reads as
-//! settings, they apply as if read at launch. Fields this version doesn't know are ignored,
-//! missing ones take their defaults, and values out of range are clamped
+//! settings, they apply as if read at launch. Fields this version doesn't
+//! know are written back as read (the first 256 by name), missing ones
+//! take their defaults, and values out of range are clamped
 //! ([`Settings::clamped`]). Nothing here panics on a bad file, and the
 //! caller logs what [`Loaded`] says.
 //!
@@ -792,6 +793,10 @@ pub struct Settings {
         deserialize_with = "record_that_reads"
     )]
     pub update_record: Option<UpdateRecord>,
+    /// The fields this build doesn't know, written back as read so a newer
+    /// build's settings survive a downgrade or a restored copy (S212).
+    #[serde(flatten)]
+    pub other_fields: BTreeMap<String, serde_json::Value>,
 }
 
 /// A stored number, or NaN for anything else, which `clamped` replaces with
@@ -924,6 +929,7 @@ impl Default for Settings {
             check_updates_automatically: true,
             last_update_check: None,
             update_record: None,
+            other_fields: BTreeMap::new(),
         }
     }
 }
@@ -1192,6 +1198,8 @@ impl Settings {
             check_updates_automatically: self.check_updates_automatically,
             last_update_check: self.last_update_check,
             update_record: self.update_record,
+            // Capped as every list is, so a damaged file's thousands of stray keys aren't carried on.
+            other_fields: self.other_fields.into_iter().take(MAX_ENTRIES).collect(),
         }
     }
 
@@ -1784,6 +1792,7 @@ mod tests {
                 version: "9.9.9".to_owned(),
                 reason: crate::ui_model::UpdateRecordReason::Blocked,
             }),
+            other_fields: BTreeMap::new(),
         }
     }
 
@@ -2211,6 +2220,7 @@ mod tests {
             check_updates_automatically,
             last_update_check,
             update_record,
+            other_fields: _,
         } = every_field();
         assert_ne!(source, default.source);
         assert_ne!(input_device, default.input_device);
@@ -2277,6 +2287,19 @@ mod tests {
         assert!(Settings::default().cast_addresses.is_empty());
     }
 
+    // covers: S212
+    #[test]
+    fn unknown_fields_past_the_cap_are_dropped_by_name() {
+        let fields: Vec<String> = (0..=MAX_ENTRIES)
+            .map(|index| format!(r#""future_{index:03}": true"#))
+            .collect();
+        let text = format!(r#"{{"version": 3, {}}}"#, fields.join(", "));
+        let (read, _) = Settings::from_json(&text).expect("read");
+        assert_eq!(read.other_fields.len(), MAX_ENTRIES);
+        assert!(read.other_fields.contains_key("future_255"));
+        assert!(!read.other_fields.contains_key("future_256"));
+    }
+
     #[test]
     fn a_field_that_does_not_read_is_named_and_falls_back_alone() {
         let (read, found) = Settings::from_json(
@@ -2285,6 +2308,10 @@ mod tests {
         .expect("read");
         assert_eq!(read.master_volume, Settings::default().master_volume);
         assert!(read.show_virtual_devices);
+        assert!(
+            read.other_fields.is_empty(),
+            "a known field is never kept as unknown"
+        );
         assert!(
             matches!(&found, Loaded::Read { unreadable, .. } if unreadable == &["master_volume"]),
             "{found:?}"

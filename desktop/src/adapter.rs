@@ -1022,6 +1022,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             check_updates_automatically: self.view.check_updates_automatically,
             last_update_check: self.view.last_update_check,
             update_record: self.view.update_record.clone(),
+            other_fields: self.saved.other_fields.clone(),
         }
         .clamped()
     }
@@ -10793,6 +10794,27 @@ mod tests {
         adapter.save_settings();
         let (saved, _) = SettingsFile::at(path).load();
         assert!(saved.speaker_names.is_empty(), "cleared, nothing is kept");
+    }
+
+    // covers: S212
+    #[test]
+    fn a_field_this_build_does_not_know_survives_a_load_and_a_save() {
+        let dir = test_dir("adapter-unknown-field");
+        let path = dir.join(settings::FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{"version": 3, "master_volume": 40, "future_choice": {"on": true}}"#,
+        )
+        .unwrap();
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.poll();
+        adapter.rename_speaker(&key(SPEAKERS), "Desk");
+        adapter.save_settings();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let stored: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(stored["future_choice"], serde_json::json!({"on": true}));
+        assert_eq!(stored["master_volume"], 40.0);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     // covers: S286
