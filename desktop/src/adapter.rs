@@ -12867,6 +12867,26 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &cc(CAST_KITCHEN)).volume, 30.0);
     }
 
+    // covers: S251
+    #[test]
+    fn a_preset_skips_the_volume_of_a_cast_speaker_that_never_reported_one() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        let kitchen = |adapter: &AudioAdapter<MockBackend>| {
+            let preset = adapter.capture_preset("preset:1", "Evening").unwrap();
+            preset
+                .members
+                .iter()
+                .find(|m| m.key == cc(CAST_KITCHEN))
+                .unwrap()
+                .volume
+        };
+        assert_eq!(kitchen(&adapter), None, "no status reported a level yet");
+
+        cast_first_status(&mut adapter, &fake, 0.8);
+        assert!(kitchen(&adapter).is_some());
+    }
+
     fn cast_first_status(adapter: &mut AudioAdapter<MockBackend>, fake: &FakeCast, level: f64) {
         fake.report(HostEvent::Session {
             attempt: AttemptId(1),
