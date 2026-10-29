@@ -578,9 +578,9 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
     );
 }
 
-/// A device that reads the stream but reports `PLAYING` only 13 s after the
-/// start, past the session's 10 s `FETCH_TIMEOUT`, as one whose startup
-/// latency is seconds (C74).
+/// A device that fetches the stream at once but reports `PLAYING` only 13 s
+/// after the start, longer than `FETCH_TIMEOUT`, as one whose startup latency
+/// is seconds (C74): nothing times out a `PLAYING` that is slow to come.
 // covers: C74
 #[test]
 fn a_device_that_reports_playing_after_13_s_is_waited_for() {
