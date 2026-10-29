@@ -3671,9 +3671,19 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::CaptureBusy => {
                 self.post(NoticeSubject::Source, NoticeMessage::CaptureFailed);
             }
+            BackendEvent::InputAway => {
+                let source = self.chosen_name();
+                self.post(
+                    NoticeSubject::Source,
+                    NoticeMessage::InputNotConnected { source },
+                );
+            }
             BackendEvent::CaptureFree => {
                 self.clear_if(NoticeSubject::Source, |message| {
-                    matches!(message, NoticeMessage::CaptureFailed)
+                    matches!(
+                        message,
+                        NoticeMessage::CaptureFailed | NoticeMessage::InputNotConnected { .. }
+                    )
                 });
             }
             BackendEvent::Stopped { reason } => {
@@ -5846,8 +5856,9 @@ mod tests {
         );
     }
 
+    // covers: S329
     #[test]
-    fn an_input_device_unplugged_while_streaming_stops_streaming_with_a_notice() {
+    fn an_input_device_unplugged_while_streaming_shows_a_notice_until_it_is_back() {
         let mut adapter = adapter();
         adapter
             .audio
@@ -5860,16 +5871,23 @@ mod tests {
         adapter.audio.disconnect_input(MIC);
         for _ in 0..20 {
             adapter.poll();
+            assert!(adapter.snapshot().running, "streaming stays on");
         }
-        let state = adapter.snapshot();
-        assert!(!state.running);
-        assert_eq!(state.source_id, mic(), "the choice stays");
+        assert_eq!(adapter.snapshot().source_id, mic(), "the choice stays");
         assert_eq!(
             messages(&adapter),
-            [NoticeMessage::InputDisconnected {
+            [NoticeMessage::InputNotConnected {
                 source: "Microphone (USB Audio)".to_owned()
             }]
         );
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        for _ in 0..4 {
+            adapter.poll();
+        }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert!(adapter.snapshot().running);
     }
 
     #[test]
