@@ -681,6 +681,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | source apps: regular apps with a bundle ID, AudioSync left out, once each, sorted by name | S12 |
 | source apps: the first instance's name, a blank name replaced by the bundle ID | S12 |
 | source apps: names that sort alike are ordered by bundle ID | S12 |
+| source apps: only regular apps have their name and icon read, in the listed order | S12 |
 | processes: the app's own process and its helpers, in Core Audio's order | S11 |
 | processes: another app's helper belongs to that app only | S11 |
 | processes: without the responsibility lookup only the app's own process counts | S11 |
@@ -748,6 +749,12 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | presets: the current mark follows a band change (for S259 the mark is worked out again after a band change; publishing on every model push is not checked) | S264, S259 |
 | presets: no presets, the submenu holds No Presets and the panel row is hidden | S260, S263 |
 | presets: the preset texts | S269 |
+| presets: a stored value that can't be read loses only that value, or its preset, never the others | S251 |
+| presets: stored presets that aren't a list read as none | S251 |
+| presets: a recall that swaps the Cast speaker while streaming gives the new one the preset's volume | S252, C105 |
+| presets: a Cast speaker whose volume isn't known yet is saved without a volume | S251, S252 |
+| presets: the card's colors are brand tokens, never a literal color | S268 |
+| presets: the teal marks and the empty-state text reach 4.5:1 in light and dark | S268 |
 | zones: a local speaker's gain goes through its zone, and no zone is the gain of before | S71, S249 |
 | zones: a zone volume change gives the Cast speaker in a session its new level, once | S249 |
 | zones: a Cast report in a zone moves the own level by master times zone | S249, S250 |
@@ -938,6 +945,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | cast model: a playing speaker added by address that a browse finds plays as loud as before when its id has another zone volume | S341 |
 | cast model: a playing speaker added by address whose loudness its id's zone can't reach gets the nearest level sent once | S341 |
 | cast model: a speaker added by address that a browse finds with no session gets no level sent | S341 |
+| cast model: a speaker that is on with no session leaves the list, says so in a notice and no longer blocks another | C2 |
+| cast model: a speaker added by address that is on with no session stays on under the id a browse finds | C2 |
 | quit: SIGTERM and Ctrl-C's SIGINT both take the clean exit path (S111) | S111 |
 | quit: after a signal's clean exit the status is 128 plus its number, so a calling script sees the interrupt (S111) | S111 |
 | local network probe: a browser waiting on PolicyDenied means denied | S154 |
@@ -1028,6 +1037,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | app tap: the first audio process while waiting gets a tap | S11 |
 | app tap: the app gone means the source is lost | S21, S142 |
 | app tap: AudioSync's own process is never tapped, even when the app launched it | S10, S11 |
+| app tap: every tap mutes the app it taps, and only AudioSync sees it | S13 |
 | app retap: the running tap is changed in place first, and nothing stops | S11, S13 |
 | app retap: a rebuilt tap exists before the old one closes, so the app stays muted | S11, S13 |
 | app retap: a new tap at another rate is discarded and the old one keeps running until the rebuild | S13, S157 |
@@ -1089,6 +1099,10 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | native airplay: a speaker not responding, lost or busy says reconnecting from its second failed retry | S222 |
 | native airplay: local outputs line up again only when L changes | S177, S178, S222 |
 | native airplay: the first reconcile starts the sender | S101, S222 |
+| native airplay: no AUDIOSYNC_AIRPLAY_PCM names no receiver | S222 |
+| native airplay: AUDIOSYNC_AIRPLAY_PCM IDs are trimmed and device IDs take the 12-hex form | S222 |
+| native airplay: a status line without the stream's counters | S222 |
+| native airplay: the status line comes every 5 s, as on Windows | S222 |
 | devices: macOS's own AirPlay output is hidden by default | S145, S151 |
 | pairing store: the file lives in the folder that is marked | S224 |
 | pairing store: a Pairings folder of its own in AudioSync's folder, where older builds kept the file | S224 |
@@ -1121,6 +1135,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | EC2 Bluetooth fresh link: switched off before its restart, it is not restarted | S325 |
 | EC2 Bluetooth fresh link: a start in one session arms a restart | S325 |
 | EC2 Bluetooth fresh link: a restart armed in a session that has ended is dropped | S325 |
+| EC2 Bluetooth fresh link: the first stream after a refused start, 3 s later, still restarts once | S325, S331 |
 | automation consent: only one Apple event is in flight per undecided player, and it isn't read meanwhile | S336 |
 | automation consent: a hung send for Spotify doesn't stop Music's readings | S336 |
 | automation consent: -1743 counts as denied and success as allowed, for readings and commands | S336 |
@@ -1167,6 +1182,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | output format: one debug line names the output's number and the old and the new format | S330 |
 | output format: the stop line tells a format change from a stall or a lost device | S330 |
 | output format: a format change during a stall trial reopens as a format change and leaves the trial as it was | S330 |
+| output format: a device that moves to another rate while its output starts reopens it once the watch listens | S325 |
+| output format: a start check reopens an output once, then keeps it until its device leaves or it is switched off | S325 |
 | EC4 rate: a new capture rate rebuilds the session | S20, S140, S157 |
 | EC4 rate: a higher capture rate rebuilds the session | S20, S140, S157 |
 | EC4 rate: the same rate keeps playing | S157 |
@@ -1207,6 +1224,10 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | microphone: the answer runs the latest switch once | S141 |
 | microphone: a later pick drops the switch waiting on the prompt, and its answer runs nothing | S141 |
 | microphone: a later pick leaves a plain start's answer alone | S141 |
+| microphone: an input starts once allowed, asks while undecided, and fails when denied or restricted | S15 |
+| microphone: picking the source that plays again drops the switch waiting on the prompt (S141) | S141 |
+| microphone: picking the channel pair that plays again drops the pair switch waiting on the prompt (S141) | S141 |
+| microphone: a pick of a capture the switch doesn't leave, or with no switch waiting, changes nothing | S141 |
 | EC6 app quit: the source app quitting while streaming stops the session | S142, S164 |
 | EC6 app quit: the source app quitting while stopped changes nothing, under either setting (S227 a) | S142, S227 |
 | EC6 app quit: another source, another app or an app without a bundle ID keeps streaming (S227 b) | S164, S227 |
@@ -1471,6 +1492,24 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | quit: SIGTERM runs the quit steps first and exits with 143 only once they are done (S111) | S111 |
 | quit: Ctrl-C exits with 130 once the bound has passed when the quit steps don't end, and only once (S111) | S111 |
 | quit: a second Ctrl-C while the quit steps run exits at once with 130, and nothing exits again later (S111) | S111 |
+| now playing: … (a position that moves, a paused track kept through empty readings or dropped, the paused player followed, the state shown after a play-pause) | S218, S274, S335 |
+| calibration: … (one speaker's run: refusals, the recording, the estimate, abort, cancel, the button; which outputs sit out of Calibrate All) | S185, S232, S233, S234, S235 |
+| calibration refusal: … (the press, the tooltip, another calibration holding the outputs) | S232 |
+| calibration fill: … (silence for a capture that never delivered or went quiet, in real time) | S232 |
+| calibrate all: … (the order and windows, who sits out, what stops a run, the sheet, Apply, Undo, Measure Again, the progress line) | S233, S235, S236, S237, S238, S239, S240, S241 |
+| calibrate zone: … (the zone's members in order, members that are off, the AirPlay line, the menu item, the sheet) | S237, S240, S255 |
+| source app quit: … (a paused app still runs, a process that ended, the capture's report and macOS's notice, the 5 s look) | S164, S227 |
+| mix quit: … (a mix ends only with its last app, the wait after a capture loss, macOS's quit notice in any letter case) | S164 |
+| mix: … (stored forms, the menu's checks and modes, an all-except tap, a mix's lost capture) | S10, S164, S242 |
+| every time: … (a speaker that asks for a code every time: off with a notice, by hand, the PIN prompt, the end of a stream) | S223 |
+| AirPlay search: … (the hint while a running sender lists nothing for under 20 s, the next look, a wake) | S101, S154 |
+| S331 refused start: … (a refused start stays on, hard errors, EAGAIN, the 3 s tries) | S331 |
+| known playing: … (which readings count for each source) | S19 |
+| session stop: … (which reasons restart, one log line each) | S20 |
+| airplay level: … (a level set on the speaker kept or held, own volume above 100, DeviceVolume at master 0) | S276, S290, S291 |
+| airplay level vectors: … (`core/tests/vectors/s290_volume.json` through the Mac's calls) | S290 |
+| auto-connect skipped: … (a run that skips auto-connect saves nothing) | S170 |
+| device anchor: … (the device anchor in the status line) | S334 |
 
 ### core (`Tests/coretest.swift`)
 
@@ -1508,6 +1547,7 @@ From 2026-10-19 to 2026-10-20 the suite ran the app's pipe feed, `CoreFifoFeed`,
 | core gain: 0 is exact silence from the first buffer (S64) | S64 |
 | core gain: 0.5 halves the signal once the change has ramped | S64 |
 | core gain: NaN and ±inf never reach a device (S65) | S65 |
+| calibration fill: … (the core's parts, the test signal with no captured block, nothing after stop) | S232 |
 
 ### soak rules (`Tests/soakrulestest.swift`)
 
@@ -2597,6 +2637,19 @@ The checks for S256 to S258, S287, S288, S337 and S338 in the remote crate (`rem
 | the_debug_switch_starts_the_remote_only_with_the_debug_log | S288 |
 | the_debug_switch_starts_the_remote_for_this_run_and_saves_nothing | S288 |
 | web remote: the debug switch starts it for one run on the saved or given port, only with the debug log | S288 |
+| web remote: a volume is clamped to 0 to 100 before use; one that isn't a number is 0 | S76 |
+| web remote: the presets go out in order with the current one marked, and no run means not calibrating | S256, S253 |
+| web remote: the core accepts a snapshot with zones and presets | S256, S253 |
+| web remote: zone and preset commands read as the core sends them; anything else is dropped | S257 |
+| web remote: a zone with no listed member doesn't flip; an unknown zone or preset changes nothing | S257 |
+| web remote: a port from 1024 to 65535 is taken | S120 |
+| web remote: Forget All stays available after a failed save, when no device is left in memory | S120 |
+| web remote: off on port 7655 by default; the stored setting and port are read back, a damaged port is dropped | S288 |
+| web remote: the .local address comes first, the IP address second | S288 |
+| web remote: VoiceOver reads the code digit by digit | S288 |
+| web remote: the paired count comes from the devices file, capped at 8; a file the core can't read counts as none | S288 |
+| web remote: a device idle for 90 days isn't counted, only the newest 8 are | S288 |
+| web remote: a seen list of another length counts every device as seen now, an unreadable time only its own device | S288 |
 | a_port_another_app_holds_on_ipv4_only_is_in_use | S337 |
 | only_home_network_peers_get_an_answer_and_a_refusal_is_logged_once (`remote/src/server.rs`) | S338 |
 | a_refused_address_is_reported_once_a_minute (`remote/src/server.rs`) | S338 |
@@ -2832,7 +2885,7 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 | a_new_exe_gone_before_the_restart_restores_the_bak (the stand-in new exe is deleted after step 4, then Restart Now) | S303, S315 |
 | a_new_exe_still_scanned_after_a_failed_restart_is_deleted_on_a_retry (the stand-in new exe ends before its signal and deleting it meets error 32 twice: the undo waits 250 ms and 500 ms on a counted clock, restores the old exe without a RestoreFailed notice, and every try runs on the updater's worker thread) | S303, S315 |
 | quitting_after_a_swap_whose_exe_is_gone_renames_the_bak_back (delete the new exe after step 4, then Quit: `audiosync.exe` is the old version again and the version is stored as blocked) | S315 |
-| the_end_of_a_windows_session_gives_a_removed_exe_its_bak_back_and_keeps_the_record (`desktop/src/view.rs`; the same removed exe at sign-out or shutdown: the session-end step runs the quit step before its last save, and the blocked version reaches the saved settings) | S315 |
+| the_end_of_a_windows_session_gives_a_removed_exe_its_bak_back_and_keeps_the_record (`desktop/src/view.rs`; the same removed exe at sign-out or shutdown: the session-end step runs the quit step before its last save, and the blocked version reaches the saved settings) | S315, S212 |
 | a_quit_during_the_undo_of_a_failed_restart_waits_for_it_and_keeps_the_record (Quit while the worker waits to retry the locked new exe: the quit waits for the undo, the old exe is back and the version is stored as failed) | S303, S315 |
 | the_undo_at_quit_spends_at_most_two_seconds_on_lock_retries (every `.bak` rename locked at quit: the counted waits add up to 2 s at most) | S315 |
 | a_quit_while_the_swap_retries_its_step_4_leaves_an_exe_in_place (step 4 always meets a sharing violation and Quit comes during its first retry wait: the quit returns only once the restore put the old exe back) | S301, S315 |
@@ -2950,6 +3003,11 @@ The release side:
 | a_source_that_cant_start_gives_way_to_the_old_one_under_the_same_airplay_speaker (`desktop/src/adapter.rs`) | S141 |
 | a_source_that_fails_once_the_old_outputs_faded_gives_way_under_the_same_cast_speaker (`desktop/src/adapter.rs`) | S141 |
 | an_input_or_channel_pair_that_cant_start_gives_way_to_the_old_one (`desktop/src/adapter.rs`) | S141 |
+| picking_the_playing_input_again_keeps_the_busy_input_notice (`desktop/src/adapter.rs`) | S163 |
+| another_channel_pair_while_stopped_clears_the_notice_of_why_the_input_stopped (`desktop/src/adapter.rs`) | S163 |
+| picking_the_playing_source_again_keeps_the_speaker_and_pairing_notices (`desktop/src/adapter.rs`) | S163 |
+| picking_the_stopped_source_again_keeps_the_notice_that_its_app_quit (`desktop/src/adapter.rs`) | S163 |
+| picking_the_whole_system_again_after_the_app_quit_clears_the_switch_notice (`desktop/src/adapter.rs`) | S163 |
 | a_capture_start_on_a_busy_input_fails_with_the_busy_reason (`desktop/src/audio/controller.rs`) | S333 |
 | a_lost_capture_whose_input_is_busy_keeps_trying_every_3_s (`desktop/src/audio/controller.rs`) | S329, S333 |
 | a_busy_capture_is_told_free_when_streaming_stops (`desktop/src/audio/controller.rs`) | S333 |
