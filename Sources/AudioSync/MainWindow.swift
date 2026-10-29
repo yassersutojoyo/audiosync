@@ -1438,7 +1438,6 @@ private struct DelayValueButton: View {
         .help(t.syncAdjust)
         .accessibilityLabel(expanded ? t.hideDelayControls(label) : t.showDelayControls(label))
         .accessibilityValue(value)
-        .accessibilityHint(t.syncAdjust)
         .onChange(of: value) { _, now in DebugTrace.log(DelayBadge.traceLine(id: id, shows: now)) }
         // Only for the field being typed in, which keeps VoiceOver's focus;
         // Command-S applying other open panels stays quiet.
