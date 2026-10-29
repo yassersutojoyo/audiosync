@@ -816,6 +816,23 @@ mod tests {
         assert_eq!(again, state);
     }
 
+    #[test]
+    fn a_paused_track_says_so_and_a_snapshot_without_the_field_plays() {
+        let with = |playing: &str| {
+            SAMPLE.replacen(
+                r#""source": "Music"}"#,
+                &format!(r#""source": "Music", "playing": {playing}}}"#),
+                1,
+            )
+        };
+        let written = |json: &str| -> Value {
+            serde_json::from_str(&State::from_json(json).unwrap().to_json(1)).unwrap()
+        };
+        assert_eq!(written(&with("false"))["now_playing"]["playing"], false);
+        assert_eq!(written(SAMPLE)["now_playing"]["playing"], true);
+        assert!(State::from_json(&with("0")).is_err());
+    }
+
     const SOURCES: &str = r#""sources": [
             {"id": "system", "name": "All System Audio", "kind": "system"},
             {"id": "app:music", "name": "Music", "kind": "app", "available": true, "notice": null},
@@ -1117,6 +1134,25 @@ mod tests {
         ] {
             assert!(State::from_json(&bad).is_err(), "{bad}");
         }
+    }
+
+    // covers: S256
+    #[test]
+    fn a_zone_counts_its_absent_members_in_all_and_a_snapshot_without_it_takes_total() {
+        let json = with_zones_and_presets(
+            r#"[{"id": "z1", "name": "Gone", "volume": 60, "members": [],
+                 "counts": {"on": 0, "total": 0, "waiting": 0, "all": 3}},
+                {"id": "z2", "name": "Older", "volume": 60, "members": ["den"],
+                 "counts": {"on": 0, "total": 1, "waiting": 0}}]"#,
+            "[]",
+        );
+        let state = State::from_json(&json).unwrap();
+        let written: Value = serde_json::from_str(&state.to_json(1)).unwrap();
+        assert_eq!(written["zones"][0]["counts"]["all"], 3);
+        assert_eq!(written["zones"][1]["counts"]["all"], 1);
+        assert_eq!(State::from_json(&state.to_json(1)).unwrap(), state);
+        let fewer = json.replacen(r#""waiting": 0}}]"#, r#""waiting": 0, "all": 0}}]"#, 1);
+        assert!(State::from_json(&fewer).is_err(), "all below total");
     }
 
     // covers: S256, S253

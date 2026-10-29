@@ -2512,7 +2512,7 @@ The checks for S256 to S258, S287 and S288 in the remote crate (`remote/src/stat
 | phone_zone_and_preset_commands_apply_without_showing_the_main_window | S257, S266 |
 | a_phone_zone_toggle_or_recall_leaves_a_code_asking_member_off_and_opens_no_pin_dialog | S257 |
 | a_phone_zone_click_or_recall_leaves_a_code_asking_member_off_with_a_notice | S257 |
-| web remote: a zone lists its listed members in zone order with on, total and waiting; a hidden one doesn't count | S256 |
+| web remote: a zone lists its listed members in zone order with on, total and waiting; one not listed counts only in all | S256 |
 | web remote: a zone command sets the zone's volume, then flips it; a preset command recalls it | S257 |
 | web remote: a zone or preset from the phone keeps a member that asks for a code off; with no other member it doesn't flip | S257 |
 | web remote: the Mac refuses every command that arrives during a microphone run | S258 |

@@ -1144,6 +1144,38 @@ mod tests {
         );
     }
 
+    // covers: S256
+    #[test]
+    fn a_zone_counts_on_as_its_switches_show_and_its_absent_members_in_all() {
+        let mut state = zoned();
+        state.running = false;
+        let snapshot = snapshot(&state, not_virtual, None, "Desk PC", &Text);
+        let downstairs = &snapshot.zones[0];
+        assert!(
+            downstairs
+                .members
+                .iter()
+                .all(|id| !snapshot.speaker(id).unwrap().on),
+            "with streaming off every switch shows off"
+        );
+        assert_eq!((downstairs.counts.on, downstairs.counts.waiting), (0, 0));
+        let written: serde_json::Value = serde_json::from_str(&snapshot.to_json(0)).unwrap();
+        assert_eq!(written["zones"][0]["counts"]["all"], 4);
+        assert_eq!(
+            written["zones"][1]["counts"]["all"], 1,
+            "the page lists none of Studio's members"
+        );
+        assert!(State::from_json(&snapshot.to_json(0)).is_ok());
+    }
+
+    #[test]
+    fn a_paused_track_goes_out_as_paused() {
+        let track = crate::now_playing_card::fake::track("Spotify.exe", "Song", "Band", false);
+        let snapshot = snapshot(&state(), not_virtual, Some(&track), "Desk PC", &Text);
+        let written: serde_json::Value = serde_json::from_str(&snapshot.to_json(0)).unwrap();
+        assert_eq!(written["now_playing"]["playing"], false);
+    }
+
     // covers: S257
     #[test]
     fn zone_and_preset_commands_map_to_the_windows_actions() {

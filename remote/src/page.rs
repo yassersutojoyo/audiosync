@@ -150,6 +150,16 @@ mod tests {
     }
 
     #[test]
+    fn a_paused_track_and_a_zone_with_no_member_here_read_as_on_the_mac() {
+        let script = only_element(PAGE, "script").unwrap();
+        assert!(script.contains("paused: \"Paused\","));
+        assert!(script.contains("const paused = playing && playing.playing === false;"));
+        assert!(script.contains("zoneNoneHere: (all) => `None of ${all} found`,"));
+        assert!(script.contains("zoneEmpty: \"No speakers\","));
+        assert!(script.contains("TEXT.zoneNoneHere(counts.all)"));
+    }
+
+    #[test]
     fn a_fixed_delay_hides_its_row_and_an_unpair_error_shows_under_the_button() {
         let script = only_element(PAGE, "script").unwrap();
         assert!(

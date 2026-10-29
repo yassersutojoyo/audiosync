@@ -9990,10 +9990,10 @@ do {
     let zoneObjects = zonedObject?["zones"] as? [[String: Any]] ?? []
     let presetObjects = zonedObject?["presets"] as? [[String: Any]] ?? []
     check(zoneObjects.first?["members"] as? [String] == ["hp", "usb", "bt"]
-            && zoneObjects.first?["counts"] as? [String: Int] == ["on": 2, "total": 3, "waiting": 1]
+            && zoneObjects.first?["counts"] as? [String: Int] == ["on": 2, "total": 3, "waiting": 1, "all": 4]
             && zoneObjects.first?["volume"] as? Double == 70
-            && zoneObjects.last?["counts"] as? [String: Int] == ["on": 0, "total": 0, "waiting": 0],
-          "web remote: a zone lists its listed members in zone order with on, total and waiting; a hidden one doesn't count",
+            && zoneObjects.last?["counts"] as? [String: Int] == ["on": 0, "total": 0, "waiting": 0, "all": 1],
+          "web remote: a zone lists its listed members in zone order with on, total and waiting; one not listed counts only in all",
           "\(zoneObjects)")
     check(presetObjects.map { $0["id"] as? String ?? "" } == ["p1", "p2"]
             && presetObjects.map { $0["current"] as? Bool ?? false } == [true, false]
