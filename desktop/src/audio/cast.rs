@@ -876,6 +876,11 @@ impl CastSpeakers {
             if self.saved_on == Some(manual) {
                 self.saved_on = Some(id);
             }
+            if let Some(volume) = self.volumes.remove(&manual)
+                && !(self.enabled == Some(id) && self.attempt.is_some())
+            {
+                self.volumes.insert(id, volume);
+            }
             // A playing session's level comes from its first status under the ID instead (S341).
             if !(self.enabled == Some(manual) && self.attempt.is_some())
                 && let Some(own) = self.levels.remove(&manual)
@@ -3425,6 +3430,112 @@ pub mod tests {
             (shown(&cast, LIVING) - 30.0).abs() < 1e-9,
             "the ID's own level stays"
         );
+    }
+
+    // covers: S341
+    #[test]
+    fn a_browse_moves_the_reported_volume_of_a_speaker_added_by_address() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_probe(|_| true);
+        cast.add_address(address("192.0.2.30"));
+        let manual = address("192.0.2.30").device_id().to_string();
+        assert_eq!(cast.set_enabled(&manual, true), Ok(()));
+        cast.set_streaming(true);
+        poll_until_started(&fake, &mut cast);
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(&manual),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.4,
+                control_type: ControlType::Fixed,
+                step_interval: Some(0.05),
+                has_level: true,
+                ..DeviceVolume::default()
+            }),
+        });
+        cast.poll();
+        assert_eq!(cast.set_enabled(&manual, false), Ok(()));
+        cast.poll();
+
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 30),
+        );
+        cast.poll();
+        let row = cast
+            .speakers()
+            .into_iter()
+            .find(|info| info.id == KITCHEN)
+            .expect("listed");
+        assert_eq!((row.volume_fixed, row.volume_step), (true, 5.0));
+    }
+
+    // covers: S341
+    #[test]
+    fn a_browse_keeps_the_reported_volume_of_a_session_playing_under_the_id() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_resolver(|_, port| Ok(SocketAddr::from(([192, 0, 2, 30], port))));
+        cast.set_probe(|_| true);
+        cast.add_address(address("192.0.2.30"));
+        let kitchen_at_30 = |fake: &FakeCast| {
+            fake.announce_at(
+                KITCHEN,
+                "Kitchen",
+                DEVICE_PORT,
+                Ipv4Addr::new(192, 0, 2, 30),
+            );
+        };
+        kitchen_at_30(&fake);
+        cast.poll();
+        fake.withdraw(KITCHEN, "Kitchen");
+        cast.poll();
+
+        // A host name for the same device that no browse has found yet plays once, at a fixed volume.
+        cast.add_address(address("speaker.local"));
+        let host = address("speaker.local").device_id().to_string();
+        cast.set_streaming(true);
+        for _ in 0..400 {
+            cast.poll();
+            if cast.set_enabled(&host, true).is_ok() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        poll_until_started(&fake, &mut cast);
+        fake.report(reported(&host, 0.4, ControlType::Fixed));
+        cast.poll();
+        assert_eq!(cast.set_enabled(&host, false), Ok(()));
+        cast.poll();
+
+        fake.state().started.clear();
+        assert_eq!(cast.set_enabled(KITCHEN, true), Ok(()));
+        poll_until_started(&fake, &mut cast);
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(2),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.4,
+                control_type: ControlType::Attenuation,
+                has_level: true,
+                ..DeviceVolume::default()
+            }),
+        });
+        cast.poll();
+        assert!(!volume_fixed(&cast, KITCHEN));
+
+        kitchen_at_30(&fake);
+        let events = cast.poll();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, BackendEvent::CastIdentified { .. })),
+            "{events:?}"
+        );
+        assert!(!volume_fixed(&cast, KITCHEN));
     }
 
     // covers: S339
