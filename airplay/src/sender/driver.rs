@@ -27,9 +27,7 @@ use std::time::{Duration, Instant};
 use crate::ap2::PinPairing;
 use crate::audio::SAMPLE_RATE;
 use crate::connects::{ConnectQueue, StartKind};
-use crate::discovery::{
-    BrowseEvent, Browser, Device, DeviceKey, Directory, DirectoryEvent, ProtocolPath,
-};
+use crate::discovery::{Browser, Device, DeviceKey, Directory, DirectoryEvent, ProtocolPath};
 use crate::error::{ErrorKind, SessionError, UnsupportedReason, UserReason, Warning};
 use crate::homekit::{HomeKitCredentials, SrpDone, SrpWork};
 use crate::ids::{Entropy, OsEntropy, SessionIds};
@@ -2481,27 +2479,7 @@ impl Driver {
     /// directory keeps what it learned about PCM refusals (P74).
     fn stop_discovery(&mut self) {
         self.browser = None;
-        let services: Vec<BrowseEvent> = self
-            .directory
-            .devices()
-            .flat_map(|device| {
-                let raop = device.raop.as_ref().map(|endpoint| BrowseEvent::Removed {
-                    kind: crate::discovery::ServiceKind::Raop,
-                    instance: endpoint.instance.clone(),
-                });
-                let airplay = device
-                    .airplay
-                    .as_ref()
-                    .map(|endpoint| BrowseEvent::Removed {
-                        kind: crate::discovery::ServiceKind::AirPlay,
-                        instance: endpoint.instance.clone(),
-                    });
-                raop.into_iter().chain(airplay)
-            })
-            .collect();
-        for service in services {
-            self.directory.apply(service);
-        }
+        self.directory.clear_services();
         for key in std::mem::take(&mut self.reported) {
             self.emit(SenderEvent::Receiver(ReceiverEvent::Gone(key)));
         }
@@ -2602,6 +2580,7 @@ fn progress_at(progress: Progress, set_at: Instant, now: Instant) -> Option<Prog
 mod tests {
     use super::*;
     use crate::clock::SenderClock;
+    use crate::discovery::BrowseEvent;
     use crate::stream::StreamConfig;
 
     #[test]
@@ -3566,7 +3545,7 @@ mod tests {
             let changes = driver.directory.apply(BrowseEvent::Resolved(ServiceRecord {
                 kind: ServiceKind::Raop,
                 instance: name.to_owned(),
-                host: "dapur.local".to_owned(),
+                host: "living.local".to_owned(),
                 port: 5000,
                 txt: vec![b"cn=0,1".to_vec(), b"et=0".to_vec()],
                 addresses: vec![ScopedAddr::new("192.0.2.58".parse().expect("an address"))],

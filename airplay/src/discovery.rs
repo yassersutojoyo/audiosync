@@ -793,18 +793,29 @@ impl Directory {
                 }
                 self.resolved += 1;
                 self.services.insert(id, (key, record, self.resolved));
-                affected.into_iter().map(|key| self.rebuild(key)).collect()
+                affected
+                    .into_iter()
+                    .filter_map(|key| self.rebuild(key))
+                    .collect()
             }
             BrowseEvent::Removed { kind, instance } => {
                 match self.services.remove(&(kind, instance)) {
-                    Some((key, ..)) => vec![self.rebuild(key)],
+                    Some((key, ..)) => self.rebuild(key).into_iter().collect(),
                     None => Vec::new(),
                 }
             }
         }
     }
 
-    fn rebuild(&mut self, key: DeviceKey) -> DirectoryEvent {
+    /// Forgets every service and device, as when discovery stops. What was
+    /// seen in this run and the PCM refusals stay (P74, P215).
+    pub fn clear_services(&mut self) {
+        self.services.clear();
+        self.devices.clear();
+    }
+
+    /// `None` when the device is listed and its records changed nothing.
+    fn rebuild(&mut self, key: DeviceKey) -> Option<DirectoryEvent> {
         let find = |kind: ServiceKind| {
             self.services
                 .values()
@@ -818,14 +829,17 @@ impl Directory {
             find(ServiceKind::AirPlay),
         ) {
             Some(device) => {
+                if self.devices.get(&key) == Some(&device) {
+                    return None;
+                }
                 self.devices.insert(key, device.clone());
-                DirectoryEvent::Updated(Box::new(device))
+                Some(DirectoryEvent::Updated(Box::new(device)))
             }
             None => {
                 // The PCM refusal stays remembered: the device may come back
                 // (P74).
                 self.devices.remove(&key);
-                DirectoryEvent::Removed(key)
+                Some(DirectoryEvent::Removed(key))
             }
         }
     }
