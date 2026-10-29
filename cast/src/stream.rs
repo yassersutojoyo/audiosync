@@ -1099,6 +1099,9 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
     // Once the ring has run dry, silence keeps the stream on the clock until
     // audio returns, so no debt goes out later as a burst (C52).
     let mut dry = false;
+    // Debt that outlasts the underrun wait while audio flows again is audio
+    // lost upstream: silence pays it too.
+    let mut caught_up = Instant::now();
     let mut overflow = reader.overflow();
     while !shared.stopped.load(Ordering::SeqCst) {
         // Frames the full ring refused never reach a block: dropped too (C79).
@@ -1139,7 +1142,7 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
                 reader.read_into(&mut block, block_frames);
                 blocks.push(block);
                 dry = false;
-            } else if dry || due - emitted > underrun_blocks {
+            } else if dry || due - emitted > underrun_blocks || caught_up.elapsed() > UNDERRUN {
                 dry = true;
                 blocks.push(vec![0; block_frames * FRAME_BYTES]);
                 shared
@@ -1149,6 +1152,9 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
                 break;
             }
             emitted += 1;
+        }
+        if emitted == due {
+            caught_up = Instant::now();
         }
         let excess = reader.available().saturating_sub(backlog_frames);
         if excess > 0 {
