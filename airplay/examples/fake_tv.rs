@@ -409,7 +409,7 @@ fn main() -> ExitCode {
             _ => println!("{} commands: vol <dB>, quit", stamp(start)),
         }
     }
-    // A run with no terminal sees stdin end at once: it serves until killed.
+    // Only reached when the Ctrl+C handler failed to install: it serves until killed.
     if !quit {
         loop {
             thread::sleep(Duration::from_secs(3600));
