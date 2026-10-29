@@ -45,7 +45,7 @@ extension AppDelegate {
             guard let self else { return [] }
             return zones.map { zone in
                 var shown = zone
-                shown.members.removeAll(where: isHidden)
+                shown.members.removeAll(where: self.isHidden)
                 return shown
             }
         }
