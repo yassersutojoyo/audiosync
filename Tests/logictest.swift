@@ -9186,6 +9186,13 @@ do {
     check(CalibrateAllFlow.end(start: connecting, now: connecting, taking: taking) == nil
             && CalibrateAllFlow.end(start: connecting, now: connected, taking: taking) == .speakersChanged,
           "calibrate all: a speaker still connecting at the start that begins playing stops the run, unmuted (S240)")
+    var referenced = started
+    referenced.reference = "mac"
+    var otherReference = referenced
+    otherReference.reference = "usb"
+    check(CalibrateAllFlow.end(start: referenced, now: referenced, taking: taking) == nil
+            && CalibrateAllFlow.end(start: referenced, now: otherReference, taking: taking) == .speakersChanged,
+          "calibrate all: a new local reference stops the run as a change of the speakers (S240)")
     check(t.calibrateAllLine(.ended(.rateChanged))
                 == "The audio's sample rate changed during the measurement. No delay was changed."
             && t.calibrateAllLine(.cannotMeasureAgain(name: "Desk", missing: .all))
@@ -9348,9 +9355,26 @@ do {
     // The stored values must still be the ones measured from.
     let measuredFrom = [CalibrateAllSpeaker(id: "mac", name: "Mac", kind: .local, offsetMs: nil, latencyMs: 0),
                         CalibrateAllSpeaker(id: "usb", name: "Desk", kind: .local, offsetMs: 150, latencyMs: 0)]
-    check(CalibrateAllFlow.unchanged(measuredFrom, current: { $0.id == "usb" ? 150 : 9 })
-            && !CalibrateAllFlow.unchanged(measuredFrom, current: { $0.id == "usb" ? 120 : nil }),
+    check(CalibrateAllFlow.unchanged(measuredFrom, reference: "mac", airPlayAdjustmentMs: 0,
+                                     current: { $0.id == "usb" ? 150 : 9 })
+            && !CalibrateAllFlow.unchanged(measuredFrom, reference: "mac", airPlayAdjustmentMs: 0,
+                                           current: { $0.id == "usb" ? 120 : nil }),
           "calibrate all: Apply writes nothing once a delay moved after the measurement")
+    // L_old 2000 with A 100; the sender's latency then moves L to 2300 while A stays.
+    let withAirPlay = measuredFrom + [CalibrateAllSpeaker(id: "native:a", name: "Den", kind: .airPlay, offsetMs: 2000,
+                                                          latencyMs: 0, adjustmentMs: 100)]
+    let storedNow: (CalibrateAllSpeaker) -> Double? = { $0.kind == .airPlay ? 2300 : 150 }
+    check(CalibrateAllFlow.unchanged(withAirPlay, reference: "mac", airPlayAdjustmentMs: 100, current: storedNow)
+            && !CalibrateAllFlow.unchanged(withAirPlay, reference: "mac", airPlayAdjustmentMs: 140, current: storedNow),
+          "calibrate all: a new sender latency alone keeps Apply, a moved AirPlay setting refuses it (S238)")
+    check(!CalibrateAllFlow.unchanged(measuredFrom, reference: "usb", airPlayAdjustmentMs: 0,
+                                      current: { $0.id == "usb" ? 150 : 9 }),
+          "calibrate all: Apply writes nothing once the reference moved after the measurement")
+    var applied = AirPlayDelay(adjustmentMs: 100)
+    let entered = applied.enter(2150, senderMs: CalibrateAllFlow.airPlaySenderMs(old: 2000, speakers: withAirPlay) ?? 2200)
+    check(entered && applied.adjustmentMs == 250,
+          "calibrate all: Apply moves A by as much as the run moved L, whatever the sender's latency is now (S238)",
+          "A \(applied.adjustmentMs)")
 
     // Undo puts back what Apply replaced, and forgets a delay that wasn't stored (S238).
     let previous = AirPlayDelay(adjustmentMs: 250)

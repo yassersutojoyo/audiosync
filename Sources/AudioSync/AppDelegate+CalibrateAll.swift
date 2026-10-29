@@ -146,7 +146,9 @@ extension AppDelegate {
         guard !calibrateAllRunning, let sheet = calibrateAllSheet, var shown = appModel.calibrateAll.sheet,
               shown.canApply
         else { return }
-        guard CalibrateAllFlow.unchanged(sheet.speakers, current: calibrateStoredValue) else {
+        guard CalibrateAllFlow.unchanged(sheet.speakers, reference: localReference,
+                                         airPlayAdjustmentMs: airPlayDelay.adjustmentMs, current: calibrateStoredValue)
+        else {
             appModel.calibrateAll.line = .changedSinceMeasured
             return
         }

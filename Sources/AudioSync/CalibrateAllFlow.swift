@@ -30,6 +30,8 @@ struct CalibrateAllSpeaker: Equatable {
     let offsetMs: Double?
     /// When its sweep is expected after entering its path (S235).
     let latencyMs: Double
+    /// For an AirPlay row, the adjustment A of S178 stored when `offsetMs` was read.
+    var adjustmentMs: Double? = nil
 
     var core: AscCalibrationSpeaker {
         AscCalibrationSpeaker(kind: kind.core, has_offset: offsetMs != nil, offset_ms: offsetMs ?? 0,
@@ -110,6 +112,8 @@ struct CalibrateAllContext: Equatable {
     /// For Calibrate Zone, the measured zone's member keys; nil once it is
     /// deleted, and for a whole run (S240, S255).
     var zoneMembers: [String]? = nil
+    /// The local reference (S173), which a device-list change can move.
+    var reference: String? = nil
 }
 
 /// The results sheet as the window shows it.
@@ -586,8 +590,13 @@ enum CalibrateAllFlow {
 
     /// Whether the stored values are still the ones the run started from,
     /// so Apply's new values build on them. `current` reads a speaker's.
-    static func unchanged(_ speakers: [CalibrateAllSpeaker], current: (CalibrateAllSpeaker) -> Double?) -> Bool {
+    static func unchanged(_ speakers: [CalibrateAllSpeaker], reference: String?, airPlayAdjustmentMs: Double,
+                          current: (CalibrateAllSpeaker) -> Double?) -> Bool {
         speakers.dropFirst().allSatisfy { current($0) == $0.offsetMs }
+    }
+
+    static func airPlaySenderMs(old: Double?, speakers: [CalibrateAllSpeaker]) -> Double? {
+        nil
     }
 
     /// Whether Undo still only reverts Apply: every value Apply wrote is
