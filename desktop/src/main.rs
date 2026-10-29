@@ -255,6 +255,26 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     // the notification area; without one, it quits.
     let tray = os::create_tray(&app, log);
 
+    // Windows may end the process once this handler returns, before the event loop ends.
+    #[cfg(windows)]
+    platform::on_session_end({
+        let app = std::rc::Rc::downgrade(&app);
+        let log = log.clone();
+        Box::new(move || {
+            let Some(app) = app.upgrade() else {
+                return;
+            };
+            let saved = app.at_session_end();
+            log.log(|| {
+                format!(
+                    "Windows session ends: settings {}",
+                    if saved { "saved" } else { "not saved" }
+                )
+            });
+            log.flush(LOG_FLUSH_AT_EXIT);
+        })
+    });
+
     // To look at both appearances without changing the Windows setting, only
     // while the debug log is on.
     if log.enabled()

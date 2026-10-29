@@ -1,7 +1,7 @@
 //! The server: its listeners, one thread per connection, the routes, and
 //! the event stream that carries each new snapshot to the open pages.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
@@ -13,6 +13,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::json;
+use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::auth::{
     self, DeviceFile, Limits, LoadProblem, PairOutcome, Pairing, Snapshot, TokenStore,
@@ -55,6 +56,10 @@ const MAX_REFUSED: usize = 16;
 const HISTORY: usize = 32;
 /// Server events kept for a host that doesn't poll.
 pub const MAX_SERVER_EVENTS: usize = 64;
+/// How often one refused address gets a line in the log.
+const REFUSAL_LOG_INTERVAL: Duration = Duration::from_secs(60);
+/// Refused addresses remembered at once for [`REFUSAL_LOG_INTERVAL`].
+const MAX_REFUSALS_LOGGED: usize = 64;
 
 /// The time limits; the defaults are the product's, tests shorten them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +136,6 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             port: DEFAULT_PORT,
-            // IPv6 first: where it is dual-stack the IPv4 bind then fails and is skipped.
             listen: vec![
                 IpAddr::V6(Ipv6Addr::UNSPECIFIED),
                 IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -230,7 +234,8 @@ pub enum ServerEvent {
         from: IpAddr,
         status: u16,
     },
-    /// A peer outside the private, link-local and loopback ranges and not on
+    /// A peer outside the private, link-local, loopback and carrier-grade NAT
+    /// (100.64/10) ranges and not on
     /// this machine's IPv6 /64, closed at accept.
     NotPrivate {
         from: IpAddr,
@@ -325,6 +330,8 @@ struct Published {
     revision: u64,
     current: Option<State>,
     history: VecDeque<(u64, Arc<str>)>,
+    /// A command reached the app since the last snapshot.
+    commanded: bool,
 }
 
 impl Published {
@@ -522,6 +529,8 @@ impl Shared {
     fn deliver(&self, command: &Command) -> bool {
         match lock(&self.sink).as_ref() {
             Some(sink) => {
+                // Before the sink: the app may publish from its own thread before sink returns.
+                lock(&self.published).commanded = true;
                 sink(command);
                 true
             }
@@ -545,17 +554,38 @@ impl fmt::Debug for RemoteServer {
     }
 }
 
+fn bind(address: SocketAddr) -> io::Result<TcpListener> {
+    let socket = Socket::new(
+        Domain::for_address(address),
+        Type::STREAM,
+        Some(Protocol::TCP),
+    )?;
+    if address.is_ipv6() {
+        // Each family on its own socket, so another app on either one is seen on every OS.
+        socket.set_only_v6(true)?;
+    }
+    // As std's bind does: a restart may reuse a port in TIME_WAIT; on Windows it would allow theft.
+    #[cfg(not(windows))]
+    socket.set_reuse_address(true)?;
+    socket.bind(&address.into())?;
+    socket.listen(128)?;
+    Ok(socket.into())
+}
+
 fn bind_all(config: &Config) -> Result<(Vec<TcpListener>, u16), RemoteError> {
     let mut listeners = Vec::new();
     let mut port = config.port;
     let mut first_error = None;
     for address in &config.listen {
-        match TcpListener::bind((*address, port)) {
+        match bind((*address, port).into()) {
             Ok(listener) => {
                 let bound = listener.local_addr().map_err(RemoteError::Bind)?;
                 listener.set_nonblocking(true).map_err(RemoteError::Bind)?;
                 port = bound.port();
                 listeners.push(listener);
+            }
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+                return Err(RemoteError::Bind(error));
             }
             Err(error) => {
                 first_error.get_or_insert(error);
@@ -668,12 +698,14 @@ impl RemoteServer {
 
     /// Makes `state` the current snapshot and streams it to the open pages;
     /// returns its revision. A snapshot equal to the current one keeps the
-    /// current revision and sends nothing.
+    /// current revision and sends nothing, unless a command reached the app
+    /// since the last one: a page shows what it sent until a snapshot comes.
     pub fn publish(&self, state: State) -> u64 {
         let mut published = lock(&self.shared.published);
-        if published.current.as_ref() == Some(&state) {
+        if !published.commanded && published.current.as_ref() == Some(&state) {
             return published.revision;
         }
+        published.commanded = false;
         published.revision += 1;
         let revision = published.revision;
         published
@@ -788,6 +820,7 @@ impl Drop for RemoteServer {
 
 fn accept_loop(listeners: &[TcpListener], shared: &Arc<Shared>) {
     let mut refused = VecDeque::new();
+    let mut reported = HashMap::new();
     while !shared.stopped.load(Ordering::SeqCst) {
         drain_refused(&mut refused);
         let mut idle = true;
@@ -795,7 +828,7 @@ fn accept_loop(listeners: &[TcpListener], shared: &Arc<Shared>) {
             match listener.accept() {
                 Ok((stream, peer)) => {
                     idle = false;
-                    if let Some(stream) = admit(stream, peer, shared) {
+                    if let Some(stream) = admit(stream, peer, shared, &mut reported) {
                         if refused.len() >= MAX_REFUSED {
                             refused.pop_front();
                         }
@@ -835,16 +868,35 @@ fn drain_refused(refused: &mut VecDeque<(TcpStream, Instant)>) {
     });
 }
 
+/// Whether a refusal of `peer` is reported: once per address per
+/// [`REFUSAL_LOG_INTERVAL`], for at most [`MAX_REFUSALS_LOGGED`] addresses at
+/// once, so a scan from the internet neither floods the log nor grows the map.
+fn note_refusal(reported: &mut HashMap<IpAddr, Instant>, peer: IpAddr, now: Instant) -> bool {
+    reported.retain(|_, at| now.duration_since(*at) < REFUSAL_LOG_INTERVAL);
+    if reported.contains_key(&peer) || reported.len() >= MAX_REFUSALS_LOGGED {
+        return false;
+    }
+    reported.insert(peer, now);
+    true
+}
+
 /// Starts serving a connection, or answers 503 and hands the connection
 /// back to linger: closing with an unread request would reset it, and a
 /// reset can discard the answer before the client reads it.
-fn admit(stream: TcpStream, peer: SocketAddr, shared: &Arc<Shared>) -> Option<TcpStream> {
+fn admit(
+    stream: TcpStream,
+    peer: SocketAddr,
+    shared: &Arc<Shared>,
+    reported: &mut HashMap<IpAddr, Instant>,
+) -> Option<TcpStream> {
     let from = peer.ip().to_canonical();
     let admitted = stream
         .local_addr()
         .is_ok_and(|local| net::admits_peer(from, local.ip()));
     if !admitted {
-        shared.report(ServerEvent::NotPrivate { from });
+        if note_refusal(reported, from, Instant::now()) {
+            shared.report(ServerEvent::NotPrivate { from });
+        }
         let _ = stream.shutdown(Shutdown::Both);
         return None;
     }
@@ -1437,6 +1489,92 @@ mod tests {
     // Private addresses are built from their parts: published files never spell one.
     fn home(subnet: u8, host: u8) -> IpAddr {
         IpAddr::V4(Ipv4Addr::new(10, 0, subnet, host))
+    }
+
+    /// Admits a loopback connection as if accept had reported `peer`; the
+    /// client has already sent a request.
+    fn admit_as(
+        server: &RemoteServer,
+        reported: &mut HashMap<IpAddr, Instant>,
+        peer: IpAddr,
+    ) -> TcpStream {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client.write_all(b"GET / HTTP/1.1\r\n\r\n").unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        assert!(
+            admit(
+                stream,
+                SocketAddr::new(peer, 50000),
+                &server.shared,
+                reported
+            )
+            .is_none()
+        );
+        client
+    }
+
+    fn not_private_events(server: &RemoteServer) -> Vec<IpAddr> {
+        std::iter::from_fn(|| server.poll_event())
+            .filter_map(|event| match event {
+                ServerEvent::NotPrivate { from } => Some(from),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_refused_address_is_reported_once_a_minute() {
+        let mut reported = HashMap::new();
+        let start = Instant::now();
+        let public = address("203.0.113.5");
+        let later = start + Duration::from_secs(59);
+        assert!(note_refusal(&mut reported, public, start));
+        assert!(!note_refusal(&mut reported, public, later));
+        assert!(note_refusal(&mut reported, address("203.0.113.6"), later));
+        assert!(note_refusal(
+            &mut reported,
+            public,
+            start + REFUSAL_LOG_INTERVAL
+        ));
+        for host in 0..MAX_REFUSALS_LOGGED {
+            let peer = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, host as u16));
+            note_refusal(&mut reported, peer, later);
+        }
+        assert_eq!(reported.len(), MAX_REFUSALS_LOGGED);
+    }
+
+    #[test]
+    fn only_home_network_peers_get_an_answer_and_a_refusal_is_logged_once() {
+        let config = Config {
+            port: 0,
+            listen: vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            ..Config::default()
+        };
+        let server = RemoteServer::start(config, |_| {}).unwrap();
+        let mut reported = HashMap::new();
+        let public = IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8));
+        let mapped = IpAddr::V6(Ipv4Addr::new(8, 8, 8, 8).to_ipv6_mapped());
+        for peer in [public, mapped, public] {
+            let mut client = admit_as(&server, &mut reported, peer);
+            let mut answer = Vec::new();
+            let _ = client.read_to_end(&mut answer);
+            assert!(answer.is_empty(), "{peer} got an answer");
+        }
+        assert_eq!(not_private_events(&server), [public]);
+        for peer in [
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20)),
+            address("fe80::1"),
+        ] {
+            let mut client = admit_as(&server, &mut reported, peer);
+            let mut answer = Vec::new();
+            let _ = client.read_to_end(&mut answer);
+            assert!(answer.starts_with(b"HTTP/1.1 "), "{peer} got no answer");
+        }
+        assert!(not_private_events(&server).is_empty());
     }
 
     #[test]

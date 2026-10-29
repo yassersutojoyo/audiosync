@@ -24,7 +24,8 @@
 # creates on the first build. Its keychain joins the keychain search list while
 # signing and leaves it afterwards. If that identity exists but can't sign, the
 # build stops before anything is quit or installed. Ad-hoc only with
-# AUDIOSYNC_ADHOC=1, or when there's no local identity and none can be created:
+# AUDIOSYNC_ADHOC=1, or when there's no local identity and none can be created,
+# and never for --release:
 # an ad-hoc signature changes with every build, so macOS stops honoring the
 # System Audio Recording permission (capture goes silent).
 #
@@ -210,6 +211,9 @@ else
   identity=-
   label="ad-hoc (no local identity could be created)"
   adhoc_warning "make-local-cert.sh couldn't create the local identity (see above)"
+fi
+if [ "$release" = 1 ] && [ "$identity" = - ]; then
+  die "--release won't sign ad-hoc: every user's System Audio Recording permission would go stale after the update. Nothing was quit or installed"
 fi
 if [ -n "${ENTITLEMENTS:-}" ]; then
   entitlements=$(absolute "$ENTITLEMENTS")

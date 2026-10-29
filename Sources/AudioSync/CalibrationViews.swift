@@ -32,6 +32,7 @@ struct CalibrationControl: View {
                                                       speakerOn: speakerOn)
         // Another speaker's run, or a cut-off sweep still playing out, holds the outputs.
         let held = (model.calibration.holdsOutputs || model.calibrateAll.holdsOutputs) && !running
+        let hint = t.calibrationButtonHint(running: running, unavailable: unavailable, held: held)
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 if case .running(let step) = phase {
@@ -49,9 +50,9 @@ struct CalibrationControl: View {
                 }
                 .controlSize(.small)
                 .disabled(!running && (unavailable != nil || held))
-                .help(running ? "" : unavailable.map(t.calibrationUnavailable) ?? t.calibrationHint)
+                .help(hint)
                 .accessibilityLabel(running ? t.calibrationCancelLabel(of: name) : t.calibrateLabel(of: name))
-                .accessibilityHint(running ? "" : unavailable.map(t.calibrationUnavailable) ?? t.calibrationHint)
+                .accessibilityHint(hint)
             }
             if let message = t.calibrationMessage(phase) {
                 Text(message)

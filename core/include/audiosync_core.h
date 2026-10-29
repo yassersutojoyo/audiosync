@@ -955,6 +955,10 @@ uint64_t asc_renderer_time_steps(const AscRenderer *renderer);
    (S207); 0 for a NULL handle. */
 uint64_t asc_renderer_stall_reanchors(const AscRenderer *renderer);
 
+/* Any thread: the times the reader re-anchored at its delay after a lasting
+   lateness (S207); 0 for a NULL handle. */
+uint64_t asc_renderer_late_reanchors(const AscRenderer *renderer);
+
 /* ---- Delay helpers ------------------------------------------------------- */
 
 /*
@@ -1706,6 +1710,14 @@ bool asc_airplay_set_device_level(AscAirPlay *airplay, const char *id, double ow
  * id.
  */
 bool asc_airplay_set_volume_dragging(AscAirPlay *airplay, const char *id, bool dragging);
+
+/*
+ * Keeps the speaker added under `id` muted while another speaker is
+ * measured, its own volume unchanged; a level set on it meanwhile is kept,
+ * not sent. Unsilenced, it sends nothing: the host sends its level. Returns
+ * false when the handle or id is NULL or no speaker was added under id.
+ */
+bool asc_airplay_set_silenced(AscAirPlay *airplay, const char *id, bool silenced);
 
 /*
  * Sets the zone position (0 to 100, 100 for no zone) of speaker `id`: it

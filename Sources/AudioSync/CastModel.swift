@@ -113,6 +113,8 @@ enum CastProblem: Equatable {
     case blocked
     case takenOver
     case connectionLost
+    /// It left the list when AudioSync's own search stopped, with no session to keep it.
+    case searchStopped
 }
 
 enum CastError: Equatable {
@@ -385,6 +387,13 @@ struct CastModel {
         case off
         case browsing(since: Date)
         case failed
+
+        /// The search's start once the Mac wakes: the sleep doesn't count
+        /// toward the 20 s, as for AirPlay (`AirPlaySearch.sinceAfterWake`).
+        func afterWake(now: Date) -> Discovery {
+            if case .browsing = self { return .browsing(since: now) }
+            return self
+        }
     }
 
     struct Attempt: Equatable {
@@ -621,8 +630,13 @@ struct CastModel {
         case .groupLog: return nil
         case .discoveryStopped:
             discovery = .failed
-            // The sender keeps the playing device and those added by address.
-            devices = devices.filter { $0.key == attempt?.device || $0.value.manual }
+            // The sender keeps the device in a session, a start included, and those added by address.
+            devices = devices.filter { $0.key == attempt?.device || $0.key == starting || $0.value.manual }
+            // A browsed device that is on but unlisted can't come back until AudioSync starts again.
+            if let id = enabled, devices[id] == nil, starting != id {
+                enabled = nil
+                return .turnedOff(id, problem: .searchStopped)
+            }
             return .changed
         case .failed:
             let wasOn = enabled
@@ -806,6 +820,17 @@ struct CastModel {
         guard ms.isFinite else { return nil }
         return min(maxOffsetMs, max(0, ms.rounded()))
     }
+
+    /// The name `id` is listed under: the one it announces, else the
+    /// address it was added with; empty once it left the list.
+    func listedName(_ id: String) -> String {
+        let announced = devices[id]?.name ?? ""
+        return announced.isEmpty ? manualAddresses[id]?.text ?? "" : announced
+    }
+
+    /// The device that is on and its listed name, read before an event that
+    /// may empty the list (a stopped search or sender) so its notice can name it.
+    var listedOn: [String: String] { enabled.map { [$0: listedName($0)] } ?? [:] }
 
     /// The device that is on counts for local outputs while it is in a
     /// session or listed online.

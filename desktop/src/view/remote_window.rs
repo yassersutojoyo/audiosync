@@ -273,6 +273,14 @@ impl App {
         self.show_remote_state();
     }
 
+    /// Follows a remote setting read after launch (S212): stopped, then
+    /// started as at launch when it is on or the debug switch asks for it.
+    pub(super) fn restore_remote_again(&self) {
+        self.stop_remote();
+        let debug_port = self.remote.borrow().debug_port;
+        self.restore_remote_with(debug_port);
+    }
+
     /// Opens the window, or brings it to the front; opening it makes a new
     /// pairing code and ends a lockout.
     pub fn show_remote(&self) {
@@ -738,6 +746,43 @@ mod tests {
             TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err(),
             "closed"
         );
+    }
+
+    // covers: S212
+    #[test]
+    fn a_remote_setting_read_after_launch_starts_or_stops_the_remote() {
+        let backend = MockBackend::new();
+        let late_view = backend.late_view.clone();
+        let app = over_loopback(backend);
+        let port = free_port();
+        *late_view.borrow_mut() = Some(crate::ui_model::ViewSettings {
+            remote: RemoteSettings { on: true, port },
+            ..crate::ui_model::ViewSettings::default()
+        });
+        app.poll();
+        assert!(app.remote_listening(), "on in the file, it listens");
+        *late_view.borrow_mut() = Some(crate::ui_model::ViewSettings::default());
+        app.poll();
+        assert!(!app.remote_listening(), "off in the file, it stops");
+    }
+
+    // covers: S212
+    #[test]
+    fn a_late_read_with_the_same_remote_setting_keeps_the_server_and_its_code() {
+        let backend = MockBackend::new();
+        let late_view = backend.late_view.clone();
+        let app = over_loopback(backend);
+        let port = free_port();
+        app.ui.borrow_mut().remote.port = port;
+        app.remote_window.invoke_remote_toggled(true);
+        let code = app.remote_window.get_code();
+        *late_view.borrow_mut() = Some(crate::ui_model::ViewSettings {
+            remote: RemoteSettings { on: true, port },
+            ..crate::ui_model::ViewSettings::default()
+        });
+        app.poll();
+        assert!(app.remote_listening());
+        assert_eq!(app.remote_window.get_code(), code);
     }
 
     #[test]
