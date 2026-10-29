@@ -742,7 +742,8 @@ struct CastModel {
             unanswered = []
             levels[id] = own
             if requested?.id == id { requested = nil }
-        } else {
+        } else if unanswered.last != level {
+            // The same level sent twice in a row gets one answer.
             if unanswered.count == Self.maxUnanswered { unanswered.removeFirst() }
             unanswered.append(level)
         }
@@ -758,7 +759,7 @@ struct CastModel {
         let level = volume.level
         let first = attempt?.heardVolume == false
         attempt?.heardVolume = true
-        let answered = unanswered.lastIndex { asc_cast_level_answers($0, level) }
+        let answered = unanswered.firstIndex { asc_cast_level_answers($0, level) }
         if let answered { unanswered.removeFirst(answered + 1) }
         let own: Double
         if first {
