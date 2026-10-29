@@ -28,8 +28,8 @@ use crate::ap2::PinPairing;
 use crate::audio::SAMPLE_RATE;
 use crate::connects::{ConnectQueue, StartKind};
 use crate::discovery::{
-    BrowseEvent, Browser, Device, DeviceKey, Directory, DirectoryEvent, Endpoint, ProtocolPath,
-    ScopedAddr,
+    BrowseEvent, Browser, Device, DeviceKey, Directory, DirectoryEvent, Endpoint, Features,
+    ProtocolPath, ScopedAddr, Verdict,
 };
 use crate::error::{ErrorKind, SessionError, UnsupportedReason, UserReason, Warning};
 use crate::homekit::{HomeKitCredentials, SrpDone, SrpWork};
@@ -356,18 +356,44 @@ impl Speaker {
     }
 }
 
-/// Whether a session would connect or set up differently on `new` than on
-/// `old`: another address, port or TXT key the sender reads (P142).
-fn connects_differently(old: &Device, new: &Device) -> bool {
-    fn at(service: &Option<Endpoint>) -> Option<(u16, &[ScopedAddr])> {
-        service
-            .as_ref()
-            .map(|service| (service.port, service.addresses.as_slice()))
+/// What a connect and its setup read from a device's records (P142): the
+/// addresses and ports of both services, the verdict without its busy hint
+/// (`pw`, flags bits 3, 7 and 9, `cn`, `tp`, `sr`, `ss`, `ch`, P16), `et`
+/// (P45, P60), `pk` and the features (P14, P60). The busy flag (P15) and
+/// the group and version keys (P19) are left out.
+#[derive(PartialEq)]
+struct ConnectInputs<'a> {
+    raop: Option<(u16, &'a [ScopedAddr])>,
+    airplay: Option<(u16, &'a [ScopedAddr])>,
+    verdict: Verdict,
+    encryption: Option<&'a [u64]>,
+    raop_key: Option<&'a [u8]>,
+    airplay_key: Option<&'a [u8; 32]>,
+    features: Features,
+}
+
+impl ConnectInputs<'_> {
+    fn of(device: &Device) -> ConnectInputs<'_> {
+        fn at(service: Option<&Endpoint>) -> Option<(u16, &[ScopedAddr])> {
+            service.map(|service| (service.port, service.addresses.as_slice()))
+        }
+        let raop = device.raop_txt.as_ref();
+        ConnectInputs {
+            raop: at(device.raop.as_ref()),
+            airplay: at(device.airplay.as_ref()),
+            verdict: Verdict {
+                busy_hint: false,
+                ..device.verdict
+            },
+            encryption: raop.and_then(|txt| txt.encryption.as_deref()),
+            raop_key: raop.and_then(|txt| txt.public_key.as_deref()),
+            airplay_key: device
+                .airplay_txt
+                .as_ref()
+                .and_then(|txt| txt.public_key.as_ref()),
+            features: device.features(),
+        }
     }
-    at(&old.raop) != at(&new.raop)
-        || at(&old.airplay) != at(&new.airplay)
-        || old.raop_txt != new.raop_txt
-        || old.airplay_txt != new.airplay_txt
 }
 
 pub(crate) struct Driver {
@@ -2458,7 +2484,7 @@ impl Driver {
                     // is untouched (P18, P19).
                     let mut changed = false;
                     if let Some(speaker) = self.speakers.get_mut(&device.key) {
-                        changed = connects_differently(&speaker.device, &device);
+                        changed = ConnectInputs::of(&speaker.device) != ConnectInputs::of(&device);
                         speaker.device = (*device).clone();
                     }
                     let key = device.key.clone();
