@@ -490,8 +490,9 @@ fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
     // ring backlog and drops some (up to 0.9 s seen under 16 busy loops), so
     // drops may only cover audio the feed wrote late; on time, none.
     assert_eq!(diagnostics.rebuffers, 0);
+    // A stall over the 100 ms ring backlog drops up to that much before a block counts late.
     assert!(
-        diagnostics.frames_dropped <= late,
+        diagnostics.frames_dropped <= late + 48_000 * LATE.as_millis() as u64 / 1000,
         "{late} late: {diagnostics:?}"
     );
     assert_eq!(
