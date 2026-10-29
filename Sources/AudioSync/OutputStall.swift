@@ -209,7 +209,7 @@ struct OutputStallRetry {
     mutating func settle(enabled: Set<String>, listed: Set<String>, nowS: Double) -> Set<String> {
         let before = lost
         entries = entries.filter { uid, entry in
-            guard enabled.contains(uid) else { return false }
+            guard enabled.contains(uid), listed.contains(uid) else { return false }
             guard let started = entry.startedAtS else { return true }
             return nowS - started < Self.trialS
         }
