@@ -698,6 +698,14 @@ fn capture_switch_without_flush() {
             .count()
     };
 
+    // Events are stamped when drained, so the stream start's first-sound
+    // time must be drained before the switch for heard() to place it there.
+    let key = tv.key.clone();
+    tv.events
+        .wait_for(&tv.sender, LONG, |e| {
+            matches!(e, SenderEvent::Speaker { key: k, event: SpeakerEvent::Latency(_) } if *k == key)
+        })
+        .expect("the stream start's first-sound time");
     let switched = Instant::now();
     switch_capture(&mut tv);
     tv.run(Duration::from_secs(4), false);
