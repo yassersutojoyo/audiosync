@@ -292,6 +292,7 @@ pub struct MockDriver {
     readings: Vec<EndpointReading>,
     changed: bool,
     listing_error: Option<BackendError>,
+    session_error: Option<BackendError>,
     output_errors: BTreeMap<String, BackendError>,
     /// The mix formats of the outputs whose device isn't in
     /// [`MOCK_STREAM`]'s format.
@@ -370,6 +371,7 @@ impl MockDriver {
             readings: Vec::new(),
             changed: false,
             listing_error: None,
+            session_error: None,
             output_errors: BTreeMap::new(),
             output_formats: BTreeMap::new(),
             format_notices: Vec::new(),
@@ -580,6 +582,9 @@ impl Driver for MockDriver {
     }
 
     fn session_pids(&mut self) -> Result<Vec<u32>, BackendError> {
+        if let Some(error) = &self.session_error {
+            return Err(error.clone());
+        }
         Ok(self.session_pids.clone())
     }
 
@@ -1063,6 +1068,12 @@ impl Controller<MockDriver> {
     /// again with `None`.
     pub fn fail_listing(&mut self, error: Option<BackendError>) {
         self.driver_mut().listing_error = error;
+    }
+
+    /// Makes every later listing of the audio sessions fail with `error`,
+    /// or work again with `None`.
+    pub fn fail_session_listing(&mut self, error: Option<BackendError>) {
+        self.driver_mut().session_error = error;
     }
 
     /// Makes `id` Windows' default output.

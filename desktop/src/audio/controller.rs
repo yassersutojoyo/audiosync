@@ -6444,6 +6444,32 @@ mod tests {
 
     // covers: S327
     #[test]
+    fn a_mix_on_a_later_instance_streams_on_when_the_session_list_fails_once() {
+        let mut backend = backend();
+        let source = SourceId::Apps {
+            root_pids: vec![PLAYER_PID],
+            executables: vec!["player.exe".to_owned()],
+        };
+        backend.start(&source).unwrap();
+        backend.add_app(PLAYER_PID + 100, "player.exe");
+        poll_quietly(&mut backend, 1);
+        backend.quit_app(PLAYER_PID);
+        backend.mix_checked = None;
+        poll_quietly(&mut backend, 1);
+        let outputs = playing(&backend);
+        backend.fail_session_listing(Some(BackendError::DeviceGone));
+        backend.mix_checked = None;
+        poll_quietly(&mut backend, 1);
+        backend.fail_session_listing(None);
+        backend.mix_checked = None;
+        poll_quietly(&mut backend, 1);
+        assert_eq!(backend.running_source(), Some(source));
+        assert_eq!(backend.driver().captures_started().len(), 1);
+        assert_eq!(playing(&backend), outputs);
+    }
+
+    // covers: S327
+    #[test]
     fn an_unwatched_app_whose_process_id_another_app_took_counts_as_quit_without_a_start_time() {
         let mut backend = backend();
         start_player(&mut backend, true);
