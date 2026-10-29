@@ -41,6 +41,9 @@ mdns-sd = { version = "0.21.5", default-features = false }
 # writes must decode back to the input. Without default features it pulls
 # in nothing else.
 alac = { version = "0.5.0", default-features = false }
+# Ctrl+C stops the fake television (examples/fake_tv.rs) as its `quit`
+# does, mDNS goodbye included, on Windows, Linux and macOS.
+ctrlc = "3.5.2"
 # A client socket bound to a chosen loopback source address, which the
 # remote-control tests need to play a connection from an unknown peer
 # (P190); std can't bind a TCP socket before it connects. Already in the

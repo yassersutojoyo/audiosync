@@ -360,9 +360,9 @@ pub struct ClickPlan {
 /// but the Cast members, of which at most one goes on: the one already on,
 /// else the first not busy, and none while a Cast speaker outside the zone is
 /// on. When streaming is on and each of those is on already, the click
-/// switches every present member off; otherwise it switches them on, starting
-/// streaming when it is off. AirPlay 2 members all go on, and all but the one
-/// P169 lets play wait. A zone without a present member does nothing.
+/// switches every present member off, and the absent ones too; otherwise it
+/// switches them on, starting streaming when it is off. AirPlay 2 members all
+/// go on, and all but the one P169 lets play wait. A zone without a present member does nothing.
 pub fn click_plan(members: &[Member], situation: Situation) -> ClickPlan {
     let present = |member: &Member| member.listed && !member.needs_airplay2 && !member.in_target;
     let cast = members
@@ -417,6 +417,9 @@ pub fn click_plan(members: &[Member], situation: Situation) -> ClickPlan {
             // A target needing AirPlay 2 isn't listed, and says why.
             if member.needs_airplay2 {
                 Step::NeedsAirPlay2
+            } else if turn_off && !member.listed && !member.in_target {
+                // Off with its zone, an unplugged member stays off when it is back.
+                Step::Off
             } else if !member.listed {
                 Step::Absent
             } else if member.in_target {

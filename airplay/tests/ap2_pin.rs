@@ -451,6 +451,30 @@ fn a_pair_verify_that_fails_after_m6_pairs_nothing() {
     assert_eq!(rig.pairing.state(), PairingState::Closed);
 }
 
+// The receiver keeps the identity of M5 once it answered M6, verified or
+// not: a host that never stores it leaves one stale pairing per attempt.
+// covers: P153
+#[test]
+fn credentials_from_m6_reach_the_host_when_the_verify_fails() {
+    let mut fake = pin_receiver();
+    fake.silent.push("POST /pair-verify".to_owned());
+    let mut rig = PinRig::new(fake);
+    assert_eq!(rig.submit(PIN), Ok(()));
+    assert!(rig.fake.keys().contains(&"POST /pair-verify".to_owned()));
+    rig.pairing.handle_connection_closed(rig.now);
+    rig.pump();
+    assert_eq!(rig.failure(), Some((ErrorKind::Lost, false)));
+    let [
+        ..,
+        PairingEvent::PairedUnverified(_),
+        PairingEvent::Failed { .. },
+    ] = rig.events.as_slice()
+    else {
+        panic!("{:?}", rig.events);
+    };
+    assert_eq!(rig.credentials(), None, "nothing verified");
+}
+
 // covers: P136
 #[test]
 fn a_cancel_or_a_close_while_waiting_ends_the_pairing() {

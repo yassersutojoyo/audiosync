@@ -440,7 +440,8 @@ impl Channel {
         let base = self
             .volume_queued
             .or(self.volume_unconfirmed.map(|(_, level)| level))
-            .unwrap_or(status.volume.level);
+            .or(status.volume.has_level.then_some(status.volume.level))
+            .ok_or(VolumeError::NotReady)?;
         let level = if up { base + step } else { base - step }.clamp(0.0, 1.0);
         self.set_volume(now, level)?;
         Ok(level)

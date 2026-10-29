@@ -3517,6 +3517,7 @@ mod tests {
         assert_eq!(picker_index(None), -1, "Custom is not an entry");
     }
 
+    // covers: S270
     #[test]
     fn the_picker_lists_the_presets_then_the_saved_curves() {
         let mut backend = MockBackend::new();
@@ -3549,6 +3550,7 @@ mod tests {
         assert_eq!(picked_curve(-1, 1), None);
     }
 
+    // covers: S270
     #[test]
     fn a_picked_saved_curve_shows_beside_a_curve_with_the_same_gains() {
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();

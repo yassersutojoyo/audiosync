@@ -924,6 +924,9 @@ impl Driver {
             if self.send_ptp() {
                 progressed = true;
             }
+            if self.delay_flushes(now) {
+                progressed = true;
+            }
             while let Some(event) = self.stream.poll_event() {
                 progressed = true;
                 self.stream_event(event, now);
@@ -1004,7 +1007,9 @@ impl Driver {
                 {
                     return;
                 }
-                if let PairingEvent::HomeKitPaired(credentials) = &event {
+                if let PairingEvent::HomeKitPaired(credentials)
+                | PairingEvent::PairedUnverified(credentials) = &event
+                {
                     self.keep_homekit(key, credentials.clone());
                 }
                 self.emit(SenderEvent::Pairing {
@@ -1206,6 +1211,28 @@ impl Driver {
         }
     }
 
+    /// Applies each due delay change once its session can send the FLUSH at
+    /// once; until then that session starts no other request (P100).
+    fn delay_flushes(&mut self, now: Instant) -> bool {
+        let mut applied = false;
+        for id in self.stream.delays_due() {
+            let Some(key) = self.stream_ids.get(&id).cloned() else {
+                continue;
+            };
+            let free = match self.active(&key) {
+                Some(active) => active.session.flush_slot(),
+                None => self
+                    .ap2_active(&key)
+                    .is_none_or(|active| active.session.flush_slot()),
+            };
+            if free {
+                self.stream.apply_delay(id, now);
+                applied = true;
+            }
+        }
+        applied
+    }
+
     /// A session's FLUSH got its answer, success or not. A resume from a
     /// pause waits until no FLUSH of that session is queued or in flight,
     /// so the answer to an earlier delay FLUSH doesn't release it (P213).
@@ -1320,15 +1347,13 @@ impl Driver {
             delay: speaker.options.delay,
             software_volume: active.software_volume.then_some(speaker.options.volume),
             software_mute: active.software_mute,
+            muted: speaker.options.volume == Volume::Muted,
             reported_latency: ReportedLatency::from_audio_latency(audio_latency),
             airplay2: None,
         };
         let id = self
             .stream
             .add_speaker_with_counters(config, speaker.counters.clone(), now);
-        if active.software_mute && speaker.options.volume == Volume::Muted {
-            self.stream.set_software_volume(id, Volume::Muted);
-        }
         active.stream_id = Some(id);
         speaker.backoff.on_playing();
         self.stream_ids.insert(id, key.clone());

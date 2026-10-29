@@ -529,6 +529,17 @@ struct Manual {
     looking_up: bool,
     /// When a lookup that failed is tried again.
     retry_at: Option<Instant>,
+    /// The device ID a browse found at its address (C18), kept after the
+    /// browse loses it.
+    found: Option<DeviceId>,
+}
+
+impl Manual {
+    /// The ID its row and its records go by: the one a browse found, else
+    /// its address's.
+    fn listed_id(&self) -> DeviceId {
+        self.found.unwrap_or(self.id)
+    }
 }
 
 /// The session of the device that is on.
@@ -649,6 +660,7 @@ impl CastSpeakers {
             resolved: socket,
             looking_up: false,
             retry_at: None,
+            found: None,
         });
         if socket.is_none() {
             self.look_up(self.manual.len() - 1);
@@ -684,7 +696,14 @@ impl CastSpeakers {
             return;
         };
         let id = self.manual[index].id;
-        if self.enabled == Some(id) {
+        // A found device no browse lists has no row once its address goes.
+        let unlisted = self.manual[index]
+            .found
+            .filter(|&found| self.list.get(DeviceKey::Id(found)).is_none());
+        if self
+            .enabled
+            .is_some_and(|on| on == id || Some(on) == unlisted)
+        {
             self.enabled = None;
             self.sync();
         }
@@ -800,42 +819,51 @@ impl CastSpeakers {
     }
 
     /// A browse, or a lookup that lands on a browsed address, found the
-    /// device a speaker added by address is (C18): one that is on stays on
-    /// as that device, and its offset goes with it.
+    /// device the speakers added by address at `from` are (C18), each
+    /// reported once: one that is on stays on as that device, and its offset
+    /// goes with it.
     fn identified(&mut self, from: SocketAddr, id: DeviceId) {
-        let Some(manual) = self
+        let found: Vec<DeviceId> = self
             .manual
-            .iter()
-            .find(|manual| manual.resolved == Some(from))
-            .map(|manual| manual.id)
-        else {
-            return;
-        };
-        // 0 ms counts as none: the sender can't forget an offset, so Undo leaves 0.
-        let memory = self.memory();
-        let stored = |device| memory.offset(device).filter(|offset| !offset.is_zero());
-        if let (Some(offset), None, Some(link)) = (stored(&manual), stored(&id), self.link.as_mut())
-        {
-            link.set_offset(id, offset);
-            self.pending.push(BackendEvent::CastMemoryChanged);
-        }
-        if self.enabled == Some(manual) {
-            if self.attempt.is_some() {
-                self.stop_session();
-                self.list.set_in_session(DeviceKey::Id(id), false);
+            .iter_mut()
+            .filter(|manual| manual.resolved == Some(from) && manual.found != Some(id))
+            .map(|manual| {
+                manual.found = Some(id);
+                manual.id
+            })
+            .collect();
+        for manual in found {
+            self.pending.push(BackendEvent::CastIdentified {
+                from: manual.to_string(),
+                to: id.to_string(),
+            });
+            // 0 ms counts as none: the sender can't forget an offset, so Undo leaves 0.
+            let memory = self.memory();
+            let stored = |device| memory.offset(device).filter(|offset| !offset.is_zero());
+            if let (Some(offset), None, Some(link)) =
+                (stored(&manual), stored(&id), self.link.as_mut())
+            {
+                link.set_offset(id, offset);
+                self.pending.push(BackendEvent::CastMemoryChanged);
             }
-            self.enabled = Some(id);
-            self.log
-                .log(|| format!("Cast: {from} stays on as {}", self.name(id)));
+            if self.enabled == Some(manual) {
+                if self.attempt.is_some() {
+                    self.stop_session();
+                    self.list.set_in_session(DeviceKey::Id(id), false);
+                }
+                self.enabled = Some(id);
+                self.log
+                    .log(|| format!("Cast: {from} stays on as {}", self.name(id)));
+            }
         }
     }
 
     /// How the list keys device `id`: by its address while it is a speaker
-    /// added by address that no browse has found.
+    /// added by address that no browse lists.
     fn key_of(&self, id: DeviceId) -> DeviceKey {
         self.manual
             .iter()
-            .find(|manual| manual.id == id)
+            .find(|manual| manual.listed_id() == id)
             .and_then(|manual| manual.resolved)
             .map(DeviceKey::Manual)
             .filter(|&key| self.list.get(key).is_some())
@@ -926,7 +954,7 @@ impl CastSpeakers {
                     .manual
                     .iter()
                     .find(|manual| manual.resolved == Some(socket))?;
-                (manual.id, manual.address.text(), None)
+                (manual.listed_id(), manual.address.text(), None)
             }
         };
         Some(self.row(id, name, group, self.added_as(entry), memory))
@@ -973,6 +1001,11 @@ impl CastSpeakers {
     /// still refuses another (spec C2).
     pub fn is_on(&self) -> bool {
         self.enabled.is_some()
+    }
+
+    /// The ID of the device that is on, listed or not.
+    pub fn enabled_id(&self) -> Option<String> {
+        self.enabled.map(|id| id.to_string())
     }
 
     /// Whether a device is on and either listed or in a session: then local
@@ -1319,7 +1352,8 @@ impl CastSpeakers {
             {
                 self.requested = None;
             }
-        } else {
+        } else if self.unanswered.last() != Some(&level) {
+            // The same level sent twice in a row gets one answer.
             self.unanswered.push(level);
         }
         if let Some(link) = self.link.as_mut() {
@@ -1342,10 +1376,6 @@ impl CastSpeakers {
             .attempt
             .as_mut()
             .is_some_and(|attempt| !std::mem::replace(&mut attempt.heard_volume, true));
-        if first {
-            // The sender sends no level before the device's first status.
-            self.unanswered.clear();
-        }
         // Answers come back in send order, so the oldest copy of a level a
         // drag passed twice is the one this answers.
         let answered = self
@@ -2657,14 +2687,29 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 36.0);
     }
 
-    // covers: C70, C104, C105 (nothing is sent before the first status)
+    // covers: C70, C104, C105 (a level set while starting goes after the launch)
     #[test]
-    fn a_level_set_before_the_first_status_never_swallows_a_later_change_from_elsewhere() {
+    fn two_levels_set_while_starting_both_count_as_sent() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_volume(KITCHEN, 30.0);
+        cast.set_volume(KITCHEN, 40.0);
+        report(&fake, &mut cast, 0.8);
+        report(&fake, &mut cast, 0.3);
+        report(&fake, &mut cast, 0.4);
+        assert_eq!(shown(&cast, KITCHEN), 40.0);
+    }
+
+    // covers: C70, C105 (the device echoes a level sent twice in a row once)
+    #[test]
+    fn a_level_resent_at_the_first_status_never_swallows_a_later_change_to_it() {
         let (fake, mut cast) = listed();
         cast.set_streaming(true);
         cast.set_enabled(KITCHEN, true).unwrap();
         cast.set_volume(KITCHEN, 30.0);
         report(&fake, &mut cast, 0.8);
+        assert_eq!(sent(&fake), [0.3, 0.3], "re-sent at the first status");
         report(&fake, &mut cast, 0.3);
         report(&fake, &mut cast, 0.7);
         assert_eq!(shown(&cast, KITCHEN), 70.0);
@@ -2978,6 +3023,171 @@ pub mod tests {
             "0 ms, left by an Undo, counts as none"
         );
         assert_eq!(offset(LIVING), Some(100.0), "the ID's own offset stays");
+    }
+
+    // covers: S341
+    #[test]
+    fn a_playing_speaker_added_by_address_that_a_browse_finds_plays_as_loud_as_before() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_probe(|_| true);
+        cast.add_address(address("192.0.2.30"));
+        let manual = address("192.0.2.30").device_id().to_string();
+        cast.set_zones(BTreeMap::from([(manual.clone(), 50.0)]));
+        cast.set_volume(&manual, 80.0);
+        assert_eq!(cast.set_enabled(&manual, true), Ok(()));
+        cast.set_streaming(true);
+        poll_until_started(&fake, &mut cast);
+        fake.report(reported(&manual, 0.4, ControlType::Attenuation));
+        cast.poll();
+
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 30),
+        );
+        cast.poll();
+        // The host moves the zone to the ID the browse found (S341).
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 50.0)]));
+        let before = sent(&fake);
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(2),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.4,
+                control_type: ControlType::Attenuation,
+                has_level: true,
+                ..DeviceVolume::default()
+            }),
+        });
+        cast.poll();
+        assert_eq!(sent(&fake), before, "it keeps playing at 0.4");
+        assert!((shown(&cast, KITCHEN) - 80.0).abs() < 1e-9);
+    }
+
+    // covers: S339
+    #[test]
+    fn a_speaker_added_by_address_that_a_browse_found_is_left_on_when_discovery_stops() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_probe(|_| true);
+        cast.add_address(address("192.0.2.30"));
+        cast.poll();
+        let manual = address("192.0.2.30").device_id().to_string();
+        assert_eq!(cast.set_enabled(&manual, true), Ok(()));
+        fake.announce_at(LIVING, "Living", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 32));
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 30),
+        );
+        cast.poll();
+        fake.withdraw(KITCHEN, "Kitchen");
+        cast.poll();
+
+        fake.state().discovery_stopped = true;
+        let events = cast.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::CastFailed { .. })),
+            "{events:?}"
+        );
+        assert!(cast.is_on());
+        let speakers = cast.speakers();
+        let row = speakers
+            .iter()
+            .find(|speaker| speaker.address.as_deref() == Some("192.0.2.30"))
+            .expect("its address row");
+        assert_eq!(
+            (row.id.as_str(), row.enabled),
+            (KITCHEN, true),
+            "listed under the ID the browse found"
+        );
+        assert_eq!(cast.set_enabled(KITCHEN, false), Ok(()));
+        assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
+    }
+
+    // covers: C18
+    #[test]
+    fn removing_the_address_of_a_found_speaker_the_browse_lost_turns_it_off() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_probe(|_| true);
+        cast.add_address(address("192.0.2.30"));
+        fake.announce_at(LIVING, "Living", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 32));
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 30),
+        );
+        cast.poll();
+        assert_eq!(cast.set_enabled(KITCHEN, true), Ok(()));
+        fake.withdraw(KITCHEN, "Kitchen");
+        cast.poll();
+
+        cast.remove_address(&address("192.0.2.30"));
+        assert!(!cast.is_on());
+        assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
+    }
+
+    // covers: S341
+    #[test]
+    fn each_address_of_a_device_a_browse_finds_is_reported_once() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_resolver(|_, port| Ok(SocketAddr::from(([192, 0, 2, 30], port))));
+        cast.set_probe(|_| true);
+        cast.add_address(address("192.0.2.30"));
+        cast.poll();
+        let identified = |events: &[BackendEvent], text: &str| {
+            let from = address(text).device_id().to_string();
+            events
+                .iter()
+                .filter(|event| {
+                    **event
+                        == BackendEvent::CastIdentified {
+                            from: from.clone(),
+                            to: KITCHEN.to_owned(),
+                        }
+                })
+                .count()
+        };
+        let kitchen_at_30 = |fake: &FakeCast| {
+            fake.announce_at(
+                KITCHEN,
+                "Kitchen",
+                DEVICE_PORT,
+                Ipv4Addr::new(192, 0, 2, 30),
+            );
+        };
+        kitchen_at_30(&fake);
+        assert_eq!(identified(&cast.poll(), "192.0.2.30"), 1);
+
+        fake.withdraw(KITCHEN, "Kitchen");
+        cast.poll();
+        kitchen_at_30(&fake);
+        let again = cast.poll();
+        assert_eq!(
+            identified(&again, "192.0.2.30"),
+            0,
+            "found again: {again:?}"
+        );
+
+        cast.add_address(address("speaker.local"));
+        let mut events = Vec::new();
+        for _ in 0..400 {
+            events.extend(cast.poll());
+            if identified(&events, "speaker.local") > 0 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(identified(&events, "speaker.local"), 1, "{events:?}");
+        assert_eq!(identified(&events, "192.0.2.30"), 0, "{events:?}");
     }
 
     // covers: C18

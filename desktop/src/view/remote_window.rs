@@ -968,6 +968,7 @@ mod tests {
         );
     }
 
+    // covers: S287
     #[test]
     fn the_debug_log_gets_each_pairing_code_and_a_normal_run_none() {
         use crate::debug_log::{self, DebugLog};

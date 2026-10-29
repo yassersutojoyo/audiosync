@@ -56,12 +56,12 @@ if [ -f "$KEYCHAIN" ] && [ -f "$PASS_FILE" ]; then
     exit 1
   fi
   if [ -n "$(identity_hash)" ]; then
-    echo "✅ Already present: \"$NAME\" ($(identity_hash)) — skipping"
+    echo "✅ Already present: \"$NAME\" ($(identity_hash)); skipping"
     exit 0
   fi
-  echo "▶ The keychain exists but holds no identity — recreating it"
+  echo "▶ The keychain exists but holds no identity; recreating it"
 elif [ -f "$KEYCHAIN" ] || [ -f "$PASS_FILE" ]; then
-  echo "▶ Only half of the signing setup exists (keychain or password file) — recreating both"
+  echo "▶ Only half of the signing setup exists (keychain or password file); recreating both"
 fi
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/localcert-XXXXXX")
@@ -114,4 +114,4 @@ if [ -z "$HASH" ]; then
   echo "❌ Identity not found after import. Check: security find-identity -p codesigning \"$KEYCHAIN\"" >&2
   exit 1
 fi
-echo "✅ Done: \"$NAME\" ($HASH) — ./build.sh signs with it from now on"
+echo "✅ Done: \"$NAME\" ($HASH). ./build.sh signs with it from now on"

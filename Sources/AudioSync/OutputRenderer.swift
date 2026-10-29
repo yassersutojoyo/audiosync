@@ -151,6 +151,9 @@ final class OutputRenderer: FadingOutput {
     private var startedFormat: OutputDeviceFormat?
     private var formatCheckQueued = false
     private var formatChanged = false
+    /// A fade-out was asked for since the latest start; `fadeEndNs` stays nil
+    /// until its last frame renders, so a format check mid-fade can't use it.
+    private var fadeOutRequested = false
     /// The latest start's device is a Bluetooth one (Classic or LE).
     private(set) var isBluetooth = false
     /// Bumped by every start and stop, so a listener call queued for an
@@ -285,6 +288,7 @@ final class OutputRenderer: FadingOutput {
         stalled = false
         formatChanged = false
         formatCheckQueued = false
+        fadeOutRequested = false
         startedDevice = device
         stopNote = "running"
         let reportedNs = Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
@@ -363,6 +367,7 @@ final class OutputRenderer: FadingOutput {
     /// exact zeros after the fade until `halt`.
     func requestFadeOut() {
         guard halUnit != nil else { return }
+        fadeOutRequested = true
         target?.renderer.requestFadeOut()
     }
 
@@ -750,10 +755,9 @@ final class OutputRenderer: FadingOutput {
             DispatchQueue.main.asyncAfter(deadline: .now() + OutputFormatWatch.settleS) { [weak self] in
                 guard let self, self.generation == mark, !self.formatChanged, !self.reportedLoss else { return }
                 self.formatCheckQueued = false
-                let fading = self.target?.renderer.fadeEndNs != nil
                 let now = OutputRenderer.deviceFormat(device)
                 guard case .reopen(let old, let new) = OutputFormatWatch.decide(
-                    started: self.startedFormat, now: now, fadingOut: fading) else { return }
+                    started: self.startedFormat, now: now, fadingOut: self.fadeOutRequested) else { return }
                 self.formatChanged = true
                 self.onFormatChanged?(old, new)
             }
