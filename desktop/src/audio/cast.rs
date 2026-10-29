@@ -860,6 +860,12 @@ impl CastSpeakers {
             if self.saved_on == Some(manual) {
                 self.saved_on = Some(id);
             }
+            // A playing session's level comes from its first status under the ID instead (S341).
+            if !(self.enabled == Some(manual) && self.attempt.is_some())
+                && let Some(own) = self.levels.remove(&manual)
+            {
+                self.levels.entry(id).or_insert(own);
+            }
             if self.enabled == Some(manual) {
                 if self.attempt.is_some() {
                     // It played: the restarted session's first status gives the own level that keeps it as loud (S341).
@@ -3367,6 +3373,32 @@ pub mod tests {
         let (sent_after, shown_after) = rekeyed_into(25.0);
         assert_eq!(sent_after, vec![0.25], "the loudest the new zone reaches");
         assert!((shown_after - 100.0).abs() < 1e-9, "shown {shown_after}");
+    }
+
+    // covers: S341
+    #[test]
+    fn a_browse_moves_the_own_level_of_an_idle_speaker_added_by_address_but_not_over_the_ids() {
+        const LIVING: &str = "fedcba9876543210fedcba9876543210";
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_volume(LIVING, 30.0);
+        for text in ["192.0.2.31", "192.0.2.32"] {
+            cast.add_address(address(text));
+            cast.set_volume(&address(text).device_id().to_string(), 80.0);
+        }
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 31),
+        );
+        fake.announce_at(LIVING, "Living", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 32));
+        cast.poll();
+        assert!((shown(&cast, KITCHEN) - 80.0).abs() < 1e-9);
+        assert!(
+            (shown(&cast, LIVING) - 30.0).abs() < 1e-9,
+            "the ID's own level stays"
+        );
     }
 
     // covers: S339
