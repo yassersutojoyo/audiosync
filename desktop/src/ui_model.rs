@@ -2824,6 +2824,7 @@ pub fn picked_curve(index: i32, saved: usize) -> Option<CurveMatch> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use audiosync_core::policy::speakers::NoticeSubject;
 
     #[test]
     fn a_delay_field_takes_digits_after_one_leading_sign_and_blocks_the_rest() {
@@ -3225,6 +3226,24 @@ mod tests {
             state.zone_state(&state.zones[0]),
             SpeakerState::Playing,
             "an offline Cast member"
+        );
+        if let Some(cast) = backend.speaker_mut("cc:kitchen").unwrap().cast.as_mut() {
+            cast.offline = false;
+        }
+        backend.state.notices.push(Notice {
+            id: 9,
+            subject: format!("{:?}", NoticeSubject::Cast("kitchen".into())),
+            message: NoticeMessage::CastCantPlay {
+                speaker: "Kitchen".into(),
+                problem: CastProblem::TakenOver,
+            },
+            time: "09.40".into(),
+        });
+        let state = backend.snapshot();
+        assert_eq!(
+            state.zone_state(&state.zones[0]),
+            SpeakerState::Playing,
+            "a Cast member another app took over"
         );
     }
 
