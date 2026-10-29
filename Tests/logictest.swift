@@ -2399,6 +2399,10 @@ do {
             && InputChannelPair.change(from: 1, to: 1, streaming: true) == .none
             && InputChannelPair.change(from: 1, to: -1, streaming: true) == .none,
           "channel pairs: choosing another pair restarts a running session, the same one does nothing")
+    check(InputChannelPair.change(from: 3, to: 0, channels: 4, streaming: true) == .none
+            && InputChannelPair.change(from: 3, to: 1, channels: 4, streaming: true) == .restart
+            && InputChannelPair.change(from: 1, to: 0, channels: 4, streaming: true) == .restart,
+          "channel pairs: picking the pair a saved pair fell back to restarts nothing")
     check(UIStrings().inputChannelPair(four[1]) == "Channels 3-4" && UIStrings().inputChannelPair(five[2]) == "Channel 5",
           "channel pairs: shown as the device counts its channels")
 
@@ -7436,12 +7440,12 @@ do {
     let unstalled = other.refused("B", nowS: 5)
     _ = other.stalled("B", nowS: 10)
     other.started("B", nowS: 10.5)
-    other.settle(enabled: ["B"], nowS: 15.4)
+    other.settle(enabled: ["B"], listed: ["B"], nowS: 15.4)
     let playing = other.tracked
-    other.settle(enabled: ["B"], nowS: 15.6)
+    other.settle(enabled: ["B"], listed: ["B"], nowS: 15.6)
     let settled = other.tracked
     _ = other.stalled("C", nowS: 20)
-    other.settle(enabled: ["B"], nowS: 20.1)
+    other.settle(enabled: ["B"], listed: ["B", "C"], nowS: 20.1)
     check(unstalled == nil && playing == ["B"] && settled.isEmpty && other.tracked.isEmpty,
           "output stall: a refused start that followed no stall is switched off as before; 5 s of play or a switch-off ends a stall",
           "\(String(describing: unstalled)) \(playing) \(settled) \(other.tracked)")
@@ -7453,16 +7457,16 @@ do {
     let afterSecond = notice.lost
     _ = notice.refused("A", nowS: 113.1)
     notice.started("A", nowS: 123.2)
-    let whilePlaying = notice.settle(enabled: ["A"], nowS: 128.1)
+    let whilePlaying = notice.settle(enabled: ["A"], listed: ["A"], nowS: 128.1)
     let keptLost = notice.lost
-    let played = notice.settle(enabled: ["A"], nowS: 128.3)
+    let played = notice.settle(enabled: ["A"], listed: ["A"], nowS: 128.3)
     _ = notice.stalled("B", nowS: 130)
     notice.started("B", nowS: 130.5)
     _ = notice.stalled("B", nowS: 131)
-    let switchedOff = notice.settle(enabled: [], nowS: 131.1)
+    let switchedOff = notice.settle(enabled: [], listed: ["B"], nowS: 131.1)
     _ = notice.stalled("C", nowS: 140)
     notice.started("C", nowS: 140.5)
-    let firstOnly = notice.settle(enabled: ["C"], nowS: 146)
+    let firstOnly = notice.settle(enabled: ["C"], listed: ["C"], nowS: 146)
     _ = notice.stalled("D", nowS: 150)
     notice.started("D", nowS: 150.5)
     _ = notice.stalled("D", nowS: 151)
@@ -7479,10 +7483,33 @@ do {
     failed.started("E", nowS: 211.2)
     failed.forget("E")
     let failedLost = failed.lost
-    let failedEnds = failed.settle(enabled: [], nowS: 212)
+    let failedEnds = failed.settle(enabled: [], listed: ["E"], nowS: 212)
     check(failedLost.isEmpty && failedEnds.isEmpty,
           "output stall: an output switched off for a failed start leaves its stall, so its could-not-start notice stays",
           "\(failedLost) \(failedEnds)")
+    // covers: S331 (a device that leaves the list ends a stall, so listed again a refusal is tried every 3 s)
+    var left = OutputStallRetry()
+    _ = left.stalled("G", nowS: 300)
+    left.settle(enabled: ["G"], listed: [], nowS: 300.5)
+    let leftTracked = left.tracked
+    let back = left.failed(LocalOutputSync.Failure(uid: "G", deviceName: "Desk", refusal: "!dev"),
+                           afterStall: left.afterStall(formatReopens: []).contains("G"), nowS: 301)
+    check(leftTracked.isEmpty && back == .refused("!dev"),
+          "output stall: a stalled output whose device leaves the list ends its stall; listed again, a refusal is tried every 3 s",
+          "\(leftTracked) \(back)")
+    var hard = OutputStallRetry()
+    _ = hard.stalled("H", nowS: 400)
+    _ = hard.stalled("I", nowS: 400)
+    let formatFailure = LocalOutputSync.Failure(uid: "H", deviceName: "Desk")
+    let hardStep = hard.failed(formatFailure, afterStall: true, nowS: 400.1)
+    let refusedStep = hard.failed(LocalOutputSync.Failure(uid: "I", deviceName: "Den", refusal: "!hog"),
+                                  afterStall: true, nowS: 400.1)
+    let hardReport = LocalOutputSync.report(hardStep == .hard ? [formatFailure] : [], enabled: ["H", "I"],
+                                            origin: .automatic)
+    check(hardStep == .hard && hard.tracked == ["I"] && refusedStep == .retry(atS: 400.1 + OutputStallRetry.retryEveryS)
+            && hardReport?.enabled == ["I"] && hardReport?.notices == [formatFailure],
+          "output stall: a start failing for good after a stall ends the stall and is switched off with its notice; a refusal retries",
+          "\(hardStep) \(refusedStep) \(hard.tracked)")
 }
 // covers: S334, S335 (a Mac sitting on 2026-10-28: both watches fired between the will-sleep notice and the sleep)
 do {
