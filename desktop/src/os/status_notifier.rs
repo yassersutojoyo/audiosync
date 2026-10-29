@@ -32,7 +32,7 @@ const HOST_PROPERTY: &str = "IsStatusNotifierHostRegistered";
 /// How long the launch waits for the session bus to answer.
 const PROBE_BUDGET: Duration = Duration::from_secs(1);
 
-/// How often a shown icon's watcher is looked at again.
+/// How often the watcher is looked at again, for a shown icon or for a host.
 const POLL_EVERY: Duration = Duration::from_secs(2);
 
 pub type Tray = Rc<tray::Tray>;
@@ -41,7 +41,7 @@ thread_local! {
     /// The app, its log and the watcher thread's mode, for what that
     /// thread reports.
     static TARGET: RefCell<Option<(Weak<App>, DebugLog, mpsc::Sender<bool>)>> = const { RefCell::new(None) };
-    /// The icon added after launch, kept for as long as the app runs.
+    /// The icon added after launch.
     static LATE_TRAY: RefCell<Option<Tray>> = const { RefCell::new(None) };
 }
 
