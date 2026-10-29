@@ -71,7 +71,10 @@ extension AppDelegate {
         for change in changes {
             DebugTrace.log("[AudioSync] Cast discovery: " + Self.castLogLine(change))
             castModel.apply(change)
-            if case .appeared(let device, _, let former?) = change { moveCastNotices(from: former, to: device.id) }
+            if case .appeared(let device, _, let former?) = change {
+                moveCastNotices(from: former, to: device.id)
+                moveCastSettings(from: former, to: device.id)
+            }
         }
         castFollow()
     }
@@ -96,6 +99,22 @@ extension AppDelegate {
         list.clear([Notice.cast(old)])
         list.post(notice.text, subject: Notice.cast(new), at: notice.date, title: notice.title, settings: notice.settings)
         appModel.notices = list
+    }
+
+    /// What the user kept under a device added by address (its zone,
+    /// presets, name, auto-connect and hidden entry) goes with it to the ID
+    /// a browse found it under (S340).
+    private func moveCastSettings(from old: String, to new: String) {
+        let saved = SpeakerIDMigration.Saved(enabledAirPlay: enabledAirPlay, airplayVolumes: airplayVolume,
+                                             groups: groups, autoConnect: autoConnect, zones: zones,
+                                             presets: presets, names: speakerNames, hidden: hiddenSpeakers)
+        let moved = SpeakerIDMigration.castIdentified(old, as: new, in: saved)
+        groups = moved.groups
+        zones = moved.zones
+        presets = moved.presets
+        autoConnect = moved.autoConnect
+        speakerNames = moved.names
+        hiddenSpeakers = moved.hidden
     }
 
     /// The session follows the model, then local outputs and the views.

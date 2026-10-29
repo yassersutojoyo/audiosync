@@ -56,6 +56,13 @@ struct SpeakerNames: Equatable {
         return SpeakerNames(custom: moved)
     }
 
+    /// The name kept under `old` moves to `new`, unless `new` has one (S340).
+    func movingKey(_ old: String, to new: String) -> SpeakerNames {
+        var moved = custom
+        if let name = moved.removeValue(forKey: old), moved[new] == nil { moved[new] = name }
+        return SpeakerNames(custom: moved)
+    }
+
     /// A typed name without the spaces and line breaks around it, line breaks
     /// inside it as spaces, and at most `maxLength` characters.
     static func clean(_ typed: String) -> String {
