@@ -956,7 +956,9 @@ impl Driver {
                 {
                     return;
                 }
-                if let PairingEvent::HomeKitPaired(credentials) = &event {
+                if let PairingEvent::HomeKitPaired(credentials)
+                | PairingEvent::PairedUnverified(credentials) = &event
+                {
                     self.keep_homekit(key, credentials.clone());
                 }
                 self.emit(SenderEvent::Pairing {

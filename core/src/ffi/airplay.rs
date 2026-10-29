@@ -1478,7 +1478,7 @@ impl AscAirPlay {
             }
             // Stored only: the Failed that follows reaches the host (P153).
             PairingEvent::PairedUnverified(credentials) => {
-                self.store_homekit_paired(&id, credentials);
+                self.store_unverified(&id, credentials);
                 return;
             }
             PairingEvent::PinRequested => (
@@ -1557,7 +1557,7 @@ impl AscAirPlay {
         let paired = match event {
             PairingEvent::PinRequested | PairingEvent::PinTurnedDown(_) => return,
             PairingEvent::PairedUnverified(credentials) => {
-                self.store_homekit_paired(id, credentials);
+                self.store_unverified(id, credentials);
                 return;
             }
             PairingEvent::Paired(credentials) => Some(self.store_paired(id, credentials)),
@@ -1616,6 +1616,17 @@ impl AscAirPlay {
         self.credentials_turned_down.remove(id);
         self.relist(id);
         detail
+    }
+
+    /// Stores the credentials of a PIN pairing whose verify failed (P153);
+    /// a failed write reaches the debug log only, as the Failed that
+    /// follows is what the host shows.
+    fn store_unverified(&mut self, id: &str, credentials: HomeKitCredentials) {
+        let detail = self.store_homekit_paired(id, credentials);
+        if !detail.is_empty() && debug_trace_on() {
+            let line = SpeakerEvent::Trace(format!("pairing: {detail}"));
+            self.queue_event(Pending::Speaker(id.to_owned(), line));
+        }
     }
 
     /// Has the sender start a pairing with `device`, the receiver `id`,
@@ -8388,6 +8399,52 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
         let (again, _) = IdentityStore::open(path);
         assert_eq!(again.get(id), Some(&credentials));
+    }
+
+    #[test]
+    fn credentials_of_a_pin_pairing_whose_verify_failed_are_stored_and_it_fails() {
+        let folder = scratch("airplay2-identity-unverified");
+        let path = folder.join("identity.dat");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        // SAFETY: a live handle, used by this thread only; the path is a
+        // NUL-terminated string.
+        unsafe {
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()),
+                0
+            );
+        }
+        let credentials = homekit_blob(7);
+        let id = "02005E005352";
+        let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x52]));
+        inside(handle).pairing.insert(id.to_owned(), key.clone());
+        inside(handle).take_in(SenderEvent::Pairing {
+            key: key.clone(),
+            event: PairingEvent::PairedUnverified(credentials.clone()),
+        });
+        inside(handle).take_in(SenderEvent::Pairing {
+            key,
+            event: PairingEvent::Failed {
+                error: audiosync_airplay::error::SessionError::new(ErrorKind::Lost),
+                wrong_pin: false,
+            },
+        });
+        let events = events_until(handle, |events| {
+            events
+                .iter()
+                .any(|e| e.kind == AIRPLAY_EVENT_PAIRING_FAILED)
+        });
+        let kinds: Vec<_> = pairing_events(&events)
+            .into_iter()
+            .map(|(kind, _, _)| kind)
+            .collect();
+        assert_eq!(kinds, [AIRPLAY_EVENT_PAIRING_FAILED]);
+        assert!(inside(handle).pairing.is_empty());
+        assert_eq!(inside(handle).identity.get(id), Some(&credentials));
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
     }
 
     #[test]
