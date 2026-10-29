@@ -469,8 +469,7 @@ final class OutputRenderer: FadingOutput {
     /// address with its own size.
     private static func setProperty<Value>(_ unit: AudioUnit, _ property: AudioUnitPropertyID,
                                            scope: AudioUnitScope, to value: Value) -> OSStatus {
-        var copy = value
-        return AudioUnitSetProperty(unit, property, scope, 0, &copy, UInt32(MemoryLayout<Value>.size))
+        withUnsafeBytes(of: value) { AudioUnitSetProperty(unit, property, scope, 0, $0.baseAddress, UInt32($0.count)) }
     }
 
     // MARK: - Output timing (S185)

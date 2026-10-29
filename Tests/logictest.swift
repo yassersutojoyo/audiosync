@@ -4321,6 +4321,12 @@ check(NowPlayingMonitor.meansNoTrack(-1728) && NowPlayingMonitor.meansNoTrack(-1
 check(!NowPlayingMonitor.meansNoTrack(-1743) && !NowPlayingMonitor.meansNoTrack(nil)
       && !NowPlayingMonitor.meansNoTrack(-2753),
       "AppleScript: Automation refused (-1743) and other errors are still logged")
+check(NowPlayingMonitor.scriptErrorLine(target: "com.spotify.client", code: -1743, error: "{NSAppleScriptErrorNumber = -1743;}")
+      == "[AudioSync] Automation access to com.spotify.client was denied",
+      "AppleScript: Automation refused (-1743) logs one line naming the player, not the error dictionary")
+check(NowPlayingMonitor.scriptErrorLine(target: "com.apple.Music", code: -2753, error: "{NSAppleScriptErrorNumber = -2753;}")
+      == "[AudioSync] AppleScript error: {NSAppleScriptErrorNumber = -2753;}",
+      "AppleScript: another error (-2753) still logs the error dictionary")
 
 // MARK: Track info — a paused player keeps its track on receivers until it stops or quits
 do {
