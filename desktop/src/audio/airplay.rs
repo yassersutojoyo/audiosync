@@ -6836,6 +6836,54 @@ pub mod tests {
     }
 
     #[test]
+    fn a_paired_tv_reads_as_refusing_only_when_its_pairing_failure_waits_to_retry() {
+        let fake = FakeAirPlay::new();
+        let mut store = PairingStore::in_memory();
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        store
+            .insert(
+                &id,
+                crate::audio::pairings::tests::credentials("0123456789ABCDEF", 3),
+            )
+            .unwrap();
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.appear(&tv);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        // P154: a pair-verify error about the receiver's state carries a wait.
+        let mut error = SessionError::new(ErrorKind::PairingFailed);
+        error.retry_after = Some(Duration::from_secs(5));
+        fake.push(SenderEvent::Speaker {
+            key: tv.key.clone(),
+            event: SpeakerEvent::Error(SpeakerError {
+                error,
+                reason: UserReason::Refused,
+                retry_at: Some(Instant::now() + Duration::from_secs(5)),
+            }),
+        });
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayTrouble {
+                id: id.clone(),
+                problem: AirPlayProblem::Refused
+            }),
+            "{events:?}"
+        );
+
+        fake.fail(&tv, ErrorKind::PairingFailed);
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayFailed {
+                id: id.clone(),
+                problem: AirPlayProblem::PairingFailed
+            }),
+            "a failure with no wait keeps its own problem: {events:?}"
+        );
+    }
+
+    #[test]
     fn the_log_tells_the_pairing_story_without_the_pin_or_the_secret() {
         let path = crate::debug_log::test_dir("airplay-pairing-log").join("debug.log");
         let log = DebugLog::new(Some(path.clone()));

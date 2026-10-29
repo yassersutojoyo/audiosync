@@ -10189,6 +10189,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_refusing_airplay_speaker_promises_a_retry_only_while_it_stays_on() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let problem = ui_model::AirPlayProblem::Refused;
+        let speaker = "Den TV".to_owned();
+        let retrying = notice_text(
+            &strings,
+            &NoticeMessage::AirPlayRetrying {
+                speaker: speaker.clone(),
+                problem,
+            },
+        );
+        assert_eq!(
+            retrying,
+            "Den TV declined the stream. AudioSync tries again shortly."
+        );
+        let off = notice_text(
+            &strings,
+            &NoticeMessage::AirPlayCantPlay { speaker, problem },
+        );
+        assert_eq!(
+            off,
+            "Den TV declined the stream, so it's off. Turn it on again to try once more."
+        );
+    }
+
     // covers: S242
     #[test]
     fn double_audio_from_all_apps_except_some_names_the_source_in_the_uis_words() {
