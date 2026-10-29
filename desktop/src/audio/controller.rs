@@ -7794,6 +7794,26 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
+    // covers: S327
+    #[test]
+    fn a_mix_that_quit_while_its_capture_waits_gives_way_though_the_session_list_fails() {
+        let mut backend = backend();
+        backend.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
+        backend
+            .start(&SourceId::Apps {
+                root_pids: vec![PLAYER_PID],
+                executables: vec!["player.exe".to_owned()],
+            })
+            .unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        backend.quit_app(PLAYER_PID);
+        backend.fail_session_listing(Some(BackendError::DeviceGone));
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS - 1);
+        assert_eq!(backend.poll(), [BackendEvent::SwitchedToSystem]);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+    }
+
     #[test]
     fn an_app_picked_while_the_last_session_fades_that_quits_before_its_start_gives_way_when_set() {
         let (mut backend, fake, kitchen) = with_airplay();
