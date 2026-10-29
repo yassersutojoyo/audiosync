@@ -1231,12 +1231,21 @@ mod tests {
         assert!(!app.remote_window.get_public_network());
     }
 
-    /// The note for speakers not found names Windows Firewall only while a
-    /// connected network is Public, as the Mac names Local Network only
-    /// after macOS refused it.
+    struct NoAnswer;
+
+    impl ProfileSource for NoAnswer {
+        fn connected(&self) -> Option<Vec<Category>> {
+            None
+        }
+    }
+
+    /// The note for speakers not found names Windows Firewall unless a
+    /// reading says no connected network is Public, as the Mac names Local
+    /// Network only after macOS refused it. The profiles are read only while
+    /// the main window shows, and a hidden window forgets the last reading.
     #[cfg(windows)]
     #[test]
-    fn the_none_found_note_names_the_firewall_only_on_a_public_network() {
+    fn the_none_found_note_names_the_firewall_unless_no_network_is_public() {
         let mut backend = MockBackend::new();
         backend.set_airplay_none_found(true);
         let app = app_over(backend);
@@ -1249,15 +1258,36 @@ mod tests {
                 .get_airplay_none_found()
                 .contains("Windows Firewall")
         };
-        for _ in 0..20 {
-            assert!(!firewall(), "a Private network");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        let until = |named: bool, why: &str| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while firewall() != named {
+                assert!(std::time::Instant::now() < deadline, "{why}");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        assert!(firewall(), "not read yet");
+        assert!(
+            app.speaker_network.borrow().is_none(),
+            "no check while hidden"
+        );
+
+        app.main.show().unwrap();
+        until(false, "a Private network");
         *fake.0.lock().unwrap() = vec![Category::Private, Category::Public];
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !firewall() {
-            assert!(std::time::Instant::now() < deadline, "no Public reading");
+        until(true, "a Public network");
+        *fake.0.lock().unwrap() = vec![Category::Private];
+        until(false, "Private again");
+
+        app.main.hide().unwrap();
+        assert!(firewall(), "a hidden window forgets the reading");
+        assert!(app.speaker_network.borrow().is_none(), "the check stopped");
+
+        app.remote.borrow_mut().profiles = Some(Arc::new(NoAnswer));
+        app.main.show().unwrap();
+        for _ in 0..20 {
+            assert!(firewall(), "Windows didn't answer");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        assert!(app.speaker_network.borrow().is_some(), "checking again");
     }
 }

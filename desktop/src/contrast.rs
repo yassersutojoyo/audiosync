@@ -412,7 +412,8 @@ fn component_body<'a>(source: &'a str, component: &str) -> &'a str {
 }
 
 /// With the equalizer off only the band sliders fade: a band's gain and name
-/// keep full opacity, so they still read at 4.5:1 on the card.
+/// keep full opacity, so they still read at 4.5:1 on the card, and a focused
+/// slider shows whole, its focus ring too.
 #[test]
 fn an_equalizer_turned_off_fades_the_sliders_not_their_text() {
     let source = include_str!("../ui/equalizer.slint");
@@ -423,6 +424,9 @@ fn an_equalizer_turned_off_fades_the_sliders_not_their_text() {
     let name = band.rfind("QuietText {").expect("the name");
     assert!(gain < fade && fade < slider && slider < name);
     assert_eq!(source.matches("opacity:").count(), 1, "nothing else fades");
+    assert!(
+        band.contains("opacity: root.dimmed && !slider.has-focus ? Tokens.disabled-opacity : 1;")
+    );
     for appearance in [Appearance::Light, Appearance::Dark] {
         assert!(ratio("text@secondaryText", "surface", appearance) >= MIN_TEXT_CONTRAST);
     }

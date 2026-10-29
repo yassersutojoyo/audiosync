@@ -1184,19 +1184,25 @@ impl App {
         self.read_speaker_network();
     }
 
-    /// While discovery looks for speakers or has found none, reads whether
-    /// a connected network is Public, which the notes for none found say.
+    /// While the main window shows and discovery looks for speakers or has
+    /// found none, reads whether a connected network is Public. Until a
+    /// reading says none is, the notes for none found name Windows Firewall.
     fn read_speaker_network(&self) {
         use crate::network_profile::{Category, Watch};
-        let looking = self.main.get_airplay_searching()
-            || self.main.get_airplay_none_found()
-            || matches!(
-                self.main.get_cast_list(),
-                CastList::Searching | CastList::NoneFound
-            );
+        let window = self.main.window();
+        let looking = window.is_visible()
+            && !window.is_minimized()
+            && (self.main.get_airplay_searching()
+                || self.main.get_airplay_none_found()
+                || matches!(
+                    self.main.get_cast_list(),
+                    CastList::Searching | CastList::NoneFound
+                ));
+        let strings = self.main.global::<Strings>();
         let mut watch = self.speaker_network.borrow_mut();
         if !looking {
             *watch = None;
+            strings.set_no_public_network(false);
             return;
         }
         if watch.is_none() {
@@ -1205,10 +1211,10 @@ impl App {
             };
             *watch = Some(Watch::start(source, remote_window::PROFILE_CHECK));
         }
-        if let Some(Some(categories)) = watch.as_ref().and_then(Watch::latest) {
-            self.main
-                .global::<Strings>()
-                .set_public_network(categories.contains(&Category::Public));
+        if let Some(reading) = watch.as_ref().and_then(Watch::latest) {
+            strings.set_no_public_network(
+                reading.is_some_and(|categories| !categories.contains(&Category::Public)),
+            );
         }
     }
 
