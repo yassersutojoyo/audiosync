@@ -6341,6 +6341,16 @@ mod tests {
     }
 
     #[test]
+    fn the_listed_app_is_followed_whatever_the_case_of_its_executable() {
+        let mut adapter = adapter();
+        adapter.select_source(&player());
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.audio_mut().add_app(2100, "PLAYER.EXE");
+        adapter.refresh_sources();
+        assert_eq!(adapter.chosen.id(), SourceId::App { root_pid: 2100 });
+    }
+
+    #[test]
     fn another_app_with_the_process_id_of_one_that_quit_isnt_captured() {
         let mut adapter = adapter();
         adapter.select_source(&player());
