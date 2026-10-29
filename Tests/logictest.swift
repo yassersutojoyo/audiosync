@@ -7743,6 +7743,23 @@ do {
     check(AppLifecycle.answersSecondLaunch(exiting: false), "second launch: the running copy shows its window")
     check(!AppLifecycle.answersSecondLaunch(exiting: true),
           "second launch: a copy that is quitting doesn't answer, so the new one waits for it")
+    do {
+        func defers(_ own: (Int32, Date), _ other: (Int32, Date), finished: Bool = false) -> Bool {
+            AppLifecycle.defersToOtherCopy(ownPID: own.0, ownStart: own.1, otherPID: other.0, otherStart: other.1,
+                                           otherFinishedLaunching: finished)
+        }
+        let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+        check(defers((300, t0 + 1), (99_000, t0)) && !defers((99_000, t0), (300, t0 + 1)),
+              "second launch: of two copies launching together, the one launched first stays and only the other leaves, even after a PID wrap")
+        check(!defers((500, t0), (501, t0)) && defers((501, t0), (500, t0)),
+              "second launch: with equal start times, the lower PID stays and only the other leaves")
+        let pairs: [((Int32, Date), (Int32, Date))] = [((99_000, t0), (300, t0 + 1)), ((500, t0), (501, t0)),
+                                                       ((501, t0), (500, t0 + 0.000_001))]
+        check(pairs.allSatisfy { defers($0.0, $0.1) != defers($0.1, $0.0) },
+              "second launch: two copies reading each other's kernel start time leave exactly one running")
+        check(defers((500, t0), (501, t0 + 1), finished: true),
+              "second launch: a copy that finished launching is asked to show its window, whatever its PID")
+    }
     check(Set(AppLifecycle.exitSignals) == [SIGTERM, SIGINT] && AppLifecycle.exitSignals.count == 2,
           "quit: SIGTERM and Ctrl-C's SIGINT both take the clean exit path (S111)",
           "\(AppLifecycle.exitSignals)")
@@ -10433,12 +10450,41 @@ do {
           "cast model: a speaker added by address that a browse finds keeps its offset under its id, as the sender "
             + "does: over none or a cleared one, never over one the id already had")
 
+    // covers: S340
     var stopped = CastModel()
     stopped.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
     stopped.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
     _ = stopped.apply(.discoveryStopped)
     check(stopped.devices[manualID] != nil && stopped.devices[realID] == nil,
           "cast model: when discovery stops, a speaker added by address stays listed, as the sender keeps it")
+
+    // The sender reports the browsed speaker gone just before or just after it reports discovery stopped.
+    var goneFirst = CastModel()
+    goneFirst.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    _ = goneFirst.turnOn(realID)
+    goneFirst.apply(.gone(id: realID))
+    let goneFirstOutcome = goneFirst.apply(.discoveryStopped)
+    var goneAfter = CastModel()
+    goneAfter.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    _ = goneAfter.turnOn(realID)
+    let goneAfterOutcome = goneAfter.apply(.discoveryStopped)
+    goneAfter.apply(.gone(id: realID))
+    check(goneFirstOutcome == .turnedOff(realID, problem: nil) && goneFirst.enabled == nil
+            && goneAfterOutcome == .turnedOff(realID, problem: nil) && goneAfter.enabled == nil
+            && goneAfter.rows.isEmpty && goneAfter.turnOn(manualID) == nil,
+          "cast model: when discovery stops, a speaker that is on with no session goes off with its row, "
+            + "so nothing keeps streaming for it and another one can go on")
+
+    var startStopped = CastModel()
+    startStopped.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    _ = startStopped.turnOn(realID)
+    startStopped.startSent(realID)
+    _ = startStopped.apply(.discoveryStopped)
+    _ = startStopped.started(realID, attempt: 3, refusal: 0)
+    let startStoppedListed = startStopped.rows == [realID] && startStopped.status(of: realID) == .connecting
+    check(startStoppedListed && startStopped.turnOff(realID) && startStopped.plan(streaming: true) == .stop,
+          "cast model: when discovery stops while a start waits for its number, the speaker stays listed "
+            + "and Off still stops it")
 
     check(t.castAddProblem(.notFound)
             == "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
