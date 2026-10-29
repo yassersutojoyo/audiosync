@@ -422,6 +422,13 @@ pub fn d4(paused: Duration, pause: Pause) -> Cell {
     Cell::new("D4", status, value)
 }
 
+/// Whether D6's grep shows a debug-log line.
+#[cfg(test)]
+pub fn d6_flags(line: &str) -> bool {
+    let line = line.to_lowercase();
+    line.contains("error") || line.contains("warn")
+}
+
 /// The cells only a person with the app, a player or the real television
 /// can judge, each with its step.
 pub fn manual() -> Vec<Cell> {
