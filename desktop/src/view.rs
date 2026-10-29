@@ -9981,6 +9981,23 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_n_while_a_curve_is_named_keeps_the_open_dialog() {
+        let app = app_over(MockBackend::new());
+        let zones = app.snapshot().zones.len();
+        app.equalizer.invoke_save_curve();
+        app.zone_dialog.set_name("Late night".into());
+        let heading = app.zone_dialog.get_heading();
+
+        app.main.invoke_new_zone_requested();
+        assert!(app.zone_dialog.window().is_visible());
+        assert_eq!(app.zone_dialog.get_heading(), heading);
+        assert_eq!(app.zone_dialog.get_name(), "Late night");
+        app.zone_dialog.invoke_confirmed("Late night".into());
+        assert_eq!(app.snapshot().equalizer_curves[0].name, "Late night");
+        assert_eq!(app.snapshot().zones.len(), zones, "no zone was made");
+    }
+
+    #[test]
     fn curves_are_saved_picked_renamed_and_deleted_and_custom_is_no_entry() {
         let mut mock = MockBackend::new();
         mock.add_zone("zone:office", "Office", &[]);

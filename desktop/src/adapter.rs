@@ -10234,6 +10234,51 @@ mod tests {
         assert!(!written.contains("member_names"), "left out while empty");
     }
 
+    /// Saves a zone holding the USB DAC under [`DAC_PORT_1`], then launches
+    /// again over `audio`, with the DAC moved while AudioSync was closed.
+    fn relaunch_after_dac_moved(name: &str, audio: MockBackend) -> AudioAdapter<MockBackend> {
+        let path = test_dir(name).join(settings::FILE_NAME);
+        let mut before = launch_audio();
+        before.connect_output_as(DAC_PORT_1, "USB DAC", OutputKind::Usb);
+        let mut adapter = launch(before, &path);
+        adapter.poll();
+        turn_on(&mut adapter, DAC_PORT_1);
+        adapter.new_zone("Desk").unwrap();
+        adapter.save_settings();
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        adapter
+    }
+
+    // covers: S286
+    #[test]
+    fn a_zone_member_moved_to_another_port_while_closed_keeps_its_zone() {
+        let mut audio = launch_audio();
+        audio.connect_output_as(DAC_PORT_2, "USB DAC", OutputKind::Usb);
+        let adapter = relaunch_after_dac_moved("adapter-zone-dac-moved", audio);
+        let members = &adapter.snapshot().zones[0].members;
+        assert!(members.contains(&key(DAC_PORT_2)), "{members:?}");
+        assert!(!members.contains(&key(DAC_PORT_1)), "no Not found row");
+        assert!(enabled(&adapter, DAC_PORT_2));
+    }
+
+    // covers: S286
+    #[test]
+    fn a_zone_member_moved_while_closed_isnt_guessed_between_two_or_another_kind() {
+        let mut audio = launch_audio();
+        audio.connect_output_as(DAC_PORT_2, "USB DAC", OutputKind::Usb);
+        audio.connect_output_as(DAC_PORT_3, "USB DAC", OutputKind::Usb);
+        let adapter = relaunch_after_dac_moved("adapter-zone-dac-twins", audio);
+        let members = &adapter.snapshot().zones[0].members;
+        assert!(members.contains(&key(DAC_PORT_1)), "two could be it");
+
+        let mut audio = launch_audio();
+        audio.connect_output_as(DAC_PORT_2, "USB DAC", OutputKind::UsbHeadphones);
+        let adapter = relaunch_after_dac_moved("adapter-zone-dac-kind", audio);
+        let members = &adapter.snapshot().zones[0].members;
+        assert!(members.contains(&key(DAC_PORT_1)), "another kind");
+    }
+
     fn hidden_entry(adapter: &AudioAdapter<MockBackend>, id: &str) -> HiddenSpeaker {
         adapter
             .snapshot()
