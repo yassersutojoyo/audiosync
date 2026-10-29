@@ -55,9 +55,6 @@ final class StreamEngine {
     /// Now Playing's latest reading, nil while the monitor doesn't run (S335 D3).
     var nowPlayingReading: (() -> NowPlayingMonitor.Track?)?
 
-    /// The core's volume curve, for the host's gain arithmetic (S70, S71).
-    let gainCurve = CoreGainCurve()
-
     /// True from a successful `start` until `stop`; false while a stop's
     /// outputs still fade out.
     private(set) var isRunning = false
@@ -305,7 +302,8 @@ final class StreamEngine {
                 frames: renderer.framesRendered.load(ordering: .relaxed),
                 starvedRenders: counted.starvedRenders, starvedFrames: counted.starvedFrames,
                 driftSkips: counted.driftSkips, driftSilences: counted.driftSilences,
-                lateCallbacks: renderer.lateCallbacks, overloads: renderer.ioOverloads)
+                lateCallbacks: renderer.lateCallbacks, overloads: renderer.ioOverloads,
+                anchor: renderer.takeAnchorSpan())
         }
         return SessionTally(capture: capture.counts ?? CaptureCounts(), outputs: outputs)
     }
@@ -562,15 +560,26 @@ final class StreamEngine {
         detachOutputs(uids: uids, then: nil)
     }
 
+    /// The `LocalOutputEngine` requirement; see `detachOutputs(uids:keepingLeads:then:)`.
+    func detachOutputs(uids: [String], keepingLeads: Bool) {
+        detachOutputs(uids: uids, keepingLeads: keepingLeads, then: nil)
+    }
+
     /// Switches outputs off (S185, S186): all of them fade out at once and
     /// stop together once their devices have played the fades, at most
     /// 500 ms later, without holding up the main thread. Unknown UIDs are
     /// skipped. `completion` runs on the main thread once they stopped, at
-    /// once when none of `uids` is attached.
-    func detachOutputs(uids: [String], then completion: (() -> Void)?) {
+    /// once when none of `uids` is attached. With `keepingLeads`, each
+    /// output's start lead stays held as a lost speaker's does (S328).
+    func detachOutputs(uids: [String], keepingLeads: Bool = false, then completion: (() -> Void)?) {
         let bluetooth = bluetoothOutputs
         let leaving = uids.sorted().compactMap { uid in
             renderers.removeValue(forKey: uid).map { (uid: uid, renderer: $0) }
+        }
+        for output in leaving where keepingLeads {
+            if let lead = output.renderer.holdLead() {
+                heldLeads[output.uid] = (lead, ProcessInfo.processInfo.systemUptime)
+            }
         }
         guard !leaving.isEmpty else {
             completion?()
@@ -701,6 +710,8 @@ struct SessionTally: Equatable {
         var driftSilences: Int64 = 0
         var lateCallbacks: Int64 = 0
         var overloads: Int64 = 0
+        /// Not a count: the span since the previous line (`AnchorSpan`).
+        var anchor: AnchorSpan? = nil
     }
 
     var capture = CaptureCounts()
@@ -740,6 +751,7 @@ struct SessionTally: Equatable {
             text += "; output \(now.number): \(rendered) frames, starved \(starved) (\(starvedFrames) frames), "
             text += "drift skips \(skips), drift silences \(silences), "
             text += "late callbacks \(late), IO overloads \(overloads)"
+            if let anchor = now.anchor { text += ", " + anchor.text }
         }
         return text
     }

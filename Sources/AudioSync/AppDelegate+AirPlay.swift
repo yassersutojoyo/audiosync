@@ -165,6 +165,7 @@ extension AppDelegate {
             guard let self else { return }
             self.macAsleep = true
             self.engine.macWillSleep()
+            self.freshLinks.sleeping()
             self.endNativePinSessions(.sleep, streaming: self.engine.isRunning)
         }
         center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -181,6 +182,14 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] woke from sleep")
         macAsleep = false
         engine.macWoke()
+        let now = Date()
+        airplayEmptySince = AirPlaySearch.sinceAfterWake(airplayEmptySince, now: now)
+        castModel.discovery = castModel.discovery.afterWake(now: now)
+        if case .browsing = castModel.discovery {
+            DispatchQueue.main.asyncAfter(deadline: .now() + CastModel.noneFoundAfter + 0.5) { [weak self] in
+                self?.pushModel()
+            }
+        }
         reconcileAirPlaySpeakers()
         // Devices may have come or gone during the sleep. Its model update
         // also arms again what fell due meanwhile (`scheduleDueReconcile`).
@@ -217,9 +226,7 @@ extension AppDelegate {
                 nativeAirPlay?.clearPause()
             }
         }
-        let airPlayStarts = trackInfoFeed.modelUpdated(sending: sending)
-        let castStarts = castSender?.trackInfo.modelUpdated(sending: casting) ?? false
-        if airPlayStarts || castStarts { sendTrackInfo() }
+        trackInfoModelUpdated(sending: sending, casting: casting)
     }
 
     /// Tells the native sender which player a speaker's remote controls and
@@ -261,7 +268,7 @@ extension AppDelegate {
     func receiverShows() -> (info: ReceiverInfo, artwork: NSImage?) {
         let track = nowPlaying.hasReading ? nowPlaying.track : nil
         // The source's name as the source picker shows it; none while the
-        // picker doesn't list the source (an input device that was unplugged).
+        // picker doesn't list the source.
         let sourceName = appModel.sources.first { $0.id == audioSource.defaultsValue }?.name
         let untitled = TrackMetadata.Fields(title: text.receiverUntitled, artist: text.receiverUnnamedSource,
                                             album: text.receiverAlbum)
@@ -273,10 +280,7 @@ extension AppDelegate {
     /// Runs `sendTrackInfo` again at `date`, when a wait ends.
     func recheckTrackInfo(at date: Date) {
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, date.timeIntervalSinceNow) + 0.05) { [weak self] in
-            guard let self else { return }
-            self.trackInfoFeed.recheckFired(at: date)
-            self.castSender?.trackInfo.recheckFired(at: date)
-            self.sendTrackInfo()
+            self?.trackInfoRecheckFired(at: date)
         }
     }
 }
@@ -285,6 +289,10 @@ extension AppDelegate: TrackInfoHost {
     var nowPlayingPollingSince: Date? { nowPlaying.startedAt }
     var nowPlayingHasReading: Bool { nowPlaying.hasReading }
     var trackInfoIcon: NSImage? { NSApp.applicationIconImage }
+    var castTrackInfoFeed: TrackInfoFeed? {
+        get { castSender?.trackInfo }
+        set { if let newValue { castSender?.trackInfo = newValue } }
+    }
 
     func showNowPlaying(_ track: NowPlayingMonitor.Track?) {
         if appModel.nowPlaying != track { appModel.nowPlaying = track }

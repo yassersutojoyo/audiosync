@@ -1645,6 +1645,7 @@ export component SpeakerRow inherits Rectangle {
     property <string> availability-note: Strings.speaker-availability(root.item.availability, root.item.code-every-time, root.item.state);
     property <string> state-note: root.availability-note != "" ? root.availability-note : Strings.row-note(root.item.state);
     property <string> note: root.item.zone-note != "" ? root.item.zone-note : root.item.cast && root.cast-note != "" ? root.cast-note : root.state-note == "" && root.item.cast-added-by-address ? Strings.cast-added-by-address : root.state-note;
+    property <string> note-help: root.note == root.availability-note ? Strings.speaker-availability-help(root.item.availability, root.item.code-every-time, root.item.state) : "";
     property <string> caption: Strings.speaker-caption(root.item.show-kind && !root.item.cast-group ? Strings.speaker-kind(root.item.kind) : "", root.note);
 
     // A click on the row's box works like its delay button; a row without a
@@ -1966,10 +1967,50 @@ export component SpeakerRow inherits Rectangle {
                                 // An AirPlay speaker's note can be long; it ends in "…"
                                 // rather than run into the delay column (Narrator reads
                                 // the whole note from the toggle).
-                                if root.caption != "": QuietText {
-                                    text: root.caption;
-                                    wrap: no-wrap;
-                                    overflow: elide;
+                                if root.caption != "": Rectangle {
+                                    preferred-width: caption-text.preferred-width;
+                                    min-height: caption-text.preferred-height;
+
+                                    caption-text := QuietText {
+                                        width: 100%;
+                                        height: 100%;
+                                        text: root.caption;
+                                        wrap: no-wrap;
+                                        overflow: elide;
+                                    }
+
+                                    // Narrator reads the note itself, from the toggle.
+                                    if root.note-help != "": TouchArea {
+                                        clicked => {
+                                            root.box-clicked();
+                                        }
+
+                                        Tooltip {
+                                            Rectangle {
+                                                width: min(help-text.preferred-width + 16px, root.width);
+                                                height: help-text.preferred-height + 10px;
+                                                border-radius: Fluent.radius-control;
+                                                border-width: 1px;
+                                                border-color: Fluent.stroke;
+                                                background: Tokens.surface;
+                                                drop-shadow-blur: 8px;
+                                                drop-shadow-offset-y: 2px;
+                                                drop-shadow-color: Tokens.text.with-alpha(0.18);
+                                                accessible-role: none;
+
+                                                help-text := Text {
+                                                    x: 8px;
+                                                    width: parent.width - 16px;
+                                                    text: root.note-help;
+                                                    font-size: Tokens.font-size-caption;
+                                                    color: Tokens.text;
+                                                    vertical-alignment: center;
+                                                    wrap: word-wrap;
+                                                    accessible-role: none;
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
 

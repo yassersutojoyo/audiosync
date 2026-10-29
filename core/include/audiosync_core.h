@@ -192,7 +192,7 @@ extern "C" {
 
 /* What asc_airplay_open_pairings returns when the store holds nothing it found. */
 #define ASC_AIRPLAY_PAIRINGS_FAILED -1  /* NULL or dead handle, or NULL, empty or non-UTF-8 path */
-#define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* unreadable or not in the format: ignored, the next pairing replaces it */
+#define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* ignored; the wrong format is replaced by the next pairing, an unreadable file is left as it is */
 #define ASC_AIRPLAY_PAIRINGS_NEWER -3   /* a newer AudioSync wrote it: ignored and left as it is */
 
 /* How private asc_airplay_pairings_access and asc_airplay_airplay2_identity_access found a file. */
@@ -235,7 +235,7 @@ extern "C" {
 #define ASC_CAST_EVENT_RELOADED 7          /* the device saw the stream end; it was loaded again */
 #define ASC_CAST_EVENT_REBUFFERING 8       /* the receiver ran dry */
 #define ASC_CAST_EVENT_FORMAT_FALLBACK 9   /* the device refused WAV; .format is loaded instead */
-#define ASC_CAST_EVENT_VOLUME 10           /* the device's volume: .level, .muted, .volume_fixed, .step */
+#define ASC_CAST_EVENT_VOLUME 10           /* the device's volume: .level, .has_level, .muted, .volume_fixed, .step */
 #define ASC_CAST_EVENT_DIAGNOSTICS 11      /* once a second while playing: .drift_ms, .queued_ms, .underrun_frames, .resync_offered */
 #define ASC_CAST_EVENT_STREAM 12           /* the stream server's log line in .detail */
 #define ASC_CAST_EVENT_COMMAND_FAILED 13   /* a volume, artwork or Resync request failed: .error */
@@ -954,6 +954,10 @@ uint64_t asc_renderer_time_steps(const AscRenderer *renderer);
 /* Any thread: the times the reader re-anchored at its delay after a stall
    (S207); 0 for a NULL handle. */
 uint64_t asc_renderer_stall_reanchors(const AscRenderer *renderer);
+
+/* Any thread: the times the reader re-anchored at its delay after a lasting
+   lateness (S207); 0 for a NULL handle. */
+uint64_t asc_renderer_late_reanchors(const AscRenderer *renderer);
 
 /* ---- Delay helpers ------------------------------------------------------- */
 
@@ -1708,6 +1712,14 @@ bool asc_airplay_set_device_level(AscAirPlay *airplay, const char *id, double ow
 bool asc_airplay_set_volume_dragging(AscAirPlay *airplay, const char *id, bool dragging);
 
 /*
+ * Keeps the speaker added under `id` muted while another speaker is
+ * measured, its own volume unchanged; a level set on it meanwhile is kept,
+ * not sent. Unsilenced, it sends nothing: the host sends its level. Returns
+ * false when the handle or id is NULL or no speaker was added under id.
+ */
+bool asc_airplay_set_silenced(AscAirPlay *airplay, const char *id, bool silenced);
+
+/*
  * Sets the zone position (0 to 100, 100 for no zone) of speaker `id`: it
  * plays at its own position times the zone's times the master, live once
  * added and from its start when added later, and a level read back from it
@@ -2084,6 +2096,7 @@ typedef struct AscCastEvent {
     double level;        /* the device's volume, 0 to 1 */
     bool muted;
     bool volume_fixed;   /* the device's volume can't be changed: show the control as unavailable */
+    bool has_level;      /* the status gave the level; .level means nothing without it */
     double step;         /* the device's volume step; 0 when it reports none */
     double drift_ms;     /* dropped audio plus rebuffering since the stream was loaded */
     double queued_ms;    /* audio waiting in the sender's queue */

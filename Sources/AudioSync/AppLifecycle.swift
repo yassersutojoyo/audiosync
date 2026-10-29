@@ -17,6 +17,11 @@ enum StartOrigin: Equatable {
     /// Only a click at the Mac may raise a modal alert; every other start
     /// posts a notice and leaves the focus where it is.
     var raisesAlert: Bool { self == .user }
+
+    /// Only a click at the Mac starts attempts that may pair or prompt for a
+    /// code (`NativeAirPlayModel.turnedOnByUser`); a speaker the phone turns
+    /// on that asks for one goes off with a notice instead.
+    var beginsAttempts: Bool { self == .user }
 }
 
 /// The decisions behind the app's launch, when the speakers are reconciled, a
@@ -65,6 +70,18 @@ enum AppLifecycle {
     /// The running copy answers a second launch by showing its window, unless
     /// it is quitting: the new copy then waits for it to go and carries on.
     static func answersSecondLaunch(exiting: Bool) -> Bool { !exiting }
+
+    /// Whether a new copy that finds another one running leaves it the speakers.
+    /// Two copies still launching can't hear each other's show request yet, so
+    /// the one whose process started first stays and only the other leaves.
+    /// Both copies read the kernel's start times, so they decide alike; PIDs
+    /// wrap, so the lower PID only breaks a tie.
+    static func defersToOtherCopy(ownPID: Int32, ownStart: Date, otherPID: Int32, otherStart: Date,
+                                  otherFinishedLaunching: Bool) -> Bool {
+        if otherFinishedLaunching { return true }
+        if ownStart != otherStart { return otherStart < ownStart }
+        return otherPID < ownPID
+    }
 
     /// The signals that end AudioSync the clean way (S111): the entry point
     /// marks the app as quitting, so a second launch arriving meanwhile waits

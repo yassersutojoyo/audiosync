@@ -17,7 +17,7 @@ use crate::media::{
 use crate::message::{
     self, BROADCAST, CastMessage, DEFAULT_MEDIA_RECEIVER, Namespace, PLATFORM, PayloadError, SENDER,
 };
-use crate::status::{AppSession, ControlType, ReceiverStatus};
+use crate::status::{AppSession, ControlType, DeviceVolume, ReceiverStatus, answers_volume};
 
 /// How long the first `RECEIVER_STATUS` may take (C33).
 pub const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -150,6 +150,8 @@ impl Request {
 #[derive(Clone, Debug)]
 struct Media {
     media_session_id: Option<i64>,
+    /// The media session before this load; a late status of it is ignored.
+    replaces: Option<i64>,
     content_id: String,
     /// The first `PLAYING` arrived.
     played: bool,
@@ -181,8 +183,12 @@ pub struct Channel {
     /// The level a drag asked for inside [`VOLUME_INTERVAL`]; the latest
     /// wins (C70).
     volume_queued: Option<f64>,
-    /// The level last sent, until the next `RECEIVER_STATUS` reports one.
-    volume_unconfirmed: Option<f64>,
+    /// The request id and level last sent, until a `RECEIVER_STATUS`
+    /// answers that request or reports that level.
+    volume_unconfirmed: Option<(u32, f64)>,
+    /// The volume the previous channel to the device knew, for a first
+    /// status that leaves it out (C37).
+    assumed_volume: Option<DeviceVolume>,
     /// The member list was asked for: the channel is a group's, and the
     /// multizone namespace is read rather than dropped (C27, C94).
     multizone: bool,
@@ -207,6 +213,7 @@ impl Channel {
             volume_sent: None,
             volume_queued: None,
             volume_unconfirmed: None,
+            assumed_volume: None,
             multizone: false,
         };
         channel.connect(PLATFORM);
@@ -340,6 +347,7 @@ impl Channel {
         if let Some(id) = media_session_id {
             self.media = Some(Media {
                 media_session_id: Some(id),
+                replaces: None,
                 content_id: content_id.to_owned(),
                 played: true,
                 rebuffering: false,
@@ -373,8 +381,10 @@ impl Channel {
         // load.
         self.pending
             .retain(|pending| pending.request != Request::MediaStatus);
+        let replaces = self.media.as_ref().and_then(|media| media.media_session_id);
         self.media = Some(Media {
             media_session_id: None,
+            replaces,
             content_id: request.url.clone(),
             played: false,
             rebuffering: false,
@@ -429,11 +439,24 @@ impl Channel {
         // Steps pressed faster than the device reports build on each other.
         let base = self
             .volume_queued
-            .or(self.volume_unconfirmed)
+            .or(self.volume_unconfirmed.map(|(_, level)| level))
             .unwrap_or(status.volume.level);
         let level = if up { base + step } else { base - step }.clamp(0.0, 1.0);
         self.set_volume(now, level)?;
         Ok(level)
+    }
+
+    /// The volume a reconnect carries over, read where a status leaves
+    /// its volume or level out (C37, C81).
+    pub fn assume_volume(&mut self, volume: Option<DeviceVolume>) {
+        self.assumed_volume = volume;
+    }
+
+    /// Takes the level still waiting for its interval, or else the one sent
+    /// and not yet answered, for the channel that replaces this one (C70, C81).
+    pub fn take_unanswered_volume(&mut self) -> Option<f64> {
+        let unconfirmed = self.volume_unconfirmed.take().map(|(_, level)| level);
+        self.volume_queued.take().or(unconfirmed)
     }
 
     fn volume_check(&self) -> Result<&ReceiverStatus, VolumeError> {
@@ -450,12 +473,15 @@ impl Channel {
     fn send_level(&mut self, now: Instant, level: f64) {
         self.volume_sent = Some(now);
         self.volume_queued = None;
-        self.volume_unconfirmed = Some(level);
-        self.send_request(
+        let id = self.send_request(
             PLATFORM,
             Namespace::Receiver,
             json!({"type": "SET_VOLUME", "volume": {"level": level}}),
         );
+        // A device reports only changes, so the level it already has gets no answer (C104).
+        let current = self.status.as_ref().map(|status| &status.volume);
+        self.volume_unconfirmed =
+            (!current.is_some_and(|current| answers_volume(level, current))).then_some((id, level));
     }
 
     /// Tears the session down (C44, C87): media `STOP` for the sender's
@@ -558,7 +584,31 @@ impl Channel {
                 self.events.push_back(Event::Multizone(message));
             }
             (Namespace::Receiver, "RECEIVER_STATUS") => {
-                self.on_status(id, ReceiverStatus::from_payload(&payload));
+                // A part the status leaves out is unknown, not empty (C37).
+                let Some(fields) = payload.get("status").and_then(|s| s.as_object()) else {
+                    return;
+                };
+                let mut status = ReceiverStatus::from_payload(&payload);
+                if let Some(known) = &self.status
+                    && !fields.get("applications").is_some_and(|a| a.is_array())
+                {
+                    status.applications = known.applications.clone();
+                }
+                let known = self.status.as_ref().map(|known| &known.volume);
+                if let Some(known) = known.or(self.assumed_volume.as_ref()) {
+                    if !fields.get("volume").is_some_and(|v| v.is_object()) {
+                        status.volume = known.clone();
+                    } else if fields
+                        .get("volume")
+                        .and_then(|v| v.get("level"))
+                        .and_then(serde_json::Value::as_f64)
+                        .is_none()
+                    {
+                        status.volume.level = known.level;
+                        status.volume.has_level = known.has_level;
+                    }
+                }
+                self.on_status(id, status);
             }
             (Namespace::Receiver, "LAUNCH_ERROR" | "INVALID_REQUEST") => {
                 let reason = device_text(
@@ -717,7 +767,15 @@ impl Channel {
         let Some(media) = self.media.as_mut() else {
             return;
         };
-        if media.media_session_id.is_none() && !awaiting_reply {
+        let other_content = status
+            .content_id
+            .as_ref()
+            .is_some_and(|content| *content != media.content_id);
+        if media.media_session_id.is_none()
+            && !awaiting_reply
+            && !other_content
+            && status.media_session_id != media.replaces
+        {
             media.media_session_id = status.media_session_id;
             if let Some(media_session_id) = status.media_session_id {
                 self.events.push_back(Event::Loaded { media_session_id });
@@ -726,10 +784,6 @@ impl Channel {
         let other_session = status.media_session_id.is_some()
             && media.media_session_id.is_some()
             && status.media_session_id != media.media_session_id;
-        let other_content = status
-            .content_id
-            .as_ref()
-            .is_some_and(|content| *content != media.content_id);
         if !media.played {
             // Before PLAYING, the status of what played before may still
             // arrive; only the sender's own media session counts.
@@ -864,8 +918,15 @@ impl Channel {
             // control that turned fixed meanwhile (C68).
             self.volume_queued = None;
         }
+        // The answer to an older level leaves the newer one unanswered (C70); a
+        // device that rounds to its step may answer without the request id.
+        if self
+            .volume_unconfirmed
+            .is_some_and(|(request, level)| request == id || answers_volume(level, &status.volume))
+        {
+            self.volume_unconfirmed = None;
+        }
         self.status = Some(status.clone());
-        self.volume_unconfirmed = None;
         self.events.push_back(Event::Status(status.clone()));
         match self.phase {
             Phase::AwaitingStatus => {

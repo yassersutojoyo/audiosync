@@ -97,6 +97,12 @@ key=$(plutil -extract SUPublicEDKey raw -o - "$plist" 2>/dev/null) || key=""
 flag=$(plutil -extract AudioSyncReleaseBuild raw -o - "$plist" 2>/dev/null) || flag=""
 [ "$flag" = true ] \
   || die "the app in $zip isn't a release build, so it would never check for updates: build it with ./build.sh --release"
+# An ad-hoc signature changes with every build, so users' System Audio
+# Recording permission would go stale after this update.
+signature=$(codesign -dv "${plist%/Contents/Info.plist}" 2>&1) || die "the app in $zip isn't signed"
+if printf '%s\n' "$signature" | grep -qx 'Signature=adhoc'; then
+  die "the app in $zip is signed ad-hoc: build it again with ./build.sh --release and the release identity (RELEASE.md)"
+fi
 
 mkdir "$work/archives" "$work/bin"
 cp "$zip" "$work/archives/"

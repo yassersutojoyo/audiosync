@@ -106,8 +106,8 @@ use crate::policy::remote::{
 use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
 use crate::volume::{
-    NO_ZONE_POSITION, ReadBack, RowMove, device_level, device_level_for_db, level_on_speaker,
-    level_set_on_speaker, row_move, sanitize_own,
+    NO_ZONE_POSITION, ReadBack, RowMove, device_level, device_level_for_db, is_echo_of,
+    level_on_speaker, level_set_on_speaker, row_move, sanitize_own, set_grid_db,
 };
 
 /// What a receiver event reports ([`AscAirPlayReceiver::event`]): discovery
@@ -376,7 +376,8 @@ pub const AIRPLAY_ERROR_RECEIVER_UNVERIFIED: i32 = 11;
 /// a null or dead handle, or a path that isn't UTF-8.
 pub const AIRPLAY_PAIRINGS_FAILED: i32 = -1;
 /// The pairings file can't be read or isn't in the expected format: it is
-/// ignored, and the next pairing replaces it.
+/// ignored; a file in the wrong format is replaced by the next pairing, an
+/// unreadable one is left as it is.
 pub const AIRPLAY_PAIRINGS_IGNORED: i32 = -2;
 
 /// The largest hold-back [`asc_airplay_set_hold_back`] applies, in ms: the
@@ -481,6 +482,9 @@ struct Added {
     unreadable: bool,
     /// The user drags its own slider, so read-backs are ignored (S271).
     dragging: bool,
+    /// Another speaker is measured: it stays muted, and a level set on it
+    /// meanwhile is kept, not sent (S276).
+    silenced: bool,
     /// The echo of the level last sent and the baseline of its reads (S291).
     read_back: ReadBack,
     /// The device level last sent, which the host's row shows (S290).
@@ -518,6 +522,7 @@ impl Added {
             volume_set_at: Some(Instant::now()),
             unreadable: false,
             dragging: false,
+            silenced: false,
             read_back: ReadBack::default(),
             level: 0.0,
             playing: false,
@@ -532,8 +537,9 @@ impl Added {
         self.level = device_level_for_db(volume.wire_db()).unwrap_or(0.0);
     }
 
-    /// Sends `volume`.
+    /// Sends `volume`, muted while silenced.
     fn set_volume(&mut self, sender: &Sender, volume: Volume) {
+        let volume = if self.silenced { Volume::Muted } else { volume };
         self.sent(volume);
         match &self.target {
             Some(id) => sender.set_target_volume(id, volume),
@@ -548,6 +554,7 @@ impl Added {
         if self.target.is_some() {
             return self.set_volume(sender, volume);
         }
+        let volume = if self.silenced { Volume::Muted } else { volume };
         self.level = device_level_for_db(volume.wire_db()).unwrap_or(0.0);
         sender.keep_volume(&self.key, volume);
     }
@@ -931,14 +938,8 @@ fn device_volume(level: f64) -> Volume {
     }
 }
 
-/// A reported level this close to the one sent is the speaker rounding it,
-/// not a person's change: the first such read (S291), or a DACP volume
-/// within [`VOLUME_SETTLE`] of the set (S271).
-const VOLUME_TOLERANCE_DB: f64 = 0.5;
-
-/// How long after the host sets a volume [`VOLUME_TOLERANCE_DB`] applies:
-/// a receiver that rounds to 0.3 dB steps can echo the set within 0.5 dB,
-/// and a remote press later can land that close too (S271).
+/// How long after the host sets a volume a DACP volume on the row sent is
+/// the speaker's echo, not a person's change (S271, S276).
 const VOLUME_SETTLE: Duration = Duration::from_secs(3);
 
 /// What [`AscAirPlayEvent::warning`] says for a sender warning.
@@ -1224,6 +1225,12 @@ impl AscAirPlay {
         }
     }
 
+    /// The grid receiver `id` keeps a level sent on, by its make (S291).
+    fn set_grid(&self, id: &str) -> Option<f64> {
+        let txt = self.listed.get(id)?.device.airplay_txt.as_ref()?;
+        set_grid_db(txt.manufacturer.as_deref(), txt.features.map(|bits| bits.0))
+    }
+
     /// The added speaker or target that `id` reports for: itself, or the
     /// target it is a member of.
     fn reporting_for(&self, id: &str) -> Option<String> {
@@ -1248,11 +1255,12 @@ impl AscAirPlay {
         };
         let master = self.master;
         let zone = zone_in(&self.zones, &owner);
+        let grid = self.set_grid(id);
         let Some(added) = self.added.get_mut(&owner) else {
             return;
         };
         let asked = std::mem::take(&mut added.reading);
-        if !asked || added.dragging || !added.read_back.set_on_speaker(db) {
+        if !asked || added.dragging || !added.read_back.set_on_speaker(db, grid) {
             return;
         }
         let Some(RowMove {
@@ -1263,9 +1271,15 @@ impl AscAirPlay {
             return;
         };
         added.position = position;
-        // The sender keeps the level too, for a reconnect or a target
-        // member that starts late (P119, P180).
-        added.keep_volume(&self.sender, device_volume(level));
+        // The sender keeps the level as read too, past the wire range its
+        // nearest, for a reconnect or a target member that starts late
+        // (P119, P180).
+        let kept = if db <= MUTED_DB {
+            Volume::Muted
+        } else {
+            Volume::from_db(db).unwrap_or(Volume::Muted)
+        };
+        added.keep_volume(&self.sender, kept);
         self.queue_event(Pending::Volume(owner, position, level));
     }
 
@@ -1354,8 +1368,13 @@ impl AscAirPlay {
                 .volume_set_at
                 .is_some_and(|at| at.elapsed() < VOLUME_SETTLE);
             // The level the speaker has, the held one with k at 0 (S290).
-            let sent = device_volume(own.level).wire_db();
-            own.echo = recent && (db - sent).abs() < VOLUME_TOLERANCE_DB;
+            let sent = if added.silenced {
+                Volume::Muted
+            } else {
+                device_volume(own.level)
+            }
+            .wire_db();
+            own.echo = recent && is_echo_of(db, sent, self.set_grid(row));
             own.reported = device_level_for_db(db);
         }
         own
@@ -2851,6 +2870,42 @@ pub unsafe extern "C" fn asc_airplay_set_volume_dragging(
     }
 }
 
+/// Keeps the speaker added under `id` muted while another speaker is
+/// measured, its own volume unchanged; a level set on it meanwhile is kept,
+/// not sent (S276). Unsilenced, it sends nothing: the host sends its level.
+/// False when the handle or `id` is null or no speaker was added under `id`.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract; `id` is null or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_set_silenced(
+    airplay: *mut AscAirPlay,
+    id: *const c_char,
+    silenced: bool,
+) -> bool {
+    // SAFETY: by the caller's contract null or a NUL-terminated string.
+    let Some(id) = (unsafe { host_text(id) }) else {
+        return false;
+    };
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, false, |airplay| {
+            let Some(added) = airplay.added.get_mut(id) else {
+                return false;
+            };
+            added.silenced = silenced;
+            if silenced {
+                added.volume_set();
+                added.set_volume(&airplay.sender, Volume::Muted);
+            }
+            true
+        })
+    }
+}
+
 /// Sets the zone position (0 to 100) of speaker `id`, 100 for no zone
 /// (S249): it plays at its own position times the zone's times the master,
 /// live once added, and from its start when added later. False, changing
@@ -2907,8 +2962,9 @@ pub unsafe extern "C" fn asc_airplay_set_zone_volume(
 /// already the speaker's level in the sender, so a reconnect or a member
 /// that starts late plays at it and the host doesn't set it again.
 /// Dropped: a level read before the host last set the volume, one that
-/// comes while the row is dragged, the first one within 0.5 dB of a level
-/// sent (its echo), and one within 0.05 dB of the last reading kept.
+/// comes while the row is dragged, the first one on the row of a level sent
+/// or on its 0.6 dB grid point (its echo), and one within 0.05 dB of the
+/// last reading kept.
 /// Stopped speakers, speakers that leave volume to the sender (`sv`, P121),
 /// and ones that turned a read down or whose reads stopped aren't asked.
 ///
@@ -5901,14 +5957,14 @@ mod tests {
         add_for_volume(handle, id, key.clone(), 50.0);
         // SAFETY: a live handle, used by this thread only; a C string.
         unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 10.0)) };
-        // Sent −27 dB; the speaker rounds it 0.3 dB off: its echo, however late.
+        // Sent −27 dB; the speaker rounds it on the same row: its echo, however late.
         set_ago(handle, id, Duration::from_secs(10));
-        read_back(handle, &key, -27.3);
+        read_back(handle, &key, -26.97);
         assert_eq!(inside(handle).added[id].position, 10.0);
-        read_back(handle, &key, -27.3);
+        read_back(handle, &key, -26.97);
         assert_eq!(inside(handle).added[id].position, 10.0);
         assert!(volume_events(handle).is_empty());
-        // One press down from the baseline: level 8, so own 8.
+        // Two presses down from the baseline: level 8, so own 8.
         read_back(handle, &key, -27.6);
         assert_eq!(own_of(handle, id), 8.0);
         assert_eq!(volume_events(handle), vec![(id.to_owned(), 8.0)]);
@@ -5997,8 +6053,8 @@ mod tests {
         assert_eq!(own_of(handle, id), nine(20.0 / 0.63));
         assert_eq!(inside(handle).added[id].read_back.echo_of(), Some(-24.0));
         // The television reads −24 back on its 0.6 dB grid: no event.
-        read_back(handle, &key, -24.200_001);
-        read_back(handle, &key, -24.200_001);
+        read_back(handle, &key, -24.000_001);
+        read_back(handle, &key, -24.000_001);
         assert!(volume_events(handle).is_empty());
         assert_eq!(own_of(handle, id), nine(20.0 / 0.63));
         // Its remote moves it to −23.6 dB: level 21.3, row 21, own 21.3 ÷ 0.63.
@@ -7434,14 +7490,14 @@ mod tests {
         remote(handle, &key, None, RemoteCommand::VolumeDown);
         assert_eq!(volume_events(handle), vec![(id.to_owned(), 45.0)]);
         assert!(just_sent(handle, id));
-        // Sent −16.5 dB; the receiver echoes it 0.3 dB off, by DACP or a read.
+        // Sent −16.5 dB; the receiver echoes it on that row, by DACP or a read.
         remote(
             handle,
             &key,
             None,
-            RemoteCommand::DeviceVolume(Volume::Db(-16.2)),
+            RemoteCommand::DeviceVolume(Volume::Db(-16.4)),
         );
-        read_back(handle, &key, -16.8);
+        read_back(handle, &key, -16.45);
         assert!(volume_events(handle).is_empty());
         assert_eq!(inside(handle).added[id].position, 45.0);
         // SAFETY: destroyed once, by this thread.
@@ -7458,19 +7514,19 @@ mod tests {
         add_for_volume(handle, id, key.clone(), 50.0);
         // SAFETY: a live handle, used by this thread only; a C string.
         unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 10.0)) };
-        // Sent −27 dB; within 0.5 dB of it is the echo.
+        // Sent −27 dB; a level on its row is the echo.
         remote(
             handle,
             &key,
             None,
-            RemoteCommand::DeviceVolume(Volume::Db(-27.3)),
+            RemoteCommand::DeviceVolume(Volume::Db(-27.0)),
         );
         set_ago(handle, id, Duration::from_millis(2_900));
         remote(
             handle,
             &key,
             None,
-            RemoteCommand::DeviceVolume(Volume::Db(-26.7)),
+            RemoteCommand::DeviceVolume(Volume::Db(-26.97)),
         );
         assert!(volume_events(handle).is_empty());
         assert_eq!(inside(handle).added[id].position, 10.0);
@@ -7491,6 +7547,141 @@ mod tests {
             RemoteCommand::DeviceVolume(Volume::Db(-26.4)),
         );
         assert_eq!(volume_events(handle), vec![(id.to_owned(), 12.0)]);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S276, S291
+    #[test]
+    fn one_step_inside_the_echo_window_is_a_change_on_the_speaker() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005411";
+        let c_id = c_string(id);
+        let key = speaker_key(0x11);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        // The row moved to 60 sent −12 dB; the remote pressed down once at
+        // once holds level 59, by DACP.
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 60.0)) };
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-12.3)),
+        );
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 59.0)]);
+        // By a read before any echo: the row moved to 40, the speaker holds 39.
+        // SAFETY: as above.
+        unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 40.0)) };
+        read_back(handle, &key, -18.3);
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 39.0)]);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S276, S291
+    #[test]
+    fn one_step_from_an_odd_row_on_an_exact_receiver_is_a_change() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005413";
+        let c_id = c_string(id);
+        let key = speaker_key(0x13);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        // Row 49 sent −15.3 dB; a receiver that keeps it exactly reads
+        // −15 dB after one press up: level 50, by DACP.
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 49.0)) };
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-15.0)),
+        );
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 50.0)]);
+        // Row 51 sent −14.7 dB; one press up reads −14.4 dB: level 52.
+        // SAFETY: as above.
+        unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 51.0)) };
+        read_back(handle, &key, -14.4);
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 52.0)]);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S276
+    #[test]
+    fn a_device_volume_on_a_silenced_speaker_is_kept_and_stays_muted() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005412";
+        let c_id = c_string(id);
+        let key = speaker_key(0x12);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        // Another speaker is measured: this one stays muted.
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_silenced(handle, c_id.as_ptr(), true)) };
+        remote(
+            handle,
+            &key,
+            None,
+            RemoteCommand::DeviceVolume(Volume::Db(-6.0)),
+        );
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 80.0)]);
+        let muted = Some(Volume::Muted.wire_db());
+        assert_eq!(inside(handle).added[id].read_back.echo_of(), muted);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S291
+    #[test]
+    fn a_reading_on_a_silenced_speaker_is_kept_muted() {
+        let mut handle = create_with(quiet);
+        let id = "02005E005414";
+        let c_id = c_string(id);
+        let key = speaker_key(0x14);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_silenced(handle, c_id.as_ptr(), true)) };
+        // Turned up on the speaker while another one is measured: the row
+        // follows, and a reconnect would still start it muted.
+        read_back(handle, &key, -6.0);
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 80.0)]);
+        assert_eq!(inside(handle).added[id].level, 0.0);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    /// Sets the AirPlay `features` the receiver `id` announced.
+    fn announce_features(handle: *mut AscAirPlay, id: &str, features: u64) {
+        let listed = inside(handle).listed.get_mut(id).expect("listed");
+        let txt = listed
+            .device
+            .airplay_txt
+            .get_or_insert_with(Default::default);
+        txt.features = Some(audiosync_airplay::discovery::Features(features));
+    }
+
+    // covers: S291
+    #[test]
+    fn the_recorded_television_features_take_its_grid_without_a_make() {
+        let id = "02005E005415";
+        let mut handle = listing(vec![raop(id, "Television", OPEN)]);
+        let c_id = c_string(id);
+        let key = speaker_key(0x15);
+        add_for_volume(handle, id, key.clone(), 50.0);
+        // The television traced on 2026-10-25 announced these features and
+        // no manufacturer; it keeps row 49 (−15.3 dB) as −15.6: the echo.
+        announce_features(handle, id, 0x038B_CB46_007F_8AD0);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 49.0)) };
+        read_back(handle, &key, -15.6);
+        assert!(volume_events(handle).is_empty());
+        // Other features and no make: the row rule alone, so −15.6 after
+        // row 47 (−15.9 dB) is one press up, level 48.
+        announce_features(handle, id, 0x0001_0040_0000_0000);
+        // SAFETY: as above.
+        unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 47.0)) };
+        read_back(handle, &key, -15.6);
+        assert_eq!(volume_events(handle), vec![(id.to_owned(), 48.0)]);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -7712,7 +7903,7 @@ mod tests {
         assert!(inside(handle).added["02005E005360"].reading);
         // Its own level back (−15 dB at 50 with the master at 100), within
         // the speaker's rounding: nothing moved.
-        report_volume(handle, &key, -15.1);
+        report_volume(handle, &key, -14.95);
         assert_eq!(speaker_events(handle), 0);
         // SAFETY: as above.
         unsafe { asc_airplay_read_volumes(handle) };
@@ -7778,6 +7969,44 @@ mod tests {
             volumes()
         );
         assert_eq!(volumes()[before], reported, "{:?}", volumes());
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S291
+    #[test]
+    fn a_reading_below_the_wire_range_is_kept_at_its_bottom_not_muted() {
+        let receiver = Loopback::start();
+        let id = "02005E005365";
+        let mut handle = listing(vec![loopback_record(id, "Shelf", receiver.port)]);
+        let c_id = c_string(id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 50.0)) };
+        let volumes = || -> Vec<String> {
+            receiver
+                .bodies(Method::SetParameter)
+                .into_iter()
+                .filter(|body| body.starts_with("volume:"))
+                .collect()
+        };
+        assert!(wait_for(|| !volumes().is_empty()), "{:?}", volumes());
+        let key = {
+            let added = inside(handle).added.get_mut(id).expect("added");
+            added.volume_set_at = None;
+            added.reading = true;
+            added.key.clone()
+        };
+        // −40 dB, below the wire range: row 0, kept as −30 dB as on Windows.
+        report_volume(handle, &key, -40.0);
+        assert_eq!(inside(handle).added[id].position, 0.0);
+        let before = volumes().len();
+        receiver.hang_up();
+        assert!(
+            wait_for(|| volumes().len() > before),
+            "no reconnect: {:?}",
+            volumes()
+        );
+        assert_eq!(volumes()[before], "volume: -30.000000\r\n");
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -7944,7 +8173,7 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
-    // covers: S290, S291, S276, S271
+    // covers: S290, S291, S276, S271, S289
     #[test]
     fn the_s290_vector_cases_land_on_the_television() {
         use serde_json::Value;
@@ -8004,6 +8233,12 @@ mod tests {
             let mut master = number(case, "master").expect("master");
             let mut own = 0.0;
             let mut handle = on_television(&receiver, &id, master, own);
+            let listed = inside(handle).listed.get_mut(&id).expect("listed");
+            let txt = listed
+                .device
+                .airplay_txt
+                .get_or_insert_with(Default::default);
+            txt.manufacturer = Some("Samsung".to_owned());
             lands(&receiver, -144.0);
             let mut measured = Vec::new();
             for (step, &db) in steps.iter().zip(dbs) {
@@ -8039,8 +8274,8 @@ mod tests {
                     lands_after(&receiver, sets, db);
                     assert_eq!(receiver.volume_sets().len(), sets + 1, "{name}");
                     // The speaker echoes that set inside the window, as sent
-                    // and 0.2 dB off as it rounds: nothing.
-                    for echoed in [db, db - 0.2] {
+                    // and as its 0.6 dB grid keeps it: nothing.
+                    for echoed in [db, (db / 0.6).round() * 0.6] {
                         let near = RemoteCommand::DeviceVolume(Volume::Db(echoed));
                         remote(handle, &key, None, near);
                         let echo = volume_events_of(handle, &id);
@@ -8216,6 +8451,7 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // covers: S291
     #[test]
     fn a_target_reads_its_volume_through_a_member() {
         let mut handle = create_with(quiet);
@@ -8247,6 +8483,11 @@ mod tests {
         assert_eq!(events[0].kind, AIRPLAY_EVENT_VOLUME);
         assert_eq!(events[0].id, "pair:volume-pair");
         assert_eq!(events[0].volume, 0.0, "muted on the speaker");
+        assert_eq!(
+            inside(handle).added["pair:volume-pair"].read_back.echo_of(),
+            Some(-144.0),
+            "the members get the level as a set"
+        );
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }

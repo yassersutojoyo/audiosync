@@ -32,6 +32,8 @@ struct CalibrationControl: View {
                                                       speakerOn: speakerOn)
         // Another speaker's run, or a cut-off sweep still playing out, holds the outputs.
         let held = (model.calibration.holdsOutputs || model.calibrateAll.holdsOutputs) && !running
+        let hint = t.calibrationButtonHint(running: running, unavailable: unavailable, held: held)
+        let reason = t.calibrationButtonReason(running: running, unavailable: unavailable, held: held)
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 if case .running(let step) = phase {
@@ -48,10 +50,18 @@ struct CalibrationControl: View {
                     if running { model.actions.cancelCalibration() } else { model.actions.calibrate(id) }
                 }
                 .controlSize(.small)
-                .disabled(!running && (unavailable != nil || held))
-                .help(running ? "" : unavailable.map(t.calibrationUnavailable) ?? t.calibrationHint)
+                .disabled(reason != nil)
+                .help(hint)
                 .accessibilityLabel(running ? t.calibrationCancelLabel(of: name) : t.calibrateLabel(of: name))
-                .accessibilityHint(running ? "" : unavailable.map(t.calibrationUnavailable) ?? t.calibrationHint)
+                .accessibilityHint(hint)
+            }
+            // Outside the button, so a disabled button doesn't dim the reason.
+            if let reason {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(Brand.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityHidden(true)
             }
             if let message = t.calibrationMessage(phase) {
                 Text(message)

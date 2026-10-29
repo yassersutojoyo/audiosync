@@ -36,6 +36,8 @@ pub struct NowPlaying {
     pub artist: String,
     /// The app the audio comes from.
     pub source: String,
+    /// False while the app is paused; true when the snapshot leaves it out.
+    pub playing: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -81,6 +83,9 @@ pub struct ZoneCounts {
     pub total: u32,
     /// Members on that wait for an AirPlay 2 place or for PTP.
     pub waiting: u32,
+    /// Every member the app's zone header counts, present or not; `total`
+    /// when the snapshot leaves it out.
+    pub all: u32,
 }
 
 /// A speaker preset as the page shows it.
@@ -239,10 +244,14 @@ fn zone_from(
         on: count_field(counts, "on", &at_counts)?,
         total: count_field(counts, "total", &at_counts)?,
         waiting: count_field(counts, "waiting", &at_counts)?,
+        all: match counts.get("all") {
+            None => count_field(counts, "total", &at_counts)?,
+            Some(_) => count_field(counts, "all", &at_counts)?,
+        },
     };
-    if counts.on > counts.total || counts.waiting > counts.on {
+    if counts.on > counts.total || counts.waiting > counts.on || counts.total > counts.all {
         return Err(invalid(format!(
-            "{at}counts are not waiting <= on <= total"
+            "{at}counts are not waiting <= on <= total <= all"
         )));
     }
     Ok(Zone {
@@ -337,6 +346,10 @@ impl State {
                 title: text_field(playing, "title", "now_playing.")?,
                 artist: text_field(playing, "artist", "now_playing.")?,
                 source: text_field(playing, "source", "now_playing.")?,
+                playing: match playing.get("playing") {
+                    None => true,
+                    Some(_) => bool_field(playing, "playing", "now_playing.")?,
+                },
             }),
             Some(_) => return Err(invalid("now_playing is not an object or null")),
         };
@@ -462,6 +475,7 @@ impl State {
                 "title": playing.title,
                 "artist": playing.artist,
                 "source": playing.source,
+                "playing": playing.playing,
             })
         });
         let zones: Vec<Value> = self
@@ -477,6 +491,7 @@ impl State {
                         "on": zone.counts.on,
                         "total": zone.counts.total,
                         "waiting": zone.counts.waiting,
+                        "all": zone.counts.all,
                     },
                 })
             })
@@ -816,6 +831,24 @@ mod tests {
         assert_eq!(again, state);
     }
 
+    // covers: S340
+    #[test]
+    fn a_paused_track_says_so_and_a_snapshot_without_the_field_plays() {
+        let with = |playing: &str| {
+            SAMPLE.replacen(
+                r#""source": "Music"}"#,
+                &format!(r#""source": "Music", "playing": {playing}}}"#),
+                1,
+            )
+        };
+        let written = |json: &str| -> Value {
+            serde_json::from_str(&State::from_json(json).unwrap().to_json(1)).unwrap()
+        };
+        assert_eq!(written(&with("false"))["now_playing"]["playing"], false);
+        assert_eq!(written(SAMPLE)["now_playing"]["playing"], true);
+        assert!(State::from_json(&with("0")).is_err());
+    }
+
     const SOURCES: &str = r#""sources": [
             {"id": "system", "name": "All System Audio", "kind": "system"},
             {"id": "app:music", "name": "Music", "kind": "app", "available": true, "notice": null},
@@ -1075,7 +1108,8 @@ mod tests {
             ZoneCounts {
                 on: 1,
                 total: 2,
-                waiting: 0
+                waiting: 0,
+                all: 2
             }
         );
         let written: Value = serde_json::from_str(&state.to_json(3)).unwrap();
@@ -1117,6 +1151,25 @@ mod tests {
         ] {
             assert!(State::from_json(&bad).is_err(), "{bad}");
         }
+    }
+
+    // covers: S256
+    #[test]
+    fn a_zone_counts_its_absent_members_in_all_and_a_snapshot_without_it_takes_total() {
+        let json = with_zones_and_presets(
+            r#"[{"id": "z1", "name": "Gone", "volume": 60, "members": [],
+                 "counts": {"on": 0, "total": 0, "waiting": 0, "all": 3}},
+                {"id": "z2", "name": "Older", "volume": 60, "members": ["den"],
+                 "counts": {"on": 0, "total": 1, "waiting": 0}}]"#,
+            "[]",
+        );
+        let state = State::from_json(&json).unwrap();
+        let written: Value = serde_json::from_str(&state.to_json(1)).unwrap();
+        assert_eq!(written["zones"][0]["counts"]["all"], 3);
+        assert_eq!(written["zones"][1]["counts"]["all"], 1);
+        assert_eq!(State::from_json(&state.to_json(1)).unwrap(), state);
+        let fewer = json.replacen(r#""waiting": 0}}]"#, r#""waiting": 0, "all": 0}}]"#, 1);
+        assert!(State::from_json(&fewer).is_err(), "all below total");
     }
 
     // covers: S256, S253

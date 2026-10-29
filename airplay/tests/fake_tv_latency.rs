@@ -69,6 +69,7 @@ fn fake_tv_latency_reads_whole_microseconds_and_names_the_variable_otherwise() {
     }
 }
 
+// covers: P203
 #[test]
 fn fake_tv_latency_reaches_the_sender_as_r_s() {
     const REPORTED_US: u64 = 320_000;

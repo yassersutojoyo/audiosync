@@ -13,7 +13,10 @@ extension AppDelegate {
         let layout = appModel.layout
         let on = (layout.thisMac + layout.connected).filter(\.enabled).map { speaker in
             // An AirPlay member keeps its own volume, not the row's device level, so presets saved before S290 still mean the same.
-            let volume = speaker.tag == .airplay ? airplayVolume[speaker.id] ?? defaultVolume : speaker.volume
+            // A Cast speaker that never reported a volume has none to save, so a recall leaves it as it is.
+            let own: Double? = speaker.tag == .cast
+                ? CastID.device(speaker.id).flatMap { castModel.knownVolume(of: $0) } : speaker.volume
+            let volume: Double? = speaker.tag == .airplay ? airplayVolume[speaker.id] ?? defaultVolume : own
             return PresetScene.Speaker(key: speaker.key, volume: speaker.cast?.volumeFixed == true ? nil : volume)
         }
         return PresetScene(on: on, zones: zones, master: masterVolume,
@@ -131,10 +134,8 @@ extension AppDelegate {
             clearPresetNotice()
             return
         }
-        let repeated = appModel.notices.items.contains { $0.subject == Notice.presets && $0.text == message }
         postNotice(message, subject: Notice.presets, title: text.presetLeftOffTitle)
         presetNotice = PresetNotice.Cause(presetID: preset.id, leftOff: leftOff, nothingChanged: nothingChanged)
-        if !repeated { AccessibilityNotification.Announcement(message).post() }
     }
 
     private func clearPresetNotice() {

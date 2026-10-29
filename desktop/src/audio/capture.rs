@@ -2194,6 +2194,8 @@ mod tests {
         assert_eq!(newest(&ring, 4), [0.25; 8], "off, audio passes unchanged");
 
         control.set_settings(preamp_only(6.0));
+        // Past the 10 ms on ramp (S28).
+        converter.push(&f32_bytes(&[0.25; 960]), 480, false);
         converter.push(&f32_bytes(&[0.25; 8]), 4, false);
         let raised = 0.25 * 10f32.powf(6.0 / 20.0);
         for sample in newest(&ring, 4) {

@@ -60,12 +60,10 @@ fn before(seq: u16, next: u16) -> bool {
     (next.wrapping_sub(seq) as i16) > 0
 }
 
-/// The most packets a pause may let out after the call: 100 ms of 352-frame
-/// packets, a count so a late arrival stamp can't inflate it (P213).
-const LATE_PACKETS: usize = 13;
-
 /// The seqs of the datagrams that arrived after `at` and come before `held`,
-/// asserted to be the run that ends right before it, each packet once.
+/// asserted to be the run that ends right before it, each packet once. Its
+/// length is a busy runner's lag, so the stop itself is checked on a fake
+/// clock in `pause_flushes_and_resumes` (P213).
 fn tail_before(datagrams: &[Datagram], at: Instant, held: u16) -> Vec<u16> {
     let tail: Vec<u16> = datagrams
         .iter()
@@ -81,7 +79,6 @@ fn tail_before(datagrams: &[Datagram], at: Instant, held: u16) -> Vec<u16> {
         tail.last().is_none_or(|last| last.wrapping_add(1) == held),
         "{tail:?} before {held}"
     );
-    assert!(tail.len() <= LATE_PACKETS, "{tail:?}");
     tail
 }
 
@@ -952,10 +949,18 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     let key = speaker.key.clone();
     sender.add_speaker(speaker, options());
     assert!(playing(&mut events, &sender, &key, 1));
-    assert!(udp.data.wait_for(|_| true).is_some());
     let count = |server: &Ap2Server, wanted: &str| {
         server.fake().keys().iter().filter(|k| *k == wanted).count()
     };
+    assert!(
+        udp.data.wait_for(|_| true).is_some(),
+        "no audio after playing; FLUSH x{}; {:?}",
+        count(&server, "FLUSH"),
+        {
+            events.drain(&sender);
+            events.of(&key)
+        }
+    );
 
     // Paused for a while: no audio, the feedback goes on.
     let feedback = count(&server, "POST /feedback");
@@ -1064,7 +1069,11 @@ fn ap2_ptp_session() {
         got.iter().filter(|(_, _, b)| b[0] & 0x0F == kind).count()
     };
     assert!(kinds(&general, 0xB) >= 1, "Announce");
-    assert!(kinds(&general, 0x8) >= 6, "Follow_Up");
+    assert!(
+        kinds(&general, 0x8) >= 6,
+        "Follow_Up x{} in 1 s",
+        kinds(&general, 0x8)
+    );
     assert!((6..=10).contains(&kinds(&event, 0x0)), "Sync");
     for (_, from, bytes) in general.iter().chain(&event) {
         assert_eq!(&bytes[20..28], &identity);

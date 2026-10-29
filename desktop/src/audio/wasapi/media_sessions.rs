@@ -264,6 +264,10 @@ mod tests {
 
     const GATE_LIMIT: Duration = Duration::from_secs(30);
 
+    /// Room for a machine busy with other builds; still far short of a hang,
+    /// which lasts until `GATE_LIMIT`.
+    const SLACK: Duration = Duration::from_secs(5);
+
     impl Gate {
         fn wait(&self) {
             let open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
@@ -312,7 +316,7 @@ mod tests {
         let started = Instant::now();
         assert!(read_thumbnail(hung(&gate), started + APP_WAIT).is_err());
         let took = started.elapsed();
-        assert!(took >= APP_WAIT && took < APP_WAIT * 2, "took {took:?}");
+        assert!(took >= APP_WAIT && took < APP_WAIT + SLACK, "took {took:?}");
     }
 
     #[test]
@@ -323,7 +327,7 @@ mod tests {
         let started = Instant::now();
         assert!(within(hung::<bool>(&gate), started + APP_WAIT).is_err());
         let took = started.elapsed();
-        assert!(took >= APP_WAIT && took < APP_WAIT * 2, "took {took:?}");
+        assert!(took >= APP_WAIT && took < APP_WAIT + SLACK, "took {took:?}");
     }
 
     #[test]
@@ -346,7 +350,7 @@ mod tests {
             |session, name: HSTRING| Ok((session, name.to_string())),
         );
         let took = started.elapsed();
-        assert!(took >= APP_WAIT && took < APP_WAIT * 2, "took {took:?}");
+        assert!(took >= APP_WAIT && took < APP_WAIT + SLACK, "took {took:?}");
         let names = |session: i32| (session, format!("session {session}"));
         assert_eq!(described, vec![names(0), names(2)]);
     }

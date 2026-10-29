@@ -40,7 +40,15 @@ extension AppDelegate {
         let saved = AppSettings.load(store.read)
         let remote = WebRemote(model: appModel, store: store, enabled: saved.webRemote, port: saved.webRemotePort)
         remote.onNowPlayingNeedChange = { [weak self] in self?.syncTrackInfo() }
-        remote.host.zones = { [weak self] in self?.zones ?? [] }
+        // Hidden members left out, so the page counts what the zone header counts.
+        remote.host.zones = { [weak self] in
+            guard let self else { return [] }
+            return zones.map { zone in
+                var shown = zone
+                shown.members.removeAll(where: self.isHidden)
+                return shown
+            }
+        }
         remote.host.presets = { [weak self] in
             guard let self else { return [] }
             let members = Dictionary(presets.map { ($0.id, $0.members.map(\.key)) }, uniquingKeysWith: { first, _ in first })
@@ -145,7 +153,7 @@ extension AppDelegate {
 
     private func acceptPermission(_ permission: Permission) {
         permissions.accept(permission)
-        UserDefaults.standard.set(permissions.stored, forKey: PermissionAsks.defaultsKey)
+        permissions.save(store)
         showPermissionOffer()
         if permission == .automation { nowPlaying.mayRaisePrompt = true }
     }
@@ -313,7 +321,10 @@ extension AppDelegate {
     private func makeActions() -> AppModel.Actions {
         var a = AppModel.Actions()
         a.setPower = { [weak self] on in self?.setStreaming(on) }
-        a.selectSource = { [weak self] id in self?.setSource(AudioSource(defaultsValue: id)) }
+        a.selectSource = { [weak self] id, origin in
+            self?.setSource(AudioSource(defaultsValue: id), origin: origin)
+            self?.pushSources()   // remembers a picked input device's name
+        }
         a.selectInputPair = { [weak self] index in self?.setInputPair(index) }
         a.toggleMixApp = { [weak self] id in self?.toggleMixApp(id) }
         a.setMixMode = { [weak self] mode in self?.setMixMode(mode) }
@@ -358,6 +369,7 @@ extension AppDelegate {
             guard let self, visible != self.nowPlayingOnScreen else { return }
             self.nowPlayingOnScreen = visible   // Now Playing polls only while someone sees it
             self.syncTrackInfo()
+            self.appModel.inputLevel.setVisible(visible)
         }
         a.dismissNotice = { [weak self] subject in self?.clearNotices([subject]) }
         a.permissionContinue = { [weak self] permission in self?.resumeAfterPermission(permission) }
@@ -567,11 +579,18 @@ extension AppDelegate {
             loggedInputs = inputLog
             inputLog.forEach { DebugTrace.log($0) }
         }
+        var inputName = store.read(Keys.sourceInputName) as? String
+        if case .input(let uid) = audioSource, let plugged = inputs.first(where: { $0.uid == uid }),
+           plugged.name != inputName {
+            inputName = plugged.name
+            store.write(plugged.name, Keys.sourceInputName)
+        }
         let channels = Dictionary(inputDevices.map { ($0.uid, $0.inputChannels) }, uniquingKeysWith: { first, _ in first })
         let entries = SourceList.entries(systemName: text.sourceSystem,
                                          apps: running.map { (bundleID: $0.bundleID, name: $0.name) },
                                          inputs: inputs, chosen: audioSource,
-                                         chosenAppName: SourceApps.name(for:), mixName: text.sourceMixName)
+                                         chosenAppName: SourceApps.name(for:), mixName: text.sourceMixName,
+                                         unpluggedInputName: text.sourceNotConnected(inputName))
         let icons = Dictionary(running.compactMap { app in app.icon.map { (app.bundleID, $0) } },
                                uniquingKeysWith: { first, _ in first })
         let sources = entries.map { entry -> AppModel.Source in
@@ -585,7 +604,8 @@ extension AppDelegate {
             if case .input(let uid) = AudioSource(defaultsValue: entry.id) {
                 pairs = InputChannelPair.offered(channels: channels[uid] ?? 0).map(text.inputChannelPair)
             }
-            return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput, pairs: pairs)
+            return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput, pairs: pairs,
+                                   connected: entry.connected)
         }
         publish(\.sources, sources)
         let mode = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
@@ -603,7 +623,8 @@ extension AppDelegate {
     /// Checks or unchecks an app in the several-apps menu.
     func toggleMixApp(_ bundleID: String) {
         let mode = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
-        setSource(SourceMix.toggle(bundleID, in: audioSource, mode: mode, ownBundleID: Bundle.main.bundleIdentifier))
+        setSource(SourceMix.toggle(bundleID, in: audioSource, mode: mode, ownBundleID: Bundle.main.bundleIdentifier),
+                  origin: .user)
         pushSources()
     }
 
@@ -612,7 +633,8 @@ extension AppDelegate {
         let current = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
         rememberedMixMode = mode
         guard mode != current else { return }
-        setSource(SourceMix.setMode(mode, from: current, of: audioSource, ownBundleID: Bundle.main.bundleIdentifier))
+        setSource(SourceMix.setMode(mode, from: current, of: audioSource, ownBundleID: Bundle.main.bundleIdentifier),
+                  origin: .user)
         pushSources()
     }
 
@@ -646,6 +668,7 @@ extension AppDelegate {
                                     airPlay2: receiver.map { native?.reachedOverAirPlay2($0) == true } ?? false,
                                     waitingForAirPlay2: receiver.map { native?.waitReason($0) == .tooManyAirPlay2 } ?? false,
                                     waitingForPtp: receiver.map { native?.waitReason($0) == .ptpOtherNetwork } ?? false,
+                                    reconnecting: receiver.map { native?.isReconnecting($0) == true } ?? false,
                                     unannounced: receiver.map { native?.isUnannounced($0) == true } ?? false,
                                     paired: receiver.map { native?.isPaired($0) == true } ?? false,
                                     holdsCredentials: receiver.map { native?.keepsCredentials($0) == true } ?? false,

@@ -197,7 +197,8 @@ struct PanelMotion: Equatable {
 
 /// When the open panel takes a new size from its content. Changes that come
 /// within `gather` of the first go in one animated step, which waits for the
-/// panel to finish growing in. The latest size wins.
+/// panel to finish growing in; content that grew starts it at once. The
+/// latest size wins.
 struct PanelResize: Equatable {
     static let gather: TimeInterval = 0.1
     static let duration: TimeInterval = 0.2
@@ -206,10 +207,13 @@ struct PanelResize: Equatable {
     private(set) var due: TimeInterval?
 
     /// When to apply the step this change joins. `settled` is when the
-    /// panel's open animation ends.
-    mutating func changed(to size: CGSize, at now: TimeInterval, settled: TimeInterval) -> TimeInterval {
+    /// panel's open animation ends; `current` is the content size on screen.
+    mutating func changed(to size: CGSize, at now: TimeInterval, settled: TimeInterval,
+                          from current: CGSize? = nil) -> TimeInterval {
         pending = size
-        let when = due ?? max(now + Self.gather, settled)
+        // Grown content runs off the bottom edge until its step starts, so a grow never waits out the gather.
+        let grows = current.map { size.height > $0.height } ?? false
+        let when = min(due ?? .infinity, max(now + (grows ? 0 : Self.gather), settled))
         due = when
         return when
     }
@@ -490,21 +494,25 @@ enum SourceList {
         /// bundle ID for an app, "input:<uid>" for an input device.
         let id, name: String
         let isInput: Bool
+        /// False only for the chosen input device while it is unplugged.
+        var connected = true
     }
 
     /// The whole system first, then the apps by name, then the input devices
     /// in Core Audio's order. The chosen app stays listed while it isn't
     /// running (its name comes from `chosenAppName`), so the picker still
-    /// says what will be captured; a chosen input device that is unplugged
-    /// is not listed. Devices without a UID can't be chosen and are skipped,
-    /// and a Bluetooth headset's hands-free input
-    /// (`AudioDevices.isHandsFreeInput`) is left out, chosen or not.
+    /// says what will be captured; so does a chosen input device that is
+    /// unplugged, listed last as `unpluggedInputName`, not connected.
+    /// Devices without a UID can't be chosen and are skipped, and a Bluetooth
+    /// headset's hands-free input (`AudioDevices.isHandsFreeInput`) is left
+    /// out, chosen or not.
     static func entries(systemName: String,
                         apps: [(bundleID: String, name: String)],
                         inputs: [Input],
                         chosen: AudioSource,
                         chosenAppName: (String) -> String,
-                        mixName: (AppMixMode, [String]) -> String = { $1.joined(separator: ", ") }) -> [Entry] {
+                        mixName: (AppMixMode, [String]) -> String = { $1.joined(separator: ", ") },
+                        unpluggedInputName: String = "") -> [Entry] {
         var mixEntry: [Entry] = []
         if case .mix(let mode, let ids) = chosen {
             let names = ids.map { id in apps.first { $0.bundleID == id }?.name ?? chosenAppName(id) }
@@ -515,8 +523,11 @@ enum SourceList {
             appEntries.append(Entry(id: bundleID, name: chosenAppName(bundleID), isInput: false))
             appEntries.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         }
-        let inputEntries = inputs.filter { leftOut($0) == nil }.map {
+        var inputEntries = inputs.filter { leftOut($0) == nil }.map {
             Entry(id: AudioSource.input(uid: $0.uid).defaultsValue, name: $0.name, isInput: true)
+        }
+        if case .input(let uid) = chosen, !inputs.contains(where: { $0.uid == uid }) {
+            inputEntries.append(Entry(id: chosen.defaultsValue, name: unpluggedInputName, isInput: true, connected: false))
         }
         return [Entry(id: AudioSource.system.defaultsValue, name: systemName, isInput: false)]
             + mixEntry + appEntries + inputEntries
@@ -613,14 +624,19 @@ struct PromptWithdrawal {
 /// Equalizer settings as the app stores them (JSON in UserDefaults).
 enum StoredEqualizer {
     /// The saved settings, or the defaults when nothing usable is saved: no
-    /// data, data that doesn't decode, or a band count other than the
-    /// equalizer's (from a build with different bands).
+    /// data or data that doesn't decode. A band count other than the
+    /// equalizer's (from a build with different bands) keeps the saved bands,
+    /// flat for missing ones, extras dropped.
     static func decode(_ data: Data?) -> Equalizer.Settings {
         guard let data, let saved = try? JSONDecoder().decode(Equalizer.Settings.self, from: data),
-              saved.gains.count == Equalizer.frequencies.count,
               saved.preamp.isFinite, saved.gains.allSatisfy(\.isFinite)
         else { return Equalizer.Settings() }
-        return saved
+        let count = Equalizer.frequencies.count
+        var stepped = saved
+        stepped.preamp = Equalizer.quantized(saved.preamp)
+        stepped.gains = (Array(saved.gains.prefix(count)) + [Double](repeating: 0, count: max(0, count - saved.gains.count)))
+            .map(Equalizer.quantized)
+        return stepped
     }
 
     static func encode(_ settings: Equalizer.Settings) -> Data? {

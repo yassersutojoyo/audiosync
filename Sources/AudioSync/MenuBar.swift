@@ -36,6 +36,8 @@ final class AppModel: ObservableObject {
         /// An AirPlay 2 speaker waiting for PTP, which runs for speakers on
         /// another network (S285).
         var waitingForPtp = false
+        /// An AirPlay speaker the sender keeps trying to reach (S222).
+        var reconnecting = false
         /// An AirPlay speaker in the sender that is out of view on the
         /// network, waiting to be announced again (P215).
         var unannounced = false
@@ -118,12 +120,14 @@ final class AppModel: ObservableObject {
         /// The channel pairs an input device with more than two channels
         /// offers, as shown (`InputChannelPair.offered`); empty otherwise.
         var pairs: [String] = []
+        /// False for the chosen input device while it is unplugged.
+        var connected = true
         static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name && a.pairs == b.pairs }
     }
 
     struct Actions {
         var setPower: (Bool) -> Void = { _ in }
-        var selectSource: (String) -> Void = { _ in }
+        var selectSource: (String, StartOrigin) -> Void = { _, _ in }
         var selectInputPair: (Int) -> Void = { _ in }
         var toggleMixApp: (String) -> Void = { _ in }
         var setMixMode: (AppMixMode) -> Void = { _ in }
@@ -329,6 +333,8 @@ final class AppModel: ObservableObject {
         apply(rename.start(target, name: zone.name))
     }
     func commitRename(id: String) { apply(rename.commit(id: id)) }
+    /// Quit applies the open rename as the focus leaving would.
+    func commitOpenRename() { apply(rename.commitOpen()) }
     func dropRename() { rename.drop() }
     /// The host listed `ids` as the speakers there are.
     func speakersListed(_ ids: Set<String>) { apply(rename.listed(ids)) }
@@ -429,13 +435,11 @@ final class AppModel: ObservableObject {
 
     /// Hide Speaker in a row's menu: the host turns it off first when it is on.
     func hide(_ speaker: Speaker) {
-        // H11: the next row's switch takes the focus, else the previous row's.
         let sections = layout
         let section = sections.thisMac.contains { $0.id == speaker.id } ? sections.thisMac : sections.connected
-        var neighbour: Speaker?
-        if let at = section.firstIndex(where: { $0.id == speaker.id }) {
-            neighbour = at + 1 < section.count ? section[at + 1] : (at > 0 ? section[at - 1] : nil)
-        }
+        let members = zone(holding: speaker.key)?.members.compactMap { self.speaker(of: $0) } ?? []
+        let neighbour = ZoneLayout.focusAfterHiding(speaker.key, in: section, zone: members, key: \.key,
+                                                    zoned: zonedKeys)
         actions.hideSpeaker(HiddenSpeakers.key(id: speaker.id, tag: speaker.tag), speaker.name,
                             text.speakerTag(speaker.tag, airPlay2: speaker.airPlay2))
         focusSwitch = neighbour?.id
@@ -1219,7 +1223,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard presented, size.width > 0, size.height > 0 else { return }
         let now = Self.uptime
         // A step still running finishes before the next one starts.
-        let due = resize.changed(to: size, at: now, settled: max(quietQueue.quiet.busyUntil, resizeEndsAt ?? 0))
+        let due = resize.changed(to: size, at: now, settled: max(quietQueue.quiet.busyUntil, resizeEndsAt ?? 0),
+                                 from: rest?.content ?? popover.contentSize)
         DispatchQueue.main.asyncAfter(deadline: .now() + max(0, due - now)) { [weak self] in self?.applyResize() }
     }
 
@@ -1814,7 +1819,7 @@ struct MenuBarView: View {
         return CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
                           text: t, height: rowHeight,
                           hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
-                                          waitingForPtp: speaker.waitingForPtp,
+                                          waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
                                           unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? note,
                           renamedFrom: speaker.renamedFrom, kind: speaker.tag, airPlay2: speaker.airPlay2,
                           availability: speaker.availability,
@@ -2116,12 +2121,12 @@ struct SourcePicker: View {
                     Divider()
                     Section(t.sourceInputsHeader) { EmptyView() }
                 }
-                Button {
-                    model.actions.selectSource(source.id)
-                } label: {
+                Toggle(isOn: Binding(get: { source.id == model.sourceID },
+                                     set: { _ in model.actions.selectSource(source.id, .user) })) {
                     if let icon = source.icon { Image(nsImage: icon) }
                     Text(source.name)
                 }
+                .disabled(!source.connected)
                 if source.id.isEmpty { Divider() }
             }
             Divider()
@@ -2193,7 +2198,7 @@ struct SourcePicker: View {
     /// The menu hands its label image to AppKit, which ignores
     /// `accessibilityHidden`; `Image(systemName:)` made VoiceOver read the
     /// symbol's name ("Volume Higher") before the label.
-    private static func unnamedSymbol(_ name: String) -> Image {
+    static func unnamedSymbol(_ name: String) -> Image {
         Image(nsImage: NSImage(systemSymbolName: name, accessibilityDescription: nil) ?? NSImage())
     }
 }
@@ -2213,15 +2218,18 @@ struct PresetPicker: View {
             }
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "square.stack.3d.up.fill")
+                SourcePicker.unnamedSymbol("square.stack.3d.up.fill")
                     .frame(width: 18, height: 18)
                     .foregroundStyle(Brand.tealText)
                     .accessibilityHidden(true)
                 Text(current ?? t.choosePreset)
-                    .foregroundStyle(current == nil ? HierarchicalShapeStyle.secondary : .primary)
+                    .foregroundStyle(current == nil ? Brand.secondaryText : .primary)
                     .lineLimit(1)
                 Spacer()
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(t.presets)
+            .accessibilityValue(current ?? t.choosePreset)
         }
         .menuStyle(.borderlessButton)
         .tint(.primary)   // as the source picker: the teal falls under 4.5:1 on the panel

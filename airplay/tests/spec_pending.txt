@@ -5,8 +5,5 @@
 
 # AirPlay 2 (behind its flag until the real-receiver checks of G17).
 
-# Receiver-reported latency: the hardware check only.
-P203 Hardware: a receiver's reported value against its measured offset.
-
 # Several AirPlay 2 receivers at once, specified for a later stage.
 P212 Hardware: two or more AirPlay 2 receivers on one PTP timeline (G20).

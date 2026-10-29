@@ -169,6 +169,9 @@ struct UIStrings {
     func delay(of name: String) -> String { "\(name) delay" }
     /// VoiceOver, as a delay applies while its panel is open: "Desk delay set to +150 ms".
     func delaySet(_ label: String, to value: String) -> String { "\(label) set to \(value)" }
+    /// The delay value's VoiceOver label, which says whether its controls are open.
+    func showDelayControls(_ label: String) -> String { "Show controls for \(label)" }
+    func hideDelayControls(_ label: String) -> String { "Hide controls for \(label)" }
     func delayStep(_ delta: Int) -> String { delta < 0 ? "−\(-delta)" : "+\(delta)" }
     func delayStepAccessibility(_ delta: Int) -> String {
         delta < 0 ? "Decrease delay by \(-delta) \(millisecondsUnit)"
@@ -189,6 +192,19 @@ struct UIStrings {
     /// The calibrate button's tooltip and VoiceOver hint while it is off.
     func calibrationUnavailable(_ reason: CalibrationFailure) -> String {
         calibrationFailure(reason)
+    }
+
+    /// The calibrate button's tooltip and VoiceOver hint; empty while it reads Cancel.
+    func calibrationButtonHint(running: Bool, unavailable: CalibrationFailure?, held: Bool) -> String {
+        if running { return "" }
+        if let unavailable { return calibrationUnavailable(unavailable) }
+        return held ? calibrateAllUnavailable(.busy) : calibrationHint
+    }
+
+    /// The line under the calibrate button while it is off; nil while it can be pressed.
+    func calibrationButtonReason(running: Bool, unavailable: CalibrationFailure?, held: Bool) -> String? {
+        guard !running, unavailable != nil || held else { return nil }
+        return calibrationButtonHint(running: running, unavailable: unavailable, held: held)
     }
 
     /// What a calibration needs that is off, in the order streaming, the
@@ -539,6 +555,9 @@ struct UIStrings {
     let sourceLabel = "Audio Source"
     let sourceSystem = "All System Audio"
     let sourceInputsHeader = "Input Devices"
+    /// The chosen input device while it is unplugged; `name` is the one it
+    /// had when last seen, nil when none was remembered.
+    func sourceNotConnected(_ name: String?) -> String { "\(name ?? "Input Device") (not connected)" }
     let inputChannelsLabel = "Input Channels"
     /// One channel pair of an input device, counted from 1 as the device's
     /// own settings count them.
@@ -614,6 +633,16 @@ struct UIStrings {
         "\(name) didn't accept the connection, so it's off. Turn it on again to try once more."
     }
 
+    /// A native speaker kept answering busy until the sender gave up.
+    func nativeAirPlayBusy(name: String) -> String {
+        "\(name) seems to be busy with another device, so it's off. Turn it on again once it's free."
+    }
+
+    /// A native speaker kept turning the session down until the sender gave up.
+    func nativeAirPlayRefused(name: String) -> String {
+        "\(name) declined the stream, so it's off. Turn it on again to try once more."
+    }
+
     /// A native speaker turned off because it asks for a PIN or password;
     /// nil for every other reason. `unasked`: it turned the session down
     /// before asking for either.
@@ -622,7 +651,7 @@ struct UIStrings {
         case .needsCode where unasked: return nativeAirPlayNotAccepted(name: name)
         case .needsCode: return airPlayTurnedOff(name: name, reason: .needsPin)
         case .needsPassword: return airPlayTurnedOff(name: name, reason: .needsPassword)
-        case .unreachable, .cantPlay, .needsAirPlay2, .timingUnavailable, .playsThroughSpeakers,
+        case .unreachable, .busy, .refused, .cantPlay, .needsAirPlay2, .timingUnavailable, .playsThroughSpeakers,
              .receiverUnverified, .memberNeedsPassword, .cancelled, .pairingFailed, .stillNeedsCode:
             return nil
         }
@@ -684,6 +713,20 @@ struct UIStrings {
     let waitingForAirPlay2 = "Waiting: too many AirPlay 2 speakers"
     /// Under the name of a speaker waiting for PTP (S285).
     let waitingForPtp = "Waiting: AirPlay 2 speakers on another network"
+    /// From its second failed retry, an AirPlay speaker the sender keeps
+    /// trying to reach stays on, with this notice (S222).
+    func nativeAirPlayRetrying(_ problem: NativeSpeakerEvent.Problem, name: String) -> String {
+        switch problem {
+        case .connectionLost: return "\(name) lost its connection. AudioSync keeps trying to reconnect."
+        case .busy: return "\(name) seems to be playing from another device. AudioSync keeps trying."
+        case .refused, .incompatible: return "\(name) declined the stream. AudioSync tries again shortly."
+        default: return "\(name) isn't responding. AudioSync keeps trying to reach it."
+        }
+    }
+    /// That notice's title.
+    func nativeAirPlayReconnectingTitle(name: String) -> String { "\(name) reconnecting" }
+    /// Under its name meanwhile.
+    let reconnecting = "Reconnecting…"
     /// Under the name of an AirPlay speaker that is not announced on the
     /// network right now; it starts by itself once it is again (P215).
     let notOnNetwork = "Not on the network right now, plays once it's back"
@@ -810,11 +853,14 @@ struct UIStrings {
     /// A device's name, or a placeholder when Core Audio can't read it.
     func deviceName(_ name: String) -> String { name.isEmpty ? unknownDevice : name }
 
-    /// `refusedCaptureRate`: the capture rate (Hz) when that was the reason;
-    /// `count`: how many speakers `names` lists.
-    func outputCouldNotStart(names: String, count: Int = 1, refusedCaptureRate: Double? = nil) -> String {
-        let deviceName = names.isEmpty ? unknownDevice : names
-        let one = count <= 1
+    /// A local output that stalled again before playing 5 s; it stays on (S334).
+    func outputLost(name: String) -> String { "\(name) was disconnected. It plays again as soon as it's back." }
+
+    /// `refusedCaptureRate`: the capture rate (Hz) when that was the reason.
+    func outputCouldNotStart(names: [String], refusedCaptureRate: Double? = nil) -> String {
+        let shown = listed(names)
+        let deviceName = shown.isEmpty ? unknownDevice : shown
+        let one = names.count <= 1
         let first = "\(deviceName) couldn't start, so " + (one ? "it's off. " : "they're off. ")
         let again = one ? "turn the speaker on again." : "turn the speakers on again."
         guard let rate = refusedCaptureRate else {
@@ -1235,11 +1281,12 @@ struct UIStrings {
     /// what a Cast speaker does, that an AirPlay 2 speaker waits, that an
     /// AirPlay speaker is off the network, or what a stereo pair or home
     /// theater group is made of.
-    func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, waitingForPtp: Bool = false,
+    func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, waitingForPtp: Bool = false, reconnecting: Bool = false,
                  unannounced: Bool, target: AirPlayTargetRow?) -> String? {
         if let cast { return castNote(cast) }
         if waitingForPtp { return self.waitingForPtp }
         if waitingForAirPlay2 { return self.waitingForAirPlay2 }
+        if reconnecting { return self.reconnecting }
         if unannounced { return notOnNetwork }
         return target.map(airPlayTargetNote)
     }
@@ -1306,6 +1353,14 @@ struct UIStrings {
     let castAddedByAddress = "Added by address"
     /// The volume slider's hint when the device's volume can't be changed.
     let castVolumeFixed = "This speaker's volume can't be changed from AudioSync."
+    /// Why a speaker's volume slider is dimmed, as its hint and tooltip; nil while it moves.
+    func volumeLocked(enabled: Bool, cast: CastRow?) -> String? {
+        if cast?.volumeFixed == true { return castVolumeFixed }
+        if !enabled { return volumeSpeakerOff }
+        return cast?.live == false ? castVolumeNotLive : nil
+    }
+    let volumeSpeakerOff = "Turn this speaker on to change its volume."
+    let castVolumeNotLive = "This speaker's volume can be changed while AudioSync plays to it."
     /// Under a Cast speaker's delay field, in place of the sync hint (CAST_SPEC C74-C77).
     let castSyncHint = "AudioSync can't sync Google Cast speakers automatically, so it keeps the others only "
         + "roughly in step with this one. Set this by ear: heard this speaker late? Raise the value, and the "
@@ -1376,6 +1431,8 @@ struct UIStrings {
             return "Another app started casting to \(name), so it's off in AudioSync."
         case .connectionLost:
             return "\(name) lost its connection, so it's off. Turn it on again to reconnect."
+        case .searchStopped:
+            return "AudioSync stopped looking for Google Cast speakers, so \(name) is off. Restart AudioSync to try again."
         }
     }
 
