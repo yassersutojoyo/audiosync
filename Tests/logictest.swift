@@ -3019,6 +3019,7 @@ do {
                 == "Den TV didn't answer as the speaker you paired, so it's off. "
                     + "If it's yours, use Forget Pairing and turn it on to pair again with its PIN.",
           "P56 native airplay: a receiver that fails its signature check goes off with its own notice, as on Windows")
+    // covers: S346
     check(UIStrings().nativeAirPlayTimingUnavailable(name: "Loft")
             == "Loft needs PTP timing, which isn't available, so it's off. Another app may be using ports 319 and 320.",
           "native airplay: the PTP text reads as on Windows")
@@ -3034,9 +3035,11 @@ do {
                                          hints: ["airplay", "airplay2", "over-airplay2"], overAirPlay2: true)))
     paths.apply(.appeared(NativeReceiver(id: "I9", name: "Den", model: "", availability: .available, reason: nil,
                                          hints: ["raop", "airplay", "airplay2"])))
+    // covers: S346, S313
     check(paths.reachedOverAirPlay2("H8") && !paths.reachedOverAirPlay2("I9") && !paths.reachedOverAirPlay2("J0"),
           "native airplay: only a receiver the sender reaches over AirPlay 2 is marked so, not one that merely lists AirPlay 2")
     let kinds = UIStrings()
+    // covers: S346
     check(kinds.speakerTag(.airplay, airPlay2: true) == "AirPlay 2" && kinds.speakerTag(.airplay) == "AirPlay"
             && kinds.speakerTag(.cast, airPlay2: true) == "Google Cast"
             && kinds.speakerLabel(name: "Loft", tag: kinds.speakerTag(.airplay, airPlay2: true)) == "Loft, AirPlay 2",
@@ -3047,6 +3050,7 @@ do {
     // covers: S224
     check(paths.isPaired("H8") && !paths.isPaired("I9") && !paths.isPaired("J0"),
           "native airplay: only a receiver AudioSync keeps a pairing for offers Forget Pairing")
+    // covers: S346
     check(kinds.nativePairPINMessage(name: "Loft").hasPrefix("Loft shows a 4-digit PIN on its screen. Enter it to pair; "
                                                               + "after that, it connects without a PIN.")
             && !kinds.nativePairWrongPINMessage(name: "Loft").contains("TV"),
@@ -10623,9 +10627,11 @@ do {
     let ids: [String] = speakers.compactMap { $0["id"] as? String }
     let named = object?["computer_name"] as? String == "Studio Mac"
     let noTrack = object?["now_playing"] is NSNull
+    // covers: S343
     check(named && noTrack && master == 80 && ids == rows.map(\.id),
           "web remote: the snapshot has the name, the master volume, no track and the rows in order")
     let clamped = field("builtin", "volume") as? Double == 100
+    // covers: S343, S76, S181
     check(clamped && range("builtin") == [0, 0, 0],
           "web remote: the reference has no delay to change and its volume stays in 0 to 100", "\(range("builtin"))")
     let usbRange = range("usb") == [-2000, 150, 20000]
@@ -10643,6 +10649,7 @@ do {
     // covers: S257 (a speaker that would ask for a code stays off)
     check(groupOpen && groupNote && codeOff && codeNote && pairedOpen && pairedQuiet,
           "web remote: a Cast group plays from the phone; a speaker that would ask for a code on the Mac can't")
+    // covers: S343
     check(snapshot.json == RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows).json,
           "web remote: the same state gives the same text, so the core sends nothing new")
     let playing = RemoteSnapshot(computerName: "", master: 50,
@@ -10660,9 +10667,11 @@ do {
                                                                transport: kAudioDeviceTransportTypeBuiltIn)],
                                      chosen: .app(bundleID: "com.apple.Music"), chosenAppName: { $0 })
     let remoteSources = entries.map { RemoteSource(pickerID: $0.id, name: $0.name) }
+    // covers: S344
     check(remoteSources.map(\.id) == ["system", "app:com.apple.Music", "input:BuiltInMic"]
             && remoteSources.map(\.kind) == [.system, .app, .input] && remoteSources.map(\.name) == entries.map(\.name),
           "web remote: the page lists the picker's entries in its order, each with an ID the core takes")
+    // covers: S344
     check(zip(remoteSources, entries).allSatisfy { RemoteSource.pickerID($0.id) == $1.id }
             && ["", "app:", "input:", "Music"].allSatisfy { RemoteSource.pickerID($0) == nil },
           "web remote: a page ID maps back to the picker's ID; one that names no source maps to nothing")
@@ -10670,6 +10679,7 @@ do {
                                  sources: remoteSources, sourceID: "app:com.apple.Music")
     let sourcedObject = (try? JSONSerialization.jsonObject(with: Data(sourced.json.utf8))) as? [String: Any]
     let sourceKinds = (sourcedObject?["sources"] as? [[String: Any]])?.compactMap { $0["kind"] as? String }
+    // covers: S344
     check(sourcedObject?["source_id"] as? String == "app:com.apple.Music" && sourceKinds == ["system", "app", "input"]
             && snapshot.json.contains("\"source_id\":null"),
           "web remote: the snapshot carries the sources and the one in use", sourced.json)
@@ -10678,6 +10688,7 @@ do {
             RemoteAction.plan($0, rows: rows, sources: remoteSources, sourceID: "app:com.apple.Music")
         } ?? []
     }
+    // covers: S344
     check(pick("input:BuiltInMic") == [.selectSource(pickerID: "input:BuiltInMic")]
             && pick("system") == [.selectSource(pickerID: "")]
             && pick("app:com.apple.Music").isEmpty && pick("app:gone").isEmpty
@@ -10691,6 +10702,7 @@ do {
     let mixSources = mixEntries.map { RemoteSource(pickerID: $0.id, name: $0.name) }
     let mixSource = mixSources.first { $0.id == except.defaultsValue }
     let onlyID = AudioSource.mixed(.only, bundleIDs: ["com.spotify.client", "com.google.Chrome"]).defaultsValue
+    // covers: S344
     check(mixSource?.kind == .app && mixSource?.name == "All apps except Spotify and Chrome"
             && zip(mixSources, mixEntries).allSatisfy { RemoteSource.pickerID($0.id) == $1.id }
             && RemoteSource.pickerID(RemoteSource.pageID(onlyID)) == onlyID
@@ -10701,6 +10713,7 @@ do {
     func planMix(from sourceID: String) -> [RemoteAction]? {
         mixPick.map { RemoteAction.plan($0, rows: rows, sources: mixSources, sourceID: sourceID) }
     }
+    // covers: S344
     check(planMix(from: except.defaultsValue) == [RemoteAction]()
             && planMix(from: "system") == [RemoteAction.selectSource(pickerID: except.defaultsValue)],
           "web remote: a pick of the several-apps source in use changes nothing; from another source it selects it")
@@ -10709,6 +10722,7 @@ do {
     let noCommand: AscRemoteCommand = { _, _ in }
     var error: Int32 = 0
     var remote = asc_remote_start("{\"port\": 0, \"listen\": [\"127.0.0.1\"]}", noCommand, nil, &error)
+    // covers: S343
     check(remote != nil && asc_remote_publish(remote, snapshot.json) && asc_remote_publish(remote, playing)
             && asc_remote_publish(remote, sourced.json),
           "web remote: the core accepts the snapshots", "start error \(error)")
@@ -10721,15 +10735,19 @@ do {
     let readFull = fullCommand == .speaker(id: "usb", on: true, volume: 55.5, delayMs: -40)
     let readNumber = numberAsSwitch == .speaker(id: "usb", on: nil, volume: nil, delayMs: nil)
     let readMaster = masterCommand == .master(volume: 20)
+    // covers: S345
     check(readFull && readNumber && readMaster && dropped.allSatisfy { $0 == nil },
           "web remote: commands read as the core sends them; anything else is dropped")
 
     func plan(_ json: String) -> [RemoteAction] { RemoteCommand(json: json).map { RemoteAction.plan($0, rows: rows) } ?? [] }
+    // covers: S345
     check(plan("{\"type\":\"speaker\",\"id\":\"usb\",\"on\":true,\"volume\":70}")
             == [.setEnabled(id: "usb", on: true), .setVolume(id: "usb", position: 70)],
           "web remote: turning a speaker on with a volume flips the switch, then moves the slider")
+    // covers: S345
     check(plan("{\"type\":\"speaker\",\"id\":\"usb\",\"volume\":70}").isEmpty,
           "web remote: the volume of a speaker that is off changes nothing, as its slider is disabled in the window")
+    // covers: S345
     check(plan("{\"type\":\"speaker\",\"id\":\"cast\",\"on\":true,\"volume\":70}") == [.setEnabled(id: "cast", on: true)],
           "web remote: a Cast speaker's volume waits for its session")
     let toLocal = plan("{\"type\":\"speaker\",\"id\":\"usb\",\"delay_ms\":-5000}") == [.setLocalOffset(id: "usb", ms: -2000)]

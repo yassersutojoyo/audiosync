@@ -671,6 +671,7 @@ mod tests {
         }
     }
 
+    // covers: S344
     #[test]
     fn the_snapshot_lists_the_pickers_sources_in_its_order_with_the_current_one() {
         let snapshot = snapshot(&with_sources(), not_virtual, None, "Studio PC", &Text);
@@ -694,6 +695,7 @@ mod tests {
         assert_eq!(served.source_id.as_deref(), Some("app:42:Spotify.exe"));
     }
 
+    // covers: S344
     #[test]
     fn an_all_apps_except_source_is_an_app_named_around_its_list() {
         // The id the adapter gives a chosen mix (Chosen::key).
@@ -715,6 +717,7 @@ mod tests {
         assert_eq!(actions(&pick, &state, not_virtual), Ok(Vec::new()));
     }
 
+    // covers: S344
     #[test]
     fn a_current_source_the_picker_doesnt_list_goes_out_as_none() {
         let unlisted = AppState {
@@ -726,6 +729,7 @@ mod tests {
         assert_eq!(snapshot.sources.len(), 3);
     }
 
+    // covers: S344
     #[test]
     fn a_source_pick_is_the_pickers_and_a_repeat_or_an_unknown_one_does_nothing() {
         let state = with_sources();
@@ -846,6 +850,7 @@ mod tests {
         assert!(use_port_enabled(" 8081 ", 8080, false));
     }
 
+    // covers: S343
     #[test]
     fn the_snapshot_lists_what_the_window_lists_in_its_order() {
         let track = crate::now_playing_card::fake::track("Spotify.exe", "Song", "Band", true);
@@ -870,6 +875,7 @@ mod tests {
         );
     }
 
+    // covers: S343
     #[test]
     fn each_speaker_carries_its_switch_kind_delay_range_and_note() {
         let snapshot = snapshot(&state(), not_virtual, None, "pc", &Text);
