@@ -306,6 +306,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Set by `runQuitSteps`, so Quit and an exit signal never run them twice.
     private var quitStepsRan = false
     private var deviceRescanPending = false
+    /// The listeners on Core Audio's system object, by property, so a service
+    /// restart can remove them before it adds them again.
+    private var systemListeners: [(AudioObjectPropertySelector, AudioObjectPropertyListenerBlock)] = []
     /// The app quits macOS or the capture already reported (`appQuit`).
     private var quitReports = AppLifecycle.QuitReports()
     /// The source picker's input lines last written to the debug log (`pushSources`).
@@ -597,10 +600,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
                                                  mScope: kAudioObjectPropertyScopeGlobal,
                                                  mElement: kAudioObjectPropertyElementMain)
-        let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address,
-                                                         DispatchQueue.main) { [weak self] _, _ in
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             self?.devicesChanged()
         }
+        let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address,
+                                                         DispatchQueue.main, listener)
+        if status == noErr { systemListeners.append((kAudioHardwarePropertyDevices, listener)) }
         if status != noErr { DebugTrace.log("[AudioSync] device list listener not added: \(status)") }
         observeServiceRestart()
     }
@@ -611,15 +616,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyServiceRestarted,
                                                  mScope: kAudioObjectPropertyScopeGlobal,
                                                  mElement: kAudioObjectPropertyElementMain)
-        let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address,
-                                                         DispatchQueue.main) { [weak self] _, _ in
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             guard let self else { return }
             DebugTrace.log("[AudioSync] Core Audio's service restarted"
                            + (self.engine.isRunning ? "; the session reopens its capture and outputs" : ""))
+            // The restart drops every listener a client added (AudioHardware.h).
+            self.removeSystemListeners()
+            self.observeDeviceList()
+            self.deviceVolumes.restarted()
+            self.dataSourceWatch.stop()
             self.engine.serviceRestarted()
             self.devicesChanged()
         }
+        let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address,
+                                                         DispatchQueue.main, listener)
+        if status == noErr { systemListeners.append((kAudioHardwarePropertyServiceRestarted, listener)) }
         if status != noErr { DebugTrace.log("[AudioSync] service restart listener not added: \(status)") }
+    }
+
+    private func removeSystemListeners() {
+        for (selector, listener) in systemListeners {
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                                     mElement: kAudioObjectPropertyElementMain)
+            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address,
+                                                   DispatchQueue.main, listener)
+        }
+        systemListeners = []
     }
 
     /// Devices change in bursts (a dock, the capture's own aggregate device):

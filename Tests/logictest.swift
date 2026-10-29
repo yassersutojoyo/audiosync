@@ -1321,6 +1321,8 @@ do {
         var mostListeners = 0
         /// Core Audio refuses every new listener.
         var refusesListeners = false
+        /// Every listener added, kept or since removed.
+        var listens = 0
 
         /// A control the device has from the start, on its main element.
         func set(_ device: AudioDeviceID, _ part: DeviceVolumeControl.Part, _ value: Double, settable: Bool = true) {
@@ -1361,6 +1363,7 @@ do {
         func listen(_ device: AudioDeviceID, _ control: DeviceVolumeControl,
                     _ changed: @escaping () -> Void) -> Bool {
             guard !refusesListeners else { return false }
+            listens += 1
             listeners[Key(device: device, control: control)] = changed
             mostListeners = max(mostListeners, listeners.count)
             return true
@@ -1728,6 +1731,21 @@ do {
               "device volume: a device that answers nothing for a moment keeps its listeners, and a refused listener is logged",
               "kept \(kept), back \(String(describing: back)), now \(String(describing: host.volumes.hints[uid])), "
                 + "lines \(host.lines)")
+    }
+
+    // covers: S335
+    do {
+        // Core Audio's service restart drops every listener, and a device
+        // can come back under the same ID, which follow alone keeps as it is.
+        let host = Host()
+        host.access.set(7, .volume, 0.5)
+        host.access.set(7, .mute, 0)
+        host.volumes.follow(["u": 7])
+        host.volumes.restarted()
+        host.volumes.follow(["u": 7])
+        check(host.access.listens == 4 && host.access.listeners.count == 2,
+              "device volume: after Core Audio's service restart a followed output with the same ID is listened to again",
+              "listens \(host.access.listens), held \(host.access.listeners.count)")
     }
 }
 

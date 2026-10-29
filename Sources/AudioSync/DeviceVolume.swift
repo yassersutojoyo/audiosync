@@ -324,6 +324,12 @@ final class DeviceVolumes {
         refreshHints()
     }
 
+    /// Core Audio's service restarted (S335): its listeners are gone, so the
+    /// next follow starts every output again, even one under the same ID.
+    func restarted() {
+        for uid in followed.keys.sorted() { release(uid) }
+    }
+
     // MARK: Following one output
 
     private func start(_ uid: String, _ device: AudioDeviceID) {
