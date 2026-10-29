@@ -2755,6 +2755,39 @@ do {
             && quit.apply(.state(id: "Q1", .playing, retryMs: nil)) == .playingChanged("native:Q1", playing: true),
           "native airplay: a speaker off the network plays again once announced, without joining the sender anew")
 
+    // Mac sitting 29 Oct: a receiver killed mid-stream sat plain "On", with
+    // no notice, for over a minute while the sender retried it.
+    var killed = NativeAirPlayModel()
+    killed.apply(.appeared(receiver("R1", "Den", .available)))
+    killed.added("R1")
+    _ = killed.apply(.state(id: "R1", .playing, retryMs: nil))
+    func fails(_ retryMs: Int64) -> NativeAirPlayOutcome? {
+        let outcome = killed.apply(.error(id: "R1", .notResponding, retryMs: retryMs, detail: "Unreachable"))
+        _ = killed.apply(.state(id: "R1", .retrying, retryMs: retryMs))
+        return outcome
+    }
+    let quietFails = [fails(1000), fails(2000)]
+    check(quietFails == [nil, nil] && !killed.isReconnecting("R1"),
+          "native airplay: a lost speaker and its first retry fail quietly", "\(quietFails)")
+    let secondRetry = fails(4000)
+    check(secondRetry == .reconnecting("native:R1", .notResponding) && killed.isReconnecting("R1") && fails(8000) == nil,
+          "native airplay: from its second failed retry a speaker says it is reconnecting, with a notice once",
+          "\(secondRetry)")
+    check(killed.apply(.state(id: "R1", .playing, retryMs: nil)) == .playingChanged("native:R1", playing: true)
+            && !killed.isReconnecting("R1"),
+          "native airplay: the first retry that works ends reconnecting")
+    _ = fails(1000)
+    _ = killed.apply(.state(id: "R1", .playing, retryMs: nil))
+    let afterBlip = [fails(1000), fails(2000)]
+    check(afterBlip == [nil, nil] && !killed.isReconnecting("R1"),
+          "native airplay: a speaker that played again counts its failed retries anew", "\(afterBlip)")
+    _ = fails(4000)
+    let lapse = killed.apply(.state(id: "R1", .unannounced, retryMs: nil))
+    check(lapse == .reconnecting("native:R1", nil) && !killed.isReconnecting("R1") && killed.isUnannounced("R1"),
+          "native airplay: a reconnecting speaker whose records lapse is off the network, its notice gone", "\(String(describing: lapse))")
+    check(UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, reconnecting: true, unannounced: false, target: nil) == "Reconnecting…",
+          "native airplay: a reconnecting speaker's row says so")
+
     // P169, S285: a 17th AirPlay 2 speaker waits for a place, switched on,
     // and the sender starts it once one of the others stops.
     model.apply(.appeared(receiver("G7", "Loft", .available)))

@@ -9324,6 +9324,73 @@ mod tests {
         assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
     }
 
+    // Mac sitting 29 Oct: a receiver killed mid-stream sat plain on, with no
+    // notice, for over a minute.
+    // covers: S222
+    #[test]
+    fn a_lost_airplay_speaker_says_reconnecting_from_its_second_failed_retry() {
+        let reconnecting = SpeakerState::Waiting(ui_model::Waiting::Reconnecting);
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        // The loss and the retry at 1 s fail quietly.
+        for _ in 0..2 {
+            fake.fail(&kitchen, ErrorKind::Unreachable);
+            adapter.poll();
+            assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+            assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        }
+        // The retry at 3 s fails too.
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayRetrying {
+                speaker: "Kitchen".to_owned(),
+                problem: ui_model::AirPlayProblem::NotResponding,
+            }]
+        );
+        // The first retry that works clears both.
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        assert!(messages(&adapter).is_empty());
+        // A blip healed by its first retry, then a loss: counted anew.
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        adapter.poll();
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        for _ in 0..2 {
+            fake.fail(&kitchen, ErrorKind::Unreachable);
+            adapter.poll();
+        }
+        assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    // covers: P215, S222
+    #[test]
+    fn a_reconnecting_airplay_speaker_is_off_the_network_once_its_records_lapse() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        for _ in 0..3 {
+            fake.fail(&kitchen, ErrorKind::Unreachable);
+            adapter.poll();
+        }
+        assert_eq!(messages(&adapter).len(), 1);
+        fake.state(&kitchen, AirPlayState::Unannounced);
+        adapter.poll();
+        assert_eq!(
+            state_of(&adapter, &ap(&kitchen)),
+            SpeakerState::Waiting(ui_model::Waiting::NotOnNetwork)
+        );
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
     #[test]
     fn a_speaker_waiting_for_the_airplay2_slot_says_so_not_reconnecting() {
         use audiosync_airplay::error::UnsupportedReason;
