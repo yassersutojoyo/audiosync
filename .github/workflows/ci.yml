@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   swift-changes:
-    # Off main and integ/* trains, the macOS build runs only for a push that touches the Swift app.
+    # Off main, integ/* trains and release/ branches, the macOS build runs only for a push that touches the Swift app.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -40,7 +40,7 @@ jobs:
 
   build-and-test:
     needs: swift-changes
-    if: ${{ !cancelled() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || needs.swift-changes.outputs.swift == 'true') }}
+    if: ${{ !cancelled() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/') || needs.swift-changes.outputs.swift == 'true') }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
@@ -194,7 +194,7 @@ jobs:
     # the core, signing with the local identity make-local-cert.sh
     # creates, then the bundle is checked and started once, and a local
     # identity that can't sign must stop the build.
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/')
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/')
     runs-on: macos-15
     timeout-minutes: 45
     steps:

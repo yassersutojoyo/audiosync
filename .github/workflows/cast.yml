@@ -21,8 +21,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS and Windows run on main and integ/* trains; other pushes test on Linux only.
-        os: ${{ fromJSON((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/')) && '["ubuntu-latest","macos-15","windows-latest"]' || '["ubuntu-latest"]') }}
+        # macOS and Windows run on main, integ/* trains and release/ branches; other pushes test on Linux only.
+        os: ${{ fromJSON((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/')) && '["ubuntu-latest","macos-15","windows-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     env:
       # Debug test builds bind every address only with this, as the apps do;
