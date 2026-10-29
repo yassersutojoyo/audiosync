@@ -54,6 +54,7 @@ use audiosync_core::volume::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::audio::backend::OutputKind;
 use crate::audio::cast_address;
 use crate::data_folder;
 use crate::remote::RemoteSettings;
@@ -540,6 +541,21 @@ where
         .collect())
 }
 
+/// A kind this build doesn't know costs only that entry.
+fn kinds_that_read<'de, D>(deserializer: D) -> Result<BTreeMap<String, OutputKind>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Object(entries) = value else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(entries
+        .into_iter()
+        .filter_map(|(key, kind)| Some((key, serde_json::from_value(kind).ok()?)))
+        .collect())
+}
+
 /// A speaker hidden with Hide Speaker: its speaker key, and the name and
 /// kind its row showed then, so Hidden Speakers can name it while it isn't
 /// listed.
@@ -717,6 +733,14 @@ pub struct Settings {
     /// The zones, in order, each speaker in at most one (spec S245).
     #[serde(deserialize_with = "entries_that_read")]
     pub speaker_zones: Vec<SavedZone>,
+    /// The kind each local zone member was last listed as, by speaker key,
+    /// so one plugged into another USB port while AudioSync was closed can
+    /// still be told (S286); left out while empty.
+    #[serde(
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "kinds_that_read"
+    )]
+    pub zone_member_kinds: BTreeMap<String, OutputKind>,
     /// The groups were moved to zones (spec S248). A file without it, as
     /// every version 2 file, has not been migrated; the defaults have, since
     /// there are no groups to move. A mark that isn't a bool was written by
@@ -878,6 +902,7 @@ impl Default for Settings {
             hidden_speakers: Vec::new(),
             groups: Vec::new(),
             speaker_zones: Vec::new(),
+            zone_member_kinds: BTreeMap::new(),
             speaker_zones_migrated: true,
             speaker_presets: Vec::new(),
             speaker_presets_migrated: true,
@@ -1140,6 +1165,12 @@ impl Settings {
             hidden_speakers: clamp_hidden(self.hidden_speakers),
             groups,
             speaker_zones,
+            zone_member_kinds: self
+                .zone_member_kinds
+                .into_iter()
+                .filter(|(key, _)| usable_name_key(key))
+                .take(MAX_ENTRIES)
+                .collect(),
             speaker_zones_migrated: self.speaker_zones_migrated,
             speaker_presets,
             speaker_presets_migrated: self.speaker_presets_migrated,
@@ -3283,6 +3314,24 @@ mod tests {
                 },
             ]
         );
+    }
+
+    // covers: S286 (a zone member's kept kind), S212
+    #[test]
+    fn zone_member_kinds_are_optional_and_an_unknown_kind_costs_only_its_entry() {
+        let (older, _) = Settings::from_json(r#"{"version": 3}"#).expect("read");
+        assert!(older.zone_member_kinds.is_empty());
+        let written = serde_json::to_string(&older).unwrap();
+        assert!(
+            !written.contains("zone_member_kinds"),
+            "left out while empty"
+        );
+
+        let text = r#"{"version": 3,
+            "zone_member_kinds": {"lc:dac": "Usb", "lc:new": "Hologram", "lc:x": 3}}"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        let kinds = BTreeMap::from([("lc:dac".to_owned(), OutputKind::Usb)]);
+        assert_eq!(read.zone_member_kinds, kinds);
     }
 
     // covers: S251 (an own volume that isn't a number is none, a master that isn't one is 100)

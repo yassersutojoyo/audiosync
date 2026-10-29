@@ -447,6 +447,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The last kind of every output listed, to tell a device listed under
     /// a new endpoint ID.
     kinds: BTreeMap<String, OutputKind>,
+    /// The kind each local zone member was last listed as before this run,
+    /// by speaker key, from the settings file.
+    saved_kinds: BTreeMap<String, OutputKind>,
     /// The endpoint IDs a device left when what was set for it followed it
     /// to a new one ([`AudioAdapter::move_output`]), until they are listed
     /// again: the same device's old IDs, not other devices of its name.
@@ -664,6 +667,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
             kinds: BTreeMap::new(),
+            saved_kinds: BTreeMap::new(),
             left_behind: BTreeSet::new(),
             airplay_listed: BTreeSet::new(),
             airplay_on_by_hand: BTreeSet::new(),
@@ -825,6 +829,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             volume: zone.volume,
             member_names: zone.member_names.clone(),
         }));
+        self.saved_kinds = saved.zone_member_kinds.clone();
         self.presets = presets::from_stored(saved.speaker_presets.iter().map(SavedPreset::preset));
         self.last_zone_id = saved.last_zone_id;
         self.last_preset_id = saved.last_preset_id;
@@ -983,6 +988,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .cloned()
                 .map(SavedZone::from)
                 .collect(),
+            zone_member_kinds: self.zone_member_kinds(),
             speaker_zones_migrated: true,
             speaker_presets: self
                 .presets
@@ -2794,8 +2800,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// came back). It must be the only output that appeared with its name
     /// and kind (which follows its form factor and bus). And exactly one
     /// output with that name and kind, listed earlier in this run and not
-    /// now, with or without anything set, must be gone, and have something
-    /// set: with two gone, the new ID could be either device. An ID a
+    /// now, with or without anything set, or a zone member not listed in
+    /// this run under its kept name and saved kind, must be gone, and have
+    /// something set: with two gone, the new ID could be either device. An ID a
     /// device left behind isn't another device, so it doesn't count. Names
     /// are compared without the number Windows may put before a device's
     /// name in another port or for a second one of a model
@@ -2831,6 +2838,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
                         && same(name, self.kinds.get(*id))
                 })
                 .map(|(id, _)| id.clone())
+                .chain(self.saved_kinds.iter().filter_map(|(key, kind)| {
+                    let Some(SpeakerKey::Local(id)) = SpeakerKey::parse(key) else {
+                        return None;
+                    };
+                    let name = self.zones.member_name(key)?;
+                    (!self.names.contains_key(&id) && same(name, Some(kind))).then_some(id)
+                }))
                 .collect();
             if let [from] = gone.as_slice()
                 && self.has_choices(from)
@@ -3021,6 +3035,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     needs_airplay2: SpeakerKey::parse(key)
                         .is_some_and(|key| self.needs_airplay2(&key)),
                 }
+            })
+            .collect()
+    }
+
+    /// The kind of each local zone member, as listed in this run, else as
+    /// saved before it.
+    fn zone_member_kinds(&self) -> BTreeMap<String, OutputKind> {
+        self.zones
+            .list()
+            .iter()
+            .flat_map(|zone| &zone.members)
+            .filter_map(|key| {
+                let Some(SpeakerKey::Local(id)) = SpeakerKey::parse(key) else {
+                    return None;
+                };
+                let kind = self.kinds.get(&id).or(self.saved_kinds.get(key))?;
+                Some((key.clone(), *kind))
             })
             .collect()
     }
@@ -10767,6 +10798,52 @@ mod tests {
         assert!(older.member_names.is_empty());
         let written = serde_json::to_string(&older).unwrap();
         assert!(!written.contains("member_names"), "left out while empty");
+    }
+
+    /// Saves a zone holding the USB DAC under [`DAC_PORT_1`], then launches
+    /// again over `audio`, with the DAC moved while AudioSync was closed.
+    fn relaunch_after_dac_moved(name: &str, audio: MockBackend) -> AudioAdapter<MockBackend> {
+        let path = test_dir(name).join(settings::FILE_NAME);
+        let mut before = launch_audio();
+        before.connect_output_as(DAC_PORT_1, "USB DAC", OutputKind::Usb);
+        let mut adapter = launch(before, &path);
+        adapter.poll();
+        turn_on(&mut adapter, DAC_PORT_1);
+        adapter.new_zone("Desk").unwrap();
+        adapter.poll();
+        adapter.save_settings();
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        adapter
+    }
+
+    // covers: S286
+    #[test]
+    fn a_zone_member_moved_to_another_port_while_closed_keeps_its_zone() {
+        let mut audio = launch_audio();
+        audio.connect_output_as(DAC_PORT_2, "USB DAC", OutputKind::Usb);
+        let adapter = relaunch_after_dac_moved("adapter-zone-dac-moved", audio);
+        let members = &adapter.snapshot().zones[0].members;
+        assert!(members.contains(&key(DAC_PORT_2)), "{members:?}");
+        assert!(!members.contains(&key(DAC_PORT_1)), "no Not found row");
+        assert!(enabled(&adapter, DAC_PORT_2));
+    }
+
+    // covers: S286
+    #[test]
+    fn a_zone_member_moved_while_closed_isnt_guessed_between_two_or_another_kind() {
+        let mut audio = launch_audio();
+        audio.connect_output_as(DAC_PORT_2, "USB DAC", OutputKind::Usb);
+        audio.connect_output_as(DAC_PORT_3, "USB DAC", OutputKind::Usb);
+        let adapter = relaunch_after_dac_moved("adapter-zone-dac-twins", audio);
+        let members = &adapter.snapshot().zones[0].members;
+        assert!(members.contains(&key(DAC_PORT_1)), "two could be it");
+
+        let mut audio = launch_audio();
+        audio.connect_output_as(DAC_PORT_2, "USB DAC", OutputKind::UsbHeadphones);
+        let adapter = relaunch_after_dac_moved("adapter-zone-dac-kind", audio);
+        let members = &adapter.snapshot().zones[0].members;
+        assert!(members.contains(&key(DAC_PORT_1)), "another kind");
     }
 
     fn hidden_entry(adapter: &AudioAdapter<MockBackend>, id: &str) -> HiddenSpeaker {

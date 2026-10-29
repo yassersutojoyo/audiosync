@@ -125,6 +125,8 @@ struct UiState {
     /// Says the item applies at the next launch, while it differs from
     /// `airplay2_at_launch`.
     airplay2_notice: Option<ui_model::Notice>,
+    /// A message the name dialog couldn't show while it asked for a name.
+    dialog_notice: Option<ui_model::Notice>,
     listed_virtual: ListedVirtual,
     /// The zones whose speakers are hidden by their arrow, by ID; a zone
     /// opens expanded.
@@ -386,6 +388,9 @@ const REMOTE_PUBLIC_NOTICE_ID: u64 = AIRPLAY2_NOTICE_ID - 1;
 
 /// The Windows updater's notice's id, next to those.
 const UPDATER_NOTICE_ID: u64 = REMOTE_PUBLIC_NOTICE_ID - 1;
+
+/// The id of the notice that holds a name dialog message, next to those.
+const DIALOG_NOTICE_ID: u64 = UPDATER_NOTICE_ID - 1;
 
 /// How often, 20 ms apart, the saved main window size waits for the native
 /// window before it gives up (about two seconds).
@@ -1061,6 +1066,7 @@ impl App {
             .extend(self.ui.borrow().airplay2_notice.clone());
         state.notices.extend(self.remote_public_notice());
         state.notices.extend(self.updater_notice());
+        state.notices.extend(self.ui.borrow().dialog_notice.clone());
         state
     }
 
@@ -1103,7 +1109,9 @@ impl App {
     fn dismiss_notice(&self, id: u64) {
         let airplay2 =
             id == AIRPLAY2_NOTICE_ID && self.ui.borrow_mut().airplay2_notice.take().is_some();
+        let dialog = id == DIALOG_NOTICE_ID && self.ui.borrow_mut().dialog_notice.take().is_some();
         if airplay2
+            || dialog
             || self.login.borrow_mut().dismiss(id)
             || self.dismiss_remote_notice(id)
             || self.dismiss_updater_notice(id)
@@ -1117,6 +1125,7 @@ impl App {
     fn dismiss_all_notices(&self) {
         self.login.borrow_mut().dismiss_notice();
         self.ui.borrow_mut().airplay2_notice = None;
+        self.ui.borrow_mut().dialog_notice = None;
         self.dismiss_remote_notice(REMOTE_PUBLIC_NOTICE_ID);
         self.dismiss_updater_notice(UPDATER_NOTICE_ID);
         self.update(|b| b.dismiss_all_notices());
@@ -3724,6 +3733,9 @@ impl App {
     /// Speakers > New Zone from Active Speakers… (Ctrl+N): a name for a
     /// zone of the speakers that are on, or why none can be made yet.
     fn ask_new_zone(&self) {
+        if self.dialog_already_open() {
+            return;
+        }
         let strings = self.strings();
         let dialog = &self.zone_dialog;
         if self.snapshot().active_speakers() == 0 {
@@ -3743,6 +3755,9 @@ impl App {
 
     /// New Zone… in a speaker's menu: a name for a zone of that speaker.
     fn ask_new_zone_with(&self, speaker_id: &str) {
+        if self.dialog_already_open() {
+            return;
+        }
         let Some(speaker) = self.snapshot().speaker(speaker_id).cloned() else {
             return;
         };
@@ -3765,6 +3780,9 @@ impl App {
     }
 
     fn ask_save_curve(&self) {
+        if self.dialog_already_open() {
+            return;
+        }
         let state = self.snapshot();
         let strings = self.strings();
         let dialog = &self.zone_dialog;
@@ -3796,6 +3814,9 @@ impl App {
     }
 
     fn ask_rename_curve(&self) {
+        if self.dialog_already_open() {
+            return;
+        }
         let state = self.snapshot();
         let Some(CurveMatch::User(index)) = ui_model::shown_curve(&state) else {
             return;
@@ -3814,8 +3835,24 @@ impl App {
         self.open_dialog();
     }
 
-    /// Shows `message` in the name dialog, without a field.
+    /// Shows `message` in the name dialog, without a field. While the
+    /// dialog is open, a notice and Narrator say it instead, so a name being
+    /// typed stays.
     fn show_dialog_message(&self, heading: SharedString, message: SharedString) {
+        if self.zone_dialog.window().is_visible() {
+            self.ui.borrow_mut().dialog_notice = Some(ui_model::Notice {
+                id: DIALOG_NOTICE_ID,
+                subject: "dialog".to_owned(),
+                message: NoticeMessage::DialogMessage {
+                    title: heading.to_string(),
+                    text: message.to_string(),
+                },
+                time: crate::platform::notice_time(),
+            });
+            self.refresh();
+            self.announce(message);
+            return;
+        }
         let dialog = &self.zone_dialog;
         *self.dialog_purpose.borrow_mut() = DialogPurpose::Message;
         dialog.set_heading(heading);
@@ -3900,6 +3937,9 @@ impl App {
     }
 
     fn ask_save_preset(&self) {
+        if self.dialog_already_open() {
+            return;
+        }
         let strings = self.strings();
         let state = self.snapshot();
         if state.presets.len() >= MAX_PRESETS {
@@ -3926,6 +3966,9 @@ impl App {
     }
 
     fn ask_rename_preset(&self, id: &str) {
+        if self.dialog_already_open() {
+            return;
+        }
         let Some(preset) = self.snapshot().presets.into_iter().find(|p| p.id == id) else {
             return;
         };
@@ -4005,6 +4048,16 @@ impl App {
             .strings()
             .invoke_preset_deleted(presets[index].name.as_str().into());
         self.announce(said);
+    }
+
+    /// Brings the name dialog to the front while it is open: one dialog
+    /// serves every name, so a second request would drop the typed one.
+    fn dialog_already_open(&self) -> bool {
+        let open = self.zone_dialog.window().is_visible();
+        if open {
+            crate::platform::bring_to_front(self.zone_dialog.window());
+        }
+        open
     }
 
     fn open_dialog(&self) {
@@ -5296,6 +5349,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::RemoteOnPublicNetwork => strings.get_remote_public_network(),
         NoticeMessage::GroupsBecameZones => strings.get_notice_groups_became_zones(),
         NoticeMessage::Update(notice) => update_notice_text(strings, notice),
+        NoticeMessage::DialogMessage { text, .. } => text.as_str().into(),
         NoticeMessage::PresetLeftOff {
             preset,
             left_off,
@@ -5440,6 +5494,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::RemoteOnPublicNetwork => (NoticeKind::RemotePublicNetwork, ""),
         NoticeMessage::GroupsBecameZones => (NoticeKind::GroupsBecameZones, ""),
         NoticeMessage::Update(_) => (NoticeKind::Update, ""),
+        NoticeMessage::DialogMessage { title, .. } => return title.as_str().into(),
         NoticeMessage::PresetLeftOff { .. } => (NoticeKind::PresetsLeftOff, ""),
         NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
     };
@@ -10176,6 +10231,23 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_n_while_a_curve_is_named_keeps_the_open_dialog() {
+        let app = app_over(MockBackend::new());
+        let zones = app.snapshot().zones.len();
+        app.equalizer.invoke_save_curve();
+        app.zone_dialog.set_name("Late night".into());
+        let heading = app.zone_dialog.get_heading();
+
+        app.main.invoke_new_zone_requested();
+        assert!(app.zone_dialog.window().is_visible());
+        assert_eq!(app.zone_dialog.get_heading(), heading);
+        assert_eq!(app.zone_dialog.get_name(), "Late night");
+        app.zone_dialog.invoke_confirmed("Late night".into());
+        assert_eq!(app.snapshot().equalizer_curves[0].name, "Late night");
+        assert_eq!(app.snapshot().zones.len(), zones, "no zone was made");
+    }
+
+    #[test]
     fn curves_are_saved_picked_renamed_and_deleted_and_custom_is_no_entry() {
         let mut mock = MockBackend::new();
         mock.add_zone("zone:office", "Office", &[]);
@@ -10952,6 +11024,33 @@ mod tests {
             "Turn on the speakers you want in the preset first, then save it."
         );
         assert!(preset_rows(&app).is_empty());
+    }
+
+    #[test]
+    fn an_update_that_fails_while_a_name_is_typed_says_why_and_keeps_the_dialog() {
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        let id = preset_ids(&app)[0].clone();
+        for speaker in app.snapshot().speakers {
+            app.update(|b| b.set_speaker_enabled(&speaker.id, false));
+        }
+        app.equalizer.invoke_save_curve();
+        app.zone_dialog.set_name("Late night".into());
+        let heading = app.zone_dialog.get_heading();
+
+        app.update_preset(&id);
+        let why = "Turn on the speakers you want in the preset first, then save it.";
+        assert!(app.zone_dialog.window().is_visible());
+        assert_eq!(app.zone_dialog.get_heading(), heading);
+        assert_eq!(app.zone_dialog.get_name(), "Late night");
+        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::SaveCurve);
+        assert_eq!(app.main.get_notice_announcement(), why);
+        let notices = app.snapshot().notices;
+        let notice = notices.last().expect("a notice says it");
+        assert_eq!(notice_text(&app.strings(), &notice.message), why);
+
+        app.dismiss_notice(notice.id);
+        assert!(app.snapshot().notices.is_empty());
     }
 
     // covers: S267
