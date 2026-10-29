@@ -510,4 +510,10 @@ struct InputChannelPair: Equatable {
     static func change(from saved: Int, to chosen: Int, channels: Int, streaming: Bool) -> SourceSwitch.Step {
         change(from: resolve(saved: saved, channels: channels).pair.index, to: chosen, streaming: streaming)
     }
+
+    /// Whether picking `chosen` replaces the stored `saved`, also when it
+    /// changes nothing that plays: the user's latest pick is the one kept.
+    static func stores(_ chosen: Int, over saved: Int) -> Bool {
+        false
+    }
 }

@@ -325,6 +325,10 @@ extension AppDelegate {
                                              streaming: engine.isRunning)
         clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
         guard change != .none else {
+            if InputChannelPair.stores(index, over: currentInputPair) {
+                inputPairs[uid] = index == 0 ? nil : index
+                pushModel()
+            }
             microphoneRequest.repicked(source: audioSource, pair: index)
             return
         }

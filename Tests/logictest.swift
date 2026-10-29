@@ -2401,8 +2401,10 @@ do {
           "channel pairs: choosing another pair restarts a running session, the same one does nothing")
     check(InputChannelPair.change(from: 3, to: 0, channels: 4, streaming: true) == .none
             && InputChannelPair.change(from: 3, to: 1, channels: 4, streaming: true) == .restart
-            && InputChannelPair.change(from: 1, to: 0, channels: 4, streaming: true) == .restart,
-          "channel pairs: picking the pair a saved pair fell back to restarts nothing")
+            && InputChannelPair.change(from: 1, to: 0, channels: 4, streaming: true) == .restart
+            && InputChannelPair.stores(0, over: 3) && !InputChannelPair.stores(1, over: 1)
+            && !InputChannelPair.stores(-1, over: 3),
+          "channel pairs: picking the pair a saved pair fell back to restarts nothing and keeps the pick")
     check(UIStrings().inputChannelPair(four[1]) == "Channels 3-4" && UIStrings().inputChannelPair(five[2]) == "Channel 5",
           "channel pairs: shown as the device counts its channels")
 
