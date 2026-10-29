@@ -72,6 +72,8 @@ final class NativeAirPlay {
     /// The receivers warned this session that they report more than the
     /// largest Lf leaves room for (main queue, P200).
     private var latencyWarned: Set<String> = []
+    /// The volume sets on their way to the core (main queue, S276).
+    private(set) var volumeEvents = AirPlayVolumeEvents()
 
     /// `onChange` gets each discovery change, `onEvent` each speaker or
     /// timeline event with what the model made of it, on the main queue.
@@ -142,18 +144,21 @@ final class NativeAirPlay {
 
     /// The slider position (0 to 100) of the speaker `id`, live.
     func setVolume(_ id: String, volume: Double) {
+        volumeEvents.sending(id)
         queue.async { [weak self] in
-            guard let handle = self?.handle else { return }
-            _ = asc_airplay_set_volume(handle, id, volume)
+            if let handle = self?.handle { _ = asc_airplay_set_volume(handle, id, volume) }
+            // Behind every report polled before the set, so those reach the main queue first.
+            DispatchQueue.main.async { self?.volumeEvents.reached(id) }
         }
     }
 
     /// A row move (S290): the speaker `id` stores own volume `own` and
     /// gets device level `level`, live.
     func setDeviceLevel(_ id: String, own: Double, level: Double) {
+        volumeEvents.sending(id)
         queue.async { [weak self] in
-            guard let handle = self?.handle else { return }
-            _ = asc_airplay_set_device_level(handle, id, own, level)
+            if let handle = self?.handle { _ = asc_airplay_set_device_level(handle, id, own, level) }
+            DispatchQueue.main.async { self?.volumeEvents.reached(id) }
         }
     }
 

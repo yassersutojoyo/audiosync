@@ -55,3 +55,28 @@ enum AirPlayDeviceLevel {
         return (own: own, level: level)
     }
 }
+
+/// Whether a volume the core reported for an AirPlay speaker moves its row
+/// and own volume (S276): one from a speaker Calibrate All Speakers keeps
+/// silent does too, so the run gives it that level back; one polled before
+/// the host's latest set reached the core does not, as the core and the
+/// speaker already hold the newer level. Main thread.
+struct AirPlayVolumeEvents {
+    private var unreached: [String: Int] = [:]
+
+    /// The host queued a volume set for receiver `id`.
+    mutating func sending(_ id: String) {
+        unreached[id, default: 0] += 1
+    }
+
+    /// That set reached the core.
+    mutating func reached(_ id: String) {
+        guard let count = unreached[id] else { return }
+        unreached[id] = count > 1 ? count - 1 : nil
+    }
+
+    /// Whether a report for receiver `id`, applied now, moves its row.
+    func applies(_ id: String) -> Bool {
+        unreached[id] == nil
+    }
+}

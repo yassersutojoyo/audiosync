@@ -480,7 +480,8 @@ extension AppDelegate {
     }
 
     /// Keeps an AirPlay speaker silent during another speaker's sweep, or
-    /// gives it its volume back. Its stored volume doesn't change.
+    /// gives it its volume back, a change made on the speaker meanwhile
+    /// included (S276).
     func calibrateSilence(airPlay id: String, _ silent: Bool) {
         if let receiver = NativeAirPlayID.receiver(id) { nativeAirPlay?.setSilenced(receiver, silent) }
         if !silent { sendNativeRowLevel(id) }
