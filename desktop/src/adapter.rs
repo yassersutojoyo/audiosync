@@ -10748,6 +10748,36 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(95.0));
     }
 
+    // covers: S238
+    #[test]
+    fn calibrate_all_results_go_once_the_reference_changes_before_apply() {
+        let mut audio = reference_audio();
+        audio.connect_output_as("builtin2", "Headphones", OutputKind::BuiltIn);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        for id in ["builtin", "bluetooth", "builtin2"] {
+            turn_on(&mut adapter, id);
+        }
+        adapter.set_speaker_delay(&key("bluetooth"), 80.0);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::local_sheet(&[
+                ("builtin", 0.0, 2010.0),
+                ("bluetooth", 80.0, 2190.0),
+            ]),
+        );
+        adapter.poll();
+        assert!(adapter.snapshot().calibrate_all.sheet.is_some());
+
+        // Its endpoint disabled in Windows Sound, the other built-in output
+        // becomes the reference (S174).
+        unplug(&mut adapter, "builtin");
+        adapter.apply_calibrate_all();
+        let state = adapter.snapshot().calibrate_all;
+        assert_eq!(state.sheet, None, "measured against a reference that went");
+        assert_eq!(state.phase, AllPhase::Stale);
+        assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
+    }
+
     fn keep(
         adapter: &mut AudioAdapter<MockBackend>,
         (sheet, members, rate): (Sheet, Vec<Member>, u32),
