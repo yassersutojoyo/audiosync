@@ -442,6 +442,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The last kind of every output listed, to tell a device listed under
     /// a new endpoint ID.
     kinds: BTreeMap<String, OutputKind>,
+    /// The kind each local zone member was last listed as before this run,
+    /// by speaker key, from the settings file.
+    saved_kinds: BTreeMap<String, OutputKind>,
     /// The endpoint IDs a device left when what was set for it followed it
     /// to a new one ([`AudioAdapter::move_output`]), until they are listed
     /// again: the same device's old IDs, not other devices of its name.
@@ -650,6 +653,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
             kinds: BTreeMap::new(),
+            saved_kinds: BTreeMap::new(),
             left_behind: BTreeSet::new(),
             airplay_listed: BTreeSet::new(),
             airplay_on_by_hand: BTreeSet::new(),
@@ -806,6 +810,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             volume: zone.volume,
             member_names: zone.member_names.clone(),
         }));
+        self.saved_kinds = saved.zone_member_kinds.clone();
         self.presets = presets::from_stored(saved.speaker_presets.iter().map(SavedPreset::preset));
         self.push_zone_volumes();
         self.equalizer = saved.equalizer.settings();
@@ -957,6 +962,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .cloned()
                 .map(SavedZone::from)
                 .collect(),
+            zone_member_kinds: self.zone_member_kinds(),
             speaker_zones_migrated: true,
             speaker_presets: self
                 .presets
@@ -2693,8 +2699,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// came back). It must be the only output that appeared with its name
     /// and kind (which follows its form factor and bus). And exactly one
     /// output with that name and kind, listed earlier in this run and not
-    /// now, with or without anything set, must be gone, and have something
-    /// set: with two gone, the new ID could be either device. An ID a
+    /// now, with or without anything set, or a zone member not listed in
+    /// this run under its kept name and saved kind, must be gone, and have
+    /// something set: with two gone, the new ID could be either device. An ID a
     /// device left behind isn't another device, so it doesn't count. Names
     /// are compared without the number Windows may put before a device's
     /// name in another port or for a second one of a model
@@ -2730,6 +2737,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
                         && same(name, self.kinds.get(*id))
                 })
                 .map(|(id, _)| id.clone())
+                .chain(self.saved_kinds.iter().filter_map(|(key, kind)| {
+                    let Some(SpeakerKey::Local(id)) = SpeakerKey::parse(key) else {
+                        return None;
+                    };
+                    let name = self.zones.member_name(key)?;
+                    (!self.names.contains_key(&id) && same(name, Some(kind))).then_some(id)
+                }))
                 .collect();
             if let [from] = gone.as_slice()
                 && self.has_choices(from)
@@ -2920,6 +2934,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     needs_airplay2: SpeakerKey::parse(key)
                         .is_some_and(|key| self.needs_airplay2(&key)),
                 }
+            })
+            .collect()
+    }
+
+    /// The kind of each local zone member, as listed in this run, else as
+    /// saved before it.
+    fn zone_member_kinds(&self) -> BTreeMap<String, OutputKind> {
+        self.zones
+            .list()
+            .iter()
+            .flat_map(|zone| &zone.members)
+            .filter_map(|key| {
+                let Some(SpeakerKey::Local(id)) = SpeakerKey::parse(key) else {
+                    return None;
+                };
+                let kind = self.kinds.get(&id).or(self.saved_kinds.get(key))?;
+                Some((key.clone(), *kind))
             })
             .collect()
     }

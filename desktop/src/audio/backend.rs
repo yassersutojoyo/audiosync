@@ -88,7 +88,7 @@ pub struct SourceInfo {
 }
 
 /// What kind of device an output is, as Windows describes its endpoint.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OutputKind {
     /// The PC's own speakers or line out.
     BuiltIn,

@@ -3648,6 +3648,9 @@ impl App {
     /// Speakers > New Zone from Active Speakers… (Ctrl+N): a name for a
     /// zone of the speakers that are on, or why none can be made yet.
     fn ask_new_zone(&self) {
+        if self.dialog_already_open() {
+            return;
+        }
         let strings = self.strings();
         let dialog = &self.zone_dialog;
         if self.snapshot().active_speakers() == 0 {
@@ -3667,6 +3670,9 @@ impl App {
 
     /// New Zone… in a speaker's menu: a name for a zone of that speaker.
     fn ask_new_zone_with(&self, speaker_id: &str) {
+        if self.dialog_already_open() {
+            return;
+        }
         let Some(speaker) = self.snapshot().speaker(speaker_id).cloned() else {
             return;
         };
@@ -3689,6 +3695,9 @@ impl App {
     }
 
     fn ask_save_curve(&self) {
+        if self.dialog_already_open() {
+            return;
+        }
         let state = self.snapshot();
         let strings = self.strings();
         let dialog = &self.zone_dialog;
@@ -3720,6 +3729,9 @@ impl App {
     }
 
     fn ask_rename_curve(&self) {
+        if self.dialog_already_open() {
+            return;
+        }
         let state = self.snapshot();
         let Some(CurveMatch::User(index)) = ui_model::shown_curve(&state) else {
             return;
@@ -3740,6 +3752,9 @@ impl App {
 
     /// Shows `message` in the name dialog, without a field.
     fn show_dialog_message(&self, heading: SharedString, message: SharedString) {
+        if self.dialog_already_open() {
+            return;
+        }
         let dialog = &self.zone_dialog;
         *self.dialog_purpose.borrow_mut() = DialogPurpose::Message;
         dialog.set_heading(heading);
@@ -3824,6 +3839,9 @@ impl App {
     }
 
     fn ask_save_preset(&self) {
+        if self.dialog_already_open() {
+            return;
+        }
         let strings = self.strings();
         let state = self.snapshot();
         if state.presets.len() >= MAX_PRESETS {
@@ -3850,6 +3868,9 @@ impl App {
     }
 
     fn ask_rename_preset(&self, id: &str) {
+        if self.dialog_already_open() {
+            return;
+        }
         let Some(preset) = self.snapshot().presets.into_iter().find(|p| p.id == id) else {
             return;
         };
@@ -3929,6 +3950,16 @@ impl App {
             .strings()
             .invoke_preset_deleted(presets[index].name.as_str().into());
         self.announce(said);
+    }
+
+    /// Brings the name dialog to the front while it is open: one dialog
+    /// serves every name, so a second request would drop the typed one.
+    fn dialog_already_open(&self) -> bool {
+        let open = self.zone_dialog.window().is_visible();
+        if open {
+            crate::platform::bring_to_front(self.zone_dialog.window());
+        }
+        open
     }
 
     fn open_dialog(&self) {
