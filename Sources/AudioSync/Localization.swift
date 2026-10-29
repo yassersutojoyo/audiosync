@@ -614,6 +614,16 @@ struct UIStrings {
         "\(name) didn't accept the connection, so it's off. Turn it on again to try once more."
     }
 
+    /// Another sender kept a native speaker busy until the sender gave up.
+    func nativeAirPlayBusy(name: String) -> String {
+        "\(name) seems to be playing from another device, so it's off. Stop it there, then turn it on again."
+    }
+
+    /// A native speaker kept turning the session down until the sender gave up.
+    func nativeAirPlayRefused(name: String) -> String {
+        "\(name) declined the stream, so it's off. Turn it on again to try once more."
+    }
+
     /// A native speaker turned off because it asks for a PIN or password;
     /// nil for every other reason. `unasked`: it turned the session down
     /// before asking for either.
@@ -622,7 +632,7 @@ struct UIStrings {
         case .needsCode where unasked: return nativeAirPlayNotAccepted(name: name)
         case .needsCode: return airPlayTurnedOff(name: name, reason: .needsPin)
         case .needsPassword: return airPlayTurnedOff(name: name, reason: .needsPassword)
-        case .unreachable, .cantPlay, .needsAirPlay2, .timingUnavailable, .playsThroughSpeakers,
+        case .unreachable, .busy, .refused, .cantPlay, .needsAirPlay2, .timingUnavailable, .playsThroughSpeakers,
              .receiverUnverified, .memberNeedsPassword, .cancelled, .pairingFailed, .stillNeedsCode:
             return nil
         }
