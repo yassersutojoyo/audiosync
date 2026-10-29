@@ -2329,6 +2329,7 @@ impl AirPlaySpeakers {
                 });
             }
         }
+        self.password_attempts.remove(id);
         if self.settings(id).enabled {
             self.entry(id).enabled = false;
             self.reconcile();
@@ -6168,6 +6169,37 @@ pub mod tests {
         assert_eq!(
             airplay.speakers()[0].availability,
             AirPlayAvailability::NeedsPin
+        );
+    }
+
+    // covers: S257
+    #[test]
+    fn a_pairing_forgotten_mid_attempt_leaves_a_phone_switch_on_unpaired() {
+        use crate::audio::pairings::tests::homekit;
+
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        airplay.set_streaming(true);
+        let tv = airplay2_device(9, "Samsung", false);
+        let id = id_of(&tv);
+        airplay.store.insert_homekit(&id, homekit(0x33)).unwrap();
+        fake.appear(&tv);
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.begin_attempt(&id);
+        airplay.forget_pairing(&id);
+
+        // The web remote switches it on without an attempt of its own.
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        fake.take_calls();
+        fake.fail(&tv, ErrorKind::PairingRequired);
+        airplay.poll();
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::StartPairing(_)))
         );
     }
 
