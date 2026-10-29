@@ -5144,8 +5144,8 @@ fn join_names(names: &[String], and: impl FnOnce(&str, &str) -> String) -> Strin
     }
 }
 
-/// A source in the UI's words: what the double-audio notice and its guide
-/// name it with.
+/// A source in the UI's words, as the source picker names it: the notices
+/// about the chosen source and the double-audio guide use it.
 fn source_name(strings: &Strings<'_>, source: &SourceName) -> SharedString {
     match source {
         SourceName::Named(name) => name.as_str().into(),
@@ -5242,18 +5242,18 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
     match message {
         NoticeMessage::NoSpeaker => strings.get_notice_no_speaker(),
         NoticeMessage::SourceQuit { source } => {
-            strings.invoke_notice_source_quit(source.as_str().into())
+            strings.invoke_notice_source_quit(source_name(strings, source))
         }
         NoticeMessage::SourceSwitched { source } => {
-            strings.invoke_notice_source_switched(source.as_str().into())
+            strings.invoke_notice_source_switched(source_name(strings, source))
         }
         NoticeMessage::SwitchFailed { new, old } => strings
             .invoke_notice_switch_failed(switch_name(strings, new), switch_name(strings, old)),
         NoticeMessage::SourceNotRunning { source } => {
-            strings.invoke_notice_source_not_running(source.as_str().into())
+            strings.invoke_notice_source_not_running(source_name(strings, source))
         }
         NoticeMessage::SourceRefused { source } => {
-            strings.invoke_notice_source_refused(source.as_str().into())
+            strings.invoke_notice_source_refused(source_name(strings, source))
         }
         NoticeMessage::InputNotConnected { source } => {
             strings.invoke_notice_input_not_connected(source.as_str().into())
@@ -5403,16 +5403,26 @@ fn current_preset_name(state: &AppState) -> &str {
 fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
     let (kind, name) = match message {
         NoticeMessage::NoSpeaker => (NoticeKind::NoSpeaker, ""),
-        NoticeMessage::SourceQuit { source } => (NoticeKind::SourceQuit, source.as_str()),
-        NoticeMessage::SourceSwitched { source } => (NoticeKind::SourceSwitched, source.as_str()),
+        NoticeMessage::SourceQuit { source } => {
+            return strings
+                .invoke_notice_title(NoticeKind::SourceQuit, source_name(strings, source));
+        }
+        NoticeMessage::SourceSwitched { source } => {
+            return strings
+                .invoke_notice_title(NoticeKind::SourceSwitched, source_name(strings, source));
+        }
         NoticeMessage::SwitchFailed { new, .. } => {
             return strings
                 .invoke_notice_title(NoticeKind::SwitchFailed, switch_name(strings, new));
         }
         NoticeMessage::SourceNotRunning { source } => {
-            (NoticeKind::SourceNotRunning, source.as_str())
+            return strings
+                .invoke_notice_title(NoticeKind::SourceNotRunning, source_name(strings, source));
         }
-        NoticeMessage::SourceRefused { source } => (NoticeKind::SourceRefused, source.as_str()),
+        NoticeMessage::SourceRefused { source } => {
+            return strings
+                .invoke_notice_title(NoticeKind::SourceRefused, source_name(strings, source));
+        }
         NoticeMessage::InputNotConnected { source } => {
             (NoticeKind::InputNotConnected, source.as_str())
         }
@@ -10601,6 +10611,70 @@ mod tests {
     }
 
     #[test]
+    fn a_several_apps_source_that_is_not_running_is_named_in_the_uis_words() {
+        let mut audio = crate::audio::mock::MockBackend::empty();
+        audio.connect_output("speakers", "Speakers");
+        audio.add_app(2000, "Spotify.exe");
+        audio.add_app(3000, "Chrome.exe");
+        audio.refuse_captures(Some(crate::audio::backend::BackendError::SourceGone));
+        let adapter =
+            crate::adapter::AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        let app = app_over(adapter);
+        app.main.invoke_mix_app_toggled(0);
+        app.main.invoke_mix_app_toggled(1);
+        app.main.invoke_speaker_toggled("lc:speakers".into());
+        app.main.invoke_power_toggled(true);
+        let notice = app.main.get_notices().row_data(0).expect("a notice");
+        assert!(
+            notice.message.starts_with("Chrome and Spotify "),
+            "{}",
+            notice.message
+        );
+        assert!(
+            notice.title.contains("Chrome and Spotify"),
+            "{}",
+            notice.title
+        );
+    }
+
+    #[test]
+    fn a_several_apps_source_that_quits_is_named_in_the_uis_words() {
+        use audiosync_core::policy::source_quit::WhenSourceQuits;
+        for setting in [WhenSourceQuits::Stop, WhenSourceQuits::SwitchToSystem] {
+            let mut audio = crate::audio::mock::MockBackend::empty();
+            audio.connect_output("speakers", "Speakers");
+            audio.add_app(2000, "Spotify.exe");
+            audio.add_app(3000, "Chrome.exe");
+            let mut adapter = crate::adapter::AudioAdapter::new(
+                audio,
+                || "09.41".to_owned(),
+                DebugLog::default(),
+            );
+            adapter.set_when_source_quits(setting);
+            adapter.toggle_mix_app("Spotify.exe");
+            adapter.toggle_mix_app("Chrome.exe");
+            adapter.set_speaker_enabled("lc:speakers", true);
+            adapter.set_running(true);
+            adapter.audio_mut().quit_app(2000);
+            adapter.audio_mut().quit_app(3000);
+            adapter.poll();
+            adapter.poll();
+            let app = app_over(adapter);
+            let notice = app.main.get_notices().row_data(0).expect("a notice");
+            assert!(
+                notice.message.starts_with("Spotify and Chrome "),
+                "{setting:?}: {}",
+                notice.message
+            );
+            assert!(
+                notice.title.contains("Spotify and Chrome"),
+                "{setting:?}: {}",
+                notice.title
+            );
+        }
+    }
+
+    #[test]
     fn a_notices_dismiss_button_names_it_in_a_few_words() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
@@ -10664,9 +10738,15 @@ mod tests {
         // Every kind gets a name of a few words, never the whole message.
         let messages = [
             NoticeMessage::NoSpeaker,
-            NoticeMessage::SourceQuit { source: "A".into() },
-            NoticeMessage::SourceNotRunning { source: "A".into() },
-            NoticeMessage::SourceRefused { source: "A".into() },
+            NoticeMessage::SourceQuit {
+                source: SourceName::Named("A".into()),
+            },
+            NoticeMessage::SourceNotRunning {
+                source: SourceName::Named("A".into()),
+            },
+            NoticeMessage::SourceRefused {
+                source: SourceName::Named("A".into()),
+            },
             NoticeMessage::InputNotConnected { source: "A".into() },
             NoticeMessage::InputDisconnected { source: "A".into() },
             NoticeMessage::MicrophoneBlocked { source: "A".into() },

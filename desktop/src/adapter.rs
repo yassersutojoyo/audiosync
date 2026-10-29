@@ -281,7 +281,7 @@ impl Chosen {
         }
     }
 
-    /// The name the double-audio notice uses, `None` for the whole system.
+    /// The name the notices about the chosen source use, `None` for the whole system.
     fn notice_name(&self) -> Option<SourceName> {
         match self {
             Chosen::WholeSystem => None,
@@ -1870,6 +1870,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.chosen.shown_name()
     }
 
+    /// The chosen source as the source notices name it.
+    fn chosen_notice_name(&self) -> SourceName {
+        self.chosen
+            .notice_name()
+            .unwrap_or_else(|| SourceName::Named(self.chosen_name()))
+    }
+
     /// Posts a notice, replacing an older one about the same subject.
     fn post(&mut self, subject: NoticeSubject, message: NoticeMessage) {
         if self.fold_into_preset_notice(&subject, &message) {
@@ -3346,11 +3353,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 source: self.chosen_name(),
             },
             BackendError::SourceGone if app => NoticeMessage::SourceNotRunning {
-                source: self.chosen_name(),
+                source: self.chosen_notice_name(),
             },
             BackendError::OwnProcess | BackendError::ContainsAudioSync if app => {
                 NoticeMessage::SourceRefused {
-                    source: self.chosen_name(),
+                    source: self.chosen_notice_name(),
                 }
             }
             _ => NoticeMessage::CaptureFailed,
@@ -3703,7 +3710,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                         // of the app.
                         self.heard_twice_dismissed.remove(&self.chosen.key());
                         NoticeMessage::SourceQuit {
-                            source: self.chosen_name(),
+                            source: self.chosen_notice_name(),
                         }
                     }
                     StopReason::CaptureFailed(BackendError::InputGone) => {
@@ -3724,7 +3731,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             // The quit app's choice gives way to the whole system, as a
             // source the user picked would (S141, S227).
             BackendEvent::SwitchedToSystem => {
-                let source = self.chosen_name();
+                let source = self.chosen_notice_name();
                 self.heard_twice_dismissed.remove(&self.chosen.key());
                 self.chosen = Chosen::WholeSystem;
                 self.notices.clear(&[NoticeSubject::Capture]);
@@ -6444,7 +6451,7 @@ mod tests {
         let state = adapter.snapshot();
         assert!(!state.running);
         let quit = NoticeMessage::SourceQuit {
-            source: "Player".into(),
+            source: SourceName::Named("Player".into()),
         };
         assert_eq!(messages(&adapter), [quit]);
         assert_eq!(state.source_id, player(), "the choice stays");
@@ -6461,7 +6468,7 @@ mod tests {
         adapter.set_running(true);
         assert!(!adapter.snapshot().running);
         let not_running = NoticeMessage::SourceNotRunning {
-            source: "Player".into(),
+            source: SourceName::Named("Player".into()),
         };
         assert_eq!(messages(&adapter), [not_running]);
         assert_eq!(captures(&adapter).len(), 1, "nothing started");
@@ -6489,7 +6496,7 @@ mod tests {
         );
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
         let switched = NoticeMessage::SourceSwitched {
-            source: "Player".into(),
+            source: SourceName::Named("Player".into()),
         };
         assert_eq!(messages(&adapter), [switched]);
         assert_eq!(state.source_id, "system");
@@ -6558,7 +6565,7 @@ mod tests {
         assert!(!adapter.snapshot().running);
         assert!(captures(&adapter).is_empty());
         let not_running = NoticeMessage::SourceNotRunning {
-            source: "Player".into(),
+            source: SourceName::Named("Player".into()),
         };
         assert_eq!(messages(&adapter), [not_running]);
         let state = adapter.snapshot();
@@ -6693,7 +6700,7 @@ mod tests {
     fn start_problems_name_the_chosen_app() {
         let mut adapter = adapter();
         adapter.select_source(&player());
-        let player = || "Player".to_owned();
+        let player = || SourceName::Named("Player".to_owned());
         assert_eq!(
             adapter.start_problem(&BackendError::ContainsAudioSync),
             NoticeMessage::SourceRefused { source: player() }
@@ -10517,7 +10524,7 @@ mod tests {
         assert_eq!(
             messages(&adapter),
             [NoticeMessage::SourceSwitched {
-                source: "Player".into()
+                source: SourceName::Named("Player".into())
             }]
         );
 
@@ -10599,7 +10606,7 @@ mod tests {
         adapter.poll();
         assert!(!adapter.snapshot().running);
         let quit = || NoticeMessage::SourceQuit {
-            source: "Player".into(),
+            source: SourceName::Named("Player".into()),
         };
         assert_eq!(messages(&adapter), [quit()]);
 

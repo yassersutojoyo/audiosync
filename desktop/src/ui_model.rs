@@ -606,18 +606,18 @@ pub enum NoticeMessage {
     /// Streaming was asked to start with no speaker on.
     NoSpeaker,
     /// The app being captured quit, so streaming stopped.
-    SourceQuit { source: String },
+    SourceQuit { source: SourceName },
     /// The app being captured quit, so streaming went on with the whole
     /// system (spec S227).
-    SourceSwitched { source: String },
+    SourceSwitched { source: SourceName },
     /// A source or channel pair picked while streaming couldn't start, so
     /// the one before it plays on, to the same speakers (spec S141).
     SwitchFailed { new: SwitchName, old: SwitchName },
     /// The chosen app isn't running, so streaming didn't start.
-    SourceNotRunning { source: String },
+    SourceNotRunning { source: SourceName },
     /// Capturing the chosen app would capture AudioSync's own sound too, so
     /// streaming didn't start.
-    SourceRefused { source: String },
+    SourceRefused { source: SourceName },
     /// The chosen input device isn't connected, so streaming didn't start.
     InputNotConnected { source: String },
     /// The input device being captured was disconnected, so streaming
@@ -3100,7 +3100,7 @@ mod tests {
         );
         assert!(
             NoticeMessage::SourceSwitched {
-                source: "Spotify".into()
+                source: SourceName::Named("Spotify".into())
             }
             .reports_a_change()
         );
@@ -3376,7 +3376,7 @@ mod tests {
     #[test]
     fn a_newer_notice_about_the_same_subject_replaces_the_older_one() {
         let quit = |source: &str| NoticeMessage::SourceQuit {
-            source: source.into(),
+            source: SourceName::Named(source.into()),
         };
         let mut backend = MockBackend::new();
         backend.post("source", quit("first"), "09.40");
