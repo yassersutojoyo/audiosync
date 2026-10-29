@@ -35,8 +35,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - On Windows, a Google Cast speaker you added by address keeps the volume you set for it when AudioSync finds it on the network while it isn't playing.
 - On Windows, a Google Cast speaker you added by address keeps the name and settings AudioSync found for it after a relaunch, before the network search finds it again. If the search finds it at another address, it shows as one row you can remove.
-- On Windows, a Google Cast speaker you added by address keeps its fixed-volume mark and volume step once AudioSync finds it on the network.
-- On Windows, when a saved input channel pair the device doesn't have plays as channels 1-2, picking 1-2 no longer restarts the capture, and the pick is kept, so the old pair doesn't come back once the device has those channels again.
+- When a saved input channel pair the device doesn't have plays as channels 1-2, picking 1-2 no longer restarts the capture, and the pick is kept, so the old pair doesn't come back once the device has those channels again. On the Mac and on Windows.
+- On Windows, settings a newer version of AudioSync added are kept when an older version saves. Before, going back a version lost them.
 - On the Mac, the line under a speaker list's In zones box no longer runs into the box's rounded corners.
 - On Windows, when the app you play from runs as administrator and quits or restarts, AudioSync now notices within about 2 seconds and stops or switches to the whole system, as your setting says, with the usual notice. Before, streaming went on in silence.
 - On Windows, when the PC wakes from sleep while AudioSync streams and Windows audio is slow to come back, AudioSync keeps trying to capture for up to a minute after the wake. Before, it stopped streaming after about 5 seconds of tries. A speaker Windows was refusing to open when the PC went to sleep gets its full 30 seconds again after the wake before AudioSync shows its notice. It hasn't been tried on a real sleep and wake yet.
@@ -128,10 +128,9 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Switching a zone off also switches off its members that aren't found right now, so a speaker you unplugged stays off when it's back. On the Mac and on Windows.
 - On the Mac, the menu bar panel no longer counts AirPlay speakers whose rows are hidden because AirPlay sending failed, and it keeps room for Open and Quit on a small screen while a notice or the permission card shows.
 - On the Mac, a speaker you turn off finishes its fade-out even when its format changes during the fade.
-- On the Mac, when a saved input channel pair the device doesn't have plays as 1-2, picking 1-2 no longer restarts the capture, and the pick is kept, so the old pair doesn't come back once the device has those channels again.
 - On the Mac, Calibrate All's Apply sets the right AirPlay delay when the AirPlay latency moved during the run or was at its limit. If the reference speaker changes, the run stops, and Apply writes nothing for results measured against another reference.
 - On Windows, quitting while you rename a speaker or zone in place keeps the name you typed.
-- On Windows, a Google Cast speaker you added by address keeps its name, zone, presets and Hide Speaker mark once AudioSync finds it on the network.
+- On Windows, a Google Cast speaker you added by address keeps its name, zone, presets, Hide Speaker mark, fixed-volume mark and volume step once AudioSync finds it on the network.
 - On Windows, removing the address of a Google Cast speaker that AudioSync found and then lost on the network turns it off. Before, it stayed on with no row, and every other Cast speaker was refused as busy.
 - On Windows, Calibrate All's Apply sets the right AirPlay delay when the AirPlay latency moved before you applied or was at its limit, and writes nothing once the reference speaker is gone. Calibrate Zone's Apply no longer goes wrong when an AirPlay speaker in the zone is off.
 - With AirPlay 2 on, stopping a speaker and starting it again right away no longer makes it read Busy. On the Mac and on Windows.
