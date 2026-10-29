@@ -49,6 +49,7 @@ use audiosync_cast::discovery::reach::Reachability;
 use audiosync_cast::discovery::{
     Announcements, BrowseEvent, DeviceId, DeviceKey, DeviceList, Entry, ListEvent,
 };
+use audiosync_cast::error::ConnectError;
 use audiosync_cast::group::{GroupMember, GroupRecords};
 use audiosync_cast::host::{
     AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, StartRefused,
@@ -513,6 +514,10 @@ impl CastLink for HostLink {
 /// How long a host name that didn't resolve waits for the next lookup.
 const LOOKUP_RETRY: Duration = Duration::from_secs(30);
 
+/// With C80's 1 s and 2 s waits, a one-address device fails the third time
+/// 3 s after the start when refused and 18 s when the TCP connect times out (5 s).
+const FAILURES_BEFORE_OFF: u32 = 3;
+
 /// Looks a host name up, IPv4 only; it may block.
 type Resolver = fn(&str, u16) -> io::Result<SocketAddr>;
 
@@ -541,6 +546,8 @@ struct Attempt {
     codec: Option<Codec>,
     /// Whether the session reported the device's volume yet (C104).
     heard_volume: bool,
+    /// Connect failures before the first connect (C80).
+    connect_failures: u32,
 }
 
 /// The Cast side of the backend.
@@ -1173,6 +1180,7 @@ impl CastSpeakers {
                     status: CastStatus::Connecting,
                     codec: None,
                     heard_volume: false,
+                    connect_failures: 0,
                 });
                 if group {
                     self.members.remove(&id);
@@ -1682,11 +1690,24 @@ impl CastSpeakers {
                         retry_in.as_millis()
                     )
                 });
-                let playing = self
-                    .attempt
-                    .is_some_and(|attempt| attempt.status != CastStatus::Connecting);
-                if playing {
+                let Some(attempt) = self.attempt.as_mut() else {
+                    return;
+                };
+                if attempt.status != CastStatus::Connecting {
                     self.set_status(CastStatus::Reconnecting);
+                    return;
+                }
+                // A group with no address yet waits for its records (C81).
+                if matches!(error, ConnectError::NoAddress) {
+                    return;
+                }
+                attempt.connect_failures += 1;
+                if attempt.connect_failures == FAILURES_BEFORE_OFF {
+                    self.log
+                        .log(|| format!("Cast: {device} switched off, it never answered"));
+                    self.enabled = None;
+                    self.stop_session();
+                    self.fail(device, CastProblem::NotResponding);
                 }
             }
             SessionEvent::Volume(volume) => self.volume_reported(device, volume),
@@ -1803,7 +1824,6 @@ pub mod tests {
 
     use audiosync_cast::client::Fingerprint;
     use audiosync_cast::discovery::{DEVICE_PORT, MAX_DEVICES, ServiceRecord};
-    use audiosync_cast::error::ConnectError;
 
     use super::*;
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
@@ -2170,6 +2190,83 @@ pub mod tests {
         // Off now, it doesn't start again on its own.
         cast.poll();
         assert_eq!(fake.state().started.len(), 1);
+    }
+
+    // covers: C80
+    #[test]
+    fn a_speaker_that_never_answers_goes_off_with_one_notice() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        let not_responding = BackendEvent::CastFailed {
+            id: KITCHEN.to_owned(),
+            problem: CastProblem::NotResponding,
+        };
+        let mut notices = Vec::new();
+        for _ in 0..5 {
+            fake.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
+            notices.push(cast.poll().contains(&not_responding));
+        }
+        assert_eq!(notices, [false, false, true, false, false]);
+        assert!(!cast.speakers()[1].enabled);
+        assert_eq!(status(&cast, KITCHEN), CastStatus::Idle);
+        assert_eq!(fake.state().stops, 1);
+        cast.poll();
+        assert_eq!(fake.state().started.len(), 1, "no retry once off");
+    }
+
+    fn connect_failed(attempt: u64, device: &str, error: ConnectError) -> HostEvent {
+        HostEvent::Session {
+            attempt: AttemptId(attempt),
+            device: id(device),
+            event: SessionEvent::ConnectFailed {
+                error,
+                retry_in: Duration::from_secs(1),
+            },
+        }
+    }
+
+    // covers: C80
+    #[test]
+    fn a_new_attempt_counts_its_connect_failures_afresh() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        for _ in 0..2 {
+            fake.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
+        }
+        cast.poll();
+        cast.set_enabled(KITCHEN, false).unwrap();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        for _ in 0..2 {
+            fake.report(connect_failed(2, KITCHEN, ConnectError::NoStatus));
+        }
+        cast.poll();
+        assert!(cast.speakers()[1].enabled);
+        assert_eq!(status(&cast, KITCHEN), CastStatus::Connecting);
+    }
+
+    // covers: C81
+    #[test]
+    fn a_group_with_no_address_yet_keeps_retrying_while_on() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        for _ in 0..5 {
+            fake.report(connect_failed(1, ATTIC, ConnectError::NoAddress));
+        }
+        let events = cast.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::CastFailed { .. }))
+        );
+        assert!(cast.speakers()[0].enabled);
+        assert_eq!(status(&cast, ATTIC), CastStatus::Connecting);
+
+        fake.report(playing(ATTIC));
+        cast.poll();
+        assert_eq!(status(&cast, ATTIC), CastStatus::Playing);
     }
 
     #[test]
