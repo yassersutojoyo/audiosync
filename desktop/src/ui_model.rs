@@ -1613,6 +1613,13 @@ pub trait Backend {
         ViewSettings::default()
     }
 
+    /// Whether [`Backend::view_settings`] were replaced since the last call
+    /// by a settings file read after launch (S212): the UI shows them again,
+    /// as at launch, so its next save doesn't send the old ones back.
+    fn take_view_restored(&mut self) -> bool {
+        false
+    }
+
     /// Whether AirPlay 2 is automatic per receiver for this launch (spec
     /// S312); the AirPlay 2 item then reads Prefer AirPlay 2 (S313).
     fn airplay2_auto(&self) -> bool {
@@ -1623,8 +1630,10 @@ pub trait Backend {
     fn set_view_settings(&mut self, _settings: ViewSettings) {}
 
     /// Saves the settings now, without waiting for the next poll: the app
-    /// is about to quit.
-    fn save_settings(&mut self) {}
+    /// is about to quit. Returns whether no change is left unsaved.
+    fn save_settings(&mut self) -> bool {
+        true
+    }
 }
 
 /// Where the main window was and how big: the position of its outer frame
@@ -1788,6 +1797,12 @@ pub struct MockBackend {
     pub play_pauses: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Each AirPlay delay applied, as asked.
     pub airplay_delays: std::rc::Rc<std::cell::RefCell<Vec<f64>>>,
+    /// Window settings the next poll takes in, as a settings file read
+    /// after launch brings them.
+    pub late_view: std::rc::Rc<std::cell::RefCell<Option<ViewSettings>>>,
+    /// The window settings each save found.
+    pub saved_views: std::rc::Rc<std::cell::RefCell<Vec<ViewSettings>>>,
+    view_restored: bool,
     /// The speaker that asks for its password once it is turned on.
     password_on: Option<String>,
 }
@@ -1960,6 +1975,9 @@ impl MockBackend {
             preset_notice: None,
             play_pauses: std::rc::Rc::default(),
             airplay_delays: std::rc::Rc::default(),
+            late_view: std::rc::Rc::default(),
+            saved_views: std::rc::Rc::default(),
+            view_restored: false,
             password_on: None,
         }
     }
@@ -2253,6 +2271,19 @@ fn add_zone(zones: &mut Zones, id: &str, name: &str, members: &[&str]) {
 
 #[cfg(any(test, feature = "mock-backend"))]
 impl Backend for MockBackend {
+    fn poll(&mut self) -> bool {
+        let Some(view) = self.late_view.borrow_mut().take() else {
+            return false;
+        };
+        self.view = view;
+        self.view_restored = true;
+        true
+    }
+
+    fn take_view_restored(&mut self) -> bool {
+        std::mem::take(&mut self.view_restored)
+    }
+
     fn play_pause_pressed(&mut self, app: &str, playing: bool) {
         self.play_pauses
             .borrow_mut()
@@ -2275,6 +2306,11 @@ impl Backend for MockBackend {
 
     fn set_view_settings(&mut self, settings: ViewSettings) {
         self.view = settings;
+    }
+
+    fn save_settings(&mut self) -> bool {
+        self.saved_views.borrow_mut().push(self.view.clone());
+        true
     }
 
     fn set_running(&mut self, on: bool) {

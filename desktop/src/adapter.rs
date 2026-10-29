@@ -98,8 +98,8 @@ use crate::audio::routing::{DirectPath, DirectReason};
 use crate::data_folder;
 use crate::debug_log::DebugLog;
 use crate::settings::{
-    self, KeptAside, MixMode, SavedCurve, SavedEqualizer, SavedGroup, SavedHidden, SavedInput,
-    SavedMix, SavedMixApp, SavedPreset, SavedSource, SavedSpeaker, SavedZone, Settings,
+    self, KeptAside, MixMode, Retried, SavedCurve, SavedEqualizer, SavedGroup, SavedHidden,
+    SavedInput, SavedMix, SavedMixApp, SavedPreset, SavedSource, SavedSpeaker, SavedZone, Settings,
     SettingsFile,
 };
 use crate::speaker_names::SpeakerNames;
@@ -115,6 +115,11 @@ use crate::ui_model::{
 /// seconds: it takes a snapshot of the running processes, and apps that play
 /// audio come and go rarely.
 const SOURCE_POLLS: u32 = 6;
+
+/// A settings save that failed is tried again this many polls later, about
+/// every thirty seconds: a Windows sign-out ends the app without the quit
+/// save, so a change made just before must not wait for the next one.
+const SAVE_RETRY_POLLS: u32 = 60;
 
 /// The results of the last Calibrate All, kept until closed or out of date.
 struct KeptSheet {
@@ -535,12 +540,18 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// Save the settings at the next chance even if they look unchanged:
     /// the file is in an older format.
     must_save: bool,
+    /// The window settings were replaced by a file read after launch, and
+    /// the window hasn't shown them yet.
+    view_restored: bool,
     /// AirPlay speakers saved as on that the backend couldn't switch on at
     /// launch (no AirPlay sender): their saved settings stay as they are.
     airplay_unrestored: BTreeSet<String>,
-    /// The last save of the settings file failed; its notice was posted
-    /// then, once until a save works again.
-    settings_unsaved: bool,
+    /// The settings whose last save failed; its notice was posted then,
+    /// once until a save works again. They are tried again after a change,
+    /// every [`SAVE_RETRY_POLLS`] polls and at quit.
+    unsaved: Option<Settings>,
+    /// Polls left until [`AudioAdapter::unsaved`] is tried again.
+    save_retry_wait: u32,
     /// An output listing worked at least once, so an empty list means
     /// Windows has no active output.
     outputs_known: bool,
@@ -692,8 +703,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 settings::Loaded::Read { version, .. } if version < settings::OFFSETS_VERSION
             ),
             must_save: false,
+            view_restored: false,
             airplay_unrestored: BTreeSet::new(),
-            settings_unsaved: false,
+            unsaved: None,
+            save_retry_wait: 0,
             outputs_known: false,
             no_output_noticed: false,
             ahead_noticed: None,
@@ -760,7 +773,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         for (endpoint_id, pair) in &saved.input_pairs {
             self.audio.set_input_pair(endpoint_id, *pair);
         }
-        self.input_pairs = saved.input_pairs.clone();
+        // A pair chosen while the file was held (S212) stays unless the file names that input.
+        self.input_pairs.extend(saved.input_pairs.clone());
         self.when_source_quits = WhenSourceQuits::from_stored(Some(&saved.when_source_quits));
         self.audio.set_when_source_quits(self.when_source_quits);
         if !self.delays_to_migrate {
@@ -811,7 +825,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.equalizer = saved.equalizer.settings();
         self.audio.set_equalizer(self.equalizer);
         self.equalizer_curves = settings::clamp_curves(&saved.equalizer_curves);
-        self.cast_addresses = saved.cast_addresses.clone();
+        let added = std::mem::replace(&mut self.cast_addresses, saved.cast_addresses.clone());
+        for address in added {
+            if !self.cast_addresses.contains(&address) {
+                self.cast_addresses.push(address);
+            }
+        }
         for address in saved
             .cast_addresses
             .iter()
@@ -997,7 +1016,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.settings_file.keep_ignored_aside()
         };
         match kept {
-            Ok(Some(kept)) => self.tell_kept_aside(&kept, ""),
+            Ok(Some(Retried::Read(read))) => self.restore_read_late(*read),
+            Ok(Some(Retried::KeptAside(kept))) => self.tell_kept_aside(&kept, ""),
             Ok(None) => false,
             Err(error) => {
                 if !due {
@@ -1011,6 +1031,55 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 false
             }
         }
+    }
+
+    /// Takes in the settings of the file ignored at launch, now that it
+    /// reads as settings, as if read at launch (S212): their values replace
+    /// those changed since, except the AirPlay 2 path the sender started
+    /// with. A running session moves to their source as a switch does, unless
+    /// it already captures that app; with none running, the listed
+    /// auto-connect speakers start one as at launch. The window shows them
+    /// again. Returns true.
+    fn restore_read_late(&mut self, (saved, loaded): (Settings, settings::Loaded)) -> bool {
+        self.log.log(|| {
+            format!(
+                "settings: the file ignored at launch can be read now, {loaded}; its values \
+                 replace those changed since launch"
+            )
+        });
+        self.delays_to_migrate = matches!(
+            loaded,
+            settings::Loaded::Read { version, .. } if version < settings::OFFSETS_VERSION
+        );
+        let before = self.chosen.clone();
+        let airplay2_at_launch = self.airplay2_at_launch;
+        self.restore(saved);
+        self.airplay2_at_launch = airplay2_at_launch;
+        let read = std::mem::replace(&mut self.chosen, before);
+        // The file keeps an app without its process, so the same app has another key.
+        let same_app = matches!(
+            (&read, &self.chosen),
+            (Chosen::App { executable: a, .. }, Chosen::App { executable: b, .. })
+                if a.eq_ignore_ascii_case(b)
+        );
+        // A capture the user started outlives a file app that doesn't run; the next start uses it.
+        let absent_app = self.running()
+            && matches!(&read, Chosen::App { executable, .. }
+                if !matches!(self.audio.find_app(0, executable), Ok(Some(_))));
+        if absent_app {
+            self.chosen = read;
+        } else if !same_app {
+            self.choose(read);
+        }
+        if !self.running() {
+            let listed: Vec<String> = self.listed.iter().cloned().collect();
+            self.auto_connect(&listed);
+            // Every listed AirPlay speaker counts as appearing, as at launch.
+            self.airplay_listed.clear();
+            self.airplay_listed();
+        }
+        self.view_restored = true;
+        true
     }
 
     /// Logs that the settings file was kept aside (`when`, for the log),
@@ -1038,47 +1107,70 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Writes the settings file if anything changed since it was last read
-    /// or written. A failed write is logged and tried again at the next
-    /// change; the settings stay in effect for this run, and the user is
-    /// told once, until a save works again and clears that notice. A file
-    /// ignored at launch that the save kept aside is told once too, with the
-    /// copy's name. Nothing is written while an older file's delays wait for
-    /// their migration. Returns whether the notices changed.
+    /// or written. A failed write is logged once and tried again at the next
+    /// change, every [`SAVE_RETRY_POLLS`] polls and at quit; the settings
+    /// stay in effect for this run, and the user is told once, until a save
+    /// works again or the settings go back to the saved ones. A file ignored
+    /// at launch that the save kept aside is told once too, with the copy's
+    /// name. Nothing is written while an older file's delays wait for their
+    /// migration. Returns whether the notices changed.
     fn persist(&mut self) -> bool {
         if self.delays_to_migrate || self.auto_connect_skipped {
             return false;
         }
         let current = self.current_settings();
         if current == self.saved && !self.must_save {
+            if self.unsaved.take().is_some() {
+                self.notices.clear(&[NoticeSubject::SettingsFile]);
+                return true;
+            }
             return false;
+        }
+        let retry = self.unsaved.as_ref() == Some(&current);
+        if retry && !self.must_save {
+            self.save_retry_wait = self.save_retry_wait.saturating_sub(1);
+            if self.save_retry_wait > 0 {
+                return false;
+            }
         }
         self.must_save = false;
         let saved = self.settings_file.save(&current);
-        let mut notices_changed = saved.is_ok() == self.settings_unsaved;
-        if saved.is_ok() && self.settings_unsaved {
+        if let Ok(Some(Retried::Read(read))) = saved {
+            return self.restore_read_late(*read);
+        }
+        let mut notices_changed = saved.is_ok() == self.unsaved.is_some();
+        if saved.is_ok() && self.unsaved.is_some() {
             self.notices.clear(&[NoticeSubject::SettingsFile]);
         }
-        self.settings_unsaved = saved.is_err();
+        let failed = saved.is_err();
         match saved {
             Ok(kept) if self.settings_file.path().is_some() => {
-                if let Some(kept) = kept {
+                if let Some(Retried::KeptAside(kept)) = kept {
                     notices_changed |= self.tell_kept_aside(&kept, " before saving over it");
                 }
                 self.log.log(|| "settings: saved".to_owned());
             }
             Ok(_) => {}
             Err(error) => {
-                self.log.log(|| {
-                    format!(
-                        "settings: couldn't be saved ({error}); they last until AudioSync quits"
-                    )
-                });
+                if !retry {
+                    self.log.log(|| {
+                        format!(
+                            "settings: couldn't be saved ({error}); they last until AudioSync quits"
+                        )
+                    });
+                }
                 if notices_changed {
                     self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
                 }
             }
         }
-        self.saved = current;
+        if failed {
+            self.unsaved = Some(current);
+            self.save_retry_wait = SAVE_RETRY_POLLS;
+        } else {
+            self.saved = current;
+            self.unsaved = None;
+        }
         notices_changed
     }
 
@@ -5099,6 +5191,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.view.clone()
     }
 
+    fn take_view_restored(&mut self) -> bool {
+        std::mem::take(&mut self.view_restored)
+    }
+
     fn airplay2_auto(&self) -> bool {
         self.airplay2_auto
     }
@@ -5107,11 +5203,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.view = settings;
     }
 
-    fn save_settings(&mut self) {
+    fn save_settings(&mut self) -> bool {
+        self.must_save |= self.unsaved.is_some();
         let _ = self.persist();
         // Before the backend drops and the Cast host shuts down, so the last
         // offset change is kept even when its event was never polled.
         self.save_cast_memory();
+        // A run that writes nothing (no file, delays to migrate, no auto-connect) keeps changes unsaved.
+        self.settings_file.path().is_some() && self.current_settings() == self.saved
     }
 
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
@@ -11784,6 +11883,130 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S212
+    #[test]
+    fn a_change_whose_save_failed_is_logged_once_and_saved_at_quit() {
+        let dir = test_dir("adapter-settings-retry-at-quit");
+        let path = dir.join(settings::FILE_NAME);
+        // A folder where the temporary file goes, as when another process
+        // holds the file during the rename.
+        let blocked = crate::data_folder::temporary_path(&path);
+        std::fs::create_dir(&blocked).expect("blocked");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let file = SettingsFile::at(path.clone());
+        let mut adapter =
+            AudioAdapter::with_settings(launch_audio(), || "09.41".to_owned(), log.clone(), file);
+        adapter.set_master_volume(64.0);
+        adapter.poll();
+        adapter.poll();
+        adapter.poll();
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.save_settings();
+        assert_eq!(SettingsFile::at(path.clone()).load().0.master_volume, 64.0);
+        assert!(log.flush(TEST_FLUSH));
+        let messages = read_messages(&dir.join(FILE_NAME));
+        let failures = messages
+            .iter()
+            .filter(|message| message.contains("settings: couldn't be saved"))
+            .count();
+        assert_eq!(failures, 1, "one attempt per change, not per poll");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
+    fn the_last_save_tells_whether_a_change_is_still_unsaved() {
+        let dir = test_dir("adapter-settings-last-save");
+        let path = dir.join(settings::FILE_NAME);
+        let blocked = crate::data_folder::temporary_path(&path);
+        std::fs::create_dir(&blocked).expect("blocked");
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.set_master_volume(64.0);
+        adapter.poll();
+        assert!(!adapter.save_settings(), "the file is still blocked");
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        assert!(adapter.save_settings());
+        assert_eq!(SettingsFile::at(path.clone()).load().0.master_volume, 64.0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
+    fn the_last_save_of_a_run_that_saves_nothing_never_tells_saved() {
+        let dir = test_dir("adapter-settings-last-save-skipped");
+        let path = dir.join(settings::FILE_NAME);
+        let file = SettingsFile::at(path.clone());
+        let mut adapter = AudioAdapter::launched(
+            launch_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+            file,
+            true,
+        );
+        adapter.set_master_volume(64.0);
+        adapter.poll();
+        assert!(
+            !adapter.save_settings(),
+            "a run without auto-connect saves nothing"
+        );
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
+    fn a_change_whose_save_failed_is_saved_later_without_another_change() {
+        let dir = test_dir("adapter-settings-retry-on-polls");
+        let path = dir.join(settings::FILE_NAME);
+        let blocked = crate::data_folder::temporary_path(&path);
+        std::fs::create_dir(&blocked).expect("blocked");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let file = SettingsFile::at(path.clone());
+        let mut adapter =
+            AudioAdapter::with_settings(launch_audio(), || "09.41".to_owned(), log.clone(), file);
+        adapter.set_master_volume(64.0);
+        for _ in 0..2 * SAVE_RETRY_POLLS {
+            adapter.poll();
+        }
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        for _ in 0..SAVE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert_eq!(SettingsFile::at(path.clone()).load().0.master_volume, 64.0);
+        assert!(messages(&adapter).is_empty(), "the notice goes");
+        assert!(log.flush(TEST_FLUSH));
+        let failures = read_messages(&dir.join(FILE_NAME))
+            .iter()
+            .filter(|message| message.contains("settings: couldn't be saved"))
+            .count();
+        assert_eq!(failures, 1, "the retries are not logged");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
+    fn going_back_to_the_saved_settings_ends_a_failed_save() {
+        let dir = test_dir("adapter-settings-back-to-saved");
+        let path = dir.join(settings::FILE_NAME);
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.set_master_volume(64.0);
+        adapter.poll();
+        let blocked = crate::data_folder::temporary_path(&path);
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        adapter.set_master_volume(64.0);
+        assert!(adapter.poll(), "the notice goes");
+        assert!(messages(&adapter).is_empty());
+        // The value that failed, chosen again, is saved at once.
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert_eq!(SettingsFile::at(path.clone()).load().0.master_volume, 65.0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn a_pairing_that_cant_be_saved_gets_a_notice_until_a_write_works() {
         use crate::audio::pairings::tests::sealer;
@@ -11918,6 +12141,193 @@ mod tests {
         for _ in 0..2 * KEEP_ASIDE_RETRY_POLLS {
             adapter.poll();
         }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A folder in place of the settings file at launch (another program
+    /// holds it), with the user's settings, master 64, the player as the
+    /// source and the speakers on with auto-connect, waiting in `held`.
+    fn launch_with_settings_held(name: &str) -> (AudioAdapter<MockBackend>, PathBuf, PathBuf) {
+        let dir = test_dir(name);
+        let path = dir.join(settings::FILE_NAME);
+        let users = Settings {
+            master_volume: 64.0,
+            source: SavedSource::App {
+                executable: "player.exe".to_owned(),
+                name: "Player".to_owned(),
+            },
+            outputs: BTreeMap::from([(
+                SPEAKERS.to_owned(),
+                SavedSpeaker {
+                    enabled: true,
+                    ..SavedSpeaker::default()
+                },
+            )]),
+            auto_connect: BTreeSet::from([key(SPEAKERS)]),
+            ..Settings::default()
+        };
+        std::fs::write(dir.join("held"), users.to_json()).expect("written");
+        std::fs::create_dir(&path).expect("the folder is made");
+        (launch(launch_audio(), &path), dir, path)
+    }
+
+    // covers: S212
+    #[test]
+    fn a_late_restore_keeps_pairs_and_cast_addresses_added_meanwhile_and_the_file_wins_per_key() {
+        let mut adapter = adapter();
+        adapter.input_pairs.insert("mic-a".to_owned(), 2);
+        adapter.input_pairs.insert("mic-b".to_owned(), 1);
+        adapter.cast_addresses.push("192.0.2.30".to_owned());
+        adapter.restore(Settings {
+            input_pairs: BTreeMap::from([("mic-a".to_owned(), 3)]),
+            cast_addresses: vec!["192.0.2.20".to_owned()],
+            ..Settings::default()
+        });
+        assert_eq!(
+            adapter.input_pairs,
+            BTreeMap::from([("mic-a".to_owned(), 3), ("mic-b".to_owned(), 1)])
+        );
+        assert_eq!(adapter.cast_addresses, ["192.0.2.20", "192.0.2.30"]);
+    }
+
+    // covers: S212
+    #[test]
+    fn a_session_already_capturing_the_files_app_keeps_its_capture_after_a_late_read() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-same-app");
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        let captures = adapter.audio.driver().captures_started().len();
+        assert_eq!(
+            adapter.audio.running_source(),
+            Some(SourceId::App {
+                root_pid: PLAYER_PID
+            })
+        );
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(dir.join("held"), &path).expect("moved back");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().master_volume, 64.0, "read");
+        assert_eq!(adapter.audio.driver().captures_started().len(), captures);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
+    fn a_running_session_keeps_its_capture_when_held_settings_name_an_app_that_isnt_running() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-absent");
+        let held = dir.join("held");
+        let mut users = SettingsFile::at(held.clone()).load().0;
+        users.source = SavedSource::App {
+            executable: "gone.exe".to_owned(),
+            name: "Gone".to_owned(),
+        };
+        std::fs::write(&held, users.to_json()).expect("written");
+        turn_on(&mut adapter, SPEAKERS);
+        assert_eq!(adapter.audio.running_source(), Some(SourceId::WholeSystem));
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(&held, &path).expect("moved back");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().master_volume, 64.0, "read");
+        assert_eq!(adapter.audio.running_source(), Some(SourceId::WholeSystem));
+        assert!(
+            matches!(&adapter.chosen, Chosen::App { executable, .. } if executable == "gone.exe"),
+            "{:?}",
+            adapter.chosen
+        );
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
+    fn held_settings_read_later_start_nothing_for_a_speaker_on_without_auto_connect() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-no-auto");
+        let held = dir.join("held");
+        let mut users = SettingsFile::at(held.clone()).load().0;
+        users.auto_connect.clear();
+        std::fs::write(&held, users.to_json()).expect("written");
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(&held, &path).expect("moved back");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().master_volume, 64.0);
+        assert_eq!(adapter.audio.running_source(), None, "as at launch");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
+    fn a_settings_file_held_at_launch_is_applied_once_it_can_be_read() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held");
+        assert_eq!(adapter.snapshot().master_volume, 100.0, "the defaults");
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(dir.join("held"), &path).expect("moved back");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().master_volume, 64.0);
+        assert!(
+            matches!(adapter.chosen, Chosen::App { .. }),
+            "{:?}",
+            adapter.chosen
+        );
+        assert_eq!(
+            adapter.audio.running_source(),
+            Some(SourceId::App {
+                root_pid: PLAYER_PID
+            }),
+            "the auto-connect speakers start streaming, as at launch"
+        );
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        assert!(crate::data_folder::copies_kept_aside(&dir, "settings.ignored").is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
+    fn a_session_running_when_held_settings_are_read_moves_to_their_source() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-running");
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.running());
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(dir.join("held"), &path).expect("moved back");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().master_volume, 64.0);
+        assert_eq!(
+            adapter.audio.running_source(),
+            Some(SourceId::App {
+                root_pid: PLAYER_PID
+            })
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
+    fn a_change_while_the_settings_file_is_held_never_saves_the_defaults_over_it() {
+        let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-change");
+        adapter.set_speaker_volume(&key(SPEAKERS), 30.0);
+        adapter.poll();
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(dir.join("held"), &path).expect("moved back");
+        adapter.set_speaker_volume(&key(SPEAKERS), 40.0);
+        adapter.poll();
+        adapter.poll();
+        assert_eq!(adapter.snapshot().master_volume, 64.0);
+        assert_eq!(SettingsFile::at(path).load().0.master_volume, 64.0);
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -991,7 +991,7 @@ impl App {
         app.connect_guide();
         app.connect_help();
         app.connect_remote();
-        app.restore_view();
+        app.restore_view(true);
         app.restore_remote();
         app.launch_update_check();
         app.refresh();
@@ -1172,6 +1172,22 @@ impl App {
     /// Lets the backend take in what happened on its own, and shows it.
     fn poll(&self) {
         let changed = self.backend.borrow_mut().poll();
+        if self.backend.borrow_mut().take_view_restored() {
+            let (remote, airplay2, airplay2_at_launch) = {
+                let ui = self.ui.borrow();
+                (ui.remote, ui.airplay2_experimental, ui.airplay2_at_launch)
+            };
+            // The window keeps its frame, and the sender its AirPlay 2 path.
+            self.restore_view(false);
+            self.ui.borrow_mut().airplay2_at_launch = airplay2_at_launch;
+            let read = self.ui.borrow().airplay2_experimental;
+            if read != airplay2 {
+                self.set_airplay2_experimental(read);
+            }
+            if self.ui.borrow().remote != remote {
+                self.restore_remote_again();
+            }
+        }
         if changed {
             self.refresh();
         } else if self.sync_now_playing() {
@@ -3137,6 +3153,14 @@ impl App {
         }
     }
 
+    /// When Windows ends the session, which may end the process before the
+    /// event loop does. Returns whether no change is left unsaved.
+    #[cfg(windows)]
+    pub fn at_session_end(&self) -> bool {
+        self.updater_at_exit();
+        self.save_settings()
+    }
+
     /// Takes the updater worker's news; a check that read the appcast
     /// stores its time.
     fn poll_updater(&self) {
@@ -3303,7 +3327,8 @@ impl App {
     /// Virtual Devices, View > Appearance, and the main window's size and
     /// place, fitted to the monitor it opens on (the one at its saved place,
     /// else the primary one, where it opens centered), maximized when it was.
-    fn restore_view(&self) {
+    /// Without `with_frame` the main window keeps its size and place.
+    fn restore_view(&self, with_frame: bool) {
         let saved = self.backend.borrow().view_settings();
         let airplay2_auto = self.backend.borrow().airplay2_auto();
         self.main.set_airplay2_auto(airplay2_auto);
@@ -3317,7 +3342,7 @@ impl App {
         self.ui.borrow_mut().last_update_check = saved.last_update_check;
         self.ui.borrow_mut().update_record = saved.update_record.clone();
         self.apply_appearance(saved.appearance);
-        let Some(saved_frame) = saved.window else {
+        let (true, Some(saved_frame)) = (with_frame, saved.window) else {
             return;
         };
         let on_a_monitor = crate::platform::is_on_a_monitor(saved_frame.x, saved_frame.y);
@@ -3366,8 +3391,8 @@ impl App {
     }
 
     /// Saves the settings now, with the main window's frame: the app is
-    /// about to quit.
-    pub fn save_settings(&self) {
+    /// about to quit. Returns whether no change is left unsaved.
+    pub fn save_settings(&self) -> bool {
         // Quit drops a typed delay or name that wasn't applied, so a focus
         // loss as the window goes applies nothing either.
         {
@@ -3377,7 +3402,7 @@ impl App {
             ui.rename = None;
         }
         self.remember_view();
-        self.backend.borrow_mut().save_settings();
+        self.backend.borrow_mut().save_settings()
     }
 
     fn step_delay(&self, id: &str, delta: i32) {
@@ -5845,6 +5870,56 @@ mod tests {
         );
     }
 
+    // covers: S212
+    #[test]
+    fn a_late_read_keeps_the_window_frame_and_logs_no_unchanged_airplay2_choice() {
+        use crate::debug_log;
+        let path = debug_log::test_dir("view-late-read").join(debug_log::FILE_NAME);
+        let backend = MockBackend::new();
+        let late_view = backend.late_view.clone();
+        let log = DebugLog::new(Some(path.clone()));
+        let app = app_logging(backend, log.clone());
+        let size = app.main.window().size();
+        *late_view.borrow_mut() = Some(ViewSettings {
+            window: Some(ui_model::WindowFrame {
+                x: 40,
+                y: 40,
+                width: 701.0,
+                height: 503.0,
+                maximized: true,
+            }),
+            ..ViewSettings::default()
+        });
+        app.poll();
+        assert_eq!(app.main.window().size(), size, "the frame stays");
+        assert!(log.flush(debug_log::TEST_FLUSH));
+        let written = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(!written.contains("applies at the next launch"), "{written}");
+    }
+
+    // covers: S212
+    #[test]
+    fn window_settings_read_after_launch_show_and_survive_a_quit() {
+        let backend = MockBackend::new();
+        let late_view = backend.late_view.clone();
+        let app = app_over(backend);
+        let file = ViewSettings {
+            appearance: ui_model::Appearance::Dark,
+            show_virtual_devices: true,
+            airplay2_experimental: true,
+            ..ViewSettings::default()
+        };
+        *late_view.borrow_mut() = Some(file.clone());
+        app.poll();
+        assert_eq!(app.main.get_appearance(), crate::Appearance::Dark);
+        assert!(
+            app.ui.borrow().airplay2_notice.is_some(),
+            "the sender keeps its path until the next launch"
+        );
+        app.save_settings();
+        assert_eq!(app.backend.borrow().view_settings(), file);
+    }
+
     #[test]
     fn the_main_window_keeps_a_virtual_output_listed_after_it_is_turned_off() {
         let mut backend = MockBackend::new();
@@ -7099,6 +7174,32 @@ mod tests {
         let state = app.snapshot();
         assert_eq!(state.speaker("local:desk").unwrap().delay_ms, Some(120.0));
         assert_eq!(state.airplay_delay_ms, Some(1750.0));
+    }
+
+    // covers: S315
+    #[cfg(windows)]
+    #[test]
+    fn the_end_of_a_windows_session_gives_a_removed_exe_its_bak_back_and_keeps_the_record() {
+        let backend = MockBackend::new();
+        let saved_views = backend.saved_views.clone();
+        let app = app_over(backend);
+        let (updater, exe) = crate::updater::tests::swapped_exe_gone("session-end");
+        *app.updater.borrow_mut() = Some(updater);
+        app.at_session_end();
+        assert!(exe.exists(), "the .bak is audiosync.exe again");
+        let saved: Vec<_> = saved_views
+            .borrow()
+            .iter()
+            .map(|view| view.update_record.clone())
+            .collect();
+        assert_eq!(
+            saved,
+            [Some(ui_model::UpdateRecord {
+                version: "0.9.0".to_owned(),
+                reason: ui_model::UpdateRecordReason::Blocked,
+            })],
+            "the one save already holds the record"
+        );
     }
 
     #[test]

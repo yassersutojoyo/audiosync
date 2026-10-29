@@ -23,7 +23,8 @@
 //! is ([`SettingsFile::keep_ignored_aside`]). A file that can't be read is
 //! tried once more at launch (another program may hold it for a moment),
 //! then every few seconds, and while it still can't be read nothing is
-//! saved over it, since it may hold the user's settings. Fields this version doesn't know are ignored,
+//! saved over it, since it may hold the user's settings; once it reads as
+//! settings, they apply as if read at launch. Fields this version doesn't know are ignored,
 //! missing ones take their defaults, and values out of range are clamped
 //! ([`Settings::clamped`]). Nothing here panics on a bad file, and the
 //! caller logs what [`Loaded`] says.
@@ -1365,7 +1366,7 @@ impl fmt::Display for Loaded {
             Loaded::Ignored(reason) => write!(
                 f,
                 "ignored: {reason}; the defaults apply, and it is kept aside before a new \
-                 file replaces it"
+                 file replaces it, or applied once it can be read"
             ),
         }
     }
@@ -1392,6 +1393,16 @@ impl KeptAside {
             .to_string_lossy()
             .into_owned()
     }
+}
+
+/// What a later try at the file the last load ignored found.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Retried {
+    /// It reads as settings now (another program held it at launch): these
+    /// apply as if read at launch, and nothing was saved over it.
+    Read(Box<(Settings, Loaded)>),
+    /// It still isn't settings this build reads, so it was copied aside.
+    KeptAside(KeptAside),
 }
 
 /// Where the settings are kept: the file, or nowhere (this run only).
@@ -1464,12 +1475,13 @@ impl SettingsFile {
     /// Keeps the file the last load ignored aside now, without saving
     /// anything, so the user can be told at launch where it is: copied as
     /// [`SettingsFile::save`] would ([`IGNORED_FILE_NAME`]), and the copy
-    /// returned, once. A newer AudioSync's file isn't copied here: `save`
+    /// returned, once; a file that reads as settings now is returned read
+    /// instead (S212). A newer AudioSync's file isn't copied here: `save`
     /// keeps one aside whenever it saves over one. While the file still
     /// can't be read, the error is returned and the next try is due
     /// [`data_folder::KEEP_ASIDE_RETRY_POLLS`] polls later
     /// ([`SettingsFile::keep_ignored_aside_if_due`]), or at the next save.
-    pub fn keep_ignored_aside(&self) -> io::Result<Option<KeptAside>> {
+    pub fn keep_ignored_aside(&self) -> io::Result<Option<Retried>> {
         let Some(path) = &self.path else {
             return Ok(None);
         };
@@ -1478,8 +1490,14 @@ impl SettingsFile {
         }
         let kept = match fs::read(path) {
             Ok(bytes) if written_by_a_newer_build(&bytes) => Ok(None),
-            Ok(bytes) => data_folder::keep_bytes_aside(path, IGNORED_FILE_NAME, &bytes)
-                .map(|kept| Some(KeptAside::Ignored(kept))),
+            Ok(bytes) => match std::str::from_utf8(&bytes)
+                .map_err(|_| String::new())
+                .and_then(Settings::from_json)
+            {
+                Ok(read) => Ok(Some(Retried::Read(Box::new(read)))),
+                Err(_) => data_folder::keep_bytes_aside(path, IGNORED_FILE_NAME, &bytes)
+                    .map(|kept| Some(Retried::KeptAside(KeptAside::Ignored(kept)))),
+            },
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         };
@@ -1503,7 +1521,7 @@ impl SettingsFile {
     /// called at every poll, it tries every
     /// [`data_folder::KEEP_ASIDE_RETRY_POLLS`] polls while the file ignored
     /// at launch couldn't be kept aside yet, and does nothing otherwise.
-    pub fn keep_ignored_aside_if_due(&self) -> io::Result<Option<KeptAside>> {
+    pub fn keep_ignored_aside_if_due(&self) -> io::Result<Option<Retried>> {
         if !self.keep_aside.get() {
             return Ok(None);
         }
@@ -1525,18 +1543,21 @@ impl SettingsFile {
     /// ([`data_folder::keep_bytes_aside`]), so no copy ever replaces an
     /// older one; what was kept is returned. While such a file still can't
     /// be read, or the copy fails, the file is left alone and the error
-    /// returned.
-    pub fn save(&self, settings: &Settings) -> io::Result<Option<KeptAside>> {
+    /// returned; one that reads as settings now is left alone and returned.
+    pub fn save(&self, settings: &Settings) -> io::Result<Option<Retried>> {
         let Some(path) = &self.path else {
             return Ok(None);
         };
         let kept = match fs::read(path) {
-            Ok(bytes) if written_by_a_newer_build(&bytes) => Some(KeptAside::Newer(
-                data_folder::keep_bytes_aside(path, NEWER_FILE_NAME, &bytes)?,
-            )),
-            Ok(_) | Err(_) if self.keep_aside.get() => {
-                data_folder::keep_aside(path, IGNORED_FILE_NAME)?.map(KeptAside::Ignored)
+            Ok(bytes) if written_by_a_newer_build(&bytes) => {
+                Some(Retried::KeptAside(KeptAside::Newer(
+                    data_folder::keep_bytes_aside(path, NEWER_FILE_NAME, &bytes)?,
+                )))
             }
+            Ok(_) | Err(_) if self.keep_aside.get() => match self.keep_ignored_aside()? {
+                read @ Some(Retried::Read(_)) => return Ok(read),
+                kept => kept,
+            },
             _ => None,
         };
         self.keep_aside.set(false);
@@ -2813,17 +2834,21 @@ mod tests {
         assert!(file.save(&Settings::default()).is_err());
         assert!(path.is_dir());
 
-        // Readable again, holding the user's settings: they are kept aside
-        // before the first save replaces the file.
+        // Readable again, holding the user's settings: the save leaves the
+        // file alone and returns them read, and keeps nothing aside.
         fs::remove_dir(&path).expect("the folder is removed");
         let good = sample().to_json();
         fs::write(&path, &good).expect("written");
-        file.save(&Settings::default()).expect("saved");
-        assert_eq!(kept(), [good.clone().into_bytes()]);
+        let read = Settings::from_json(&good).expect("settings");
+        assert_eq!(
+            file.save(&Settings::default()).expect("not saved"),
+            Some(Retried::Read(Box::new(read)))
+        );
+        assert_eq!(fs::read_to_string(&path).expect("read"), good);
+        // Once read, the next save replaces the file.
+        assert_eq!(file.save(&Settings::default()).expect("saved"), None);
         assert_eq!(file.load().0, Settings::default());
-        // Once replaced, the next save leaves the copy alone.
-        file.save(&sample()).expect("saved again");
-        assert_eq!(kept(), [good.into_bytes()]);
+        assert!(kept().is_empty());
     }
 
     #[test]
@@ -2844,7 +2869,8 @@ mod tests {
             assert!(matches!(found, Loaded::Ignored(_)), "{found}");
             fs::remove_dir(&path).expect("the folder is removed");
             fs::rename(&held, &path).expect("moved back");
-            file.save(settings).expect("saved");
+            let read = file.save(settings).expect("not saved");
+            assert!(matches!(read, Some(Retried::Read(_))), "{read:?}");
         };
         let mut changed = Settings {
             master_volume: 12.0,
@@ -2853,11 +2879,9 @@ mod tests {
         launch(&changed);
         changed.master_volume = 13.0;
         launch(&changed);
-        // The user's settings are still kept, next to the first launch's.
-        let kept = copies_kept_aside(&folder, "settings.ignored");
-        assert!(kept.contains(&users.into_bytes()), "{kept:?}");
-        assert_eq!(kept.len(), 2);
-        assert_eq!(SettingsFile::at(path).load().0, changed);
+        // The user's settings are still the file, and nothing is kept aside.
+        assert_eq!(fs::read_to_string(&path).expect("read"), users);
+        assert!(copies_kept_aside(&folder, "settings.ignored").is_empty());
     }
 
     #[test]
