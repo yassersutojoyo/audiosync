@@ -445,7 +445,7 @@ extension AppDelegate {
         if on, refusedAsTargetMember(id, origin: origin) { return }
         if on { clearNotices([SpeakerKey.make(id: id, airplay: true)]) }   // a new attempt
         if on { enabledAirPlay.insert(id) } else { enabledAirPlay.remove(id) }
-        if on { beginNativeAttempts([id]) } else { endNativeAttempt(id) }
+        if !on { endNativeAttempt(id) } else if origin.beginsAttempts { beginNativeAttempts([id]) }
         if StreamingPolicy.startsStreaming(turnedOn: on, streaming: engine.isRunning) {
             startEngine(origin: origin)
         } else {

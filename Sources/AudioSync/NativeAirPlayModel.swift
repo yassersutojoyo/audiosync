@@ -182,6 +182,8 @@ struct AirPlayTargetRow: Equatable {
     /// A member is out of view, plays nothing, or reports its partner
     /// unreachable, even when no name is known for it.
     let incomplete: Bool
+    /// A member in view asks for a password this run hasn't had.
+    var asksPassword = false
 }
 
 /// Something the native sender reported about a speaker, or about the stream
@@ -597,7 +599,10 @@ struct NativeAirPlayModel {
         }
         let missing = named(ids.filter { receivers[$0] == nil })
         return AirPlayTargetRow(kind: kind, members: named(ids), missing: missing,
-                                incomplete: receivers[id]?.incomplete == true || !missing.isEmpty)
+                                incomplete: receivers[id]?.incomplete == true || !missing.isEmpty,
+                                asksPassword: ids.contains {
+                                    receivers[$0]?.availability == .needsPassword && !passwords.contains($0)
+                                })
     }
 
     func isPlaying(_ id: String) -> Bool { states[id] == .playing }

@@ -276,6 +276,7 @@ final class WebRemote {
                 cast: s.cast.map { (live: $0.live, volumeFixed: $0.volumeFixed) },
                 offsetMs: s.offsetMs, airPlayDelayMs: model.airPlayDelayMs,
                 needsCode: s.availability != .open, paired: s.paired,
+                memberAsksPassword: s.airPlayTarget?.asksPassword == true,
                 note: t.rowNote(cast: s.cast, waitingForAirPlay2: s.waitingForAirPlay2,
                                 waitingForPtp: s.waitingForPtp, reconnecting: s.reconnecting, unannounced: s.unannounced,
                                 target: s.airPlayTarget),
@@ -333,7 +334,7 @@ final class WebRemote {
         case .setZoneVolume(let id, let position): host.setZoneVolume(id, position)
         case .toggleZone(let id, let keepOff): host.toggleZone(id, keepOff, .remote)
         case .recallPreset(let id, let keepOff): host.recallPreset(id, keepOff, .remote)
-        case .selectSource(let pickerID): model.actions.selectSource(pickerID)
+        case .selectSource(let pickerID): model.actions.selectSource(pickerID, .remote)
         }
     }
 

@@ -125,7 +125,7 @@ final class AppModel: ObservableObject {
 
     struct Actions {
         var setPower: (Bool) -> Void = { _ in }
-        var selectSource: (String) -> Void = { _ in }
+        var selectSource: (String, StartOrigin) -> Void = { _, _ in }
         var selectInputPair: (Int) -> Void = { _ in }
         var toggleMixApp: (String) -> Void = { _ in }
         var setMixMode: (AppMixMode) -> Void = { _ in }
@@ -2120,7 +2120,7 @@ struct SourcePicker: View {
                     Section(t.sourceInputsHeader) { EmptyView() }
                 }
                 Button {
-                    model.actions.selectSource(source.id)
+                    model.actions.selectSource(source.id, .user)
                 } label: {
                     if let icon = source.icon { Image(nsImage: icon) }
                     Text(source.name)

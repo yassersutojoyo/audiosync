@@ -17,6 +17,11 @@ enum StartOrigin: Equatable {
     /// Only a click at the Mac may raise a modal alert; every other start
     /// posts a notice and leaves the focus where it is.
     var raisesAlert: Bool { self == .user }
+
+    /// Only a click at the Mac starts attempts that may pair or prompt for a
+    /// code (`NativeAirPlayModel.turnedOnByUser`); a speaker the phone turns
+    /// on that asks for one goes off with a notice instead.
+    var beginsAttempts: Bool { self == .user }
 }
 
 /// The decisions behind the app's launch, when the speakers are reconciled, a

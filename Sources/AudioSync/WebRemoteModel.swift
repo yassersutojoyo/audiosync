@@ -78,6 +78,9 @@ extension RemoteRow {
         /// Asks for a PIN or password.
         var needsCode = false
         var paired = false
+        /// A stereo pair or home theater whose member asks for a password
+        /// this run hasn't had: turning it on prompts for that member (P176).
+        var memberAsksPassword = false
         /// What the window writes under the name, if anything.
         var note: String?
         var key = ""
@@ -87,7 +90,7 @@ extension RemoteRow {
     /// A speaker that would ask for a code when turned on can't be turned on
     /// from the phone: the prompt would open on the Mac with nobody there.
     init(_ f: Facts, text: UIStrings) {
-        let codeBlocked = f.needsCode && !f.paired && !f.on
+        let codeBlocked = (f.needsCode && !f.paired || f.memberAsksPassword) && !f.on
         let delay: RemoteDelay
         if f.isAirPlay { delay = .airPlay(f.airPlayDelayMs) }
         else if f.cast != nil { delay = f.offsetMs.map(RemoteDelay.cast) ?? .fixed }
