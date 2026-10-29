@@ -8560,7 +8560,11 @@ mod tests {
             let (mut adapter, fake, den) = auto_connected_with_stored_credentials();
             let id = ap(&den);
             fake.take_calls();
-            fake.fail(&den, kind);
+            if kind == ErrorKind::PairingFailed {
+                fake.refuse_for_state(&den);
+            } else {
+                fake.fail(&den, kind);
+            }
             adapter.poll();
             let state = adapter.snapshot();
             let row = state.speaker(&id).unwrap();
@@ -8582,7 +8586,7 @@ mod tests {
                 assert!(
                     messages(&adapter).iter().any(|message| matches!(
                         message,
-                        NoticeMessage::AirPlayCantPlay {
+                        NoticeMessage::AirPlayRetrying {
                             problem: ui_model::AirPlayProblem::Refused,
                             ..
                         }

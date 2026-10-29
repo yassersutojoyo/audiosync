@@ -4205,7 +4205,10 @@ impl AirPlaySpeakers {
                 let mut problem = problem(reason);
                 // Errors 1 and 3 to 6 to a verify with stored credentials
                 // describe the receiver, not them: a refusal (P154).
-                if error.kind == ErrorKind::PairingFailed && self.store.homekit(id).is_some() {
+                if error.kind == ErrorKind::PairingFailed
+                    && error.retry_after.is_some()
+                    && self.store.homekit(id).is_some()
+                {
                     problem = AirPlayProblem::Refused;
                 }
                 self.paired_for_session.remove(id);
@@ -4796,6 +4799,21 @@ pub mod tests {
                     error: SessionError::new(kind),
                     reason: kind.user_reason(),
                     retry_at,
+                }),
+            });
+        }
+
+        /// A pair-verify error about the receiver's state ended a session:
+        /// the sender reports a refusal and retries after the wait (P154).
+        pub fn refuse_for_state(&self, device: &Device) {
+            let mut error = SessionError::new(ErrorKind::PairingFailed);
+            error.retry_after = Some(Duration::from_secs(5));
+            self.push(SenderEvent::Speaker {
+                key: device.key.clone(),
+                event: SpeakerEvent::Error(SpeakerError {
+                    error,
+                    reason: UserReason::Refused,
+                    retry_at: Some(Instant::now() + Duration::from_secs(5)),
                 }),
             });
         }
@@ -6852,17 +6870,7 @@ pub mod tests {
         airplay.poll();
         airplay.set_enabled(&id, true).unwrap();
         airplay.set_streaming(true);
-        // P154: a pair-verify error about the receiver's state carries a wait.
-        let mut error = SessionError::new(ErrorKind::PairingFailed);
-        error.retry_after = Some(Duration::from_secs(5));
-        fake.push(SenderEvent::Speaker {
-            key: tv.key.clone(),
-            event: SpeakerEvent::Error(SpeakerError {
-                error,
-                reason: UserReason::Refused,
-                retry_at: Some(Instant::now() + Duration::from_secs(5)),
-            }),
-        });
+        fake.refuse_for_state(&tv);
         let events = airplay.poll();
         assert!(
             events.contains(&BackendEvent::AirPlayTrouble {
@@ -6875,10 +6883,10 @@ pub mod tests {
         fake.fail(&tv, ErrorKind::PairingFailed);
         let events = airplay.poll();
         assert!(
-            events.contains(&BackendEvent::AirPlayFailed {
-                id: id.clone(),
-                problem: AirPlayProblem::PairingFailed
-            }),
+            events.iter().any(|event| matches!(
+                event,
+                BackendEvent::AirPlayFailed { problem, .. } if *problem != AirPlayProblem::Refused
+            )),
             "a failure with no wait keeps its own problem: {events:?}"
         );
     }

@@ -5180,6 +5180,10 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::PairFirst { speaker } => {
             strings.invoke_notice_pair_first(speaker.as_str().into())
         }
+        NoticeMessage::AirPlayCantPlay {
+            speaker,
+            problem: ui_model::AirPlayProblem::Refused,
+        } => strings.invoke_notice_airplay_refused_off(speaker.as_str().into()),
         NoticeMessage::AirPlayRetrying { speaker, problem }
         | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
