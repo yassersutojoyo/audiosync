@@ -514,6 +514,6 @@ struct InputChannelPair: Equatable {
     /// Whether picking `chosen` replaces the stored `saved`, also when it
     /// changes nothing that plays: the user's latest pick is the one kept.
     static func stores(_ chosen: Int, over saved: Int) -> Bool {
-        false
+        chosen >= 0 && chosen != saved
     }
 }
