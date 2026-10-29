@@ -1121,6 +1121,15 @@ do {
             && AirPlaySearch.endsAt(access: .allowed, senderUp: true, emptySince: t0, now: t0 + wait) == nil
             && AirPlaySearch.endsAt(access: .denied, senderUp: true, emptySince: t0, now: t0) == nil,
           "AirPlay search: the host looks again when the first look ends, even with access allowed")
+    let woke = t0 + 8 * 3600
+    let wokeSince = AirPlaySearch.sinceAfterWake(t0, now: woke)
+    check(wokeSince == woke && AirPlaySearch.sinceAfterWake(nil, now: woke) == nil
+            && searching(.unknown, empty: wokeSince, at: woke + 1) && hint(.unknown, empty: wokeSince, at: woke + 1) == .none
+            && CastModel.Discovery.browsing(since: t0).afterWake(now: woke) == .browsing(since: woke)
+            && CastModel.Discovery.failed.afterWake(now: woke) == .failed
+            && CastModel.Discovery.off.afterWake(now: woke) == .off,
+          "AirPlay search: a wake starts the 20 s of an empty AirPlay or Cast list over, so no hint shows at once (S154)",
+          "\(String(describing: wokeSince))")
     let lookingText = UIStrings()
     check(lookingText.networkSpeakersNote(airPlayNone: true, cast: .quiet, airPlaySearching: true) == "Looking for speakers…"
             && lookingText.networkSpeakersNote(airPlayNone: true, cast: .searching, airPlaySearching: true)
@@ -6909,6 +6918,32 @@ do {
     check(unstalled == nil && playing == ["B"] && settled.isEmpty && other.tracked.isEmpty,
           "output stall: a refused start that followed no stall is switched off as before; 5 s of play or a switch-off ends a stall",
           "\(String(describing: unstalled)) \(playing) \(settled) \(other.tracked)")
+    var notice = OutputStallRetry()
+    _ = notice.stalled("A", nowS: 100)
+    let quietFirst = notice.lost
+    notice.started("A", nowS: 100.5)
+    _ = notice.stalled("A", nowS: 103)
+    let afterSecond = notice.lost
+    _ = notice.refused("A", nowS: 113.1)
+    notice.started("A", nowS: 123.2)
+    let whilePlaying = notice.settle(enabled: ["A"], nowS: 128.1)
+    let keptLost = notice.lost
+    let played = notice.settle(enabled: ["A"], nowS: 128.3)
+    _ = notice.stalled("B", nowS: 130)
+    notice.started("B", nowS: 130.5)
+    _ = notice.stalled("B", nowS: 131)
+    let switchedOff = notice.settle(enabled: [], nowS: 131.1)
+    _ = notice.stalled("C", nowS: 140)
+    notice.started("C", nowS: 140.5)
+    let firstOnly = notice.settle(enabled: ["C"], nowS: 146)
+    _ = notice.stalled("D", nowS: 150)
+    notice.started("D", nowS: 150.5)
+    _ = notice.stalled("D", nowS: 151)
+    check(quietFirst.isEmpty && afterSecond == ["A"] && whilePlaying.isEmpty && keptLost == ["A"] && played == ["A"]
+            && switchedOff == ["B"] && firstOnly.isEmpty && notice.lost == ["D"]
+            && UIStrings().outputLost(name: "Desk") == "Desk was disconnected. It plays again as soon as it's back.",
+          "output stall: a second stall brings the disconnected notice; 5 s of play or a switch-off ends it, a stop reads it",
+          "\(afterSecond) \(whilePlaying) \(played) \(switchedOff) \(firstOnly) \(notice.lost)")
 }
 // covers: S334, S335 (a Mac sitting on 2026-10-28: both watches fired between the will-sleep notice and the sleep)
 do {
@@ -9226,7 +9261,7 @@ do {
     check(t.castList(.noneFound, localNetworkRefused: true)?.contains("Local Network") == true
             && t.castList(.noneFound)?.contains("Local Network") == false,
           "cast: none found points to Local Network access only once it was refused")
-    let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost]
+    let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost, .notFound]
     check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
           "cast: every notice names the speaker, with no em dash")
     let bothNone = t.networkSpeakersNote(airPlayNone: true, cast: .noneFound) ?? ""
@@ -10355,6 +10390,19 @@ do {
     _ = stopped.apply(.discoveryStopped)
     check(stopped.devices[manualID] != nil && stopped.devices[realID] == nil,
           "cast model: when discovery stops, a speaker added by address stays listed, as the sender keeps it")
+    var unplayed = CastModel()
+    unplayed.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    _ = unplayed.turnOn(realID)
+    let unfound = unplayed.apply(.discoveryStopped)
+    var keptOn = CastModel()
+    keptOn.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    _ = keptOn.turnOn(manualID)
+    let keptOutcome = keptOn.apply(.discoveryStopped)
+    check(unfound == .turnedOff(realID, problem: .notFound) && unplayed.enabled == nil
+            && keptOutcome == .changed && keptOn.enabled == manualID
+            && t.castProblem(.notFound, name: "Lounge") == "Lounge wasn't found on the network, so it's off.",
+          "cast model: a speaker on with no session that leaves the list when discovery stops goes off with a notice",
+          "\(String(describing: unfound)) \(String(describing: keptOutcome))")
 
     check(t.castAddProblem(.notFound)
             == "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
