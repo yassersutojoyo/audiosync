@@ -6955,6 +6955,16 @@ do {
     check(asFormat.isEmpty && asStall == ["A"] && inARow == .retry(atS: 113),
           "output format: a format change during a stall trial reopens as a format change and leaves the trial as it was",
           "\(asFormat) \(asStall) \(inARow)")
+    // covers: S325 (measured: a Bluetooth output re-added after its restart ran 44100 Hz on a 48000 Hz device)
+    let stereo44 = F(rate: 44_100, channels: 2)
+    let moved = OutputFormatWatch.atStart(bound: stereo44, now: stereo48)
+    let settled = OutputFormatWatch.atStart(bound: stereo44, now: stereo44)
+    let unread = OutputFormatWatch.atStart(bound: nil, now: stereo48)
+    check(moved.baseline == stereo44 && moved.verdict == .reopen(old: stereo44, new: stereo48)
+            && settled.baseline == stereo44 && settled.verdict == .keep
+            && unread.baseline == stereo48 && unread.verdict == .keep,
+          "output format: a device that moves to another rate while its output starts reopens it once the watch listens",
+          "\(moved) \(settled) \(unread)")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
