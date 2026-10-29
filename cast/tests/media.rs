@@ -477,7 +477,10 @@ fn a_step_before_any_reported_level_builds_only_on_a_level_sent() {
     let level = channel
         .step_volume(start + VOLUME_INTERVAL, true)
         .expect("step");
-    assert!((level - 0.35).abs() < 1e-9, "builds on the 0.3 sent: {level}");
+    assert!(
+        (level - 0.35).abs() < 1e-9,
+        "builds on the 0.3 sent: {level}"
+    );
 }
 
 // covers: C69, C70, C104
