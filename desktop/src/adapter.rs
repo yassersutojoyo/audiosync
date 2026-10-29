@@ -6729,16 +6729,16 @@ mod tests {
     fn a_zone_switched_off_turns_its_gone_cast_member_off() {
         let (mut adapter, fake) = cast_adapter();
         turn_on(&mut adapter, SPEAKERS);
+        // Switched on before a browse found it: unlisted, yet on (S339).
+        fake.withdraw(CAST_KITCHEN, "Kitchen");
+        adapter.poll();
         adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
         adapter.poll();
         adapter.add_zone("Lounge", &[key(SPEAKERS), cc(CAST_KITCHEN)]);
-        // Gone with no session: it leaves the list but stays on.
         adapter.audio_mut().fail_capture(BackendError::System {
             call: "IAudioCaptureClient::GetBuffer",
             code: 1,
         });
-        adapter.poll();
-        fake.withdraw(CAST_KITCHEN, "Kitchen");
         adapter.poll();
         turn_on(&mut adapter, HEADPHONES);
         assert!(adapter.snapshot().running);

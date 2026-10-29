@@ -1636,7 +1636,8 @@ impl CastSpeakers {
     /// off at once, so it never refuses another while unlisted (C2, S339).
     /// A speaker added by address that no browse found is never reported gone.
     fn off_when_gone(&mut self, id: DeviceId) {
-        if self.enabled != Some(id) {
+        // One a browse found stays listed under its ID through its address row (S341).
+        if self.enabled != Some(id) || self.manual.iter().any(|manual| manual.found == Some(id)) {
             return;
         }
         self.log
@@ -3166,12 +3167,9 @@ pub mod tests {
         assert_eq!(speakers[0].address, None);
     }
 
-    // covers: C2, C18
-    // As on the Mac, a browse that found it and then loses it turns it off;
-    // only its address row is left.
+    // covers: C18, S341
     #[test]
-    fn a_found_speaker_added_by_address_goes_off_when_the_browse_loses_it_and_its_address_row_comes_back()
-     {
+    fn a_found_speaker_added_by_address_stays_on_under_its_id_when_the_browse_loses_it() {
         let fake = FakeCast::default();
         let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
         cast.set_probe(|_| true);
@@ -3196,18 +3194,18 @@ pub mod tests {
         fake.withdraw(KITCHEN, "Kitchen");
         let events = cast.poll();
         assert!(
-            events.contains(&BackendEvent::CastFailed {
-                id: KITCHEN.to_owned(),
-                problem: CastProblem::NotResponding,
-            }),
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::CastFailed { .. })),
             "{events:?}"
         );
-        assert!(!cast.is_on());
+        assert!(cast.is_on());
         let speakers = cast.speakers();
         assert_eq!(speakers.len(), 1);
-        assert_eq!(speakers[0].id, manual.to_string());
-        assert!(!speakers[0].enabled);
-        assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
+        assert_eq!(
+            (speakers[0].id.as_str(), speakers[0].enabled),
+            (KITCHEN, true)
+        );
     }
 
     // covers: C18
