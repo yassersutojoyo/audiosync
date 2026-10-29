@@ -37,6 +37,7 @@ use crate::backdrop::Frame;
 use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::launch_at_login::{self, LaunchAtLogin};
+use crate::network_profile::{self, Watch};
 use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Transport};
 use crate::ui_model::{
     self, AirPlayWait, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MAX_PRESETS,
@@ -772,6 +773,8 @@ pub struct App {
     /// The Now Playing card, and the source it was last given.
     now_playing: RefCell<NowPlayingCard>,
     now_playing_source: RefCell<Option<CardSource>>,
+    /// The networks' profiles while a note says no speaker was found.
+    network_watch: RefCell<Option<Watch>>,
 }
 
 /// The main window's native window and the menu bar theme last sent to it.
@@ -1023,6 +1026,7 @@ impl App {
             updater: RefCell::new(crate::updater::for_this_exe(log_for_updater)),
             now_playing: RefCell::default(),
             now_playing_source: RefCell::default(),
+            network_watch: RefCell::default(),
         });
         let sessions = i32::try_from(audiosync_airplay::sender::AIRPLAY2_SESSIONS);
         app.main
@@ -1256,6 +1260,7 @@ impl App {
         } else if self.sync_now_playing() {
             self.publish_remote(&self.snapshot());
         }
+        self.read_none_found_network();
         self.poll_remote();
     }
 
@@ -1867,6 +1872,9 @@ impl App {
         self.main.set_no_speaker_on(state.no_speaker_on);
         self.flyout.set_no_speaker_on(state.no_speaker_on);
         self.main.set_cast_list(cast_list(state.cast_list));
+        self.watch_network(
+            state.airplay_none_found || state.cast_list == ui_model::CastList::NoneFound,
+        );
         self.main.set_cast_by_address(state.cast_by_address);
         self.main.set_this_pc_all_hidden(state.hidden_in(true));
         self.main.set_connected_all_hidden(state.hidden_in(false));
@@ -4209,6 +4217,33 @@ impl App {
             .strings()
             .invoke_window_failed(error.to_string().into());
         crate::platform::show_error(&text);
+    }
+
+    /// While a note says no speaker was found, watches the networks'
+    /// profiles, which `poll` takes in; once the note goes, it names no
+    /// Public network until a new reading.
+    fn watch_network(&self, none_found: bool) {
+        let mut watch = self.network_watch.borrow_mut();
+        if !none_found {
+            if watch.take().is_some() {
+                self.strings().set_public_network(false);
+            }
+            return;
+        }
+        if watch.is_none() {
+            let profiles = self.remote.borrow().profiles.clone();
+            *watch = profiles.map(|source| Watch::start(source, remote_window::PROFILE_CHECK));
+        }
+    }
+
+    /// Takes the newest reading for the note that no speaker was found, on
+    /// every poll: a quiet backend refreshes nothing that would.
+    fn read_none_found_network(&self) {
+        let reading = self.network_watch.borrow().as_ref().and_then(Watch::latest);
+        if let Some(Some(connected)) = reading {
+            self.strings()
+                .set_public_network(network_profile::names_firewall(&connected));
+        }
     }
 
     pub fn hide_flyout(&self) {
@@ -7102,6 +7137,56 @@ mod tests {
                 .next()
                 .is_none()
         );
+    }
+
+    /// The notes that no speaker was found name Windows Firewall only once
+    /// Windows reports a Public network; until then they name the network.
+    #[test]
+    fn the_none_found_notes_leave_the_firewall_out_off_a_public_network() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        for note in [
+            strings.get_airplay_none_found(),
+            strings.get_network_none_found(),
+            strings.invoke_cast_list(CastList::NoneFound),
+        ] {
+            assert!(!note.contains("Windows Firewall"), "{note}");
+        }
+        strings.set_public_network(true);
+        assert!(
+            strings
+                .get_airplay_none_found()
+                .contains("Windows Firewall")
+        );
+    }
+
+    /// A Public reading reaches the note that no speaker was found on a poll
+    /// that changes nothing else, and the note leaves the firewall out again
+    /// once it goes.
+    #[test]
+    fn the_none_found_note_takes_a_public_reading_on_a_quiet_poll() {
+        use crate::network_profile::{Category, ProfileSource};
+        use std::time::Instant;
+
+        struct Public;
+        impl ProfileSource for Public {
+            fn connected(&self) -> Option<Vec<Category>> {
+                Some(vec![Category::Public])
+            }
+        }
+        let mut backend = MockBackend::new();
+        backend.set_airplay_none_found(true);
+        let app = app_over(backend);
+        app.remote.borrow_mut().profiles = Some(std::sync::Arc::new(Public));
+        app.refresh();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !app.strings().get_public_network() {
+            assert!(Instant::now() < deadline, "no Public reading came in");
+            std::thread::sleep(Duration::from_millis(5));
+            app.poll();
+        }
+        app.watch_network(false);
+        assert!(!app.strings().get_public_network(), "the note went");
     }
 
     #[test]

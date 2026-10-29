@@ -19,6 +19,13 @@ pub enum Category {
     Domain,
 }
 
+/// Whether the notes that no speaker was found name Windows Firewall: only
+/// while a connected network is Public, where a firewall that allows
+/// AudioSync on Private networks alone keeps the speakers' answers out.
+pub fn names_firewall(connected: &[Category]) -> bool {
+    connected.contains(&Category::Public)
+}
+
 /// Where the profiles come from: Windows, or a fake in the tests.
 pub trait ProfileSource: Send + Sync {
     /// The categories of the networks this PC is connected to; `None` when
@@ -220,6 +227,13 @@ mod tests {
         );
         assert!(warning.read(Some(&[])), "disconnected");
         assert!(!warning.public() && !warning.notice());
+    }
+
+    #[test]
+    fn only_a_public_network_names_the_firewall() {
+        assert!(names_firewall(&[Private, Public]));
+        assert!(!names_firewall(&[Private, Domain]));
+        assert!(!names_firewall(&[]));
     }
 
     #[test]
