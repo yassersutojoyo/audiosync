@@ -6396,6 +6396,35 @@ mod tests {
 
     // covers: S327
     #[test]
+    fn a_mix_with_an_unwatched_app_gets_the_same_quit_handling_once_all_its_apps_quit() {
+        const ADMIN_PID: u32 = PLAYER_PID + 10;
+        let mix = SourceId::Apps {
+            root_pids: vec![PLAYER_PID, ADMIN_PID],
+            executables: vec!["player.exe".to_owned(), "admin.exe".to_owned()],
+        };
+        for setting in [WhenSourceQuits::Stop, WhenSourceQuits::SwitchToSystem] {
+            let outcome = |refused: bool| {
+                let mut backend = backend();
+                backend.add_app(ADMIN_PID, "admin.exe");
+                backend.set_when_source_quits(setting);
+                if refused {
+                    backend.refuse_watch(ADMIN_PID);
+                }
+                backend.start(&mix).unwrap();
+                backend.quit_app(PLAYER_PID);
+                backend.quit_app(ADMIN_PID);
+                let events = backend.poll();
+                poll_quietly(&mut backend, 2);
+                (events, backend.running_source(), playing(&backend))
+            };
+            let watched = outcome(false);
+            assert!(!watched.0.is_empty(), "{setting:?}");
+            assert_eq!(outcome(true), watched, "{setting:?}");
+        }
+    }
+
+    // covers: S327
+    #[test]
     fn an_unwatched_app_whose_process_id_another_app_took_counts_as_quit_without_a_start_time() {
         let mut backend = backend();
         start_player(&mut backend, true);

@@ -744,6 +744,15 @@ impl Driver for MockDriver {
             {
                 Some(ACCESS_DENIED)
             }
+            // As on Windows, one app that can't be waited for leaves the
+            // whole mix unwatched.
+            CaptureTarget::Mix(activations)
+                if activations
+                    .iter()
+                    .any(|activation| self.unwatchable.contains(&activation.target_pid)) =>
+            {
+                Some(ACCESS_DENIED)
+            }
             _ => None,
         };
         let link = Arc::new(Mutex::new(CaptureLink {
