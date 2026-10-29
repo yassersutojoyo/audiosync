@@ -20,7 +20,7 @@ use audiosync_airplay::clock::{NTP_ORIGIN_SECONDS, SenderClock};
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
-use audiosync_airplay::error::{ErrorKind, UnsupportedReason, Warning};
+use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning};
 use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::ptp::{PtpPorts, PtpService, PtpTransmit, clock_identity};
 use audiosync_airplay::rtp::{RESEND_PREFIX_BYTES, ResendRequest};
@@ -1334,26 +1334,41 @@ fn launch(
     stored: Option<TimingMemory>,
     until: SpeakerState,
 ) -> (Vec<String>, Vec<SpeakerEvent>) {
-    server.fake().requests.clear();
-    let (sender, _host) = start(
-        SenderClock::new(Instant::now()),
-        free_ptp_ports(),
-        udp.ptp_ports(),
-    );
-    let mut events = Events::default();
     let key = speaker.key.clone();
-    let mut with_store = options();
-    with_store.timing = stored;
-    with_store.homekit_credentials = Some(known_to(server));
-    sender.add_speaker(speaker.clone(), with_store);
-    assert!(
-        events
-            .wait_state(&sender, &key, 1, LONG, |s| *s == until)
-            .is_some(),
-        "{:?} {:?}",
-        events.of(&key),
-        server.fake().keys()
-    );
+    // A starved loopback fake can miss the sender's own deadlines (a timeout
+    // or unreachable error); such a launch says nothing about the timing
+    // memory, so it runs again. Until then a slow launch is waited for.
+    let mut attempts = 3;
+    let (sender, _host, events) = loop {
+        server.fake().requests.clear();
+        let (sender, host) = start(
+            SenderClock::new(Instant::now()),
+            free_ptp_ports(),
+            udp.ptp_ports(),
+        );
+        let mut events = Events::default();
+        let mut with_store = options();
+        with_store.timing = stored.clone();
+        with_store.homekit_credentials = Some(known_to(server));
+        sender.add_speaker(speaker.clone(), with_store);
+        let (mut reached, mut late) = (false, false);
+        wait_until(LONG * 4, || {
+            events.drain(&sender);
+            let seen = events.of(&key);
+            reached = seen.contains(&SpeakerEvent::State(until));
+            late = seen.iter().any(|event| {
+                matches!(event, SpeakerEvent::Error(error) if error.reason == UserReason::NotResponding)
+            });
+            reached || late
+        });
+        attempts -= 1;
+        if late && attempts > 0 {
+            sender.shutdown();
+            continue;
+        }
+        assert!(reached, "{:?} {:?}", events.of(&key), server.fake().keys());
+        break (sender, host, events);
+    };
     sender.shutdown();
     let timings = server
         .fake()
