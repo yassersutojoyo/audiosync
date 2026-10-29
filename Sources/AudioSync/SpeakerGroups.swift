@@ -181,7 +181,7 @@ enum SpeakerIDMigration {
     /// `saved` once a browse found the Cast device added by address as
     /// `old` under the device ID `new`: its key moves as in `apply`, and so
     /// do its name and hidden entry, a record the new key has already
-    /// winning (S340).
+    /// winning (S342).
     static func castIdentified(_ old: String, as new: String, in saved: Saved) -> Saved {
         var out = movingKeys([CastID.key(old): CastID.key(new)], in: saved)
         out.names = saved.names.movingKey(CastID.key(old), to: CastID.key(new))

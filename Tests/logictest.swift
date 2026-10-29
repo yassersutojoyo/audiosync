@@ -10690,7 +10690,7 @@ do {
           "cast model: a speaker added by address that a browse finds keeps its offset under its id, as the sender "
             + "does: over none or a cleared one, never over one the id already had")
 
-    // covers: S340
+    // covers: S342
     let manualKey = CastID.key(manualID), realKey = CastID.key(realID)
     let flatGains = Array(repeating: 0.0, count: Equalizer.frequencies.count)
     func evening(_ members: [SpeakerPreset.Member]) -> SpeakerPreset {
@@ -10736,6 +10736,37 @@ do {
     if let browsed { zonedPlaying.apply(browsed) }
     check(zonedPlaying.zoneLevels == [realID: 0.5],
           "cast model: a speaker added by address that a browse finds keeps its zone volume under its id")
+    func rekeyed(zones: [String: Double], playing: Bool = true) -> CastModel {
+        var m = CastModel()
+        m.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+        _ = m.setZones(zones)
+        if playing {
+            _ = m.turnOn(manualID)
+            m.startSent(manualID)
+            _ = m.started(manualID, attempt: 7, refusal: 0)
+            _ = m.apply(.playing(attempt: 7))
+            _ = m.apply(.volume(attempt: 7, CastVolume(level: 0.4, muted: false, fixed: false)))
+        }
+        m.apply(.gone(id: manualID))
+        if let browsed { m.apply(browsed) }
+        return m
+    }
+    // Played at 0.4: own 0.8 in the 50 zone, 0.5 in the id's 80 zone.
+    var otherZone = rekeyed(zones: [manualID: 50, realID: 80])
+    check(abs(otherZone.volume(of: realID) - 50) < 1e-9 && otherZone.takeLevelDue() == nil
+            && otherZone.zoneLevels == [realID: 0.8],
+          "cast model: a playing speaker added by address that a browse finds plays as loud as before when its id "
+            + "has another zone volume")
+    // Played at 0.4 in no zone; the id's 25 zone reaches 0.25 at most.
+    var cappedZone = rekeyed(zones: [realID: 25])
+    let capped = cappedZone.takeLevelDue()
+    check(cappedZone.volume(of: realID) == 100 && capped.map { abs($0 - 0.25) < 1e-9 } == true
+            && cappedZone.takeLevelDue() == nil,
+          "cast model: a playing speaker added by address whose loudness its id's zone can't reach gets the nearest "
+            + "level sent once")
+    var idle = rekeyed(zones: [manualID: 50, realID: 80], playing: false)
+    check(idle.takeLevelDue() == nil && idle.zoneLevels == [realID: 0.8],
+          "cast model: a speaker added by address that a browse finds with no session gets no level sent")
 
     // covers: S339
     var stopped = CastModel()

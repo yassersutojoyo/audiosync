@@ -56,7 +56,7 @@ struct SpeakerNames: Equatable {
         return SpeakerNames(custom: moved)
     }
 
-    /// The name kept under `old` moves to `new`, unless `new` has one (S340).
+    /// The name kept under `old` moves to `new`, unless `new` has one (S342).
     func movingKey(_ old: String, to new: String) -> SpeakerNames {
         var moved = custom
         if let name = moved.removeValue(forKey: old), moved[new] == nil { moved[new] = name }

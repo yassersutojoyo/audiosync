@@ -430,6 +430,8 @@ struct CastModel {
     /// The levels sent in this session that no status has answered yet,
     /// oldest first; a drag sends one every 100 ms at most (C70).
     private var unanswered: [Double] = []
+    /// A level a re-key left to send once (S342).
+    private var levelDue: Double?
     private static let maxUnanswered = 16
     /// The offset the device memory holds, per device, in ms. 0 ms counts as
     /// none: the sender can't forget an offset, so Undo leaves 0 ms behind.
@@ -520,6 +522,12 @@ struct CastModel {
         if let wanted = requested, wanted.id == old { requested = (new, wanted.level) }
         // As the sender: it moves the offset over none or 0 ms (a cleared one), and keeps any other.
         if offsets[new] == nil, let offset = offsets.removeValue(forKey: old) { offsets[new] = offset }
+    }
+
+    /// The level a re-key left to send, once; nil when none is due.
+    mutating func takeLevelDue() -> Double? {
+        defer { levelDue = nil }
+        return levelDue
     }
 
     /// The sender listed `id` for an address the user added: it shows again
