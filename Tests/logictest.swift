@@ -10723,10 +10723,10 @@ do {
     _ = goneAfter.turnOn(realID)
     let goneAfterOutcome = goneAfter.apply(.discoveryStopped)
     goneAfter.apply(.gone(id: realID))
-    check(goneFirstOutcome == .turnedOff(realID, problem: nil) && goneFirst.enabled == nil
-            && goneAfterOutcome == .turnedOff(realID, problem: nil) && goneAfter.enabled == nil
+    check(goneFirstOutcome == .turnedOff(realID, problem: .searchStopped) && goneFirst.enabled == nil
+            && goneAfterOutcome == .turnedOff(realID, problem: .searchStopped) && goneAfter.enabled == nil
             && goneAfter.rows.isEmpty && goneAfter.turnOn(manualID) == nil,
-          "cast model: when discovery stops, a speaker that is on with no session goes off with its row, "
+          "cast model: when discovery stops, a speaker that is on with no session goes off with its row and a notice, "
             + "so nothing keeps streaming for it and another one can go on")
 
     var startStopped = CastModel()
