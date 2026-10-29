@@ -1513,3 +1513,23 @@ fn only_a_flyout_zone_badge_switches_the_zone() {
     assert!(flyout.contains("for speaker in zone.expanded ? zone.members : []: FlyoutRow {"));
     assert!(flyout.contains("root.zone-expanded-changed(zone.id, open);"));
 }
+
+/// With the equalizer off, the gain values and band labels stay readable:
+/// only the sliders fade, never the text around them.
+#[test]
+fn an_equalizer_turned_off_fades_only_the_sliders() {
+    let source = include_str!("../ui/equalizer.slint");
+    let sliders: usize = blocks(source, "Slider")
+        .iter()
+        .map(|block| block.matches("Tokens.disabled-opacity").count())
+        .sum();
+    assert!(
+        sliders > 0,
+        "the band's slider fades while the equalizer is off"
+    );
+    assert_eq!(
+        source.matches("Tokens.disabled-opacity").count(),
+        sliders,
+        "nothing but the sliders fades in equalizer.slint"
+    );
+}

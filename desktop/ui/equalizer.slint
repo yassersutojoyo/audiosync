@@ -14,6 +14,7 @@ component Band inherits VerticalLayout {
     in property <string> short-label;
     in property <string> name;
     in property <float> max-gain;
+    in property <bool> faded;
     callback changed(float);
 
     spacing: 8px;
@@ -39,6 +40,8 @@ component Band inherits VerticalLayout {
             maximum: root.max-gain;
             step: 0.5;
             value: root.gain;
+            opacity: root.faded ? Tokens.disabled-opacity : 1;
+            animate opacity { duration: Fluent.normal; }
             accessible-label: root.name;
             accessible-value: Strings.equalizer-gain-value(self.value);
             changed(value) => {
@@ -193,8 +196,6 @@ export component EqualizerWindow inherits Window {
 
                 HorizontalLayout {
                     spacing: 2px;
-                    opacity: root.enabled ? 1 : Tokens.disabled-opacity;
-                    animate opacity { duration: Fluent.normal; }
 
                     Band {
                         horizontal-stretch: 1;
@@ -202,6 +203,7 @@ export component EqualizerWindow inherits Window {
                         short-label: Strings.equalizer-preamp;
                         name: Strings.equalizer-preamp-accessibility;
                         max-gain: root.max-gain;
+                        faded: !root.enabled;
                         changed(value) => {
                             root.preamp-changed(value);
                         }
@@ -224,6 +226,7 @@ export component EqualizerWindow inherits Window {
                         short-label: Strings.equalizer-band-short(root.band-hz[index]);
                         name: Strings.equalizer-band-name(root.band-hz[index]);
                         max-gain: root.max-gain;
+                        faded: !root.enabled;
                         changed(value) => {
                             root.gain-changed(index, value);
                         }
