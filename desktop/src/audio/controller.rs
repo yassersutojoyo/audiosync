@@ -472,7 +472,8 @@ struct UnwatchedApp {
 /// The start lead of an output whose renderer stopped while it stays on.
 struct LostLead {
     lead: HeldLead,
-    /// Polls left while its device is listed ([`BRIEF_LOSS_POLLS`]).
+    /// Polls left while its device is listed ([`BRIEF_LOSS_POLLS`], after
+    /// the [`STALL_RETRY_POLLS`] wait of one that stalled again).
     polls_left: u32,
 }
 
@@ -2162,8 +2163,11 @@ impl<D: Driver> Controller<D> {
             if !invalidated && !changed {
                 continue;
             }
-            if let Some(session) = self.session.as_mut() {
-                drop(session.outputs.remove(&id));
+            if let Some(session) = self.session.as_mut()
+                && let Some(playing) = session.outputs.remove(&id)
+                && self.policy.settings(&id).enabled
+            {
+                keep_lead(&mut session.held_leads, &id, &playing.control);
             }
             // Written once the old stream is released (S126).
             self.log.log(|| {
@@ -3954,9 +3958,8 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 .map(|(id, playing)| (id.clone(), playing.handle.stall()))
                 .collect();
             // Released before the log says why they ended (S126).
-            for (id, stall) in &stopped {
+            for (id, _) in &stopped {
                 if let Some(playing) = session.outputs.remove(id)
-                    && stall.is_none()
                     && self.policy.settings(id).enabled
                 {
                     keep_lead(&mut session.held_leads, id, &playing.control);
@@ -3967,7 +3970,16 @@ impl<D: Driver> AudioBackend for Controller<D> {
         let mut stalled_again = false;
         for (id, stall) in stopped {
             match stall {
-                Some(stall) if self.note_stall(&id, stall) => stalled_again = true,
+                Some(stall) if self.note_stall(&id, stall) => {
+                    stalled_again = true;
+                    if let Some(held) = self
+                        .session
+                        .as_mut()
+                        .and_then(|session| session.held_leads.get_mut(&id))
+                    {
+                        held.polls_left += STALL_RETRY_POLLS;
+                    }
+                }
                 Some(_) => ended.push(id),
                 None => {
                     self.log.log(|| {
@@ -6212,6 +6224,75 @@ mod tests {
         );
     }
 
+    // covers: S326, S328
+    #[test]
+    fn a_stalled_output_keeps_its_lead_in_the_session_lead_until_it_reopens() {
+        let mut backend = backend();
+        backend.set_output_period(HEADPHONES, 9_600);
+        backend.set_output_period(SPEAKERS, 480);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let before = backend.session_lead();
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        assert!(backend.poll().is_empty(), "a first stall posts no notice");
+        assert_eq!(starts_of(&backend, HEADPHONES), 2);
+        assert_eq!(backend.session_lead(), before);
+    }
+
+    // covers: S326, S328
+    #[test]
+    fn a_second_stall_keeps_the_outputs_lead_in_the_session_lead_through_its_retry() {
+        let mut backend = backend();
+        backend.set_output_period(HEADPHONES, 9_600);
+        backend.set_output_period(SPEAKERS, 480);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let before = backend.session_lead();
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        backend.set_output_period(HEADPHONES, 9_600);
+        poll_quietly(&mut backend, 1);
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        assert!(!backend.poll().is_empty(), "the second stall is told");
+        for poll in 1..STALL_RETRY_POLLS {
+            poll_quietly(&mut backend, 1);
+            assert_eq!(backend.session_lead(), before, "poll {poll} of the wait");
+        }
+        backend.set_output_period(HEADPHONES, 9_600);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(backend.session_lead(), before);
+    }
+
+    // covers: S328
+    #[test]
+    fn a_held_lead_ends_once_its_hold_runs_out_while_the_device_stays_listed() {
+        let mut backend = backend();
+        backend.set_output_period(HEADPHONES, 9_600);
+        backend.set_output_period(SPEAKERS, 480);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let before = backend.session_lead();
+        // The reopened stream never publishes a lead of its own.
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        poll_quietly(&mut backend, BRIEF_LOSS_POLLS - 1);
+        assert_eq!(backend.session_lead(), before);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert!(backend.session_lead() < before);
+    }
+
+    // covers: S328
+    #[test]
+    fn an_output_switched_off_while_its_lead_is_held_drops_the_lead_at_once() {
+        let mut backend = backend();
+        backend.set_output_period(HEADPHONES, 9_600);
+        backend.set_output_period(SPEAKERS, 480);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let before = backend.session_lead();
+        backend.stall_renderer(HEADPHONES, FULL_STALL);
+        poll_quietly(&mut backend, 1);
+        assert_eq!(backend.session_lead(), before);
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        assert!(backend.session_lead() < before);
+    }
+
     // covers: S326
     #[test]
     fn a_second_stall_in_a_row_posts_the_lost_notice_and_keeps_the_output_on() {
@@ -7062,6 +7143,24 @@ mod tests {
         );
         assert_eq!(hold_backs(&backend), before);
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S328, S330
+    #[test]
+    fn a_format_reopen_keeps_the_outputs_lead_in_the_session_lead() {
+        let mut backend = backend();
+        backend.set_output_period(HEADPHONES, 9_600);
+        backend.set_output_period(SPEAKERS, 480);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let before = backend.session_lead();
+        // The reopened stream hasn't published a lead of its own yet.
+        backend.disconnect_session(HEADPHONES);
+        assert!(backend.poll().is_empty(), "no notice");
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES]
+        );
+        assert_eq!(backend.session_lead(), before);
     }
 
     // covers: S330, S68

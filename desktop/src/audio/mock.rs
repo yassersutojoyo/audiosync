@@ -26,10 +26,11 @@ use std::time::{Duration, SystemTime};
 
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::reader::Reader;
-use audiosync_core::render::RendererControl;
+use audiosync_core::render::{Renderer, RendererControl};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 
+use super::SESSION_RATE;
 use super::backend::{BackendError, OutputKind};
 use super::capture::{CAPTURE_ATTEMPTS, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode};
 use super::controller::{
@@ -300,6 +301,9 @@ pub struct MockDriver {
     format_notices: Vec<String>,
     /// Whether the format reads don't answer in time.
     formats_hang: bool,
+    /// The device periods, in device frames, the next stream on each output
+    /// publishes its start lead for as it opens (S208).
+    periods: BTreeMap<String, usize>,
     capture_error: Option<BackendError>,
     /// The error only the next capture start fails with.
     next_capture_error: Option<BackendError>,
@@ -376,6 +380,7 @@ impl MockDriver {
             output_formats: BTreeMap::new(),
             format_notices: Vec::new(),
             formats_hang: false,
+            periods: BTreeMap::new(),
             capture_error: None,
             next_capture_error: None,
             capture_setup: CAPTURE_ATTEMPTS[0],
@@ -771,8 +776,8 @@ impl Driver for MockDriver {
         &mut self,
         endpoint: &Endpoint,
         reader: Reader,
-        _control: RendererControl,
-        _gain: Arc<SharedGain>,
+        control: RendererControl,
+        gain: Arc<SharedGain>,
     ) -> Result<MockRenderer, BackendError> {
         self.renderer_attempts.push(endpoint.id.clone());
         if !self.outputs.iter().any(|output| output.id == endpoint.id) {
@@ -791,9 +796,16 @@ impl Driver for MockDriver {
         let stall = Arc::new(StallSlot::default());
         let invalidated = Arc::new(AtomicBool::new(false));
         let format = self.device_format(&endpoint.id);
+        let ring = Arc::clone(reader.ring());
+        if let Some(period) = self.periods.remove(&endpoint.id) {
+            let channels = usize::from(format.channels);
+            Renderer::new(reader, &control, gain, SESSION_RATE, format.rate, channels)
+                .expect("a mock format renders")
+                .set_period_frames(period);
+        }
         self.renderers.push(RendererLink {
             id: endpoint.id.clone(),
-            ring: Arc::clone(reader.ring()),
+            ring,
             ended: Arc::clone(&ended),
             dropped: Arc::clone(&dropped),
             stall: Arc::clone(&stall),
@@ -1114,6 +1126,19 @@ impl Controller<MockDriver> {
     /// Windows says output `id`'s device format changed while it didn't.
     pub fn notify_output_format(&mut self, id: &str) {
         self.driver_mut().format_notices.push(id.to_owned());
+    }
+
+    /// The next stream opened on output `id` publishes its start lead for a
+    /// device period of `frames` frames as it opens (S208).
+    pub fn set_output_period(&mut self, id: &str, frames: usize) {
+        self.driver_mut().periods.insert(id.to_owned(), frames);
+    }
+
+    /// The session lead K of the ring the outputs started last read, in
+    /// capture frames (S208).
+    pub fn session_lead(&self) -> Option<i64> {
+        let renderer = self.driver().renderers.last()?;
+        Some(renderer.ring.session_leads().session_lead())
     }
 
     /// The audio session of the output playing on `id` says it was
