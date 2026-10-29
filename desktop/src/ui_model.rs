@@ -1419,6 +1419,11 @@ pub trait Backend {
     fn set_mix_all_except(&mut self, on: bool);
     fn set_master_volume(&mut self, volume: f64);
     fn set_speaker_enabled(&mut self, id: &str, on: bool);
+    /// A switch from the web remote: a speaker it turns on never pairs or
+    /// asks for a password (spec S257).
+    fn set_speaker_enabled_from_phone(&mut self, id: &str, on: bool) {
+        self.set_speaker_enabled(id, on);
+    }
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
     /// The speaker's volume slider is held (true) or let go (false).
     fn set_speaker_volume_editing(&mut self, _id: &str, _on: bool) {}

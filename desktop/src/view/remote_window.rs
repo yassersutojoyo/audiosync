@@ -470,7 +470,9 @@ impl App {
                     let mut backend = self.backend.borrow_mut();
                     for action in actions {
                         match action {
-                            Action::Enable { id, on } => backend.set_speaker_enabled(&id, on),
+                            Action::Enable { id, on } => {
+                                backend.set_speaker_enabled_from_phone(&id, on);
+                            }
                             Action::Volume { id, volume } => {
                                 backend.set_speaker_volume(&id, volume);
                             }

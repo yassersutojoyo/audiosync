@@ -457,6 +457,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// asks for a code every time stays on while listed. The marks go when
     /// a stream that ran stops (S223).
     airplay_on_by_hand: BTreeSet<String>,
+    /// Set while a web remote command runs: the AirPlay speakers it switches
+    /// on start no attempt, so they never pair or prompt (S257).
+    from_phone: bool,
     /// Whether streaming ran at the last look, to tell when it stopped.
     streamed: bool,
     /// The last name of every AirPlay speaker listed.
@@ -667,6 +670,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             left_behind: BTreeSet::new(),
             airplay_listed: BTreeSet::new(),
             airplay_on_by_hand: BTreeSet::new(),
+            from_phone: false,
             streamed: false,
             airplay_quiet_polls: 0,
             airplay_names: BTreeMap::new(),
@@ -3441,7 +3445,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.airplay_on_by_hand.remove(id);
         }
         self.audio.set_airplay_enabled(id, on)?;
-        if on {
+        if on && !self.from_phone {
             self.audio.begin_airplay_attempt(id);
         }
         Ok(())
@@ -4669,11 +4673,21 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn toggle_zone_from_phone(&mut self, id: &str, keep_off: &[String]) {
+        self.from_phone = true;
         self.toggle_zone_keeping_off(id, keep_off);
+        self.from_phone = false;
     }
 
     fn recall_preset_from_phone(&mut self, id: &str, keep_off: &[String]) {
+        self.from_phone = true;
         let _ = self.recall_preset_keeping_off(id, keep_off);
+        self.from_phone = false;
+    }
+
+    fn set_speaker_enabled_from_phone(&mut self, id: &str, on: bool) {
+        self.from_phone = true;
+        self.set_speaker_enabled(id, on);
+        self.from_phone = false;
     }
 
     fn new_zone(&mut self, name: &str) -> Result<(), ZoneError> {
