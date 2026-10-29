@@ -1567,4 +1567,67 @@ pub mod tests {
         );
         assert_eq!(folder(&updater), old_folder());
     }
+
+    /// Real files, except that moving `audiosync.exe.new` into place always
+    /// meets a sharing violation, as while Defender scans it.
+    struct ScannedNew;
+
+    impl crate::updater::files::Files for ScannedNew {
+        fn create(
+            &self,
+            path: &Path,
+            exclusive: bool,
+        ) -> std::io::Result<Box<dyn crate::updater::files::Sink>> {
+            RealFiles.create(path, exclusive)
+        }
+        fn remove(&self, path: &Path) -> std::io::Result<()> {
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            if from
+                .file_name()
+                .is_some_and(|name| name == "audiosync.exe.new")
+            {
+                return Err(std::io::Error::from_raw_os_error(32));
+            }
+            RealFiles.rename(from, to)
+        }
+    }
+
+    // covers: S303, S315
+    #[test]
+    fn a_quit_while_the_swap_retries_its_step_4_leaves_an_exe_in_place() {
+        let (entered_sender, entered) = mpsc::channel();
+        let (release, gate) = mpsc::channel::<()>();
+        let (entered_sender, gate) = (Mutex::new(entered_sender), Mutex::new(gate));
+        let first = AtomicBool::new(true);
+        let mut f = fixture(
+            "quit-during-swap",
+            false,
+            Arc::new(ScannedNew),
+            DebugLog::default(),
+        );
+        f.env.pause = Arc::new(files::Pause::counted(move |_| {
+            if first.swap(false, Ordering::Relaxed) {
+                let _ = entered_sender.lock().unwrap().send(());
+                let _ = gate.lock().unwrap().recv();
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }));
+        let mut updater = Updater::new(f.env);
+        updater.check(Trigger::Manual);
+        updater.wait();
+        updater.press(UpdaterButton::Download);
+        entered
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect("step 4 waits to retry");
+        drop(release);
+        updater.at_quit();
+        assert_eq!(
+            std::fs::read(updater.env.install_dir.join(archive::EXE_NAME)).ok(),
+            Some(b"old exe".to_vec()),
+            "the .bak is back before the quit goes on"
+        );
+    }
 }
