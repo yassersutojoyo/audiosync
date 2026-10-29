@@ -222,12 +222,13 @@ fn an_output_late_by_a_gap_of_89_ms_is_back_at_its_delay_within_1_5_s() {
 // covers: S207
 #[test]
 fn a_second_lasting_lateness_within_5_s_waits_for_the_5_s() {
+    // 75 ms, as 89 right after a re-anchor passes the 50 ms drift tolerance.
     let stalls = [
         (STALL_AT_S * 1000, 40, 89),
         (STALL_AT_S * 1000 + 2000, 40, 75),
     ];
-    let (delays, _, resyncs) = run_stalls(&stalls, false);
-    assert_eq!(resyncs.len(), 2, "resyncs at {resyncs:?} s");
+    let (delays, control, resyncs) = run_stalls(&stalls, false);
+    assert_eq!(control.late_reanchors(), 2, "resyncs at {resyncs:?} s");
     assert!(resyncs[1] - resyncs[0] >= 5.0, "resyncs at {resyncs:?} s");
     let worst = worst_offset(&delays, resyncs[1] + 0.5);
     assert!(worst.abs() <= 2.0, "off its delay by up to {worst:.2} ms");
