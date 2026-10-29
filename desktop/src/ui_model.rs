@@ -379,6 +379,7 @@ pub enum CastProblem {
     /// Another app started casting to it.
     TakenOver,
     ConnectionLost,
+    SearchStopped,
 }
 
 /// Why a speaker that is on can't play right now. Its row says so instead
