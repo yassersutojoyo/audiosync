@@ -5230,7 +5230,7 @@ do {
     check(gone.action == .nothing && gone.steps == [.absent],
           "zones: a zone with no member listed does nothing on a click")
 
-    // covers: S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel)
+    // covers: S259, S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel)
     let presetText = UIStrings()
     let presetFlat = [Double](repeating: 0, count: Equalizer.frequencies.count)
     let livingZone = SpeakerZone(id: "z1", name: "Living Room", members: ["lc:usb:out", "lc:tv"], volume: 60)
