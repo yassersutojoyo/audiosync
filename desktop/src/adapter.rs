@@ -5766,6 +5766,44 @@ mod tests {
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
 
+    // covers: S329
+    #[test]
+    fn an_input_device_away_never_follows_a_twin_plugged_in_while_it_played() {
+        const TWIN: &str = "{0.0.1.00000000}.{mic-twin}";
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.set_running(true);
+        adapter
+            .audio
+            .connect_input(TWIN, "Microphone (2- USB Audio)", "USB");
+        for _ in 0..2 * SOURCE_POLLS {
+            adapter.poll();
+        }
+        adapter.audio.disconnect_input(MIC);
+        for _ in 0..10 {
+            adapter.poll();
+        }
+        // Any later change of the devices lists the inputs again.
+        adapter
+            .audio
+            .connect_input("{0.0.1.00000000}.{line-in}", "Line In", "HDAUDIO");
+        for _ in 0..4 {
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().source_id, mic());
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::InputNotConnected {
+                source: "Microphone (USB Audio)".to_owned()
+            }]
+        );
+    }
+
     #[test]
     fn the_snapshot_shows_the_sources_and_outputs_listed() {
         let state = adapter().snapshot();
