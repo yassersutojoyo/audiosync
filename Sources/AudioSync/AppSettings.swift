@@ -17,6 +17,8 @@ struct AppSettings: Equatable {
     enum Keys {
         /// `AudioSource.defaultsValue` (S12): "" or missing is the whole system.
         static let source = "audioSourceBundleID"
+        /// The chosen input device's name, kept to show while it is unplugged.
+        static let sourceInputName = "audioSourceInputName"
         /// App IDs (`NativeAirPlayID`) of the AirPlay speakers that are on, as an array.
         static let enabledAirPlay = "enabledAirPlayIds"
         /// Device UIDs of the local speakers that are on, as an array.

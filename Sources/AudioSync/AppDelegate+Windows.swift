@@ -313,7 +313,10 @@ extension AppDelegate {
     private func makeActions() -> AppModel.Actions {
         var a = AppModel.Actions()
         a.setPower = { [weak self] on in self?.setStreaming(on) }
-        a.selectSource = { [weak self] id in self?.setSource(AudioSource(defaultsValue: id)) }
+        a.selectSource = { [weak self] id in
+            self?.setSource(AudioSource(defaultsValue: id))
+            self?.pushSources()   // remembers a picked input device's name
+        }
         a.selectInputPair = { [weak self] index in self?.setInputPair(index) }
         a.toggleMixApp = { [weak self] id in self?.toggleMixApp(id) }
         a.setMixMode = { [weak self] mode in self?.setMixMode(mode) }
@@ -567,11 +570,18 @@ extension AppDelegate {
             loggedInputs = inputLog
             inputLog.forEach { DebugTrace.log($0) }
         }
+        var inputName = store.read(Keys.sourceInputName) as? String
+        if case .input(let uid) = audioSource, let plugged = inputs.first(where: { $0.uid == uid }),
+           plugged.name != inputName {
+            inputName = plugged.name
+            store.write(plugged.name, Keys.sourceInputName)
+        }
         let channels = Dictionary(inputDevices.map { ($0.uid, $0.inputChannels) }, uniquingKeysWith: { first, _ in first })
         let entries = SourceList.entries(systemName: text.sourceSystem,
                                          apps: running.map { (bundleID: $0.bundleID, name: $0.name) },
                                          inputs: inputs, chosen: audioSource,
-                                         chosenAppName: SourceApps.name(for:), mixName: text.sourceMixName)
+                                         chosenAppName: SourceApps.name(for:), mixName: text.sourceMixName,
+                                         unpluggedInputName: text.sourceNotConnected(inputName))
         let icons = Dictionary(running.compactMap { app in app.icon.map { (app.bundleID, $0) } },
                                uniquingKeysWith: { first, _ in first })
         let sources = entries.map { entry -> AppModel.Source in
@@ -585,7 +595,8 @@ extension AppDelegate {
             if case .input(let uid) = AudioSource(defaultsValue: entry.id) {
                 pairs = InputChannelPair.offered(channels: channels[uid] ?? 0).map(text.inputChannelPair)
             }
-            return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput, pairs: pairs)
+            return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput, pairs: pairs,
+                                   connected: entry.connected)
         }
         publish(\.sources, sources)
         let mode = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
