@@ -3150,6 +3150,12 @@ impl AirPlaySpeakers {
         self.reconcile();
     }
 
+    /// The PC is going to sleep, which ends the stream as stopping it does
+    /// (S223).
+    pub fn sleeping(&mut self) {
+        self.stream_ended |= self.streaming;
+    }
+
     /// A new capture started (P143): a paused stream resumes. The timeline
     /// goes on and the speakers get no FLUSH, so a held E stays held.
     pub fn capture_started(&mut self) {

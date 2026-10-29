@@ -8273,6 +8273,48 @@ mod tests {
 
     // covers: S223
     #[test]
+    fn an_every_time_speaker_turned_on_by_hand_goes_off_with_a_notice_when_the_pc_sleeps() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&den, PairingEvent::PairedForSession);
+        adapter.poll();
+        fake.state(&den, AirPlayState::Playing);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&id).unwrap().enabled);
+
+        adapter
+            .audio
+            .notify_power(crate::audio::controller::PowerNotice::Suspend);
+        fake.take_calls();
+        adapter.poll();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(
+            !state.speaker(&id).unwrap().enabled,
+            "sleep ends the stream, and the PIN session with it"
+        );
+        assert_eq!(state.pin_prompt, None, "no prompt opens by itself");
+        assert!(
+            !starts_a_pairing(&fake.take_calls()),
+            "never paired by itself"
+        );
+        assert!(
+            messages(&adapter).contains(&NoticeMessage::AirPlayCantPlay {
+                speaker: "Den".to_owned(),
+                problem: ui_model::AirPlayProblem::NeedsPin,
+            }),
+            "{:?}",
+            messages(&adapter)
+        );
+    }
+
+    // covers: S223
+    #[test]
     fn an_every_time_speaker_whose_pin_prompt_outlives_the_stream_turns_on_once_paired() {
         let (mut adapter, fake, den) = every_time_adapter();
         let id = ap(&den);

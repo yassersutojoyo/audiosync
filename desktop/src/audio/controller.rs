@@ -2248,6 +2248,9 @@ impl<D: Driver> Controller<D> {
                 PowerNotice::Suspend if self.power.suspended.is_none() => {
                     self.power.suspended = Some(now);
                     self.cancel_fresh_restarts_for_sleep();
+                    if let Some(airplay) = self.airplay.as_mut() {
+                        airplay.sleeping();
+                    }
                     self.log.log(|| {
                         "the PC is going to sleep: a capture lost now is opened again once it \
                          wakes"
