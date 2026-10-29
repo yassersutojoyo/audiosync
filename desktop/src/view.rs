@@ -745,6 +745,8 @@ pub struct App {
     /// The Now Playing card, and the source it was last given.
     now_playing: RefCell<NowPlayingCard>,
     now_playing_source: RefCell<Option<CardSource>>,
+    /// Reads the network profiles while discovery looks for speakers.
+    speaker_network: RefCell<Option<crate::network_profile::Watch>>,
 }
 
 /// The main window's native window and the menu bar theme last sent to it.
@@ -976,6 +978,7 @@ impl App {
             updater: RefCell::new(crate::updater::for_this_exe(log_for_updater)),
             now_playing: RefCell::default(),
             now_playing_source: RefCell::default(),
+            speaker_network: RefCell::default(),
         });
         let sessions = i32::try_from(audiosync_airplay::sender::AIRPLAY2_SESSIONS);
         app.main
@@ -1178,6 +1181,35 @@ impl App {
             self.publish_remote(&self.snapshot());
         }
         self.poll_remote();
+        self.read_speaker_network();
+    }
+
+    /// While discovery looks for speakers or has found none, reads whether
+    /// a connected network is Public, which the notes for none found say.
+    fn read_speaker_network(&self) {
+        use crate::network_profile::{Category, Watch};
+        let looking = self.main.get_airplay_searching()
+            || self.main.get_airplay_none_found()
+            || matches!(
+                self.main.get_cast_list(),
+                CastList::Searching | CastList::NoneFound
+            );
+        let mut watch = self.speaker_network.borrow_mut();
+        if !looking {
+            *watch = None;
+            return;
+        }
+        if watch.is_none() {
+            let Some(source) = self.remote.borrow().profiles.clone() else {
+                return;
+            };
+            *watch = Some(Watch::start(source, remote_window::PROFILE_CHECK));
+        }
+        if let Some(Some(categories)) = watch.as_ref().and_then(Watch::latest) {
+            self.main
+                .global::<Strings>()
+                .set_public_network(categories.contains(&Category::Public));
+        }
     }
 
     /// Reads the media sessions for the Now Playing card while the main

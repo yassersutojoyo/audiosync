@@ -11,6 +11,10 @@ import { SpeakerKind, Availability, AirPlayProblem, CastList, CastProblem, CastS
 export global Strings {
     // The sender's AirPlay 2 session limit, set from Rust (AIRPLAY2_SESSIONS).
     in property <int> airplay2-sessions;
+    // A connected network is Public, set from Rust while discovery looks for
+    // speakers: the notes for speakers not found name Windows Firewall only
+    // then, as the Mac names Local Network only after macOS refused it.
+    in property <bool> public-network;
     // Main window
     out property <string> app-name: "AudioSync";
     out property <string> main-window-title: "AudioSync";
@@ -42,9 +46,9 @@ export global Strings {
     out property <string> connected-none-virtual-hidden: @tr("No connected speakers. Virtual devices are hidden; to list them, choose View > Show Virtual Devices.");
     // Under Connected Speakers once AirPlay discovery has run for 20 seconds
     // without finding a speaker (a firewall or a Public network blocks it).
-    out property <string> airplay-none-found: Platform.os == OperatingSystemType.linux ? @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.") : @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).");
+    out property <string> airplay-none-found: Platform.os == OperatingSystemType.linux ? @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.") : !root.public-network ? @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers.") : @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).");
     // In place of that note and the Google Cast one when neither finds any.
-    out property <string> network-none-found: Platform.os == OperatingSystemType.linux ? @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.") : @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).");
+    out property <string> network-none-found: Platform.os == OperatingSystemType.linux ? @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.") : !root.public-network ? @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers.") : @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).");
     // Under Connected Speakers while no Google Cast speaker is listed: the
     // search runs, has found nothing for 20 seconds, or couldn't start.
     public pure function cast-list(state: CastList) -> string {
@@ -54,6 +58,9 @@ export global Strings {
         if state == CastList.none-found {
             if Platform.os == OperatingSystemType.linux {
                 return @tr("No Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.");
+            }
+            if !root.public-network {
+                return @tr("No Google Cast speakers found yet. Make sure this PC is on the same network as your speakers.");
             }
             return @tr("No Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).");
         }

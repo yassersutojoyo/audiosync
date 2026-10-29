@@ -40,9 +40,10 @@ thread_local! {
 /// Pixels a QR module is drawn with before the window scales it.
 const QR_SCALE: usize = 4;
 
-/// How often the networks' profiles are read while the remote listens: a
-/// move to a cafe's Wi-Fi shows within this. The tests read more often.
-const PROFILE_CHECK: Duration = Duration::from_millis(if cfg!(test) { 10 } else { 5000 });
+/// How often the networks' profiles are read while the remote listens or
+/// discovery looks for speakers: a move to a cafe's Wi-Fi shows within this. The tests read more often.
+pub(super) const PROFILE_CHECK: Duration =
+    Duration::from_millis(if cfg!(test) { 10 } else { 5000 });
 
 /// Why the remote is on but not listening.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
