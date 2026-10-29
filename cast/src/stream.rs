@@ -1086,7 +1086,8 @@ fn stream_body(
 }
 
 /// What the pump sends next for a due 20 ms block.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
 pub enum Pace {
     Audio,
     Silence,
@@ -1096,6 +1097,7 @@ pub enum Pace {
 
 /// The pump's clock (C52, C64): which due blocks go out as audio and which
 /// as silence, never ahead of real time.
+#[doc(hidden)]
 #[derive(Debug, Default)]
 pub struct Pacer {
     emitted: u64,
