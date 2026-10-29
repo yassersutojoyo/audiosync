@@ -9875,6 +9875,7 @@ do {
     check(CastEnd.failed(CastError(ASC_CAST_ERROR_INTERNAL)).problem == .connectionLost,
           "cast: a fault inside the sender reads as a lost connection, as on Windows (C107)")
 
+    // covers: C112
     final class SavedCast { var values: [String: Any] = [:] }
     let castDisk = SavedCast()
     let castStore = SettingsStore(read: { castDisk.values[$0] }, write: { value, key in castDisk.values[key] = value })
