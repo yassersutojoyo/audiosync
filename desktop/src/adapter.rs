@@ -1534,6 +1534,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// present members, and those that don't play with their stored delays.
     fn zone_scope(&self, zone: &zones::Zone) -> ZoneScope {
         let state = self.snapshot();
+        let sender_ms = self.audio.airplay_sender_latency_ms().unwrap_or(0.0);
         let playing: Vec<String> = calibrate_all::lineup(&self.audio)
             .members
             .iter()
@@ -1570,6 +1571,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     class,
                     offset_ms,
                     latency_ms: 0.0,
+                    sender_ms,
                 })
             })
             .collect();
@@ -11252,6 +11254,122 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
     }
 
+    // covers: S238
+    #[test]
+    fn apply_writes_nothing_once_the_reference_is_gone() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        for id in ["builtin", "bluetooth"] {
+            turn_on(&mut adapter, id);
+        }
+        adapter.set_speaker_delay(&key("bluetooth"), 80.0);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::local_sheet(&[
+                ("builtin", 0.0, 2010.0),
+                ("bluetooth", 80.0, 2190.0),
+            ]),
+        );
+        adapter.poll();
+        assert!(adapter.snapshot().calibrate_all.sheet.is_some());
+
+        adapter.audio_mut().disconnect_output("builtin");
+        adapter.refresh_devices();
+        assert_eq!(adapter.audio.calibration_engine().reference, None);
+        adapter.apply_calibrate_all();
+        let state = adapter.snapshot().calibrate_all;
+        assert_eq!(state.sheet, None, "measured against a reference that went");
+        assert_eq!(state.phase, AllPhase::Stale);
+        assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
+    }
+
+    /// Sets the L_s the kept results' AirPlay rows were read with.
+    fn read_with_sender(adapter: &mut AudioAdapter<MockBackend>, sender_ms: f64) {
+        let kept = adapter.calibrate_all.sheet.as_mut().expect("results");
+        for member in &mut kept.members {
+            if member.class == Class::AirPlay {
+                member.sender_ms = sender_ms;
+            }
+        }
+    }
+
+    fn applied_airplay_ms(adapter: &AudioAdapter<MockBackend>) -> f64 {
+        adapter
+            .calibrate_all
+            .sheet
+            .as_ref()
+            .and_then(|kept| kept.applied.as_ref())
+            .and_then(|applied| applied.changes.iter().find(|c| c.target == Target::AirPlay))
+            .expect("an AirPlay change")
+            .new_ms
+    }
+
+    // covers: S238
+    #[test]
+    fn a_sender_latency_that_moves_before_apply_keeps_the_results_and_applies_the_runs_l() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        let fake = FakeAirPlay::new();
+        adapter.audio_mut().set_airplay(fake.link(), None);
+        fake.set_latency(std::time::Duration::from_millis(2000));
+        adapter.poll();
+        adapter.audio.set_airplay_adjustment(100.0);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::sheet_of(&[
+                (Class::Local, SPEAKERS, Some(0.0), 2010.0),
+                (Class::Local, HEADPHONES, Some(0.0), 2060.0),
+                (Class::AirPlay, "kitchen", Some(2100.0), 2150.0),
+            ]),
+        );
+        read_with_sender(&mut adapter, 2000.0);
+
+        fake.set_latency(std::time::Duration::from_millis(2100));
+        adapter.poll();
+        assert_eq!(adapter.audio.airplay_sender_latency_ms(), Some(2100.0));
+        let shown = adapter.snapshot().calibrate_all.sheet.expect("results");
+        assert!(shown.can_apply, "the user changed nothing, only L_s moved");
+
+        adapter.apply_calibrate_all();
+        let wanted = applied_airplay_ms(&adapter);
+        assert_eq!(
+            adapter.audio.airplay_adjustment(),
+            100.0 + (wanted - 2100.0),
+            "A moves by what the run measured against its own L"
+        );
+    }
+
+    // covers: S238
+    #[test]
+    fn an_airplay_delay_clamped_at_0_applies_against_the_runs_sender_latency() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        let fake = FakeAirPlay::new();
+        adapter.audio_mut().set_airplay(fake.link(), None);
+        adapter.poll();
+        assert_eq!(adapter.audio.airplay_sender_latency_ms(), Some(1750.0));
+        adapter.audio.set_airplay_adjustment(-2000.0);
+        assert_eq!(adapter.snapshot().airplay_delay_ms, Some(0.0));
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::sheet_of(&[
+                (Class::Local, SPEAKERS, Some(0.0), 2010.0),
+                (Class::Local, HEADPHONES, Some(0.0), 2060.0),
+                (Class::AirPlay, "kitchen", Some(0.0), 2310.0),
+            ]),
+        );
+        read_with_sender(&mut adapter, 1750.0);
+
+        fake.set_latency(std::time::Duration::from_millis(1800));
+        adapter.poll();
+        adapter.apply_calibrate_all();
+        assert_eq!(applied_airplay_ms(&adapter), 300.0);
+        assert_eq!(adapter.audio.airplay_adjustment(), -1450.0);
+    }
+
     fn keep(
         adapter: &mut AudioAdapter<MockBackend>,
         (sheet, members, rate): (Sheet, Vec<Member>, u32),
@@ -11311,6 +11429,10 @@ mod tests {
                 (Class::AirPlay, "kitchen", Some(2000.0), 2050.0),
             ]),
         );
+        read_with_sender(
+            &mut adapter,
+            crate::audio::outputs::DEFAULT_SENDER_LATENCY_MS,
+        );
         assert_eq!(adapter.audio.airplay_sender_latency_ms(), None);
         assert!(
             adapter
@@ -11364,6 +11486,7 @@ mod tests {
                 (Class::AirPlay, "kitchen", Some(2100.0), 2150.0),
             ]),
         );
+        read_with_sender(&mut adapter, 2000.0);
         adapter.apply_calibrate_all();
         let written = adapter.audio.airplay_adjustment();
         assert_ne!(written, 100.0, "Apply wrote a new adjustment");

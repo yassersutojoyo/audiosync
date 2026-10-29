@@ -44,6 +44,9 @@ pub struct Member {
     /// When its sweep is expected in a recording that starts as the sweep
     /// enters its path (S235), in ms.
     pub latency_ms: f64,
+    /// The AirPlay sender latency L_s read with `offset_ms` (S238); only an
+    /// AirPlay member's is used.
+    pub sender_ms: f64,
 }
 
 impl Member {
@@ -296,6 +299,7 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
                 .find(|output| output.id == *id)
                 .map(|output| output.delay_ms),
             latency_ms: finite_ms(engine.hold_backs_ms.get(id).copied()) + allowance_ms,
+            sender_ms: 0.0,
         })
         .collect();
     locals.sort_by(|a, b| {
@@ -313,6 +317,7 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
                 latency_ms: cast_wait_ms(offset_ms, cast.hold_back_ms, cast.format),
                 id: cast.id,
                 class: Class::Cast,
+                sender_ms: 0.0,
             }
         })
         .collect();
@@ -321,10 +326,8 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
         .filter_map(|cast| cast.offset_ms)
         .fold(0.0, f64::max);
     let sender_ms = audio.airplay_sender_latency_ms();
-    let shown_ms = native_airplay_latency_ms(
-        sender_ms.unwrap_or_else(|| audio.airplay_adjustment_base_ms()),
-        audio.airplay_adjustment(),
-    );
+    let base_ms = sender_ms.unwrap_or_else(|| audio.airplay_adjustment_base_ms());
+    let shown_ms = native_airplay_latency_ms(base_ms, audio.airplay_adjustment());
     let airplay: Vec<Member> = audio
         .airplay_speakers()
         .into_iter()
@@ -339,6 +342,7 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
             id: speaker.id,
             class: Class::AirPlay,
             offset_ms: Some(shown_ms),
+            sender_ms: base_ms,
         })
         .collect();
     let reference_off = outputs
@@ -1365,6 +1369,7 @@ pub(crate) mod tests {
             class,
             offset_ms,
             latency_ms,
+            sender_ms: 0.0,
         }
     }
 
