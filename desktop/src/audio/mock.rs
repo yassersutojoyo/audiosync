@@ -26,10 +26,11 @@ use std::time::{Duration, SystemTime};
 
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::reader::Reader;
-use audiosync_core::render::RendererControl;
+use audiosync_core::render::{Renderer, RendererControl};
 use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 
+use super::SESSION_RATE;
 use super::backend::{BackendError, OutputKind};
 use super::capture::{CAPTURE_ATTEMPTS, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode};
 use super::controller::{
@@ -154,6 +155,24 @@ struct CaptureLink {
     /// The error code its app's process refused a wait with, as an app
     /// running as administrator does (S327).
     watch_refused: Option<i32>,
+    /// The processes that refuse a wait, for the apps a mix follows.
+    unwatchable: BTreeSet<u32>,
+}
+
+/// The error a wait on `target`'s apps is refused with. As on Windows, one
+/// app of a mix that can't be waited for leaves the whole mix unwatched.
+fn refused_watch(target: &CaptureTarget, unwatchable: &BTreeSet<u32>) -> Option<i32> {
+    let refused = match target {
+        CaptureTarget::Loopback(activation) => {
+            activation.mode == LoopbackMode::IncludeTree
+                && unwatchable.contains(&activation.target_pid)
+        }
+        CaptureTarget::Mix(activations) => activations
+            .iter()
+            .any(|activation| unwatchable.contains(&activation.target_pid)),
+        CaptureTarget::Input { .. } => false,
+    };
+    refused.then_some(ACCESS_DENIED)
 }
 
 fn lock(link: &Mutex<CaptureLink>) -> std::sync::MutexGuard<'_, CaptureLink> {
@@ -185,6 +204,7 @@ impl CaptureHandle for MockCapture {
             return false;
         }
         link.target = target.clone();
+        link.watch_refused = refused_watch(target, &link.unwatchable);
         link.retargets += 1;
         link.missing = false;
         true
@@ -292,12 +312,18 @@ pub struct MockDriver {
     readings: Vec<EndpointReading>,
     changed: bool,
     listing_error: Option<BackendError>,
+    session_error: Option<BackendError>,
     output_errors: BTreeMap<String, BackendError>,
     /// The mix formats of the outputs whose device isn't in
     /// [`MOCK_STREAM`]'s format.
     output_formats: BTreeMap<String, RenderFormat>,
     /// The outputs whose device format Windows said changed, not yet taken.
     format_notices: Vec<String>,
+    /// Whether the format reads don't answer in time.
+    formats_hang: bool,
+    /// The device periods, in device frames, the next stream on each output
+    /// publishes its start lead for as it opens (S208).
+    periods: BTreeMap<String, usize>,
     capture_error: Option<BackendError>,
     /// The error only the next capture start fails with.
     next_capture_error: Option<BackendError>,
@@ -370,9 +396,12 @@ impl MockDriver {
             readings: Vec::new(),
             changed: false,
             listing_error: None,
+            session_error: None,
             output_errors: BTreeMap::new(),
             output_formats: BTreeMap::new(),
             format_notices: Vec::new(),
+            formats_hang: false,
+            periods: BTreeMap::new(),
             capture_error: None,
             next_capture_error: None,
             capture_setup: CAPTURE_ATTEMPTS[0],
@@ -580,6 +609,9 @@ impl Driver for MockDriver {
     }
 
     fn session_pids(&mut self) -> Result<Vec<u32>, BackendError> {
+        if let Some(error) = &self.session_error {
+            return Err(error.clone());
+        }
         Ok(self.session_pids.clone())
     }
 
@@ -609,6 +641,9 @@ impl Driver for MockDriver {
     }
 
     fn output_format(&mut self, id: &str) -> Result<RenderFormat, BackendError> {
+        if self.formats_hang {
+            return Err(BackendError::NotResponding);
+        }
         if !self.is_connected(id) {
             return Err(BackendError::DeviceGone);
         }
@@ -737,15 +772,7 @@ impl Driver for MockDriver {
             return Err(BackendError::InputGone);
         }
         self.captures_started.push(target.clone());
-        let watch_refused = match &target {
-            CaptureTarget::Loopback(activation)
-                if activation.mode == LoopbackMode::IncludeTree
-                    && self.unwatchable.contains(&activation.target_pid) =>
-            {
-                Some(ACCESS_DENIED)
-            }
-            _ => None,
-        };
+        let watch_refused = refused_watch(&target, &self.unwatchable);
         let link = Arc::new(Mutex::new(CaptureLink {
             target,
             state: CaptureState::Running,
@@ -756,6 +783,7 @@ impl Driver for MockDriver {
             retargets: 0,
             setup: self.capture_setup,
             watch_refused,
+            unwatchable: self.unwatchable.clone(),
         }));
         self.capture = Some(Arc::clone(&link));
         Ok(MockCapture { link })
@@ -765,8 +793,8 @@ impl Driver for MockDriver {
         &mut self,
         endpoint: &Endpoint,
         reader: Reader,
-        _control: RendererControl,
-        _gain: Arc<SharedGain>,
+        control: RendererControl,
+        gain: Arc<SharedGain>,
     ) -> Result<MockRenderer, BackendError> {
         self.renderer_attempts.push(endpoint.id.clone());
         if !self.outputs.iter().any(|output| output.id == endpoint.id) {
@@ -785,9 +813,16 @@ impl Driver for MockDriver {
         let stall = Arc::new(StallSlot::default());
         let invalidated = Arc::new(AtomicBool::new(false));
         let format = self.device_format(&endpoint.id);
+        let ring = Arc::clone(reader.ring());
+        if let Some(period) = self.periods.remove(&endpoint.id) {
+            let channels = usize::from(format.channels);
+            Renderer::new(reader, &control, gain, SESSION_RATE, format.rate, channels)
+                .expect("a mock format renders")
+                .set_period_frames(period);
+        }
         self.renderers.push(RendererLink {
             id: endpoint.id.clone(),
-            ring: Arc::clone(reader.ring()),
+            ring,
             ended: Arc::clone(&ended),
             dropped: Arc::clone(&dropped),
             stall: Arc::clone(&stall),
@@ -889,7 +924,11 @@ impl Controller<MockDriver> {
     /// as an app running as administrator: a capture of its tree then
     /// doesn't notice when it quits.
     pub fn refuse_watch(&mut self, pid: u32) {
-        self.driver_mut().unwatchable.insert(pid);
+        let driver = self.driver_mut();
+        driver.unwatchable.insert(pid);
+        if let Some(link) = &driver.capture {
+            lock(link).unwatchable.insert(pid);
+        }
     }
 
     /// Makes the creation time of process `pid` one that can't be read.
@@ -1056,6 +1095,12 @@ impl Controller<MockDriver> {
         self.driver_mut().listing_error = error;
     }
 
+    /// Makes every later listing of the audio sessions fail with `error`,
+    /// or work again with `None`.
+    pub fn fail_session_listing(&mut self, error: Option<BackendError>) {
+        self.driver_mut().session_error = error;
+    }
+
     /// Makes `id` Windows' default output.
     pub fn set_default_output(&mut self, id: &str) {
         let driver = self.driver_mut();
@@ -1100,9 +1145,27 @@ impl Controller<MockDriver> {
         driver.format_notices.push(id.to_owned());
     }
 
+    /// Windows audio stops answering the output format reads in time.
+    pub fn hang_output_formats(&mut self) {
+        self.driver_mut().formats_hang = true;
+    }
+
     /// Windows says output `id`'s device format changed while it didn't.
     pub fn notify_output_format(&mut self, id: &str) {
         self.driver_mut().format_notices.push(id.to_owned());
+    }
+
+    /// The next stream opened on output `id` publishes its start lead for a
+    /// device period of `frames` frames as it opens (S208).
+    pub fn set_output_period(&mut self, id: &str, frames: usize) {
+        self.driver_mut().periods.insert(id.to_owned(), frames);
+    }
+
+    /// The session lead K of the ring the outputs started last read, in
+    /// capture frames (S208).
+    pub fn session_lead(&self) -> Option<i64> {
+        let renderer = self.driver().renderers.last()?;
+        Some(renderer.ring.session_leads().session_lead())
     }
 
     /// The audio session of the output playing on `id` says it was

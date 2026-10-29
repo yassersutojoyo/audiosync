@@ -118,10 +118,11 @@ extension AppDelegate {
         pushModel()
     }
 
-    /// The user's AirPlay delay, as the field shows it (S178, S181).
-    func setAirPlayDelay(_ rawMs: Double) {
+    /// The user's AirPlay delay, as the field shows it (S178, S181), against
+    /// `senderMs` when given, else the sender's latency now.
+    func setAirPlayDelay(_ rawMs: Double, senderMs: Double? = nil) {
         var next = airPlayDelay
-        guard next.enter(rawMs, senderMs: nativeSenderLatencyMs) else { return }
+        guard next.enter(rawMs, senderMs: senderMs ?? nativeSenderLatencyMs) else { return }
         airPlayDelay = next
         retimeLocalOutputs()
         pushModel()
@@ -320,9 +321,15 @@ extension AppDelegate {
     /// session rebuilds its capture on it, as for a source switch.
     func setInputPair(_ index: Int) {
         guard case .input(let uid) = audioSource else { return }
-        let change = InputChannelPair.change(from: currentInputPair, to: index, streaming: engine.isRunning)
+        let channels = devices.allInputDevices().first { $0.uid == uid }?.inputChannels ?? 0
+        let change = InputChannelPair.change(from: currentInputPair, to: index, channels: channels,
+                                             streaming: engine.isRunning)
         clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
         guard change != .none else {
+            if InputChannelPair.stores(index, over: currentInputPair) {
+                inputPairs[uid] = index == 0 ? nil : index
+                pushModel()
+            }
             microphoneRequest.repicked(source: audioSource, pair: index)
             return
         }
@@ -382,8 +389,10 @@ extension AppDelegate {
         guard engine.isRunning else { return }   // stopped: startEngine syncs them once it runs
 
         let now = ProcessInfo.processInfo.systemUptime
-        clearNotices(stallRetry.settle(enabled: enabledLocal, nowS: now).map { SpeakerKey.make(id: $0, airplay: false) })
-        refusalRetry.settle(enabled: enabledLocal, listed: Set(listing.map(\.uid)))
+        let listed = Set(listing.map(\.uid))
+        clearNotices(stallRetry.settle(enabled: enabledLocal, listed: listed, nowS: now)
+            .map { SpeakerKey.make(id: $0, airplay: false) })
+        refusalRetry.settle(enabled: enabledLocal, listed: listed)
         let afterStall = stallRetry.afterStall(formatReopens: formatReopens)
         let applied = LocalOutputSync.apply(enabled: enabledLocal.subtracting(freshLinks.held)
                                                 .subtracting(stallRetry.held(nowS: now))
@@ -414,14 +423,14 @@ extension AppDelegate {
         // mode refuses every start) is a stall in a row: the speaker stays on (S334).
         var failures: [LocalOutputSync.Failure] = []
         for failure in applied.failures {
-            if afterStall.contains(failure.uid), let retryAt = stallRetry.refused(failure.uid, nowS: now) {
+            switch stallRetry.failed(failure, afterStall: afterStall.contains(failure.uid), nowS: now) {
+            case .retry(let retryAt):
                 DebugTrace.log("[AudioSync] output \(engine.outputNumber(failure.uid)) not reopened after a stall: "
                     + "its device refused the start; trying again in \(Int(OutputStallRetry.retryEveryS)) s")
                 scheduleStallRetry(atS: retryAt)
-            } else if let refusal = failure.refusal {
+            case .refused(let refusal):
                 outputRefused(failure.uid, refusal, nowS: now)
-            } else {
-                stallRetry.forget(failure.uid)
+            case .hard:
                 failures.append(failure)
             }
         }

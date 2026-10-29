@@ -22,6 +22,7 @@ use common::ap2::{
     Ap2Rig, DATA_PORT, EVENT_PORT, FakeAp2, FakeFraming, RECEIVER_CONTROL_PORT, STREAM_ID,
     TestEntropy, ap2_config, dict, int, plist, read_dict, read_value, request_key,
 };
+use common::hap::Answer;
 use common::{CONTROL_PORT, RECEIVER, SENDER, TIMING_PORT, connection, ids};
 
 const SECRET: [u8; 32] = [7; 32];
@@ -430,6 +431,22 @@ fn pairing_goes_on_the_session_connection() {
     assert_eq!(kind(&rig), Some(ErrorKind::PasswordRequired));
 }
 
+// Outside a PIN pairing a back-off ends the pairing; its wait still
+// reaches the host's event and debug log, as a PIN pairing's does.
+// covers: P150
+#[test]
+fn a_back_off_outside_a_pin_pairing_tells_the_host_its_wait() {
+    let mut fake = FakeAp2::new();
+    fake.hap
+        .answers
+        .push((("/pair-setup", 1), Answer::Error(3)));
+    fake.hap.back_off = Some(30);
+    let rig = Ap2Rig::new(ap2_config(), fake);
+    let error = rig.failure().expect("the pairing fails");
+    assert_eq!(error.kind, ErrorKind::PairingFailed);
+    assert!(error.to_string().contains("30 s"), "{error}");
+}
+
 // covers: P70
 #[test]
 fn event_connection_answers_every_request() {
@@ -830,6 +847,22 @@ fn teardown_during_the_session_setup_tears_down_the_session_it_made() {
     assert_eq!(rig.events.last(), Some(&Ap2Event::Closed));
     assert!(rig.failure().is_none());
     assert!(rig.event_connects.is_empty());
+}
+
+// covers: P25, P129
+#[test]
+fn teardown_during_the_session_setup_carries_the_answers_session() {
+    let mut fake = FakeAp2::new();
+    fake.session = Some("5A1B2C3D".to_owned());
+    fake.hold = Some("SETUP session".to_owned());
+    let mut rig = Ap2Rig::new(ap2_config(), fake);
+    rig.advance(Duration::from_millis(100));
+    let now = rig.now;
+    rig.session.teardown(now);
+    rig.advance(Duration::from_millis(200));
+    rig.release();
+    let teardown = rig.fake.last("TEARDOWN").expect("TEARDOWN");
+    assert_eq!(teardown.headers.get("Session"), Some("5A1B2C3D"));
 }
 
 // covers: P129

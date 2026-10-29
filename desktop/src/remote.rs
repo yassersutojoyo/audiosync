@@ -125,6 +125,7 @@ pub trait RowText {
 fn asks_for_code(state: &AppState, speaker: &Speaker) -> bool {
     speaker.availability == Availability::NeedsCode
         && !speaker.paired
+        && !speaker.holds_password
         && state.speaker_state(speaker).click_turns_on()
 }
 
@@ -1037,6 +1038,12 @@ mod tests {
             "paired, it turns on without a prompt"
         );
         assert_eq!(tv(&paired).notice.as_deref(), Some("Asks for a code"));
+        let mut held = state.clone();
+        held.speakers.last_mut().unwrap().holds_password = true;
+        assert!(
+            tv(&held).available,
+            "its password held this run, it turns on without a prompt"
+        );
         let mut playing = state.clone();
         playing.speakers.last_mut().unwrap().enabled = true;
         assert!(tv(&playing).available, "on, it can be turned off");

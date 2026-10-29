@@ -637,6 +637,95 @@ mod tests {
         assert!(s.control.is_faded());
     }
 
+    /// A pipeline whose fade-out's last frame was rendered `after` frames
+    /// ago.
+    fn faded_and_followed_by(after: usize) -> Setup {
+        let mut s = primed(SESSION_RATE);
+        live(&mut s, 2_400, 480);
+        s.control.request_fade_out();
+        live(&mut s, 480, 480);
+        play(&mut s, 480, 480);
+        play(&mut s, after, 480);
+        s
+    }
+
+    // covers: S185
+    #[test]
+    fn with_a_clock_reading_a_stop_waits_on_the_padding_not_the_stream_latency() {
+        let s = faded_and_followed_by(960);
+        // 500 ms of reported latency holds nothing once the queue is zeros.
+        assert!(
+            s.pipeline
+                .has_played_its_fade(queue(960, Some(480), 24_000))
+        );
+        assert!(
+            !s.pipeline.has_played_its_fade(queue(1_440, Some(480), 0)),
+            "the padding still holds the end of the fade"
+        );
+    }
+
+    // covers: S231
+    #[test]
+    fn the_stream_latency_counts_only_for_a_stop_without_a_clock() {
+        let s = faded_and_followed_by(960);
+        let thirty_seconds = 30 * 48_000;
+        for latency in [0, thirty_seconds] {
+            assert!(
+                s.pipeline
+                    .has_played_its_fade(queue(480, Some(480), latency))
+            );
+        }
+        assert!(s.pipeline.has_played_its_fade(queue(480, None, 0)));
+        assert!(
+            !s.pipeline
+                .has_played_its_fade(queue(480, None, thirty_seconds))
+        );
+        assert_eq!(s.control.output_latency_ns(), 0, "none reaches the lead");
+    }
+
+    // covers: S209, S317
+    #[test]
+    fn without_output_times_no_wake_counts_late_and_no_start_step_is_made() {
+        let mut s = primed(SESSION_RATE);
+        s.pipeline.set_period_frames(480);
+        // Late wakes refill two or three periods at once.
+        for callback in [480, 960, 480, 1_440].repeat(40) {
+            live(&mut s, callback, callback);
+        }
+        let c = &s.control;
+        assert_eq!((c.late_max_ns(), c.late_callbacks()), (0, 0));
+        assert_eq!((c.floor_drop_ns(), c.time_steps()), (0, 0));
+        assert_eq!((c.start_steps(), c.start_step_frames()), (0, 0));
+        assert_eq!(c.counters().starved_renders, 0);
+    }
+
+    // covers: S190
+    #[test]
+    fn a_stop_asked_from_the_control_thread_comes_back_as_faded() {
+        let mut s = primed(SESSION_RATE);
+        let control = s.control.clone();
+        let (rendering, started) = std::sync::mpsc::channel();
+        let render = std::thread::spawn(move || {
+            let mut last = Vec::new();
+            for wake in 0..10_000 {
+                if s.pipeline.has_played_its_fade(queue(480, Some(480), 0)) {
+                    s.pipeline.mark_faded();
+                    return last;
+                }
+                last = live(&mut s, 480, 480);
+                if wake == 10 {
+                    rendering.send(()).unwrap();
+                }
+            }
+            panic!("the fade-out never played");
+        });
+        started.recv().unwrap();
+        control.request_fade_out();
+        let last = render.join().unwrap();
+        assert!(control.is_faded());
+        assert!(last.iter().all(|&sample| sample == 0.0));
+    }
+
     /// Writes stereo frames whose left sample is `index / 1e6` and right
     /// sample its negative, from `first` on.
     fn write_ramp(writer: &mut RingWriter, first: usize, frames: usize) {

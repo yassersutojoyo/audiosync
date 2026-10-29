@@ -16,6 +16,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - A Google Cast speaker that ends the stream on its own gets it again, unless it already ended it in the 10 minutes before, which ends the session. Before, the second end in a session always ended it. On the Mac and on Windows.
 - When several AirPlay speakers start together, they connect one after another, half a second apart, and a pairing's key exchange no longer holds up the sound of a speaker that's already playing. On the Mac and on Windows.
+- On Windows, the main window and the tray panel look more like the Mac app. A speaker's name, kind and note share one line, with the kind as a small icon after the name and the device name in the name's tooltip. Card titles are small grey capitals, a zone's arrow sits at the left with its speakers in one tinted box, the AirPlay delay sits in the Connected Speakers card, and Several Apps sits right under the source. The tray panel lists this PC's speakers under the volume, then zones, then connected speakers.
 - A zone is renamed in place, like a speaker, instead of in a dialog. On the Mac, double-click its name in the main window or choose Rename… from its menu: Return keeps the new name, Escape the old one. On Windows, double-click its name, press F2 or choose Rename…, type, then press Enter; a speaker in its row under In zones renames the same way.
 - A zone's menu item now says Rename…, as a speaker's does, and a zone name is cut to 60 characters with line breaks turned into spaces, as a speaker name is. On the Mac and on Windows.
 - On the Mac, the notice for an AirPlay speaker turned off because it asks for a code now says whether it needs a PIN or a password, as on Windows.
@@ -100,6 +101,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the menu bar panel grows as soon as its content does, so its bottom is no longer cut off.
 - On the Mac, a zone or preset volume that isn't a valid number no longer keeps your zones and presets from being saved.
 - On the Mac, an AirPlay pairings file AudioSync can't read is left as it is instead of being written over.
+- On Windows, picking other input channels while the input device is unplugged no longer turns streaming off; the new channels play once the device is back.
 
 ## [0.7.1] - 2026-10-27
 

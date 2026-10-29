@@ -68,7 +68,7 @@ pub struct Timing {
     pub code_lifetime: Duration,
     /// The window in which one peer may send five wrong codes.
     pub wrong_code_window: Duration,
-    /// The longest an event stream stays silent; a comment line fills it.
+    /// The longest an event stream stays silent; a `ping` event fills it.
     pub heartbeat: Duration,
     /// How long a client has to send its whole request; a slower one is closed unanswered.
     pub request: Duration,
@@ -1396,9 +1396,10 @@ fn preset(request: &Request, id: Option<String>, shared: &Shared) -> Answer {
 }
 
 /// The event stream (HTML Living Standard §9.2): the current snapshot at
-/// once, then each new revision once, a comment line when it has been quiet
-/// for a heartbeat. It ends when the server stops, the device is forgotten
-/// or the device opens a stream too many, which sends a last `replaced` event.
+/// once, then each new revision once, a `ping` event when it has been quiet
+/// for a heartbeat, so the page can tell a dead stream. It ends when the
+/// server stops, the device is forgotten or the device opens a stream too
+/// many, which sends a last `replaced` event.
 fn stream_events(stream: TcpStream, token: &str, shared: &Shared) {
     let Ok(probe) = stream.try_clone() else {
         return;
@@ -1471,7 +1472,7 @@ fn send_events(mut stream: TcpStream, token: &str, id: u64, shared: &Shared) {
         };
         let mut text = String::new();
         if batch.is_empty() {
-            text.push_str(": heartbeat\n\n");
+            text.push_str("event: ping\ndata:\n\n");
         }
         for (revision, json) in &batch {
             text.push_str(&format!("event: state\nid: {revision}\ndata: {json}\n\n"));

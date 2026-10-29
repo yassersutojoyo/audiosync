@@ -729,7 +729,8 @@ impl Events {
     }
 
     fn heartbeats(&self) -> usize {
-        self.data.matches(": heartbeat\n\n").count()
+        // A named event: the page's script never sees a comment line, so it can't tell a dead stream.
+        self.data.matches("\n\nevent: ping\ndata:\n\n").count()
     }
 }
 

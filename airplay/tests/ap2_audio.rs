@@ -21,6 +21,7 @@ use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, Warning};
+use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::ptp::{PtpPorts, PtpService, PtpTransmit, clock_identity};
 use audiosync_airplay::rtp::{RESEND_PREFIX_BYTES, ResendRequest};
 use audiosync_airplay::sdp::Codec;
@@ -939,6 +940,9 @@ fn ap2_a_pair_sends_every_member_the_same_full_stereo_audio() {
 #[test]
 fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     const ANSWER: Duration = Duration::from_millis(800);
+    // Feedback answered this late goes out every third interval, as on a
+    // runner too loaded to keep the 2 s rhythm.
+    const SLOW_FEEDBACK: Duration = Duration::from_millis(4_200);
     let _serial = serial();
     let udp = Udp::bind();
     let server = Ap2Server::start(udp.fake(FakeAp2::new()));
@@ -963,12 +967,15 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     );
 
     // Paused for a while: no audio, the feedback goes on.
+    server
+        .fake()
+        .pause
+        .insert("POST /feedback".to_owned(), SLOW_FEEDBACK);
     let feedback = count(&server, "POST /feedback");
     sender.pause();
     let paused = Instant::now();
     assert!(wait_until(LONG, || count(&server, "FLUSH") == 2));
-    std::thread::sleep(Duration::from_millis(4_500));
-    assert!(count(&server, "POST /feedback") >= feedback + 2);
+    assert!(wait_until(LONG, || count(&server, "POST /feedback") >= feedback + 2));
     let (seq, rtptime) = rtp_info(&server);
     // The FLUSH names the first packet held back. Packets before it left
     // before the sender took the pause, however late a busy runner stamps
@@ -988,9 +995,13 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
 
     // A delay FLUSH in flight when the pause comes: only the pause FLUSH's
     // answer, about 2 ANSWER after the pause, lets the audio out.
+    server.fake().pause.remove("POST /feedback");
     server.fake().pause.insert("FLUSH".to_owned(), ANSWER);
+    let flushes = server.fake().flushes_seen.clone();
     sender.set_delay(&key, Duration::from_millis(200));
-    std::thread::sleep(Duration::from_millis(400));
+    // A delay FLUSH still queued behind another request would merge with
+    // the pause FLUSH, so the pause waits until the speaker has read it.
+    assert!(wait_until(LONG, || flushes.load(Ordering::SeqCst) == 3));
     udp.data.take();
     sender.pause();
     let paused = Instant::now();
@@ -1060,15 +1071,28 @@ fn ap2_ptp_session() {
     assert!(!ports_free(local), "the PTP ports are held under PTP");
 
     // Announce, Sync and Follow_Up reach the receiver's ports, from the
-    // sender's ports 319 and 320 (here the test's own), by unicast.
+    // sender's ports 319 and 320 (here the test's own), by unicast. The
+    // window starts at a fresh Announce and lasts their 1 s period, so the
+    // next one, late from a loaded sender, may land just past it.
+    let kinds = |got: &[(Instant, SocketAddr, Vec<u8>)], kind: u8| {
+        got.iter().filter(|(_, _, b)| b[0] & 0x0F == kind).count()
+    };
+    udp.general.take();
+    assert!(
+        udp.general
+            .wait_for(|(_, _, b)| b[0] & 0x0F == 0xB)
+            .is_some()
+    );
     udp.general.take();
     udp.event.take();
     std::thread::sleep(Duration::from_millis(1_000));
     let (general, event) = (udp.general.take(), udp.event.take());
-    let kinds = |got: &[(Instant, SocketAddr, Vec<u8>)], kind: u8| {
-        got.iter().filter(|(_, _, b)| b[0] & 0x0F == kind).count()
-    };
-    assert!(kinds(&general, 0xB) >= 1, "Announce");
+    assert!(
+        udp.general
+            .wait_for(|(_, _, b)| b[0] & 0x0F == 0xB)
+            .is_some(),
+        "Announce"
+    );
     assert!(
         kinds(&general, 0x8) >= 6,
         "Follow_Up x{} in 1 s",
@@ -1320,6 +1344,7 @@ fn launch(
     let key = speaker.key.clone();
     let mut with_store = options();
     with_store.timing = stored;
+    with_store.homekit_credentials = Some(known_to(server));
     sender.add_speaker(speaker.clone(), with_store);
     assert!(
         events
@@ -1343,6 +1368,21 @@ fn launch(
         })
         .collect();
     (timings, events.of(&key))
+}
+
+/// Credentials the fake holds, so a launch skips the transient SRP, which an
+/// unoptimized build on a loaded machine stretches past its 10 s deadline.
+fn known_to(server: &Ap2Server) -> HomeKitCredentials {
+    let id = "00000000-0000-4000-8000-000000000217";
+    let seed = [0x17; 32];
+    let mut fake = server.fake();
+    let public = ed25519_dalek::SigningKey::from_bytes(&seed)
+        .verifying_key()
+        .to_bytes();
+    fake.hap.paired.push((id.as_bytes().to_vec(), public));
+    let receiver = fake.hap.public_key();
+    let blob = [&[1][..], id.as_bytes(), &seed, &receiver, &fake.hap.id].concat();
+    HomeKitCredentials::from_bytes(&blob).expect("credentials")
 }
 
 /// The last entry the sender handed the host to keep.

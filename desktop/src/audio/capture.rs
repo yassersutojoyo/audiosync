@@ -1398,6 +1398,7 @@ mod tests {
         );
     }
 
+    // covers: S14
     #[test]
     fn pair_attempts_capture_every_channel_and_leave_one_two_to_the_stereo_mix() {
         assert!(pair_attempts(0, 8, 48_000).is_empty());

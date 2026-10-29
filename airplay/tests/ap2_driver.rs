@@ -2467,3 +2467,46 @@ fn a_pin_flag_after_a_turn_down_goes_straight_to_the_pin() {
     speaker.sender.cancel_pairing(&speaker.key);
     speaker.sender.shutdown();
 }
+
+// Credentials a PIN pairing got at M6 replace turned-down ones even when
+// its verify failed: the next start verifies with them, PIN flag or not.
+// covers: P153, P154
+#[test]
+fn credentials_from_a_pairing_whose_verify_failed_are_not_turned_down() {
+    let _serial = serial();
+    let case = "unverified";
+    let mut speaker = paired_then_pin_flagged(88);
+    {
+        let mut fake = speaker.server.fake();
+        fake.info_body = status_flags_body(0x244);
+        fake.hap
+            .answers
+            .push((("/pair-verify", 1), Answer::Error(2)));
+    }
+    let (seen, _) = speaker.first_error(speaker.device.clone(), case);
+    assert_eq!(seen, [ErrorKind::PairingRequired]);
+
+    speaker
+        .server
+        .fake()
+        .hap
+        .answers
+        .push((("/pair-verify", 1), Answer::Error(2)));
+    speaker.sender.start_pairing(speaker.device.clone());
+    let (events, sender, key) = (&mut speaker.events, &speaker.sender, &speaker.key);
+    let pin_requested = |event: &PairingEvent| *event == PairingEvent::PinRequested;
+    assert!(wait_pairing(events, sender, key, 2, pin_requested).is_some());
+    sender.submit_pin(key, "4821").expect("digits");
+    let kept = wait_pairing(events, sender, key, 1, |event| {
+        matches!(event, PairingEvent::PairedUnverified(_))
+    });
+    let Some(PairingEvent::PairedUnverified(credentials)) = kept else {
+        panic!("{:?}", pairing_events(events, key));
+    };
+    let failed = |event: &PairingEvent| matches!(event, PairingEvent::Failed { .. });
+    assert!(wait_pairing(events, sender, key, 1, failed).is_some());
+    speaker.options.homekit_credentials = Some(credentials);
+    speaker.server.fake().info_body = status_flags_body(0x4c);
+    speaker.verifies_and_plays(case);
+    speaker.sender.shutdown();
+}

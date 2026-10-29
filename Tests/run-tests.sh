@@ -10,8 +10,8 @@
 # and the engine test link the Rust core, so this builds it first with
 # scripts/build_core.sh (which needs a Rust toolchain).
 # Off macOS (the Windows PC's Git Bash) the Swift suites can't build, so it runs
-# the checks that don't need them and the Rust crates' cargo tests instead, and
-# skips shellcheck when it isn't installed (CI runs it).
+# the checks that don't need them and the Rust crates' cargo tests instead. It
+# still fails there when shellcheck isn't installed.
 # AUDIOSYNC_TESTS_ONLY=python runs only the Python checks (Tests/pythonpicktest.sh).
 set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/.."
@@ -56,6 +56,13 @@ status=0
 macos=0
 if [ "$(uname -s)" = Darwin ]; then macos=1; fi
 only=${AUDIOSYNC_TESTS_ONLY:-}
+case "$only" in
+  "" | python) ;;
+  *)
+    echo "❌ unknown AUDIOSYNC_TESTS_ONLY value: $only (only python is supported)" >&2
+    exit 2
+    ;;
+esac
 
 if [ -z "$only" ]; then
   echo "▶ shellcheck"
@@ -281,6 +288,16 @@ Tests/updatertexttest.sh || status=1
 if [ "$macos" = 0 ]; then
   # shellcheck source=scripts/cargo_path.sh disable=SC1091
   source scripts/cargo_path.sh
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*)
+      # Same shared target and touch as scripts/pc_test.sh, so worktrees don't each fill the disk.
+      main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+      export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$main/windows/target}"
+      export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}"
+      export CARGO_INCREMENTAL=0
+      git ls-files -z desktop core airplay cast remote | xargs -0 touch
+      ;;
+  esac
   for crate in core airplay cast remote desktop; do
     echo "▶ $crate crate (cargo test)"
     (cd "$crate" && cargo test --locked --quiet) || status=1

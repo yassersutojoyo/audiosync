@@ -88,7 +88,7 @@ pub struct SourceInfo {
 }
 
 /// What kind of device an output is, as Windows describes its endpoint.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OutputKind {
     /// The PC's own speakers or line out.
     BuiltIn,
@@ -507,8 +507,23 @@ pub enum BackendEvent {
     /// few seconds; [`BackendEvent::CaptureFree`] tells once it no longer
     /// waits.
     CaptureBusy,
-    /// A capture reported busy no longer waits for its input: it captures
-    /// again, or its session ended.
+    /// A lost capture's input device is no longer listed (S329). Streaming
+    /// stays on and the capture opens again once the device is listed;
+    /// [`BackendEvent::CaptureFree`] tells once it no longer waits.
+    InputAway,
+    /// A capture waiting for its input device follows that device to a new
+    /// endpoint ID, as an output's settings do (S329): it is the source now,
+    /// and its channel pair, which the UI keeps, goes with it.
+    InputMoved {
+        /// The endpoint ID the device left.
+        from: String,
+        /// The endpoint ID it is listed under now.
+        to: String,
+        /// The name Windows lists it under now.
+        name: String,
+    },
+    /// A capture reported busy, or waiting for its input device, no longer
+    /// waits for its input: it captures again, or its session ended.
     CaptureFree,
     /// An output's stream stopped taking frames again before it had played
     /// five seconds since the last time (S326). The output stays on, its
@@ -624,6 +639,14 @@ pub enum BackendEvent {
     /// Google Cast speakers appeared, changed or went away, or one's state
     /// changed: list them again.
     CastChanged,
+    /// A browse found the device a Cast speaker added by address is (S341):
+    /// what is kept under the ID `from` moves to the device's ID `to`.
+    CastIdentified {
+        /// The ID the speaker had as an address.
+        from: String,
+        /// The device's own ID.
+        to: String,
+    },
     /// A Google Cast speaker plays.
     CastPlaying {
         /// The speaker's ID.
@@ -811,6 +834,10 @@ pub trait AudioBackend {
 
     /// The source being captured, or `None` when stopped.
     fn running_source(&self) -> Option<SourceId>;
+
+    /// Whether the running session waits for its input device to be listed
+    /// again (S329).
+    fn waits_for_input(&self) -> bool;
 
     /// While an input device is captured, the largest sample magnitude
     /// captured since the last call (1 is full scale), for the level meter;
@@ -1005,6 +1032,11 @@ pub trait AudioBackend {
     /// A Cast speaker is on, listed or not: turning on another is refused.
     fn cast_on(&self) -> bool {
         false
+    }
+
+    /// The ID of the Cast speaker that is on, listed or not.
+    fn cast_enabled(&self) -> Option<String> {
+        None
     }
 
     /// Turns a Cast speaker on or off. One plays at a time: turning one on

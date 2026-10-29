@@ -761,7 +761,7 @@ mod tests {
         read_messages(&dir.join(FILE_NAME))
     }
 
-    // S201
+    // covers: S201
     #[test]
     fn a_volume_change_logs_only_when_its_decision_changes() {
         let dir = test_dir("controller-device-volume");
