@@ -10492,6 +10492,17 @@ do {
             && kept.hidden.contains(CastID.app(realID)) && !kept.hidden.contains(CastID.app(manualID)),
           "cast: a device added by address that a browse finds keeps its name, zone and presets")
 
+    // covers: S251, S252
+    var unheard = CastModel()
+    unheard.apply(.appeared(CastDevice(id: castX, name: "Kitchen"), offsetMs: nil))
+    _ = unheard.turnOn(castX)
+    unheard.startSent(castX)
+    _ = unheard.started(castX, attempt: 1, refusal: 0)
+    let unknownVolume = unheard.knownVolume(of: castX)
+    _ = unheard.apply(.volume(attempt: 1, CastVolume(level: 0.4, muted: false, fixed: false)))
+    check(unknownVolume == nil && unheard.knownVolume(of: castX).map { approx($0, 40, 1e-9) } == true,
+          "presets: a Cast speaker whose volume isn't known yet is saved without a volume")
+
     check(t.castAddProblem(.notFound)
             == "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
             && t.castAddProblem(.unreadable) == t.castAddInvalid
