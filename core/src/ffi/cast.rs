@@ -734,6 +734,10 @@ impl AscCast {
 
     fn listed(&mut self, event: ListEvent) {
         if let Some(id) = self.announcements.note(&self.list, &event) {
+            // A paused session it wakes reconnects to these records at once.
+            self.follow_groups();
+            #[cfg(test)]
+            tests::note_announcement(&self.attempts);
             self.host.announced(id);
         }
         match event {
@@ -2141,6 +2145,19 @@ mod tests {
         pub(super) static PANIC_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
 
+    thread_local! {
+        /// The sessions' addresses at each announcement this thread made.
+        static ANNOUNCED_WITH: std::cell::RefCell<Vec<Vec<SocketAddr>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn note_announcement(attempts: &[Attempt]) {
+        let groups = attempts
+            .iter()
+            .filter_map(|attempt| attempt.group.as_ref().or(attempt.records.as_ref()))
+            .map(|records| records.get().group);
+        ANNOUNCED_WITH.with(|seen| seen.borrow_mut().extend(groups));
+    }
+
     fn panic_in_next_call() {
         PANIC_NEXT.with(|next| next.set(true));
     }
@@ -2912,6 +2929,27 @@ mod tests {
         browse(handle, vec![BrowseEvent::Resolved(at(7))], false);
         devices(handle);
         assert!(seen_again(handle), "at another address");
+        destroy(handle);
+    }
+
+    // The announcement may wake a paused session at once, which then
+    // connects wherever its records point.
+    // CAST_SPEC: C81, C90
+    #[test]
+    fn a_group_announced_after_a_handover_is_followed_before_the_session_hears() {
+        let handle = create();
+        let group = "fedcba9876543210fedcba9876543210";
+        let at = |last| record(group, "Downstairs", 32_000, Ipv4Addr::new(192, 0, 2, last));
+        browse(handle, vec![BrowseEvent::Resolved(at(6))], false);
+        devices(handle);
+        let (attempt, _) = start(handle, group);
+        assert!(attempt > 0);
+        browse(handle, vec![BrowseEvent::Resolved(at(7))], false);
+        devices(handle);
+        let leader = SocketAddr::new(IpAddr::from([192, 0, 2, 7]), 32_000);
+        assert_eq!(ANNOUNCED_WITH.with(|seen| seen.take()), [vec![leader]]);
+        // SAFETY: a live handle.
+        unsafe { asc_cast_stop(handle) };
         destroy(handle);
     }
 

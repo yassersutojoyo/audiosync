@@ -1507,10 +1507,12 @@ impl CastSpeakers {
                 ListEvent::Skipped(_) => {}
                 change => {
                     self.log.log(|| format!("Cast discovery: {change:?}"));
-                    if let Some(id) = self.announcements.note(&self.list, &change)
-                        && let Some(link) = self.link.as_mut()
-                    {
-                        link.announced(id);
+                    if let Some(id) = self.announcements.note(&self.list, &change) {
+                        // A paused session it wakes reconnects to these records at once.
+                        self.follow_group();
+                        if let Some(link) = self.link.as_mut() {
+                            link.announced(id);
+                        }
                     }
                     if let ListEvent::Added(DeviceKey::Id(id))
                     | ListEvent::Displaced {
@@ -1846,6 +1848,8 @@ pub mod tests {
         pub resyncs: usize,
         pub shutdowns: usize,
         pub announced: Vec<DeviceId>,
+        /// The latest start's group address at each announcement.
+        pub announced_with: Vec<Vec<SocketAddr>>,
         pub memory: DeviceMemory,
         pub refuse: Option<StartRefused>,
         pub readers: Vec<AudioReader>,
@@ -1965,7 +1969,11 @@ pub mod tests {
         }
 
         fn announced(&mut self, device: DeviceId) {
-            self.state().announced.push(device);
+            let mut state = self.state();
+            let group = state.groups.last().cloned().flatten();
+            let with = group.map_or_else(Vec::new, |records| records.get().group);
+            state.announced_with.push(with);
+            state.announced.push(device);
         }
 
         fn discovery(&self) -> CastDiscovery {
@@ -2166,9 +2174,15 @@ pub mod tests {
         cast.set_enabled(ATTIC, true).unwrap();
         cast.poll();
         fake.state().announced.clear();
-        fake.announce_at(ATTIC, "Attic", 32_123, Ipv4Addr::new(192, 0, 2, 11));
+        let leader = Ipv4Addr::new(192, 0, 2, 11);
+        fake.announce_at(ATTIC, "Attic", 32_123, leader);
         cast.poll();
         assert_eq!(fake.state().announced, [id(ATTIC)]);
+        // A session woken by it connects to the new leader.
+        assert_eq!(
+            fake.state().announced_with.last(),
+            Some(&vec![SocketAddr::new(IpAddr::V4(leader), 32_123)])
+        );
     }
 
     #[test]
