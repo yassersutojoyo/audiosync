@@ -16,8 +16,8 @@ use audiosync_core::ring::Ring;
 use audiosync_core::volume::SharedGain;
 
 use super::{
-    OutputStatus, STATUS_INTERVAL, StatusSpan, describe_capture_start, describe_output_start,
-    describe_status, label, status_due,
+    CONVERTER, OutputStatus, STATUS_INTERVAL, StatusSpan, describe_capture_start,
+    describe_output_start, describe_status, label, status_due,
 };
 use crate::audio::SESSION_RATE;
 use crate::audio::backend::SourceId;
@@ -162,8 +162,9 @@ fn a_capture_line_names_each_format_the_loopback_can_settle_on() {
         endpoint_id: "mic".to_owned(),
         pair: 0,
     };
+    let converted = format!("48000 Hz, 2 ch, 32-bit float, converted by {CONVERTER}");
     let formats = [
-        "48000 Hz, 2 ch, 32-bit float, converted by Windows",
+        converted.as_str(),
         "48000 Hz, 2 ch, 32-bit float",
         "48000 Hz, 2 ch, 16-bit integer",
         "44100 Hz, 2 ch, 16-bit integer",
@@ -194,8 +195,10 @@ fn a_capture_line_names_each_format_the_loopback_can_settle_on() {
     );
     assert_eq!(
         describe_capture_start(&input, Some(CAPTURE_ATTEMPTS[0]), false),
-        "capture started: input device mic, channels 1-2; \
-         48000 Hz, 2 ch, 32-bit float, converted by Windows"
+        format!(
+            "capture started: input device mic, channels 1-2; \
+             48000 Hz, 2 ch, 32-bit float, converted by {CONVERTER}"
+        )
     );
 }
 
@@ -208,27 +211,37 @@ fn a_capture_line_names_the_input_pair_and_a_saved_pair_that_fell_back() {
     let third_and_fourth = pair_attempts(1, 6, 44_100);
     assert_eq!(
         describe_capture_start(&interface(1), third_and_fourth.first().copied(), false),
-        "capture started: input device interface, channels 3-4; \
-         48000 Hz, 6 ch, 32-bit float, converted by Windows"
+        format!(
+            "capture started: input device interface, channels 3-4; \
+             48000 Hz, 6 ch, 32-bit float, converted by {CONVERTER}"
+        )
     );
     let fifth = pair_attempts(2, 5, 48_000);
     assert_eq!(
         describe_capture_start(&interface(2), fifth.first().copied(), false),
-        "capture started: input device interface, channel 5; \
-         48000 Hz, 5 ch, 32-bit float, converted by Windows"
+        format!(
+            "capture started: input device interface, channel 5; \
+             48000 Hz, 5 ch, 32-bit float, converted by {CONVERTER}"
+        )
     );
     // A pair the device lost has no attempts of its own: the stereo ones
     // play 1-2, and the line says the saved pair went.
     assert!(pair_attempts(3, 4, 48_000).is_empty());
     assert_eq!(
         describe_capture_start(&interface(3), Some(CAPTURE_ATTEMPTS[0]), false),
-        "capture started: input device interface, channels 1-2 (saved pair 4 is not available); \
-         48000 Hz, 2 ch, 32-bit float, converted by Windows"
+        format!(
+            "capture started: input device interface, channels 1-2 (saved pair 4 is not available); \
+             48000 Hz, 2 ch, 32-bit float, converted by {CONVERTER}"
+        )
     );
 }
 
 #[test]
 fn an_output_line_shows_the_stream_an_endpoint_gets() {
+    let headset = format!(
+        "16000 Hz, 1 ch (mask 0x4), float, converted by {CONVERTER} to the device's format; \
+         buffer 320 frames (20.0 ms)"
+    );
     let streams = [
         (
             wasapi_setup(SPEAKERS_MIX, DEFAULT_PERIOD_HNS),
@@ -244,8 +257,7 @@ fn an_output_line_shows_the_stream_an_endpoint_gets() {
         // center.
         (
             wasapi_setup(HEADSET_MIX, DEFAULT_PERIOD_HNS),
-            "16000 Hz, 1 ch (mask 0x4), float, converted by Windows to the device's format; \
-             buffer 320 frames (20.0 ms)",
+            headset.as_str(),
         ),
         // A 3 ms period still asks for the smallest buffer, 20 ms.
         (
@@ -297,6 +309,30 @@ fn an_output_line_shows_the_stream_an_endpoint_gets() {
              delay 0 ms, volume 100 (gain 1.000); Bluetooth, extra lead 10.7 ms"
         )
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn on_linux_the_capture_and_output_lines_name_pipewire_as_the_converter() {
+    let input = CaptureTarget::Input {
+        endpoint_id: "mic".to_owned(),
+        pair: 0,
+    };
+    let capture = describe_capture_start(&input, Some(CAPTURE_ATTEMPTS[0]), false);
+    let output = describe_output_start(
+        &label(&names(), SPEAKERS_ID),
+        Some(wasapi_setup(HEADSET_MIX, DEFAULT_PERIOD_HNS)),
+        0.0,
+        100.0,
+        1.0,
+        0,
+    );
+    for line in [capture, output] {
+        assert!(
+            line.contains("converted by PipeWire") && !line.contains("Windows"),
+            "{line}"
+        );
+    }
 }
 
 #[test]
