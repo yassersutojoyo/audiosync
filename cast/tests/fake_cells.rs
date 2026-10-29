@@ -111,6 +111,7 @@ fn start_as(device: &FakeDevice, group: Option<GroupRecords>) -> (CastSession, F
         metadata: Metadata::default(),
         artwork: None,
         group,
+        records: None,
         fingerprints: None,
     };
     let selected = Arc::new(AtomicBool::new(true));
@@ -357,6 +358,75 @@ fn a_sender_suspended_past_the_devices_ping_timeout_reconnects_and_plays_on() {
     cell(
         "C13",
         "PONG cut 3 s twice: reconnect reusing the app, then relaunch and reload",
+    );
+}
+
+// covers: C37, C81
+#[test]
+fn the_level_set_stays_shown_after_a_reconnect_whose_first_status_has_no_level() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    wait_level(&mut session, 0.4);
+    session.set_volume(0.3).expect("sent");
+    wait_level(&mut session, 0.3);
+    let sent = levels_sent(&device);
+
+    device.send(Command::ForgetLevel);
+    device.send(Command::DropConnection);
+    let mut seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { .. })
+    });
+    seen.extend(run(&mut session, Duration::from_millis(500)));
+    assert_eq!(device.connection_count(), 2);
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Volume(_))),
+        "{seen:?}"
+    );
+    let shown = session.volume().expect("volume").level;
+    assert!(close(shown, 0.3), "{shown}");
+    assert_eq!(levels_sent(&device), sent, "nothing set again");
+    session.stop();
+    device.join();
+    cell(
+        "C13.level",
+        &format!(
+            "set 0.30, reconnect status without a level: shown {shown:.2}, 0 SET_VOLUME after"
+        ),
+    );
+}
+
+// covers: C69, C70, C104
+#[test]
+fn a_slider_level_the_device_rounds_onto_its_own_is_sent_once_and_not_chased() {
+    let device = FakeDevice::start(Behavior {
+        volume: json!({"level": 0.35, "muted": false, "controlType": "attenuation", "stepInterval": 0.05}),
+        volume_answer: Some(|level| (level / 0.05).round() * 0.05),
+        ..Behavior::default()
+    });
+    let (mut session, _feed) = start(&device);
+    wait_level(&mut session, 0.35);
+
+    session.set_volume(0.36).expect("sent");
+    run(&mut session, Duration::from_millis(500));
+    assert_eq!(levels_sent(&device), [0.36], "no second SET_VOLUME");
+    let shown = session.volume().expect("volume").level;
+    assert!(close(shown, 0.35), "{shown}");
+
+    let asked = session.step_volume(false).expect("step");
+    assert!(
+        close(asked, 0.3),
+        "a step builds on the 0.35 shown: {asked}"
+    );
+    wait_level(&mut session, 0.3);
+    session.stop();
+    device.join();
+    cell(
+        "C12.slider36",
+        &format!(
+            "device at 0.35 step 0.05, slider 0.36: 1 SET_VOLUME, shown {shown:.2}, next step 0.30"
+        ),
     );
 }
 

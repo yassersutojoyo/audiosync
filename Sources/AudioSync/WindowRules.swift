@@ -620,7 +620,10 @@ enum StoredEqualizer {
               saved.gains.count == Equalizer.frequencies.count,
               saved.preamp.isFinite, saved.gains.allSatisfy(\.isFinite)
         else { return Equalizer.Settings() }
-        return saved
+        var stepped = saved
+        stepped.preamp = Equalizer.quantized(saved.preamp)
+        stepped.gains = saved.gains.map(Equalizer.quantized)
+        return stepped
     }
 
     static func encode(_ settings: Equalizer.Settings) -> Data? {

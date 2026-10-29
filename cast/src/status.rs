@@ -4,6 +4,9 @@ use serde_json::{Map, Value};
 
 use crate::message::DEFAULT_MEDIA_RECEIVER;
 
+/// The Backdrop app, a device's idle screen (C81).
+const BACKDROP: &str = "E8C28D3C";
+
 /// `volume.controlType` (C37, C68).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ControlType {
@@ -82,6 +85,16 @@ pub fn answers_level(sent: f64, reported: f64) -> bool {
     (sent - reported).abs() <= ANSWER_TOLERANCE
 }
 
+/// [`answers_level`], or within half the `stepInterval` of a device that
+/// rounds to its step (C70).
+pub fn answers_volume(sent: f64, volume: &DeviceVolume) -> bool {
+    answers_level(sent, volume.level)
+        || volume
+            .step_interval
+            .filter(|step| step.is_finite())
+            .is_some_and(|step| (sent - volume.level).abs() < step / 2.0)
+}
+
 /// One entry of `applications` (C37).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Application {
@@ -91,6 +104,7 @@ pub struct Application {
     pub transport_id: Option<String>,
     pub namespaces: Vec<String>,
     pub status_text: Option<String>,
+    pub is_idle_screen: bool,
 }
 
 impl Application {
@@ -174,6 +188,13 @@ impl ReceiverStatus {
             .iter()
             .any(|app| app.session_id.as_deref() == Some(session_id))
     }
+
+    /// Whether the device runs nothing but its idle screen (C81).
+    pub fn is_idle(&self) -> bool {
+        self.applications
+            .iter()
+            .all(|app| app.is_idle_screen || app.app_id == BACKDROP)
+    }
 }
 
 fn application(value: &Value) -> Option<Application> {
@@ -195,5 +216,9 @@ fn application(value: &Value) -> Option<Application> {
             })
             .unwrap_or_default(),
         status_text: text("statusText"),
+        is_idle_screen: object
+            .get("isIdleScreen")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     })
 }

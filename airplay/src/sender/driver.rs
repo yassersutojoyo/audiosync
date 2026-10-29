@@ -27,7 +27,10 @@ use std::time::{Duration, Instant};
 use crate::ap2::PinPairing;
 use crate::audio::SAMPLE_RATE;
 use crate::connects::{ConnectQueue, StartKind};
-use crate::discovery::{Browser, Device, DeviceKey, Directory, DirectoryEvent, ProtocolPath};
+use crate::discovery::{
+    Browser, Device, DeviceKey, Directory, DirectoryEvent, Endpoint, Features, ProtocolPath,
+    ScopedAddr, Verdict,
+};
 use crate::error::{ErrorKind, SessionError, UnsupportedReason, UserReason, Warning};
 use crate::homekit::{HomeKitCredentials, SrpDone, SrpWork};
 use crate::ids::{Entropy, OsEntropy, SessionIds};
@@ -301,6 +304,9 @@ struct Speaker {
     /// A P228 restart waits for its turn: its connect is the start it
     /// replaces, not counted again.
     restarting: bool,
+    /// Its retry waits out a back-off the receiver asked for (P154), which
+    /// discovery listing it again doesn't cut short (P142).
+    receiver_wait: bool,
 }
 
 impl Speaker {
@@ -328,6 +334,7 @@ impl Speaker {
             told_connecting: false,
             started_as: StartKind::Host,
             restarting: false,
+            receiver_wait: false,
         }
     }
 
@@ -346,6 +353,49 @@ impl Speaker {
     fn wait_until(&mut self, at: Instant, kind: StartKind) {
         self.phase = Phase::Waiting(at);
         self.next_start = kind;
+    }
+}
+
+/// What a connect and its setup read from a device's records (P142): the
+/// port and addresses of both services, the verdict without its busy hint
+/// (from `pw`, flags bits 3, 7 and 9, `cn`, `et`, `tp`, `sr`, `ss`, `ch`,
+/// the model and the features, P16), the `cn` list (P74), `et` (P45, P60),
+/// both `pk` keys, the features (P14, P60) and `srcvers`. Flags bit 17
+/// (P15), the group keys and the other version keys (P19) are left out.
+#[derive(PartialEq)]
+struct ConnectInputs<'a> {
+    raop: Option<(u16, &'a [ScopedAddr])>,
+    airplay: Option<(u16, &'a [ScopedAddr])>,
+    verdict: Verdict,
+    codecs: Option<&'a [u64]>,
+    encryption: Option<&'a [u64]>,
+    raop_key: Option<&'a [u8]>,
+    airplay_key: Option<&'a [u8; 32]>,
+    features: Features,
+    source_version: Option<&'a str>,
+}
+
+impl ConnectInputs<'_> {
+    fn of(device: &Device) -> ConnectInputs<'_> {
+        fn at(service: Option<&Endpoint>) -> Option<(u16, &[ScopedAddr])> {
+            service.map(|service| (service.port, service.addresses.as_slice()))
+        }
+        let raop = device.raop_txt.as_ref();
+        let airplay = device.airplay_txt.as_ref();
+        ConnectInputs {
+            raop: at(device.raop.as_ref()),
+            airplay: at(device.airplay.as_ref()),
+            verdict: Verdict {
+                busy_hint: false,
+                ..device.verdict
+            },
+            codecs: raop.and_then(|txt| txt.codecs.as_deref()),
+            encryption: raop.and_then(|txt| txt.encryption.as_deref()),
+            raop_key: raop.and_then(|txt| txt.public_key.as_deref()),
+            airplay_key: airplay.and_then(|txt| txt.public_key.as_ref()),
+            features: device.features(),
+            source_version: airplay.and_then(|txt| txt.source_version.as_deref()),
+        }
     }
 }
 
@@ -1324,6 +1374,7 @@ impl Driver {
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
+        speaker.receiver_wait = false;
         let retry_at = if closing {
             None
         } else if alac_retry || path_switch {
@@ -1331,6 +1382,7 @@ impl Driver {
         } else if settling {
             speaker.backoff.on_failure(ErrorKind::Lost, now)
         } else if let Some(wait) = error.retry_after {
+            speaker.receiver_wait = true;
             Some(speaker.backoff.on_receiver_state(wait, now))
         } else {
             speaker.backoff.on_failure(error.kind, now)
@@ -2259,6 +2311,7 @@ impl Driver {
         let retry_at = speaker.backoff.on_failure(error.kind, now);
         speaker.phase = retry_at.map_or(Phase::Failed, Phase::Waiting);
         speaker.next_start = StartKind::Retry;
+        speaker.receiver_wait = false;
         let reason = error.kind.user_reason();
         self.emit_speaker(
             key,
@@ -2296,14 +2349,19 @@ impl Driver {
                 || (self.directory.seen(key) && self.directory.device(key).is_none()))
     }
 
-    /// Discovery listed an unannounced speaker again: a session starts now,
-    /// the first of a fresh schedule, unless the records still leave it
-    /// unannounced (P215).
-    fn announced(&mut self, key: &DeviceKey, now: Instant) {
+    /// Discovery listed an unannounced speaker again, or one waiting to
+    /// retry on records that `changed`: a session starts now, the first of a
+    /// fresh schedule, unless the records still leave it unannounced (P215,
+    /// P142). A back-off the receiver asked for still holds (P154).
+    fn announced(&mut self, key: &DeviceKey, changed: bool, now: Instant) {
         let Some(speaker) = self.speakers.get_mut(key) else {
             return;
         };
-        if !matches!(speaker.phase, Phase::Unannounced) || self.stopping.is_some() {
+        let retry = changed
+            && !speaker.receiver_wait
+            && matches!(speaker.phase, Phase::Waiting(_))
+            && speaker.next_start == StartKind::Retry;
+        if !(retry || matches!(speaker.phase, Phase::Unannounced)) || self.stopping.is_some() {
             return;
         }
         speaker.backoff = Backoff::new();
@@ -2427,7 +2485,9 @@ impl Driver {
                 DirectoryEvent::Updated(device) => {
                     // The next session uses the new records; a running one
                     // is untouched (P18, P19).
+                    let mut changed = false;
                     if let Some(speaker) = self.speakers.get_mut(&device.key) {
+                        changed = ConnectInputs::of(&speaker.device) != ConnectInputs::of(&device);
                         speaker.device = (*device).clone();
                     }
                     let key = device.key.clone();
@@ -2447,7 +2507,7 @@ impl Driver {
                         ReceiverEvent::Changed(info)
                     };
                     self.emit(SenderEvent::Receiver(event));
-                    self.announced(&key, Instant::now());
+                    self.announced(&key, changed, Instant::now());
                 }
                 DirectoryEvent::Removed(key) => {
                     self.forget_outcome(&key, "its services went away");
@@ -3303,6 +3363,7 @@ mod tests {
                 told_connecting: false,
                 started_as: StartKind::Host,
                 restarting: false,
+                receiver_wait: false,
             },
         );
 
@@ -3554,5 +3615,157 @@ mod tests {
         }
         driver.stop_discovery();
         assert_eq!(driver.directory.devices().count(), 0);
+    }
+
+    const KITCHEN: [u8; 4] = [192, 0, 2, 59];
+
+    /// A RAOP receiver at a fixed address, on `port`.
+    fn kitchen(port: u16) -> crate::discovery::ServiceRecord {
+        use crate::discovery::{ScopedAddr, ServiceKind, ServiceRecord};
+        ServiceRecord {
+            kind: ServiceKind::Raop,
+            instance: "0123456789AB@Kitchen".to_owned(),
+            host: "kitchen.local".to_owned(),
+            port,
+            txt: vec![b"cn=0,1".to_vec(), b"et=0".to_vec()],
+            addresses: vec![ScopedAddr::new(KITCHEN.into())],
+        }
+    }
+
+    /// The receiver's `_airplay._tcp` record, AirPlay 1 only, with `keys`.
+    fn kitchen_airplay(keys: &[&str]) -> crate::discovery::ServiceRecord {
+        use crate::discovery::{ScopedAddr, ServiceKind, ServiceRecord};
+        let mut txt = vec![
+            b"features=0x0".to_vec(),
+            b"deviceid=01:23:45:67:89:AB".to_vec(),
+        ];
+        txt.extend(keys.iter().map(|key| key.as_bytes().to_vec()));
+        ServiceRecord {
+            kind: ServiceKind::AirPlay,
+            instance: "Kitchen".to_owned(),
+            host: "kitchen.local".to_owned(),
+            port: 7000,
+            txt,
+            addresses: vec![ScopedAddr::new(KITCHEN.into())],
+        }
+    }
+
+    fn connect_kitchen(port: u16) -> Output {
+        Output::Connect(std::net::SocketAddr::from((KITCHEN, port)))
+    }
+
+    /// A driver with a speaker on [`kitchen`] port 5000, its session
+    /// connecting.
+    fn kitchen_driver(now: Instant) -> (Driver, DeviceKey) {
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency);
+        for record in [kitchen(5000), kitchen_airplay(&["flags=0x4"])] {
+            let changes = driver.directory.apply(BrowseEvent::Resolved(record));
+            driver.report_changes(changes);
+        }
+        let device = driver.directory.devices().next().cloned().expect("listed");
+        let key = device.key.clone();
+        driver.add_speaker(
+            device,
+            SpeakerOptions::new(Volume::Db(-20.0)),
+            Arc::new(SpeakerCounters::default()),
+            now,
+        );
+        assert_eq!(driver.next_output(&key), Some(connect_kitchen(5000)));
+        (driver, key)
+    }
+
+    /// Discovery lists [`kitchen`] on `port`; what the speaker sends by `at`.
+    fn relist_kitchen(
+        driver: &mut Driver,
+        key: &DeviceKey,
+        port: u16,
+        at: Instant,
+    ) -> Option<Output> {
+        relist(driver, key, kitchen(port), at)
+    }
+
+    fn relist(
+        driver: &mut Driver,
+        key: &DeviceKey,
+        record: crate::discovery::ServiceRecord,
+        at: Instant,
+    ) -> Option<Output> {
+        let changes = driver.directory.apply(BrowseEvent::Resolved(record));
+        driver.report_changes(changes);
+        driver.run_timers(at);
+        driver.next_output(key)
+    }
+
+    // A receiver that restarts on a new port after the short retries are
+    // used up: discovery listing it again starts a session at once instead
+    // of after the 30 s wait. The same records again change nothing.
+    // covers: P142
+    #[test]
+    fn a_speaker_waiting_to_retry_starts_at_once_when_discovery_lists_it_again() {
+        let now = Instant::now();
+        let (mut driver, key) = kitchen_driver(now);
+        let mut failed_at = now;
+        let mut retry_at = now;
+        for attempt in 1..=6 {
+            if attempt > 1 {
+                assert_eq!(
+                    driver.next_output(&key),
+                    Some(connect_kitchen(5000)),
+                    "attempt {attempt}"
+                );
+            }
+            failed_at = retry_at;
+            driver.on_failed(&key, SessionError::new(ErrorKind::Unreachable), failed_at);
+            let Phase::Waiting(at) = driver.speakers[&key].phase else {
+                panic!("attempt {attempt} is not retried");
+            };
+            retry_at = at;
+            if attempt < 6 {
+                driver.run_timers(retry_at);
+            }
+        }
+        assert_eq!(retry_at - failed_at, Duration::from_secs(30));
+
+        let soon = failed_at + Duration::from_secs(1);
+        assert_eq!(relist_kitchen(&mut driver, &key, 5000, soon), None);
+        assert!(matches!(driver.speakers[&key].phase, Phase::Waiting(at) if at == retry_at));
+        // Nor does another sender's session (flags bit 17) or a group the
+        // receiver joined (P15, P19).
+        for keys in [
+            &["flags=0x20004"][..],
+            &["flags=0x4", "gid=6F3D1B2A-0C4E-4A5B-9D8E-7F6A5B4C3D2E"][..],
+        ] {
+            assert_eq!(relist(&mut driver, &key, kitchen_airplay(keys), soon), None);
+            assert!(matches!(driver.speakers[&key].phase, Phase::Waiting(at) if at == retry_at));
+        }
+        assert_eq!(
+            relist_kitchen(&mut driver, &key, 5001, soon),
+            Some(connect_kitchen(5001))
+        );
+    }
+
+    // A wait the receiver asked for holds even when discovery lists it on
+    // new records.
+    // covers: P142, P154
+    #[test]
+    fn a_wait_the_receiver_asked_for_holds_when_discovery_lists_it_again() {
+        let now = Instant::now();
+        let (mut driver, key) = kitchen_driver(now);
+        let mut error = SessionError::new(ErrorKind::PairingFailed);
+        error.retry_after = Some(Duration::from_secs(60));
+        driver.on_failed(&key, error, now);
+        let Phase::Waiting(retry_at) = driver.speakers[&key].phase else {
+            panic!("not retried");
+        };
+        assert_eq!(retry_at - now, Duration::from_secs(60));
+
+        let before = retry_at - Duration::from_secs(1);
+        assert_eq!(relist_kitchen(&mut driver, &key, 5001, before), None);
+        driver.run_timers(retry_at);
+        assert_eq!(driver.next_output(&key), Some(connect_kitchen(5001)));
     }
 }
