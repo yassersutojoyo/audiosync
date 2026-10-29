@@ -204,6 +204,9 @@ final class OutputRenderer: FadingOutput {
     var lateCallbacks: Int64 { target?.renderer.lateCallbacks ?? 0 }
     /// The device's IO overloads since the latest start (S229).
     var ioOverloads: Int64 { target?.overloads.load(ordering: .relaxed) ?? 0 }
+    /// The device anchor's span since the previous call (S334), for the
+    /// status line; nil without a timed callback since. Main thread.
+    func takeAnchorSpan() -> AnchorSpan? { target?.takeAnchorSpan() }
 
     /// The latest start's counters and the observer's values (S229), for the
     /// debug log; main thread.
@@ -1012,6 +1015,38 @@ struct OutputObservation {
     }
 }
 
+/// Where a device's clock puts its sample 0 on the host clock, `host time −
+/// sample time / rate`, from a render callback's time stamp (S334). It holds
+/// still while the device's timeline follows the host's, so a step that
+/// stays is the device's timeline moving against the host clock.
+enum DeviceAnchor {
+    /// In host ns; nil without both times or a rate. Safe on an audio thread.
+    @inline(__always)
+    static func ns(_ stamp: AudioTimeStamp, hostNs: UInt64, nsPerFrame: Double) -> Int64? {
+        guard stamp.mFlags.contains(.hostTimeValid), stamp.mFlags.contains(.sampleTimeValid),
+              nsPerFrame > 0 else { return nil }
+        let played = stamp.mSampleTime * nsPerFrame
+        guard played.isFinite, abs(played) < 9e18 else { return nil }
+        return Int64(truncatingIfNeeded: hostNs) &- Int64(played)
+    }
+}
+
+/// One output's device anchor over a status line's span, and the first one
+/// of its start, in host ns.
+struct AnchorSpan: Equatable {
+    var base: Int64
+    var low: Int64
+    var high: Int64
+    var last: Int64
+
+    /// Against the start's first value, so a step reads as a jump and stays
+    /// in every later line.
+    var text: String {
+        func ms(_ value: Int64) -> String { String(format: "%+.1f", Double(value - base) / 1e6) }
+        return "device anchor min \(ms(low)) max \(ms(high)) last \(ms(last)) ms"
+    }
+}
+
 /// The Mac's Wi-Fi link as the debug log shows it once per session (S229):
 /// band, channel and signal strength, never the network's name or address.
 enum WiFiNote {
@@ -1051,6 +1086,13 @@ private final class RenderTarget {
     /// reads), and the latest one as `LateCallbackLog.pack` made it.
     let lateCount = Atomic<UInt64>(0)
     let lateLatest = Atomic<UInt64>(0)
+    /// The device anchor (`DeviceAnchor`): the render thread notes, the
+    /// status line takes the span. `anchorBase`, the start's first anchor,
+    /// is `Int64.min` until then and no take clears it.
+    let anchorBase = Atomic<Int64>(.min)
+    let anchorLow = Atomic<Int64>(.max)
+    let anchorHigh = Atomic<Int64>(.min)
+    let anchorLast = Atomic<Int64>(0)
 
     init(owner: OutputRenderer, renderer: CoreRenderer, channels: Int, leadNs: UInt64, rate: Double) {
         self.owner = owner
@@ -1074,12 +1116,38 @@ private final class RenderTarget {
         _ = lateCount.wrappingAdd(1, ordering: .releasing)
     }
 
+    /// Lock-free stores only; a store that races the status line's take
+    /// lands in either span.
+    @inline(__always)
+    private func noteAnchor(_ stamp: AudioTimeStamp) {
+        guard let anchor = DeviceAnchor.ns(stamp, hostNs: clock.nanoseconds(ticks: stamp.mHostTime),
+                                           nsPerFrame: nsPerFrame) else { return }
+        anchorLast.store(anchor, ordering: .relaxed)
+        let low = anchorLow.load(ordering: .relaxed)
+        if anchor < low { _ = anchorLow.compareExchange(expected: low, desired: anchor, ordering: .relaxed) }
+        let high = anchorHigh.load(ordering: .relaxed)
+        if anchor > high { _ = anchorHigh.compareExchange(expected: high, desired: anchor, ordering: .relaxed) }
+        _ = anchorBase.compareExchange(expected: .min, desired: anchor, ordering: .relaxed)
+    }
+
+    /// The anchor's span since the previous take, and starts the next. Main thread.
+    func takeAnchorSpan() -> AnchorSpan? {
+        let low = anchorLow.exchange(.max, ordering: .relaxed)
+        let high = anchorHigh.exchange(.min, ordering: .relaxed)
+        let base = anchorBase.load(ordering: .relaxed)
+        guard base != .min, low <= high else { return nil }
+        return AnchorSpan(base: base, low: low, high: high, last: anchorLast.load(ordering: .relaxed))
+    }
+
     /// Fills the unit's buffer with `frames` frames through the renderer,
     /// stamped with the output time of its first frame (S185). Real-time
     /// safe.
     @inline(__always)
     func render(frames: Int, timeStamp: UnsafePointer<AudioTimeStamp>, into data: UnsafeMutablePointer<AudioBufferList>) {
-        if watchesLateness { timeBuffer(timeStamp.pointee, frames: frames) }
+        if watchesLateness {
+            timeBuffer(timeStamp.pointee, frames: frames)
+            noteAnchor(timeStamp.pointee)
+        }
         let buffers = UnsafeMutableAudioBufferListPointer(data)
         guard let first = buffers.first else { return }
         // The interleaved format gives one buffer; anything beyond it stays silent.
