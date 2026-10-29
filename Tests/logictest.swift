@@ -10463,9 +10463,11 @@ do {
     expired.apply(.appeared(CastDevice(id: castX, name: "Kitchen"), offsetMs: nil))
     expired.apply(.appeared(CastDevice(id: castY, name: "Den"), offsetMs: nil))
     _ = expired.turnOn(castX)
-    expired.apply(.gone(id: castX))
-    check(expired.rows == [castY] && expired.enabled == nil && expired.turnOn(castY) == nil,
-          "cast model: a speaker that is on with no session leaves the list and no longer blocks another")
+    let expiredOff = expired.apply(.gone(id: castX))
+    check(expiredOff == .turnedOff(castX, problem: .notResponding)
+            && expired.rows == [castY] && expired.enabled == nil && expired.turnOn(castY) == nil,
+          "cast model: a speaker that is on with no session leaves the list, says so in a notice "
+            + "and no longer blocks another")
     var manualOn = CastModel()
     manualOn.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
     _ = manualOn.turnOn(manualID)
