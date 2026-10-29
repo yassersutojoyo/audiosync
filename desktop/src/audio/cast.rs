@@ -696,7 +696,14 @@ impl CastSpeakers {
             return;
         };
         let id = self.manual[index].id;
-        if self.enabled == Some(id) {
+        // A found device no browse lists has no row once its address goes.
+        let unlisted = self.manual[index]
+            .found
+            .filter(|&found| self.list.get(DeviceKey::Id(found)).is_none());
+        if self
+            .enabled
+            .is_some_and(|on| on == id || Some(on) == unlisted)
+        {
             self.enabled = None;
             self.sync();
         }
