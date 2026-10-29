@@ -80,11 +80,15 @@ struct HiddenSpeakers: Equatable {
     /// `renames` maps an old app ID to the new one. A hidden entry moves with them.
     mutating func migrate(airPlay renames: [String: String]) {
         for (old, new) in renames.sorted(by: { $0.key < $1.key }) {
-            let oldKey = SpeakerKey.make(id: old, airplay: true)
-            guard let index = entries.firstIndex(where: { $0.key == oldKey }) else { continue }
-            let entry = entries.remove(at: index)
-            hide(key: SpeakerKey.make(id: new, airplay: true), name: entry.name, kind: entry.kind)
+            move(SpeakerKey.make(id: old, airplay: true), to: SpeakerKey.make(id: new, airplay: true))
         }
+    }
+
+    /// The entry hidden under `old` moves to `new`; one already under `new` stays (S342).
+    mutating func move(_ old: String, to new: String) {
+        guard let index = entries.firstIndex(where: { $0.key == old }) else { return }
+        let entry = entries.remove(at: index)
+        hide(key: new, name: entry.name, kind: entry.kind)
     }
 
     /// The Hidden Speakers menu, by shown name ignoring case, then by key.

@@ -10896,6 +10896,84 @@ do {
           "cast model: a speaker added by address that a browse finds keeps its offset under its id, as the sender "
             + "does: over none or a cleared one, never over one the id already had")
 
+    // covers: S342
+    let manualKey = CastID.key(manualID), realKey = CastID.key(realID)
+    let flatGains = Array(repeating: 0.0, count: Equalizer.frequencies.count)
+    func evening(_ members: [SpeakerPreset.Member]) -> SpeakerPreset {
+        SpeakerPreset(id: "p1", name: "Evening", members: members, zones: [.init(id: "z1", volume: 60)],
+                      master: 80, gains: flatGains)
+    }
+    var hiddenManual = HiddenSpeakers()
+    hiddenManual.hide(key: CastID.app(manualID), name: "Lounge", kind: "Cast")
+    let addressed = SpeakerIDMigration.Saved(
+        enabledAirPlay: [], airplayVolumes: [:], groups: [], autoConnect: [manualKey, "lc:usb"],
+        zones: [SpeakerZone(id: "z1", name: "Living", members: ["lc:usb", manualKey], volume: 60)],
+        presets: [evening([.init(key: manualKey, volume: 40)])],
+        names: SpeakerNames(custom: [manualKey: "Lounge TV"]), hidden: hiddenManual)
+    let rekeyed = SpeakerIDMigration.castIdentified(manualID, as: realID, in: addressed)
+    check(rekeyed.zones.map(\.members) == [["lc:usb", realKey]]
+            && rekeyed.presets == [evening([.init(key: realKey, volume: 40)])]
+            && rekeyed.autoConnect == ["lc:usb", realKey]
+            && rekeyed.names == SpeakerNames(custom: [realKey: "Lounge TV"])
+            && rekeyed.hidden.contains(CastID.app(realID)) && !rekeyed.hidden.contains(CastID.app(manualID))
+            && SpeakerIDMigration.castIdentified(manualID, as: realID, in: rekeyed) == rekeyed,
+          "cast: a speaker added by address that a browse finds keeps its zone, presets, name, auto-connect and "
+            + "hidden mark under its id")
+    var hiddenBoth = hiddenManual
+    hiddenBoth.hide(key: CastID.app(realID), name: "Lounge", kind: "Cast")
+    let bothKept = SpeakerIDMigration.Saved(
+        enabledAirPlay: [], airplayVolumes: [:], groups: [], autoConnect: [manualKey, realKey],
+        zones: [SpeakerZone(id: "z1", name: "Living", members: [manualKey], volume: 60),
+                SpeakerZone(id: "z2", name: "Den", members: [realKey], volume: 30)],
+        presets: [evening([.init(key: manualKey, volume: 40), .init(key: realKey, volume: 70)])],
+        names: SpeakerNames(custom: [manualKey: "Lounge TV", realKey: "TV"]), hidden: hiddenBoth)
+    let idWins = SpeakerIDMigration.castIdentified(manualID, as: realID, in: bothKept)
+    check(idWins.zones.map(\.members) == [[], [realKey]]
+            && idWins.presets == [evening([.init(key: realKey, volume: 70)])]
+            && idWins.autoConnect == [realKey]
+            && idWins.names == SpeakerNames(custom: [realKey: "TV"])
+            && idWins.hidden.contains(CastID.app(realID)) && !idWins.hidden.contains(CastID.app(manualID)),
+          "cast: where the id a browse found already has a zone, preset entry, name or hidden mark, the id's own "
+            + "wins over the address's")
+    var zonedPlaying = CastModel()
+    zonedPlaying.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    _ = zonedPlaying.setZones([manualID: 50])
+    zonedPlaying.apply(.gone(id: manualID))
+    if let browsed { zonedPlaying.apply(browsed) }
+    check(zonedPlaying.zoneLevels == [realID: 0.5],
+          "cast model: a speaker added by address that a browse finds keeps its zone volume under its id")
+    func rekeyed(zones: [String: Double], playing: Bool = true) -> CastModel {
+        var m = CastModel()
+        m.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+        _ = m.setZones(zones)
+        if playing {
+            _ = m.turnOn(manualID)
+            m.startSent(manualID)
+            _ = m.started(manualID, attempt: 7, refusal: 0)
+            _ = m.apply(.playing(attempt: 7))
+            _ = m.apply(.volume(attempt: 7, CastVolume(level: 0.4, muted: false, fixed: false)))
+        }
+        m.apply(.gone(id: manualID))
+        if let browsed { m.apply(browsed) }
+        return m
+    }
+    // Played at 0.4: own 0.8 in the 50 zone, 0.5 in the id's 80 zone.
+    var otherZone = rekeyed(zones: [manualID: 50, realID: 80])
+    check(abs(otherZone.volume(of: realID) - 50) < 1e-9 && otherZone.takeLevelDue() == nil
+            && otherZone.zoneLevels == [realID: 0.8],
+          "cast model: a playing speaker added by address that a browse finds plays as loud as before when its id "
+            + "has another zone volume")
+    // Played at 0.4 in no zone; the id's 25 zone reaches 0.25 at most.
+    var cappedZone = rekeyed(zones: [realID: 25])
+    let capped = cappedZone.takeLevelDue()
+    check(cappedZone.volume(of: realID) == 100 && capped.map { abs($0 - 0.25) < 1e-9 } == true
+            && cappedZone.takeLevelDue() == nil,
+          "cast model: a playing speaker added by address whose loudness its id's zone can't reach gets the nearest "
+            + "level sent once")
+    var idle = rekeyed(zones: [manualID: 50, realID: 80], playing: false)
+    check(idle.takeLevelDue() == nil && idle.zoneLevels == [realID: 0.8],
+          "cast model: a speaker added by address that a browse finds with no session gets no level sent")
+
     // covers: S339
     var stopped = CastModel()
     stopped.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))

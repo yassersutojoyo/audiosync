@@ -113,3 +113,4 @@ S336 Hosts only: the Mac host sending one waiting Apple event per player not yet
 S337 Web remote only: the remote crate failing its start as a port in use when another app holds its port on any address it listens on; the remote crate's tests check it.
 S338 Web remote only: the remote crate closing connections from peers outside the home network ranges and rate-limiting their log lines; the remote crate's tests check it.
 S339 Hosts only: the Mac host's Cast list when the sender's discovery ends, keeping a start in flight and turning off a browsed speaker that is on but no longer listed; the Mac logic suite's "cast model: when discovery stops ..." tests check it.
+S342 Hosts only: the Mac host moving the zone, presets, name, auto-connect and hidden entry of a Cast speaker added by address to the ID a browse found; the Mac logic suite's "cast: a speaker added by address that a browse finds ..." tests check it.

@@ -108,6 +108,8 @@ enum SpeakerIDMigration {
         var autoConnect: Set<String>
         var zones: [SpeakerZone] = []
         var presets: [SpeakerPreset] = []
+        var names = SpeakerNames()
+        var hidden = HiddenSpeakers()
     }
 
     /// The largest device ID: six bytes.
@@ -162,18 +164,37 @@ enum SpeakerIDMigration {
     static func apply(_ renames: [String: String], to saved: Saved) -> Saved {
         guard !renames.isEmpty else { return saved }
         func renamed(_ id: String) -> String { renames[id] ?? id }
-        func renamedKey(_ key: String) -> String {
-            guard let (id, airplay) = SpeakerKey.parse(key), airplay, let new = renames[id] else { return key }
-            return SpeakerKey.make(id: new, airplay: true)
+        var keys: [String: String] = [:]
+        for (old, new) in renames {
+            keys[SpeakerKey.make(id: old, airplay: true)] = SpeakerKey.make(id: new, airplay: true)
         }
-        var out = saved
+        var out = movingKeys(keys, in: saved)
         out.enabledAirPlay = Set(saved.enabledAirPlay.map(renamed))
-        out.autoConnect = Set(saved.autoConnect.map(renamedKey))
         var volumes = saved.airplayVolumes.filter { renames[$0.key] == nil }
         for (old, new) in renames {
             if volumes[new] == nil, let volume = saved.airplayVolumes[old] { volumes[new] = volume }
         }
         out.airplayVolumes = volumes
+        return out
+    }
+
+    /// `saved` once a browse found the Cast device added by address as
+    /// `old` under the device ID `new`: its key moves as in `apply`, and so
+    /// do its name and hidden entry, a record the new key has already
+    /// winning (S342).
+    static func castIdentified(_ old: String, as new: String, in saved: Saved) -> Saved {
+        var out = movingKeys([CastID.key(old): CastID.key(new)], in: saved)
+        out.names = saved.names.movingKey(CastID.key(old), to: CastID.key(new))
+        out.hidden.move(CastID.app(old), to: CastID.app(new))
+        return out
+    }
+
+    /// `saved` with every key in `keys` replaced by its value in
+    /// auto-connect, groups, zones and presets, by `apply`'s rules.
+    private static func movingKeys(_ keys: [String: String], in saved: Saved) -> Saved {
+        func renamedKey(_ key: String) -> String { keys[key] ?? key }
+        var out = saved
+        out.autoConnect = Set(saved.autoConnect.map(renamedKey))
         out.groups = saved.groups.map { group in
             var copy = group
             copy.members = []
@@ -206,10 +227,7 @@ enum SpeakerIDMigration {
         }
         // A preset already holding the new key keeps it, as a group does (S254).
         out.presets = saved.presets.map { preset in
-            renames.keys.sorted().reduce(preset) { preset, old in
-                preset.renamingKey(SpeakerKey.make(id: old, airplay: true),
-                                   to: SpeakerKey.make(id: renames[old] ?? old, airplay: true))
-            }
+            keys.keys.sorted().reduce(preset) { preset, old in preset.renamingKey(old, to: keys[old] ?? old) }
         }
         return out
     }
