@@ -2203,10 +2203,19 @@ impl<A: AudioBackend> AudioAdapter<A> {
             };
             members.push((key, member.volume, name, facts));
         }
+        let holding: Vec<String> = members
+            .iter()
+            .filter_map(|(key, ..)| match key {
+                SpeakerKey::AirPlay(id) => self.audio.airplay_holding_target(id),
+                _ => None,
+            })
+            .map(|target| airplay_key(&target.id))
+            .collect();
         let others: Vec<&Speaker> = state
             .speakers
             .iter()
             .filter(|speaker| !preset.members.iter().any(|member| member.key == speaker.id))
+            .filter(|speaker| !holding.contains(&speaker.id))
             .collect();
         let other_facts: Vec<RecallOther> = others
             .iter()
