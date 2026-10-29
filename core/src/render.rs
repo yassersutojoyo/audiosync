@@ -192,6 +192,10 @@ pub const LATE_REANCHOR_EVERY_MS: u32 = 5000;
 /// clock's rate, which a re-anchor would only repeat, so the trim keeps it.
 pub const LATE_RISE_MS_PER_S: f64 = 1.0;
 
+/// The rise is the median of the slopes between the fill's means over the
+/// hold's eighths (Theil-Sen), so one stray callback tilts few of them.
+const LATE_SLOTS: usize = 8;
+
 /// The most a callback's lateness moves its reader's delay, in ms (S209).
 pub const LATE_CAP_MS: u64 = 50;
 
@@ -921,9 +925,11 @@ pub struct Renderer {
     /// Device frames over which the fill has lain [`LATE_SHIFT_MS`] or more
     /// above the reference at every callback.
     late_held: u64,
-    /// Over those callbacks, the sums a least-squares line of the fill's
-    /// excess over the frames held needs: n, Σt, Σo, Σt², Σt·o.
-    late_fit: [f64; 5],
+    /// The fill's excess summed and counted per [`LATE_SLOTS`]th of the hold,
+    /// the latest [`LATE_SLOTS`] of them, by slot number modulo that.
+    late_slots: [(f64, u32); LATE_SLOTS],
+    /// The slot number of the latest callback held.
+    late_slot: u64,
     /// Device frames left before a lasting lateness may re-anchor again.
     late_wait: u64,
     /// A held correction waits for the fade-out; closed until the first
@@ -1056,7 +1062,8 @@ impl Renderer {
             awaiting_resync: false,
             stalled: false,
             late_held: 0,
-            late_fit: [0.0; 5],
+            late_slots: [(0.0, 0); LATE_SLOTS],
+            late_slot: 0,
             late_wait: 0,
             correction_due: false,
             frames_after_fade: None,
@@ -1540,8 +1547,7 @@ impl Renderer {
                 let minus_anchor = self
                     .anchor_floor
                     .map_or(0.0, |anchor| -(anchor as f64) * rate as f64 / 1e9);
-                self.late_held = 0;
-                self.late_fit = [0.0; 5];
+                self.reset_late();
                 let shift = if count == 0 { minus_anchor } else { shift };
                 let fill = fill + minus_anchor - shift;
                 let (sum, count, span) = (sum + fill, count + 1, span + frames as u64);
@@ -1563,30 +1569,30 @@ impl Renderer {
             }
             Tracking::Following { reference, average } => {
                 let off = fill - reference;
+                let device_rate = u64::from(self.device_rate);
+                let width =
+                    (device_rate * u64::from(LATE_HOLD_MS) / 1000 / LATE_SLOTS as u64).max(1);
                 if off >= f64::from(LATE_SHIFT_MS) * rate as f64 / 1e3 {
-                    let t = self.late_held as f64;
-                    let [n, st, so, stt, sto] = self.late_fit;
-                    self.late_fit = [n + 1.0, st + t, so + off, stt + t * t, sto + t * off];
+                    let slot = self.late_held / width;
+                    let fresh =
+                        (self.late_slot + 1).max(slot.saturating_sub(LATE_SLOTS as u64 - 1));
+                    for s in fresh..=slot {
+                        self.late_slots[s as usize % LATE_SLOTS] = (0.0, 0);
+                    }
+                    self.late_slot = slot;
+                    let (sum, count) = &mut self.late_slots[slot as usize % LATE_SLOTS];
+                    *sum += off;
+                    *count += 1;
                     self.late_held += frames as u64;
                 } else {
-                    self.late_held = 0;
-                    self.late_fit = [0.0; 5];
+                    self.reset_late();
                 }
-                let device_rate = u64::from(self.device_rate);
                 if self.late_held * 1000 >= device_rate * u64::from(LATE_HOLD_MS)
                     && self.late_wait == 0
                     && self.stop == Stop::None
                 {
-                    // Least squares over the hold, in ms of lateness per s.
-                    let [n, st, so, stt, sto] = std::mem::take(&mut self.late_fit);
-                    let spread = n * stt - st * st;
-                    let slope = if spread > 0.0 {
-                        (n * sto - st * so) / spread
-                    } else {
-                        0.0
-                    };
-                    let slope = slope * device_rate as f64 * 1e3 / rate as f64;
-                    self.late_held = 0;
+                    let slope = self.late_rise(width, rate);
+                    self.reset_late();
                     if slope <= LATE_RISE_MS_PER_S {
                         self.late_wait = device_rate * u64::from(LATE_REANCHOR_EVERY_MS) / 1000;
                         self.shared.late_reanchors.fetch_add(1, Ordering::Relaxed);
@@ -1606,6 +1612,37 @@ impl Renderer {
                 if off < 0.0 { by } else { -by }
             }
         }
+    }
+
+    /// Starts the hold of a lasting lateness over (S207).
+    fn reset_late(&mut self) {
+        self.late_held = 0;
+        self.late_slot = 0;
+        self.late_slots = [(0.0, 0); LATE_SLOTS];
+    }
+
+    /// How fast the fill's excess rose over the latest [`LATE_SLOTS`] slots
+    /// of `width` device frames, in ms per s at capture rate `rate`: the
+    /// median of the slopes between every two slots' means (S207).
+    fn late_rise(&self, width: u64, rate: u64) -> f64 {
+        let mut slopes = [0.0f64; LATE_SLOTS * (LATE_SLOTS - 1) / 2];
+        let mut n = 0;
+        let first = self.late_slot.saturating_sub(LATE_SLOTS as u64 - 1);
+        for a in first..=self.late_slot {
+            for b in a + 1..=self.late_slot {
+                let (sa, ca) = self.late_slots[a as usize % LATE_SLOTS];
+                let (sb, cb) = self.late_slots[b as usize % LATE_SLOTS];
+                if ca > 0 && cb > 0 {
+                    slopes[n] = (sb / f64::from(cb) - sa / f64::from(ca)) / (b - a) as f64;
+                    n += 1;
+                }
+            }
+        }
+        if n == 0 {
+            return 0.0;
+        }
+        let (_, median, _) = slopes[..n].select_nth_unstable_by(n / 2, f64::total_cmp);
+        *median / width as f64 * f64::from(self.device_rate) * 1e3 / rate as f64
     }
 
     /// Counts a trim of `by` capture frames (positive slowed, negative sped
