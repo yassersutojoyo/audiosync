@@ -1293,6 +1293,10 @@ export global Strings {
     // Under a Google Cast speaker's volume when the device locks it.
     out property <string> cast-volume-fixed: @tr("This speaker's volume can't be changed from AudioSync.");
 
+    // Why a speaker's volume slider is dimmed, read and shown on the slider.
+    out property <string> volume-speaker-off: @tr("Turn this speaker on to change its volume.");
+    out property <string> cast-volume-not-live: @tr("This speaker's volume can be changed while AudioSync plays to it.");
+
     // Beside a Google Cast speaker's delay, in place of the sync hint.
     out property <string> cast-sync-hint: @tr("AudioSync can't sync Google Cast speakers automatically, so it keeps the others only roughly in step with this one. Set this by ear: heard this speaker late? Raise the value, and the other speakers wait longer. Heard it early? Lower it. AudioSync keeps it for this speaker; check it again when you start it.");
 

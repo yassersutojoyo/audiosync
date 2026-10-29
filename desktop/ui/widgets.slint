@@ -1634,6 +1634,8 @@ export component SpeakerRow inherits Rectangle {
     // A Google Cast speaker that connects or plays: its volume, Mute and
     // Resync reach it.
     property <bool> cast-live: root.item.cast && root.item.state != RowState.off && root.item.cast-state != CastState.idle;
+    // Why the volume slider is dimmed; a missing speaker gets no text here.
+    property <string> volume-hint: root.item.missing ? "" : root.item.cast && root.item.volume-fixed ? Strings.cast-volume-fixed : root.item.state == RowState.off ? Strings.volume-speaker-off : root.item.cast && !root.cast-live ? Strings.cast-volume-not-live : "";
     changed focused-part => {
         root.focus-changed(self.focused-part);
     }
@@ -2136,13 +2138,46 @@ export component SpeakerRow inherits Rectangle {
                                     volume: root.item.volume;
                                     step: root.item.cast ? root.item.volume-step : 1;
                                     label: Strings.volume-of(root.item.name);
-                                    description: root.item.cast && root.item.volume-fixed ? Strings.cast-volume-fixed : "";
+                                    description: root.volume-hint;
                                     enabled: !root.item.missing && (root.item.cast ? root.cast-live && !root.item.volume-fixed : root.item.state != RowState.off);
                                     changed(value) => {
                                         root.volume-changed(value);
                                     }
                                     editing(on) => {
                                         root.volume-editing(on);
+                                    }
+                                }
+
+                                // Narrator reads the hint from the slider.
+                                if root.volume-hint != "": TouchArea {
+                                    clicked => {
+                                        root.box-clicked();
+                                    }
+
+                                    Tooltip {
+                                        Rectangle {
+                                            width: min(volume-tip.preferred-width + 16px, root.width);
+                                            height: volume-tip.preferred-height + 10px;
+                                            border-radius: Fluent.radius-control;
+                                            border-width: 1px;
+                                            border-color: Fluent.stroke;
+                                            background: Tokens.surface;
+                                            drop-shadow-blur: 8px;
+                                            drop-shadow-offset-y: 2px;
+                                            drop-shadow-color: Tokens.text.with-alpha(0.18);
+                                            accessible-role: none;
+
+                                            volume-tip := Text {
+                                                x: 8px;
+                                                width: parent.width - 16px;
+                                                text: root.volume-hint;
+                                                font-size: Tokens.font-size-caption;
+                                                color: Tokens.text;
+                                                vertical-alignment: center;
+                                                wrap: word-wrap;
+                                                accessible-role: none;
+                                            }
+                                        }
                                     }
                                 }
                             }
