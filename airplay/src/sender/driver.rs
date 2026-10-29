@@ -357,19 +357,22 @@ impl Speaker {
 }
 
 /// What a connect and its setup read from a device's records (P142): the
-/// addresses and ports of both services, the verdict without its busy hint
-/// (`pw`, flags bits 3, 7 and 9, `cn`, `tp`, `sr`, `ss`, `ch`, P16), `et`
-/// (P45, P60), `pk` and the features (P14, P60). The busy flag (P15) and
-/// the group and version keys (P19) are left out.
+/// port and addresses of both services, the verdict without its busy hint
+/// (from `pw`, flags bits 3, 7 and 9, `cn`, `et`, `tp`, `sr`, `ss`, `ch`,
+/// the model and the features, P16), the `cn` list (P74), `et` (P45, P60),
+/// both `pk` keys, the features (P14, P60) and `srcvers`. Flags bit 17
+/// (P15), the group keys and the other version keys (P19) are left out.
 #[derive(PartialEq)]
 struct ConnectInputs<'a> {
     raop: Option<(u16, &'a [ScopedAddr])>,
     airplay: Option<(u16, &'a [ScopedAddr])>,
     verdict: Verdict,
+    codecs: Option<&'a [u64]>,
     encryption: Option<&'a [u64]>,
     raop_key: Option<&'a [u8]>,
     airplay_key: Option<&'a [u8; 32]>,
     features: Features,
+    source_version: Option<&'a str>,
 }
 
 impl ConnectInputs<'_> {
@@ -378,6 +381,7 @@ impl ConnectInputs<'_> {
             service.map(|service| (service.port, service.addresses.as_slice()))
         }
         let raop = device.raop_txt.as_ref();
+        let airplay = device.airplay_txt.as_ref();
         ConnectInputs {
             raop: at(device.raop.as_ref()),
             airplay: at(device.airplay.as_ref()),
@@ -385,13 +389,12 @@ impl ConnectInputs<'_> {
                 busy_hint: false,
                 ..device.verdict
             },
+            codecs: raop.and_then(|txt| txt.codecs.as_deref()),
             encryption: raop.and_then(|txt| txt.encryption.as_deref()),
             raop_key: raop.and_then(|txt| txt.public_key.as_deref()),
-            airplay_key: device
-                .airplay_txt
-                .as_ref()
-                .and_then(|txt| txt.public_key.as_ref()),
+            airplay_key: airplay.and_then(|txt| txt.public_key.as_ref()),
             features: device.features(),
+            source_version: airplay.and_then(|txt| txt.source_version.as_deref()),
         }
     }
 }
