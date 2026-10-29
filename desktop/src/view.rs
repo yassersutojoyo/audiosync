@@ -5638,12 +5638,12 @@ mod tests {
     }
 
     /// The App over `backend`, with headless windows.
-    pub(super) fn app_over(backend: MockBackend) -> Rc<App> {
+    pub(super) fn app_over(backend: impl Backend + 'static) -> Rc<App> {
         app_logging(backend, DebugLog::new(None))
     }
 
     /// [`app_over`] writing to `log`.
-    pub(super) fn app_logging(backend: MockBackend, log: DebugLog) -> Rc<App> {
+    pub(super) fn app_logging(backend: impl Backend + 'static, log: DebugLog) -> Rc<App> {
         // The platform is set per thread: a thread that already built an
         // App has it, which is fine.
         let _ = slint::platform::set_platform(Box::new(Headless));
