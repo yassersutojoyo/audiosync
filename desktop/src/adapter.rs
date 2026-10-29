@@ -2058,7 +2058,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let id = format!("zone:{}", self.last_zone_id);
         let name = self
             .zones
-            .new_zone(&id, typed, |n| format!("Zone {n}"))
+            .new_zone(&id, &crate::speaker_names::normalized(typed), |n| {
+                format!("Zone {n}")
+            })
             .name
             .clone();
         for member in members {
@@ -6350,6 +6352,23 @@ mod tests {
         assert_eq!(name, "a".repeat(crate::speaker_names::MAX_NAME_CHARS));
         adapter.rename_zone("zone:1", "Den\nStudy");
         assert_eq!(adapter.snapshot().zones[0].name, "Den Study");
+    }
+
+    // covers: S150
+    #[test]
+    fn a_new_zones_name_is_cleaned_as_a_renamed_ones() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.new_zone(&format!(" {}\n", "a".repeat(65))).unwrap();
+        adapter.new_zone_with(&key(HEADPHONES), "Den\nStudy");
+        let names: Vec<String> = adapter
+            .snapshot()
+            .zones
+            .into_iter()
+            .map(|z| z.name)
+            .collect();
+        let long = "a".repeat(crate::speaker_names::MAX_NAME_CHARS);
+        assert_eq!(names, [long.as_str(), "Den Study"]);
     }
 
     #[test]

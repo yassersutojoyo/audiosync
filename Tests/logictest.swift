@@ -6754,6 +6754,12 @@ do {
               && ZoneEdit.renaming("zone-1", to: "Den\nStudy", in: zonesBefore)[0].name == "Den Study",
           "zone rename: a long name is cut to 60 characters and line breaks become spaces, as a speaker's",
           "\(ZoneEdit.renaming("zone-1", to: String(repeating: "a", count: 65), in: zonesBefore)[0].name.count)")
+    // covers: S150 (a new zone's name is cleaned as a renamed one's)
+    let longNew = ZoneEdit.adding(id: "zone-3", name: String(repeating: "a", count: 65), members: [], to: zonesBefore)
+    let brokenNew = ZoneEdit.adding(id: "zone-3", name: "Den\nStudy", members: [], to: zonesBefore)
+    check(longNew[2].name == String(repeating: "a", count: SpeakerNames.maxLength) && brokenNew[2].name == "Den Study",
+          "zone name: a new zone's long name is cut to 60 characters and line breaks become spaces, as a rename's",
+          "\(longNew[2].name.count) \(brokenNew[2].name.debugDescription)")
     check(UIStrings().renameZone == "Rename…" && UIStrings().renameZone == UIStrings().renameSpeaker,
           "zone rename: the zone menu item reads like the speaker's",
           UIStrings().renameZone)
