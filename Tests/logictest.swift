@@ -10804,6 +10804,15 @@ do {
             && goneAfter.rows.isEmpty && goneAfter.turnOn(manualID) == nil,
           "cast model: when discovery stops, a speaker that is on with no session goes off with its row and a notice, "
             + "so nothing keeps streaming for it and another one can go on")
+    var cameBack = CastModel()
+    cameBack.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    _ = cameBack.turnOn(realID)
+    cameBack.apply(.gone(id: realID))
+    cameBack.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    let cameBackOutcome = cameBack.apply(.discoveryStopped)
+    check(cameBackOutcome == .changed && cameBack.enabled == nil,
+          "cast model: a speaker that left the list and came back off gets no search-stopped notice when discovery stops",
+          "\(String(describing: cameBackOutcome))")
 
     var startStopped = CastModel()
     startStopped.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
