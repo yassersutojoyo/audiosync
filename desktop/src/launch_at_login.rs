@@ -661,7 +661,12 @@ mod tests {
 
     #[test]
     fn a_run_value_whose_exe_is_gone_shows_off_and_is_left_as_it_is() {
-        let gone = r#""D:\Old\audiosync.exe" --background"#;
+        // Only a path absolute on the host can be gone; a drive letter isn't on Linux.
+        let gone = if cfg!(windows) {
+            r#""D:\Old\audiosync.exe" --background"#
+        } else {
+            r#""/old/audiosync" --background"#
+        };
         let (store, mut login) = setup(|e| {
             e.run = Some(gone.to_owned());
             e.listed_exe_gone = true;
