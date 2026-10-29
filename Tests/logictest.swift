@@ -1198,7 +1198,7 @@ do {
     check(text.nativeAirPlayAsksForCode(name: "Den", reason: .unreachable, unasked: false) == nil,
           "native off: other reasons keep their own notice")
     let unreachableOff = text.airPlayTurnedOff(name: "Den", reason: .unreachable)
-    check(text.nativeAirPlayBusy(name: "Den").contains("busy with another device") &&!text.nativeAirPlayBusy(name: "Den").contains("network")
+    check(text.nativeAirPlayBusy(name: "Den").contains("busy with another device") && !text.nativeAirPlayBusy(name: "Den").contains("network")
             && text.nativeAirPlayRefused(name: "Den") == text.castProblem(.refused, name: "Den")
             && text.nativeAirPlayBusy(name: "Den") != unreachableOff && text.nativeAirPlayRefused(name: "Den") != unreachableOff,
           "native off: a busy speaker names the other device and a refusing one says it declined, neither sends the user to the network")
