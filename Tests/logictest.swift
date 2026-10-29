@@ -10598,7 +10598,7 @@ do {
     let comesBack = m.apply(.changed(CastDevice(id: id, name: "", manual: true), offsetMs: nil))
     m.addedManually(id, address: den)
     let readded = m.apply(.changed(CastDevice(id: id, name: "", manual: true), offsetMs: nil))
-    check(replaced == nil && removedAddress == den && !comesBack && readded && m.devices[id] != nil
+    check(replaced == nil && removedAddress == den && comesBack == nil && readded == .changed && m.devices[id] != nil
             && m.removeManual("0123456789abcdef0123456789abcdef") == nil,
           "cast model: a removed manual device stays off the list until it is added again; only a manual one is removed")
     // covers: S245 (Remove on a Cast speaker added by address that leaves the list)
@@ -10739,6 +10739,96 @@ do {
     check(startStoppedListed && startStopped.turnOff(realID) && startStopped.plan(streaming: true) == .stop,
           "cast model: when discovery stops while a start waits for its number, the speaker stays listed "
             + "and Off still stops it")
+
+    // covers: S252, C105
+    let castX = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", castY = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    var swap = CastModel()
+    swap.apply(.appeared(CastDevice(id: castX, name: "Kitchen"), offsetMs: nil))
+    swap.apply(.appeared(CastDevice(id: castY, name: "Den"), offsetMs: nil))
+    _ = swap.turnOn(castX)
+    swap.startSent(castX)
+    _ = swap.started(castX, attempt: 1, refusal: 0)
+    _ = swap.apply(.playing(attempt: 1))
+    // As recallPreset: both switches, one sync that only stops X, then the preset's volume for Y.
+    swap.turnOff(castX)
+    _ = swap.turnOn(castY)
+    let swapStops = swap.plan(streaming: true) == .stop
+    swap.stopSent()
+    _ = swap.setVolume(castY, position: 30)
+    let swapStarts = swap.plan(streaming: true) == .start(castY)
+    swap.startSent(castY)
+    _ = swap.started(castY, attempt: 2, refusal: 0)
+    var swapSent: Double?
+    if case .setVolume(let level)? = swap.apply(.volume(attempt: 2, CastVolume(level: 0.8, muted: false, fixed: false))) {
+        swapSent = level
+    }
+    check(swapStops && swapStarts && swapSent.map { approx($0, 0.3, 1e-9) } == true
+            && approx(swap.volume(of: castY), 30, 1e-9),
+          "presets: a recall that swaps the Cast speaker while streaming gives the new one the preset's volume",
+          "\(String(describing: swapSent)) \(swap.volume(of: castY))")
+
+    // covers: C2
+    var expired = CastModel()
+    expired.apply(.appeared(CastDevice(id: castX, name: "Kitchen"), offsetMs: nil))
+    expired.apply(.appeared(CastDevice(id: castY, name: "Den"), offsetMs: nil))
+    _ = expired.turnOn(castX)
+    let expiredOff = expired.apply(.gone(id: castX))
+    check(expiredOff == .turnedOff(castX, problem: .notResponding)
+            && expired.rows == [castY] && expired.enabled == nil && expired.turnOn(castY) == nil,
+          "cast model: a speaker that is on with no session leaves the list, says so in a notice "
+            + "and no longer blocks another")
+    var manualOn = CastModel()
+    manualOn.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    _ = manualOn.turnOn(manualID)
+    manualOn.apply(.gone(id: manualID))
+    if let browsed { manualOn.apply(browsed) }
+    check(manualOn.enabled == realID,
+          "cast model: a speaker added by address that is on with no session stays on under the id a browse finds")
+
+    // covers: C18
+    let byAddress = CastID.key(manualID), byID = CastID.key(realID)
+    var hiddenByAddress = HiddenSpeakers()
+    hiddenByAddress.hide(key: CastID.app(manualID), name: "Patio", kind: "Google Cast")
+    let kept = CastUserSettings(
+        names: SpeakerNames(custom: [byAddress: "Patio"]),
+        zones: [SpeakerZone(id: "z1", name: "Outside", members: ["lc:usb", byAddress], volume: 60,
+                            memberNames: [byAddress: "192.0.2.9"])],
+        presets: [SpeakerPreset(id: "p1", name: "Party", members: [.init(key: byAddress, volume: 40)], zones: [],
+                                master: 100, gains: [Double](repeating: 0, count: 10))],
+        hidden: hiddenByAddress
+    ).moved(from: manualID, to: realID)
+    check(kept.names.renamed(key: byID) == "Patio" && kept.names.renamed(key: byAddress) == nil
+            && kept.zones.map(\.members) == [["lc:usb", byID]] && kept.zones.first?.memberNames == [byID: "192.0.2.9"]
+            && kept.presets.first?.members == [SpeakerPreset.Member(key: byID, volume: 40)]
+            && kept.hidden.contains(CastID.app(realID)) && !kept.hidden.contains(CastID.app(manualID)),
+          "cast: a device added by address that a browse finds keeps its name, zone and presets")
+    var hiddenBoth = HiddenSpeakers()
+    hiddenBoth.hide(key: CastID.app(manualID), name: "Patio", kind: "Google Cast")
+    hiddenBoth.hide(key: CastID.app(realID), name: "Lounge", kind: "Google Cast")
+    let ownWins = CastUserSettings(
+        names: SpeakerNames(custom: [byAddress: "Patio", byID: "Lounge"]),
+        zones: [SpeakerZone(id: "z1", name: "Outside", members: [byAddress], volume: 60),
+                SpeakerZone(id: "z2", name: "Inside", members: [byID], volume: 80)],
+        presets: [SpeakerPreset(id: "p1", name: "Party",
+                                members: [.init(key: byAddress, volume: 40), .init(key: byID, volume: 70)], zones: [],
+                                master: 100, gains: [Double](repeating: 0, count: 10))],
+        hidden: hiddenBoth
+    ).moved(from: manualID, to: realID)
+    check(ownWins.names.custom == [byID: "Lounge"] && ownWins.zones.map(\.members) == [[], [byID]]
+            && ownWins.presets.first?.members == [SpeakerPreset.Member(key: byID, volume: 70)]
+            && ownWins.hidden.entries == [HiddenSpeakers.Entry(key: CastID.app(realID), name: "Lounge", kind: "Google Cast")],
+          "cast: a name, zone, preset place or hidden mark the id already has wins over the address's")
+
+    // covers: S251, S252
+    var unheard = CastModel()
+    unheard.apply(.appeared(CastDevice(id: castX, name: "Kitchen"), offsetMs: nil))
+    _ = unheard.turnOn(castX)
+    unheard.startSent(castX)
+    _ = unheard.started(castX, attempt: 1, refusal: 0)
+    let unknownVolume = unheard.knownVolume(of: castX)
+    _ = unheard.apply(.volume(attempt: 1, CastVolume(level: 0.4, muted: false, fixed: false)))
+    check(unknownVolume == nil && unheard.knownVolume(of: castX).map { approx($0, 40, 1e-9) } == true,
+          "presets: a Cast speaker whose volume isn't known yet is saved without a volume")
 
     check(t.castAddProblem(.notFound)
             == "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
