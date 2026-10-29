@@ -1114,7 +1114,6 @@ impl Pacer {
     /// `audio` saying whether the ring holds a whole block.
     pub fn next(&mut self, now: Duration, audio: bool) -> Pace {
         let due = (now.as_millis() / BLOCK.as_millis()) as u64;
-        let underrun_blocks = (UNDERRUN.as_millis() / BLOCK.as_millis()) as u64;
         if self.emitted >= due {
             self.caught_up = now;
             return Pace::Wait;
@@ -1122,10 +1121,7 @@ impl Pacer {
         let pace = if audio {
             self.dry = false;
             Pace::Audio
-        } else if self.dry
-            || due - self.emitted > underrun_blocks
-            || now.saturating_sub(self.caught_up) > UNDERRUN
-        {
+        } else if self.dry || now.saturating_sub(self.caught_up) > UNDERRUN {
             self.dry = true;
             Pace::Silence
         } else {
