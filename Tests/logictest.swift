@@ -3971,6 +3971,8 @@ do {
     pw.apply(.appeared(member(left, "Left", of: pair)))
     pw.apply(.appeared(member(right, "Right", of: pair, .needsPassword)))
     pw.apply(.appeared(target(pair, "Living Room")))
+    check(pw.targetRow(pair)?.asksPassword == true && listedPair().targetRow(pair)?.asksPassword == false,
+          "P176 native airplay: the pair's row knows a member asks for a password")
     let ask = NativePrompt(id: right, password: true, wrong: false)
     check(pw.turnedOnByUser(pair) == .prompt && pw.nextPrompt() == ask
             && pw.plan(streaming: true, enabled: [app(pair)]).add.isEmpty,
@@ -3978,6 +3980,8 @@ do {
     check(pw.answered(ask, code: "secret") == .sendPassword(pair: false) && pw.promptTargets.isEmpty
             && pw.plan(streaming: true, enabled: [app(pair)]).add == [pair],
           "P176 native airplay: once the member's password is in, the pair starts")
+    check(pw.targetRow(pair)?.asksPassword == false,
+          "P176 native airplay: once the member's password is in, the pair's row asks for nothing")
     pw.added(pair)
     let again = NativePrompt(id: right, password: true, wrong: true)
     check(pw.apply(.error(id: pair, .wrongPassword, retryMs: nil, detail: "")) == nil
@@ -10428,6 +10432,22 @@ do {
             && codePlan(.preset(id: "p3")) == [.recallPreset(id: "p3", keepOff: ["ap:tv"])]
             && codePlan(.zone(id: "z4", toggle: true, volume: nil)).isEmpty,
           "web remote: a zone or preset from the phone keeps a member that asks for a code off; with no other member it doesn't flip")
+    let loungeRow = RemoteRow(Facts(id: "lounge", name: "Lounge", kind: "AirPlay 2", on: false, volume: 50,
+                                    isAirPlay: true, paired: true, memberAsksPassword: true, key: "ap:lounge"), text: t)
+    let loungeRows = zoneRows + [loungeRow]
+    let loungeZones = [SpeakerZone(id: "z5", name: "Lounge", members: ["ap:lounge", "lc:bt"], volume: 100)].map {
+        RemoteZoneRow($0, listed: loungeRows)
+    }
+    let loungePresets = [RemotePresetRow(id: "p5", name: "Party", current: false, members: ["ap:lounge", "lc:bt"])]
+    func loungePlan(_ command: RemoteCommand) -> [RemoteAction] {
+        RemoteAction.plan(command, rows: loungeRows, zones: loungeZones, presets: loungePresets)
+    }
+    check(loungeRow.asksForCode && !loungeRow.available
+            && loungePlan(.speaker(id: "lounge", on: true, volume: nil, delayMs: nil)).isEmpty,
+          "web remote: a stereo pair whose member asks for a password can't be turned on from the phone")
+    check(loungePlan(.zone(id: "z5", toggle: true, volume: nil)) == [.toggleZone(id: "z5", keepOff: ["ap:lounge"])]
+            && loungePlan(.preset(id: "p5")) == [.recallPreset(id: "p5", keepOff: ["ap:lounge"])],
+          "web remote: a zone or preset from the phone keeps a pair whose member asks for a password off")
 
     // covers: S258
     let duringRun = [zoneCommand, presetCommand, "{\"type\":\"master\",\"volume\":20}",

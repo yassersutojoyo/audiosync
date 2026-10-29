@@ -135,6 +135,8 @@ struct AirPlayTargetRow: Equatable {
     /// A member is out of view, plays nothing, or reports its partner
     /// unreachable, even when no name is known for it.
     let incomplete: Bool
+    /// A member in view asks for a password this run hasn't had.
+    var asksPassword = false
 }
 
 /// Something the native sender reported about a speaker, or about the stream
