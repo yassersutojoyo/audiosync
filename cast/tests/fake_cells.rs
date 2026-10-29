@@ -16,10 +16,12 @@ use audiosync_cast::discovery::{
     BrowseEvent, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent, ServiceRecord,
 };
 use audiosync_cast::group::GroupRecords;
+use audiosync_cast::host::{OUTPUT_SYNC, OutputSync};
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::{DEFAULT_MEDIA_RECEIVER, NS_MEDIA, NS_RECEIVER, PLATFORM};
 use audiosync_cast::session::{CastSession, Diagnostics, SessionConfig, SessionEvent};
-use common::{Behavior, Command, FakeDevice, app, json_message};
+use audiosync_cast::stream::QUEUE_LIMIT;
+use common::{Behavior, Command, FakeDevice, OnLoad, app, json_message};
 use serde_json::{Value, json};
 
 const ID: &str = "3f2a8c41d27e4b8f9a06c1d5e7f80b12";
@@ -576,6 +578,77 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
             lines[filled].0
         ),
     );
+}
+
+/// A device that reads the stream but reports `PLAYING` only `hold` after
+/// the start, as one whose startup latency is seconds (C74).
+fn holds_playing_back(hold: Duration) -> String {
+    let device = FakeDevice::start(Behavior {
+        on_load: OnLoad::NeverPlay,
+        ..Behavior::default()
+    });
+    let commands = device.commands();
+    let started = Instant::now();
+    let release = thread::spawn(move || {
+        thread::sleep(hold);
+        let _ = commands.send(playing_at(None));
+    });
+    let (mut session, _feed) = start(&device);
+    let waited = started.elapsed();
+    release.join().expect("the release thread");
+    assert!(waited >= hold, "playing after {waited:?}");
+    let seen = run(&mut session, Duration::from_secs(3));
+    let lines: Vec<&Diagnostics> = seen
+        .iter()
+        .filter_map(|event| match event {
+            SessionEvent::Diagnostics(line) => Some(line),
+            _ => None,
+        })
+        .collect();
+    assert!(lines.len() >= 2, "{seen:?}");
+    for line in &lines {
+        assert!(line.queued <= QUEUE_LIMIT, "{line:?}");
+    }
+    assert!(
+        !seen.iter().any(|event| matches!(
+            event,
+            SessionEvent::Ended(_)
+                | SessionEvent::Recovering(_)
+                | SessionEvent::Recovered { .. }
+                | SessionEvent::Reloaded
+                | SessionEvent::FormatFallback { .. }
+        )),
+        "{seen:?}"
+    );
+    assert_eq!(device.payloads(NS_RECEIVER, "LAUNCH").len(), 1);
+    assert_eq!(device.payloads(NS_MEDIA, "LOAD").len(), 1);
+    assert_eq!(device.fetches().len(), 1);
+    assert_eq!(device.connection_count(), 1);
+    assert_eq!(OUTPUT_SYNC, OutputSync::MeasuredOffset);
+    let queued = lines
+        .iter()
+        .map(|line| line.queued)
+        .max()
+        .unwrap_or_default();
+    session.stop();
+    device.join();
+    format!(
+        "PLAYING after {:.1} s: 1 LAUNCH, 1 LOAD, 1 fetch, queue at most {} ms, measured offset",
+        waited.as_secs_f64(),
+        queued.as_millis()
+    )
+}
+
+// covers: C74
+#[test]
+fn a_device_that_reports_playing_after_3_s_is_waited_for() {
+    cell("C74.3s", &holds_playing_back(Duration::from_secs(3)));
+}
+
+// covers: C74
+#[test]
+fn a_device_that_reports_playing_after_13_s_is_waited_for() {
+    cell("C74.13s", &holds_playing_back(Duration::from_secs(13)));
 }
 
 fn txt_record(port: u16, txt: &[&str]) -> ServiceRecord {
