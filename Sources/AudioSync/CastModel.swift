@@ -449,6 +449,9 @@ struct CastModel {
     private(set) var removedManual: Set<String> = []
     /// Devices another app took over, until the user turns one on again.
     private(set) var takenOver: Set<String> = []
+    /// A browsed device turned off by leaving the list with no session, until a
+    /// device appears or changes, the sender fails or one goes on.
+    private var leftOn: CastDevice?
 
     /// The devices listed, by name.
     var rows: [String] {
@@ -467,6 +470,7 @@ struct CastModel {
     mutating func apply(_ change: CastDeviceChange) -> CastOutcome? {
         switch change {
         case .appeared(let device, let offset, _), .changed(let device, let offset):
+            leftOn = nil
             if removedManual.contains(device.id) { return nil }
             if case .appeared(_, _, let former?) = change { identified(former, as: device.id) }
             if let offset, !offsetsWritten.contains(device.id) { offsets[device.id] = offset > 0 ? offset : nil }
@@ -478,6 +482,7 @@ struct CastModel {
             // One added by address leaves only when a browse finds it, which moves it to its ID (C18).
             if enabled == id, !isLive(id), removed?.manual != true {
                 enabled = nil
+                leftOn = removed
                 return .turnedOff(id, problem: .notResponding)
             }
             return removed == nil ? nil : .changed
@@ -568,6 +573,7 @@ struct CastModel {
     mutating func turnOn(_ id: String) -> CastProblem? {
         if let other = enabled, other != id { return .busy }
         enabled = id
+        leftOn = nil
         takenOver.remove(id)
         return nil
     }
@@ -642,13 +648,16 @@ struct CastModel {
             // The sender keeps the device in a session, a start included, and those added by address.
             devices = devices.filter { $0.key == attempt?.device || $0.key == starting || $0.value.manual }
             // A browsed device that is on but unlisted can't come back until AudioSync starts again.
-            if let id = enabled, devices[id] == nil, starting != id {
+            // The sender reports its browsed devices gone first, so one turned off that way gets this notice too.
+            if let id = enabled ?? leftOn?.id, devices[id] == nil, starting != id {
                 enabled = nil
+                leftOn = nil
                 return .turnedOff(id, problem: .searchStopped)
             }
             return .changed
         case .failed:
             let wasOn = enabled
+            leftOn = nil
             discovery = .failed
             devices = [:]
             attempt = nil
@@ -844,7 +853,9 @@ struct CastModel {
 
     /// The device that is on and its listed name, read before an event that
     /// may empty the list (a stopped search or sender) so its notice can name it.
-    var listedOn: [String: String] { enabled.map { [$0: listedName($0)] } ?? [:] }
+    var listedOn: [String: String] {
+        enabled.map { [$0: listedName($0)] } ?? leftOn.map { [$0.id: $0.name] } ?? [:]
+    }
 
     /// The device that is on counts for local outputs while it is in a
     /// session or listed online.
