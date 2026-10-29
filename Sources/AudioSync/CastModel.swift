@@ -113,8 +113,8 @@ enum CastProblem: Equatable {
     case blocked
     case takenOver
     case connectionLost
-    /// It left the list when discovery stopped, with no session to keep it.
-    case notFound
+    /// It left the list when AudioSync's own search stopped, with no session to keep it.
+    case searchStopped
 }
 
 enum CastError: Equatable {
@@ -634,7 +634,7 @@ struct CastModel {
             devices = devices.filter { $0.key == attempt?.device || $0.value.manual }
             if let id = enabled, devices[id] == nil, starting != id {
                 enabled = nil
-                return .turnedOff(id, problem: .notFound)
+                return .turnedOff(id, problem: .searchStopped)
             }
             return .changed
         case .failed:
@@ -819,6 +819,17 @@ struct CastModel {
         guard ms.isFinite else { return nil }
         return min(maxOffsetMs, max(0, ms.rounded()))
     }
+
+    /// The name `id` is listed under: the one it announces, else the
+    /// address it was added with; empty once it left the list.
+    func listedName(_ id: String) -> String {
+        let announced = devices[id]?.name ?? ""
+        return announced.isEmpty ? manualAddresses[id]?.text ?? "" : announced
+    }
+
+    /// The device that is on and its listed name, read before an event that
+    /// may empty the list (a stopped search or sender) so its notice can name it.
+    var listedOn: [String: String] { enabled.map { [$0: listedName($0)] } ?? [:] }
 
     /// The device that is on counts for local outputs while it is in a
     /// session or listed online.

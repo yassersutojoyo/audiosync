@@ -6942,8 +6942,20 @@ do {
     check(quietFirst.isEmpty && afterSecond == ["A"] && whilePlaying.isEmpty && keptLost == ["A"] && played == ["A"]
             && switchedOff == ["B"] && firstOnly.isEmpty && notice.lost == ["D"]
             && UIStrings().outputLost(name: "Desk") == "Desk was disconnected. It plays again as soon as it's back.",
-          "output stall: a second stall brings the disconnected notice; 5 s of play or a switch-off ends it, a stop reads it",
+          "output stall: a second stall brings the disconnected notice; 5 s of play or a switch-off ends it, a stop clears it",
           "\(afterSecond) \(whilePlaying) \(played) \(switchedOff) \(firstOnly) \(notice.lost)")
+    // Lost inside its trial, then a format reopen that fails for good: switched off with its could-not-start notice.
+    var failed = OutputStallRetry()
+    _ = failed.stalled("E", nowS: 200)
+    failed.started("E", nowS: 200.5)
+    _ = failed.stalled("E", nowS: 201)
+    failed.started("E", nowS: 211.2)
+    failed.forget("E")
+    let failedLost = failed.lost
+    let failedEnds = failed.settle(enabled: [], nowS: 212)
+    check(failedLost.isEmpty && failedEnds.isEmpty,
+          "output stall: an output switched off for a failed start leaves its stall, so its could-not-start notice stays",
+          "\(failedLost) \(failedEnds)")
 }
 // covers: S334, S335 (a Mac sitting on 2026-10-28: both watches fired between the will-sleep notice and the sleep)
 do {
@@ -9256,12 +9268,20 @@ do {
             && cleared && senderGone.items.map(\.subject) == [Notice.source],
           "cast: a sender that stopped clears every speaker's notice, and only those")
     check(t.castSenderStopped(speaker: "Kitchen").contains("Kitchen"), "cast: the sender's notice names the speaker that went off")
+    var named = CastModel()
+    named.apply(.appeared(CastDevice(id: "kitchen", name: "Kitchen"), offsetMs: nil))
+    _ = named.turnOn("kitchen")
+    let namedBefore = named.listedOn
+    _ = named.apply(.failed(detail: ""))
+    check(namedBefore == ["kitchen": "Kitchen"] && named.listedName("kitchen").isEmpty,
+          "cast: the speaker that was on is named as listed before the sender's failure empties the list",
+          "\(namedBefore)")
     var idleFailure = CastModel()
     check(idleFailure.apply(.failed(detail: "")) == .senderFailed(wasOn: nil), "cast: no speaker named when none was on")
     check(t.castList(.noneFound, localNetworkRefused: true)?.contains("Local Network") == true
             && t.castList(.noneFound)?.contains("Local Network") == false,
           "cast: none found points to Local Network access only once it was refused")
-    let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost, .notFound]
+    let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost, .searchStopped]
     check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
           "cast: every notice names the speaker, with no em dash")
     let bothNone = t.networkSpeakersNote(airPlayNone: true, cast: .noneFound) ?? ""
@@ -10398,9 +10418,10 @@ do {
     keptOn.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
     _ = keptOn.turnOn(manualID)
     let keptOutcome = keptOn.apply(.discoveryStopped)
-    check(unfound == .turnedOff(realID, problem: .notFound) && unplayed.enabled == nil
+    check(unfound == .turnedOff(realID, problem: .searchStopped) && unplayed.enabled == nil
             && keptOutcome == .changed && keptOn.enabled == manualID
-            && t.castProblem(.notFound, name: "Lounge") == "Lounge wasn't found on the network, so it's off.",
+            && t.castProblem(.searchStopped, name: "Lounge")
+                == "AudioSync stopped looking for Google Cast speakers, so Lounge is off. Restart AudioSync to try again.",
           "cast model: a speaker on with no session that leaves the list when discovery stops goes off with a notice",
           "\(String(describing: unfound)) \(String(describing: keptOutcome))")
 

@@ -198,6 +198,12 @@ struct OutputStallRetry {
         return before.subtracting(lost)
     }
 
+    /// Output `uid` failed to start for good and is switched off: its stall
+    /// ends without clearing the notice that says why (S334).
+    mutating func forget(_ uid: String) {
+        entries[uid] = nil
+    }
+
     mutating func reset() {
         entries = [:]
     }

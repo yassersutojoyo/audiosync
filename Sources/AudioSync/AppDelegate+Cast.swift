@@ -80,7 +80,7 @@ extension AppDelegate {
         for event in events {
             if let line = castLogLine(event) { DebugTrace.log("[AudioSync] Cast: " + line) }
             // A speaker that leaves the list with this event is named as it was listed.
-            let listed = castModel.enabled.map { [$0: castName($0)] } ?? [:]
+            let listed = castModel.listedOn
             guard let outcome = castModel.apply(event) else { continue }
             castOutcome(outcome, listed: listed)
         }
@@ -107,6 +107,7 @@ extension AppDelegate {
     }
 
     private func castOutcome(_ outcome: CastOutcome, listed: [String: String] = [:]) {
+        func named(_ id: String) -> String { listed[id].map { shownCastName(id, listedAs: $0) } ?? castName(id) }
         switch outcome {
         case .changed, .memoryChanged:
             break
@@ -116,10 +117,10 @@ extension AppDelegate {
             clearNotices([Notice.cast(id)])
         case .turnedOff(let id, let problem):
             DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) is off")
-            if let problem { postNotice(text.castProblem(problem, name: listed[id] ?? castName(id)), subject: Notice.cast(id)) }
+            if let problem { postNotice(text.castProblem(problem, name: named(id)), subject: Notice.cast(id)) }
         case .senderFailed(let wasOn):
             DebugTrace.log("[AudioSync] Cast: the sender stopped after an internal error")
-            let name = wasOn.map(castName)
+            let name = wasOn.map(named)
             castSender?.discard()
             castSender = nil
             // Its speakers left the list, so what was said about them no longer holds.
@@ -336,11 +337,10 @@ extension AppDelegate {
 
     /// A Cast speaker's name as the rows and notices show it: the user's,
     /// else the one it announces, else the address it was added with.
-    func castName(_ id: String) -> String {
-        let announced = castModel.devices[id]?.name ?? ""
-        let shown = announced.isEmpty ? castModel.manualAddresses[id]?.text ?? "" : announced
-        return speakerNames.shown(key: CastID.key(id),
-                                  system: text.deviceName(shown))
+    func castName(_ id: String) -> String { shownCastName(id, listedAs: castModel.listedName(id)) }
+
+    private func shownCastName(_ id: String, listedAs listed: String) -> String {
+        speakerNames.shown(key: CastID.key(id), system: text.deviceName(listed))
     }
 
     /// A group member as its row shows it: the listed device's name, the

@@ -420,6 +420,7 @@ extension AppDelegate {
             } else if let refusal = failure.refusal {
                 outputRefused(failure.uid, refusal, nowS: now)
             } else {
+                stallRetry.forget(failure.uid)
                 failures.append(failure)
             }
         }

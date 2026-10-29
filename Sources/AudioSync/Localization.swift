@@ -1394,8 +1394,8 @@ struct UIStrings {
             return "Another app started casting to \(name), so it's off in AudioSync."
         case .connectionLost:
             return "\(name) lost its connection, so it's off. Turn it on again to reconnect."
-        case .notFound:
-            return "\(name) wasn't found on the network, so it's off."
+        case .searchStopped:
+            return "AudioSync stopped looking for Google Cast speakers, so \(name) is off. Restart AudioSync to try again."
         }
     }
 
