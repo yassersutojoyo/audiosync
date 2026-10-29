@@ -2195,7 +2195,7 @@ struct SourcePicker: View {
     /// The menu hands its label image to AppKit, which ignores
     /// `accessibilityHidden`; `Image(systemName:)` made VoiceOver read the
     /// symbol's name ("Volume Higher") before the label.
-    private static func unnamedSymbol(_ name: String) -> Image {
+    static func unnamedSymbol(_ name: String) -> Image {
         Image(nsImage: NSImage(systemSymbolName: name, accessibilityDescription: nil) ?? NSImage())
     }
 }
@@ -2215,7 +2215,7 @@ struct PresetPicker: View {
             }
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "square.stack.3d.up.fill")
+                SourcePicker.unnamedSymbol("square.stack.3d.up.fill")
                     .frame(width: 18, height: 18)
                     .foregroundStyle(Brand.tealText)
                     .accessibilityHidden(true)
@@ -2224,6 +2224,9 @@ struct PresetPicker: View {
                     .lineLimit(1)
                 Spacer()
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(t.presets)
+            .accessibilityValue(current ?? t.choosePreset)
         }
         .menuStyle(.borderlessButton)
         .tint(.primary)   // as the source picker: the teal falls under 4.5:1 on the panel

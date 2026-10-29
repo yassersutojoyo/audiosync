@@ -131,10 +131,8 @@ extension AppDelegate {
             clearPresetNotice()
             return
         }
-        let repeated = appModel.notices.items.contains { $0.subject == Notice.presets && $0.text == message }
         postNotice(message, subject: Notice.presets, title: text.presetLeftOffTitle)
         presetNotice = PresetNotice.Cause(presetID: preset.id, leftOff: leftOff, nothingChanged: nothingChanged)
-        if !repeated { AccessibilityNotification.Announcement(message).post() }
     }
 
     private func clearPresetNotice() {

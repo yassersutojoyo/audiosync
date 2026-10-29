@@ -1140,10 +1140,10 @@ struct SpeakerRow: View {
                                 }
                             }
                             .controlSize(.small)
-                            .disabled(!volumeAdjustable)
+                            .disabled(volumeLocked != nil)
                             .accessibilityLabel(t.volume(of: speaker.name))
                             .accessibilityValue(t.volumeValue(speaker.volume))
-                            .hintAndHelp(speaker.cast?.volumeFixed == true ? t.castVolumeFixed : nil)
+                            .hintAndHelp(volumeLocked)
                             .modifier(CastVolumeKeys(step: speaker.isCast
                                 ? { up in model.actions.stepCastVolume(speaker.id, up) } : nil))
                             .focused($volumeFocused)
@@ -1276,9 +1276,8 @@ struct SpeakerRow: View {
     }
 
     /// The device's own volume moves only while a session reaches it.
-    private var volumeAdjustable: Bool {
-        guard let cast = speaker.cast else { return speaker.enabled }
-        return speaker.enabled && cast.live && !cast.volumeFixed
+    private var volumeLocked: String? {
+        model.text.volumeLocked(enabled: speaker.enabled, cast: speaker.cast)
     }
 
     /// Mute and Resync under a Cast speaker's volume while it connects or plays.
@@ -1437,7 +1436,7 @@ private struct DelayValueButton: View {
         .buttonStyle(.plain)
         .focused(focus)
         .help(t.syncAdjust)
-        .accessibilityLabel(label)
+        .accessibilityLabel(expanded ? t.hideDelayControls(label) : t.showDelayControls(label))
         .accessibilityValue(value)
         .accessibilityHint(t.syncAdjust)
         .onChange(of: value) { _, now in DebugTrace.log(DelayBadge.traceLine(id: id, shows: now)) }
@@ -2010,6 +2009,10 @@ struct SyncControls: View {
         Button(text.delayStep(delta)) {
             if let value = draft.field.step(Double(delta), saved: savedMs, sanitize: clamped, format: shown) {
                 applied(value, "step")
+                // The delay value announces it instead while the field has the focus.
+                if !draft.fieldFocused, let now = model.savedDelayText(of: id) {
+                    AccessibilityNotification.Announcement(text.delaySet(label, to: now)).post()
+                }
             }
         }
             .accessibilityLabel(text.delayStepAccessibility(delta))

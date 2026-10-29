@@ -169,6 +169,9 @@ struct UIStrings {
     func delay(of name: String) -> String { "\(name) delay" }
     /// VoiceOver, as a delay applies while its panel is open: "Desk delay set to +150 ms".
     func delaySet(_ label: String, to value: String) -> String { "\(label) set to \(value)" }
+    /// The delay value's VoiceOver label, which says whether its controls are open.
+    func showDelayControls(_ label: String) -> String { "Show controls for \(label)" }
+    func hideDelayControls(_ label: String) -> String { "Hide controls for \(label)" }
     func delayStep(_ delta: Int) -> String { delta < 0 ? "−\(-delta)" : "+\(delta)" }
     func delayStepAccessibility(_ delta: Int) -> String {
         delta < 0 ? "Decrease delay by \(-delta) \(millisecondsUnit)"
@@ -1343,8 +1346,12 @@ struct UIStrings {
     let castVolumeFixed = "This speaker's volume can't be changed from AudioSync."
     /// Why a speaker's volume slider is dimmed, as its hint and tooltip; nil while it moves.
     func volumeLocked(enabled: Bool, cast: CastRow?) -> String? {
-        cast?.volumeFixed == true ? castVolumeFixed : nil
+        if cast?.volumeFixed == true { return castVolumeFixed }
+        if !enabled { return volumeSpeakerOff }
+        return cast?.live == false ? castVolumeNotLive : nil
     }
+    let volumeSpeakerOff = "Turn this speaker on to change its volume."
+    let castVolumeNotLive = "This speaker's volume can be changed while AudioSync plays to it."
     /// Under a Cast speaker's delay field, in place of the sync hint (CAST_SPEC C74-C77).
     let castSyncHint = "AudioSync can't sync Google Cast speakers automatically, so it keeps the others only "
         + "roughly in step with this one. Set this by ear: heard this speaker late? Raise the value, and the "
