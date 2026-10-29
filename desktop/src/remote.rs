@@ -245,6 +245,7 @@ pub fn snapshot(
             title: track.title.clone(),
             artist: track.artist.clone(),
             source: app_name(&track.app_id),
+            playing: track.playing,
         }),
         speakers,
         zones: zones(state, &listed_now),
@@ -290,16 +291,19 @@ fn zones(state: &AppState, listed_now: &[&Speaker]) -> Vec<RemoteZone> {
                 u32::try_from(members.iter().filter(|speaker| test(speaker)).count())
                     .unwrap_or(u32::MAX)
             };
+            // As the speaker's own switch shows it.
+            let on = |speaker: &Speaker| !state.speaker_state(speaker).click_turns_on();
             RemoteZone {
                 id: zone.id.clone(),
                 name: zone.name.clone(),
                 volume: volume(zone.volume),
                 members: members.iter().map(|speaker| speaker.id.clone()).collect(),
                 counts: ZoneCounts {
-                    on: count(&|speaker| speaker.enabled),
+                    on: count(&on),
                     total: count(&|_| true),
+                    all: u32::try_from(state.zone_counts(zone).total).unwrap_or(u32::MAX),
                     waiting: count(&|speaker| {
-                        speaker.enabled
+                        on(speaker)
                             && matches!(
                                 speaker.waiting,
                                 Some(Waiting::ForAirPlay2Slot | Waiting::ForPtp)
@@ -1127,7 +1131,8 @@ mod tests {
             ZoneCounts {
                 on: 2,
                 total: 3,
-                waiting: 1
+                waiting: 1,
+                all: 4
             }
         );
         assert_eq!(snapshot.zones[1].counts.total, 0);
@@ -1142,6 +1147,39 @@ mod tests {
             State::from_json(&snapshot.to_json(0)).is_ok(),
             "the snapshot passes the crate's checks"
         );
+    }
+
+    // covers: S256
+    #[test]
+    fn a_zone_counts_on_as_its_switches_show_and_its_absent_members_in_all() {
+        let mut state = zoned();
+        state.running = false;
+        let snapshot = snapshot(&state, not_virtual, None, "Desk PC", &Text);
+        let downstairs = &snapshot.zones[0];
+        assert!(
+            downstairs
+                .members
+                .iter()
+                .all(|id| !snapshot.speaker(id).unwrap().on),
+            "with streaming off every switch shows off"
+        );
+        assert_eq!((downstairs.counts.on, downstairs.counts.waiting), (0, 0));
+        let written: serde_json::Value = serde_json::from_str(&snapshot.to_json(0)).unwrap();
+        assert_eq!(written["zones"][0]["counts"]["all"], 4);
+        assert_eq!(
+            written["zones"][1]["counts"]["all"], 1,
+            "the page lists none of Studio's members"
+        );
+        assert!(State::from_json(&snapshot.to_json(0)).is_ok());
+    }
+
+    // covers: S343
+    #[test]
+    fn a_paused_track_goes_out_as_paused() {
+        let track = crate::now_playing_card::fake::track("Spotify.exe", "Song", "Band", false);
+        let snapshot = snapshot(&state(), not_virtual, Some(&track), "Desk PC", &Text);
+        let written: serde_json::Value = serde_json::from_str(&snapshot.to_json(0)).unwrap();
+        assert_eq!(written["now_playing"]["playing"], false);
     }
 
     // covers: S257

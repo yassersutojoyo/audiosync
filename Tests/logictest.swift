@@ -10330,8 +10330,12 @@ do {
           "web remote: the same state gives the same text, so the core sends nothing new")
     let playing = RemoteSnapshot(computerName: "", master: 50,
                                  nowPlaying: .init(title: "Song", artist: "Band", source: "Music"), rows: []).json
-    check(playing.contains("\"now_playing\":{\"artist\":\"Band\",\"source\":\"Music\",\"title\":\"Song\"}"),
+    check(playing.contains("\"now_playing\":{\"artist\":\"Band\",\"playing\":true,\"source\":\"Music\",\"title\":\"Song\"}"),
           "web remote: Now Playing goes out with title, artist and source app", playing)
+    let paused = RemoteSnapshot(computerName: "", master: 50,
+                                nowPlaying: .init(title: "Song", artist: "Band", source: "Music", playing: false),
+                                rows: []).json
+    check(paused.contains("\"playing\":false"), "web remote: a paused track goes out as paused", paused)
 
     let entries = SourceList.entries(systemName: "All System Audio", apps: [(bundleID: "com.apple.Music", name: "Music")],
                                      inputs: [SourceList.Input(uid: "BuiltInMic", name: "MacBook Microphone",
@@ -10450,10 +10454,10 @@ do {
     let zoneObjects = zonedObject?["zones"] as? [[String: Any]] ?? []
     let presetObjects = zonedObject?["presets"] as? [[String: Any]] ?? []
     check(zoneObjects.first?["members"] as? [String] == ["hp", "usb", "bt"]
-            && zoneObjects.first?["counts"] as? [String: Int] == ["on": 2, "total": 3, "waiting": 1]
+            && zoneObjects.first?["counts"] as? [String: Int] == ["on": 2, "total": 3, "waiting": 1, "all": 4]
             && zoneObjects.first?["volume"] as? Double == 70
-            && zoneObjects.last?["counts"] as? [String: Int] == ["on": 0, "total": 0, "waiting": 0],
-          "web remote: a zone lists its listed members in zone order with on, total and waiting; a hidden one doesn't count",
+            && zoneObjects.last?["counts"] as? [String: Int] == ["on": 0, "total": 0, "waiting": 0, "all": 1],
+          "web remote: a zone lists its listed members in zone order with on, total and waiting; one not listed counts only in all",
           "\(zoneObjects)")
     check(presetObjects.map { $0["id"] as? String ?? "" } == ["p1", "p2"]
             && presetObjects.map { $0["current"] as? Bool ?? false } == [true, false]
