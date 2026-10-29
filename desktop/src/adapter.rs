@@ -5774,6 +5774,40 @@ mod tests {
 
     // covers: S329
     #[test]
+    fn an_input_followed_by_a_source_listing_opens_on_its_channel_pair() {
+        const MOVED: &str = "{0.0.1.00000000}.{mic-port-2}";
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Interface (USB Audio)", "USB");
+        adapter.audio.set_input_channels(MIC, 6);
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.set_running(true);
+        adapter.select_input_pair(1);
+        adapter.audio.disconnect_input(MIC);
+        for _ in 0..10 {
+            adapter.poll();
+        }
+        adapter
+            .audio
+            .connect_input(MOVED, "Interface (2- USB Audio)", "USB");
+        adapter.audio.set_input_channels(MOVED, 6);
+        // The source listing finds the device before a poll does.
+        adapter.refresh_sources();
+        for _ in 0..4 {
+            adapter.poll();
+        }
+        assert_eq!(
+            input_pair_captures(&adapter).last(),
+            Some(&(MOVED.to_owned(), 1))
+        );
+        assert_eq!(adapter.snapshot().input_pair, 1);
+    }
+
+    // covers: S329
+    #[test]
     fn an_input_device_away_never_follows_a_twin_plugged_in_while_it_played() {
         const TWIN: &str = "{0.0.1.00000000}.{mic-twin}";
         let mut adapter = adapter();
