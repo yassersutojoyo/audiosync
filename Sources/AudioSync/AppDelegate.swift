@@ -82,7 +82,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// before that and after it stopped working.
     var castSender: CastSender?
     /// The Cast devices listed, the one that is on, and its session.
-    var castModel = CastModel()
+    var castModel = CastModel() {
+        didSet { store.save(cast: castModel, was: oldValue) }
+    }
     /// Whether the notice that AirPlay plays ahead of it is up (`syncNetworkHoldBacks`).
     var airPlayAheadNotice = AirPlayAheadNotice()
 
@@ -343,6 +345,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if speakerNames != saved.speakerNames { store.save(speakerNames: speakerNames) }
         _ = castModel.setMaster(saved.master)
         _ = castModel.setZones(SpeakerZone.volumes(zones, kind: .cast))
+        castModel.savedOn = saved.castOnAtLaunch
     }
 
     /// The one-time migration of the absolute delays to offsets (S179), with

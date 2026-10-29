@@ -410,6 +410,9 @@ struct CastModel {
     private(set) var devices: [String: CastDevice] = [:]
     /// The one device the user turned on.
     private(set) var enabled: String?
+    /// The device saved as on at the last quit: it turns on once listed,
+    /// unless the user switched a Cast speaker on first (C112).
+    var savedOn: String?
     /// The selection the sender was last told of; nil until it heard one.
     private var namedSelection: CastSelection?
     /// The current session; its events are the only ones that count.
@@ -475,6 +478,10 @@ struct CastModel {
             leftOn = nil
             if removedManual.contains(device.id) { return nil }
             if case .appeared(_, _, let former?) = change { levelDue = identified(former, as: device.id) }
+            if savedOn == device.id {
+                savedOn = nil
+                if enabled == nil { enabled = device.id }
+            }
             if let offset, !offsetsWritten.contains(device.id) { offsets[device.id] = offset > 0 ? offset : nil }
             let changed = devices[device.id] != device
             devices[device.id] = device
@@ -525,6 +532,7 @@ struct CastModel {
         if let address = manualAddresses.removeValue(forKey: old) { manualAddresses[new] = address }
         if takenOver.remove(old) != nil { takenOver.insert(new) }
         if enabled == old { enabled = new }
+        if savedOn == old { savedOn = new }
         if starting == old { starting = new }
         if let current = attempt, current.device == old {
             attempt = Attempt(number: current.number, device: new, status: current.status,
@@ -598,6 +606,7 @@ struct CastModel {
         if let other = enabled, other != id { return .busy }
         enabled = id
         leftOn = nil
+        savedOn = nil
         takenOver.remove(id)
         return nil
     }
