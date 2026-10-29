@@ -6352,6 +6352,23 @@ mod tests {
         assert_eq!(adapter.snapshot().zones[0].name, "Den Study");
     }
 
+    // covers: S150
+    #[test]
+    fn a_new_zones_name_is_cleaned_as_a_renamed_ones() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.new_zone(&format!(" {}\n", "a".repeat(65))).unwrap();
+        adapter.new_zone_with(&key(HEADPHONES), "Den\nStudy");
+        let names: Vec<String> = adapter
+            .snapshot()
+            .zones
+            .into_iter()
+            .map(|z| z.name)
+            .collect();
+        let long = "a".repeat(crate::speaker_names::MAX_NAME_CHARS);
+        assert_eq!(names, [long.as_str(), "Den Study"]);
+    }
+
     #[test]
     fn a_speaker_moves_between_zones_from_its_menu() {
         let mut adapter = adapter();
