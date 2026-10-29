@@ -3641,6 +3641,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.cast.as_ref().is_some_and(CastSpeakers::is_on)
     }
 
+    fn cast_enabled(&self) -> Option<String> {
+        self.cast.as_ref().and_then(CastSpeakers::enabled_id)
+    }
+
     fn set_cast_enabled(&mut self, id: &str, enabled: bool) -> Result<(), CastProblem> {
         let Some(cast) = self.cast.as_mut() else {
             return if enabled {

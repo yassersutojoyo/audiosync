@@ -457,6 +457,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// asks for a code every time stays on while listed. The marks go when
     /// a stream that ran stops (S223).
     airplay_on_by_hand: BTreeSet<String>,
+    /// Set while a web remote command runs: the AirPlay speakers it switches
+    /// on start no attempt, so they never pair or prompt (S257).
+    from_phone: bool,
     /// Whether streaming ran at the last look, to tell when it stopped.
     streamed: bool,
     /// The last name of every AirPlay speaker listed.
@@ -667,6 +670,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             left_behind: BTreeSet::new(),
             airplay_listed: BTreeSet::new(),
             airplay_on_by_hand: BTreeSet::new(),
+            from_phone: false,
             streamed: false,
             airplay_quiet_polls: 0,
             airplay_names: BTreeMap::new(),
@@ -1367,8 +1371,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Results that no longer describe the stored delays go: a measured
     /// speaker's delay changed before Apply (its new value would undo that
-    /// change), or a value Apply wrote changed since (Undo would undo it).
-    /// Returns whether the card changed.
+    /// change) or the reference changed before Apply, or a value Apply wrote
+    /// changed since (Undo would undo it). Returns whether the card changed.
     fn follow_calibrate_all(&mut self) -> bool {
         if self.calibrate_all.run.is_some() {
             return false;
@@ -1409,18 +1413,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if kept.sheet.applied() || kept.sheet.ended().is_some() {
             return false;
         }
+        let reference = self.audio.calibration_engine().reference;
         let moved = kept
             .sheet
             .rows()
             .iter()
             .zip(&kept.members)
-            .filter(|(row, _)| row.state != RowState::Reference)
-            .any(|(_, m)| !holds(self.calibrated_now(m.class, &m.id), m.offset_ms));
+            .any(|(row, m)| match row.state {
+                RowState::Reference => reference.as_ref().is_some_and(|now| *now != m.id),
+                _ => !holds(self.calibrated_now(m.class, &m.id), m.offset_ms),
+            });
         if !moved {
             return false;
         }
-        self.log
-            .log(|| "Calibrate All: a delay changed before Apply, the results go".to_owned());
+        self.log.log(|| {
+            "Calibrate All: a delay or the reference changed before Apply, the results go"
+                .to_owned()
+        });
         self.calibrate_all.sheet = None;
         self.calibrate_all.phase = AllPhase::Stale;
         self.calibrate_all.endings += 1;
@@ -2198,6 +2207,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         zone: &Zone,
         keep_off: &[String],
     ) -> Vec<(SpeakerKey, bool, zones::Member)> {
+        let enabled_outputs = self.audio.enabled_outputs();
+        let enabled_airplay = self.audio.enabled_airplay();
+        let enabled_cast = self.audio.cast_enabled();
         zone.members
             .iter()
             .filter_map(|text| {
@@ -2210,7 +2222,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     (SpeakerKey::AirPlay(id), _) if is_airplay_target(id) => MemberKind::AirPlay2,
                     (SpeakerKey::AirPlay(_), _) => MemberKind::AirPlay,
                 };
-                let on = listed.is_some_and(|speaker| speaker.enabled);
+                // An unplugged output or a gone speaker stays on until its zone goes off.
+                let on = match (listed, &key) {
+                    (Some(speaker), _) => speaker.enabled,
+                    (None, SpeakerKey::Local(id)) => enabled_outputs.contains(id),
+                    (None, SpeakerKey::AirPlay(id)) => enabled_airplay.contains(id),
+                    (None, SpeakerKey::Cast(id)) => enabled_cast.as_ref() == Some(id),
+                };
                 let member = zones::Member {
                     kind,
                     listed: listed.is_some() && !keep_off.contains(text),
@@ -2586,7 +2604,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
-            own_volume: None,
+            own_volume: speaker.volume_known.then_some(speaker.volume),
             device_volume: None,
             waiting: (speaker.enabled && speaker.status == CastStatus::Reconnecting)
                 .then_some(Waiting::Reconnecting),
@@ -3443,7 +3461,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.airplay_on_by_hand.remove(id);
         }
         self.audio.set_airplay_enabled(id, on)?;
-        if on {
+        if on && !self.from_phone {
             self.audio.begin_airplay_attempt(id);
         }
         Ok(())
@@ -4671,11 +4689,21 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn toggle_zone_from_phone(&mut self, id: &str, keep_off: &[String]) {
+        self.from_phone = true;
         self.toggle_zone_keeping_off(id, keep_off);
+        self.from_phone = false;
     }
 
     fn recall_preset_from_phone(&mut self, id: &str, keep_off: &[String]) {
+        self.from_phone = true;
         let _ = self.recall_preset_keeping_off(id, keep_off);
+        self.from_phone = false;
+    }
+
+    fn set_speaker_enabled_from_phone(&mut self, id: &str, on: bool) {
+        self.from_phone = true;
+        self.set_speaker_enabled(id, on);
+        self.from_phone = false;
     }
 
     fn new_zone(&mut self, name: &str) -> Result<(), ZoneError> {
@@ -5119,6 +5147,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn apply_calibrate_all(&mut self) {
+        if self.follow_calibrate_all() {
+            return;
+        }
         if self.calibrate_all.run.is_some() {
             return;
         }
@@ -5330,6 +5361,7 @@ fn ui_cast_problem(problem: CastProblem) -> ui_model::CastProblem {
         CastProblem::Blocked => P::Blocked,
         CastProblem::TakenOver => P::TakenOver,
         CastProblem::ConnectionLost => P::ConnectionLost,
+        CastProblem::SearchStopped => P::SearchStopped,
     }
 }
 
@@ -6308,13 +6340,63 @@ mod tests {
         assert_eq!(state.zone_state(&zone), SpeakerState::Playing);
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
 
-        // An absent member is left alone.
+        // An absent member goes off with its zone, so it stays off when it is back.
         adapter.audio_mut().disconnect_output(HEADPHONES);
         adapter.poll();
         adapter.toggle_zone(&zone.id);
         assert!(!enabled(&adapter, SPEAKERS));
-        assert_eq!(adapter.audio.enabled_outputs(), [HEADPHONES]);
-        assert!(adapter.snapshot().running, "the absent member is still on");
+        assert!(adapter.audio.enabled_outputs().is_empty());
+        assert!(!adapter.snapshot().running);
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_switched_off_turns_its_gone_airplay_member_off() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.poll();
+        adapter.add_zone("Lounge", &[key(SPEAKERS), ap(&kitchen)]);
+        // Gone while streaming is down: the sender drops it, so it isn't listed.
+        adapter.audio_mut().fail_capture(BackendError::System {
+            call: "IAudioCaptureClient::GetBuffer",
+            code: 1,
+        });
+        adapter.poll();
+        fake.gone(&kitchen);
+        adapter.poll();
+        turn_on(&mut adapter, HEADPHONES);
+        assert!(adapter.snapshot().running);
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_none());
+        assert_eq!(adapter.audio.enabled_airplay(), [id_of(&kitchen)]);
+        adapter.toggle_zone("zone:1");
+        assert!(!enabled(&adapter, SPEAKERS));
+        assert!(adapter.audio.enabled_airplay().is_empty());
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_switched_off_turns_its_gone_cast_member_off() {
+        let (mut adapter, fake) = cast_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.poll();
+        adapter.add_zone("Lounge", &[key(SPEAKERS), cc(CAST_KITCHEN)]);
+        // Gone with no session: it leaves the list but stays on.
+        adapter.audio_mut().fail_capture(BackendError::System {
+            call: "IAudioCaptureClient::GetBuffer",
+            code: 1,
+        });
+        adapter.poll();
+        fake.withdraw(CAST_KITCHEN, "Kitchen");
+        adapter.poll();
+        turn_on(&mut adapter, HEADPHONES);
+        assert!(adapter.snapshot().running);
+        assert!(adapter.snapshot().speaker(&cc(CAST_KITCHEN)).is_none());
+        assert!(adapter.audio.cast_on());
+        adapter.toggle_zone("zone:1");
+        assert!(!enabled(&adapter, SPEAKERS));
+        assert!(!adapter.audio.cast_on());
     }
 
     #[test]
@@ -11169,6 +11251,66 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(95.0));
     }
 
+    // covers: S238
+    #[test]
+    fn calibrate_all_results_go_once_the_reference_changes_before_apply() {
+        let mut audio = reference_audio();
+        audio.connect_output_as("builtin2", "Headphones", OutputKind::BuiltIn);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        for id in ["builtin", "bluetooth", "builtin2"] {
+            turn_on(&mut adapter, id);
+        }
+        adapter.set_speaker_delay(&key("bluetooth"), 80.0);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::local_sheet(&[
+                ("builtin", 0.0, 2010.0),
+                ("bluetooth", 80.0, 2190.0),
+            ]),
+        );
+        adapter.poll();
+        assert!(adapter.snapshot().calibrate_all.sheet.is_some());
+
+        // Its endpoint disabled in Windows Sound, the other built-in output
+        // becomes the reference (S174).
+        unplug(&mut adapter, "builtin");
+        adapter.apply_calibrate_all();
+        let state = adapter.snapshot().calibrate_all;
+        assert_eq!(state.sheet, None, "measured against a reference that went");
+        assert_eq!(state.phase, AllPhase::Stale);
+        assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
+    }
+
+    // covers: S238
+    #[test]
+    fn an_apply_before_the_next_poll_writes_nothing_once_the_reference_changed() {
+        let mut audio = reference_audio();
+        audio.connect_output_as("builtin2", "Headphones", OutputKind::BuiltIn);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        for id in ["builtin", "bluetooth", "builtin2"] {
+            turn_on(&mut adapter, id);
+        }
+        adapter.set_speaker_delay(&key("bluetooth"), 80.0);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::local_sheet(&[
+                ("builtin", 0.0, 2010.0),
+                ("bluetooth", 80.0, 2190.0),
+            ]),
+        );
+        adapter.poll();
+        assert!(adapter.snapshot().calibrate_all.sheet.is_some());
+
+        // Listing the devices again by hand takes the change in between polls.
+        adapter.audio_mut().disconnect_output("builtin");
+        adapter.refresh_devices();
+        adapter.apply_calibrate_all();
+        let state = adapter.snapshot().calibrate_all;
+        assert_eq!(state.sheet, None, "measured against a reference that went");
+        assert_eq!(state.phase, AllPhase::Stale);
+        assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(80.0));
+    }
+
     fn keep(
         adapter: &mut AudioAdapter<MockBackend>,
         (sheet, members, rate): (Sheet, Vec<Member>, u32),
@@ -12884,6 +13026,26 @@ mod tests {
         let level = *fake.state().volumes.last().expect("a Cast volume");
         assert!((level - 0.21).abs() < 1e-9, "{level}");
         assert_eq!(speaker_of(&adapter, &cc(CAST_KITCHEN)).volume, 30.0);
+    }
+
+    // covers: S251
+    #[test]
+    fn a_preset_skips_the_volume_of_a_cast_speaker_that_never_reported_one() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        let kitchen = |adapter: &AudioAdapter<MockBackend>| {
+            let preset = adapter.capture_preset("preset:1", "Evening").unwrap();
+            preset
+                .members
+                .iter()
+                .find(|m| m.key == cc(CAST_KITCHEN))
+                .unwrap()
+                .volume
+        };
+        assert_eq!(kitchen(&adapter), None, "no status reported a level yet");
+
+        cast_first_status(&mut adapter, &fake, 0.8);
+        assert!(kitchen(&adapter).is_some());
     }
 
     fn cast_first_status(adapter: &mut AudioAdapter<MockBackend>, fake: &FakeCast, level: f64) {

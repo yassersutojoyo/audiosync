@@ -470,7 +470,9 @@ impl App {
                     let mut backend = self.backend.borrow_mut();
                     for action in actions {
                         match action {
-                            Action::Enable { id, on } => backend.set_speaker_enabled(&id, on),
+                            Action::Enable { id, on } => {
+                                backend.set_speaker_enabled_from_phone(&id, on);
+                            }
                             Action::Volume { id, volume } => {
                                 backend.set_speaker_volume(&id, volume);
                             }
@@ -673,7 +675,16 @@ mod tests {
 
     use std::sync::Arc;
 
+    use audiosync_airplay::discovery::Device;
+    use audiosync_airplay::error::ErrorKind;
+    use audiosync_airplay::sender::SpeakerState as AirPlayState;
+
     use super::super::tests::{app_over, draw_frames, press};
+    use crate::adapter::AudioAdapter;
+    use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, airplay2_tv, device, id_of};
+    use crate::audio::pairings::PairingStore;
+    use crate::audio::pairings::tests::homekit;
+    use crate::debug_log::DebugLog;
     use crate::network_profile::{Category, ProfileSource};
     use crate::remote::RemoteSettings;
     use crate::ui_model::{MockBackend, NoticeMessage};
@@ -1211,6 +1222,151 @@ mod tests {
             app.snapshot().pin_prompt.is_some(),
             "a recall at the PC still turns it on and asks for the code"
         );
+    }
+
+    /// The App over the real adapter, whose sender lists `speaker`, with the
+    /// AirPlay 2 key an earlier run kept for it when `key` is set.
+    fn over_airplay(speaker: &Device, key: bool) -> (std::rc::Rc<super::App>, FakeAirPlay) {
+        let mut audio = crate::audio::mock::MockBackend::empty();
+        audio.connect_output("speakers", "Speakers");
+        let fake = FakeAirPlay::new();
+        if key {
+            fake.set_airplay2(true);
+            let mut store = PairingStore::in_memory();
+            store.open_airplay2();
+            store
+                .insert_homekit(&id_of(speaker), homekit(0x33))
+                .expect("kept in memory");
+            audio.set_airplay_with_pairings(fake.link(), None, store);
+        } else {
+            audio.set_airplay(fake.link(), None);
+        }
+        fake.appear(speaker);
+        let adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        let app = app_over(adapter);
+        app.poll();
+        (app, fake)
+    }
+
+    fn from_phone(app: &super::App, command: audiosync_remote::Command) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.remote.borrow_mut().commands = Some(receiver);
+        sender.send(command).expect("sent");
+        app.take_remote_commands();
+    }
+
+    fn switch_on(id: &str) -> audiosync_remote::Command {
+        audiosync_remote::Command::Speaker {
+            id: id.to_owned(),
+            change: audiosync_remote::SpeakerChange {
+                on: Some(true),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// `id`, turned down by the speaker during a phone's switch-on, is off
+    /// with a notice; no prompt opens and no pairing starts.
+    fn assert_off_without_asking(app: &super::App, fake: &FakeAirPlay, id: &str) {
+        let calls = fake.take_calls();
+        assert!(
+            !calls
+                .iter()
+                .any(|call| matches!(call, Call::StartPairing(_))),
+            "{calls:?}"
+        );
+        let state = app.snapshot();
+        assert_eq!(state.password_prompt, None);
+        assert!(!app.password_dialog.window().is_visible());
+        assert_eq!(state.pin_prompt, None);
+        assert!(!app.pin_dialog.window().is_visible());
+        assert!(!state.speaker(id).expect("listed").enabled);
+        assert!(
+            state
+                .notices
+                .iter()
+                .any(|notice| matches!(notice.message, NoticeMessage::AirPlayCantPlay { .. })),
+            "{:?}",
+            state.notices
+        );
+    }
+
+    // covers: S257
+    #[test]
+    fn a_phone_switch_on_whose_stored_key_is_turned_down_opens_no_pin_dialog() {
+        let loft = airplay2_tv(9, "Loft");
+        let (app, fake) = over_airplay(&loft, true);
+        let id = format!("ap:{}", id_of(&loft));
+        from_phone(&app, switch_on(&id));
+        fake.fail(&loft, ErrorKind::PairingRequired);
+        app.poll();
+        assert_off_without_asking(&app, &fake, &id);
+    }
+
+    // covers: S257
+    #[test]
+    fn a_phone_zone_toggle_whose_member_turns_its_stored_key_down_opens_no_pin_dialog() {
+        let loft = airplay2_tv(9, "Loft");
+        let (app, fake) = over_airplay(&loft, true);
+        let id = format!("ap:{}", id_of(&loft));
+        app.backend.borrow_mut().new_zone_with(&id, "Upstairs");
+        let zone = app.snapshot().zones[0].id.clone();
+        from_phone(
+            &app,
+            audiosync_remote::Command::Zone {
+                id: zone,
+                change: audiosync_remote::ZoneChange {
+                    toggle: true,
+                    volume: None,
+                },
+            },
+        );
+        fake.fail(&loft, ErrorKind::PairingRequired);
+        app.poll();
+        assert_off_without_asking(&app, &fake, &id);
+    }
+
+    // covers: S257
+    #[test]
+    fn a_phone_recall_whose_member_turns_its_stored_key_down_opens_no_pin_dialog() {
+        let loft = airplay2_tv(9, "Loft");
+        let (app, fake) = over_airplay(&loft, true);
+        let id = format!("ap:{}", id_of(&loft));
+        app.backend.borrow_mut().set_speaker_enabled(&id, true);
+        fake.state(&loft, AirPlayState::Playing);
+        app.poll();
+        app.backend
+            .borrow_mut()
+            .save_preset("Night")
+            .expect("saved");
+        app.backend.borrow_mut().set_speaker_enabled(&id, false);
+        app.poll();
+        let preset = app.snapshot().presets[0].id.clone();
+        from_phone(&app, audiosync_remote::Command::Preset { id: preset });
+        fake.fail(&loft, ErrorKind::PairingRequired);
+        app.poll();
+        assert_off_without_asking(&app, &fake, &id);
+    }
+
+    // covers: S257
+    #[test]
+    fn a_phone_switch_on_whose_password_is_turned_down_opens_no_password_dialog() {
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let (app, fake) = over_airplay(&kitchen, false);
+        let id = format!("ap:{}", id_of(&kitchen));
+        app.backend.borrow_mut().set_speaker_enabled(&id, true);
+        fake.fail(&kitchen, ErrorKind::PasswordRequired);
+        app.poll();
+        app.backend.borrow_mut().submit_password(&id, "hunter2");
+        fake.state(&kitchen, AirPlayState::Playing);
+        app.poll();
+        app.backend.borrow_mut().set_speaker_enabled(&id, false);
+        app.poll();
+
+        from_phone(&app, switch_on(&id));
+        fake.fail(&kitchen, ErrorKind::WrongPassword);
+        app.poll();
+        assert_off_without_asking(&app, &fake, &id);
     }
 
     struct FakeProfiles(std::sync::Mutex<Vec<Category>>);

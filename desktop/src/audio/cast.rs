@@ -943,7 +943,7 @@ impl CastSpeakers {
         let reported = self.volumes.get(&id);
         let level = self
             .own_of(id)
-            .unwrap_or_else(|| reported.map_or(1.0, |volume| volume.level));
+            .or_else(|| reported.map(|volume| volume.level));
         let session = self.attempt.filter(|attempt| attempt.device == id);
         let status = session.map_or(CastStatus::Idle, |attempt| attempt.status);
         CastInfo {
@@ -953,7 +953,8 @@ impl CastSpeakers {
             address,
             offline: !self.entry(id).is_some_and(|entry| entry.online),
             enabled: self.enabled == Some(id),
-            volume: (level * 100.0).clamp(0.0, 100.0),
+            volume: (level.unwrap_or(1.0) * 100.0).clamp(0.0, 100.0),
+            volume_known: level.is_some(),
             muted: reported.is_some_and(|volume| volume.muted),
             volume_fixed: reported.is_some_and(|volume| volume.control_type == ControlType::Fixed),
             volume_step: volume_step(reported),
@@ -972,6 +973,11 @@ impl CastSpeakers {
     /// still refuses another (spec C2).
     pub fn is_on(&self) -> bool {
         self.enabled.is_some()
+    }
+
+    /// The ID of the device that is on, listed or not.
+    pub fn enabled_id(&self) -> Option<String> {
+        self.enabled.map(|id| id.to_string())
     }
 
     /// Whether a device is on and either listed or in a session: then local
@@ -1522,9 +1528,28 @@ impl CastSpeakers {
         while let Some(event) = self.link.as_mut().and_then(|link| link.poll_event()) {
             self.handle(event);
         }
+        self.off_when_discovery_stopped();
         self.feed.flush();
         self.sync();
         dedup_changed(std::mem::take(&mut self.pending))
+    }
+
+    /// A browsed device that is on with no session and left the list can't
+    /// come back once discovery stopped, so it goes off and no longer
+    /// refuses another (S339).
+    fn off_when_discovery_stopped(&mut self) {
+        let Some(id) = self.enabled else { return };
+        if self.discovery() != CastDiscovery::Failed
+            || self.entry(id).is_some()
+            || self.attempt.is_some_and(|attempt| attempt.device == id)
+            || self.manual.iter().any(|manual| manual.id == id)
+        {
+            return;
+        }
+        self.log
+            .log(|| format!("Cast: {id} switched off, discovery stopped"));
+        self.enabled = None;
+        self.fail(id, CastProblem::SearchStopped);
     }
 
     /// What a group announces, when it is first listed (C89).
@@ -1797,6 +1822,8 @@ pub mod tests {
         pub targets: Vec<Vec<SocketAddr>>,
         pub events: VecDeque<HostEvent>,
         pub browse: VecDeque<BrowseEvent>,
+        /// The mDNS browser ended: discovery reads as failed.
+        pub discovery_stopped: bool,
         next: u64,
     }
 
@@ -1907,7 +1934,11 @@ pub mod tests {
         }
 
         fn discovery(&self) -> CastDiscovery {
-            CastDiscovery::Browsing
+            if self.state().discovery_stopped {
+                CastDiscovery::Failed
+            } else {
+                CastDiscovery::Browsing
+            }
         }
 
         fn shutdown(&mut self) -> bool {
@@ -2150,6 +2181,32 @@ pub mod tests {
             problem: CastProblem::Busy,
         }));
         assert!(!cast.speakers()[2].enabled);
+    }
+
+    // covers: S339
+    #[test]
+    fn a_speaker_that_left_is_turned_off_with_a_notice_when_discovery_stops_and_another_can_go_on()
+    {
+        let (fake, mut cast) = listed();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        fake.withdraw(KITCHEN, "Kitchen");
+        cast.poll();
+        assert!(cast.is_on());
+
+        fake.state().discovery_stopped = true;
+        let events = cast.poll();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                BackendEvent::CastFailed {
+                    id,
+                    problem: CastProblem::SearchStopped
+                } if id == KITCHEN
+            )),
+            "{events:?}"
+        );
+        assert!(!cast.is_on());
+        assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
     }
 
     fn members(device: &str, members: Vec<GroupMember>) -> HostEvent {
