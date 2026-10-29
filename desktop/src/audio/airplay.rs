@@ -97,8 +97,8 @@ use audiosync_core::policy::remote::{
 use audiosync_core::resample::Resampler;
 use audiosync_core::volume::{
     DEFAULT_LOCAL_POSITION, NO_ZONE_POSITION, ReadBack, device_level, device_level_for_db,
-    level_on_speaker, level_set_on_speaker, own_for_device_level, row_move, sanitize_own,
-    sanitize_position,
+    is_echo_of, level_on_speaker, level_set_on_speaker, own_for_device_level, row_move,
+    sanitize_own, sanitize_position, set_grid_db,
 };
 
 use super::SESSION_RATE;
@@ -783,13 +783,8 @@ fn held_level(level: f64, zone: f64, master: f64) -> Option<f64> {
 /// How often playing speakers are asked for their own volume (P122, S291).
 const VOLUME_READ_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Within [`VOLUME_SETTLE`] of a set, a DACP volume this close to the one
-/// sent is the speaker rounding it, not a person's change (S276).
-const VOLUME_TOLERANCE_DB: f64 = 0.5;
-
-/// How long after a set [`VOLUME_TOLERANCE_DB`] applies to a DACP volume:
-/// a receiver that rounds to 0.3 dB steps can echo the set within 0.5 dB,
-/// and a remote press later can land that close too (S271).
+/// How long after a set a DACP volume on the row sent is the speaker's
+/// echo, not a person's change (S271, S276).
 const VOLUME_SETTLE: Duration = Duration::from_secs(3);
 
 /// How long a slider that started editing holds its row with no move: a
@@ -2932,7 +2927,7 @@ impl AirPlaySpeakers {
                 _ => device_volume(own.level),
             }
             .wire_db();
-            own.echo = added.read.recent(now) && (db - has).abs() < VOLUME_TOLERANCE_DB;
+            own.echo = added.read.recent(now) && is_echo_of(db, has, self.set_grid(row));
             own.reported = device_level_for_db(db);
         }
         own
@@ -2960,7 +2955,11 @@ impl AirPlaySpeakers {
         } else {
             None
         };
-        let volume = if on_speaker {
+        let heard = self
+            .calibration_solo
+            .as_deref()
+            .is_none_or(|solo| solo == row);
+        let volume = if on_speaker && heard {
             device_volume(moved.device_level)
         } else {
             self.volume_of(row)
@@ -2970,6 +2969,12 @@ impl AirPlaySpeakers {
             added.set_volume(self.link.as_mut(), volume);
         }
         true
+    }
+
+    /// The grid speaker `id` keeps a level sent on, by its make (S291).
+    fn set_grid(&self, id: &str) -> Option<f64> {
+        let txt = self.listed.get(id)?.device().airplay_txt.as_ref()?;
+        set_grid_db(txt.manufacturer.as_deref(), txt.features.map(|bits| bits.0))
     }
 
     /// The added row `id` reports for: itself, or the target it's a member
@@ -2996,13 +3001,14 @@ impl AirPlaySpeakers {
         let (zone, master) = (self.zone(&row), self.master);
         let own = self.settings(&row).volume;
         let shown = self.device_level_of(&row);
+        let grid = self.set_grid(id);
         let Some(added) = self.added.get_mut(&row) else {
             return false;
         };
         if !added.read.answered() || added.read.held(Instant::now()) || solo {
             return false;
         }
-        if !added.read.echo.set_on_speaker(db) {
+        if !added.read.echo.set_on_speaker(db, grid) {
             return false;
         }
         let Some(moved) = level_set_on_speaker(db, own, shown, zone, master) else {
@@ -7069,6 +7075,30 @@ pub mod tests {
         );
     }
 
+    // covers: S276
+    #[test]
+    fn a_device_volume_during_a_calibration_solo_is_kept_and_stays_muted() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let study = device(2, "Study", OPEN_TXT);
+        let (k, s) = (id_of(&kitchen), id_of(&study));
+        fake.appear(&kitchen);
+        fake.appear(&study);
+        airplay.poll();
+        airplay.set_enabled(&k, true).unwrap();
+        airplay.set_enabled(&s, true).unwrap();
+        airplay.set_streaming(true);
+        airplay.set_calibration_solo(Some(&k));
+        fake.take_calls();
+        // Study's remote asks for −6 dB while only Kitchen may be heard.
+        remote(&fake, &study, RemoteCommand::DeviceVolume(Volume::Db(-6.0)));
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(sent_levels(&fake), [(s.clone(), None)]);
+        airplay.set_calibration_solo(None);
+        assert!(sent_levels(&fake).contains(&(s.clone(), Some(-6.0))));
+    }
+
     #[test]
     fn the_cast_hold_back_comes_on_top_of_each_speakers_own_delay() {
         let fake = FakeAirPlay::new();
@@ -8077,11 +8107,18 @@ pub mod tests {
     fn a_remote_volume_step_is_sent_and_starts_the_3_s_window() {
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        let listed = airplay.listed.get_mut(&id).expect("listed");
+        let txt = listed
+            .info
+            .device
+            .airplay_txt
+            .get_or_insert_with(Default::default);
+        txt.manufacturer = Some("Samsung".to_owned());
         remote(&fake, &kitchen, RemoteCommand::VolumeUp);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
         assert_eq!(airplay.speakers()[0].volume, 55.0);
         assert_eq!(sent_levels(&fake), [(id.clone(), Some(-13.5))]);
-        // The receiver's echo of that send, by DACP or by a read.
+        // A Samsung's echo of that send on its 0.6 dB grid, by DACP or a read.
         remote(
             &fake,
             &kitchen,
@@ -8155,16 +8192,16 @@ pub mod tests {
         let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
         airplay.set_volume(&id, 10.0);
         fake.take_calls();
-        // Sent −27 dB; the speaker rounds it 0.3 dB off: its echo, however late.
+        // Sent −27 dB; the speaker rounds it on the same row: its echo, however late.
         settle(&mut airplay, &id);
         read_now(&mut airplay);
-        report_volume(&fake, &kitchen, -27.3);
+        report_volume(&fake, &kitchen, -26.97);
         assert!(airplay.poll().is_empty());
         read_now(&mut airplay);
-        report_volume(&fake, &kitchen, -27.3);
+        report_volume(&fake, &kitchen, -26.97);
         assert!(airplay.poll().is_empty());
         assert!(fake.take_calls().is_empty());
-        // One press down from the baseline: level 8, so own 8.
+        // Two presses down from the baseline: level 8, so own 8.
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -27.6);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
@@ -8175,6 +8212,88 @@ pub mod tests {
         report_volume(&fake, &kitchen, -26.4);
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
         assert_eq!(own(&airplay), 12.0);
+    }
+
+    // covers: S276, S291
+    #[test]
+    fn one_step_inside_the_echo_window_is_a_change_on_the_speaker() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        // The row moved to 60 sent −12 dB; the remote pressed down once at
+        // once holds level 59, by DACP.
+        airplay.set_volume(&id, 60.0);
+        remote(
+            &fake,
+            &kitchen,
+            RemoteCommand::DeviceVolume(Volume::Db(-12.3)),
+        );
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(own(&airplay), 59.0);
+        // By a read before any echo: the row moved to 40, the speaker holds 39.
+        airplay.set_volume(&id, 40.0);
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -18.3);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(own(&airplay), 39.0);
+    }
+
+    // covers: S276, S291
+    #[test]
+    fn one_step_from_an_odd_row_on_an_exact_receiver_is_a_change() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        // Row 49 sent −15.3 dB; a receiver that keeps it exactly reads
+        // −15 dB after one press up: level 50, by DACP.
+        airplay.set_volume(&id, 49.0);
+        remote(
+            &fake,
+            &kitchen,
+            RemoteCommand::DeviceVolume(Volume::Db(-15.0)),
+        );
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(own(&airplay), 50.0);
+        // Row 51 sent −14.7 dB; one press up reads −14.4 dB: level 52.
+        airplay.set_volume(&id, 51.0);
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -14.4);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(own(&airplay), 52.0);
+    }
+
+    /// Sets the AirPlay `features` the receiver `id` announced.
+    fn announce_features(airplay: &mut AirPlaySpeakers, id: &str, features: u64) {
+        let listed = airplay.listed.get_mut(id).expect("listed");
+        let txt = listed
+            .info
+            .device
+            .airplay_txt
+            .get_or_insert_with(Default::default);
+        txt.features = Some(audiosync_airplay::discovery::Features(features));
+    }
+
+    // covers: S291
+    #[test]
+    fn the_recorded_television_features_take_its_grid_without_a_make() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        // The television traced on 2026-10-25 announced these features and
+        // no manufacturer; it keeps row 49 (−15.3 dB) as −15.6: the echo.
+        announce_features(&mut airplay, &id, 0x038B_CB46_007F_8AD0);
+        airplay.set_volume(&id, 49.0);
+        airplay.poll();
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -15.6);
+        airplay.poll();
+        assert_eq!(own(&airplay), 49.0);
+        // Other features and no make: the row rule alone, so −15.6 after
+        // row 47 (−15.9 dB) is one press up, level 48.
+        announce_features(&mut airplay, &id, 0x0001_0040_0000_0000);
+        airplay.set_volume(&id, 47.0);
+        airplay.poll();
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -15.6);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(own(&airplay), 48.0);
     }
 
     // covers: S271
@@ -8468,11 +8587,10 @@ pub mod tests {
         airplay.set_master(63.0);
         airplay.move_row(&id, 20.0);
         fake.take_calls();
-        // Sent −24 dB; the television answers on its 0.6 dB grid, 0.3 dB off,
-        // however late.
+        // Sent −24 dB; the television answers on its 0.6 dB grid, however late.
         for _ in 0..3 {
             read_now(&mut airplay);
-            report_volume(&fake, &kitchen, -24.3);
+            report_volume(&fake, &kitchen, -24.0);
             assert!(airplay.poll().is_empty());
         }
         assert!(fake.take_calls().is_empty());
@@ -8515,7 +8633,7 @@ pub mod tests {
         // The same for a zone volume: after the echo of 21, level 21.9 reads
         // as own 21.9 ÷ 0.63 and row 21, which it shows again after the zone.
         read_now(&mut airplay);
-        report_volume(&fake, &kitchen, -23.763);
+        report_volume(&fake, &kitchen, -23.67);
         assert!(airplay.poll().is_empty());
         read_now(&mut airplay);
         report_volume(&fake, &kitchen, -23.43);
@@ -8578,7 +8696,7 @@ pub mod tests {
         airplay.set_volume(&id, 50.0);
         fake.take_calls();
         read_now(&mut airplay);
-        report_volume(&fake, &kitchen, -15.2);
+        report_volume(&fake, &kitchen, -14.95);
         assert!(airplay.poll().is_empty());
         assert_eq!(airplay.speakers()[0].volume, 50.0);
         read_now(&mut airplay);
@@ -8810,8 +8928,8 @@ pub mod tests {
         assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
         fake.take_calls();
         // The speaker echoes the level sent back inside the 3 s window, as
-        // sent and 0.2 dB off as it rounds.
-        for echoed in [-18.0, -18.2] {
+        // sent and on the same row as it rounds.
+        for echoed in [-18.0, -17.95] {
             remote(
                 &fake,
                 &kitchen,
