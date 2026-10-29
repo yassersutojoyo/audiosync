@@ -1330,9 +1330,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// counts as 0 for a local or Cast speaker.
     fn write_calibrated(&mut self, members: &[Member], target: &Target, value: Option<f64>) {
         match target {
+            // Against the L_s the run read with L, which a clamped L can't give back.
             Target::AirPlay => {
-                if let Some(ms) = value {
-                    <Self as Backend>::set_airplay_delay(self, ms);
+                let sender = members.iter().find(|m| m.class == Class::AirPlay);
+                if let Some(adjustment) = value
+                    .zip(sender)
+                    .and_then(|(ms, m)| native_airplay_adjustment_ms(ms, m.sender_ms))
+                {
+                    self.audio.set_airplay_adjustment(adjustment);
                 }
             }
             Target::Speaker(key) => {
@@ -1420,7 +1425,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .iter()
             .zip(&kept.members)
             .any(|(row, m)| match row.state {
-                RowState::Reference => reference.as_ref().is_some_and(|now| *now != m.id),
+                RowState::Reference => reference.as_deref() != Some(m.id.as_str()),
+                // Against the L_s the run read, so a new L_s alone is no change.
+                _ if m.class == Class::AirPlay => !holds(
+                    self.audio.airplay_sender_latency_ms().map(|_| {
+                        native_airplay_latency_ms(m.sender_ms, self.audio.airplay_adjustment())
+                    }),
+                    m.offset_ms,
+                ),
                 _ => !holds(self.calibrated_now(m.class, &m.id), m.offset_ms),
             });
         if !moved {
@@ -11370,10 +11382,18 @@ mod tests {
         assert_eq!(adapter.audio.airplay_adjustment(), -1450.0);
     }
 
+    /// Keeps a run's results, its reference row's output made the reference
+    /// of S174 (built in), since a run starts only with one.
     fn keep(
         adapter: &mut AudioAdapter<MockBackend>,
         (sheet, members, rate): (Sheet, Vec<Member>, u32),
     ) {
+        let reference = members[0].id.clone();
+        let name = adapter.output_name(&reference);
+        adapter
+            .audio_mut()
+            .connect_output_as(&reference, &name, OutputKind::BuiltIn);
+        adapter.refresh_devices();
         adapter.calibrate_all.sheet = Some(KeptSheet {
             sheet,
             members,
