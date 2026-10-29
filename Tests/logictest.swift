@@ -10156,6 +10156,14 @@ do {
     check(approx(starting.volume(of: tv), 40, 1e-9),
           "cast master: two levels set while the speaker starts are both sent, so their echoes leave it at the second")
 
+    var back = session(master: 100, attempt: 9)
+    _ = back.apply(.volume(attempt: 9, reported(0.1)))
+    for position in [30.0, 50, 30] { _ = back.setVolume(tv, position: position) }
+    _ = back.apply(.volume(attempt: 9, reported(0.3)))
+    _ = back.apply(.volume(attempt: 9, reported(0.5)))
+    check(approx(back.volume(of: tv), 30, 1e-9),
+          "cast master: a status answers the oldest level it matches, so 30, 50, 30 sent never jumps the slider to 50 (C70)")
+
     var resent = session(master: 100, attempt: 10)
     _ = resent.setVolume(tv, position: 30)
     check(resent.apply(.volume(attempt: 10, reported(0.8))) == .setVolume(0.3),
