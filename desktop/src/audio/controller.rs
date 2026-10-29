@@ -2128,7 +2128,18 @@ impl<D: Driver> Controller<D> {
             })
             .collect();
         for (id, invalidated, opened) in marked {
-            let now = self.driver.output_format(&id).ok();
+            let now = match self.driver.output_format(&id) {
+                Err(BackendError::NotResponding) => {
+                    self.log.log(|| {
+                        format!(
+                            "output {}: Windows audio didn't answer its format read in time",
+                            label(&self.names, &id)
+                        )
+                    });
+                    None
+                }
+                read => read.ok(),
+            };
             let changed = matches!((opened, now), (Some(opened), Some(now)) if opened != now);
             if !invalidated && !changed {
                 continue;
@@ -6924,6 +6935,28 @@ mod tests {
         );
         poll_quietly(&mut backend, 2);
         assert_eq!(backend.driver().renderers_started().len(), 3);
+    }
+
+    // covers: S330
+    #[test]
+    fn a_format_read_that_doesnt_answer_logs_a_line_and_the_output_opens_again() {
+        let (mut backend, log, dir) = logged_backend("controller-format-hang");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.hang_output_formats();
+        backend.disconnect_session(HEADPHONES);
+        assert!(backend.poll().is_empty(), "no notice");
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES]
+        );
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "output \"Headphones\" (headphones): Windows audio didn't answer its format read \
+                 in time",
+                "output \"Headphones\" (headphones): Windows disconnected its stream",
+            ],
+        );
     }
 
     // covers: S330
