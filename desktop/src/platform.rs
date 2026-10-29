@@ -48,6 +48,26 @@ pub fn double_click_ms() -> i64 {
     DEFAULT_DOUBLE_CLICK_MS
 }
 
+/// Whether Windows' Animation effects setting is on; on when it can't be read.
+#[cfg(windows)]
+pub fn animation_effects_on() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+    };
+
+    let mut on: i32 = 1;
+    // SAFETY: this action writes one BOOL (an i32) to `on`, which outlives the call.
+    let read = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some((&raw mut on).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    read.is_err() || on != 0
+}
+
 /// Windows' own default double-click time.
 pub const DEFAULT_DOUBLE_CLICK_MS: i64 = 500;
 

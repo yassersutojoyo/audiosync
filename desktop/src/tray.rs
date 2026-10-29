@@ -399,7 +399,9 @@ fn show_flyout(app: &App, icon: Bounds) {
     place_flyout(app, icon);
     platform::bring_to_front(flyout);
     app.flyout.invoke_take_focus();
-    app.flyout.invoke_reveal();
+    if platform::animation_effects_on() {
+        app.flyout.invoke_reveal();
+    }
 }
 
 /// Sizes the flyout to its parts, as much as the work area of the icon's

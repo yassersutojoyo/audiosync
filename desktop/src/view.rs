@@ -8809,8 +8809,9 @@ mod tests {
         assert!(height <= bottom + 16.5, "no room left under the buttons");
     }
 
-    /// Each opening slides the flyout's content up into place as it fades in;
-    /// the slide leaves the height the window is sized to alone.
+    /// Each opening slides the flyout's content up into place as it fades in,
+    /// unless Windows' Animation effects are off; the slide leaves the height
+    /// the window is sized to alone.
     #[test]
     fn the_flyout_slides_in_on_opening_without_changing_its_fit() {
         hold_clock();
@@ -8819,7 +8820,9 @@ mod tests {
         flyout.show().expect("the flyout shows headless");
         draw_frames();
         let fit = flyout.get_fit_height();
-        assert!(include_str!("tray.rs").contains("app.flyout.invoke_reveal();"));
+        let tray = include_str!("tray.rs");
+        assert!(tray.contains("if platform::animation_effects_on() {"));
+        assert!(tray.contains("app.flyout.invoke_reveal();"));
         flyout.invoke_reveal();
         draw_frames();
         assert_eq!(flyout.get_reveal_offset(), 8.0, "it starts below its place");

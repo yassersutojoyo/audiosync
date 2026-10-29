@@ -404,7 +404,8 @@ export component TrayFlyout inherits Window {
     }
 
     // Each opening slides the content up a few pixels as it fades in, as
-    // Windows 11's own tray flyouts do. The timer waits a frame, so the
+    // Windows 11's own tray flyouts do; the app skips it when Windows'
+    // Animation effects are off. The timer waits a frame, so the
     // content first draws in its start place and the slide has a start.
     property <bool> revealed: true;
     public function reveal() {
