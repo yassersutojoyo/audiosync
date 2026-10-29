@@ -3043,6 +3043,7 @@ pub mod tests {
         cast.poll();
         let manual = address("192.0.2.30").device_id().to_string();
         assert_eq!(cast.set_enabled(&manual, true), Ok(()));
+        fake.announce_at(LIVING, "Living", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 32));
         fake.announce_at(
             KITCHEN,
             "Kitchen",
@@ -3062,6 +3063,74 @@ pub mod tests {
             "{events:?}"
         );
         assert!(cast.is_on());
+        let speakers = cast.speakers();
+        let row = speakers
+            .iter()
+            .find(|speaker| speaker.address.as_deref() == Some("192.0.2.30"))
+            .expect("its address row");
+        assert_eq!(
+            (row.id.as_str(), row.enabled),
+            (KITCHEN, true),
+            "listed under the ID the browse found"
+        );
+        assert_eq!(cast.set_enabled(KITCHEN, false), Ok(()));
+        assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
+    }
+
+    // covers: S341
+    #[test]
+    fn each_address_of_a_device_a_browse_finds_is_reported_once() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_resolver(|_, port| Ok(SocketAddr::from(([192, 0, 2, 30], port))));
+        cast.set_probe(|_| true);
+        cast.add_address(address("192.0.2.30"));
+        cast.poll();
+        let identified = |events: &[BackendEvent], text: &str| {
+            let from = address(text).device_id().to_string();
+            events
+                .iter()
+                .filter(|event| {
+                    **event
+                        == BackendEvent::CastIdentified {
+                            from: from.clone(),
+                            to: KITCHEN.to_owned(),
+                        }
+                })
+                .count()
+        };
+        let kitchen_at_30 = |fake: &FakeCast| {
+            fake.announce_at(
+                KITCHEN,
+                "Kitchen",
+                DEVICE_PORT,
+                Ipv4Addr::new(192, 0, 2, 30),
+            );
+        };
+        kitchen_at_30(&fake);
+        assert_eq!(identified(&cast.poll(), "192.0.2.30"), 1);
+
+        fake.withdraw(KITCHEN, "Kitchen");
+        cast.poll();
+        kitchen_at_30(&fake);
+        let again = cast.poll();
+        assert_eq!(
+            identified(&again, "192.0.2.30"),
+            0,
+            "found again: {again:?}"
+        );
+
+        cast.add_address(address("speaker.local"));
+        let mut events = Vec::new();
+        for _ in 0..400 {
+            events.extend(cast.poll());
+            if identified(&events, "speaker.local") > 0 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(identified(&events, "speaker.local"), 1, "{events:?}");
+        assert_eq!(identified(&events, "192.0.2.30"), 0, "{events:?}");
     }
 
     // covers: C18

@@ -12937,6 +12937,54 @@ mod tests {
 
     // covers: S341
     #[test]
+    fn a_found_speaker_that_the_browse_loses_keeps_its_name_zone_and_hidden_mark() {
+        let (mut adapter, fake) = cast_adapter();
+        let address = cc_address("192.0.2.31");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), address.clone()])],
+            speaker_names: BTreeMap::from([(address.clone(), "Study".to_owned())]),
+            ..Settings::default()
+        });
+        browse_finds_den(&mut adapter, &fake);
+        fake.withdraw(DEN, "Den");
+        adapter.poll();
+
+        let state = adapter.snapshot();
+        assert!(state.speaker(&address).is_none());
+        assert_eq!(
+            state.speaker(&cc(DEN)).map(|row| row.name.as_str()),
+            Some("Study")
+        );
+        assert_eq!(
+            adapter.current_settings().speaker_zones[0].members,
+            [key(SPEAKERS), cc(DEN)]
+        );
+
+        adapter.hide_speaker(&cc(DEN), "Google Cast");
+        let state = adapter.snapshot();
+        assert!(state.speaker(&cc(DEN)).is_none() && state.speaker(&address).is_none());
+    }
+
+    // covers: S341
+    #[test]
+    fn identifying_a_speaker_again_writes_no_settings() {
+        let (mut adapter, fake) = cast_adapter();
+        let address = cc_address("192.0.2.31");
+        adapter.restore(Settings {
+            speaker_names: BTreeMap::from([(address.clone(), "Study".to_owned())]),
+            ..Settings::default()
+        });
+        browse_finds_den(&mut adapter, &fake);
+        adapter.must_save = false;
+        adapter.handle(BackendEvent::CastIdentified {
+            from: address["cc:".len()..].to_owned(),
+            to: DEN.to_owned(),
+        });
+        assert!(!adapter.must_save);
+    }
+
+    // covers: S341
+    #[test]
     fn where_the_id_a_browse_found_has_a_zone_name_or_hidden_mark_its_own_wins() {
         let (mut adapter, fake) = cast_adapter();
         let address = cc_address("192.0.2.31");
