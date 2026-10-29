@@ -130,7 +130,7 @@ enum PanelChrome {
         var height: CGFloat = 220
         // The compact panel shows the newest notice, with a footer line when others wait.
         if notices > 0 { height += 90 }
-        if notices > 1 { height += 20 }
+        if notices > 1 { height += 30 }
         if permissionCard { height += 140 }
         if airPlayNote { height += 70 }
         if castAddRow { height += 20 }
