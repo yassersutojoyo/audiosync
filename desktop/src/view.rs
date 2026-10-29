@@ -3456,13 +3456,20 @@ impl App {
     /// Saves the settings now, with the main window's frame: the app is
     /// about to quit. Returns whether no change is left unsaved.
     pub fn save_settings(&self) -> bool {
-        // Quit drops a typed delay or name that wasn't applied, so a focus
-        // loss as the window goes applies nothing either.
-        {
+        // Quit drops a typed delay that wasn't applied and applies an open
+        // rename, so a focus loss as the window goes applies nothing more.
+        let rename = {
             let mut ui = self.ui.borrow_mut();
             ui.delay_drafts.clear();
             ui.airplay_delay_draft.cancel();
-            ui.rename = None;
+            ui.rename.take().map(|open| (open, ui.rename_place))
+        };
+        match rename {
+            Some(((id, text), RenamePlace::Zone)) => {
+                self.backend.borrow_mut().rename_zone(&id, &text)
+            }
+            Some(((id, text), _)) => self.backend.borrow_mut().rename_speaker(&id, &text),
+            None => {}
         }
         self.remember_view();
         self.backend.borrow_mut().save_settings()
@@ -7287,6 +7294,31 @@ mod tests {
         let state = app.snapshot();
         assert_eq!(state.speaker("local:desk").unwrap().delay_ms, Some(120.0));
         assert_eq!(state.airplay_delay_ms, Some(1750.0));
+    }
+
+    #[test]
+    fn quitting_applies_an_open_rename() {
+        let app = app_over(MockBackend::new());
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "Desk left".into());
+        app.save_settings();
+        assert_eq!(name_of(&app, "local:desk"), "Desk left");
+        assert!(app.ui.borrow().rename.is_none());
+    }
+
+    #[test]
+    fn quitting_applies_an_open_zone_rename_to_the_zone() {
+        let app = app_over(MockBackend::zones_preview());
+        app.main.invoke_zone_rename_requested("zone:office".into());
+        app.main
+            .invoke_zone_rename_edited("zone:office".into(), "Study".into());
+        app.save_settings();
+        let state = app.snapshot();
+        let office = state.zones.iter().find(|z| z.id == "zone:office");
+        assert_eq!(office.unwrap().name, "Study");
+        assert!(app.ui.borrow().rename.is_none());
     }
 
     fn name_of(app: &App, id: &str) -> String {
