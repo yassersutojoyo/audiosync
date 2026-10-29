@@ -9,14 +9,9 @@ extension AppDelegate {
 
     // MARK: - Speaker / source state (shared by the window and the menu bar panel)
 
-    /// A local speaker's linear gain through its zone, on the core's volume
-    /// curve (S71, S249); 0 while a calibration plays its signal through
-    /// another output (S232, S235).
     private func effectiveGain(_ uid: String) -> Double {
-        if let solo = calibrationRun?.soloUID ?? calibrateAllRun?.localSolo, solo != uid { return 0 }
-        let zone = SpeakerZone.volume(of: SpeakerKey.make(id: uid, kind: .local), in: zones)
-        return engine.gainCurve.outputGain(localPosition: localVolume[uid] ?? defaultVolume,
-                                           zonePosition: zone, masterPosition: masterVolume)
+        LocalOutputGain.gain(uid, solo: calibrationRun?.soloUID ?? calibrateAllRun?.localSolo, volumes: localVolume,
+                             zones: zones, master: masterVolume)
     }
 
     /// Zone `id`'s volume (0 to 100, S245); its playing members hear it at once (S249).

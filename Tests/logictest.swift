@@ -3,6 +3,7 @@
 import Foundation
 import AppKit
 import AudioToolbox
+import AVFoundation
 import CAudioSyncCore
 import CoreAudio
 import CoreServices
@@ -31,6 +32,20 @@ check(approx(VolumeCurve.position(gain: 0.0349), 32.7, 0.1), "volume: legacy 3.4
 var mono = true
 for p in stride(from: 0.0, to: 100, by: 1) where VolumeCurve.gain(position: p + 1) <= VolumeCurve.gain(position: p) { mono = false }
 check(mono, "volume: strictly increasing")
+// covers: S71 (the Mac host's local output gain)
+do {
+    let den = SpeakerZone(id: "z1", name: "Den", members: ["lc:usb"], volume: 50)
+    func gain(_ uid: String, solo: String? = nil, master: Double = 100) -> Double {
+        LocalOutputGain.gain(uid, solo: solo, volumes: ["usb": 80], zones: [den], master: master)
+    }
+    let g = VolumeCurve.gain(position:)
+    check(AppSettings.defaultVolume == 60 && approx(gain("new", master: 70), g(60) * g(70), 1e-12),
+          "volume: a local speaker with no stored volume plays at 60, in no zone at zone volume 100", "\(gain("new", master: 70))")
+    check(approx(gain("usb", master: 70), g(80) * g(50) * g(70), 1e-12),
+          "volume: a local speaker's gain is its own volume times its zone's times the master's", "\(gain("usb", master: 70))")
+    check(gain("usb", solo: "bt") == 0 && gain("new", solo: "") == 0 && approx(gain("usb", solo: "usb"), g(80) * g(50), 1e-12),
+          "volume: a calibration playing through one output silences every other local speaker")
+}
 
 // covers: S290, S291 (a level set on the speaker is kept for its next session)
 do {
@@ -1666,6 +1681,34 @@ check(CaptureCheck.provesPermission(.system) && CaptureCheck.provesPermission(.a
       "capture: sound from a system or app tap proves the permission")
 check(!CaptureCheck.provesPermission(.input(uid: "BuiltInMicrophoneDevice")),
       "capture: a microphone or line-in heard never proves the tap permission")
+// covers: S19
+do {
+    let spotify = "com.spotify.client", music = "com.apple.Music"
+    func track(_ bundleID: String, playing: Bool = true) -> NowPlayingMonitor.Track {
+        NowPlayingMonitor.Track(bundleID: bundleID, appName: "Player", title: "Song", artist: "Band", album: "Record",
+                                isPlaying: playing, artwork: nil)
+    }
+    func plays(_ reading: NowPlayingMonitor.Track?, _ source: AudioSource, running: Bool = true) -> Bool {
+        NowPlayingMonitor.sourcePlaying(reading, running: running, source: source) != nil
+    }
+    check(plays(track(spotify), .system) && plays(track(music), .system),
+          "known playing: for the whole system any playing player counts")
+    check(plays(track(spotify), .app(bundleID: spotify)) && !plays(track(music), .app(bundleID: spotify)),
+          "known playing: for an app source only that app's reading counts")
+    check(plays(track(spotify), .mix(.only, bundleIDs: [spotify, "com.apple.Safari"]))
+            && !plays(track(music), .mix(.only, bundleIDs: [spotify]))
+            && plays(track(music), .mix(.allExcept, bundleIDs: [spotify]))
+            && !plays(track(spotify), .mix(.allExcept, bundleIDs: [spotify])),
+          "known playing: a mix counts only the readings of the apps it captures")
+    check(!plays(track(spotify), .input(uid: "mic")), "known playing: an input device is never known to play")
+    check(!plays(track(spotify, playing: false), .system) && !plays(nil, .system)
+            && !plays(track(spotify), .system, running: false),
+          "known playing: a paused reading, no reading or a stopped monitor's last reading never counts")
+}
+// covers: S15 (the decision by permission status; the notice is the call site's)
+check(MicrophoneStart.decide(.authorized) == .start && MicrophoneStart.decide(.notDetermined) == .ask
+        && MicrophoneStart.decide(.denied) == .fail && MicrophoneStart.decide(.restricted) == .fail,
+      "microphone: an input starts once allowed, asks while undecided, and fails when denied or restricted")
 do {
     let old = NowPlayingMonitor.Position(elapsed: 10, length: 200, readAt: 50, playing: true)
     let moved = NowPlayingMonitor.Position(elapsed: 12, length: 200, readAt: 52, playing: true)
