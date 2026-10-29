@@ -669,6 +669,15 @@ impl OutputPolicy {
         self.settings.contains_key(id)
     }
 
+    /// Every output that has settings of its own, connected or not, with
+    /// them.
+    pub fn kept_settings(&self) -> Vec<(String, OutputSettings)> {
+        self.settings
+            .iter()
+            .map(|(id, settings)| (id.clone(), *settings))
+            .collect()
+    }
+
     /// Forgets the settings of output `id`, and returns them: the defaults
     /// when it had none.
     pub fn take_settings(&mut self, id: &str) -> OutputSettings {

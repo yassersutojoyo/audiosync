@@ -18,6 +18,7 @@ use audiosync_core::policy::source_quit::WhenSourceQuits;
 
 use super::calibration::{CalibrationTap, Engine, Microphone, MicrophoneError};
 use super::cast_address::CastAddress;
+use super::outputs::OutputSettings;
 use super::routing::DirectPath;
 
 /// The zone volume, 0 to 100, of every speaker in a zone (spec S249), by
@@ -838,6 +839,10 @@ pub trait AudioBackend {
     /// turned on or off, or its delay or volume set, in this run or a saved
     /// one.
     fn has_output_settings(&self, id: &str) -> bool;
+
+    /// Every output that has settings of its own, connected or not, with
+    /// them, so an unplugged output's offset is saved too (S175).
+    fn kept_output_settings(&self) -> Vec<(String, OutputSettings)>;
 
     /// Gives output `to` the settings of output `from` (on or off, offset,
     /// volume) and forgets `from`'s, for a device listed under a new

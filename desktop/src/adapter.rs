@@ -919,16 +919,28 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// The settings as they are now, to compare with the file.
     fn current_settings(&self) -> Settings {
+        let kept = self
+            .audio
+            .kept_output_settings()
+            .into_iter()
+            .map(|(id, settings)| {
+                let speaker = SavedSpeaker {
+                    enabled: settings.enabled,
+                    volume: settings.volume,
+                    delay_ms: settings.delay_ms,
+                };
+                (id, speaker)
+            });
         let outputs = Self::merged_speakers(
             &self.saved.outputs,
-            self.audio.outputs().into_iter().map(|output| {
+            kept.chain(self.audio.outputs().into_iter().map(|output| {
                 let speaker = SavedSpeaker {
                     enabled: output.enabled,
                     volume: output.volume,
                     delay_ms: output.delay_ms,
                 };
                 (output.id, speaker)
-            }),
+            })),
             &self.audio.enabled_outputs(),
             &BTreeSet::new(),
         );
@@ -10701,6 +10713,55 @@ mod tests {
 
     fn speaker_of(adapter: &AudioAdapter<MockBackend>, id: &str) -> Speaker {
         adapter.snapshot().speaker(id).cloned().expect("listed")
+    }
+
+    // covers: S175
+    #[test]
+    fn offsets_of_an_absent_output_and_the_reference_survive_two_launches() {
+        let dir = test_dir("adapter-offsets-kept");
+        let path = dir.join(settings::FILE_NAME);
+        let mut adapter = launch(reference_audio(), &path);
+        adapter.poll();
+        adapter.set_speaker_delay(&key("bluetooth"), -250.0);
+        adapter.set_speaker_delay(&key("builtin"), 300.0);
+        adapter.save_settings();
+        adapter.audio.disconnect_output("bluetooth");
+        adapter.poll();
+        adapter.save_settings();
+
+        let mut audio = reference_audio();
+        audio.disconnect_output("bluetooth");
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, "tv");
+        for id in ["builtin", "tv"] {
+            let params = adapter.audio.playing_params(id).expect("playing");
+            assert_eq!(params.delay_frames, 0, "{id}: no stored offset held back");
+        }
+        adapter.save_settings();
+
+        let (saved, _) = SettingsFile::at(path).load();
+        assert_eq!(saved.outputs["bluetooth"].delay_ms, -250.0);
+        assert_eq!(saved.outputs["builtin"].delay_ms, 300.0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S175
+    #[test]
+    fn an_offset_set_on_an_output_unplugged_before_any_save_is_kept() {
+        let dir = test_dir("adapter-offset-unplugged");
+        let path = dir.join(settings::FILE_NAME);
+        let mut adapter = launch(reference_audio(), &path);
+        adapter.poll();
+        adapter.set_speaker_delay(&key("bluetooth"), -250.0);
+        adapter.audio.disconnect_output("bluetooth");
+        adapter.poll();
+        adapter.save_settings();
+
+        let (saved, _) = SettingsFile::at(path).load();
+        assert_eq!(saved.outputs["bluetooth"].delay_ms, -250.0);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

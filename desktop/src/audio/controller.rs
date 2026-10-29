@@ -87,8 +87,8 @@ use super::now_playing::{Follow, SharedLabels, TrackInfo, TrackReader, TrackSour
 #[cfg(test)]
 use super::outputs::OutputParams;
 use super::outputs::{
-    AirPlay, Endpoint, EndpointReading, Listing, ListingNote, OutputPolicy, RenderFormat,
-    StreamSetup,
+    AirPlay, Endpoint, EndpointReading, Listing, ListingNote, OutputPolicy, OutputSettings,
+    RenderFormat, StreamSetup,
 };
 use super::pairings::PairingStore;
 use super::process::ProcessTable;
@@ -3416,6 +3416,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
     fn has_output_settings(&self, id: &str) -> bool {
         self.policy.has_settings(id)
+    }
+
+    fn kept_output_settings(&self) -> Vec<(String, OutputSettings)> {
+        self.policy.kept_settings()
     }
 
     fn move_output_settings(&mut self, from: &str, to: &str) -> Result<(), BackendError> {
