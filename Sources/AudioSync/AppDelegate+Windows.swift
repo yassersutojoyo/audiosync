@@ -153,7 +153,7 @@ extension AppDelegate {
 
     private func acceptPermission(_ permission: Permission) {
         permissions.accept(permission)
-        UserDefaults.standard.set(permissions.stored, forKey: PermissionAsks.defaultsKey)
+        permissions.save(store)
         showPermissionOffer()
         if permission == .automation { nowPlaying.mayRaisePrompt = true }
     }

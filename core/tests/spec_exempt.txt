@@ -94,7 +94,7 @@ S306 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Wi
 S307 Hosts only: the Windows updater of section 19; whether SmartScreen prompts after a swap is checked by hand at the first PC sitting with a real update.
 S308 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
 S309 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
-S310 No automated test yet: a one-time Mac check that Sparkle offers only the Mac item of the first release appcast carrying Windows items.
+S310 Hosts only: a one-time Mac check that Sparkle offers only the Mac item of the first release appcast carrying Windows items; scripts/check_appcast.py refuses such an appcast until that check's date is on record.
 S311 Hosts only: the release appcast's Windows items; scripts/check_appcast.py checks it (a Python marker the core's coverage rule doesn't count), and scripts/sign_appcast.sh runs it on each release appcast.
 S314 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
 S315 Hosts only: the Windows updater of section 19 (desktop/src/updater); the Windows tests check it.
@@ -110,4 +110,6 @@ S333 Hosts only: the Windows capture reading an input another app holds as busy 
 S334 Hosts only: the Mac host ending an output whose render callback hands its device no frame for 2 s after it took frames once and attaching it again; the Mac logic suite checks it.
 S335 Hosts only: the Mac host watching its capture for the whole session and on Core Audio's service restart, reopening only the capture, both watches resting from the will-sleep notice to the wake; the Mac logic suite's "capture watch: ..." tests check it.
 S336 Hosts only: the Mac host sending one waiting Apple event per player not yet allowed and reading only allowed players; the Mac logic suite checks it.
+S337 Web remote only: the remote crate failing its start as a port in use when another app holds its port on any address it listens on; the remote crate's tests check it.
+S338 Web remote only: the remote crate closing connections from peers outside the home network ranges and rate-limiting their log lines; the remote crate's tests check it.
 S343 Web remote and hosts only: a paused track's playing flag and the page's Paused and "None of N found" text; the remote crate's, the Windows host's and the Mac logic suites check it.

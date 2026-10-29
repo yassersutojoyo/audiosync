@@ -326,6 +326,8 @@ const TEXT = {
 
 const RETRY_STEPS_MS = [1000, 2000, 5000, 10000];
 const SEND_EVERY_MS = 100;
+// The server answers once the change is queued, not applied; snapshots from that gap still carry the old value.
+const SETTLE_MS = 1000;
 const DELAY_STEP_MS = 10;
 // A switch restarts the capture; past this the app has dropped or refused the pick.
 const SWITCH_WAIT_MS = 5000;
@@ -592,12 +594,17 @@ function post(path, body) {
 // One request at a time per control, at most one every SEND_EVERY_MS, and
 // only the newest value waits: two requests in flight could reach the app in
 // the wrong order and leave the older value applied.
-function sender(send, onFail) {
+function sender(send, onFail, onSettle = () => {}) {
   let lastSent = 0;
   let timer = null;
   let pending = null;
   let sentValue = null;
   let inFlight = false;
+  let settleTimer = null;
+  const release = () => {
+    window.clearTimeout(settleTimer);
+    settleTimer = null;
+  };
   const fire = () => {
     window.clearTimeout(timer);
     timer = null;
@@ -612,8 +619,13 @@ function sender(send, onFail) {
     sentValue = value;
     lastSent = Date.now();
     inFlight = true;
+    release();
     send(value).then(() => {
       inFlight = false;
+      settleTimer = window.setTimeout(() => {
+        settleTimer = null;
+        if (pending === null) { onSettle(); }
+      }, SETTLE_MS);
       fire();
     }, (problem) => {
       inFlight = false;
@@ -627,7 +639,10 @@ function sender(send, onFail) {
       pending = value;
       if (timer === null) { fire(); }
     },
-    busy() { return inFlight || pending !== null; },
+    busy(reported) {
+      if (!inFlight && reported === sentValue) { release(); }
+      return inFlight || pending !== null || settleTimer !== null;
+    },
   };
 }
 
@@ -640,9 +655,11 @@ function rangeControl(input, output, read, write, onFail) {
   const send = sender(write, (problem, settled) => {
     if (problem) { onFail(problem.message); }
     if (settled && !held) { control.show(read()); }
+  }, () => {
+    if (!held) { control.show(read()); }
   });
   const control = {
-    held: () => held || send.busy(),
+    held: (reported) => held || send.busy(Math.round(reported)),
     show(value) {
       input.value = String(Math.round(value));
       showPercent(Math.round(value));
@@ -770,13 +787,13 @@ function makeRow(speaker) {
   row.powerSender = sender((on) => change({ on }), (problem, settled) => {
     if (problem) { fail(problem.message); }
     if (settled) { power.checked = row.speaker.on; }
-  });
+  }, () => { power.checked = row.speaker.on; });
   power.addEventListener("change", () => row.powerSender.set(power.checked));
 
   row.delaySender = sender((value) => change({ delay_ms: value }), (problem, settled) => {
     if (problem) { fail(problem.message); }
     if (settled) { showDelay(row, row.speaker.delay_ms); }
-  });
+  }, () => { if (document.activeElement !== row.delay) { showDelay(row, row.speaker.delay_ms); } });
 
   const sendDelay = (value) => {
     const min = row.speaker.delay_min_ms;
@@ -841,10 +858,10 @@ function updateRow(row, speaker) {
   row.notice.hidden = !reason;
   if (!speaker.available) { showError(row.error, ""); return; }
 
-  if (!row.powerSender.busy()) { row.power.checked = speaker.on; }
-  if (!row.volumeControl.held()) { row.volumeControl.show(speaker.volume); }
+  if (!row.powerSender.busy(speaker.on)) { row.power.checked = speaker.on; }
+  if (!row.volumeControl.held(speaker.volume)) { row.volumeControl.show(speaker.volume); }
   const editing = document.activeElement === row.delay;
-  if (!row.delaySender.busy() && !editing) { showDelay(row, speaker.delay_ms); }
+  if (!row.delaySender.busy(speaker.delay_ms) && !editing) { showDelay(row, speaker.delay_ms); }
 }
 
 // Removing the focused card drops focus to the page top; move it to the next card, else the previous one, else the title.
@@ -952,7 +969,7 @@ function updateZone(row, zone, speakers) {
   const names = zone.members.map((id) => speakers.get(id)).filter(Boolean);
   row.members.textContent = names.join(", ");
   row.members.hidden = names.length === 0;
-  if (!row.volumeControl.held()) { row.volumeControl.show(zone.volume); }
+  if (!row.volumeControl.held(zone.volume)) { row.volumeControl.show(zone.volume); }
 }
 
 function renderZones(next) {
@@ -1148,7 +1165,7 @@ function render(next) {
     ui.playingDetail.textContent = playing && playing.source ? playing.source : "";
   }
   ui.playingDetail.hidden = ui.playingDetail.textContent === "";
-  if (!masterControl.held()) { masterControl.show(next.master.volume); }
+  if (!masterControl.held(next.master.volume)) { masterControl.show(next.master.volume); }
   showSources(next);
 
   const order = Array.from(ui.speakers.children);

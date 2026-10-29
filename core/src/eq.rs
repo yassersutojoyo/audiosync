@@ -54,6 +54,9 @@ pub const MAX_GAIN_DB: f64 = 12.0;
 /// Step of the host's gain and preamp controls, in dB (S23).
 pub const GAIN_STEP_DB: f64 = 0.5;
 
+/// Length of the dry/wet ramp when the equalizer is turned on or off (S27, S28).
+const TOGGLE_RAMP_SECONDS: f64 = 0.010;
+
 /// Equalizer settings as the host persists them (S24).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EqSettings {
@@ -337,6 +340,47 @@ impl Biquad {
             a2: (1.0 - alpha / a) / a0,
         }
     }
+
+    /// Squared magnitude response at `w` radians per sample. At 0 dB the numerator
+    /// and denominator come from identical values, so it is exactly 1.
+    fn power_at(&self, w: f64) -> f64 {
+        let (c1, s1, c2, s2) = (w.cos(), w.sin(), (2.0 * w).cos(), (2.0 * w).sin());
+        let num =
+            (self.b0 + self.b1 * c1 + self.b2 * c2).powi(2) + (self.b1 * s1 + self.b2 * s2).powi(2);
+        let den =
+            (1.0 + self.a1 * c1 + self.a2 * c2).powi(2) + (self.a1 * s1 + self.a2 * s2).powi(2);
+        num / den
+    }
+}
+
+/// P of S26: the largest gain of the ten bands in series, in dB, between 20 Hz and
+/// 20 kHz: the best point of a 1/12-octave grid and 20 kHz itself, refined to
+/// 1/12 000 octave around it, since a peak between grid points reads up to a few
+/// hundredths of a dB low and a full-scale tone there would still touch the clamp.
+pub fn cascade_peak_db(gains_db: &[f64; BAND_COUNT], sample_rate: f64) -> f64 {
+    const FINE: i32 = 1000;
+    let bands = design_bands(gains_db, sample_rate);
+    let top = 1000f64.log2();
+    let last = (top * f64::from(12 * FINE)).floor() as i32;
+    let octaves = |step: i32| f64::from(step) / f64::from(12 * FINE);
+    let power = |octaves: f64| {
+        let f = 20.0 * 2f64.powf(octaves);
+        let w = 2.0 * PI * f / sample_rate;
+        bands.iter().map(|band| band.power_at(w)).product::<f64>()
+    };
+    let coarse = (0..=last)
+        .step_by(FINE as usize)
+        .map(octaves)
+        .chain([top])
+        .max_by(|&a, &b| power(a).total_cmp(&power(b)))
+        .unwrap_or(0.0);
+    let center = (coarse * f64::from(12 * FINE)).round() as i32;
+    let peak_power = ((center - FINE).max(0)..=(center + FINE).min(last))
+        .map(octaves)
+        .chain([top])
+        .map(power)
+        .fold(0.0, f64::max);
+    10.0 * peak_power.log10()
 }
 
 /// The ten band filters for these gains at this rate (S25).
@@ -348,9 +392,11 @@ pub fn design_bands(gains_db: &[f64; BAND_COUNT], sample_rate: f64) -> [Biquad; 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Snapshot {
     enabled: bool,
-    /// Linear preamp factor, 10^(preamp/20).
+    /// Linear preamp factor, 10^(preamp/20), with the headroom of S26 taken off.
     preamp: f64,
     bands: [Biquad; BAND_COUNT],
+    /// Output frames of the on/off ramp at the design rate (S27, S28).
+    fade_frames: u64,
     /// Changes with every rate change; a processor that adopts a set with a new
     /// epoch zeroes its filter state first (S30).
     epoch: u64,
@@ -358,10 +404,12 @@ struct Snapshot {
 
 impl Snapshot {
     fn design(settings: &EqSettings, sample_rate: f64, epoch: u64) -> Snapshot {
+        let headroom_db = cascade_peak_db(&settings.gains_db, sample_rate).max(0.0);
         Snapshot {
             enabled: settings.enabled,
-            preamp: 10f64.powf(settings.preamp_db / 20.0),
+            preamp: 10f64.powf((settings.preamp_db - headroom_db) / 20.0),
             bands: design_bands(&settings.gains_db, sample_rate),
+            fade_frames: (TOGGLE_RAMP_SECONDS * sample_rate).round().max(1.0) as u64,
             epoch,
         }
     }
@@ -373,6 +421,7 @@ struct SharedSet {
     enabled: AtomicBool,
     preamp: AtomicU64,
     bands: [[AtomicU64; 5]; BAND_COUNT],
+    fade_frames: AtomicU64,
     epoch: AtomicU64,
 }
 
@@ -382,6 +431,7 @@ impl SharedSet {
             enabled: AtomicBool::new(false),
             preamp: AtomicU64::new(0),
             bands: std::array::from_fn(|_| std::array::from_fn(|_| AtomicU64::new(0))),
+            fade_frames: AtomicU64::new(0),
             epoch: AtomicU64::new(0),
         };
         set.store(snapshot);
@@ -399,6 +449,8 @@ impl SharedSet {
                 slot.store(value.to_bits(), Ordering::Relaxed);
             }
         }
+        self.fade_frames
+            .store(snapshot.fade_frames, Ordering::Relaxed);
         self.epoch.store(snapshot.epoch, Ordering::Relaxed);
     }
 
@@ -418,6 +470,7 @@ impl SharedSet {
                     a2: value(&slots[4]),
                 }
             }),
+            fade_frames: self.fade_frames.load(Ordering::Relaxed),
             epoch: self.epoch.load(Ordering::Relaxed),
         }
     }
@@ -462,7 +515,8 @@ pub fn equalizer() -> (EqControl, EqProcessor) {
         shared,
         current: snapshot,
         state: [[BandState::ZERO; BAND_COUNT]; 2],
-        was_enabled: false,
+        running: false,
+        wet_frames: 0,
         seen_version: 0,
         #[cfg(test)]
         biquad_steps: 0,
@@ -595,7 +649,10 @@ pub struct EqProcessor {
     current: Snapshot,
     /// Per channel (L, R) and per band (S26).
     state: [[BandState; BAND_COUNT]; 2],
-    was_enabled: bool,
+    /// The filters run while enabled and through the off ramp (S27, S28).
+    running: bool,
+    /// Position in the on/off ramp: 0 is dry, `fade_frames` is fully equalized.
+    wet_frames: u64,
     seen_version: u64,
     /// Biquad steps taken, to check the O(20·N) bound (S127).
     #[cfg(test)]
@@ -606,50 +663,74 @@ impl EqProcessor {
     /// Equalizes one block of interleaved stereo float32 frames in place (S26).
     ///
     /// The block holds `interleaved.len() / 2` frames; an odd trailing sample is
-    /// left untouched. Disabled, the block is left untouched (S27). Real-time
+    /// left untouched. Turning on or off ramps between the dry and the equalized
+    /// signal over 10 ms (S27, S28); disabled after that, the block is left
+    /// untouched. Real-time
     /// safe: no allocation, lock, wait or system call (S126); 20 biquad steps
     /// per frame (S127). State too small to hear is cleared after each block,
     /// so silence never leaves the filters working on subnormal numbers.
     pub fn process(&mut self, interleaved: &mut [f32]) {
         self.pick_up();
-        if !self.current.enabled {
-            self.was_enabled = false;
+        let enabled = self.current.enabled;
+        if !enabled && self.wet_frames == 0 {
+            self.running = false;
             return;
         }
-        if !self.was_enabled {
+        if !self.running {
             // S28: the first enabled block after a disabled stretch starts
             // from zeroed filters; their memory is from audio that is long gone.
             self.zero_state();
-            self.was_enabled = true;
+            self.running = true;
         }
         let samples = interleaved.len() / 2 * 2;
         let block = &mut interleaved[..samples];
         let preamp = self.current.preamp;
         let bands = &self.current.bands;
+        let full = self.current.fade_frames;
+        let start = self.wet_frames.min(full);
+        let mut end = start;
         let mut resets = 0u64;
         for (channel, saved) in self.state.iter_mut().enumerate() {
             let mut state = *saved;
+            let mut wet = start;
             for frame in block.chunks_exact_mut(2) {
-                let mut y = f64::from(frame[channel]) * preamp;
+                wet = if enabled {
+                    (wet + 1).min(full)
+                } else {
+                    wet - 1
+                };
+                if wet == 0 {
+                    break;
+                }
+                let dry = f64::from(frame[channel]);
+                let mut y = dry * preamp;
                 for (band, z) in bands.iter().zip(state.iter_mut()) {
                     let x = y;
                     y = band.b0 * x + z.z1;
                     z.z1 = band.b1 * x - band.a1 * y + z.z2;
                     z.z2 = band.b2 * x - band.a2 * y;
                 }
-                frame[channel] = if y.is_finite() {
-                    y.clamp(-1.0, 1.0) as f32
-                } else {
+                frame[channel] = if !y.is_finite() {
                     // NaN or ±infinity: this channel starts over from silence (S29).
                     state = [BandState::ZERO; BAND_COUNT];
                     resets += 1;
                     0.0
+                } else if wet == full {
+                    y.clamp(-1.0, 1.0) as f32
+                } else {
+                    let mix = wet as f64 / full as f64;
+                    (dry + mix * (y - dry)).clamp(-1.0, 1.0) as f32
                 };
             }
             for band in &mut state {
                 band.clear_tiny();
             }
             *saved = state;
+            end = wet;
+        }
+        self.wet_frames = end;
+        if end == 0 {
+            self.running = false;
         }
         #[cfg(test)]
         {
@@ -727,6 +808,7 @@ mod tests {
                 a1: v,
                 a2: v,
             }; BAND_COUNT],
+            fade_frames: k,
             epoch: 0,
         }
     }
@@ -835,6 +917,7 @@ mod tests {
             assert_eq!(processor.biquad_steps - before, 20 * frames as u64);
         }
         control.set_settings(EqSettings::default());
+        processor.process(&mut sine(4096, 1000.0, 48_000.0, 0.25));
         let before = processor.biquad_steps;
         processor.process(&mut sine(512, 1000.0, 48_000.0, 0.25));
         assert_eq!(

@@ -414,6 +414,27 @@ mod tests {
     }
 
     #[test]
+    fn a_sent_value_stays_until_a_snapshot_reports_it_or_the_settle_time_ends() {
+        let script = only_element(PAGE, "script").unwrap();
+        assert!(script.contains("if (!inFlight && reported === sentValue) { release(); }"));
+        assert!(script.contains("if (pending === null) { onSettle(); }"));
+        assert!(script.contains("}, () => { power.checked = row.speaker.on; });"));
+        assert!(script.contains(
+            "}, () => { if (document.activeElement !== row.delay) { showDelay(row, row.speaker.delay_ms); } });"
+        ));
+        assert!(script.contains("if (!held) { control.show(read()); }"));
+        for check in [
+            "row.powerSender.busy(speaker.on)",
+            "row.volumeControl.held(speaker.volume)",
+            "row.delaySender.busy(speaker.delay_ms)",
+            "row.volumeControl.held(zone.volume)",
+            "masterControl.held(next.master.volume)",
+        ] {
+            assert!(script.contains(check), "{check}");
+        }
+    }
+
+    #[test]
     fn a_pick_never_leaves_a_stale_error_or_a_blank_picker() {
         let script = only_element(PAGE, "script").unwrap();
         let shown = &script[script.find("function showSources(next) {").unwrap()..];
