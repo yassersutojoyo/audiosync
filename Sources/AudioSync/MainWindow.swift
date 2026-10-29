@@ -954,6 +954,7 @@ private struct ZoneMemberCompactRow: View {
                         .font(.caption)
                         .foregroundStyle(Brand.secondaryText)
                         .lineLimit(2)
+                        .help(note)
                         .accessibilityHidden(true)
                 }
             }
