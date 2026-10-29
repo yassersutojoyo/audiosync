@@ -42,9 +42,10 @@ const ANSWER_NAME: windows::core::PCWSTR =
 pub const ANSWER_WAIT: Duration = Duration::from_secs(2);
 
 /// How long a second launch whose request went unanswered keeps trying to
-/// become the first copy, counted from the launch: a copy that is quitting
-/// stops answering, and its teardown takes a few seconds. As on the Mac.
-pub const RELAUNCH_WAIT: Duration = Duration::from_millis(5500);
+/// become the first copy, counted from the launch: a quitting copy holds the
+/// mutex through its teardown, up to 9 s with the updater's quit waits, so
+/// this is S303's 10 s (the updater's relaunch wait), not the Mac's 5.5 s.
+pub const RELAUNCH_WAIT: Duration = Duration::from_secs(10);
 
 /// How often a second launch checks whether the running copy has gone.
 pub const RELAUNCH_POLL: Duration = Duration::from_millis(250);
@@ -416,6 +417,17 @@ mod tests {
         );
     }
 
+    /// Exit, then a launch at once: the old copy holds the mutex through the
+    /// updater's quit waits and the session's quit budget.
+    #[cfg(windows)]
+    #[test]
+    fn a_launch_waits_out_the_longest_teardown_of_a_quitting_copy() {
+        let budget = Duration::from_secs_f64(audiosync_core::policy::session::QUIT_BUDGET);
+        let gone = crate::updater::QUIT_WAIT + crate::updater::files::QUIT_RETRY_BUDGET + budget;
+        let (_, first, _, _) = run_second_launch(HandOver::NoAnswer, ANSWER_WAIT, Some(gone));
+        assert!(first.is_some(), "gave up before the old copy was gone");
+    }
+
     #[test]
     fn a_request_that_cannot_be_sent_also_waits_for_the_old_copy() {
         let gone = Duration::from_millis(1000);
@@ -428,13 +440,12 @@ mod tests {
         let (_, first, tries, ended) = run_second_launch(HandOver::NoAnswer, ANSWER_WAIT, None);
         assert_eq!(first, None);
         assert_eq!(ended, RELAUNCH_WAIT);
-        // Polled every 250 ms from 2 s to 5.5 s, the last try at 5.5 s.
-        assert_eq!(tries, 15);
+        // Polled every 250 ms from 2 s to 10 s, the last try at 10 s.
+        assert_eq!(tries, 33);
     }
 
     #[test]
-    fn the_relaunch_wait_matches_the_mac() {
-        assert_eq!(RELAUNCH_WAIT, Duration::from_millis(5500));
+    fn the_relaunch_poll_matches_the_mac() {
         assert_eq!(RELAUNCH_POLL, Duration::from_millis(250));
     }
 

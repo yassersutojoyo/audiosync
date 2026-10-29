@@ -16,7 +16,8 @@
 //! A Run value that starts another copy of AudioSync (the exe moved, or
 //! another build wrote it) still shows as on. It is rewritten or removed only
 //! when the user turns the option on or off: the documentation asks programs
-//! started from the Run key not to write to it while they run.
+//! started from the Run key not to write to it while they run. One whose exe
+//! is gone starts nothing, so it shows as off, and is left as it is too.
 //!
 //! On Linux the same option is the autostart entry
 //! (`crate::os::xdg::autostart`), through the same [`StartupStore`].
@@ -72,6 +73,11 @@ pub trait StartupStore {
     fn same_exe(&self, a: &Path, b: &Path) -> bool {
         same_exe(a, b)
     }
+
+    /// Whether the exe at `path` is there.
+    fn exe_exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
 }
 
 /// The startup entry as Windows has it now.
@@ -84,6 +90,8 @@ pub enum Status {
     /// The Run value starts another exe: AudioSync moved since it was
     /// written, or another copy wrote it.
     Elsewhere,
+    /// The Run value starts an exe that is gone, so nothing starts.
+    Missing,
     /// Task Manager or Settings turned the entry off.
     TurnedOffInSettings,
 }
@@ -122,8 +130,13 @@ fn same_exe(a: &Path, b: &Path) -> bool {
     normal(a) == normal(b)
 }
 
-/// Reads the startup entry for `exe` from `store`.
-pub fn status(store: &dyn StartupStore, exe: Option<&Path>) -> Status {
+/// Reads the startup entry for `exe` from `store`; `exists` says whether a
+/// listed exe is there.
+pub fn status(
+    store: &dyn StartupStore,
+    exe: Option<&Path>,
+    exists: &mut dyn FnMut(&Path) -> bool,
+) -> Status {
     let Some(command) = store.run_value() else {
         return Status::Off;
     };
@@ -135,6 +148,8 @@ pub fn status(store: &dyn StartupStore, exe: Option<&Path>) -> Status {
     }
     match (store.command_exe(&command), exe) {
         (Some(listed), Some(exe)) if store.same_exe(&listed, exe) => Status::On,
+        // A relative name is looked up by Windows, not in our working folder.
+        (Some(listed), _) if listed.is_absolute() && !exists(&listed) => Status::Missing,
         _ => Status::Elsewhere,
     }
 }
@@ -206,18 +221,35 @@ pub struct LaunchAtLogin {
     exe: Option<PathBuf>,
     status: Status,
     notice: Option<Notice>,
+    /// The listed exe last looked for and whether it was there, so the
+    /// readings every few seconds don't touch the disk.
+    checked: Option<(PathBuf, bool)>,
 }
 
 impl LaunchAtLogin {
     /// `exe` is this program's path, `None` when Windows didn't say.
     pub fn new(store: Box<dyn StartupStore>, exe: Option<PathBuf>) -> LaunchAtLogin {
-        let status = status(store.as_ref(), exe.as_deref());
-        LaunchAtLogin {
+        let mut login = LaunchAtLogin {
             store,
             exe,
-            status,
+            status: Status::Off,
             notice: None,
-        }
+            checked: None,
+        };
+        login.status = login.read();
+        login
+    }
+
+    fn read(&mut self) -> Status {
+        let (store, checked) = (self.store.as_ref(), &mut self.checked);
+        status(store, self.exe.as_deref(), &mut |listed| match checked {
+            Some((path, there)) if path == listed => *there,
+            _ => {
+                checked
+                    .insert((listed.to_owned(), store.exe_exists(listed)))
+                    .1
+            }
+        })
     }
 
     pub fn status(&self) -> Status {
@@ -244,7 +276,7 @@ impl LaunchAtLogin {
     /// Reads the entry again; returns whether what the windows show changed.
     /// A notice whose cause went (the user fixed it in Settings) goes too.
     pub fn reread(&mut self) -> bool {
-        let new = status(self.store.as_ref(), self.exe.as_deref());
+        let new = self.read();
         let mut changed = new != self.status;
         self.status = new;
         if self
@@ -279,7 +311,7 @@ impl LaunchAtLogin {
                 Ok(()) => None,
             }
         };
-        self.status = status(self.store.as_ref(), self.exe.as_deref());
+        self.status = self.read();
         let message = message.or_else(|| {
             (on && self.status == Status::TurnedOffInSettings).then(|| {
                 outcome.open_startup_settings = true;
@@ -347,6 +379,8 @@ pub struct MemoryEntry {
     pub approval: Option<Vec<u8>>,
     /// Writes and removals fail, as when a policy locks the key.
     pub refuse_writes: bool,
+    /// The exe the Run value names is gone from the disk.
+    pub listed_exe_gone: bool,
 }
 
 #[cfg(any(not(any(windows, target_os = "linux")), test))]
@@ -383,6 +417,10 @@ impl StartupStore for MemoryStore {
 
     fn approval(&self) -> Option<Vec<u8>> {
         self.0.borrow().approval.clone()
+    }
+
+    fn exe_exists(&self, _: &Path) -> bool {
+        !self.0.borrow().listed_exe_gone
     }
 }
 
@@ -619,6 +657,40 @@ mod tests {
             Some(run_command(&exe()).as_str())
         );
         assert_eq!(login.status(), Status::On);
+    }
+
+    #[test]
+    fn a_run_value_whose_exe_is_gone_shows_off_and_is_left_as_it_is() {
+        // Only a path absolute on the host can be gone; a drive letter isn't on Linux.
+        let gone = if cfg!(windows) {
+            r#""D:\Old\audiosync.exe" --background"#
+        } else {
+            r#""/old/audiosync" --background"#
+        };
+        let (store, mut login) = setup(|e| {
+            e.run = Some(gone.to_owned());
+            e.listed_exe_gone = true;
+        });
+        assert_eq!(login.status(), Status::Missing);
+        assert!(!login.is_on());
+        assert!(!login.reread());
+        assert_eq!(store.entry().run.as_deref(), Some(gone));
+
+        login.set(true, time);
+        assert_eq!(
+            store.entry().run.as_deref(),
+            Some(run_command(&exe()).as_str())
+        );
+        assert_eq!(login.status(), Status::On);
+    }
+
+    #[test]
+    fn a_relative_exe_name_reads_as_elsewhere_not_gone() {
+        let (_, login) = setup(|e| {
+            e.run = Some("audiosync.exe --background".to_owned());
+            e.listed_exe_gone = true;
+        });
+        assert_eq!(login.status(), Status::Elsewhere);
     }
 
     #[test]
