@@ -120,6 +120,8 @@ final class AppModel: ObservableObject {
         /// The channel pairs an input device with more than two channels
         /// offers, as shown (`InputChannelPair.offered`); empty otherwise.
         var pairs: [String] = []
+        /// False for the chosen input device while it is unplugged.
+        var connected = true
         static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name && a.pairs == b.pairs }
     }
 
@@ -2119,12 +2121,12 @@ struct SourcePicker: View {
                     Divider()
                     Section(t.sourceInputsHeader) { EmptyView() }
                 }
-                Button {
-                    model.actions.selectSource(source.id, .user)
-                } label: {
+                Toggle(isOn: Binding(get: { source.id == model.sourceID },
+                                     set: { _ in model.actions.selectSource(source.id, .user) })) {
                     if let icon = source.icon { Image(nsImage: icon) }
                     Text(source.name)
                 }
+                .disabled(!source.connected)
                 if source.id.isEmpty { Divider() }
             }
             Divider()
@@ -2221,7 +2223,7 @@ struct PresetPicker: View {
                     .foregroundStyle(Brand.tealText)
                     .accessibilityHidden(true)
                 Text(current ?? t.choosePreset)
-                    .foregroundStyle(current == nil ? HierarchicalShapeStyle.secondary : .primary)
+                    .foregroundStyle(current == nil ? Brand.secondaryText : .primary)
                     .lineLimit(1)
                 Spacer()
             }

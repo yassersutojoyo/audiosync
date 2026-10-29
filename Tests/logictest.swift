@@ -5539,8 +5539,14 @@ do {
     check(list(.app(bundleID: "com.apple.Safari")).map(\.name)
             == ["All System Audio", "Music", "Safari", "Spotify", "MacBook Pro Microphone"],
           "sources: a chosen app that isn't running stays listed, sorted among the apps")
-    check(list(.input(uid: "gone")).count == 4,
-          "sources: a chosen input device that is unplugged is not listed")
+    check(list(.input(uid: "gone")).count == 5 && list(.input(uid: "gone")).last?.connected == false
+            && list(.system).allSatisfy(\.connected),
+          "sources: a chosen input device that is unplugged is listed last, not connected")
+    check(list(.input(uid: "gone")).last.map { $0.id == "input:gone" && $0.isInput && $0.name != "All System Audio" } == true,
+          "sources: an unplugged chosen input isn't labelled as the whole system")
+    check(UIStrings().sourceNotConnected("USB Microphone") == "USB Microphone (not connected)"
+            && UIStrings().sourceNotConnected(nil) == "Input Device (not connected)",
+          "sources: an unplugged chosen input reads its remembered name, or Input Device, not connected")
     check(list(.app(bundleID: "com.spotify.client")).count == 4,
           "sources: a chosen app that is running is listed once")
 

@@ -268,7 +268,7 @@ extension AppDelegate {
     func receiverShows() -> (info: ReceiverInfo, artwork: NSImage?) {
         let track = nowPlaying.hasReading ? nowPlaying.track : nil
         // The source's name as the source picker shows it; none while the
-        // picker doesn't list the source (an input device that was unplugged).
+        // picker doesn't list the source.
         let sourceName = appModel.sources.first { $0.id == audioSource.defaultsValue }?.name
         let untitled = TrackMetadata.Fields(title: text.receiverUntitled, artist: text.receiverUnnamedSource,
                                             album: text.receiverAlbum)

@@ -549,6 +549,9 @@ struct UIStrings {
     let sourceLabel = "Audio Source"
     let sourceSystem = "All System Audio"
     let sourceInputsHeader = "Input Devices"
+    /// The chosen input device while it is unplugged; `name` is the one it
+    /// had when last seen, nil when none was remembered.
+    func sourceNotConnected(_ name: String?) -> String { "\(name ?? "Input Device") (not connected)" }
     let inputChannelsLabel = "Input Channels"
     /// One channel pair of an input device, counted from 1 as the device's
     /// own settings count them.

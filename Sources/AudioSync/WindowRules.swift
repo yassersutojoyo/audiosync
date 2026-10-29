@@ -494,21 +494,25 @@ enum SourceList {
         /// bundle ID for an app, "input:<uid>" for an input device.
         let id, name: String
         let isInput: Bool
+        /// False only for the chosen input device while it is unplugged.
+        var connected = true
     }
 
     /// The whole system first, then the apps by name, then the input devices
     /// in Core Audio's order. The chosen app stays listed while it isn't
     /// running (its name comes from `chosenAppName`), so the picker still
-    /// says what will be captured; a chosen input device that is unplugged
-    /// is not listed. Devices without a UID can't be chosen and are skipped,
-    /// and a Bluetooth headset's hands-free input
-    /// (`AudioDevices.isHandsFreeInput`) is left out, chosen or not.
+    /// says what will be captured; so does a chosen input device that is
+    /// unplugged, listed last as `unpluggedInputName`, not connected.
+    /// Devices without a UID can't be chosen and are skipped, and a Bluetooth
+    /// headset's hands-free input (`AudioDevices.isHandsFreeInput`) is left
+    /// out, chosen or not.
     static func entries(systemName: String,
                         apps: [(bundleID: String, name: String)],
                         inputs: [Input],
                         chosen: AudioSource,
                         chosenAppName: (String) -> String,
-                        mixName: (AppMixMode, [String]) -> String = { $1.joined(separator: ", ") }) -> [Entry] {
+                        mixName: (AppMixMode, [String]) -> String = { $1.joined(separator: ", ") },
+                        unpluggedInputName: String = "") -> [Entry] {
         var mixEntry: [Entry] = []
         if case .mix(let mode, let ids) = chosen {
             let names = ids.map { id in apps.first { $0.bundleID == id }?.name ?? chosenAppName(id) }
@@ -519,8 +523,11 @@ enum SourceList {
             appEntries.append(Entry(id: bundleID, name: chosenAppName(bundleID), isInput: false))
             appEntries.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         }
-        let inputEntries = inputs.filter { leftOut($0) == nil }.map {
+        var inputEntries = inputs.filter { leftOut($0) == nil }.map {
             Entry(id: AudioSource.input(uid: $0.uid).defaultsValue, name: $0.name, isInput: true)
+        }
+        if case .input(let uid) = chosen, !inputs.contains(where: { $0.uid == uid }) {
+            inputEntries.append(Entry(id: chosen.defaultsValue, name: unpluggedInputName, isInput: true, connected: false))
         }
         return [Entry(id: AudioSource.system.defaultsValue, name: systemName, isInput: false)]
             + mixEntry + appEntries + inputEntries
