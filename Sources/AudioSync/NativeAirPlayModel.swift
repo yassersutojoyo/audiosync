@@ -318,7 +318,7 @@ enum NativeTurnOff: Equatable {
     case needsPassword
     /// It didn't answer, or lost the connection, and the sender gave up.
     case unreachable
-    /// Another sender plays to it, and the sender gave up.
+    /// It answered busy, and the sender gave up.
     case busy
     /// It turned the session down, and the sender gave up.
     case refused

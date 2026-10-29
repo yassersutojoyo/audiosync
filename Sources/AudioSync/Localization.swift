@@ -614,9 +614,9 @@ struct UIStrings {
         "\(name) didn't accept the connection, so it's off. Turn it on again to try once more."
     }
 
-    /// Another sender kept a native speaker busy until the sender gave up.
+    /// A native speaker kept answering busy until the sender gave up.
     func nativeAirPlayBusy(name: String) -> String {
-        "\(name) seems to be playing from another device, so it's off. Stop it there, then turn it on again."
+        "\(name) seems to be busy with another device, so it's off. Turn it on again once it's free."
     }
 
     /// A native speaker kept turning the session down until the sender gave up.
