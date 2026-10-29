@@ -15,7 +15,7 @@ pub mod version;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 
 use appcast::{Arch, Update};
 use flow::{Checked, Env, Installed};
@@ -28,7 +28,8 @@ pub use crate::ui_model::{UpdateRecord, UpdateRecordReason, UpdaterButton, Updat
 /// `SUFeedURL` in `Info.plist`.
 pub const FEED_URL: &str =
     "https://github.com/yassersutojoyo/audiosync/releases/latest/download/appcast.xml";
-/// How long a quit waits for a failed restart's undo (spec S303).
+/// How long a quit waits for a failed restart's undo (spec S303) or an
+/// ended swap's result (spec S301).
 const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub const RELEASE_PAGE: &str = "https://github.com/yassersutojoyo/audiosync/releases/latest";
@@ -560,8 +561,8 @@ impl Updater {
         }));
     }
 
-    /// At quit: a swap under way or a failed restart's undo ends first
-    /// (spec S303), and an exe Windows security removed gets the
+    /// At quit: a swap under way (spec S301) or a failed restart's undo
+    /// (spec S303) ends first, and an exe Windows security removed gets the
     /// `.bak` back, so the next start finds one (spec S315). Lock retries
     /// share [`files::QUIT_RETRY_BUDGET`]. True when the record changed.
     pub fn at_quit(&mut self) -> bool {
@@ -570,11 +571,25 @@ impl Updater {
         if self.work == Work::Restarting {
             self.finish_restart(&mut polled);
         } else {
-            // Waits for a swap under way, so an exe is in place (spec S303).
-            *self
-                .undo_closed
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = true;
+            let swapping = match self.undo_closed.try_lock() {
+                Ok(mut closed) => {
+                    *closed = true;
+                    false
+                }
+                Err(TryLockError::Poisoned(closed)) => {
+                    *closed.into_inner() = true;
+                    false
+                }
+                Err(TryLockError::WouldBlock) => true,
+            };
+            if swapping {
+                // Waits for the swap under way, so an exe is in place (spec S301).
+                *self
+                    .undo_closed
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = true;
+                self.finish_install(&mut polled);
+            }
         }
         let Some((_, swapped)) = &self.swapped else {
             return polled.record_changed;
@@ -590,6 +605,19 @@ impl Updater {
             &mut polled,
         );
         polled.record_changed
+    }
+
+    /// Waits up to [`QUIT_WAIT`] for the result of a swap that has ended,
+    /// which comes once the worker deleted its temp folder.
+    fn finish_install(&mut self, polled: &mut Polled) {
+        let deadline = std::time::Instant::now() + QUIT_WAIT;
+        while self.work == Work::Installing {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.events.recv_timeout(left) {
+                Ok(event) => self.apply(event, polled),
+                Err(_) => break,
+            }
+        }
     }
 
     /// Waits up to [`QUIT_WAIT`] for the restart's worker; past that, a
@@ -1040,6 +1068,10 @@ pub mod tests {
             std::fs::metadata(&exe).unwrap().modified().unwrap(),
             modified
         );
+        // The install worker drops its `env` just after its last event.
+        while Arc::strong_count(&updater.env) > 1 {
+            std::thread::yield_now();
+        }
         Arc::get_mut(&mut updater.env).unwrap().launch = Arc::new(Signals);
         assert_eq!(updater.press(UpdaterButton::RestartNow), Action::Nothing);
         assert!(
@@ -1575,9 +1607,14 @@ pub mod tests {
         assert_eq!(folder(&updater), old_folder());
     }
 
-    /// Real files, except that moving `audiosync.exe.new` into place always
-    /// meets a sharing violation, as while Defender scans it.
-    struct ScannedNew;
+    /// Real files, except that moving `audiosync.exe.new` into place meets
+    /// a sharing violation, as while Defender scans it: always, or with
+    /// `then_removed` once, after which Defender removes the exe moved in.
+    #[derive(Default)]
+    struct ScannedNew {
+        then_removed: bool,
+        tried: AtomicBool,
+    }
 
     impl crate::updater::files::Files for ScannedNew {
         fn create(
@@ -1591,29 +1628,28 @@ pub mod tests {
             RealFiles.remove(path)
         }
         fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
-            if from
+            if !from
                 .file_name()
                 .is_some_and(|name| name == "audiosync.exe.new")
             {
+                return RealFiles.rename(from, to);
+            }
+            if !self.then_removed || !self.tried.swap(true, Ordering::Relaxed) {
                 return Err(std::io::Error::from_raw_os_error(32));
             }
-            RealFiles.rename(from, to)
+            RealFiles.rename(from, to)?;
+            RealFiles.remove(to)
         }
     }
 
-    // covers: S303, S315
-    #[test]
-    fn a_quit_while_the_swap_retries_its_step_4_leaves_an_exe_in_place() {
+    /// Download and Install over `files`, then a quit during step 4's
+    /// first retry wait; the updater and what the quit returned.
+    fn quit_during_swap(name: &str, files: ScannedNew) -> (Updater, bool) {
         let (entered_sender, entered) = mpsc::channel();
         let (release, gate) = mpsc::channel::<()>();
         let (entered_sender, gate) = (Mutex::new(entered_sender), Mutex::new(gate));
         let first = AtomicBool::new(true);
-        let mut f = fixture(
-            "quit-during-swap",
-            false,
-            Arc::new(ScannedNew),
-            DebugLog::default(),
-        );
+        let mut f = fixture(name, false, Arc::new(files), DebugLog::default());
         f.env.pause = Arc::new(files::Pause::counted(move |_| {
             if first.swap(false, Ordering::Relaxed) {
                 let _ = entered_sender.lock().unwrap().send(());
@@ -1630,11 +1666,34 @@ pub mod tests {
             .recv_timeout(std::time::Duration::from_secs(20))
             .expect("step 4 waits to retry");
         drop(release);
-        updater.at_quit();
+        let changed = updater.at_quit();
+        (updater, changed)
+    }
+
+    // covers: S301, S315
+    #[test]
+    fn a_quit_while_the_swap_retries_its_step_4_leaves_an_exe_in_place() {
+        let (updater, _) = quit_during_swap("quit-during-swap", ScannedNew::default());
         assert_eq!(
             std::fs::read(updater.env.install_dir.join(archive::EXE_NAME)).ok(),
             Some(b"old exe".to_vec()),
             "the .bak is back before the quit goes on"
         );
+    }
+
+    // covers: S301, S315
+    #[test]
+    fn a_swap_that_ends_during_the_quit_still_gets_the_removed_exe_check() {
+        let files = ScannedNew {
+            then_removed: true,
+            ..ScannedNew::default()
+        };
+        let (updater, changed) = quit_during_swap("swap-ends-in-quit", files);
+        assert!(changed, "the quit stores the record");
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::Blocked).as_ref()
+        );
+        assert_eq!(folder(&updater), old_folder());
     }
 }
