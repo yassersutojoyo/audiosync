@@ -8770,7 +8770,10 @@ mod tests {
             let id = ap(&den);
             fake.take_calls();
             if kind == ErrorKind::PairingFailed {
-                fake.refuse_for_state(&den);
+                // The notice comes with the second failed retry (S222).
+                for _ in 0..3 {
+                    fake.refuse_for_state(&den);
+                }
             } else {
                 fake.fail(&den, kind);
             }

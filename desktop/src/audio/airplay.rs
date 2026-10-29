@@ -6894,7 +6894,10 @@ pub mod tests {
         airplay.poll();
         airplay.set_enabled(&id, true).unwrap();
         airplay.set_streaming(true);
-        fake.refuse_for_state(&tv);
+        // The notice comes with the second failed retry (S222).
+        for _ in 0..3 {
+            fake.refuse_for_state(&tv);
+        }
         let events = airplay.poll();
         assert!(
             events.contains(&BackendEvent::AirPlayTrouble {
