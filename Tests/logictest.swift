@@ -7018,6 +7018,29 @@ do {
     check(asFormat.isEmpty && asStall == ["A"] && inARow == .retry(atS: 113),
           "output format: a format change during a stall trial reopens as a format change and leaves the trial as it was",
           "\(asFormat) \(asStall) \(inARow)")
+    // covers: S325 (measured: a Bluetooth output re-added after its restart ran 44100 Hz on a 48000 Hz device)
+    let stereo44 = F(rate: 44_100, channels: 2)
+    let moved = OutputFormatWatch.atStart(unitRate: 44_100, bound: stereo44, now: stereo48)
+    let staleUnit = OutputFormatWatch.atStart(unitRate: 44_100, bound: stereo48, now: stereo48)
+    let settled = OutputFormatWatch.atStart(unitRate: 44_100, bound: stereo44, now: stereo44)
+    let unitUnread = OutputFormatWatch.atStart(unitRate: 0, bound: stereo48, now: stereo48)
+    let unread = OutputFormatWatch.atStart(unitRate: 44_100, bound: nil, now: stereo48)
+    check(moved.baseline == stereo44 && moved.verdict == .reopen(old: stereo44, new: stereo48)
+            && staleUnit.verdict == .reopen(old: stereo44, new: stereo48)
+            && settled.baseline == stereo44 && settled.verdict == .keep
+            && unitUnread.baseline == stereo48 && unitUnread.verdict == .keep
+            && unread.baseline == stereo48 && unread.verdict == .keep,
+          "output format: a device that moves to another rate while its output starts reopens it once the watch listens",
+          "\(moved) \(staleUnit) \(settled) \(unitUnread) \(unread)")
+    var reopens = StartReopens()
+    let first = reopens.take("A"), again = reopens.take("A"), other = reopens.take("B")
+    reopens.settle(enabled: ["A", "B"], listed: ["B"])
+    let afterLeaving = reopens.take("A")
+    reopens.settle(enabled: ["A"], listed: ["A", "B"])
+    let afterSwitchOff = reopens.take("B"), stillUsed = reopens.take("A")
+    check(first && !again && other && afterLeaving && afterSwitchOff && !stillUsed,
+          "output format: a start check reopens an output once, then keeps it until its device leaves or it is switched off",
+          "\(first) \(again) \(other) \(afterLeaving) \(afterSwitchOff) \(stillUsed)")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)

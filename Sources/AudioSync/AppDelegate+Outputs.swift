@@ -374,6 +374,7 @@ extension AppDelegate {
                           formatReopens: Set<String> = []) {
         let listing = provided ?? devices.allOutputDevices()
         noteLocalDeviceList(listing)   // the reference follows the list, streaming or not
+        OutputFormatWatch.startReopens.settle(enabled: enabledLocal, listed: Set(listing.map(\.uid)))
         guard engine.isRunning else { return }   // stopped: startEngine syncs them once it runs
 
         let now = ProcessInfo.processInfo.systemUptime

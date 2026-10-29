@@ -259,10 +259,12 @@ final class OutputRenderer: FadingOutput {
         if let owner = Self.hogOwner(device), owner != getpid() {
             throw StartFailure.deviceDidNotStart(OSStatus(kAudioDevicePermissionsError))
         }
+        // Its channels, against the rate the unit binds at: a move during the start sends no notice (S325's relink).
+        let boundFormat = Self.deviceFormat(device)
         let fresh = try Self.makeUnit()
         let bluetooth = BluetoothIOBuffer.isBluetooth(
             transport: Self.uint32(device, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal) ?? 0)
-        let started: (channels: Int, rate: Double)
+        let started: (channels: Int, rate: Double, unitRate: Double)
         var initialized = false
         do {
             started = try configure(fresh, device: device, captureRate: captureRate, delayMs: delayMs,
@@ -284,7 +286,6 @@ final class OutputRenderer: FadingOutput {
         formatChanged = false
         formatCheckQueued = false
         startedDevice = device
-        startedFormat = Self.deviceFormat(device)
         stopNote = "running"
         let reportedNs = Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
         let uid = Self.deviceString(device, kAudioDevicePropertyDeviceUID)
@@ -296,6 +297,19 @@ final class OutputRenderer: FadingOutput {
         installDeviceAliveListener(device)
         installOverloadListener(device)
         installFormatListener(device)
+        let check = OutputFormatWatch.atStart(unitRate: started.unitRate, bound: boundFormat,
+                                              now: Self.deviceFormat(device))
+        startedFormat = check.baseline
+        if case .reopen(let old, let new) = check.verdict {
+            if let uid, OutputFormatWatch.startReopens.take(uid), let listener = formatListener {
+                var address = Self.formatAddresses[0]
+                listener.block(1, &address)   // checked as a notice would be
+            } else {
+                startedFormat = new   // later notices then reopen only for a real change
+                DebugTrace.log("[AudioSync] output unit on device \(device) bound at \(old.text) on a device at "
+                    + "\(new.text); already reopened once for this, kept as is")
+            }
+        }
         startDebugReport()
         startLateCallbackReport(device: device)
         let extraLeadMs = target?.renderer.extraLeadMs ?? 0
@@ -377,9 +391,9 @@ final class OutputRenderer: FadingOutput {
     /// Enables output, binds the unit to `device`, sets the format the render
     /// callback fills (the device's channels at the device's rate), makes the
     /// renderer for it at `delayMs` and installs the callback. Returns the
-    /// channel count and the rate.
+    /// channel count, the rate and the rate the unit bound the device at.
     private func configure(_ unit: AudioUnit, device: AudioObjectID, captureRate: Double,
-                           delayMs: Double, bluetooth: Bool) throws -> (channels: Int, rate: Double) {
+                           delayMs: Double, bluetooth: Bool) throws -> (channels: Int, rate: Double, unitRate: Double) {
         var status = Self.setProperty(unit, kAudioOutputUnitProperty_EnableIO, scope: kAudioUnitScope_Output,
                                       to: UInt32(1))
         guard status == noErr else { throw StartFailure.outputNotEnabled(status) }
@@ -435,7 +449,7 @@ final class OutputRenderer: FadingOutput {
         // The previous start's unit is gone (`halt` ran first), so nothing
         // renders through the old target any more.
         self.target = target
-        return (channels, rate)
+        return (channels, rate, deviceRate)
     }
 
     /// Interleaved, packed Float32 with `channels` channels at `rate` Hz, as
