@@ -260,7 +260,16 @@ extension AppDelegate {
     /// 10 s more (S328).
     func noteLocalDeviceList(_ devices: [AudioDevices.Device]) {
         localListed = devices.map(\.uid).filter { !$0.isEmpty }
-        freshLinks.noteListing(localListed, now: ProcessInfo.processInfo.systemUptime)
+        let calmRestarts = freshLinks.noteListing(localListed, now: ProcessInfo.processInfo.systemUptime,
+                                                  session: engine.isRunning ? session : nil)
+        for (uid, ticket) in calmRestarts
+        where devices.contains(where: { $0.uid == uid && BluetoothIOBuffer.isBluetooth(transport: $0.transport) }) {
+            DebugTrace.log("[AudioSync] fresh link: Bluetooth output \(uid) came back mid-session; "
+                + "one more quiet restart in \(Int(FreshLinkWatch.calmRestartAfterS)) s")
+            DispatchQueue.main.asyncAfter(deadline: .now() + FreshLinkWatch.calmRestartAfterS) { [weak self] in
+                self?.restartOnSettledLink(uid, ticket: ticket)
+            }
+        }
         localReference = LocalDelay.reference(in: devices)
         let heldBefore = briefLoss.held
         briefLoss.noteListing(localListed, enabled: enabledLocal, reference: localReference,
@@ -522,12 +531,17 @@ extension AppDelegate {
     private func restartOnSettledLink(_ uid: String, ticket: Int) {
         guard engine.isRunning, engine.activeOutputUIDs.contains(uid),
               freshLinks.begin(uid: uid, ticket: ticket, session: session) else { return }
-        DebugTrace.log("[AudioSync] fresh link: restarting Bluetooth output \(uid) once")
+        let device = localBoundDevices[uid]
         localHoldBacks[uid] = nil
         localBoundDevices[uid] = nil
         engine.detachOutputs(uids: [uid], keepingLeads: true) { [weak self] in
             DispatchQueue.main.asyncAfter(deadline: .now() + FreshLinkWatch.rejoinPauseS) {
                 guard let self else { return }
+                // Our restart stops only our own unit: a device another process keeps running never drops its link.
+                let running = device.flatMap(OutputRenderer.isRunningSomewhere)
+                    .map { $0 ? "yes" : "no" } ?? "unreadable"
+                DebugTrace.log("[AudioSync] fresh link: restarting Bluetooth output \(uid); "
+                    + "its device still running somewhere during the rest: \(running)")
                 self.freshLinks.release(uid: uid)
                 self.syncLocalOutputs(origin: .automatic)
                 self.checkBriefLosses()   // its held start lead goes once due (S328)

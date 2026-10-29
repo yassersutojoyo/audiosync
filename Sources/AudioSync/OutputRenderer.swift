@@ -638,6 +638,12 @@ final class OutputRenderer: FadingOutput {
         return (Self.hogOwner(device), running.map { $0 != 0 })
     }
 
+    /// For a fresh-link restart's log (S325), main queue: whether any process
+    /// keeps `device` running; nil when unreadable.
+    static func isRunningSomewhere(_ device: AudioObjectID) -> Bool? {
+        uint32(device, kAudioDevicePropertyDeviceIsRunningSomewhere, kAudioObjectPropertyScopeGlobal).map { $0 != 0 }
+    }
+
     /// The process holding `device` in hog mode; nil for none or unreadable.
     private static func hogOwner(_ device: AudioObjectID) -> pid_t? {
         var hogAddress = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyHogMode,
