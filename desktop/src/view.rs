@@ -870,8 +870,10 @@ fn place_to_show(
     frame: WindowFrame,
     on_a_monitor: bool,
     minimized: bool,
+    visible: bool,
     primary: Option<(crate::placement::Bounds, f64)>,
 ) -> Option<WindowFrame> {
+    let _ = visible;
     if on_a_monitor || minimized {
         return None;
     }
@@ -1268,7 +1270,13 @@ impl App {
         };
         let on_a_monitor = crate::platform::is_on_a_monitor(frame.x, frame.y);
         let primary = crate::platform::monitor_at(0.0, 0.0);
-        if let Some(fitted) = place_to_show(frame, on_a_monitor, window.is_minimized(), primary) {
+        if let Some(fitted) = place_to_show(
+            frame,
+            on_a_monitor,
+            window.is_minimized(),
+            window.is_visible(),
+            primary,
+        ) {
             if (fitted.width, fitted.height) != (frame.width, frame.height) {
                 window.set_size(slint::LogicalSize::new(
                     fitted.width as f32,
@@ -8019,14 +8027,14 @@ mod tests {
         };
         let centered = fitted_main_frame(frame, primary, 1.0, false);
         assert_eq!(
-            place_to_show(frame, false, false, Some((primary, 1.0))),
+            place_to_show(frame, false, false, false, Some((primary, 1.0))),
             Some(centered)
         );
         assert_eq!(
-            place_to_show(frame, true, false, Some((primary, 1.0))),
+            place_to_show(frame, true, false, false, Some((primary, 1.0))),
             None
         );
-        assert_eq!(place_to_show(frame, false, false, None), None);
+        assert_eq!(place_to_show(frame, false, false, false, None), None);
         // Windows parks a minimized window at (-32000, -32000), on no monitor.
         let minimized = WindowFrame {
             x: -32000,
@@ -8034,7 +8042,13 @@ mod tests {
             ..frame
         };
         assert_eq!(
-            place_to_show(minimized, false, true, Some((primary, 1.0))),
+            place_to_show(minimized, false, true, false, Some((primary, 1.0))),
+            None
+        );
+        // A window the user dragged partly off the screen stays where it is.
+        let dragged = WindowFrame { x: -250, ..frame };
+        assert_eq!(
+            place_to_show(dragged, false, false, true, Some((primary, 1.0))),
             None
         );
     }
