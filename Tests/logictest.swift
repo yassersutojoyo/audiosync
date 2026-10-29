@@ -4411,6 +4411,36 @@ do {
           "receiver info: system source: the player that played last stops or quits: the fallback")
 }
 
+// MARK: Now playing — a play-pause flips the shown state at once; a stale reading doesn't flip it back
+// covers: S274 (the shown state after a play-pause)
+do {
+    typealias Track = NowPlayingMonitor.Track
+    let spotify = NowPlayingMonitor.spotify, music = NowPlayingMonitor.music
+    func track(_ app: String, playing: Bool) -> Track {
+        Track(bundleID: app, appName: "Player", title: "Song", artist: "Band", album: "Record",
+              isPlaying: playing, artwork: nil)
+    }
+    let settle = NowPlayingMonitor.PendingPlayPause.settle
+    var pending = NowPlayingMonitor.PendingPlayPause()
+    check(pending.landed(track(spotify, playing: true), target: spotify, at: 100)?.isPlaying == false,
+          "now playing: a play-pause that reached a playing player shows it paused at once")
+    check(pending.reconcile(track(spotify, playing: true), readAt: 100.2)?.isPlaying == false,
+          "now playing: a reading right after the play-pause that still says playing is stale")
+    check(pending.reconcile(track(spotify, playing: false), readAt: 101)?.isPlaying == false
+            && pending.reconcile(track(spotify, playing: true), readAt: 101.5)?.isPlaying == true,
+          "now playing: once a reading agrees, the next one is shown as read")
+    _ = pending.landed(track(spotify, playing: false), target: spotify, at: 200)
+    check(pending.reconcile(track(spotify, playing: false), readAt: 200 + settle)?.isPlaying == false,
+          "now playing: a reading taken after the settle time is shown as read")
+    _ = pending.landed(track(spotify, playing: false), target: spotify, at: 300)
+    check(pending.reconcile(track(music, playing: false), readAt: 300.5)?.isPlaying == false
+            && pending.reconcile(nil, readAt: 300.6) == nil,
+          "now playing: a reading of another player, or none, is shown as read")
+    check(pending.landed(track(music, playing: true), target: spotify, at: 400)?.isPlaying == true
+            && pending.landed(nil, target: spotify, at: 400) == nil,
+          "now playing: a play-pause to a player not shown changes nothing shown")
+}
+
 // MARK: Explicit pause of the AirPlay speakers (P213, ExplicitPause in NowPlaying.swift)
 // covers: S292 (the Mac host)
 do {
