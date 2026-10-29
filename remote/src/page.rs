@@ -149,7 +149,7 @@ mod tests {
         assert!(script.contains("Do step 2 before you enter the code"));
     }
 
-    // covers: S343
+    // covers: S340
     #[test]
     fn a_paused_track_and_a_zone_with_no_member_here_read_as_on_the_mac() {
         let script = only_element(PAGE, "script").unwrap();
