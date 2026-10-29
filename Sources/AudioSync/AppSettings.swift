@@ -21,6 +21,8 @@ struct AppSettings: Equatable {
         static let enabledAirPlay = "enabledAirPlayIds"
         /// Device UIDs of the local speakers that are on, as an array.
         static let enabledLocal = "enabledLocalUIDs"
+        /// The device ID (`CastDevice.id`) of the Cast speaker that is on (C112).
+        static let enabledCast = "enabledCastID"
         /// The master slider's position, 0…100.
         static let master = "masterVolume"
         /// Each local speaker's slider position (0…100), by device UID.
@@ -115,6 +117,7 @@ struct AppSettings: Equatable {
     var source = AudioSource.system
     var enabledAirPlay: Set<String> = []
     var enabledLocal: Set<String> = []
+    var enabledCast: String?
     var master = AppSettings.defaultMaster
     var localVolumes: [String: Double] = [:]
     /// The absolute delays from before the local delay model (S77), as the
@@ -160,6 +163,7 @@ struct AppSettings: Equatable {
         var held = self
         held.enabledAirPlay = []
         held.enabledLocal = []
+        held.enabledCast = nil
         return held
     }
 
@@ -170,6 +174,7 @@ struct AppSettings: Equatable {
         s.source = AudioSource(defaultsValue: read(Keys.source) as? String)
         s.enabledAirPlay = ids(read(Keys.enabledAirPlay))
         s.enabledLocal = ids(read(Keys.enabledLocal))
+        s.enabledCast = read(Keys.enabledCast) as? String
         s.autoConnect = ids(read(Keys.autoConnect))
         s.speakerNames = SpeakerNames(stored: read(Keys.speakerNames))
         s.hiddenSpeakers = HiddenSpeakers(stored: read(Keys.hiddenSpeakers))
@@ -400,6 +405,8 @@ struct SettingsStore {
 
     /// A set of IDs, sorted so the stored array doesn't churn.
     func save(ids: Set<String>, forKey key: String) { write(ids.sorted(), key) }
+
+    func save(cast id: String?) { write(id, Keys.enabledCast) }
 
     func save(levels: [String: Double], forKey key: String) { write(levels, key) }
 

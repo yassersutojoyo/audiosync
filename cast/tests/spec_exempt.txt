@@ -4,3 +4,4 @@
 # fails if a clause listed here gains a `// covers:` test.
 C106 Discovery drain cap: the desktop app applies it, and its test a_discovery_burst_beyond_the_cap_waits_for_the_next_tick (desktop/src/audio/cast.rs) covers it.
 C77a Starting guess for a Cast speaker's wait: the host applies it, and its tests a_cast_speakers_wait_is_its_offset_and_hold_back_or_a_guess_by_format (core/tests/calibrate_all.rs) and only_a_cast_speaker_without_an_offset_waits_for_the_unknown_start_guess (desktop/src/audio/calibrate_all.rs) cover it.
+C112 Cast selection kept across a relaunch: the Mac app applies it, and its logic tests named (C112) in Tests/logictest.swift cover it; the desktop app does not yet.

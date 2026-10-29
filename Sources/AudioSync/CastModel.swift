@@ -410,6 +410,9 @@ struct CastModel {
     private(set) var devices: [String: CastDevice] = [:]
     /// The one device the user turned on.
     private(set) var enabled: String?
+    /// The device saved as on at the last quit: it turns on once listed,
+    /// unless the user switched a Cast speaker on first (C112).
+    var savedOn: String?
     /// The selection the sender was last told of; nil until it heard one.
     private var namedSelection: CastSelection?
     /// The current session; its events are the only ones that count.
@@ -468,6 +471,10 @@ struct CastModel {
         case .appeared(let device, let offset, _), .changed(let device, let offset):
             if removedManual.contains(device.id) { return false }
             if case .appeared(_, _, let former?) = change { identified(former, as: device.id) }
+            if savedOn == device.id {
+                savedOn = nil
+                if enabled == nil { enabled = device.id }
+            }
             if let offset, !offsetsWritten.contains(device.id) { offsets[device.id] = offset > 0 ? offset : nil }
             let changed = devices[device.id] != device
             devices[device.id] = device
@@ -559,6 +566,7 @@ struct CastModel {
     mutating func turnOn(_ id: String) -> CastProblem? {
         if let other = enabled, other != id { return .busy }
         enabled = id
+        savedOn = nil
         takenOver.remove(id)
         return nil
     }
