@@ -2761,6 +2761,8 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | set_clear_and_unknown_keys (`desktop/src/speaker_names.rs`) | S228 |
 | names_survive_the_saved_form_and_follow_a_moved_speaker (`desktop/src/speaker_names.rs`) | S228 |
 | the_system_name_typed_with_spaces_or_a_line_break_removes_the_key (`desktop/src/speaker_names.rs`) | S228 |
+| quitting_applies_an_open_rename (`desktop/src/view.rs`) | S228 |
+| quitting_applies_an_open_zone_rename_to_the_zone (`desktop/src/view.rs`) | S228 |
 | a_draft_is_typed_text_other_than_the_applied_value (`desktop/src/view.rs`) | S220 |
 | a_typed_airplay_delay_applies_only_when_committed (`desktop/src/view.rs`) | S220 |
 | escape_drops_the_typed_airplay_delay (`desktop/src/view.rs`) | S220 |
