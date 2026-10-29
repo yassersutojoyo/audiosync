@@ -2802,6 +2802,19 @@ do {
           "native airplay: a reconnecting speaker refused for good keeps its turn-off notice when it leaves the sender")
     check(UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, reconnecting: true, unannounced: false, target: nil) == "Reconnecting…",
           "native airplay: a reconnecting speaker's row says so")
+    for problem: NativeSpeakerEvent.Problem in [.notResponding, .connectionLost, .busy] {
+        var retried = NativeAirPlayModel()
+        retried.apply(.appeared(receiver("R3", "Study", .available)))
+        retried.added("R3")
+        let outcomes = [1000, 2000, 4000].map { (retryMs: Int64) -> NativeAirPlayOutcome? in
+            let outcome = retried.apply(.error(id: "R3", problem, retryMs: retryMs, detail: ""))
+            _ = retried.apply(.state(id: "R3", .retrying, retryMs: retryMs))
+            return outcome
+        }
+        check(outcomes == [nil, nil, .reconnecting("native:R3", problem)] && retried.isReconnecting("R3"),
+              "native airplay: a speaker not responding, lost or busy says reconnecting from its second failed retry",
+              "\(problem): \(outcomes)")
+    }
 
     // P169, S285: a 17th AirPlay 2 speaker waits for a place, switched on,
     // and the sender starts it once one of the others stops.
