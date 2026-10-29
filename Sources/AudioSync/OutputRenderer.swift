@@ -1023,24 +1023,26 @@ enum DeviceAnchor {
     /// In host ns; nil without both times or a rate. Safe on an audio thread.
     @inline(__always)
     static func ns(_ stamp: AudioTimeStamp, hostNs: UInt64, nsPerFrame: Double) -> Int64? {
-        guard stamp.mFlags.contains([.hostTimeValid, .sampleTimeValid]), nsPerFrame > 0,
-              hostNs <= UInt64(Int64.max) else { return nil }
+        guard stamp.mFlags.contains(.hostTimeValid), stamp.mFlags.contains(.sampleTimeValid),
+              nsPerFrame > 0 else { return nil }
         let played = stamp.mSampleTime * nsPerFrame
         guard played.isFinite, abs(played) < 9e18 else { return nil }
-        return Int64(hostNs) &- Int64(played)
+        return Int64(truncatingIfNeeded: hostNs) &- Int64(played)
     }
 }
 
-/// One output's device anchor over a status line's span, in host ns.
+/// One output's device anchor over a status line's span, and the first one
+/// of its start, in host ns.
 struct AnchorSpan: Equatable {
-    var first: Int64
+    var base: Int64
     var low: Int64
     var high: Int64
     var last: Int64
 
-    /// Against the span's first value, so a step reads as a jump.
+    /// Against the start's first value, so a step reads as a jump and stays
+    /// in every later line.
     var text: String {
-        func ms(_ value: Int64) -> String { String(format: "%+.1f", Double(value - first) / 1e6) }
+        func ms(_ value: Int64) -> String { String(format: "%+.1f", Double(value - base) / 1e6) }
         return "device anchor min \(ms(low)) max \(ms(high)) last \(ms(last)) ms"
     }
 }
@@ -1084,9 +1086,10 @@ private final class RenderTarget {
     /// reads), and the latest one as `LateCallbackLog.pack` made it.
     let lateCount = Atomic<UInt64>(0)
     let lateLatest = Atomic<UInt64>(0)
-    /// The device anchor's span (`DeviceAnchor`): the render thread notes,
-    /// the status line takes; `Int64.min` in `anchorFirst` means none yet.
-    let anchorFirst = Atomic<Int64>(.min)
+    /// The device anchor (`DeviceAnchor`): the render thread notes, the
+    /// status line takes the span. `anchorBase`, the start's first anchor,
+    /// is `Int64.min` until then and no take clears it.
+    let anchorBase = Atomic<Int64>(.min)
     let anchorLow = Atomic<Int64>(.max)
     let anchorHigh = Atomic<Int64>(.min)
     let anchorLast = Atomic<Int64>(0)
@@ -1124,16 +1127,16 @@ private final class RenderTarget {
         if anchor < low { _ = anchorLow.compareExchange(expected: low, desired: anchor, ordering: .relaxed) }
         let high = anchorHigh.load(ordering: .relaxed)
         if anchor > high { _ = anchorHigh.compareExchange(expected: high, desired: anchor, ordering: .relaxed) }
-        _ = anchorFirst.compareExchange(expected: .min, desired: anchor, ordering: .relaxed)
+        _ = anchorBase.compareExchange(expected: .min, desired: anchor, ordering: .relaxed)
     }
 
     /// The anchor's span since the previous take, and starts the next. Main thread.
     func takeAnchorSpan() -> AnchorSpan? {
-        let first = anchorFirst.exchange(.min, ordering: .relaxed)
         let low = anchorLow.exchange(.max, ordering: .relaxed)
         let high = anchorHigh.exchange(.min, ordering: .relaxed)
-        guard first != .min, low <= high else { return nil }
-        return AnchorSpan(first: first, low: low, high: high, last: anchorLast.load(ordering: .relaxed))
+        let base = anchorBase.load(ordering: .relaxed)
+        guard base != .min, low <= high else { return nil }
+        return AnchorSpan(base: base, low: low, high: high, last: anchorLast.load(ordering: .relaxed))
     }
 
     /// Fills the unit's buffer with `frames` frames through the renderer,

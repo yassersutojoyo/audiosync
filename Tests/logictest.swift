@@ -6785,10 +6785,11 @@ do {
 do {
     // 32 kHz keeps every time a whole ns, so the anchors are exact.
     let nsPerFrame = 1e9 / 32_000
-    // 400 callbacks of 512 frames on time; with `stepAt`, the host time steps 150 ms there and stays.
-    func span(stepAt: Int?) -> AnchorSpan? {
+    // Callbacks `range` of 512 frames on time, against the start's first; with `stepAt`, the host
+    // time steps 150 ms there and stays.
+    func span(_ range: Range<Int>, stepAt: Int?) -> AnchorSpan? {
         var anchors: [Int64] = []
-        for i in 0..<400 {
+        for i in [0] + Array(range) {
             var stamp = AudioTimeStamp()
             stamp.mSampleTime = Double(i * 512)
             stamp.mFlags = [.sampleTimeValid, .hostTimeValid]
@@ -6796,16 +6797,20 @@ do {
             let hostNs = UInt64((5e12 + Double(i * 512) * nsPerFrame + stepNs).rounded())
             if let anchor = DeviceAnchor.ns(stamp, hostNs: hostNs, nsPerFrame: nsPerFrame) { anchors.append(anchor) }
         }
-        guard let first = anchors.first, let low = anchors.min(), let high = anchors.max(), let last = anchors.last else { return nil }
-        return AnchorSpan(first: first, low: low, high: high, last: last)
+        let spanned = anchors.dropFirst()
+        guard let base = anchors.first, let low = spanned.min(), let high = spanned.max(), let last = spanned.last else { return nil }
+        return AnchorSpan(base: base, low: low, high: high, last: last)
     }
-    let steady = span(stepAt: nil)
+    let steady = span(0..<400, stepAt: nil)
     check(steady.map { $0.high - $0.low < 10_000 } == true && steady?.text == "device anchor min +0.0 max +0.0 last +0.0 ms",
           "device anchor: a device on time holds its anchor flat", "\(String(describing: steady))")
-    let stepped = span(stepAt: 200)
+    let stepped = span(0..<300, stepAt: 200)
     check(stepped.map { abs(Double($0.high - $0.low) / 1e6 - 150) < 0.01 } == true
               && stepped?.text == "device anchor min +0.0 max +150.0 last +150.0 ms",
           "device anchor: a 150 ms step that stays reads as max - min of 150 ms", "\(String(describing: stepped))")
+    let after = span(300..<400, stepAt: 200)
+    check(after?.text == "device anchor min +150.0 max +150.0 last +150.0 ms",
+          "device anchor: the next span still shows the step against the start's first anchor", "\(String(describing: after))")
     var untimed = AudioTimeStamp()
     untimed.mSampleTime = 512
     untimed.mFlags = [.sampleTimeValid]
