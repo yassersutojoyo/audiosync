@@ -79,8 +79,10 @@ extension AppDelegate {
     private func castEventsArrived(_ events: [CastEvent]) {
         for event in events {
             if let line = castLogLine(event) { DebugTrace.log("[AudioSync] Cast: " + line) }
+            // A speaker that leaves the list with this event is named as it was listed.
+            let listed = castModel.enabled.map { [$0: castName($0)] } ?? [:]
             guard let outcome = castModel.apply(event) else { continue }
-            castOutcome(outcome)
+            castOutcome(outcome, listed: listed)
         }
         castFollow()
     }
@@ -104,7 +106,7 @@ extension AppDelegate {
         pushModel()
     }
 
-    private func castOutcome(_ outcome: CastOutcome) {
+    private func castOutcome(_ outcome: CastOutcome, listed: [String: String] = [:]) {
         switch outcome {
         case .changed, .memoryChanged:
             break
@@ -114,7 +116,7 @@ extension AppDelegate {
             clearNotices([Notice.cast(id)])
         case .turnedOff(let id, let problem):
             DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) is off")
-            if let problem { postNotice(text.castProblem(problem, name: castName(id)), subject: Notice.cast(id)) }
+            if let problem { postNotice(text.castProblem(problem, name: listed[id] ?? castName(id)), subject: Notice.cast(id)) }
         case .senderFailed(let wasOn):
             DebugTrace.log("[AudioSync] Cast: the sender stopped after an internal error")
             let name = wasOn.map(castName)

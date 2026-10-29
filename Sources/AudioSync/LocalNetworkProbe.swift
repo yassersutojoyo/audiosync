@@ -80,6 +80,12 @@ enum AirPlaySearch {
               let emptySince else { return nil }
         return emptySince.addingTimeInterval(LocalNetworkHint.emptyBeforeHint)
     }
+
+    /// `emptySince` once the Mac wakes: it is wall-clock time, which counts
+    /// the sleep, so an empty list starts its 20 s over at the wake (S154).
+    static func sinceAfterWake(_ emptySince: Date?, now: Date) -> Date? {
+        emptySince == nil ? nil : now
+    }
 }
 
 /// Finds out whether macOS lets AudioSync use the local network.

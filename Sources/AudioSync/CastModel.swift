@@ -113,6 +113,8 @@ enum CastProblem: Equatable {
     case blocked
     case takenOver
     case connectionLost
+    /// It left the list when discovery stopped, with no session to keep it.
+    case notFound
 }
 
 enum CastError: Equatable {
@@ -385,6 +387,13 @@ struct CastModel {
         case off
         case browsing(since: Date)
         case failed
+
+        /// The search's start once the Mac wakes: the sleep doesn't count
+        /// toward the 20 s, as for AirPlay (`AirPlaySearch.sinceAfterWake`).
+        func afterWake(now: Date) -> Discovery {
+            if case .browsing = self { return .browsing(since: now) }
+            return self
+        }
     }
 
     struct Attempt: Equatable {
@@ -623,6 +632,10 @@ struct CastModel {
             discovery = .failed
             // The sender keeps the playing device and those added by address.
             devices = devices.filter { $0.key == attempt?.device || $0.value.manual }
+            if let id = enabled, devices[id] == nil, starting != id {
+                enabled = nil
+                return .turnedOff(id, problem: .notFound)
+            }
             return .changed
         case .failed:
             let wasOn = enabled

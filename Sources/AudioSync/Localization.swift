@@ -824,6 +824,9 @@ struct UIStrings {
     /// A device's name, or a placeholder when Core Audio can't read it.
     func deviceName(_ name: String) -> String { name.isEmpty ? unknownDevice : name }
 
+    /// A local output that stalled again before playing 5 s; it stays on (S334).
+    func outputLost(name: String) -> String { "\(name) was disconnected. It plays again as soon as it's back." }
+
     /// `refusedCaptureRate`: the capture rate (Hz) when that was the reason;
     /// `count`: how many speakers `names` lists.
     func outputCouldNotStart(names: String, count: Int = 1, refusedCaptureRate: Double? = nil) -> String {
@@ -1391,6 +1394,8 @@ struct UIStrings {
             return "Another app started casting to \(name), so it's off in AudioSync."
         case .connectionLost:
             return "\(name) lost its connection, so it's off. Turn it on again to reconnect."
+        case .notFound:
+            return "\(name) wasn't found on the network, so it's off."
         }
     }
 

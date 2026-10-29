@@ -381,7 +381,7 @@ extension AppDelegate {
         guard engine.isRunning else { return }   // stopped: startEngine syncs them once it runs
 
         let now = ProcessInfo.processInfo.systemUptime
-        stallRetry.settle(enabled: enabledLocal, nowS: now)
+        clearNotices(stallRetry.settle(enabled: enabledLocal, nowS: now).map { SpeakerKey.make(id: $0, airplay: false) })
         refusalRetry.settle(enabled: enabledLocal, listed: Set(listing.map(\.uid)))
         let afterStall = stallRetry.afterStall(formatReopens: formatReopens)
         let applied = LocalOutputSync.apply(enabled: enabledLocal.subtracting(freshLinks.held)
@@ -392,7 +392,8 @@ extension AppDelegate {
                                             holdBacks: localHoldBackTargets(), gain: { effectiveGain($0) })
         for (uid, holdBack) in applied.attached {
             localHoldBacks[uid] = holdBack
-            clearNotices([SpeakerKey.make(id: uid, airplay: false)])
+            // A disconnected notice stays until the reopened stream has played 5 s (S334).
+            if !stallRetry.lost.contains(uid) { clearNotices([SpeakerKey.make(id: uid, airplay: false)]) }
             if let device = listing.first(where: { $0.uid == uid }) { noteFreshLinkStart(uid, device) }
             if let refusedS = refusalRetry.started(uid, nowS: now) {
                 DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) started after its device refused it for "
@@ -400,6 +401,7 @@ extension AppDelegate {
             }
             if afterStall.contains(uid) {
                 stallRetry.started(uid, nowS: now)
+                if stallRetry.lost.contains(uid) { scheduleStallRetry(atS: now + OutputStallRetry.trialS) }
                 DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) reopened after a stall, "
                     + "hold-back \(Int(holdBack.rounded())) ms")
             } else if formatReopens.contains(uid) {
@@ -455,9 +457,13 @@ extension AppDelegate {
     /// (S334). A first stall reopens at the sync that follows; a stall before
     /// the reopened stream played 5 s waits 10 s per try, the speaker on.
     func outputStalled(_ uid: String) {
+        let wasLost = stallRetry.lost.contains(uid)
         let step = stallRetry.stalled(uid, nowS: ProcessInfo.processInfo.systemUptime)
         guard case .retry(let atS) = step else { return }
-        // S334 D1: the notice for a second stall goes here once its wording is approved.
+        if !wasLost {   // once, so a dismissed notice stays dismissed through the retries
+            postNotice(text.outputLost(name: shownName(local: uid, system: localDevices[uid]?.name ?? "")),
+                       subject: SpeakerKey.make(id: uid, airplay: false))
+        }
         DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) stalled again before playing "
             + "\(Int(OutputStallRetry.trialS)) s; trying again every \(Int(OutputStallRetry.retryEveryS)) s")
         scheduleStallRetry(atS: atS)
