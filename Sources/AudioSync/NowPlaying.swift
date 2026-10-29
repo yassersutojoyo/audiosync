@@ -362,10 +362,11 @@ final class NowPlayingMonitor {
         let candidates = candidates()
         let lastPlayed = played.bundleID
         let startedAt = Date()
-        let readAt = ProcessInfo.processInfo.systemUptime
         let mayAsk = mayRaisePrompt
         scripts.async { [weak self] in
             guard let self else { return }
+            // Here, not on main: a refresh queued behind a slow command reads after it landed.
+            let readAt = ProcessInfo.processInfo.systemUptime
             var found: Track?
             var paused: [Track] = []
             var empties: [String: EmptyReadings.Empty] = [:]

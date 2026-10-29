@@ -4439,6 +4439,11 @@ do {
     check(pending.landed(track(music, playing: true), target: spotify, at: 400)?.isPlaying == true
             && pending.landed(nil, target: spotify, at: 400) == nil,
           "now playing: a play-pause to a player not shown changes nothing shown")
+    var twice = NowPlayingMonitor.PendingPlayPause()
+    let paused = twice.landed(track(spotify, playing: true), target: spotify, at: 100)
+    check(twice.landed(paused, target: spotify, at: 100.5)?.isPlaying == true
+            && twice.reconcile(track(spotify, playing: false), readAt: 101)?.isPlaying == true,
+          "now playing: a second play-pause shows playing again and restarts the settle time")
 }
 
 // MARK: Explicit pause of the AirPlay speakers (P213, ExplicitPause in NowPlaying.swift)
