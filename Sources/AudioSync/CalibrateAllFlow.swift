@@ -300,6 +300,8 @@ enum CalibrateAllFlow {
         var airPlay: [(id: String, name: String)]
         /// L, the AirPlay delay as its field shows it (S178).
         var airPlayDelayMs: Double
+        /// A, the AirPlay setting that L comes from.
+        var airPlayAdjustmentMs = 0.0
         /// How much longer than L the AirPlay sender holds its speakers back.
         var airPlayHoldBackMs: Double
         /// L_s, the latency the sender holds the session to, nil while it
@@ -355,7 +357,8 @@ enum CalibrateAllFlow {
                                                                  inputs.airPlayHoldBackMs,
                                                                  inputs.airPlayReportedMs[speaker.id] ?? 0)
             speakers.append(CalibrateAllSpeaker(id: speaker.id, name: speaker.name, kind: .airPlay,
-                                                offsetMs: inputs.airPlayDelayMs, latencyMs: airPlayLatency))
+                                                offsetMs: inputs.airPlayDelayMs, latencyMs: airPlayLatency,
+                                                adjustmentMs: inputs.airPlayAdjustmentMs))
         }
         if speakers.count > 1 { return .success(speakers) }
         return .failure(sittingOut.isEmpty ? .noOtherSpeaker : .onlyLeftOut)
@@ -498,7 +501,9 @@ enum CalibrateAllFlow {
         // A speaker that was still connecting starts playing unmuted and would hear another's sweep.
         let joined = now.playing.subtracting(start.playing).subtracting(taking)
         if joined.contains(where: now.switchedOn.contains) { return .speakersChanged }
-        if now.session != start.session || now.switchedOn != start.switchedOn { return .speakersChanged }
+        if now.session != start.session || now.switchedOn != start.switchedOn || now.reference != start.reference {
+            return .speakersChanged
+        }
         if now.delays != start.delays { return .delaysChanged }
         if let members = start.zoneMembers {
             guard let kept = now.zoneMembers, members.allSatisfy(kept.contains) else { return .speakersChanged }
@@ -588,15 +593,24 @@ enum CalibrateAllFlow {
         }
     }
 
-    /// Whether the stored values are still the ones the run started from,
-    /// so Apply's new values build on them. `current` reads a speaker's.
+    /// Whether the reference and the stored values are still the ones the
+    /// run started from, so Apply's new values build on them. `current`
+    /// reads a speaker's; AirPlay compares the setting A, since L also moves
+    /// with the sender's latency (S238).
     static func unchanged(_ speakers: [CalibrateAllSpeaker], reference: String?, airPlayAdjustmentMs: Double,
                           current: (CalibrateAllSpeaker) -> Double?) -> Bool {
-        speakers.dropFirst().allSatisfy { current($0) == $0.offsetMs }
+        speakers.first?.id == reference && speakers.dropFirst().allSatisfy {
+            $0.kind == .airPlay ? $0.adjustmentMs == airPlayAdjustmentMs : current($0) == $0.offsetMs
+        }
     }
 
+    /// The sender latency of the run that read L as `old`, which Apply enters
+    /// the new AirPlay delay against so A moves by as much as L (S238).
     static func airPlaySenderMs(old: Double?, speakers: [CalibrateAllSpeaker]) -> Double? {
-        nil
+        guard let old, let row = speakers.first(where: { $0.kind == .airPlay && $0.offsetMs == old }),
+              let adjustment = row.adjustmentMs
+        else { return nil }
+        return old - adjustment
     }
 
     /// Whether Undo still only reverts Apply: every value Apply wrote is
