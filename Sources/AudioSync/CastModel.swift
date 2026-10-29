@@ -516,6 +516,7 @@ struct CastModel {
         if let address = manualAddresses.removeValue(forKey: old) { manualAddresses[new] = address }
         if takenOver.remove(old) != nil { takenOver.insert(new) }
         if enabled == old { enabled = new }
+        if savedOn == old { savedOn = new }
         if starting == old { starting = new }
         if let current = attempt, current.device == old {
             attempt = Attempt(number: current.number, device: new, status: current.status,
