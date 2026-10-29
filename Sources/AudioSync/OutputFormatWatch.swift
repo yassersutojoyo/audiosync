@@ -28,13 +28,16 @@ enum OutputFormatWatch {
         return same ? .keep : .reopen(old: started, new: now)
     }
 
-    /// A start's check once its watch listens: `bound` is the device's format
-    /// as the unit was bound to it, `now` the one read after. A move in between
-    /// sends the watch no notice, so it is checked here; `baseline` is what
-    /// later notices compare with.
-    static func atStart(bound: OutputDeviceFormat?,
+    /// A start's check once its watch listens: the rate the output unit bound
+    /// at (`unitRate`, 0 when unread) with `bound`'s channels, read before the
+    /// bind, against the device's format `now`. Bluetooth can move its nominal
+    /// rate during the start, with no notice, or update it apart from the
+    /// unit's; `baseline` is what later notices compare with.
+    static func atStart(unitRate: Double, bound: OutputDeviceFormat?,
                         now: OutputDeviceFormat?) -> (baseline: OutputDeviceFormat?, verdict: Verdict) {
-        (bound ?? now, decide(started: bound, now: now, fadingOut: false))
+        guard var started = bound else { return (now, .keep) }
+        if unitRate > 0 { started.rate = unitRate }
+        return (started, decide(started: started, now: now, fadingOut: false))
     }
 
     /// The debug line for output `number` (its status-line number, never its device's name).
