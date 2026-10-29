@@ -454,9 +454,12 @@ struct CastModel {
     private(set) var removedManual: Set<String> = []
     /// Devices another app took over, until the user turns one on again.
     private(set) var takenOver: Set<String> = []
-    /// A browsed device turned off by leaving the list with no session, until a
-    /// device appears or changes, the sender fails or one goes on.
-    private var leftOn: CastDevice?
+    /// A browsed device turned off by leaving the list with no session, and
+    /// when, until a device appears or changes, the sender fails or one goes on.
+    private var leftOn: (device: CastDevice, at: Date)?
+    /// The sender reports its browsed devices gone just before discovery
+    /// stops: one that left earlier keeps its not-responding notice.
+    static let goneBurstLasts: TimeInterval = 5
 
     /// The devices listed, by name.
     var rows: [String] {
@@ -491,7 +494,7 @@ struct CastModel {
             // One added by address leaves only when a browse finds it, which moves it to its ID (C18).
             if enabled == id, !isLive(id), removed?.manual != true {
                 enabled = nil
-                leftOn = removed
+                leftOn = removed.map { (device: $0, at: now) }
                 return .turnedOff(id, problem: .notResponding)
             }
             return removed == nil ? nil : .changed
@@ -682,7 +685,8 @@ struct CastModel {
             devices = devices.filter { $0.key == attempt?.device || $0.key == starting || $0.value.manual }
             // A browsed device that is on but unlisted can't come back until AudioSync starts again.
             // The sender reports its browsed devices gone first, so one turned off that way gets this notice too.
-            if let id = enabled ?? leftOn?.id, devices[id] == nil, starting != id {
+            let burst = leftOn.flatMap { now.timeIntervalSince($0.at) < Self.goneBurstLasts ? $0.device.id : nil }
+            if let id = enabled ?? burst, devices[id] == nil, starting != id {
                 enabled = nil
                 leftOn = nil
                 return .turnedOff(id, problem: .searchStopped)
@@ -887,7 +891,7 @@ struct CastModel {
     /// The device that is on and its listed name, read before an event that
     /// may empty the list (a stopped search or sender) so its notice can name it.
     var listedOn: [String: String] {
-        enabled.map { [$0: listedName($0)] } ?? leftOn.map { [$0.id: $0.name] } ?? [:]
+        enabled.map { [$0: listedName($0)] } ?? leftOn.map { [$0.device.id: $0.device.name] } ?? [:]
     }
 
     /// The device that is on counts for local outputs while it is in a
