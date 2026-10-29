@@ -12940,6 +12940,49 @@ mod tests {
         assert!(!enabled(&adapter, HEADPHONES));
     }
 
+    // covers: S228, S265
+    #[test]
+    fn a_recall_names_an_unplugged_member_by_its_last_listed_name() {
+        let mut adapter = preset_adapter(vec![saved_preset(&[
+            (key(SPEAKERS), None),
+            (key(HEADPHONES), None),
+        ])]);
+        adapter.audio.disconnect_output(HEADPHONES);
+        adapter.poll();
+        adapter.recall_preset("preset:1");
+        assert_eq!(
+            preset_notices(&adapter),
+            [left_off_notice(
+                "Evening",
+                &[("Headphones", PresetLeftOff::NotFound)]
+            )]
+        );
+    }
+
+    // covers: S228, S265
+    #[test]
+    fn a_recall_names_a_gone_cast_member_by_its_last_listed_name() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[
+                (key(SPEAKERS), None),
+                (cc(CAST_KITCHEN), None),
+            ])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        fake.withdraw(CAST_KITCHEN, "Kitchen");
+        adapter.poll();
+        adapter.recall_preset("preset:1");
+        assert_eq!(
+            preset_notices(&adapter),
+            [left_off_notice(
+                "Evening",
+                &[("Kitchen", PresetLeftOff::NotFound)]
+            )]
+        );
+    }
+
     // covers: S265
     #[test]
     fn the_preset_notice_follows_its_preset_and_goes_once_it_plays_in_full() {
@@ -13107,6 +13150,33 @@ mod tests {
                 "Evening",
                 &[("Left", PresetLeftOff::InTarget("Living Room".to_owned()))]
             )]
+        );
+    }
+
+    // covers: S252
+    #[test]
+    fn a_recall_leaves_on_the_stereo_pair_that_holds_a_member() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let (pair, left, right) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        adapter.poll();
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[(key(SPEAKERS), None), (ap(&left), None)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled("ap:pair:5f0c", true);
+        assert!(speaker_of(&adapter, "ap:pair:5f0c").enabled);
+
+        adapter.recall_preset("preset:1");
+        assert!(enabled(&adapter, SPEAKERS));
+        assert!(
+            speaker_of(&adapter, "ap:pair:5f0c").enabled,
+            "Left plays through it"
         );
     }
 
@@ -13558,6 +13628,19 @@ mod tests {
         // Turned on again, the notice goes.
         adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
         assert!(messages(&adapter).is_empty());
+    }
+
+    // covers: S162
+    #[test]
+    fn streaming_stops_when_the_only_cast_speaker_on_ends_its_session() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        assert!(adapter.snapshot().running);
+        fake.report(cast_ended(1, SessionEnd::Stopped));
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(!state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
+        assert!(!state.running);
     }
 
     #[test]
