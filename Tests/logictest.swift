@@ -2707,10 +2707,12 @@ do {
             && model.apply(.error(id: "A1", .pairingRequired, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsCode)
             && model.apply(.error(id: "A1", .wrongPassword, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsPassword)
             && model.apply(.error(id: "A1", .unsupported, retryMs: 5, detail: "")) == .turnOff("native:A1", .cantPlay)
-            && model.apply(.error(id: "A1", .incompatible, retryMs: 5, detail: "")) == .turnOff("native:A1", .cantPlay)
+            && model.apply(.error(id: "A1", .incompatible, retryMs: nil, detail: "")) == .turnOff("native:A1", .cantPlay)
             && model.apply(.error(id: "A1", .airPlay2Only, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsAirPlay2)
             && model.apply(.error(id: "A1", .timingUnavailable, retryMs: nil, detail: "")) == .turnOff("native:A1", .timingUnavailable),
           "native airplay: an error the sender won't retry turns the speaker off, with why")
+    check(model.apply(.error(id: "A1", .incompatible, retryMs: 5, detail: "")) == nil,
+          "native airplay: a malformed or unexpected answer the sender retries keeps the speaker on (P142)")
     check(model.apply(.error(id: "A1", .busy, retryMs: nil, detail: "")) == .turnOff("native:A1", .busy)
             && model.apply(.error(id: "A1", .refused, retryMs: nil, detail: "")) == .turnOff("native:A1", .refused),
           "native airplay: a speaker that answered busy or refused is off for that reason, not as unreachable")
@@ -3655,6 +3657,19 @@ do {
         check(off == expected && marked.byHand.isEmpty,
               "every time: \(what) ends the stream: the by-hand mark is gone", "\(off), \(marked.byHand)")
     }
+    // The Mac sleeps while it plays: the sender still holds it, and the stream ends all the same.
+    var asleep = NativeAirPlayModel()
+    asleep.apply(.appeared(tv("S3", .needsPin, everyTime: true)))
+    var sleeper = EveryTimeGuard()
+    sleeper.turnedOnByHand(["native:S3"])
+    _ = asleep.turnedOnByUser("S3")
+    asleep.added("S3")
+    _ = asleep.apply(.state(id: "S3", .playing, retryMs: nil))
+    let sleepOff = sleeper.streamEnded(.sleep, streaming: true,
+                                       asking: asleep.askingEveryTime(asleep.rows(enabled: ["native:S3"]), streamEnded: true),
+                                       enabled: ["native:S3"])
+    check(sleepOff == [.init(id: "native:S3", reason: .needsCode)] && sleeper.byHand.isEmpty,
+          "every time: the Mac sleeping while it plays ends the stream: row off + notice", "\(sleepOff)")
     // A rebuild (a source change, say) stops the engine before it starts it
     // again; when that start fails, streaming has stopped and the mark ends.
     var rebuilt = EveryTimeGuard()
