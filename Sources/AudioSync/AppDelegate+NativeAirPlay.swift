@@ -229,10 +229,8 @@ extension AppDelegate {
     func endNativePinSessions(_ cause: StreamEnd, streaming: Bool, midRebuild: Bool = false,
                               model: NativeAirPlayModel? = nil) {
         guard let model = model ?? nativeAirPlay?.model else { return }
-        let asking = model.askingEveryTime(model.rows(enabled: enabledAirPlay))
         for off in everyTimeGuard.streamEnded(cause, streaming: streaming, midRebuild: midRebuild,
-                                              asking: asking, enabled: enabledAirPlay,
-                                              awaitingUser: model.awaitingUser) {
+                                              model: model, enabled: enabledAirPlay) {
             turnOffNativeSpeaker(off.id, reason: off.reason, origin: .automatic)
         }
     }

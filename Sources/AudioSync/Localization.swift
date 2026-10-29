@@ -710,7 +710,7 @@ struct UIStrings {
         switch problem {
         case .connectionLost: return "\(name) lost its connection. AudioSync keeps trying to reconnect."
         case .busy: return "\(name) seems to be playing from another device. AudioSync keeps trying."
-        case .refused: return "\(name) declined the stream. AudioSync tries again shortly."
+        case .refused, .incompatible: return "\(name) declined the stream. AudioSync tries again shortly."
         default: return "\(name) isn't responding. AudioSync keeps trying to reach it."
         }
     }

@@ -80,10 +80,10 @@ struct EveryTimeGuard: Equatable {
     /// click bought, so every mark goes (a retry or a source change inside
     /// the stream keeps them, S223), except for a speaker in `awaitingUser`
     /// (`NativeAirPlayModel.awaitingUser`), whose pairing turns it on, as on
-    /// Windows. Of `asking`, the speakers still on go off with the notice
+    /// Windows. Of `everyTime`, the speakers still on go off with the notice
     /// that they need a PIN.
     mutating func streamEnded(_ cause: StreamEnd, streaming: Bool, midRebuild: Bool = false,
-                              asking: [String], enabled: Set<String>,
+                              everyTime: [String], enabled: Set<String>,
                               awaitingUser: Set<String> = []) -> [NativeAirPlayPlan.TurnOff] {
         guard cause.endsStream(streaming: streaming, midRebuild: midRebuild) else {
             // After the stream ended, a failed sender still takes the pairings that outlived it.
@@ -96,7 +96,18 @@ struct EveryTimeGuard: Equatable {
         // A failed sender took its pairings and prompts with it.
         byHand.formIntersection(cause == .senderFailed ? Set<String>() : awaitingUser)
         outlived = byHand
-        return turnsOff(asking, enabled: enabled).map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
+        return turnsOff(everyTime, enabled: enabled).map { NativeAirPlayPlan.TurnOff(id: $0, reason: .needsCode) }
+    }
+
+    /// The same for `model`'s rows that ask for a code every time, also one
+    /// that still plays: its PIN session ends at a stream end too (S223).
+    mutating func streamEnded(_ cause: StreamEnd, streaming: Bool, midRebuild: Bool = false,
+                              model: NativeAirPlayModel, enabled: Set<String>) -> [NativeAirPlayPlan.TurnOff] {
+        let everyTime = model.rows(enabled: enabled).filter { id in
+            NativeAirPlayID.receiver(id).map(model.asksEveryTime) == true
+        }
+        return streamEnded(cause, streaming: streaming, midRebuild: midRebuild, everyTime: everyTime, enabled: enabled,
+                           awaitingUser: model.awaitingUser)
     }
 
     /// A new stream started: a pairing that outlived the last one now
@@ -226,7 +237,7 @@ enum NativeSpeakerEvent: Equatable {
         /// stays on (`NativeAirPlayModel.apply`).
         var retried: Bool {
             switch self {
-            case .notResponding, .connectionLost, .busy, .refused: return true
+            case .notResponding, .connectionLost, .busy, .refused, .incompatible: return true
             default: return false
             }
         }

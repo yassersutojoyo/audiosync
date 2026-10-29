@@ -2720,10 +2720,12 @@ do {
             && model.apply(.error(id: "A1", .pairingRequired, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsCode)
             && model.apply(.error(id: "A1", .wrongPassword, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsPassword)
             && model.apply(.error(id: "A1", .unsupported, retryMs: 5, detail: "")) == .turnOff("native:A1", .cantPlay)
-            && model.apply(.error(id: "A1", .incompatible, retryMs: 5, detail: "")) == .turnOff("native:A1", .cantPlay)
+            && model.apply(.error(id: "A1", .incompatible, retryMs: nil, detail: "")) == .turnOff("native:A1", .cantPlay)
             && model.apply(.error(id: "A1", .airPlay2Only, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsAirPlay2)
             && model.apply(.error(id: "A1", .timingUnavailable, retryMs: nil, detail: "")) == .turnOff("native:A1", .timingUnavailable),
           "native airplay: an error the sender won't retry turns the speaker off, with why")
+    check(model.apply(.error(id: "A1", .incompatible, retryMs: 5, detail: "")) == nil,
+          "native airplay: a malformed or unexpected answer the sender retries keeps the speaker on (P142)")
     check(model.apply(.error(id: "A1", .busy, retryMs: nil, detail: "")) == .turnOff("native:A1", .busy)
             && model.apply(.error(id: "A1", .refused, retryMs: nil, detail: "")) == .turnOff("native:A1", .refused),
           "native airplay: a speaker that answered busy or refused is off for that reason, not as unreachable")
@@ -3624,7 +3626,7 @@ do {
     _ = session.apply(.state(id: "S1", .playing, retryMs: nil))
     for id in session.plan(streaming: false, enabled: ["native:S1"]).remove { session.removed(id) }
     let ended = hand.streamEnded(.stopped(.powerSwitch), streaming: true,
-                                 asking: session.askingEveryTime(session.rows(enabled: ["native:S1"])),
+                                 everyTime: session.askingEveryTime(session.rows(enabled: ["native:S1"])),
                                  enabled: ["native:S1"])
     for off in ended { _ = session.turnedOff(off.id) }
     let enabledAfter: Set<String> = ended.isEmpty ? ["native:S1"] : []
@@ -3664,23 +3666,34 @@ do {
     for (cause, enabled, expected, what) in ends {
         var marked = EveryTimeGuard()
         marked.turnedOnByHand(["native:S1"])
-        let off = marked.streamEnded(cause, streaming: true, asking: ["native:S1"], enabled: enabled)
+        let off = marked.streamEnded(cause, streaming: true, everyTime: ["native:S1"], enabled: enabled)
         check(off == expected && marked.byHand.isEmpty,
               "every time: \(what) ends the stream: the by-hand mark is gone", "\(off), \(marked.byHand)")
     }
+    // The Mac sleeps while it plays: the sender still holds it, and the stream ends all the same.
+    var asleep = NativeAirPlayModel()
+    asleep.apply(.appeared(tv("S3", .needsPin, everyTime: true)))
+    var sleeper = EveryTimeGuard()
+    sleeper.turnedOnByHand(["native:S3"])
+    _ = asleep.turnedOnByUser("S3")
+    asleep.added("S3")
+    _ = asleep.apply(.state(id: "S3", .playing, retryMs: nil))
+    let sleepOff = sleeper.streamEnded(.sleep, streaming: true, model: asleep, enabled: ["native:S3"])
+    check(sleepOff == [.init(id: "native:S3", reason: .needsCode)] && sleeper.byHand.isEmpty,
+          "every time: the Mac sleeping while it plays ends the stream: row off + notice", "\(sleepOff)")
     // A rebuild (a source change, say) stops the engine before it starts it
     // again; when that start fails, streaming has stopped and the mark ends.
     var rebuilt = EveryTimeGuard()
     rebuilt.turnedOnByHand(["native:S1"])
     let failedRebuild = rebuilt.streamEnded(.stopped(.startFailed), streaming: false, midRebuild: true,
-                                            asking: ["native:S1"], enabled: ["native:S1"])
+                                            everyTime: ["native:S1"], enabled: ["native:S1"])
     check(failedRebuild == [.init(id: "native:S1", reason: .needsCode)] && rebuilt.byHand.isEmpty,
           "every time: a rebuild after a source change that fails to start ends the stream: the by-hand mark is gone",
           "\(failedRebuild), \(rebuilt.byHand)")
     var quitMidRebuild = EveryTimeGuard()
     quitMidRebuild.turnedOnByHand(["native:S1"])
     let quitOff = quitMidRebuild.streamEnded(.stopped(.quitting), streaming: false, midRebuild: true,
-                                             asking: ["native:S1"], enabled: ["native:S1"])
+                                             everyTime: ["native:S1"], enabled: ["native:S1"])
     check(quitOff.isEmpty && quitMidRebuild.byHand == ["native:S1"],
           "every time: quitting during a rebuild keeps the by-hand mark", "\(quitOff)")
     // A source change rebuilds inside the stream, and quitting leaves the
@@ -3690,7 +3703,7 @@ do {
     for (cause, streaming) in keeps {
         var marked = EveryTimeGuard()
         marked.turnedOnByHand(["native:S1"])
-        let off = marked.streamEnded(cause, streaming: streaming, asking: ["native:S1"], enabled: ["native:S1"])
+        let off = marked.streamEnded(cause, streaming: streaming, everyTime: ["native:S1"], enabled: ["native:S1"])
         check(off.isEmpty && marked.byHand == ["native:S1"],
               "every time: \(cause) with streaming \(streaming) keeps the by-hand mark", "\(off)")
     }
@@ -3707,7 +3720,7 @@ do {
         _ = model.turnedOnByUser("E1")
         if promptOpen { _ = model.apply(.pinNeeded(id: "E1")) }
         let off = hand.streamEnded(.stopped(.powerSwitch), streaming: true,
-                                   asking: model.askingEveryTime(model.rows(enabled: ["native:E1"])),
+                                   everyTime: model.askingEveryTime(model.rows(enabled: ["native:E1"])),
                                    enabled: ["native:E1"], awaitingUser: model.awaitingUser)
         return (model, hand, off)
     }
@@ -3748,14 +3761,14 @@ do {
     // A failed sender takes its pairings and prompts with it: nothing is left to finish.
     var failedSender = EveryTimeGuard()
     failedSender.turnedOnByHand(["native:E1"])
-    let senderOff = failedSender.streamEnded(.senderFailed, streaming: true, asking: ["native:E1"],
+    let senderOff = failedSender.streamEnded(.senderFailed, streaming: true, everyTime: ["native:E1"],
                                              enabled: ["native:E1"], awaitingUser: ["native:E1"])
     check(senderOff == [.init(id: "native:E1", reason: .needsCode)] && failedSender.byHand.isEmpty,
           "every time: a sender failure during the pairing ends the mark", "\(senderOff)")
     // The sender fails after the stream ended, its pairing with it: the
     // speaker goes off, or the new sender's listing keeps it on with nothing pairing.
     var (_, failedAfterEnd, _) = outlivingStream(promptOpen: true)
-    let lateSenderOff = failedAfterEnd.streamEnded(.senderFailed, streaming: false, asking: ["native:E1"],
+    let lateSenderOff = failedAfterEnd.streamEnded(.senderFailed, streaming: false, everyTime: ["native:E1"],
                                                    enabled: ["native:E1"])
     let relistedAfterFailure = failedAfterEnd.turnsOff(["native:E1"], enabled: ["native:E1"])
     check(lateSenderOff == [.init(id: "native:E1", reason: .needsCode)] && failedAfterEnd.byHand.isEmpty
@@ -8300,7 +8313,7 @@ do {
     var switchedOn = EveryTimeGuard()
     switchedOn.turnedOnByHand(["native:S1"])
     let allFailed = switchedOn.streamEnded(.stopped(.startFailed), streaming: false, midRebuild: true,
-                                           asking: ["native:S1"], enabled: ["native:S1"])
+                                           everyTime: ["native:S1"], enabled: ["native:S1"])
     check(allFailed == [.init(id: "native:S1", reason: .needsCode)] && switchedOn.byHand.isEmpty,
           "source quit: a switch to the whole system whose every attempt fails ends the stream: the by-hand mark is gone (S223)",
           "\(allFailed), \(switchedOn.byHand)")
