@@ -33,6 +33,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On Windows, when a saved input channel pair the device doesn't have plays as channels 1-2, picking 1-2 no longer restarts the capture, and the pick is kept, so the old pair doesn't come back once the device has those channels again.
 - On the Mac, the line under a speaker list's In zones box no longer runs into the box's rounded corners.
 - On Windows, when the app you play from runs as administrator and quits or restarts, AudioSync now notices within about 2 seconds and stops or switches to the whole system, as your setting says, with the usual notice. Before, streaming went on in silence.
 - On Windows, when the PC wakes from sleep while AudioSync streams and Windows audio is slow to come back, AudioSync keeps trying to capture for up to a minute after the wake. Before, it stopped streaming after about 5 seconds of tries. A speaker Windows was refusing to open when the PC went to sleep gets its full 30 seconds again after the wake before AudioSync shows its notice. It hasn't been tried on a real sleep and wake yet.

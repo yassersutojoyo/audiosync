@@ -4505,6 +4505,15 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             return;
         }
         let (endpoint_id, name) = (endpoint_id.clone(), name.clone());
+        if pair == 0
+            && InputPair::resolve(self.chosen_input_pair(), self.listed_channels(&endpoint_id)).1
+        {
+            // 1-2 already plays for the saved pair the device lacks (S14).
+            self.input_pairs.remove(&endpoint_id);
+            self.audio.set_input_pair(&endpoint_id, 0);
+            self.clear_source_notice_if_running();
+            return;
+        }
         // A session waiting for its unplugged input opens on the new pair
         // once the device is listed again (S329).
         let waits = self.audio.waits_for_input();
@@ -6009,6 +6018,36 @@ mod tests {
         adapter.select_input_pair(2);
         assert_eq!(adapter.snapshot().input_pair, 0);
         assert!(adapter.current_settings().input_pairs.is_empty());
+    }
+
+    // covers: S14
+    #[test]
+    fn picking_the_pair_a_saved_pair_fell_back_to_keeps_the_pick_and_restarts_nothing() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Interface (USB Audio)", "USB");
+        adapter.audio.set_input_channels(MIC, 8);
+        adapter.refresh_sources();
+        adapter.select_source(&mic());
+        adapter.select_input_pair(3);
+        adapter.audio.set_input_channels(MIC, 4);
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_running(true);
+        let before = input_pair_captures(&adapter).len();
+
+        adapter.select_input_pair(0);
+        assert!(adapter.snapshot().running);
+        assert_eq!(
+            input_pair_captures(&adapter).len(),
+            before,
+            "1-2 already plays"
+        );
+        assert!(
+            adapter.current_settings().input_pairs.is_empty(),
+            "the pick replaces 7-8"
+        );
     }
 
     #[test]
