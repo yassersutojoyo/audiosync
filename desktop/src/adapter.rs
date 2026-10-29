@@ -10594,7 +10594,9 @@ mod tests {
         adapter.refresh_sources();
         turn_on(&mut adapter, SPEAKERS);
         adapter.select_source(&mic());
-        adapter.audio.disconnect_input(MIC);
+        // Still listed, so the lost capture takes its tries and stops (S329).
+        adapter.audio.refuse_captures(Some(BackendError::InputGone));
+        adapter.audio.fail_capture(BackendError::InputGone);
         for _ in 0..20 {
             adapter.poll();
         }

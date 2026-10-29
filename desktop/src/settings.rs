@@ -1346,6 +1346,7 @@ fn unreadable_fields(text: &str) -> Vec<&'static str> {
         ("hidden_speakers", Value::is_array),
         ("groups", Value::is_array),
         ("speaker_zones", Value::is_array),
+        ("zone_member_kinds", Value::is_object),
         ("speaker_presets", Value::is_array),
         ("last_zone_id", Value::is_u64),
         ("last_preset_id", Value::is_u64),
