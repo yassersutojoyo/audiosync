@@ -9371,8 +9371,8 @@ do {
                                       current: { $0.id == "usb" ? 150 : 9 }),
           "calibrate all: Apply writes nothing once the reference moved after the measurement")
     var applied = AirPlayDelay(adjustmentMs: 100)
-    let entered = applied.enter(2150, senderMs: CalibrateAllFlow.airPlaySenderMs(old: 2000, speakers: withAirPlay) ?? 2200)
-    check(entered && applied.adjustmentMs == 250,
+    let enteredWithAirPlay = applied.enter(2150, senderMs: CalibrateAllFlow.airPlaySenderMs(old: 2000, speakers: withAirPlay) ?? 2200)
+    check(enteredWithAirPlay && applied.adjustmentMs == 250,
           "calibrate all: Apply moves A by as much as the run moved L, whatever the sender's latency is now (S238)",
           "A \(applied.adjustmentMs)")
     // L_s 1750 and A −2000 clamp L to 0; the run then asks for 300.
