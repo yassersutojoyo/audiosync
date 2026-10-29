@@ -40,8 +40,25 @@ enum OutputFormatWatch {
         return (started, decide(started: started, now: now, fadingOut: false))
     }
 
+    /// The start checks' reopens so far, so a unit that binds at a stale
+    /// rate every time reopens once, not in a loop; main queue.
+    static var startReopens = StartReopens()
+
     /// The debug line for output `number` (its status-line number, never its device's name).
     static func line(number: Int, old: OutputDeviceFormat, new: OutputDeviceFormat) -> String {
         "output \(number): its device's format changed from \(old.text) to \(new.text); reopening it"
+    }
+}
+
+/// One start-check reopen per output UID, until its device leaves the list
+/// or the output is switched off.
+struct StartReopens {
+    private var used: Set<String> = []
+
+    /// Whether output `uid` may reopen for a start check; uses it up.
+    mutating func take(_ uid: String) -> Bool { used.insert(uid).inserted }
+
+    mutating func settle(enabled: Set<String>, listed: Set<String>) {
+        used.formIntersection(enabled.intersection(listed))
     }
 }

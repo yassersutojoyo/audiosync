@@ -297,9 +297,15 @@ final class OutputRenderer: FadingOutput {
         let check = OutputFormatWatch.atStart(unitRate: started.unitRate, bound: boundFormat,
                                               now: Self.deviceFormat(device))
         startedFormat = check.baseline
-        if case .reopen = check.verdict, let listener = formatListener {   // checked as a notice would be
-            var address = Self.formatAddresses[0]
-            listener.block(1, &address)
+        if case .reopen(let old, let new) = check.verdict {
+            if let uid, OutputFormatWatch.startReopens.take(uid), let listener = formatListener {
+                var address = Self.formatAddresses[0]
+                listener.block(1, &address)   // checked as a notice would be
+            } else {
+                startedFormat = new   // later notices then reopen only for a real change
+                DebugTrace.log("[AudioSync] output unit on device \(device) bound at \(old.text) on a device at "
+                    + "\(new.text); already reopened once for this, kept as is")
+            }
         }
         startDebugReport()
         startLateCallbackReport(device: device)
