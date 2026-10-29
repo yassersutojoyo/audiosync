@@ -25,6 +25,8 @@ env:
 jobs:
   test:
     name: Format, clippy and tests
+    # Windows runs on main and integ/* trains; other pushes test on Linux only.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/')
     runs-on: windows-latest
     timeout-minutes: 45
     defaults:
@@ -196,6 +198,7 @@ jobs:
 
   build:
     name: Release build (${{ matrix.arch }})
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/')
     strategy:
       fail-fast: false
       matrix:
