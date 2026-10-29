@@ -148,6 +148,7 @@ extension AppDelegate {
             // Not from inside the event loop: a prompt runs modally.
             DispatchQueue.main.async { [weak self] in self?.showNextNativePrompt() }
         case .paired(let id):
+            everyTimeGuard.paired(id)
             clearNotices([SpeakerKey.make(id: id, airplay: true)])
             syncNativeSpeakers()   // it joins with its new credentials
             pushModel()
@@ -222,13 +223,16 @@ extension AppDelegate {
     /// The stream ended (stopped, the sender failed, or the Mac sleeps): a
     /// speaker that asks for a code every time and was switched on by hand
     /// goes off with the needs-a-PIN notice, since left on it would play
-    /// nothing in the next stream (S223). `model` is a failed sender's.
+    /// nothing in the next stream (S223). One whose pairing or prompt is
+    /// still open stays on and its pairing goes on: paired, it stays on;
+    /// failed, it goes off with that notice. `model` is a failed sender's.
     func endNativePinSessions(_ cause: StreamEnd, streaming: Bool, midRebuild: Bool = false,
                               model: NativeAirPlayModel? = nil) {
         guard let model = model ?? nativeAirPlay?.model else { return }
         let asking = model.askingEveryTime(model.rows(enabled: enabledAirPlay))
         for off in everyTimeGuard.streamEnded(cause, streaming: streaming, midRebuild: midRebuild,
-                                              asking: asking, enabled: enabledAirPlay) {
+                                              asking: asking, enabled: enabledAirPlay,
+                                              awaitingUser: model.awaitingUser) {
             turnOffNativeSpeaker(off.id, reason: off.reason, origin: .automatic)
         }
     }
@@ -560,6 +564,7 @@ extension AppDelegate {
     /// whether or not it is still switched on: a cancelled prompt leaves its
     /// stage in the model so that this stops the pairing that waited for it.
     func turnOffNativeSpeaker(_ id: String, reason: NativeTurnOff, origin: StartOrigin) {
+        let reason = everyTimeGuard.turnedOff(id, reason: reason)
         endNativeAttempt(id)
         guard enabledAirPlay.contains(id) else { return }
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) turned off (\(reason))")
