@@ -1329,8 +1329,11 @@ impl CastSpeakers {
     /// A status's volume (C70, C104, C105): the answer to a level sent keeps
     /// the own level and any other level moves it by master × zone, except
     /// the session's first, which is set to master × zone × own level
-    /// instead.
+    /// instead. A status without a level is not the first.
     fn volume_reported(&mut self, device: DeviceId, volume: DeviceVolume) {
+        if !volume.has_level {
+            return;
+        }
         let shown = self.own_of(device);
         let zone = self.zone_of(device);
         let level = volume.level;
@@ -2559,6 +2562,7 @@ pub mod tests {
                 event: SessionEvent::Volume(DeviceVolume {
                     level,
                     step_interval: Some(0.05),
+                    has_level: true,
                     ..DeviceVolume::default()
                 }),
             });
@@ -2592,6 +2596,7 @@ pub mod tests {
             event: SessionEvent::Volume(DeviceVolume {
                 level: 0.35,
                 step_interval: Some(0.05),
+                has_level: true,
                 ..DeviceVolume::default()
             }),
         });
@@ -3042,6 +3047,7 @@ pub mod tests {
         assert_eq!(volume_step(None), 1.0);
         let reported = |step| DeviceVolume {
             step_interval: step,
+            has_level: true,
             ..DeviceVolume::default()
         };
         assert_eq!(volume_step(Some(&reported(None))), 1.0);
@@ -3080,6 +3086,7 @@ pub mod tests {
             event: SessionEvent::Volume(DeviceVolume {
                 level,
                 control_type,
+                has_level: true,
                 ..DeviceVolume::default()
             }),
         }
@@ -3207,12 +3214,39 @@ pub mod tests {
             device: id(KITCHEN),
             event: SessionEvent::Volume(DeviceVolume {
                 level: 0.8,
+                has_level: true,
                 ..DeviceVolume::default()
             }),
         });
         cast.poll();
         assert_eq!(sent(&fake), [0.0, 0.35], "louder than master × own: set");
         assert!((shown(&cast, KITCHEN) - 70.0).abs() < 1e-9, "not read back");
+    }
+
+    #[test]
+    fn a_first_status_without_a_level_keeps_the_own_level() {
+        let (fake, mut cast) = listed();
+        cast.set_master(50.0);
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        let before = shown(&cast, KITCHEN);
+        let payload = serde_json::json!({"status": {"volume": {"muted": false}}});
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(
+                audiosync_cast::status::ReceiverStatus::from_payload(
+                    payload.as_object().expect("object"),
+                )
+                .volume,
+            ),
+        });
+        cast.poll();
+        assert!(sent(&fake).is_empty(), "{:?}", sent(&fake));
+        assert_eq!(shown(&cast, KITCHEN), before);
+        report(&fake, &mut cast, 0.2);
+        assert!(sent(&fake).is_empty(), "{:?}", sent(&fake));
+        assert!((shown(&cast, KITCHEN) - 40.0).abs() < 1e-9);
     }
 
     #[test]
@@ -3254,6 +3288,7 @@ pub mod tests {
             device: id(KITCHEN),
             event: SessionEvent::Volume(DeviceVolume {
                 level: 0.1,
+                has_level: true,
                 ..DeviceVolume::default()
             }),
         });
@@ -3281,6 +3316,7 @@ pub mod tests {
             event: SessionEvent::Volume(DeviceVolume {
                 level: 0.6,
                 control_type: ControlType::Fixed,
+                has_level: true,
                 ..DeviceVolume::default()
             }),
         });
@@ -3314,6 +3350,7 @@ pub mod tests {
             event: SessionEvent::Volume(DeviceVolume {
                 level: 0.6,
                 control_type,
+                has_level: true,
                 ..DeviceVolume::default()
             }),
         };
