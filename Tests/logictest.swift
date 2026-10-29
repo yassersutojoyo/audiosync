@@ -4004,6 +4004,7 @@ do {
     typealias P = LocalOutputSync.Plan
 
     // EC1 / EC2: a local speaker's device goes away and comes back.
+    // covers: S161, S117, S68 (a speaker whose output went stays on, the others play, it is attached once listed)
     check(LocalOutputSync.plan(enabled: ["usb"], active: ["usb"], available: ["usb"]) == P(attach: [], detach: []),
           "EC1 unplug: a playing speaker that is still present is left alone")
     check(LocalOutputSync.plan(enabled: ["usb"], active: [], available: []) == P(attach: [], detach: []),
@@ -4073,6 +4074,7 @@ do {
     }
 
     // EC4 / EC9: the capture rate changes under a running session.
+    // covers: S157
     check(CaptureRate.needsRestart(current: 48000, reported: 44100), "EC4 rate: a new capture rate rebuilds the session")
     check(CaptureRate.needsRestart(current: 44100, reported: 96000), "EC4 rate: a higher capture rate rebuilds the session")
     check(!CaptureRate.needsRestart(current: 48000, reported: 48000), "EC4 rate: the same rate keeps playing")
@@ -4210,6 +4212,7 @@ do {
           "EC6 app quit: the switch to the whole system never waits on the microphone prompt (S227)")
 
     // EC8: every speaker off, then one on again.
+    // covers: S162, S118, S119 (the stop and start decisions; a local speaker joining is the sync plan above)
     check(StreamingPolicy.isIdle(streaming: true, enabledAirPlay: [], enabledLocal: []),
           "EC8 all off: streaming stops when the last speaker is switched off")
     check(!StreamingPolicy.isIdle(streaming: true, enabledAirPlay: ["a"], enabledLocal: []),
@@ -5925,6 +5928,7 @@ do {
             && LocalDelay.shownOffset(r, reference: r, offsets: [r: 300]) == nil,
           "local delay: a switched-off reference is still the reference", "\(holds([usb, bt]))")
 
+    // covers: S8 (only local outputs get a hold-back; they wait L for the AirPlay speakers)
     check(holds([r, usb, bt], airPlay: true) == [r: 2000, usb: 2150, bt: 1750]
             && holds([bt], airPlay: true) == [bt: 1750],
           "local delay: AirPlay chosen adds the AirPlay delay on top", "\(holds([r, usb, bt], airPlay: true))")
@@ -7682,6 +7686,7 @@ do {
     check(quit(lost) == "stop com.apple.Music" && quit(lost, music, .system) == "switchToSystem com.apple.Music",
           "source quit: the capture finding its app gone counts as that app quitting (S227 f)",
           "\(quit(lost)), \(quit(lost, music, .system))")
+    // covers: S21 (a capture lost for any cause but its app quitting goes on to the stop)
     check(quit(.captureLost(.inputDisconnected), music, .system) == "keep"
             && quit(.captureLost(.aggregateDeviceFailed(1)), music, .system) == "keep",
           "source quit: a capture lost for another cause is no app quit (S21 still applies)")
@@ -9999,6 +10004,10 @@ do {
     let offFirst = plan("{\"type\":\"speaker\",\"id\":\"hp\",\"on\":false,\"volume\":10}") == [.setEnabled(id: "hp", on: false)]
     let masterClamped = plan("{\"type\":\"master\",\"volume\":150}") == [.setMaster(position: 100)]
     check(offFirst && masterClamped, "web remote: a speaker turned off takes no volume; the master volume is clamped")
+    // covers: S76 (a phone's volume, before it reaches a speaker, a zone or the master)
+    check(RemoteSnapshot.volume(-20) == 0 && RemoteSnapshot.volume(150) == 100 && RemoteSnapshot.volume(.nan) == 0
+            && RemoteSnapshot.volume(37) == 37,
+          "web remote: a volume is clamped to 0 to 100 before use; one that isn't a number is 0")
 
     // covers: S256, S253
     let zoneRows = [
