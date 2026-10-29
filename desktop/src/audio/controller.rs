@@ -3844,9 +3844,16 @@ impl<D: Driver> AudioBackend for Controller<D> {
         };
         // A running capture feeds the old sender, or none: it starts again
         // with the new sender's feed (the capture can't swap it while it
-        // runs).
-        let source = self.session.as_ref().map(|session| session.source.clone());
-        self.end_session();
+        // runs). One waiting for its input device holds no feed and waits on;
+        // its next try takes the new feed (S329).
+        let source = self
+            .session
+            .as_ref()
+            .filter(|session| !session.reopen.is_some_and(|reopen| reopen.away))
+            .map(|session| session.source.clone());
+        if source.is_some() {
+            self.end_session();
+        }
         self.use_sender(started);
         self.sync_airplay_rule();
         if let Some(source) = source
@@ -4077,8 +4084,8 @@ fn another_format(started: Option<CaptureAttempt>, now: Option<CaptureAttempt>) 
 
 /// Whether a capture that couldn't start again after a loss may start at a
 /// later try: Windows audio isn't back yet, the device is held or failed for
-/// now, or an input device is inactive for a moment (a USB microphone after a
-/// wake, or while Windows lists it again). An app that quit, or a source that
+/// now, or a running capture's input device went inactive while a sleep is
+/// near (a reopen waits for its listing instead, S329). An app that quit, or a source that
 /// can't be captured, stays so.
 /// An activation Windows never completed, or a capture thread that didn't
 /// answer in time ([`BackendError::NotResponding`]), is the last try: each
@@ -7386,7 +7393,7 @@ mod tests {
         );
     }
 
-    // covers: S329, S335
+    // covers: S329
     #[test]
     fn an_input_device_unplugged_while_streaming_waits_for_it_without_timed_tries() {
         let mut backend = backend();
@@ -7431,7 +7438,7 @@ mod tests {
         assert_eq!(backend.running_source(), Some(source));
     }
 
-    // covers: S329, S335
+    // covers: S329
     #[test]
     fn an_input_still_listed_whose_capture_fails_gets_the_five_tries() {
         let mut backend = backend();
@@ -7476,6 +7483,7 @@ mod tests {
         assert_eq!(backend.input_peak(), None);
     }
 
+    // covers: S329
     #[test]
     fn an_input_device_back_within_the_restart_tries_is_captured_again() {
         let mut backend = backend();
@@ -9434,6 +9442,49 @@ mod tests {
         fake.appear(&kitchen);
         backend.poll();
         assert_eq!(backend.airplay_speakers().len(), 1);
+    }
+
+    // covers: S329
+    #[test]
+    fn a_retry_while_the_input_device_is_away_keeps_waiting_for_it() {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        backend.start_airplay(
+            starter_of(vec![
+                None,
+                Some(StartedSender::browsing(
+                    fake.link(),
+                    Some(FeedSlot::new(input)),
+                )),
+            ]),
+            PairingStore::in_memory(),
+        );
+        assert_eq!(backend.poll(), [BackendEvent::AirPlayStopped]);
+        backend.connect_input("mic", "Microphone", "USB");
+        let source = SourceId::Input {
+            endpoint_id: "mic".to_owned(),
+        };
+        backend.start(&source).unwrap();
+        backend.disconnect_input("mic");
+        let events: Vec<BackendEvent> = (0..2 * RESTART_DELAY_POLLS)
+            .flat_map(|_| backend.poll())
+            .collect();
+        assert_eq!(events, [BackendEvent::InputAway]);
+        backend.retry_airplay();
+        assert_eq!(backend.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(backend.running_source(), Some(source));
+        assert_eq!(backend.driver().capture_attempts(), 1 + 1);
+        backend.connect_input("mic", "Microphone", "USB");
+        let events: Vec<BackendEvent> = (0..RESTART_DELAY_POLLS)
+            .flat_map(|_| backend.poll())
+            .collect();
+        assert_eq!(events, [BackendEvent::CaptureFree]);
+        assert!(
+            backend.driver().capture_feeds_airplay(),
+            "the capture feeds the new sender"
+        );
     }
 
     #[test]

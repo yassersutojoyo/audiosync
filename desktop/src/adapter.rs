@@ -5714,6 +5714,7 @@ mod tests {
         );
     }
 
+    // covers: S329
     #[test]
     fn an_input_device_unplugged_while_streaming_shows_a_notice_until_it_is_back() {
         let mut adapter = adapter();
