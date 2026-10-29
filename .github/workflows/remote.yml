@@ -30,14 +30,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          RUN_ID: ${{ github.run_id }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
           SHA: ${{ github.sha }}
         # Any API error leaves skip=false, so main runs everything.
         run: |
           skip=false
           if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
-            if wf=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .workflow_id) &&
-              n=$(gh api "repos/$REPO/actions/workflows/$wf/runs?head_sha=$SHA&status=success&per_page=100" \
+            wf=${WORKFLOW_REF%@*}
+            if n=$(gh api "repos/$REPO/actions/workflows/${wf##*/}/runs?head_sha=$SHA&status=success&per_page=100" \
                 --jq '[.workflow_runs[] | select(.head_branch | startswith("integ/"))] | length') &&
               [ "$n" -gt 0 ] 2>/dev/null; then
               skip=true
