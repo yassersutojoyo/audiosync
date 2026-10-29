@@ -3914,6 +3914,17 @@ impl<D: Driver> AudioBackend for Controller<D> {
         result
     }
 
+    fn turn_cast_on_when_listed(&mut self, id: &str) -> bool {
+        self.cast
+            .as_mut()
+            .map(|cast| cast.turn_on_when_listed(id))
+            .is_some()
+    }
+
+    fn cast_on_to_save(&self) -> Option<String> {
+        self.cast.as_ref().and_then(CastSpeakers::on_to_save)
+    }
+
     fn set_cast_volume(&mut self, id: &str, position: f64) {
         if let Some(cast) = self.cast.as_mut() {
             cast.set_volume(id, position);

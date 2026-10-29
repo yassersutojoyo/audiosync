@@ -569,6 +569,9 @@ pub struct CastSpeakers {
     announcements: Announcements,
     /// The one device the user turned on.
     enabled: Option<DeviceId>,
+    /// The device saved as on at the last quit, which turns on once listed
+    /// (C112).
+    saved_on: Option<DeviceId>,
     /// Each device's volume as its latest status reports it.
     volumes: BTreeMap<DeviceId, DeviceVolume>,
     /// An own level the user set that no status has answered yet, 0.0 to
@@ -617,6 +620,7 @@ impl CastSpeakers {
             list: DeviceList::new(),
             announcements: Announcements::default(),
             enabled: None,
+            saved_on: None,
             volumes: BTreeMap::new(),
             requested: None,
             levels: BTreeMap::new(),
@@ -852,6 +856,9 @@ impl CastSpeakers {
             {
                 link.set_offset(id, offset);
                 self.pending.push(BackendEvent::CastMemoryChanged);
+            }
+            if self.saved_on == Some(manual) {
+                self.saved_on = Some(id);
             }
             if self.enabled == Some(manual) {
                 if self.attempt.is_some() {
@@ -1128,6 +1135,19 @@ impl CastSpeakers {
             .unwrap_or_else(|| id.to_string())
     }
 
+    /// Turns `id` on once it is listed, unless one is on before (C112).
+    pub fn turn_on_when_listed(&mut self, id: &str) {
+        if self.enabled.is_none() {
+            self.saved_on = DeviceId::parse(id);
+        }
+    }
+
+    /// The device to save as on: the one on, else the one waiting to be
+    /// listed (C112).
+    pub fn on_to_save(&self) -> Option<String> {
+        self.enabled.or(self.saved_on).map(|id| id.to_string())
+    }
+
     /// Turns a device or group on or off. A second one is refused while one
     /// is on (C2), a member of the group that plays included (C99).
     pub fn set_enabled(&mut self, id: &str, on: bool) -> Result<(), CastProblem> {
@@ -1135,6 +1155,9 @@ impl CastSpeakers {
             return Ok(());
         };
         if !on {
+            if self.saved_on == Some(device) {
+                self.saved_on = None;
+            }
             if self.enabled == Some(device) {
                 self.log
                     .log(|| format!("Cast: {} switched off", self.name(device)));
@@ -1153,6 +1176,7 @@ impl CastSpeakers {
             });
             return Err(CastProblem::Busy);
         }
+        self.saved_on = None;
         self.enabled = Some(device);
         self.log
             .log(|| format!("Cast: {} switched on", self.name(device)));
@@ -1571,6 +1595,16 @@ impl CastSpeakers {
         self.keep_manual_listed();
         self.check_manual();
         self.follow_group();
+        if let Some(id) = self
+            .saved_on
+            .filter(|&id| self.entry(id).is_some_and(|entry| entry.online))
+        {
+            self.saved_on = None;
+            self.enabled = Some(id);
+            self.log
+                .log(|| format!("Cast: {} switched on, as saved", self.name(id)));
+            self.pending.push(BackendEvent::CastChanged);
+        }
         while let Some(event) = self.link.as_mut().and_then(|link| link.poll_event()) {
             self.handle(event);
         }

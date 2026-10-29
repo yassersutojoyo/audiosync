@@ -1051,6 +1051,19 @@ pub trait AudioBackend {
         Err(CastProblem::NotResponding)
     }
 
+    /// Turns the Cast speaker saved as on at the last quit on once it is
+    /// listed, unless one is switched on first (spec C112); false without a
+    /// Cast sender.
+    fn turn_cast_on_when_listed(&mut self, _id: &str) -> bool {
+        false
+    }
+
+    /// The Cast speaker to save as on: the one on, else the one waiting to
+    /// be listed (spec C112).
+    fn cast_on_to_save(&self) -> Option<String> {
+        None
+    }
+
     /// Sets a Cast speaker's device volume, 0 to 100.
     fn set_cast_volume(&mut self, _id: &str, _position: f64) {}
 

@@ -555,6 +555,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// AirPlay speakers saved as on that the backend couldn't switch on at
     /// launch (no AirPlay sender): their saved settings stay as they are.
     airplay_unrestored: BTreeSet<String>,
+    /// The Cast speaker saved as on that stays saved so without a Cast
+    /// sender (C112).
+    cast_unrestored: Option<String>,
     /// The settings whose last save failed; its notice was posted then,
     /// once until a save works again. They are tried again after a change,
     /// every [`SAVE_RETRY_POLLS`] polls and at quit.
@@ -718,6 +721,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             must_save: false,
             view_restored: false,
             airplay_unrestored: BTreeSet::new(),
+            cast_unrestored: None,
             unsaved: None,
             save_retry_wait: 0,
             outputs_known: false,
@@ -853,6 +857,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .filter_map(|text| CastAddress::parse(text))
         {
             self.audio.add_cast_address(address);
+        }
+        if let Some(id) = &saved.cast_on
+            && !self.is_hidden(&cast_key(id))
+            && !self.auto_connect_skipped
+            && !self.audio.turn_cast_on_when_listed(id)
+        {
+            self.cast_unrestored = Some(id.clone());
         }
         self.chosen = match (&saved.input_device, &saved.source) {
             (None, _) if let Some(mix) = &saved.source_mix => {
@@ -1024,6 +1035,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             when_source_quits: self.when_source_quits.stored().to_owned(),
             remote: self.view.remote,
             cast_addresses: self.cast_addresses.clone(),
+            cast_on: self
+                .audio
+                .cast_on_to_save()
+                .or_else(|| self.cast_unrestored.clone()),
             airplay2_experimental: self.view.airplay2_experimental,
             check_updates_automatically: self.view.check_updates_automatically,
             last_update_check: self.view.last_update_check,
@@ -4794,6 +4809,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             .is_some_and(|speaker| speaker.enabled)
         {
             self.set_speaker_enabled(id, false);
+        }
+        // One saved as on must not turn on once listed (C112).
+        if let Some(SpeakerKey::Cast(cast_id)) = SpeakerKey::parse(id) {
+            let _ = self.audio.set_cast_enabled(&cast_id, false);
         }
         // Its row is gone, and so is what it said.
         let subject = match SpeakerKey::parse(id) {
@@ -13477,6 +13496,134 @@ mod tests {
         let names = &adapter.cast_names;
         assert!(!names.contains_key(CAST_LIVING), "{names:?}");
         assert_eq!(names.get(CAST_KITCHEN).map(String::as_str), Some("Kitchen"));
+    }
+
+    /// A launch with the settings in `path` and the Cast speakers
+    /// `announced`.
+    fn cast_launch(
+        path: &std::path::Path,
+        announced: &[(&str, &str)],
+        skip_auto_connect: bool,
+    ) -> (AudioAdapter<MockBackend>, FakeCast) {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let fake = FakeCast::default();
+        for (id, name) in announced {
+            fake.announce(id, name, DEVICE_PORT);
+        }
+        audio.set_cast(fake.link());
+        let file = SettingsFile::at(path.to_path_buf());
+        let clock = || "09.41".to_owned();
+        let mut adapter =
+            AudioAdapter::launched(audio, clock, DebugLog::default(), file, skip_auto_connect);
+        adapter.poll();
+        (adapter, fake)
+    }
+
+    // covers: C112
+    #[test]
+    fn a_cast_speaker_on_at_quit_turns_on_again_once_listed_after_a_relaunch() {
+        let dir = test_dir("adapter-cast-on-kept");
+        let path = dir.join(settings::FILE_NAME);
+        let relaunch = |announced: &[(&str, &str)], skip| cast_launch(&path, announced, skip);
+        let (mut adapter, _fake) = relaunch(&[(CAST_KITCHEN, "Kitchen")], false);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        assert!(adapter.save_settings());
+
+        let (mut adapter, _fake) = relaunch(&[], false);
+        assert!(!adapter.audio.cast_on(), "not on before it is listed");
+        assert!(adapter.save_settings(), "kept while not listed");
+        let (mut adapter, fake) = relaunch(&[], false);
+        fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
+        adapter.poll();
+        assert!(speaker_of(&adapter, &cc(CAST_KITCHEN)).enabled);
+
+        let (adapter, _fake) = relaunch(&[(CAST_KITCHEN, "Kitchen")], true);
+        assert!(!speaker_of(&adapter, &cc(CAST_KITCHEN)).enabled);
+
+        let (mut adapter, fake) = relaunch(&[(CAST_LIVING, "Living Room")], false);
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
+        fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
+        adapter.poll();
+        assert!(speaker_of(&adapter, &cc(CAST_LIVING)).enabled);
+        assert!(
+            !speaker_of(&adapter, &cc(CAST_KITCHEN)).enabled,
+            "the user's pick wins"
+        );
+        fake.report(cast_ended(1, SessionEnd::Stopped));
+        adapter.poll();
+        assert_eq!(adapter.current_settings().cast_on, None, "off on its own");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: C112
+    #[test]
+    fn a_cast_speaker_saved_as_on_stays_off_when_hidden_and_stays_saved_without_a_cast_sender() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.restore(Settings {
+            cast_on: Some(CAST_KITCHEN.to_owned()),
+            hidden_speakers: vec![SavedHidden {
+                key: cc(CAST_KITCHEN),
+                name: "Kitchen".to_owned(),
+                kind: "Google Cast".to_owned(),
+            }],
+            ..Settings::default()
+        });
+        adapter.poll();
+        assert!(!adapter.audio.cast_on());
+
+        let mut adapter = AudioAdapter::new(
+            MockBackend::empty(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        adapter.restore(Settings {
+            cast_on: Some(CAST_KITCHEN.to_owned()),
+            ..Settings::default()
+        });
+        assert_eq!(
+            adapter.current_settings().cast_on.as_deref(),
+            Some(CAST_KITCHEN)
+        );
+    }
+
+    // covers: C112
+    #[test]
+    fn a_speaker_added_by_address_on_at_quit_turns_on_when_a_browse_finds_it_first() {
+        let dir = test_dir("adapter-cast-on-by-address");
+        let path = dir.join(settings::FILE_NAME);
+        let den = "00112233445566778899aabbccddeeff";
+        let (mut adapter, _fake) = cast_launch(&path, &[], false);
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        adapter.set_speaker_enabled(&cc_address("192.0.2.31"), true);
+        assert!(adapter.save_settings());
+        let before_found = dir.join("before-found.json");
+        std::fs::copy(&path, &before_found).expect("copied");
+
+        // Its address doesn't answer yet when the browse finds it.
+        let (mut adapter, fake) = cast_launch(&path, &[], false);
+        fake.announce_at(
+            den,
+            "Den",
+            DEVICE_PORT,
+            std::net::Ipv4Addr::new(192, 0, 2, 31),
+        );
+        adapter.poll();
+        assert!(speaker_of(&adapter, &cc(den)).enabled);
+
+        // Hidden before it is found, it stays off.
+        let (mut adapter, fake) = cast_launch(&before_found, &[], false);
+        adapter.hide_speaker(&cc_address("192.0.2.31"), "Google Cast");
+        fake.announce_at(
+            den,
+            "Den",
+            DEVICE_PORT,
+            std::net::Ipv4Addr::new(192, 0, 2, 31),
+        );
+        adapter.poll();
+        assert!(!adapter.audio.cast_on());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The UI's ID of a Google Cast speaker.

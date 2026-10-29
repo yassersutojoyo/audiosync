@@ -800,6 +800,12 @@ pub struct Settings {
     /// `host` or `host:port`.
     #[serde(deserialize_with = "strings_that_read")]
     pub cast_addresses: Vec<String>,
+    /// The device ID of the Google Cast speaker that is on (spec C112).
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "or_default"
+    )]
+    pub cast_on: Option<String>,
     /// File > AirPlay 2 (Experimental); read at launch only (spec P170).
     #[serde(deserialize_with = "bool_or_false")]
     pub airplay2_experimental: bool,
@@ -950,6 +956,7 @@ impl Default for Settings {
             when_source_quits: WhenSourceQuits::Stop.stored().to_owned(),
             remote: RemoteSettings::default(),
             cast_addresses: Vec::new(),
+            cast_on: None,
             airplay2_experimental: false,
             check_updates_automatically: true,
             last_update_check: None,
@@ -1225,6 +1232,7 @@ impl Settings {
                 .to_owned(),
             remote: self.remote.clamped(),
             cast_addresses: cast_address::clamped(self.cast_addresses),
+            cast_on: self.cast_on.filter(|id| usable_id(id)),
             airplay2_experimental: self.airplay2_experimental,
             check_updates_automatically: self.check_updates_automatically,
             last_update_check: self.last_update_check,
@@ -1397,6 +1405,7 @@ fn unreadable_fields(text: &str) -> Vec<String> {
         ("when_source_quits", Value::is_string),
         ("remote", reads::<RemoteSettings>),
         ("cast_addresses", Value::is_array),
+        ("cast_on", reads::<Option<String>>),
         ("airplay2_experimental", Value::is_boolean),
         ("check_updates_automatically", Value::is_boolean),
         ("last_update_check", reads::<Option<u64>>),
@@ -1821,6 +1830,7 @@ mod tests {
             when_source_quits: WhenSourceQuits::SwitchToSystem.stored().to_owned(),
             remote: sample.remote,
             cast_addresses: sample.cast_addresses,
+            cast_on: Some("4a1f9d2e-7b3c-4e8a-9f60-1c2d3e4f5a6b".to_owned()),
             airplay2_experimental: true,
             check_updates_automatically: false,
             last_update_check: Some(1_800_000_000),
@@ -2272,6 +2282,7 @@ mod tests {
             when_source_quits,
             remote,
             cast_addresses,
+            cast_on,
             airplay2_experimental,
             check_updates_automatically,
             last_update_check,
@@ -2303,6 +2314,7 @@ mod tests {
         assert_ne!(when_source_quits, default.when_source_quits);
         assert_ne!(remote, default.remote);
         assert_ne!(cast_addresses, default.cast_addresses);
+        assert_ne!(cast_on, default.cast_on);
         assert_ne!(airplay2_experimental, default.airplay2_experimental);
         assert_ne!(
             check_updates_automatically,

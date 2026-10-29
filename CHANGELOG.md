@@ -12,6 +12,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, AudioSync updates itself. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, checks at launch, at most once a day after a check that worked. Download and Install fetches the update, checks that it was signed with AudioSync's release key and installs it, and Restart Now opens the new version. If the new version doesn't start within 15 seconds, or Windows security blocks the file, AudioSync puts the old version back and offers the release page, and that version isn't offered again at launch. Builds you make yourself never check.
 - With AirPlay 2 on, AudioSync remembers per speaker whether it plays with PTP or NTP timing, so the next launch starts with the timing that worked. It's forgotten when the speaker's software changes, when the speaker turns that timing down, and with Forget Pairing. If that saved record is damaged for one speaker, only that speaker loses it and works it out again on its next connect. On the Mac and on Windows.
 - On Windows, a speaker's dimmed volume slider says why it's dimmed: Narrator reads the reason, and it shows when you hover over the slider in the main window, as on the Mac.
+- On Windows, a Google Cast speaker that was on when you quit turns on again after you relaunch, once it shows up on the network, as on the Mac.
 
 ### Changed
 
