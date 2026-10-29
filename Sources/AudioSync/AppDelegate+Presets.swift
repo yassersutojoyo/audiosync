@@ -49,7 +49,10 @@ extension AppDelegate {
                                        fixedVolume: hasFixedVolume(state), hasVolume: member.volume != nil)
         }
         let stored = Set(preset.members.map(\.key))
-        let others = speakersOnNow().filter { !stored.contains($0.key) }
+        let holders = PresetRecall.holders(states.compactMap { $0?.target })
+        let onNow = speakersOnNow()
+        let outside = Set(PresetRecall.outside(onNow.map(\.key), stored: stored, holders: holders))
+        let others = onNow.filter { outside.contains($0.key) }
         let running = engine.isRunning
         let plan = PresetRecall.plan(facts, others: others.map { _ in true }, streaming: running)
         let leftOff = zip(preset.members, zip(states, plan.steps)).compactMap { member, pair -> PresetNotice.LeftOff? in

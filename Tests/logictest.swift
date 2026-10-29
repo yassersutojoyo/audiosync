@@ -5822,6 +5822,13 @@ do {
             && PresetNotice.message(preset: "Evening", leftOff: [], nothingChanged: false, text: presetText) == nil,
           "presets: a full recall clears the notice", "\(fullRecall)")
 
+    // covers: S342
+    let heldOutside = PresetRecall.outside(["lc:den", "ap:native:pair:5A1B-77", "lc:kitchen"],
+                                           stored: ["lc:kitchen", "ap:native:left"],
+                                           holders: PresetRecall.holders(["pair:5A1B-77"]))
+    check(heldOutside == ["lc:den"],
+          "presets: a recall leaves on the stereo pair or home theater that holds a stored member", "\(heldOutside)")
+
     let noneHere = PresetRecall.plan([.init(kind: .local, found: false), .init(kind: .cast, found: true, busy: true)],
                                      others: [true], streaming: true)
     let nothingText = "Nothing changed: no speaker in “Evening” can play now. Kitchen (\(presetText.zoneMemberNotFound))."

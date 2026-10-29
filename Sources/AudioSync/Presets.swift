@@ -309,6 +309,19 @@ enum PresetRecall {
         return Plan(action: Self.action(action), steps: steps.map(step), setVolume: setVolume, switchOff: switchOff)
     }
 
+    /// The keys of `onNow` a recall may switch off: those outside `stored`
+    /// and outside `holders`, the stereo pairs and home theaters a stored
+    /// member plays through (S247).
+    static func outside(_ onNow: [String], stored: Set<String>, holders: Set<String>) -> [String] {
+        onNow.filter { !stored.contains($0) && !holders.contains($0) }
+    }
+
+    /// The keys of the stereo pairs and home theaters `targets` (the sender's
+    /// IDs) as the speakers on now are keyed.
+    static func holders(_ targets: [String]) -> Set<String> {
+        Set(targets.map { SpeakerKey.make(id: NativeAirPlayID.app($0), kind: .airplay) })
+    }
+
     private static func code(_ kind: ZoneMemberFacts.Kind) -> UInt32 {
         switch kind {
         case .local: return UInt32(ASC_ZONE_MEMBER_LOCAL)

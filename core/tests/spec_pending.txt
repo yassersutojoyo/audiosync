@@ -3,4 +3,3 @@
 # space, what is missing. tests/spec_coverage.rs fails once a clause listed here
 # gains a `// covers:` test, so the line goes when the core implements it. A
 # clause only the host can implement belongs in tests/spec_exempt.txt instead.
-S342 Hosts only: the Mac host leaving on the stereo pair or home theater that holds a recalled member; the Mac recall still switches it off, so no Mac test checks it yet.
