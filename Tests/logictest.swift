@@ -168,6 +168,21 @@ do {
           "\(loaded), row \(row)")
 }
 
+// covers: S276 (a change on a silenced speaker moves its row; a report older than the row's latest set does not)
+do {
+    var events = AirPlayVolumeEvents()
+    check(events.applies("tv", silenced: true),
+          "airplay volume event: a TV remote change during Calibrate All Speakers moves the silenced speaker's row")
+    events.sending("tv")
+    events.sending("tv")
+    events.reached("tv")
+    check(!events.applies("tv", silenced: false) && events.applies("lamp", silenced: false),
+          "airplay volume event: a report made before the row's latest set reached the core is dropped, that speaker only")
+    events.reached("tv")
+    check(events.applies("tv", silenced: false),
+          "airplay volume event: once every set reached the core, a report moves the row again")
+}
+
 // MARK: Audio source persistence
 for src in [AudioSource.system, .app(bundleID: "com.spotify.client"), .input(uid: "BuiltInMicrophoneDevice")] {
     check(AudioSource(defaultsValue: src.defaultsValue) == src, "source: round-trip \(src)")

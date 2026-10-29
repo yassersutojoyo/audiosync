@@ -55,3 +55,18 @@ enum AirPlayDeviceLevel {
         return (own: own, level: level)
     }
 }
+
+/// Whether a volume the core reported for an AirPlay speaker moves its row
+/// and own volume (S276). Main thread.
+struct AirPlayVolumeEvents {
+    /// The host queued a volume set for receiver `id`.
+    mutating func sending(_ id: String) {}
+
+    /// That set reached the core.
+    mutating func reached(_ id: String) {}
+
+    /// Whether a report for receiver `id`, applied now, moves its row.
+    func applies(_ id: String, silenced: Bool) -> Bool {
+        !silenced
+    }
+}
