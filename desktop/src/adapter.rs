@@ -3612,6 +3612,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 names.retain(|id, _| self.key_kept(&cast_key(id)));
                 names.extend(listed);
                 self.cast_names = names;
+                // A session that ended with no problem turned its speaker off.
+                self.stop_if_idle();
             }
             BackendEvent::CastPlaying { id } => {
                 self.notices.clear(&[NoticeSubject::Cast(id)]);
