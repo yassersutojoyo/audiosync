@@ -879,6 +879,66 @@ fn discovery_goodbye_and_txt_changes_update_the_device_but_not_the_session() {
     );
 }
 
+// covers: P18
+#[test]
+fn a_renamed_device_keeps_its_new_name_when_the_old_instance_lapses() {
+    let key = DeviceKey::Id(ID);
+    let old = || raop("00005E005301@Dapur", &[]);
+    let new = || raop("00005E005301@Ruang", &[]);
+    let mut directory = Directory::new();
+    directory.apply(BrowseEvent::Resolved(old()));
+    directory.apply(BrowseEvent::Resolved(new()));
+    assert_eq!(directory.device(&key).expect("device").name, "Ruang");
+
+    // The goodbye for the old name was missed; an address change resolves
+    // both instances again, the old one last.
+    directory.apply(BrowseEvent::Resolved(new()));
+    directory.apply(BrowseEvent::Resolved(old()));
+    assert_eq!(directory.device(&key).expect("device").name, "Dapur");
+
+    let changes = directory.apply(BrowseEvent::Removed {
+        kind: ServiceKind::Raop,
+        instance: old().instance,
+    });
+    assert_eq!(updated(&changes).len(), 1);
+    assert_eq!(updated(&changes)[0].name, "Ruang");
+    assert_eq!(directory.device(&key).expect("device").name, "Ruang");
+}
+
+// covers: P18
+#[test]
+fn an_older_instance_going_changes_and_reports_nothing() {
+    let key = DeviceKey::Id(ID);
+    let mut directory = Directory::new();
+    directory.apply(BrowseEvent::Resolved(raop("00005E005301@Dapur", &[])));
+    directory.apply(BrowseEvent::Resolved(raop("00005E005301@Ruang", &[])));
+    let changes = directory.apply(BrowseEvent::Removed {
+        kind: ServiceKind::Raop,
+        instance: "00005E005301@Dapur".to_owned(),
+    });
+    assert_eq!(changes, []);
+    assert_eq!(directory.device(&key).expect("device").name, "Ruang");
+}
+
+// The trade-off of keeping every instance: when the newer one says goodbye
+// while an older one is still cached, the device stays listed under the old
+// name until that one lapses too (P18).
+// covers: P18
+#[test]
+fn the_newer_instance_going_falls_back_to_an_older_one_still_cached() {
+    let key = DeviceKey::Id(ID);
+    let mut directory = Directory::new();
+    directory.apply(BrowseEvent::Resolved(raop("00005E005301@Dapur", &[])));
+    directory.apply(BrowseEvent::Resolved(raop("00005E005301@Ruang", &[])));
+    let changes = directory.apply(BrowseEvent::Removed {
+        kind: ServiceKind::Raop,
+        instance: "00005E005301@Ruang".to_owned(),
+    });
+    assert_eq!(updated(&changes).len(), 1);
+    assert_eq!(updated(&changes)[0].name, "Dapur");
+    assert_eq!(directory.device(&key).expect("device").name, "Dapur");
+}
+
 // covers: P1, P2, P45
 #[test]
 fn scope_and_protocol_choice() {
