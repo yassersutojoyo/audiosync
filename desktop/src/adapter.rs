@@ -11133,6 +11133,52 @@ mod tests {
         assert!(shown.undone && !shown.can_undo && !shown.can_apply);
     }
 
+    // covers: S238
+    #[test]
+    fn a_speaker_that_leaves_after_apply_keeps_its_delay_and_undo_stays() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        for id in ["builtin", "tv"] {
+            turn_on(&mut adapter, id);
+        }
+        adapter.set_speaker_delay(&key("tv"), -20.0);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::local_sheet(&[
+                ("builtin", 0.0, 2010.0),
+                ("tv", -20.0, 1950.0),
+            ]),
+        );
+        adapter.apply_calibrate_all();
+        let applied = speaker_of(&adapter, &key("tv")).delay_ms;
+        assert_ne!(applied, Some(-20.0));
+
+        adapter.audio_mut().disconnect_output("tv");
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&key("tv")).is_none());
+        let shown = adapter.snapshot().calibrate_all.sheet.expect("results");
+        assert!(shown.can_undo, "a speaker that leaves withdraws nothing");
+        adapter
+            .audio_mut()
+            .connect_output_as("tv", "TV", OutputKind::Hdmi);
+        adapter.poll();
+        assert_eq!(speaker_of(&adapter, &key("tv")).delay_ms, applied);
+        assert!(
+            adapter
+                .snapshot()
+                .calibrate_all
+                .sheet
+                .expect("results")
+                .can_undo
+        );
+
+        adapter.undo_calibrate_all();
+        assert_eq!(speaker_of(&adapter, &key("tv")).delay_ms, Some(-20.0));
+    }
+
     #[test]
     fn calibrate_all_results_go_once_a_measured_delay_changes_before_apply() {
         let mut adapter = AudioAdapter::new(
@@ -12931,6 +12977,23 @@ mod tests {
         let names: Vec<&str> = connected.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, ["Headphones", "Kitchen", "Living Room", "Speakers"]);
         assert_eq!(state.cast_list, CastList::Quiet);
+    }
+
+    // covers: S149
+    #[test]
+    fn an_airplay_rows_id_is_ap_and_its_receiver_id() {
+        let (adapter, _, kitchen, _) = airplay_adapter();
+        let state = adapter.snapshot();
+        let row = state.speaker("ap:02005E005301").expect("Kitchen is listed");
+        assert_eq!(row.name, "Kitchen");
+        assert_eq!(
+            SpeakerKey::parse(&row.id),
+            Some(SpeakerKey::AirPlay(id_of(&kitchen)))
+        );
+        assert_eq!(airplay_key(&id_of(&kitchen)), row.id);
+        let pair = SpeakerKey::parse("ap:pair:5f0c").expect("a stereo pair");
+        assert_eq!(pair, SpeakerKey::AirPlay("pair:5f0c".to_owned()));
+        assert_eq!(pair.to_string(), "ap:pair:5f0c");
     }
 
     #[test]
