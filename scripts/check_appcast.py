@@ -11,7 +11,9 @@ releases/download/v<version>/<zip name> and a length; every
 item carries the release's sparkle:shortVersionString and one shared
 sparkle:version. Each zip given must match its item's url name and length,
 and each Windows zip must hold exactly audiosync.exe and
-THIRD-PARTY-NOTICES.txt at its top level. A zip whose name has windows-x64
+THIRD-PARTY-NOTICES.txt at its top level, with an audiosync.exe whose
+version information names VERSION as its ProductVersion and marks it as a
+release build (AudioSyncReleaseBuild 1). A zip whose name has windows-x64
 or windows-arm64 in it is that architecture's; any other zip is the Mac's.
 
 It does not verify signatures: it only checks that sparkle:edSignature is a
@@ -31,6 +33,10 @@ item's zip must be among them. The names come as arguments (paths count by
 file name) or, with --assets-file, from a file holding the output of
 `gh release view TAG --json assets` or one name per line. It also wants a
 Mac item and, without --mac-only, an item for each Windows architecture.
+With the gh output, each item's length must also be its zip's attached size.
+An appcast with Windows items also needs the S310 Mac check on record: the
+date it passed in S310_MAC_CHECK_PASSED below or in the
+AUDIOSYNC_S310_MAC_CHECK environment variable (YYYY-MM-DD).
 
 Usage:
     scripts/check_appcast.py [--mac-only] APPCAST VERSION [ZIP...]
@@ -44,9 +50,12 @@ Usage:
 import argparse
 import base64
 import contextlib
+import datetime
 import io
 import json
 import os
+import re
+import struct
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -59,6 +68,28 @@ MAC_OS = ("", "macos")
 MAC_ONLY_HINT = "pass --mac-only for a release without Windows"
 WINDOWS_ZIP_FILES = {"audiosync.exe", "THIRD-PARTY-NOTICES.txt"}
 ED25519_SIGNATURE_BYTES = 64
+# The S310 check runs once: set this to the date it passed, so later releases need no variable.
+S310_MAC_CHECK_PASSED = ""
+S310_VARIABLE = "AUDIOSYNC_S310_MAC_CHECK"
+S310_REFUSAL = (f"the appcast carries Windows items, but no S310 Mac check is on record: point the "
+                f"Mac app at this appcast and check that it offers the Mac update only (RELEASE.md), "
+                f"then set {S310_VARIABLE} to that check's date (YYYY-MM-DD) and record the date as "
+                f"S310_MAC_CHECK_PASSED in scripts/check_appcast.py")
+
+
+def s310_mac_check():
+    """The date the S310 Mac check passed, from the constant or the variable; None without one."""
+    for text in (S310_MAC_CHECK_PASSED, os.environ.get(S310_VARIABLE, "")):
+        # fromisoformat alone also takes 20261101 and 2026-W44-4.
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text.strip()):
+            continue
+        try:
+            date = datetime.date.fromisoformat(text.strip())
+        except ValueError:
+            continue
+        if date <= datetime.date.today():
+            return date
+    return None
 
 
 def sparkle(name):
@@ -100,17 +131,60 @@ def stray_zips(folder, version):
                   if name.endswith(".zip") and "windows" in name.lower() and name not in wanted)
 
 
-def windows_zip_problems(path):
+def version_strings(exe):
+    """The text values of the VS_VERSIONINFO resource in an exe's bytes, by name
+    (Microsoft Learn, VS_VERSIONINFO, StringFileInfo and String)."""
+    start = exe.find("VS_VERSION_INFO\0".encode("utf-16-le")) - 6
+    if start < 0:
+        return {}
+    blob = exe[start:start + struct.unpack_from("<H", exe, start)[0]]
+    strings = {}
+
+    def walk(at, end):
+        while at + 6 <= end:
+            length, value_length, text = struct.unpack_from("<HHH", blob, at)
+            if length < 6:
+                return
+            key_end = at + 6
+            while key_end + 2 <= len(blob) and blob[key_end:key_end + 2] != b"\0\0":
+                key_end += 2
+            value = (key_end + 5) & ~3
+            # A text value's length counts UTF-16 units, any other value's bytes.
+            size = value_length * 2 if text else value_length
+            if text and value_length:
+                strings[blob[at + 6:key_end].decode("utf-16-le")] = \
+                    blob[value:value + size].decode("utf-16-le").rstrip("\0")
+            walk((value + size + 3) & ~3, min(at + length, end))
+            at = (at + length + 3) & ~3
+
+    walk(0, len(blob))
+    return strings
+
+
+def windows_zip_problems(path, version):
     try:
         with zipfile.ZipFile(path) as archive:
             names = set(archive.namelist())
+            exe = archive.read("audiosync.exe") if names == WINDOWS_ZIP_FILES else None
     except (OSError, zipfile.BadZipFile) as error:
         return [f"{path}: not a readable zip ({error})"]
-    if names == WINDOWS_ZIP_FILES:
-        return []
-    want = ", ".join(sorted(WINDOWS_ZIP_FILES))
-    got = ", ".join(sorted(names)) or "nothing"
-    return [f"{path}: holds {got}; expected exactly {want} at the top level"]
+    if exe is None:
+        want = ", ".join(sorted(WINDOWS_ZIP_FILES))
+        got = ", ".join(sorted(names)) or "nothing"
+        return [f"{path}: holds {got}; expected exactly {want} at the top level"]
+    try:
+        strings = version_strings(exe)
+    except (struct.error, UnicodeDecodeError, RecursionError):
+        strings = {}
+    problems = []
+    # An older exe in a newer zip would be offered this update again after every install.
+    if strings.get("ProductVersion") != version:
+        problems.append(f"{path}: audiosync.exe has ProductVersion "
+                        f"{strings.get('ProductVersion')!r}; expected {version!r}")
+    if strings.get("AudioSyncReleaseBuild") != "1":
+        problems.append(f"{path}: audiosync.exe is not a release build, so it never checks for "
+                        "updates: take it from the CI run of the push to release/x.y.z (RELEASE.md)")
+    return problems
 
 
 def check(appcast, version, zips, mac_only=False):
@@ -132,7 +206,7 @@ def check(appcast, version, zips, mac_only=False):
             if mac_only:
                 problems.append(f"{path}: a Windows zip, but --mac-only says the release has none")
             else:
-                problems += windows_zip_problems(path)
+                problems += windows_zip_problems(path, version)
     if zips and not mac_only:
         problems += [f"no {arch} zip given ({MAC_ONLY_HINT})"
                      for arch in WINDOWS_ARCHES if arch not in zip_by_os]
@@ -201,8 +275,9 @@ def check(appcast, version, zips, mac_only=False):
     return problems
 
 
-def read_asset_names(path):
-    """Asset names from `gh release view TAG --json assets` output, or one per line; - is stdin."""
+def read_assets(path):
+    """Asset names and sizes from `gh release view TAG --json assets` output, or names one per
+    line (size None); - is stdin."""
     if path == "-":
         text = sys.stdin.read()
     else:
@@ -212,13 +287,15 @@ def read_asset_names(path):
         listed = json.loads(text)
         if isinstance(listed, dict):
             listed = listed.get("assets", [])
-        return [entry["name"] if isinstance(entry, dict) else str(entry) for entry in listed]
-    return [line.strip() for line in text.splitlines() if line.strip()]
+        return {entry["name"] if isinstance(entry, dict) else str(entry):
+                entry.get("size") if isinstance(entry, dict) else None for entry in listed}
+    return {line.strip(): None for line in text.splitlines() if line.strip()}
 
 
 def asset_problems(appcast, version, assets, mac_only=False):
-    """One line per release zip without an appcast item, per item whose zip is not attached,
-    and per OS the release must reach that has no item."""
+    """One line per release zip without an appcast item, per item whose zip is not attached
+    or whose length is not the attached size (when assets maps a name to one), and per OS the
+    release must reach that has no item."""
     version = version[1:] if version.startswith("v") else version
     try:
         root = ET.parse(appcast).getroot()
@@ -238,6 +315,9 @@ def asset_problems(appcast, version, assets, mac_only=False):
                                 f"to the v{version} release")
             elif not url.endswith(url_prefix + name):
                 problems.append(f"item {number}: url {url!r} does not end in {url_prefix}{name}")
+            elif assets[name] is not None and enclosure.get("length") != str(assets[name]):
+                problems.append(f"item {number}: length {enclosure.get('length')!r}; the attached "
+                                f"{name} is {assets[name]} bytes")
             # The Windows updater picks an enclosure by sparkle:os alone, never by its url.
             os_name = enclosure.get(sparkle("os"), "")
             os_name = "macos" if os_name in MAC_OS else os_name
@@ -257,6 +337,8 @@ def asset_problems(appcast, version, assets, mac_only=False):
     if not mac_only:
         problems += [f"no {arch} item in the appcast, so Windows users never see this release "
                      f"({MAC_ONLY_HINT})" for arch in WINDOWS_ARCHES if arch not in item_oses]
+    if item_oses & set(WINDOWS_ARCHES) and s310_mac_check() is None:
+        problems.append(S310_REFUSAL)
     return problems
 
 
@@ -316,6 +398,25 @@ def write_zip(path, files):
             archive.writestr(name, data)
 
 
+def version_node(key, value=None, children=()):
+    """A VS_VERSIONINFO node as the resource compiler lays it out; a str value is text."""
+    text = isinstance(value, str)
+    data = (value + "\0").encode("utf-16-le") if text else value or b""
+    key_bytes = (key + "\0").encode("utf-16-le")
+    node = key_bytes + bytes(-(6 + len(key_bytes)) % 4) + data
+    for child in children:
+        node += bytes(-(6 + len(node)) % 4) + child
+    return struct.pack("<HHH", 6 + len(node), len(data) // 2 if text else len(data), text) + node
+
+
+def fake_exe(version="0.8.0", release=True):
+    strings = [version_node("ProductName", "AudioSync"), version_node("ProductVersion", version)]
+    if release:
+        strings.append(version_node("AudioSyncReleaseBuild", "1"))
+    table = version_node("StringFileInfo", children=[version_node("040904B0", children=strings)])
+    return b"MZ\0\0" + version_node("VS_VERSION_INFO", bytes(52), [table])
+
+
 def write_appcast(path, items):
     body = "".join(
         "<item><title>{v}</title>"
@@ -348,7 +449,8 @@ def fixture_item(zip_path, version="0.8.0", build="80", os_attr=None, sig=True,
 
 
 def self_test():
-    # covers: S311
+    # covers: S311, S310
+    global S310_MAC_CHECK_PASSED
     failures = []
     cases = 0
     with tempfile.TemporaryDirectory() as folder:
@@ -359,9 +461,19 @@ def self_test():
         nested = os.path.join(folder, "nested", "AudioSync-0.8.0-windows-arm64.zip")
         os.mkdir(os.path.dirname(nested))
         write_zip(mac, {"AudioSync.app/Contents/Info.plist": "plist"})
-        windows = {"audiosync.exe": "MZ", "THIRD-PARTY-NOTICES.txt": "notices"}
+        windows = {"audiosync.exe": fake_exe(), "THIRD-PARTY-NOTICES.txt": "notices"}
         write_zip(x64, windows)
-        write_zip(arm, {**windows, "audiosync.exe": "MZ arm"})
+        write_zip(arm, {**windows, "audiosync.exe": fake_exe() + b"arm"})
+        exes = {}
+        deep = version_node("a")
+        for _ in range(4000):
+            deep = version_node("a", children=[deep])
+        for case, exe in (("old", fake_exe("0.7.1")), ("unmarked", fake_exe(release=False)),
+                          ("plain", b"MZ"),
+                          ("deep", b"MZ\0\0" + version_node("VS_VERSION_INFO", bytes(52), [deep]))):
+            exes[case] = os.path.join(folder, case, "AudioSync-0.8.0-windows-x64.zip")
+            os.mkdir(os.path.dirname(exes[case]))
+            write_zip(exes[case], {**windows, "audiosync.exe": exe})
         write_zip(extra, {**windows, "readme.txt": "x"})
         write_zip(nested, {"audiosync/audiosync.exe": "MZ", "THIRD-PARTY-NOTICES.txt": "n"})
 
@@ -423,6 +535,12 @@ def self_test():
         run("zip with an extra file", good(), [mac, x64, extra], "readme.txt")
         run("zip with the exe in a folder", good()[:2] + [fixture_item(nested,
             os_attr="windows-arm64")], [mac, x64, nested], "audiosync/audiosync.exe")
+        for case, want in (("old", "ProductVersion '0.7.1'; expected '0.8.0'"),
+                           ("unmarked", "not a release build"),
+                           ("plain", "ProductVersion None"),
+                           ("deep", "ProductVersion None")):
+            run(f"{case} audiosync.exe", good()[:1] + [fixture_item(exes[case], os_attr="windows-x64")]
+                + good()[2:], [mac, exes[case], arm], want)
         two_enclosures = os.path.join(folder, "two enclosures.xml")
         write_appcast(two_enclosures, good())
         with open(two_enclosures, encoding="utf-8") as f:
@@ -513,6 +631,22 @@ def self_test():
         names = [os.path.basename(path) for path in everything]
         other_assets = ["AudioSync-0.8.0.dmg", "SHA256SUMS.txt", "appcast.xml"]
         x64_name, arm_name = names[1], names[2]
+        S310_MAC_CHECK_PASSED = ""
+        os.environ.pop(S310_VARIABLE, None)
+        against_assets("Windows items without the S310 Mac check on record", good(),
+                       names + other_assets, "no S310 Mac check is on record")
+        against_assets("a Mac-only release without the S310 record", good()[:1],
+                       names[:1] + other_assets, None, mac_only=True)
+        S310_MAC_CHECK_PASSED = "2026-10-28"
+        against_assets("Windows items with the S310 check recorded in the script", good(),
+                       names + other_assets, None)
+        S310_MAC_CHECK_PASSED = ""
+        for bad in ("yes", "20261028", "2026-W44-4", "2026-02-30",
+                    (datetime.date.today() + datetime.timedelta(days=1)).isoformat()):
+            os.environ[S310_VARIABLE] = bad
+            against_assets(f"Windows items with {S310_VARIABLE}={bad}", good(),
+                           names + other_assets, "no S310 Mac check is on record")
+        os.environ[S310_VARIABLE] = "2026-10-28"
         against_assets("assets of a full release", good(), names + other_assets, None)
         against_assets("assets of a Mac-only release", good()[:1], names[:1] + other_assets, None,
                        mac_only=True)
@@ -547,6 +681,15 @@ def self_test():
                            {"assets": [{"name": n, "size": 1} for n in listed]}))
         against_assets("assets one name per line", good(), names + other_assets, None,
                        use_file=lambda listed: "\n".join(listed) + "\n")
+        sizes = {os.path.basename(path): os.path.getsize(path) for path in everything}
+        against_assets("attached sizes match the lengths", good(), names + other_assets, None,
+                       use_file=lambda listed: json.dumps(
+                           {"assets": [{"name": n, "size": sizes.get(n, 1)} for n in listed]}))
+        against_assets("an attached zip whose size is not its length", good(), names + other_assets,
+                       f"the attached {arm_name} is {sizes[arm_name] + 1} bytes",
+                       use_file=lambda listed: json.dumps(
+                           {"assets": [{"name": n, "size": sizes.get(n, 1) + (n == arm_name)}
+                                       for n in listed]}))
     for failure in failures:
         print(f"self-test: {failure}", file=sys.stderr)
     print(f"self-test: {cases} cases, {len(failures)} failure(s)")
@@ -594,16 +737,16 @@ def main(argv):
     if args.assets:
         if args.add:
             parser.error("--assets checks a finished appcast; it takes no --add")
-        names = [os.path.basename(name) for name in args.zips]
+        names = {os.path.basename(name): None for name in args.zips}
         if args.assets_file:
             try:
-                names += read_asset_names(args.assets_file)
+                names.update(read_assets(args.assets_file))
             except (OSError, ValueError, KeyError, TypeError) as error:
                 print(f"{args.assets_file}: not a list of asset names ({error})")
                 return 1
         if not names:
             parser.error("--assets needs the asset names, as arguments or with --assets-file")
-        problems = asset_problems(args.appcast, args.version, set(names), args.mac_only)
+        problems = asset_problems(args.appcast, args.version, names, args.mac_only)
         for problem in problems:
             print(problem)
         return 1 if problems else 0

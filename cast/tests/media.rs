@@ -441,11 +441,13 @@ fn steps_move_by_the_step_interval_from_the_reported_level() {
         "a quick second step builds on the first"
     );
     channel.tick(start + VOLUME_INTERVAL);
-    assert_eq!(sent(&mut channel).len(), 2);
+    let out = sent(&mut channel);
+    assert_eq!(out.len(), 2);
+    let last_id = out[1].2["requestId"].as_u64().expect("id");
     channel.handle(
         start,
         status(
-            0,
+            u32::try_from(last_id).expect("id"),
             vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")],
             json!({"level": 0.65, "stepInterval": 0.1}),
         ),
@@ -457,6 +459,80 @@ fn steps_move_by_the_step_interval_from_the_reported_level() {
     let no_step = json!({"level": 0.5});
     let mut channel = running(start, no_step);
     assert_eq!(channel.step_volume(start, true), Err(VolumeError::NoStep));
+}
+
+// covers: C69, C70, C104
+#[test]
+fn a_level_equal_to_the_reported_one_is_not_awaited() {
+    let start = Instant::now();
+    let top = json!({"level": 1.0, "controlType": "attenuation", "stepInterval": 0.05});
+    let mut channel = running(start, top);
+    assert_eq!(channel.step_volume(start, true), Ok(1.0));
+    sent(&mut channel);
+    channel.handle(
+        start,
+        status(
+            0,
+            vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")],
+            json!({"level": 0.3, "controlType": "attenuation", "stepInterval": 0.05}),
+        ),
+    );
+    let level = channel
+        .step_volume(start + VOLUME_INTERVAL, false)
+        .expect("step");
+    assert!(
+        (level - 0.25).abs() < 1e-9,
+        "builds on the reported 0.3: {level}"
+    );
+}
+
+// covers: C69, C70, C104
+#[test]
+fn a_level_the_device_rounds_onto_the_reported_one_is_not_awaited() {
+    let start = Instant::now();
+    let reported = json!({"level": 0.7, "controlType": "attenuation", "stepInterval": 0.1});
+    let mut channel = running(start, reported);
+    channel.set_volume(start, 0.72).expect("sent");
+    sent(&mut channel);
+    channel.handle(
+        start,
+        status(
+            0,
+            vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")],
+            json!({"level": 0.3, "controlType": "attenuation", "stepInterval": 0.1}),
+        ),
+    );
+    let level = channel
+        .step_volume(start + VOLUME_INTERVAL, false)
+        .expect("step");
+    assert!(
+        (level - 0.2).abs() < 1e-9,
+        "builds on the reported 0.3: {level}"
+    );
+}
+
+// covers: C69, C70
+#[test]
+fn a_rounded_answer_without_the_request_id_answers_the_level() {
+    let start = Instant::now();
+    let mut channel = running(start, volume());
+    channel.set_volume(start, 0.73).expect("sent");
+    sent(&mut channel);
+    channel.handle(
+        start,
+        status(
+            0,
+            vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")],
+            json!({"level": 0.7, "controlType": "attenuation", "stepInterval": 0.1}),
+        ),
+    );
+    let level = channel
+        .step_volume(start + VOLUME_INTERVAL, false)
+        .expect("step");
+    assert!(
+        (level - 0.6).abs() < 1e-9,
+        "builds on the reported 0.7: {level}"
+    );
 }
 
 // covers: C70
@@ -611,6 +687,80 @@ fn before_playing_a_status_of_an_earlier_media_session_changes_nothing() {
     assert!(events(&mut channel).contains(&Event::Playing {
         media_session_id: 7
     }));
+}
+
+// covers: C50
+#[test]
+fn a_load_reply_without_a_media_session_waits_for_this_loads_own_status() {
+    let start = Instant::now();
+    let empty_reply = |request_id: u32| {
+        json_message(
+            "t-1",
+            "*",
+            NS_MEDIA,
+            json!({"type": "MEDIA_STATUS", "requestId": request_id, "status": []}),
+        )
+    };
+    let with_content = |id: i64, content_id: &str, state: &str| {
+        json_message(
+            "t-1",
+            "*",
+            NS_MEDIA,
+            json!({"type": "MEDIA_STATUS", "requestId": 0, "status": [
+                {"mediaSessionId": id, "playerState": state, "media": {"contentId": content_id}}
+            ]}),
+        )
+    };
+
+    // A late status of another URL's media.
+    let mut channel = running(start, volume());
+    channel
+        .load(start, &request(Metadata::default()))
+        .expect("loads");
+    sent(&mut channel);
+    channel.handle(start, empty_reply(102));
+    channel.handle(
+        start,
+        with_content(1, "http://192.0.2.10:1/other.wav", "IDLE"),
+    );
+    channel.handle(start, with_content(2, URL, "PLAYING"));
+    let seen = events(&mut channel);
+    assert!(
+        seen.contains(&Event::Loaded {
+            media_session_id: 2
+        }) && seen.contains(&Event::Playing {
+            media_session_id: 2
+        }),
+        "{seen:?}"
+    );
+    assert!(!seen.contains(&Event::Loaded {
+        media_session_id: 1
+    }));
+
+    // A reload of the same URL: a late status of the media it replaces.
+    let mut channel = playing(start);
+    channel
+        .load(start, &request(Metadata::default()))
+        .expect("loads again");
+    sent(&mut channel);
+    channel.handle(start, empty_reply(103));
+    channel.handle(start, media_status("t-1", 0, 7, "PLAYING", None));
+    channel.handle(start, media_status("t-1", 0, 8, "PLAYING", None));
+    let seen = events(&mut channel);
+    assert!(
+        seen.contains(&Event::Loaded {
+            media_session_id: 8
+        }) && seen.contains(&Event::Playing {
+            media_session_id: 8
+        }),
+        "{seen:?}"
+    );
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, Event::PlaybackEnded(_))),
+        "{seen:?}"
+    );
 }
 
 // covers: C29, C83

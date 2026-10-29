@@ -212,6 +212,7 @@ fn unreachable(error: &io::Error) -> bool {
             | io::ErrorKind::ConnectionReset
             | io::ErrorKind::HostUnreachable
             | io::ErrorKind::NetworkUnreachable
+            | io::ErrorKind::AddrNotAvailable
     )
 }
 
@@ -1109,6 +1110,16 @@ mod tests {
     fn other_peek_errors_stay_as_they_are() {
         let error = peek_error(io::Error::from(io::ErrorKind::ConnectionReset));
         assert_eq!(error.kind(), io::ErrorKind::ConnectionReset);
+    }
+
+    // A send from a local address the host no longer has, as after a DHCP
+    // renew moved it to a new one, can't reach the receiver (P141).
+    // covers: P141
+    #[test]
+    fn a_lost_local_address_is_unreachable() {
+        assert!(unreachable(&io::Error::from(
+            io::ErrorKind::AddrNotAvailable
+        )));
     }
 
     /// A driver that panics on the events `bug` picks, as a bug in a
