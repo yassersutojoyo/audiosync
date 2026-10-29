@@ -2584,7 +2584,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
-            own_volume: None,
+            own_volume: speaker.volume_known.then_some(speaker.volume),
             device_volume: None,
             waiting: (speaker.enabled && speaker.status == CastStatus::Reconnecting)
                 .then_some(Waiting::Reconnecting),

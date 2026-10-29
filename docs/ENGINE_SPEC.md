@@ -2503,6 +2503,7 @@ The checks for S251 to S254 in the Rust core (`core/tests/policy_presets.rs`, `c
 | a_settings_file_without_the_id_counters_gives_ids_above_every_stored_one (`desktop/src/adapter.rs`) | S245, S251 |
 | an_older_files_preset_keeps_a_deleted_zones_id_from_a_new_zone (`desktop/src/adapter.rs`) | S245, S252 |
 | a_hidden_speaker_is_never_saved_and_a_recall_names_it_hidden (`desktop/src/adapter.rs`) | S251, S265 |
+| a_preset_skips_the_volume_of_a_cast_speaker_that_never_reported_one (`desktop/src/adapter.rs`) | S251 |
 
 ### Speaker presets in the Windows app: Windows (`cargo test` in `desktop/`)
 

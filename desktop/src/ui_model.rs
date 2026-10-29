@@ -215,7 +215,7 @@ pub struct Speaker {
     /// any other row's own volume.
     pub volume: f64,
     /// An AirPlay row's own volume s behind `volume`, which a preset keeps
-    /// (spec S290).
+    /// (spec S290); a Cast row's `volume` once it is known (spec S251).
     pub own_volume: Option<f64>,
     /// The offset of a local output relative to the reference; the
     /// reference has none, and neither do AirPlay speakers (the AirPlay
@@ -777,7 +777,8 @@ pub const MAX_PRESETS: usize = crate::settings::MAX_ENTRIES;
 
 /// The speakers on now as a preset sees them (spec S251, S253): list
 /// order, the reference output left out, no own volume for a fixed-volume
-/// Cast speaker. A hidden speaker is never listed, so never captured.
+/// Cast speaker or one with no known volume. A hidden speaker is never
+/// listed, so never captured.
 pub fn speakers_on_now(state: &AppState) -> Vec<SpeakerNow> {
     state
         .speakers
@@ -785,8 +786,11 @@ pub fn speakers_on_now(state: &AppState) -> Vec<SpeakerNow> {
         .filter(|speaker| speaker.enabled && !speaker.is_reference())
         .map(|speaker| SpeakerNow {
             key: speaker.id.clone(),
-            volume: (!speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed))
-                .then_some(speaker.own_volume.unwrap_or(speaker.volume)),
+            volume: match &speaker.cast {
+                Some(cast) if cast.volume_fixed => None,
+                Some(_) => speaker.own_volume,
+                None => Some(speaker.own_volume.unwrap_or(speaker.volume)),
+            },
         })
         .collect()
 }
