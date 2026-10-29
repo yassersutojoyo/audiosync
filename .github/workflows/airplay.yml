@@ -2,7 +2,7 @@ name: AirPlay
 
 on:
   push:
-    branches: ['**']
+    branches: ['**', '!wip/**']
   pull_request:
 
 # A newer push to a feature branch cancels that branch's older run; every
@@ -16,6 +16,35 @@ permissions:
   contents: read
 
 jobs:
+  proven:
+    # main skips the rest for a commit this workflow already passed on an integ/* train.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Was this commit green on an integ/* train?
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        # Any API error leaves skip=false, so main runs everything.
+        run: |
+          skip=false
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+            if wf=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .workflow_id) &&
+              n=$(gh api "repos/$REPO/actions/workflows/$wf/runs?head_sha=$SHA&status=success&per_page=100" \
+                --jq '[.workflow_runs[] | select(.head_branch | startswith("integ/"))] | length') &&
+              [ "$n" -gt 0 ] 2>/dev/null; then
+              skip=true
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   test:
     name: Test (${{ matrix.os }})
     strategy:
@@ -23,6 +52,8 @@ jobs:
       matrix:
         # macOS and Windows run on main, integ/* trains and release/ branches; other pushes test on Linux only.
         os: ${{ fromJSON((github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/')) && '["ubuntu-latest","macos-15","windows-latest"]' || '["ubuntu-latest"]') }}
+    needs: proven
+    if: needs.proven.outputs.skip != 'true'
     runs-on: ${{ matrix.os }}
     env:
       # Debug test builds bind every address only with this, as the apps do;
@@ -54,6 +85,8 @@ jobs:
     # The weekend sheet's dry-run cells against the fake television, on
     # loopback, with the paused-cover cell cut to one minute.
     name: Fake TV cells (loopback)
+    needs: proven
+    if: needs.proven.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -72,6 +105,8 @@ jobs:
 
   licenses:
     name: Licenses
+    needs: proven
+    if: needs.proven.outputs.skip != 'true'
     runs-on: ubuntu-latest
     defaults:
       run:

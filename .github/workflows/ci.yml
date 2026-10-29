@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: ['**', '!wip/**']
   pull_request:
 
 # A newer push to a feature branch cancels that branch's older run; every
@@ -13,8 +13,39 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  proven:
+    # main skips the rest for a commit this workflow already passed on an integ/* train.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Was this commit green on an integ/* train?
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        # Any API error leaves skip=false, so main runs everything.
+        run: |
+          skip=false
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+            if wf=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .workflow_id) &&
+              n=$(gh api "repos/$REPO/actions/workflows/$wf/runs?head_sha=$SHA&status=success&per_page=100" \
+                --jq '[.workflow_runs[] | select(.head_branch | startswith("integ/"))] | length') &&
+              [ "$n" -gt 0 ] 2>/dev/null; then
+              skip=true
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   swift-changes:
     # Off main, integ/* trains and release/ branches, the macOS build runs only for a push that touches the Swift app.
+    needs: proven
+    if: needs.proven.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -41,8 +72,8 @@ jobs:
           fi
 
   build-and-test:
-    needs: swift-changes
-    if: ${{ !cancelled() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/') || needs.swift-changes.outputs.swift == 'true') }}
+    needs: [proven, swift-changes]
+    if: ${{ needs.proven.outputs.skip != 'true' && (!cancelled() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/') || needs.swift-changes.outputs.swift == 'true')) }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
@@ -196,7 +227,8 @@ jobs:
     # the core, signing with the local identity make-local-cert.sh
     # creates, then the bundle is checked and started once, and a local
     # identity that can't sign must stop the build.
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/')
+    needs: proven
+    if: needs.proven.outputs.skip != 'true' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/'))
     runs-on: macos-15
     timeout-minutes: 45
     steps:
@@ -241,6 +273,8 @@ jobs:
           diff "$RUNNER_TEMP/keychains-before" "$RUNNER_TEMP/keychains-after"
 
   shellcheck:
+    needs: proven
+    if: needs.proven.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -252,6 +286,8 @@ jobs:
         run: scripts/shellcheck.sh
 
   private-refs:
+    needs: proven
+    if: needs.proven.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
