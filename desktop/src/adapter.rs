@@ -4184,6 +4184,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 }
 
+/// Sets `from_phone` for one web remote command and clears it on drop, so
+/// a panic midway can't leave the PC's own switches without an attempt.
+struct PhoneCommand<'a, A: AudioBackend>(&'a mut AudioAdapter<A>);
+
+impl<'a, A: AudioBackend> PhoneCommand<'a, A> {
+    fn start(adapter: &'a mut AudioAdapter<A>) -> Self {
+        adapter.from_phone = true;
+        PhoneCommand(adapter)
+    }
+}
+
+impl<A: AudioBackend> Drop for PhoneCommand<'_, A> {
+    fn drop(&mut self) {
+        self.0.from_phone = false;
+    }
+}
+
 impl<A: AudioBackend> Backend for AudioAdapter<A> {
     fn snapshot(&self) -> AppState {
         let reference_name = self
@@ -4700,21 +4717,18 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn toggle_zone_from_phone(&mut self, id: &str, keep_off: &[String]) {
-        self.from_phone = true;
-        self.toggle_zone_keeping_off(id, keep_off);
-        self.from_phone = false;
+        let phone = PhoneCommand::start(self);
+        phone.0.toggle_zone_keeping_off(id, keep_off);
     }
 
     fn recall_preset_from_phone(&mut self, id: &str, keep_off: &[String]) {
-        self.from_phone = true;
-        let _ = self.recall_preset_keeping_off(id, keep_off);
-        self.from_phone = false;
+        let phone = PhoneCommand::start(self);
+        let _ = phone.0.recall_preset_keeping_off(id, keep_off);
     }
 
     fn set_speaker_enabled_from_phone(&mut self, id: &str, on: bool) {
-        self.from_phone = true;
-        self.set_speaker_enabled(id, on);
-        self.from_phone = false;
+        let phone = PhoneCommand::start(self);
+        phone.0.set_speaker_enabled(id, on);
     }
 
     fn new_zone(&mut self, name: &str) -> Result<(), ZoneError> {
@@ -13596,6 +13610,29 @@ mod tests {
         assert!(
             fake.take_calls().contains(&Call::StartPairing(id_of(&tv))),
             "a recall at the PC still pairs it"
+        );
+    }
+
+    // covers: S257
+    #[test]
+    fn a_phone_command_that_panics_midway_still_ends_the_phone_mark() {
+        let (mut adapter, _fake, tv) = apple_tv_adapter();
+        let tv_id = ap(&tv);
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), tv_id.clone()])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.clock = || panic!("the notice's clock fails");
+
+        let phone = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            adapter.toggle_zone_from_phone("zone:1", std::slice::from_ref(&tv_id));
+        }));
+        assert!(phone.is_err(), "the phone's notice panics");
+
+        assert!(
+            !adapter.from_phone,
+            "a later switch at the PC starts an attempt"
         );
     }
 
