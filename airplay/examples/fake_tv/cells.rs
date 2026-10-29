@@ -422,11 +422,13 @@ pub fn d4(paused: Duration, pause: Pause) -> Cell {
     Cell::new("D4", status, value)
 }
 
-/// Whether D6's grep shows a debug-log line.
+/// Whether D6's grep shows a debug-log line: the hosts' warning and error
+/// lines, never the sender's traces, which carry receiver answers such as
+/// the 500 a refused volume set gets (P183).
 #[cfg(test)]
 pub fn d6_flags(line: &str) -> bool {
-    let line = line.to_lowercase();
-    line.contains("error") || line.contains("warn")
+    let trace = line.contains("[AirPlay] trace ") || line.contains(" trace: ");
+    !trace && (line.contains(" warning: ") || line.contains(" error: "))
 }
 
 /// The cells only a person with the app, a player or the real television
@@ -459,7 +461,7 @@ pub fn manual() -> Vec<Cell> {
         ),
         (
             "D6",
-            "Mac app: grep -iE \"error|warn\" /tmp/audiosync-debug.log shows only the expected 500 volume lines",
+            "Mac app: grep -F -e \" warning: \" -e \" error: \" /tmp/audiosync-debug.log | grep -v -F -e \"[AirPlay] trace \" -e \" trace: \" prints nothing",
         ),
         (
             "W1",
