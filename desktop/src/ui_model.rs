@@ -3163,6 +3163,50 @@ mod tests {
         assert_eq!(state.zone_state(&state.zones[0]), SpeakerState::Playing);
     }
 
+    // covers: S246
+    #[test]
+    fn a_cast_member_left_off_counts_toward_neither_in_the_zone_header() {
+        let mut backend = MockBackend::new();
+        let cast = Speaker {
+            kind: SpeakerKind::Cast,
+            enabled: false,
+            ..backend.snapshot().speakers[3].clone()
+        };
+        backend.add_speaker(Speaker {
+            id: "cc:kitchen".into(),
+            ..cast.clone()
+        });
+        backend.add_speaker(Speaker {
+            id: "cc:living".into(),
+            enabled: true,
+            ..cast
+        });
+        backend.add_zone("zone:a", "Kitchen", &["local:speakers", "cc:kitchen"]);
+        backend.set_speaker_enabled("local:speakers", true);
+        let state = backend.snapshot();
+        assert_eq!(
+            state.zone_state(&state.zones[0]),
+            SpeakerState::Playing,
+            "another Cast speaker plays"
+        );
+        backend.set_speaker_enabled("cc:living", false);
+        backend.speaker_mut("cc:kitchen").unwrap().cast = Some(CastRow {
+            state: CastState::Idle,
+            muted: false,
+            volume_fixed: false,
+            volume_step: 1.0,
+            group: None,
+            added_by_address: false,
+            offline: true,
+        });
+        let state = backend.snapshot();
+        assert_eq!(
+            state.zone_state(&state.zones[0]),
+            SpeakerState::Playing,
+            "an offline Cast member"
+        );
+    }
+
     #[test]
     fn a_new_zone_needs_a_speaker_that_is_on_and_takes_it_from_its_zone() {
         let mut backend = MockBackend::new();
