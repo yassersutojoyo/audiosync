@@ -1344,6 +1344,7 @@ impl Ap2Session {
             status,
             fallback: None,
             retry_after: None,
+            back_off: None,
             detail,
         });
     }

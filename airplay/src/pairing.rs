@@ -327,6 +327,12 @@ pub enum PairingEvent {
     /// later pair-verify down. The speaker plays when the host starts it
     /// while the pairing connection is held (P153, P182).
     PairedForSession,
+    /// A PIN pairing on the AirPlay 2 path got these credentials at M6, but
+    /// the pair-verify after it failed: the receiver keeps them, so the host
+    /// stores them without turning the speaker on, and the
+    /// [`PairingEvent::Failed`] that follows says why (P153). `Debug` shows
+    /// the identifiers only.
+    PairedUnverified(HomeKitCredentials),
     /// Pairing ended with an error (P58, P136): PairingFailed for a 470 or
     /// another failure status at a pairing step, Busy for a 409 (P137),
     /// Unsupported when the OPTIONS answer shows a receiver that can't take
@@ -753,6 +759,7 @@ impl Pairing {
                 status: None,
                 fallback: None,
                 retry_after: None,
+                back_off: None,
                 detail,
             },
             false,
@@ -1014,6 +1021,7 @@ impl Pairing {
             status: Some(status),
             fallback: None,
             retry_after: None,
+            back_off: None,
             detail,
         };
         self.fail_with(error, wrong_pin);

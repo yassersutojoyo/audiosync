@@ -464,8 +464,14 @@ fn credentials_from_m6_reach_the_host_when_the_verify_fails() {
     rig.pairing.handle_connection_closed(rig.now);
     rig.pump();
     assert_eq!(rig.failure(), Some((ErrorKind::Lost, false)));
-    let events = format!("{:?}", rig.events);
-    assert!(events.contains("HomeKitCredentials"), "{events}");
+    let [
+        ..,
+        PairingEvent::PairedUnverified(_),
+        PairingEvent::Failed { .. },
+    ] = rig.events.as_slice()
+    else {
+        panic!("{:?}", rig.events);
+    };
     assert_eq!(rig.credentials(), None, "nothing verified");
 }
 

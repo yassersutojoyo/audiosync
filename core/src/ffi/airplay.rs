@@ -1476,6 +1476,11 @@ impl AscAirPlay {
                 }
                 return;
             }
+            // Stored only: the Failed that follows reaches the host (P153).
+            PairingEvent::PairedUnverified(credentials) => {
+                self.store_homekit_paired(&id, credentials);
+                return;
+            }
             PairingEvent::PinRequested => (
                 AIRPLAY_EVENT_PIN_NEEDED,
                 0,
@@ -1551,6 +1556,10 @@ impl AscAirPlay {
     fn ending_pairing_event(&mut self, id: &str, event: PairingEvent) {
         let paired = match event {
             PairingEvent::PinRequested | PairingEvent::PinTurnedDown(_) => return,
+            PairingEvent::PairedUnverified(credentials) => {
+                self.store_homekit_paired(id, credentials);
+                return;
+            }
             PairingEvent::Paired(credentials) => Some(self.store_paired(id, credentials)),
             PairingEvent::HomeKitPaired(credentials) => {
                 Some(self.store_homekit_paired(id, credentials))
