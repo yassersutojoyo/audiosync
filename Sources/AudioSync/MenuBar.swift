@@ -332,9 +332,7 @@ final class AppModel: ObservableObject {
     }
     func commitRename(id: String) { apply(rename.commit(id: id)) }
     /// Quit applies the open rename as the focus leaving would.
-    func commitOpenRename() {
-        if let id = rename.target?.id { commitRename(id: id) }
-    }
+    func commitOpenRename() { apply(rename.commitOpen()) }
     func dropRename() { rename.drop() }
     /// The host listed `ids` as the speakers there are.
     func speakersListed(_ ids: Set<String>) { apply(rename.listed(ids)) }

@@ -6481,6 +6481,15 @@ do {
     let stopAt = quitBody.range(of: "stopEngine(")
     check(renameAt != nil && stopAt != nil && renameAt!.lowerBound < stopAt!.lowerBound,
           "speaker rename: quit applies an open rename before the session stops")
+    var quitting = InlineRename()
+    _ = quitting.start(livingTarget, name: "Living")
+    quitting.text = "Lounge"
+    let quitApplied = quitting.commitOpen()
+    _ = quitting.start(deskTarget, name: "USB Audio")
+    quitting.drop()
+    check(quitApplied == InlineRename.Apply(key: "zone-1", system: "Living", typed: "Lounge", kind: .zone)
+              && quitting.commitOpen() == nil && quitting.target == nil,
+          "speaker rename: quit applies the open rename's typing, and nothing after Escape")
 
     let zonesBefore = [SpeakerZone(id: "zone-1", name: "Living", members: [usb], volume: 100),
                        SpeakerZone(id: "zone-2", name: "Kitchen", members: [], volume: 80)]

@@ -669,7 +669,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     func runQuitSteps() {
         guard !quitStepsRan else { return }
         quitStepsRan = true
-        appModel.commitOpenRename()   // saved by its didSet before anything winds down
+        appModel.commitOpenRename()
         Self.exiting.store(true, ordering: .relaxed)
         dataSourceWatch.stop()
         DebugTrace.log("[AudioSync] quitting")
