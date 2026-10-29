@@ -203,7 +203,7 @@ extension LocalOutputSync {
     /// attach starts at its target hold-back (0 without one) and its gain; one
     /// that throws is logged and comes back as a failure.
     static func apply(enabled: Set<String>, listing: [AudioDevices.Device], to engine: LocalOutputEngine,
-                      bound: [String: AudioObjectID] = [:],
+                      bound: [String: AudioObjectID] = [:], relinked: (String) -> Void = { _ in },
                       holdBacks: [String: Double], gain: (String) -> Double) -> Applied {
         var deviceByUID: [String: AudioDevices.Device] = [:]
         for device in listing where deviceByUID[device.uid] == nil {
@@ -216,6 +216,7 @@ extension LocalOutputSync {
             DebugTrace.log("[AudioSync] local output(s) on a new device ID, restarting: "
                 + steps.restart.joined(separator: ", "))
             engine.detachOutputs(uids: steps.restart, keepingLeads: true)
+            steps.restart.forEach(relinked)
             applied.restarted = steps.restart
         }
         for uid in steps.attach {
@@ -284,55 +285,75 @@ extension LocalOutputSync {
 /// A Bluetooth speaker's first stream on a link that has just come up can
 /// play later than its reported latency for the whole stream, while the same
 /// output started again a moment later plays in time (S325). This watch tells
-/// which starts are on such a link and restarts each of those once. Main
-/// thread only.
+/// which starts are the first on such a link and restarts each of those once.
+/// Main thread only.
 final class FreshLinkWatch {
-    /// A start this long after its device appeared, or longer, is on a settled link.
-    static let windowS = 3.0
     /// How long after its fresh-link start an output restarts.
     static let restartAfterS = 2.0
     /// The rest between the old output's fade and the new start; the sitting's
     /// switch-off and on that played in time had 1.4 s between them.
     static let rejoinPauseS = 1.0
+    /// When a link back mid-session restarts again. Sitting 29 Oct, two Bluetooth speakers on one
+    /// radio: the link's first calm stretch began 166 s and 274 s after it came back; the later plus 30 s.
+    static let calmRestartAfterS = 305.0
 
     enum Decision: Equatable {
         case notBluetooth
-        /// `linkAgeS` is nil when the device was listed at launch or its
-        /// appearance was used up by a restart.
-        case settled(linkAgeS: Double?)
+        /// The device was listed at launch or its appearance was used up by a restart.
+        case settled
         case restart(linkAgeS: Double)
     }
 
     private var listed: Set<String>?
     private var appearedAt: [String: Double] = [:]
     private var pending: [String: (ticket: Int, session: Int)] = [:]
+    private var leftIn: [String: Int] = [:]
+    private var calm: [String: (ticket: Int, session: Int)] = [:]
     private var nextTicket = 0
     /// Outputs between their restart's fade-out and their new start: the
     /// sync leaves them off.
     private(set) var held: Set<String> = []
 
-    /// A device list read at `now` (seconds on a monotonic clock).
-    func noteListing(_ uids: [String], now: Double) {
+    /// A device list read at `now` (seconds on a monotonic clock) while
+    /// `session` plays (nil when stopped). Returns the ticket of each UID that
+    /// left and came back in that session: it restarts again `calmRestartAfterS` on.
+    @discardableResult
+    func noteListing(_ uids: [String], now: Double, session: Int? = nil) -> [String: Int] {
         let current = Set(uids)
+        var armed: [String: Int] = [:]
         if let before = listed {
-            for uid in current.subtracting(before) { appearedAt[uid] = now }
+            for uid in before.subtracting(current) {
+                calm[uid] = nil
+                leftIn[uid] = session
+            }
+            for uid in current.subtracting(before) {
+                appearedAt[uid] = now
+                let left = leftIn.removeValue(forKey: uid)
+                guard let session, left == session else { continue }
+                nextTicket += 1
+                calm[uid] = (nextTicket, session)
+                armed[uid] = nextTicket
+            }
         }
         appearedAt = appearedAt.filter { current.contains($0.key) }
         listed = current
+        return armed
     }
+
+    /// Output `uid`'s link dropped and came back while its UID stayed listed:
+    /// a stall, a restart on a new device ID or a loss inside one rescan.
+    func relinked(uid: String, now: Double) { appearedAt[uid] = now }
 
     /// What to do with output `uid` that has just started at `now` in
     /// `session`. A restart uses up the appearance and arms a ticket
     /// (`pendingTicket`) that only that session can use.
     func decide(uid: String, bluetooth: Bool, now: Double, session: Int) -> Decision {
         guard bluetooth else { return .notBluetooth }
-        guard let appeared = appearedAt[uid] else { return .settled(linkAgeS: nil) }
-        let age = now - appeared
-        guard age < Self.windowS else { return .settled(linkAgeS: age) }
-        appearedAt[uid] = nil
+        // No window: a start refused every 3 s (S331) can play first long after the link came up.
+        guard let appeared = appearedAt.removeValue(forKey: uid) else { return .settled }
         nextTicket += 1
         pending[uid] = (nextTicket, session)
-        return .restart(linkAgeS: age)
+        return .restart(linkAgeS: now - appeared)
     }
 
     func pendingTicket(uid: String) -> Int? { pending[uid]?.ticket }
@@ -342,8 +363,16 @@ final class FreshLinkWatch {
     /// sync until `release`. A ticket from an ended session is dropped: the
     /// new session started the output again already.
     func begin(uid: String, ticket: Int, session: Int) -> Bool {
-        guard let armed = pending[uid], armed.ticket == ticket else { return false }
-        pending[uid] = nil
+        let armed: (ticket: Int, session: Int)
+        if let quick = pending[uid], quick.ticket == ticket {
+            pending[uid] = nil
+            armed = quick
+        } else if let late = calm[uid], late.ticket == ticket {
+            calm[uid] = nil
+            armed = late
+        } else {
+            return false
+        }
         guard armed.session == session else { return false }
         held.insert(uid)
         return true
@@ -352,5 +381,11 @@ final class FreshLinkWatch {
     func release(uid: String) { held.remove(uid) }
 
     /// The output stopped another way (switched off, lost): no restart.
-    func cancel(uid: String) { pending[uid] = nil }
+    func cancel(uid: String) {
+        pending[uid] = nil
+        calm[uid] = nil
+    }
+
+    /// The Mac goes to sleep: the restart of a link back mid-session is dropped.
+    func sleeping() { calm = [:] }
 }

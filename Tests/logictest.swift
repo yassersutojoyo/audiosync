@@ -4048,7 +4048,7 @@ do {
     do {
         let links = FreshLinkWatch()
         links.noteListing(["builtin", "bt-old"], now: 100)
-        check(links.decide(uid: "bt-old", bluetooth: true, now: 100.5, session: 1) == .settled(linkAgeS: nil),
+        check(links.decide(uid: "bt-old", bluetooth: true, now: 100.5, session: 1) == .settled,
               "EC2 Bluetooth fresh link: a device listed at launch starts as is")
         links.noteListing(["builtin", "bt-old", "bt", "usb"], now: 200)
         check(links.decide(uid: "usb", bluetooth: false, now: 200.5, session: 1) == .notBluetooth,
@@ -4061,12 +4061,12 @@ do {
         check(!links.begin(uid: "bt", ticket: ticket ?? -1, session: 1),
               "EC2 Bluetooth fresh link: a ticket restarts it only once")
         links.release(uid: "bt")
-        check(links.held.isEmpty && links.decide(uid: "bt", bluetooth: true, now: 203, session: 1) == .settled(linkAgeS: nil),
+        check(links.held.isEmpty && links.decide(uid: "bt", bluetooth: true, now: 203, session: 1) == .settled,
               "EC2 Bluetooth fresh link: its start after the restart plays as is")
         links.noteListing(["builtin", "bt-old", "usb"], now: 300)
         links.noteListing(["builtin", "bt-old", "usb", "bt"], now: 400)
-        check(links.decide(uid: "bt", bluetooth: true, now: 404, session: 1) == .settled(linkAgeS: 4),
-              "EC2 Bluetooth fresh link: one that starts 4 s after it came back has a settled link")
+        check(links.decide(uid: "bt", bluetooth: true, now: 404, session: 1) == .restart(linkAgeS: 4),
+              "EC2 Bluetooth fresh link: one whose first start comes 4 s after it came back still restarts once")
         links.noteListing(["builtin", "bt-old", "usb"], now: 500)
         links.noteListing(["builtin", "bt-old", "usb", "bt"], now: 600)
         check(links.decide(uid: "bt", bluetooth: true, now: 601, session: 1) == .restart(linkAgeS: 1),
@@ -4083,6 +4083,85 @@ do {
         check(stale != nil && !links.begin(uid: "bt", ticket: stale ?? -1, session: 2) && links.held.isEmpty
                 && links.pendingTicket(uid: "bt") == nil,
               "EC2 Bluetooth fresh link: a restart armed in a session that has ended is dropped")
+    }
+    // covers: S325 (a link that restarts on a new device ID while its UID stays listed is fresh again)
+    do {
+        let links = FreshLinkWatch()
+        links.noteListing(["bt"], now: 0)
+        links.noteListing(["bt"], now: 1)
+        let restart = LocalOutputSync.plan(enabled: ["bt"], active: ["bt"], available: ["bt"],
+                                           bound: ["bt": 52], listed: ["bt": 99]).restart
+        for uid in restart { links.relinked(uid: uid, now: 1) }
+        let decision = links.decide(uid: "bt", bluetooth: true, now: 1.5, session: 1)
+        check(restart == ["bt"] && decision == .restart(linkAgeS: 0.5),
+              "EC2 Bluetooth fresh link: a restart on a new device ID counts as a fresh link",
+              "\(restart) \(decision)")
+    }
+    // covers: S325, S331 (a start refused once on a fresh link still restarts once it plays)
+    do {
+        let links = FreshLinkWatch()
+        links.noteListing([], now: 0)
+        links.noteListing(["bt"], now: 0)
+        let decision = links.decide(uid: "bt", bluetooth: true, now: 3.1, session: 1)
+        check(decision == .restart(linkAgeS: 3.1),
+              "EC2 Bluetooth fresh link: the first stream after a refused start, 3 s later, still restarts once",
+              "\(decision)")
+    }
+    // covers: S325 (a link that left the list and came back mid-session gets one more restart once it is calm)
+    do {
+        let links = FreshLinkWatch()
+        links.noteListing(["bt", "usb"], now: 0, session: 1)
+        links.noteListing(["usb"], now: 10, session: 1)
+        let armed = links.noteListing(["bt", "usb"], now: 20, session: 1)
+        let quick = links.decide(uid: "bt", bluetooth: true, now: 20.5, session: 1)
+        let quickTicket = links.pendingTicket(uid: "bt") ?? -1
+        let quickRan = links.begin(uid: "bt", ticket: quickTicket, session: 1)
+        links.release(uid: "bt")
+        let calmTicket = armed["bt"] ?? -1
+        check(FreshLinkWatch.calmRestartAfterS == 305 && armed.keys.sorted() == ["bt"] && quick == .restart(linkAgeS: 0.5)
+                && quickRan && calmTicket != quickTicket,
+              "EC2 Bluetooth fresh link: one that came back mid-session arms a second restart after the 2 s one",
+              "\(armed) \(quick)")
+        check(links.begin(uid: "bt", ticket: calmTicket, session: 1) && links.held == ["bt"],
+              "EC2 Bluetooth fresh link: the second restart runs once its time after the return has come")
+        links.release(uid: "bt")
+        check(!links.begin(uid: "bt", ticket: calmTicket, session: 1) && links.held.isEmpty,
+              "EC2 Bluetooth fresh link: the second restart runs only once")
+    }
+    // covers: S325 (what cancels the second restart, and a new return starting its clock over)
+    do {
+        func cameBack(_ links: FreshLinkWatch, at now: Double) -> Int {
+            links.noteListing(["bt"], now: now - 5, session: 1)
+            links.noteListing([], now: now - 1, session: 1)
+            return links.noteListing(["bt"], now: now, session: 1)["bt"] ?? -1
+        }
+        let toggled = FreshLinkWatch()
+        let toggledTicket = cameBack(toggled, at: 10)
+        toggled.cancel(uid: "bt")
+        check(!toggled.begin(uid: "bt", ticket: toggledTicket, session: 1),
+              "EC2 Bluetooth fresh link: switching the speaker off and on before the second restart cancels it")
+        let ended = FreshLinkWatch()
+        let endedTicket = cameBack(ended, at: 10)
+        check(!ended.begin(uid: "bt", ticket: endedTicket, session: 2) && ended.held.isEmpty,
+              "EC2 Bluetooth fresh link: the end of the session cancels the second restart")
+        let slept = FreshLinkWatch()
+        let sleptTicket = cameBack(slept, at: 10)
+        slept.sleeping()
+        check(!slept.begin(uid: "bt", ticket: sleptTicket, session: 1),
+              "EC2 Bluetooth fresh link: a sleep cancels the second restart")
+        let flapping = FreshLinkWatch()
+        let firstTicket = cameBack(flapping, at: 10)
+        flapping.noteListing([], now: 100, session: 1)
+        check(!flapping.begin(uid: "bt", ticket: firstTicket, session: 1),
+              "EC2 Bluetooth fresh link: leaving the list again cancels the second restart")
+        let secondTicket = flapping.noteListing(["bt"], now: 200, session: 1)["bt"]
+        check(secondTicket != nil && flapping.begin(uid: "bt", ticket: secondTicket ?? -1, session: 1),
+              "EC2 Bluetooth fresh link: a new return starts the second restart's clock over")
+        let stopped = FreshLinkWatch()
+        stopped.noteListing(["bt"], now: 0, session: nil)
+        stopped.noteListing([], now: 1, session: nil)
+        check(stopped.noteListing(["bt"], now: 2, session: nil).isEmpty,
+              "EC2 Bluetooth fresh link: a return while nothing plays arms no second restart")
     }
 
     // EC4 / EC9: the capture rate changes under a running session.
@@ -7102,6 +7181,13 @@ do {
     check(first && !again && other && afterLeaving && afterSwitchOff && !stillUsed,
           "output format: a start check reopens an output once, then keeps it until its device leaves or it is switched off",
           "\(first) \(again) \(other) \(afterLeaving) \(afterSwitchOff) \(stillUsed)")
+    // covers: S325, S330 (a relink that stays listed gives the start check its reopen back)
+    var relinkReopens = StartReopens()
+    _ = relinkReopens.take("A")
+    relinkReopens.relinked("A")
+    relinkReopens.settle(enabled: ["A"], listed: ["A"])
+    check(relinkReopens.take("A"),
+          "output format: a stall reopen or a restart on a new device ID lets the next start check reopen once more")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)

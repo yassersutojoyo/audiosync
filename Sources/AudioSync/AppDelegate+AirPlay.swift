@@ -165,6 +165,7 @@ extension AppDelegate {
             guard let self else { return }
             self.macAsleep = true
             self.engine.macWillSleep()
+            self.freshLinks.sleeping()
             self.endNativePinSessions(.sleep, streaming: self.engine.isRunning)
         }
         center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in

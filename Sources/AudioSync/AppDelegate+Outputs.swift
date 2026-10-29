@@ -260,7 +260,16 @@ extension AppDelegate {
     /// 10 s more (S328).
     func noteLocalDeviceList(_ devices: [AudioDevices.Device]) {
         localListed = devices.map(\.uid).filter { !$0.isEmpty }
-        freshLinks.noteListing(localListed, now: ProcessInfo.processInfo.systemUptime)
+        let calmRestarts = freshLinks.noteListing(localListed, now: ProcessInfo.processInfo.systemUptime,
+                                                  session: engine.isRunning ? session : nil)
+        for (uid, ticket) in calmRestarts
+        where devices.contains(where: { $0.uid == uid && BluetoothIOBuffer.isBluetooth(transport: $0.transport) }) {
+            DebugTrace.log("[AudioSync] fresh link: Bluetooth output \(uid) came back mid-session; "
+                + "one more quiet restart in \(Int(FreshLinkWatch.calmRestartAfterS)) s")
+            DispatchQueue.main.asyncAfter(deadline: .now() + FreshLinkWatch.calmRestartAfterS) { [weak self] in
+                self?.restartOnSettledLink(uid, ticket: ticket)
+            }
+        }
         localReference = LocalDelay.reference(in: devices)
         let heldBefore = briefLoss.held
         briefLoss.noteListing(localListed, enabled: enabledLocal, reference: localReference,
@@ -385,7 +394,7 @@ extension AppDelegate {
                                                 .subtracting(stallRetry.held(nowS: now))
                                                 .subtracting(refusalRetry.held(nowS: now)), listing: listing,
                                             to: engine,
-                                            bound: localBoundDevices,
+                                            bound: localBoundDevices, relinked: { noteRelinked($0) },
                                             holdBacks: localHoldBackTargets(), gain: { effectiveGain($0) })
         for (uid, holdBack) in applied.attached {
             localHoldBacks[uid] = holdBack
@@ -488,6 +497,13 @@ extension AppDelegate {
         }
     }
 
+    /// Output `uid`'s link dropped and came back while its UID stayed listed:
+    /// its next start is on a fresh link (S325) and its start check may reopen again.
+    func noteRelinked(_ uid: String) {
+        freshLinks.relinked(uid: uid, now: ProcessInfo.processInfo.systemUptime)
+        OutputFormatWatch.startReopens.relinked(uid)
+    }
+
     /// A Bluetooth output that started on a link that just came up gets one
     /// quiet restart (S325); every Bluetooth start logs the decision.
     private func noteFreshLinkStart(_ uid: String, _ device: AudioDevices.Device) {
@@ -496,9 +512,8 @@ extension AppDelegate {
                                  session: session) {
         case .notBluetooth:
             return
-        case .settled(let age):
-            let link = age.map { "its device appeared \(String(format: "%.1f", $0)) s ago" } ?? "its link is not new"
-            DebugTrace.log("[AudioSync] fresh link: Bluetooth output \(uid) started as is, \(link)")
+        case .settled:
+            DebugTrace.log("[AudioSync] fresh link: Bluetooth output \(uid) started as is, its link is not new")
         case .restart(let age):
             DebugTrace.log("[AudioSync] fresh link: Bluetooth output \(uid) started \(String(format: "%.1f", age)) s "
                 + "after its device appeared; one quiet restart in \(FreshLinkWatch.restartAfterS) s")
@@ -514,14 +529,24 @@ extension AppDelegate {
     /// start it again at its current delay and gain. The other outputs keep
     /// playing untouched.
     private func restartOnSettledLink(_ uid: String, ticket: Int) {
-        guard engine.isRunning, engine.activeOutputUIDs.contains(uid),
-              freshLinks.begin(uid: uid, ticket: ticket, session: session) else { return }
-        DebugTrace.log("[AudioSync] fresh link: restarting Bluetooth output \(uid) once")
+        guard freshLinks.begin(uid: uid, ticket: ticket, session: session) else { return }
+        guard engine.isRunning, engine.activeOutputUIDs.contains(uid) else {
+            freshLinks.release(uid: uid)
+            DebugTrace.log("[AudioSync] fresh link: restart of Bluetooth output \(uid) dropped, it is not playing")
+            return
+        }
+        let device = localBoundDevices[uid]
         localHoldBacks[uid] = nil
         localBoundDevices[uid] = nil
         engine.detachOutputs(uids: [uid], keepingLeads: true) { [weak self] in
             DispatchQueue.main.asyncAfter(deadline: .now() + FreshLinkWatch.rejoinPauseS) {
                 guard let self else { return }
+                // Our restart stops only our own unit; the line below tests the guess that a device
+                // another process keeps running never drops its link.
+                let running = device.flatMap(OutputRenderer.isRunningSomewhere)
+                    .map { $0 ? "yes" : "no" } ?? "unreadable"
+                DebugTrace.log("[AudioSync] fresh link: restarting Bluetooth output \(uid); "
+                    + "its device still running somewhere during the rest: \(running)")
                 self.freshLinks.release(uid: uid)
                 self.syncLocalOutputs(origin: .automatic)
                 self.checkBriefLosses()   // its held start lead goes once due (S328)
