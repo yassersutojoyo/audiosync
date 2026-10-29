@@ -231,6 +231,7 @@ impl Tray {
             tray.theme_timer
                 .start(slint::TimerMode::Repeated, THEME_CHECK, move || {
                     if let Some(tray) = weak.upgrade() {
+                        tray.show_tooltip();
                         tray.show_icon();
                     }
                 });
@@ -277,8 +278,10 @@ impl Tray {
 
 /// Hands `pending` to `set`, keeping it for the next try when `set` fails.
 fn show_pending<E>(pending: &mut Option<String>, set: impl FnOnce(&str) -> Result<(), E>) {
-    if let Some(text) = pending.take() {
-        let _ = set(&text);
+    if let Some(text) = pending.take()
+        && set(&text).is_err()
+    {
+        *pending = Some(text);
     }
 }
 

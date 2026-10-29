@@ -70,7 +70,9 @@ volume, the AirPlay delay, the master volume, auto-connect marks, the names give
 Show Virtual Devices, View > Appearance, File > Switch to All System Audio When the Source App Quits,
 File > AirPlay 2 (Experimental), the web remote's switch and port, the Cast
 speakers added by address, and the main window's size and place (fitted to the
-monitor it opens on) and whether it was maximized. A file from a newer
+monitor it opens on) and whether it was maximized. The window shown again
+after its monitor went away opens centered on the primary monitor, as at
+launch. A file from a newer
 AudioSync is ignored and kept as `settings.newer-<UTC time>.json` before the
 first save over it. A value in the file that doesn't read goes back to its
 default on its own, and the rest is kept. One that's damaged, or that can't be read at launch even
@@ -201,7 +203,8 @@ only exposes a window that is showing, so with every window closed nothing
 is said; for that case the tray icon's tooltip names the newest notice on a
 second line, the same way, which Narrator reads when the tray icon gets the
 focus (Windows+B), and drops it once no notice is left.
-The tooltip is cut to the 127 characters Windows shows. AudioSync shows no
+The tooltip is cut to the 127 characters Windows shows. One Windows refuses
+while Explorer restarts is set again once the taskbar is back. AudioSync shows no
 toast for a notice: an automatic event never pops up over other apps.
 
 Text colors meet 4.5:1 on every background they're drawn on, in light and

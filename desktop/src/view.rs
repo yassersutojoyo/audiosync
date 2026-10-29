@@ -870,8 +870,12 @@ fn place_to_show(
     on_a_monitor: bool,
     primary: Option<(crate::placement::Bounds, f64)>,
 ) -> Option<(i32, i32)> {
-    let _ = (frame, on_a_monitor, primary);
-    None
+    if on_a_monitor {
+        return None;
+    }
+    let (work_area, scale) = primary?;
+    let fitted = fitted_main_frame(frame, work_area, scale, false);
+    Some((fitted.x, fitted.y))
 }
 
 /// The saved main window `frame` as it opens on the monitor with
