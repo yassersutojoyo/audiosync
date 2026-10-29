@@ -2123,6 +2123,23 @@ mod tests {
         assert_eq!(keys(&value["zones"][0]), ["id", "volume"]);
     }
 
+    // covers: S23
+    #[test]
+    fn an_equalizer_with_another_band_count_loads_missing_bands_flat_and_drops_extra_ones() {
+        let gains = |saved: &str| {
+            let text = format!(r#"{{"version": 2, "equalizer": {{"gains_db": {saved}}}}}"#);
+            let (read, _) = Settings::from_json(&text).expect("read");
+            read.equalizer.settings().gains_db
+        };
+        let mut short = [0.0; BAND_COUNT];
+        short[..3].copy_from_slice(&[3.0, -2.5, 1.0]);
+        assert_eq!(gains("[3, -2.5, 1]"), short);
+        let long: Vec<f64> = (1..=12).map(f64::from).collect();
+        let mut kept = [0.0; BAND_COUNT];
+        kept.copy_from_slice(&long[..BAND_COUNT]);
+        assert_eq!(gains(&format!("{long:?}")), kept);
+    }
+
     #[test]
     fn equalizer_curves_are_read_leniently_and_left_out_while_none_is() {
         let text = r#"{"version": 2, "master_volume": 40, "equalizer_curves": [
