@@ -313,7 +313,7 @@ extension AppDelegate {
     private func makeActions() -> AppModel.Actions {
         var a = AppModel.Actions()
         a.setPower = { [weak self] on in self?.setStreaming(on) }
-        a.selectSource = { [weak self] id in self?.setSource(AudioSource(defaultsValue: id)) }
+        a.selectSource = { [weak self] id, origin in self?.setSource(AudioSource(defaultsValue: id), origin: origin) }
         a.selectInputPair = { [weak self] index in self?.setInputPair(index) }
         a.toggleMixApp = { [weak self] id in self?.toggleMixApp(id) }
         a.setMixMode = { [weak self] mode in self?.setMixMode(mode) }
@@ -603,7 +603,8 @@ extension AppDelegate {
     /// Checks or unchecks an app in the several-apps menu.
     func toggleMixApp(_ bundleID: String) {
         let mode = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
-        setSource(SourceMix.toggle(bundleID, in: audioSource, mode: mode, ownBundleID: Bundle.main.bundleIdentifier))
+        setSource(SourceMix.toggle(bundleID, in: audioSource, mode: mode, ownBundleID: Bundle.main.bundleIdentifier),
+                  origin: .user)
         pushSources()
     }
 
@@ -612,7 +613,8 @@ extension AppDelegate {
         let current = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
         rememberedMixMode = mode
         guard mode != current else { return }
-        setSource(SourceMix.setMode(mode, from: current, of: audioSource, ownBundleID: Bundle.main.bundleIdentifier))
+        setSource(SourceMix.setMode(mode, from: current, of: audioSource, ownBundleID: Bundle.main.bundleIdentifier),
+                  origin: .user)
         pushSources()
     }
 

@@ -296,7 +296,7 @@ extension AppDelegate {
         nowPlaying.refresh()
     }
 
-    func setSource(_ source: AudioSource) {
+    func setSource(_ source: AudioSource, origin: StartOrigin) {
         let change = SourceSwitch.decide(from: audioSource, to: source, streaming: engine.isRunning)
         clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
         guard change != .none else {
@@ -310,7 +310,7 @@ extension AppDelegate {
         // The tap is built for one source; switching rebuilds only it, under
         // the speakers (S141).
         autoStartFailed = false
-        if change == .restart { startEngine(origin: .user, switching: .source(from: old, to: source)) }
+        if change == .restart { startEngine(origin: origin, switching: .source(from: old, to: source)) }
         pushModel()
     }
 

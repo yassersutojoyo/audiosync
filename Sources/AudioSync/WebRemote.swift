@@ -334,7 +334,7 @@ final class WebRemote {
         case .setZoneVolume(let id, let position): host.setZoneVolume(id, position)
         case .toggleZone(let id, let keepOff): host.toggleZone(id, keepOff, .remote)
         case .recallPreset(let id, let keepOff): host.recallPreset(id, keepOff, .remote)
-        case .selectSource(let pickerID): model.actions.selectSource(pickerID)
+        case .selectSource(let pickerID): model.actions.selectSource(pickerID, .remote)
         }
     }
 
