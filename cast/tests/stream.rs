@@ -560,14 +560,17 @@ fn lag(server: &StreamServer, origin: Instant) -> i64 {
     least
 }
 
-// covers: C52
-#[test]
-fn an_input_gap_past_100_ms_is_all_silence_and_the_stream_stays_on_the_clock() {
-    let (server, writer) = server(vec![LOCAL]);
-    let paused = Arc::new(AtomicBool::new(false));
-    let stop = Arc::new(AtomicBool::new(false));
+/// Feeds 10 ms of audio every 10 ms except while `paused` and reads the
+/// response as a device would, both until `stop`; returns once the pump
+/// streams, with the origin for `lag`.
+fn paced(
+    server: &StreamServer,
+    writer: AudioWriter,
+    paused: &Arc<AtomicBool>,
+    stop: &Arc<AtomicBool>,
+) -> (Instant, [thread::JoinHandle<()>; 2]) {
     let feeder = {
-        let (paused, stop) = (Arc::clone(&paused), Arc::clone(&stop));
+        let (paused, stop) = (Arc::clone(paused), Arc::clone(stop));
         thread::spawn(move || {
             let block = vec![7i16; 960];
             let start = Instant::now();
@@ -582,10 +585,10 @@ fn an_input_gap_past_100_ms_is_all_silence_and_the_stream_stays_on_the_clock() {
             }
         })
     };
-    let mut stream = streaming(&server);
+    let mut stream = streaming(server);
     let origin = Instant::now();
     let drain = {
-        let stop = Arc::clone(&stop);
+        let stop = Arc::clone(stop);
         thread::spawn(move || {
             let mut buffer = [0u8; 8192];
             while !stop.load(Ordering::SeqCst) {
@@ -599,6 +602,16 @@ fn an_input_gap_past_100_ms_is_all_silence_and_the_stream_stays_on_the_clock() {
             }
         })
     };
+    (origin, [feeder, drain])
+}
+
+// covers: C52
+#[test]
+fn an_input_gap_past_100_ms_is_filled_with_silence_and_the_stream_stays_on_the_clock() {
+    let (server, writer) = server(vec![LOCAL]);
+    let paused = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
+    let (origin, threads) = paced(&server, writer, &paused, &stop);
     thread::sleep(Duration::from_millis(200));
     let before = lag(&server, origin);
     paused.store(true, Ordering::SeqCst);
@@ -625,8 +638,35 @@ fn an_input_gap_past_100_ms_is_all_silence_and_the_stream_stays_on_the_clock() {
         after - before
     );
     stop.store(true, Ordering::SeqCst);
-    feeder.join().expect("feeder");
-    drain.join().expect("drain");
+    for thread in threads {
+        thread.join().expect("joins");
+    }
+    server.stop();
+}
+
+// covers: C52
+#[test]
+fn audio_lost_for_less_than_100_ms_leaves_no_debt_once_the_input_returns() {
+    let (server, writer) = server(vec![LOCAL]);
+    let paused = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
+    let (origin, threads) = paced(&server, writer, &paused, &stop);
+    thread::sleep(Duration::from_millis(200));
+    let before = lag(&server, origin);
+    paused.store(true, Ordering::SeqCst);
+    thread::sleep(Duration::from_millis(80));
+    paused.store(false, Ordering::SeqCst);
+    thread::sleep(Duration::from_millis(400));
+    let after = lag(&server, origin);
+    assert!(
+        after - before < 2 * 960,
+        "80 ms of lost audio left {} frames of debt",
+        after - before
+    );
+    stop.store(true, Ordering::SeqCst);
+    for thread in threads {
+        thread.join().expect("joins");
+    }
     server.stop();
 }
 
