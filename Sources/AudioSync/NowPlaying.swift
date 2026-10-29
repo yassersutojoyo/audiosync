@@ -35,6 +35,19 @@ final class NowPlayingMonitor {
         }
     }
 
+    /// `reading` when it reports `source` as playing (S19); only a `running`
+    /// monitor's reading is live.
+    static func sourcePlaying(_ reading: Track?, running: Bool, source: AudioSource) -> Track? {
+        guard running, let track = reading, track.isPlaying else { return nil }
+        switch source {
+        case .system: return track
+        case .app(let bundleID): return track.bundleID == bundleID ? track : nil
+        case .mix(.only, let ids): return ids.contains(track.bundleID) ? track : nil
+        case .mix(.allExcept, let ids): return ids.contains(track.bundleID) ? nil : track
+        case .input: return nil
+        }
+    }
+
     /// How far into its track a player was when read, and the track's
     /// length, in seconds, for receivers that show progress (P126).
     struct Position: Equatable {

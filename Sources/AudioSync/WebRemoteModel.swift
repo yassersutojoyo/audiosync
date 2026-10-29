@@ -121,6 +121,8 @@ struct RemoteZoneRow: Equatable {
     var members: [String]
     var on = 0
     var waiting = 0
+    /// Every member of `zone`, listed or not, for "None of 3 found".
+    var all = 0
 
     init(id: String, name: String, volume: Double, members: [String], on: Int = 0, waiting: Int = 0) {
         self.id = id
@@ -135,11 +137,12 @@ struct RemoteZoneRow: Equatable {
         let present = zone.members.compactMap { key in listed.first { $0.key == key } }
         self.init(id: zone.id, name: zone.name, volume: zone.volume, members: present.map(\.id),
                   on: present.filter(\.on).count, waiting: present.filter { $0.on && $0.waiting }.count)
+        all = zone.members.count
     }
 
     var json: [String: Any] {
         ["id": id, "name": name, "volume": RemoteSnapshot.volume(volume), "members": members,
-         "counts": ["on": on, "total": members.count, "waiting": waiting]]
+         "counts": ["on": on, "total": members.count, "waiting": waiting, "all": all]]
     }
 }
 
@@ -205,6 +208,8 @@ struct RemoteSource: Equatable {
 struct RemoteSnapshot: Equatable {
     struct Playing: Equatable {
         var title, artist, source: String
+        /// False while the app is paused.
+        var playing = true
     }
 
     var computerName: String
@@ -222,7 +227,7 @@ struct RemoteSnapshot: Equatable {
 
     /// One line, keys sorted, so an unchanged snapshot gives the same text.
     var json: String {
-        let playing: Any = nowPlaying.map { ["title": $0.title, "artist": $0.artist, "source": $0.source] } ?? NSNull()
+        let playing: Any = nowPlaying.map { ["title": $0.title, "artist": $0.artist, "source": $0.source, "playing": $0.playing] } ?? NSNull()
         let root: [String: Any] = [
             "computer_name": computerName,
             "master": ["volume": Self.volume(master)],

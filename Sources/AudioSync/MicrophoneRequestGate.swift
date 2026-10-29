@@ -1,3 +1,18 @@
+import AVFoundation
+
+/// What an input source's start does with the microphone permission (S15).
+enum MicrophoneStart: Equatable {
+    case start, ask, fail
+
+    static func decide(_ status: AVAuthorizationStatus) -> MicrophoneStart {
+        switch status {
+        case .authorized: return .start
+        case .notDetermined: return .ask
+        default: return .fail
+        }
+    }
+}
+
 /// One microphone permission request at a time. Every answer starts the
 /// engine, so a second request queued behind an open prompt would stop the
 /// first session and start it again, flushing the AirPlay timeline.

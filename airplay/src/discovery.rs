@@ -756,7 +756,9 @@ pub enum DirectoryEvent {
 /// The devices on the network, merged from browse events (P10).
 #[derive(Debug, Default)]
 pub struct Directory {
-    services: BTreeMap<(ServiceKind, String), (DeviceKey, ServiceRecord)>,
+    /// Each record with the order it was resolved in.
+    services: BTreeMap<(ServiceKind, String), (DeviceKey, ServiceRecord, u64)>,
+    resolved: u64,
     devices: BTreeMap<DeviceKey, Device>,
     pcm_refused: BTreeSet<DeviceKey>,
     /// Every device a record was resolved for in this run, and those with a
@@ -770,10 +772,10 @@ impl Directory {
         Directory::default()
     }
 
-    /// Applies one browse event and reports what changed. A device keeps at
-    /// most one service of each kind; a newer instance of the same kind
-    /// replaces the older one. Running sessions are never touched (P18,
-    /// P19).
+    /// Applies one browse event and reports what changed. A device keeps
+    /// every instance of each kind and is built from the one resolved last,
+    /// so a renamed device whose old instance lapses keeps its new one.
+    /// Running sessions are never touched (P18, P19).
     pub fn apply(&mut self, event: BrowseEvent) -> Vec<DirectoryEvent> {
         match event {
             BrowseEvent::Resolved(record) => {
@@ -784,31 +786,42 @@ impl Directory {
                 self.seen.insert(key.clone());
                 let id = (record.kind, record.instance.clone());
                 let mut affected = vec![key.clone()];
-                if let Some((old_key, _)) = self.services.remove(&id)
+                if let Some((old_key, ..)) = self.services.remove(&id)
                     && old_key != key
                 {
                     affected.push(old_key);
                 }
-                self.services
-                    .retain(|(kind, _), (owner, _)| !(*kind == record.kind && *owner == key));
-                self.services.insert(id, (key, record));
-                affected.into_iter().map(|key| self.rebuild(key)).collect()
+                self.resolved += 1;
+                self.services.insert(id, (key, record, self.resolved));
+                affected
+                    .into_iter()
+                    .filter_map(|key| self.rebuild(key))
+                    .collect()
             }
             BrowseEvent::Removed { kind, instance } => {
                 match self.services.remove(&(kind, instance)) {
-                    Some((key, _)) => vec![self.rebuild(key)],
+                    Some((key, ..)) => self.rebuild(key).into_iter().collect(),
                     None => Vec::new(),
                 }
             }
         }
     }
 
-    fn rebuild(&mut self, key: DeviceKey) -> DirectoryEvent {
+    /// Forgets every service and device, as when discovery stops. What was
+    /// seen in this run and the PCM refusals stay (P74, P215).
+    pub fn clear_services(&mut self) {
+        self.services.clear();
+        self.devices.clear();
+    }
+
+    /// `None` when the device is listed and its records changed nothing.
+    fn rebuild(&mut self, key: DeviceKey) -> Option<DirectoryEvent> {
         let find = |kind: ServiceKind| {
             self.services
                 .values()
-                .find(|(owner, record)| *owner == key && record.kind == kind)
-                .map(|(_, record)| record)
+                .filter(|(owner, record, _)| *owner == key && record.kind == kind)
+                .max_by_key(|(.., order)| *order)
+                .map(|(_, record, _)| record)
         };
         match Device::from_records(
             key.clone(),
@@ -816,14 +829,17 @@ impl Directory {
             find(ServiceKind::AirPlay),
         ) {
             Some(device) => {
+                if self.devices.get(&key) == Some(&device) {
+                    return None;
+                }
                 self.devices.insert(key, device.clone());
-                DirectoryEvent::Updated(Box::new(device))
+                Some(DirectoryEvent::Updated(Box::new(device)))
             }
             None => {
                 // The PCM refusal stays remembered: the device may come back
                 // (P74).
                 self.devices.remove(&key);
-                DirectoryEvent::Removed(key)
+                Some(DirectoryEvent::Removed(key))
             }
         }
     }

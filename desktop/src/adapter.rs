@@ -12873,6 +12873,7 @@ mod tests {
             device: cast_device(CAST_KITCHEN),
             event: SessionEvent::Volume(audiosync_cast::status::DeviceVolume {
                 level,
+                has_level: true,
                 ..Default::default()
             }),
         });

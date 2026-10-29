@@ -266,6 +266,7 @@ const TEXT = {
   retry: "Retry",
   connecting: "Connecting to AudioSync…",
   nowPlaying: "Now playing",
+  paused: "Paused",
   masterVolume: "Master volume",
   source: "Audio source",
   noSources: "AudioSync hasn't listed any sources yet.",
@@ -319,7 +320,8 @@ const TEXT = {
   turnOff: "Turn off",
   zoneCount: (on, total) => `${on} of ${total} on`,
   zoneWaiting: (count) => `, ${count} waiting`,
-  zoneEmpty: "None of this zone's speakers is here right now.",
+  zoneNoneHere: (all) => `None of ${all} found`,
+  zoneEmpty: "No speakers",
 };
 
 const RETRY_STEPS_MS = [1000, 2000, 5000, 10000];
@@ -958,7 +960,7 @@ function updateZone(row, zone, speakers) {
   const present = counts.total > 0;
   row.count.textContent = present
     ? TEXT.zoneCount(counts.on, counts.total) + (counts.waiting > 0 ? TEXT.zoneWaiting(counts.waiting) : "")
-    : TEXT.zoneEmpty;
+    : counts.all > 0 ? TEXT.zoneNoneHere(counts.all) : TEXT.zoneEmpty;
   const label = present && counts.on === counts.total ? TEXT.turnOff : TEXT.turnOn;
   row.toggle.textContent = label;
   row.toggle.setAttribute("aria-label", `${label}, ${zone.name}`);
@@ -1154,9 +1156,10 @@ function render(next) {
   showComputer(next.computer_name);
 
   const playing = next.now_playing;
+  const paused = playing && playing.playing === false;
   if (playing && (playing.title || playing.artist)) {
     ui.playingTitle.textContent = playing.title || playing.artist;
-    ui.playingDetail.textContent = [playing.title ? playing.artist : "", playing.source].filter(Boolean).join(" · ");
+    ui.playingDetail.textContent = [playing.title ? playing.artist : "", playing.source, paused ? TEXT.paused : ""].filter(Boolean).join(" · ");
   } else {
     ui.playingTitle.textContent = TEXT.nothingPlaying;
     ui.playingDetail.textContent = playing && playing.source ? playing.source : "";

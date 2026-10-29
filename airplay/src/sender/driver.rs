@@ -28,8 +28,8 @@ use crate::ap2::PinPairing;
 use crate::audio::SAMPLE_RATE;
 use crate::connects::{ConnectQueue, StartKind};
 use crate::discovery::{
-    BrowseEvent, Browser, Device, DeviceKey, Directory, DirectoryEvent, Endpoint, Features,
-    ProtocolPath, ScopedAddr, Verdict,
+    Browser, Device, DeviceKey, Directory, DirectoryEvent, Endpoint, Features, ProtocolPath,
+    ScopedAddr, Verdict,
 };
 use crate::error::{ErrorKind, SessionError, UnsupportedReason, UserReason, Warning};
 use crate::homekit::{HomeKitCredentials, SrpDone, SrpWork};
@@ -2539,27 +2539,7 @@ impl Driver {
     /// directory keeps what it learned about PCM refusals (P74).
     fn stop_discovery(&mut self) {
         self.browser = None;
-        let services: Vec<BrowseEvent> = self
-            .directory
-            .devices()
-            .flat_map(|device| {
-                let raop = device.raop.as_ref().map(|endpoint| BrowseEvent::Removed {
-                    kind: crate::discovery::ServiceKind::Raop,
-                    instance: endpoint.instance.clone(),
-                });
-                let airplay = device
-                    .airplay
-                    .as_ref()
-                    .map(|endpoint| BrowseEvent::Removed {
-                        kind: crate::discovery::ServiceKind::AirPlay,
-                        instance: endpoint.instance.clone(),
-                    });
-                raop.into_iter().chain(airplay)
-            })
-            .collect();
-        for service in services {
-            self.directory.apply(service);
-        }
+        self.directory.clear_services();
         for key in std::mem::take(&mut self.reported) {
             self.emit(SenderEvent::Receiver(ReceiverEvent::Gone(key)));
         }
@@ -2660,6 +2640,7 @@ fn progress_at(progress: Progress, set_at: Instant, now: Instant) -> Option<Prog
 mod tests {
     use super::*;
     use crate::clock::SenderClock;
+    use crate::discovery::BrowseEvent;
     use crate::stream::StreamConfig;
 
     #[test]
@@ -3607,6 +3588,33 @@ mod tests {
             .active(&key)
             .and_then(|active| active.session.remote_addr());
         assert_eq!(remote, Some(SocketAddr::new(v4, 5000)));
+    }
+
+    // Every instance a renamed device left behind goes with the stop, so
+    // none comes back as a ghost under its old name (P18).
+    #[test]
+    fn stopping_discovery_forgets_every_instance_of_a_device() {
+        use crate::discovery::{ScopedAddr, ServiceKind, ServiceRecord};
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency);
+        for name in ["0123456789AB@Dapur", "0123456789AB@Ruang"] {
+            let changes = driver.directory.apply(BrowseEvent::Resolved(ServiceRecord {
+                kind: ServiceKind::Raop,
+                instance: name.to_owned(),
+                host: "living.local".to_owned(),
+                port: 5000,
+                txt: vec![b"cn=0,1".to_vec(), b"et=0".to_vec()],
+                addresses: vec![ScopedAddr::new("192.0.2.58".parse().expect("an address"))],
+            }));
+            driver.report_changes(changes);
+        }
+        driver.stop_discovery();
+        assert_eq!(driver.directory.devices().count(), 0);
     }
 
     const KITCHEN: [u8; 4] = [192, 0, 2, 59];

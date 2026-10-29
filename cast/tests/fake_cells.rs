@@ -19,7 +19,7 @@ use audiosync_cast::group::GroupRecords;
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::{DEFAULT_MEDIA_RECEIVER, NS_MEDIA, NS_RECEIVER, PLATFORM};
 use audiosync_cast::session::{CastSession, Diagnostics, SessionConfig, SessionEvent};
-use common::{Behavior, Command, FakeDevice, app, json_message};
+use common::{Behavior, Command, FakeDevice, OnLoad, app, json_message};
 use serde_json::{Value, json};
 
 const ID: &str = "3f2a8c41d27e4b8f9a06c1d5e7f80b12";
@@ -644,6 +644,59 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
         &format!(
             "read at {reading:.2} s/s: audio piles up +{growth:.2} s/s, queue full at {:.1} s, then +{overflow:.2} s/s with drops, resync offered at {offered_at:.1} s, drops counted, 1 LOAD",
             lines[filled].0
+        ),
+    );
+}
+
+/// A device that fetches the stream at once but reports `PLAYING` only 13 s
+/// after the start, longer than `FETCH_TIMEOUT`, as one whose startup latency
+/// is seconds (C74): nothing times out a `PLAYING` that is slow to come.
+// covers: C74
+#[test]
+fn a_device_that_reports_playing_after_13_s_is_waited_for() {
+    let hold = Duration::from_secs(13);
+    let device = FakeDevice::start(Behavior {
+        on_load: OnLoad::NeverPlay,
+        ..Behavior::default()
+    });
+    let commands = device.commands();
+    let started = Instant::now();
+    let release = thread::spawn(move || {
+        thread::sleep(hold);
+        let _ = commands.send(playing_at(None));
+    });
+    let (mut session, _feed) = start(&device);
+    let waited = started.elapsed();
+    release.join().expect("the release thread");
+    assert!(waited >= hold, "playing after {waited:?}");
+    let seen = run(&mut session, Duration::from_secs(3));
+    let lines = seen
+        .iter()
+        .filter(|event| matches!(event, SessionEvent::Diagnostics(_)))
+        .count();
+    assert!(lines >= 2, "{seen:?}");
+    assert!(
+        !seen.iter().any(|event| matches!(
+            event,
+            SessionEvent::Ended(_)
+                | SessionEvent::Recovering(_)
+                | SessionEvent::Recovered { .. }
+                | SessionEvent::Reloaded
+                | SessionEvent::FormatFallback { .. }
+        )),
+        "{seen:?}"
+    );
+    assert_eq!(device.payloads(NS_RECEIVER, "LAUNCH").len(), 1);
+    assert_eq!(device.payloads(NS_MEDIA, "LOAD").len(), 1);
+    assert_eq!(device.fetches().len(), 1);
+    assert_eq!(device.connection_count(), 1);
+    session.stop();
+    device.join();
+    cell(
+        "C74",
+        &format!(
+            "PLAYING after {:.1} s: 1 LAUNCH, 1 LOAD, 1 fetch, no restart",
+            waited.as_secs_f64()
         ),
     );
 }
