@@ -234,8 +234,41 @@ pub fn level_on_speaker(
     }
 }
 
-/// The first reading this close to a level sent is the speaker's echo (S291).
-pub const ECHO_TOLERANCE_DB: f64 = 0.5;
+/// Receivers measured to keep a level sent on a coarser grid, by the
+/// `features` they announce (both words) or the start of their
+/// `manufacturer`, lowercase, and the grid in dB (S291). Only the UT5500
+/// television of 2026-10-25, whose TXT manufacturer and model weren't recorded.
+const SET_GRIDS: [(u64, &str, f64); 1] = [(0x038B_CB46_007F_8AD0, "samsung", 0.6)];
+
+/// The grid a receiver announcing `manufacturer` and `features` keeps a
+/// level sent on; none for a receiver not measured to round (S291).
+pub fn set_grid_db(manufacturer: Option<&str>, features: Option<u64>) -> Option<f64> {
+    let make = manufacturer.map(str::to_ascii_lowercase);
+    SET_GRIDS
+        .iter()
+        .find(|&&(bits, prefix, _)| {
+            features == Some(bits) || make.as_deref().is_some_and(|make| make.starts_with(prefix))
+        })
+        .map(|&(_, _, grid)| grid)
+}
+
+/// Whether reading `db` is the speaker's echo of `sent_db` (S291, S276): on
+/// the row sent, or, for a receiver that keeps sets on `grid`, that level on
+/// the grid. One remote step anywhere else is a change, however soon.
+pub fn is_echo_of(db: f64, sent_db: f64, grid: Option<f64>) -> bool {
+    if let Some(grid) = grid {
+        let steps = db / grid;
+        if (steps - steps.round()).abs() * grid <= BASELINE_TOLERANCE_DB
+            && (db - sent_db).abs() <= grid / 2.0 + BASELINE_TOLERANCE_DB
+        {
+            return true;
+        }
+    }
+    match (device_level_for_db(db), device_level_for_db(sent_db)) {
+        (Some(read), Some(sent)) => row_level(read) == row_level(sent),
+        _ => false,
+    }
+}
 
 /// After the echo, a reading this close to the baseline changes nothing (S291).
 pub const BASELINE_TOLERANCE_DB: f64 = 0.05;
@@ -248,7 +281,7 @@ pub struct ReadBack {
 }
 
 impl ReadBack {
-    /// The host sent the speaker `db`: the first reading near it is its echo.
+    /// The host sent the speaker `db`: the first reading on its row is its echo.
     pub fn sent(&mut self, db: f64) {
         self.echo_of = Some(db);
         self.baseline = None;
@@ -260,15 +293,16 @@ impl ReadBack {
     }
 
     /// Whether reading `db` is a level set on the speaker: not the echo of
-    /// a level sent and not within [`BASELINE_TOLERANCE_DB`] of the
-    /// baseline. Either way it becomes the baseline. A reading that isn't
-    /// finite is no change and leaves the state as it is.
-    pub fn set_on_speaker(&mut self, db: f64) -> bool {
+    /// a level sent (on `grid` for a receiver that keeps sets on one) and
+    /// not within [`BASELINE_TOLERANCE_DB`] of the baseline. Either way it
+    /// becomes the baseline. A reading that isn't finite is no change and
+    /// leaves the state as it is.
+    pub fn set_on_speaker(&mut self, db: f64, grid: Option<f64>) -> bool {
         if !db.is_finite() {
             return false;
         }
         if let Some(sent) = self.echo_of.take() {
-            if (db - sent).abs() < ECHO_TOLERANCE_DB {
+            if is_echo_of(db, sent, grid) {
                 self.baseline = Some(db);
                 return false;
             }

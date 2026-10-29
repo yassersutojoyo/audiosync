@@ -2,8 +2,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-/// Whether `peer` may connect at all: private (RFC 1918, RFC 4193),
-/// link-local or loopback. Everyone else is closed at accept.
+/// Whether `peer` is private (RFC 1918, RFC 4193), link-local or loopback.
+/// [`admits_peer`] adds the peers let in beside these.
 pub fn is_private_peer(peer: IpAddr) -> bool {
     match peer.to_canonical() {
         IpAddr::V4(v4) => v4.is_private() || v4.is_link_local() || v4.is_loopback(),
@@ -15,13 +15,15 @@ pub fn is_private_peer(peer: IpAddr) -> bool {
 }
 
 /// Whether a connection from `peer` to this machine's `local` address is
-/// let in: a private peer, or an IPv6 peer in the same /64 as a native
+/// let in: a private peer, a carrier-grade NAT peer (RFC 6598, the range
+/// Tailscale gives its devices), or an IPv6 peer in the same /64 as a native
 /// global `local`, which on a home network is the phone next to it.
 pub fn admits_peer(peer: IpAddr, local: IpAddr) -> bool {
     if is_private_peer(peer) {
         return true;
     }
     match (peer.to_canonical(), local.to_canonical()) {
+        (IpAddr::V4(peer), _) => peer.octets()[0] == 100 && peer.octets()[1] & 0xc0 == 64,
         (IpAddr::V6(peer), IpAddr::V6(local)) => {
             native_global(local) && peer.segments()[..4] == local.segments()[..4]
         }
@@ -196,6 +198,25 @@ mod tests {
         );
         assert!(admits_peer(v4(192, 168, 1, 20), local), "private stays in");
         assert!(admits_peer(v6("fe80::1"), local));
+    }
+
+    #[test]
+    fn a_carrier_nat_peer_is_let_in() {
+        let loopback = v4(127, 0, 0, 1);
+        for allowed in [
+            v4(100, 64, 0, 1),
+            v4(100, 100, 1, 1),
+            v4(100, 127, 255, 255),
+        ] {
+            assert!(admits_peer(allowed, loopback), "{allowed}");
+        }
+        let mapped = IpAddr::V6(Ipv4Addr::new(100, 100, 1, 1).to_ipv6_mapped());
+        assert!(admits_peer(mapped, loopback));
+        for refused in [v4(100, 63, 255, 255), v4(100, 128, 0, 1)] {
+            assert!(!admits_peer(refused, loopback), "{refused}");
+        }
+        // The address shown for the phone to open stays a home network's.
+        assert!(!is_private_peer(v4(100, 100, 1, 1)));
     }
 
     #[test]

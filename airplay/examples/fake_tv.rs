@@ -9,7 +9,7 @@
 //! ```text
 //! cargo run -p audiosync-airplay --example fake_tv -- [--lan] [--name <text>]
 //!     [--deviceid <XX:XX:XX:XX:XX:XX>] [--port <n>] [--pin every|once]
-//!     [--code <digits>] [--password <text>] [--summary]
+//!     [--code <digits>] [--password <text>] [--ptp-only] [--summary]
 //! ```
 //!
 //! `FAKE_TV_LATENCY_US` set to whole microseconds adds that output latency
@@ -24,6 +24,10 @@
 //! place of a PIN, a pairing kept across connections; it excludes `--pin`
 //! and `--code`.
 //!
+//! `--ptp-only` sets features bit 41 and answers a session SETUP that asks
+//! for NTP with 501, as a receiver that times with PTP only. It binds
+//! nothing on the PTP ports and sends no PTP message.
+//!
 //! Every request line and its answer status goes to stdout; with `--summary`
 //! only one plain line per event a dry-run sheet judges, with its running
 //! count (the `summary` module). On stdin,
@@ -32,6 +36,8 @@
 
 #[path = "../tests/common/mod.rs"]
 mod common;
+#[path = "fake_tv/options.rs"]
+mod options;
 #[path = "fake_tv/summary.rs"]
 mod summary;
 #[path = "fake_tv/television.rs"]
@@ -48,78 +54,17 @@ use std::time::{Duration, Instant};
 use audiosync_airplay::rtsp::Request;
 use common::ap2::{Ap2Server, FakeAp2, request_key};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use options::{Options, parse};
 use summary::Summary;
-use television::{DEVICE_ID, Pin, television};
+use television::{Pin, television};
 
 const SERVICE_TYPE: &str = "_airplay._tcp.local.";
 
-struct Options {
-    name: String,
-    device_id: [u8; 6],
-    port: u16,
-    pin: Pin,
-    code: String,
-    on_network: bool,
-    summary: bool,
-}
-
-fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
-    let mut name = None;
-    let (mut pin_given, mut password_given) = (false, false);
-    let mut options = Options {
-        name: String::new(),
-        device_id: DEVICE_ID,
-        port: 0,
-        pin: Pin::None,
-        code: "4821".to_owned(),
-        on_network: false,
-        summary: false,
-    };
-    while let Some(arg) = args.next() {
-        let mut value = || args.next().ok_or(format!("{arg} needs a value"));
-        match arg.as_str() {
-            "--lan" => options.on_network = true,
-            "--summary" => options.summary = true,
-            "--name" => name = Some(value()?),
-            "--deviceid" => options.device_id = television::parse_device_id(&value()?)?,
-            "--port" => options.port = value()?.parse().map_err(|_| "bad --port")?,
-            "--pin" => {
-                pin_given = true;
-                options.pin = match value()?.as_str() {
-                    "every" => Pin::EveryTime,
-                    "once" => Pin::Once,
-                    other => return Err(format!("--pin takes every or once, not {other}")),
-                }
-            }
-            "--code" => {
-                let code = value()?;
-                if code.is_empty() || !code.bytes().all(|b| b.is_ascii_digit()) {
-                    return Err("--code takes digits".to_owned());
-                }
-                pin_given = true;
-                options.code = code;
-            }
-            "--password" => {
-                let password = value()?;
-                if password.is_empty() {
-                    return Err("--password takes a non-empty text".to_owned());
-                }
-                password_given = true;
-                options.pin = Pin::Password;
-                options.code = password;
-            }
-            other => return Err(format!("unknown argument {other}")),
-        }
-    }
-    if pin_given && password_given {
-        return Err("--password excludes --pin and --code".to_owned());
-    }
-    options.name = name.unwrap_or_else(|| television::default_name(options.device_id));
-    Ok(options)
-}
-
 fn advertise(options: &Options, port: u16) -> Result<(ServiceDaemon, String), String> {
-    let entries = television::txt(options.pin, 0, options.device_id);
+    let mut entries = television::txt(options.pin, 0, options.device_id);
+    if options.ptp_only {
+        entries = television::ptp_only_txt(entries);
+    }
     let txt: Vec<(&str, &str)> = entries
         .iter()
         .map(|(key, value)| (*key, value.as_str()))
@@ -294,6 +239,9 @@ fn main() -> ExitCode {
     if let Some(micros) = latency_us {
         television::report_latency(&mut fake, micros);
     }
+    if options.ptp_only {
+        television::ptp_only(&mut fake);
+    }
     let server = Ap2Server::start_at(SocketAddr::new(IpAddr::V4(ip), options.port), fake);
     let port = server.address.port();
     let advertised = if options.on_network {
@@ -338,6 +286,12 @@ fn main() -> ExitCode {
             stamp(start),
             options.code
         ),
+    }
+    if options.ptp_only {
+        println!(
+            "{} timing: PTP only (features bit 41; NTP session SETUP answered 501)",
+            stamp(start)
+        );
     }
     if let Some(micros) = latency_us {
         println!(

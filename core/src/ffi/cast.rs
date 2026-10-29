@@ -42,7 +42,7 @@ use audiosync_cast::audio::{AudioWriter, Codec, audio_ring};
 use audiosync_cast::discovery::mdns::MdnsBrowser;
 use audiosync_cast::discovery::reach::Reachability;
 use audiosync_cast::discovery::{
-    BrowseEvent, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent,
+    Announcements, BrowseEvent, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent,
 };
 use audiosync_cast::error::ConnectError;
 use audiosync_cast::group::{GroupMember, GroupRecords};
@@ -191,8 +191,8 @@ const INPUT_CHUNK_FRAMES: usize = 4096;
 const MAX_HOLD_BACK_FRAMES: usize = MAX_HOLD_BACK_MS as usize * CAST_RATE as usize / 1000;
 /// The largest artwork [`asc_cast_set_artwork`] keeps.
 const MAX_ARTWORK_BYTES: usize = 8 << 20;
-/// The largest offset [`asc_cast_set_offset`] stores: C74 reports latencies
-/// beyond 30 s.
+/// The largest offset [`asc_cast_set_offset`] accepts: C74 reports latencies
+/// beyond 30 s. The sender stores at most `MAX_OFFSET`, 20 s.
 const MAX_OFFSET_MS: f64 = 120_000.0;
 
 /// One device change. The strings are NUL-terminated UTF-8 owned by the
@@ -359,6 +359,8 @@ struct Attempt {
     id: String,
     /// A group's addresses, kept current from discovery (C90, C103).
     group: Option<GroupRecords>,
+    /// A single device's addresses, kept current from discovery (C111).
+    records: Option<GroupRecords>,
 }
 
 /// What the handle and its input share: the writing end of the running
@@ -475,6 +477,7 @@ pub struct AscCast {
     shared: Arc<Shared>,
     input_taken: bool,
     list: DeviceList,
+    announcements: Announcements,
     browser: Option<Box<dyn Browse>>,
     open_browser: OpenBrowser,
     changes: VecDeque<Change>,
@@ -702,8 +705,8 @@ impl AscCast {
         }
     }
 
-    /// Hands the playing group's latest records and its members' addresses
-    /// to its session (C90, C103).
+    /// Hands the playing device or group its latest records, and a group
+    /// its members' addresses (C90, C103, C111).
     fn follow_groups(&mut self) {
         let member_ips: Vec<IpAddr> = self
             .members
@@ -712,17 +715,22 @@ impl AscCast {
             .flat_map(|entry| entry.addresses.iter().map(SocketAddr::ip))
             .collect();
         for attempt in &self.attempts {
-            let Some(records) = &attempt.group else {
+            let Some(records) = attempt.group.as_ref().or(attempt.records.as_ref()) else {
                 continue;
             };
             if let Some(entry) = self.list.get(attempt.key) {
                 records.set_group(entry.addresses.clone());
             }
-            records.set_members(member_ips.clone());
+            if attempt.group.is_some() {
+                records.set_members(member_ips.clone());
+            }
         }
     }
 
     fn listed(&mut self, event: ListEvent) {
+        if let Some(id) = self.announcements.note(&self.list, &event) {
+            self.host.announced(id);
+        }
         match event {
             ListEvent::Added(key) => {
                 self.change(CAST_APPEARED, key);
@@ -926,13 +934,17 @@ impl AscCast {
         self.pump_discovery();
         let key = device_key(id).ok_or(CAST_REFUSED_UNKNOWN)?;
         let entry = self.list.get(key).ok_or(CAST_REFUSED_UNKNOWN)?;
-        let group = entry
-            .is_group()
-            .then(|| GroupRecords::new(entry.addresses.clone()));
+        let all = GroupRecords::new(entry.addresses.clone());
+        let (group, records) = if entry.is_group() {
+            (Some(all), None)
+        } else {
+            (None, Some(all))
+        };
         let target = CastTarget {
             id: memory_id(key),
             addresses: entry.addresses.clone(),
             group: group.clone(),
+            records: records.clone(),
         };
         let (writer, reader) = audio_ring(RING_FRAMES);
         let attempt = self
@@ -959,6 +971,7 @@ impl AscCast {
             key,
             id: device_id_text(key),
             group,
+            records,
         });
         Ok(attempt)
     }
@@ -1158,6 +1171,7 @@ fn create_with(memory_json: &str, open_browser: OpenBrowser) -> *mut AscCast {
             shared: Arc::new(Shared::new()),
             input_taken: false,
             list: DeviceList::new(),
+            announcements: Announcements::default(),
             browser: None,
             open_browser,
             changes: VecDeque::new(),
@@ -1738,8 +1752,8 @@ pub unsafe extern "C" fn asc_cast_resync(cast: *mut AscCast) -> bool {
 }
 
 /// Stores the user's measured offset for device `id`, in ms, rounded to
-/// whole ms (C77): the host delays its other outputs by it. The device
-/// needn't be listed. Store [`asc_cast_memory_json`] afterwards. False for
+/// whole ms and capped at 20 s (C77): the host delays its other outputs by
+/// it. The device needn't be listed. Store [`asc_cast_memory_json`] afterwards. False for
 /// a null or dead handle, an ID that doesn't read, or an offset outside 0
 /// to 120 000 ms.
 ///
@@ -2634,6 +2648,46 @@ mod tests {
         destroy(handle);
     }
 
+    // CAST_SPEC: C111
+    #[test]
+    fn a_single_devices_session_follows_its_latest_address() {
+        let handle = create();
+        let at = |ip| record(KITCHEN, "Kitchen", DEVICE_PORT, ip);
+        browse(
+            handle,
+            vec![BrowseEvent::Resolved(at(Ipv4Addr::new(127, 0, 0, 2)))],
+            false,
+        );
+        devices(handle);
+        let (attempt, _) = start(handle, KITCHEN);
+        assert!(attempt > 0);
+        let failed_at = |address: &'static str| {
+            move |event: &Pending| {
+                event.kind == CAST_EVENT_CONNECT_FAILED && event.detail.contains(address)
+            }
+        };
+        events_until(handle, failed_at("127.0.0.2:8009"));
+        browse(
+            handle,
+            vec![BrowseEvent::Resolved(at(Ipv4Addr::new(127, 0, 0, 3)))],
+            false,
+        );
+        devices(handle);
+        let records = inside(handle).attempts[0]
+            .records
+            .clone()
+            .expect("a single device's records");
+        assert_eq!(
+            records.get().group,
+            [SocketAddr::new(IpAddr::from([127, 0, 0, 3]), DEVICE_PORT)]
+        );
+        // The session's next attempt goes where the entry moved.
+        events_until(handle, failed_at("127.0.0.3:8009"));
+        // SAFETY: a live handle.
+        unsafe { asc_cast_stop(handle) };
+        destroy(handle);
+    }
+
     // No record vouches for a device added by address, so it is offline
     // until a check reaches it, and again once it stops answering.
     // CAST_SPEC: C18
@@ -2805,6 +2859,37 @@ mod tests {
         assert!(devices(handle).is_empty());
         let (attempt, refused) = start(handle, &id);
         assert_eq!((attempt, refused), (0, CAST_REFUSED_UNKNOWN));
+        destroy(handle);
+    }
+
+    // The handle feeds every list change to the announcement rule: a change
+    // it already saw announces nothing a second time.
+    // CAST_SPEC: C81, C90
+    #[test]
+    fn list_changes_reach_the_announcement_rule() {
+        let handle = create();
+        let id = DeviceId::parse(KITCHEN).expect("id");
+        let key = DeviceKey::Id(id);
+        let seen_again = |handle| {
+            let cast = inside(handle);
+            cast.announcements
+                .note(&cast.list, &ListEvent::Updated(key))
+                .is_none()
+        };
+        let at = |last| {
+            record(
+                KITCHEN,
+                "Kitchen",
+                DEVICE_PORT,
+                Ipv4Addr::new(192, 0, 2, last),
+            )
+        };
+        browse(handle, vec![BrowseEvent::Resolved(at(6))], false);
+        devices(handle);
+        assert!(seen_again(handle), "found");
+        browse(handle, vec![BrowseEvent::Resolved(at(7))], false);
+        devices(handle);
+        assert!(seen_again(handle), "at another address");
         destroy(handle);
     }
 

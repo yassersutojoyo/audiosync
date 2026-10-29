@@ -16,7 +16,8 @@
 //!
 //! Invariants, from 2 s on unless said otherwise:
 //! - I1: no read runs dry.
-//! - I2: no drift skip or silence at any time, the start included.
+//! - I2: no drift skip or silence at any time, the start included, and no
+//!   re-anchor after a lasting lateness (S207).
 //! - I3: S206's slow-down makes up no shortage. A late-first output's I1
 //!   and I3 count from 1 s after its callbacks came on time. Neither counts
 //!   the callbacks on the falling half of a wander that brings them earlier
@@ -1055,7 +1056,7 @@ fn judge(case: &Case, outputs: &[Output], stall_marks: &[Vec<Marks>], lead_moved
         let mut trim = String::new();
         if !case.is_stall() {
             own[0] = dry > o.excused.0;
-            own[1] = corrections > 0;
+            own[1] = corrections > 0 || o.control.late_reanchors() > 0;
             own[2] = shortage > o.excused.1;
             own[4] = o.tail.count == 0 || spread > STEADY_MS;
             if d.wander_ms == 0.0 && d.ppm.abs() >= TRIM_JUDGED_PPM {

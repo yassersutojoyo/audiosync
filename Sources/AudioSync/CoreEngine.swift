@@ -396,6 +396,8 @@ final class CoreRenderer {
     var timeSteps: Int64 { Int64(clamping: asc_renderer_time_steps(handle)) }
     /// Any thread: the re-anchors at its delay after a stall (S207).
     var stallReanchors: UInt64 { asc_renderer_stall_reanchors(handle) }
+    /// Any thread: the re-anchors at its delay after a lasting lateness (S207).
+    var lateReanchors: UInt64 { asc_renderer_late_reanchors(handle) }
 }
 
 /// A lost speaker's start lead, still counted in the session lead until this

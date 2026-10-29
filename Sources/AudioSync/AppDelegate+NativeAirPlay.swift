@@ -572,6 +572,8 @@ extension AppDelegate {
             }
             return words
         case .unreachable: return text.airPlayTurnedOff(name: name, reason: .unreachable)
+        case .busy: return text.nativeAirPlayBusy(name: name)
+        case .refused: return text.nativeAirPlayRefused(name: name)
         case .cantPlay: return text.nativeAirPlayCantPlay(name: name)
         case .needsAirPlay2: return text.nativeAirPlayNeedsAirPlay2(name: name)
         case .timingUnavailable: return text.nativeAirPlayTimingUnavailable(name: name)
