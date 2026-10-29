@@ -766,6 +766,11 @@ do {
     run.write(nil, Keys.enabledAirPlay)
     check(AppSettings.ids(run.read(Keys.enabledLocal)) == ["Headphones"] && run.read(Keys.enabledAirPlay) == nil,
           "auto-connect skipped: the run reads its own changes")
+    var asks = PermissionAsks.load(run)
+    asks.accept(.microphone)
+    asks.save(run)
+    check(PermissionAsks.load(run).stored == ["microphone"],
+          "auto-connect skipped: an accepted permission explanation holds for the run")
     check(NSDictionary(dictionary: saved.values) == before,
           "auto-connect skipped: nothing the run changes is saved")
     let next = disk.load().atLaunch(holdingSpeakersOff: false)
@@ -1197,6 +1202,11 @@ do {
           "native off: a speaker that turned the session down unasked says it didn't accept")
     check(text.nativeAirPlayAsksForCode(name: "Den", reason: .unreachable, unasked: false) == nil,
           "native off: other reasons keep their own notice")
+    let unreachableOff = text.airPlayTurnedOff(name: "Den", reason: .unreachable)
+    check(text.nativeAirPlayBusy(name: "Den").contains("busy with another device") && !text.nativeAirPlayBusy(name: "Den").contains("network")
+            && text.nativeAirPlayRefused(name: "Den") == text.castProblem(.refused, name: "Den")
+            && text.nativeAirPlayBusy(name: "Den") != unreachableOff && text.nativeAirPlayRefused(name: "Den") != unreachableOff,
+          "native off: a busy speaker names the other device and a refusing one says it declined, neither sends the user to the network")
 }
 
 // MARK: Device volume — a turned-down or muted output shows a hint and a one-click fix (S192 to S202)
@@ -2692,6 +2702,9 @@ do {
             && model.apply(.error(id: "A1", .airPlay2Only, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsAirPlay2)
             && model.apply(.error(id: "A1", .timingUnavailable, retryMs: nil, detail: "")) == .turnOff("native:A1", .timingUnavailable),
           "native airplay: an error the sender won't retry turns the speaker off, with why")
+    check(model.apply(.error(id: "A1", .busy, retryMs: nil, detail: "")) == .turnOff("native:A1", .busy)
+            && model.apply(.error(id: "A1", .refused, retryMs: nil, detail: "")) == .turnOff("native:A1", .refused),
+          "native airplay: a speaker that answered busy or refused is off for that reason, not as unreachable")
     model.removed("A1")
     check(model.apply(.state(id: "A1", .playing, retryMs: nil)) == nil
             && model.apply(.error(id: "A1", .notResponding, retryMs: nil, detail: "")) == nil,
@@ -4369,6 +4382,12 @@ check(NowPlayingMonitor.meansNoTrack(-1728) && NowPlayingMonitor.meansNoTrack(-1
 check(!NowPlayingMonitor.meansNoTrack(-1743) && !NowPlayingMonitor.meansNoTrack(nil)
       && !NowPlayingMonitor.meansNoTrack(-2753),
       "AppleScript: Automation refused (-1743) and other errors are still logged")
+check(NowPlayingMonitor.scriptErrorLine(target: "com.spotify.client", code: -1743, error: "{NSAppleScriptErrorNumber = -1743;}")
+      == "[AudioSync] Automation access to com.spotify.client was denied",
+      "AppleScript: Automation refused (-1743) logs one line naming the player, not the error dictionary")
+check(NowPlayingMonitor.scriptErrorLine(target: "com.apple.Music", code: -2753, error: "{NSAppleScriptErrorNumber = -2753;}")
+      == "[AudioSync] AppleScript error: {NSAppleScriptErrorNumber = -2753;}",
+      "AppleScript: another error (-2753) still logs the error dictionary")
 
 // MARK: Track info — a paused player keeps its track on receivers until it stops or quits
 do {
@@ -5291,7 +5310,7 @@ do {
     check(gone.action == .nothing && gone.steps == [.absent],
           "zones: a zone with no member listed does nothing on a click")
 
-    // covers: S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel)
+    // covers: S259, S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel)
     let presetText = UIStrings()
     let presetFlat = [Double](repeating: 0, count: Equalizer.frequencies.count)
     let livingZone = SpeakerZone(id: "z1", name: "Living Room", members: ["lc:usb:out", "lc:tv"], volume: 60)
@@ -5436,6 +5455,12 @@ do {
     fewBands.gains = [1, 2, 3]
     check(StoredEqualizer.decode(StoredEqualizer.encode(fewBands)) == Equalizer.Settings(),
           "equalizer storage: settings with another band count give the defaults")
+    var outOfRange = tuned
+    outOfRange.preamp = 60; outOfRange.gains[1] = -40
+    let clamped = StoredEqualizer.decode(StoredEqualizer.encode(outOfRange))
+    check(clamped.preamp == 12 && clamped.gains[1] == -12 && clamped.gains[0] == 6,
+          "equalizer storage: an out-of-range preamp or gain is clamped to ±12 dB (S23)",
+          "preamp \(clamped.preamp), gains \(clamped.gains)")
 
     func fades(content: CGFloat, top: CGFloat, height: CGFloat = 400) -> ScrollEdgeFades {
         ScrollEdgeFades.of(contentHeight: content, visibleTop: top, visibleHeight: height, fade: 12)
@@ -6062,6 +6087,16 @@ do {
     check(keeps(listed: false, published: false) && keeps(listed: true, published: false)
             && !keeps(listed: true, published: true) && !keeps(listed: false, published: false, now: 15),
           "local delay: a lost output's start lead counts until its new renderer publishes one, 10 s at most")
+    // A restart holds the lead with no brief loss: the next check still comes
+    // in 0.5 s while it plays again, and at the 10 s bound while it doesn't.
+    let restarted = LocalBriefLoss()
+    let whileOff = restarted.nextCheck(now: 21, held: [bt: 20], playing: [r])
+    let whilePlaying = restarted.nextCheck(now: 23, held: [bt: 20], playing: [r, bt])
+    let released = restarted.nextCheck(now: 24, held: [:], playing: [r, bt])
+    check(whileOff == 30 && whilePlaying == 23.5 && released == nil,
+          "local delay: a restarted output's held start lead is checked until it publishes, 10 s at most",
+          "while off \(String(describing: whileOff)), while playing \(String(describing: whilePlaying)), "
+            + "released \(String(describing: released))")
 
     // covers: S178, S181 (the AirPlay delay field)
     var native = AirPlayDelay(adjustmentMs: 250)
@@ -6841,6 +6876,51 @@ do {
           "status line: no time passed gives a rate of 0, and no outputs say so", idle)
 }
 
+// MARK: Status line: each output's device anchor over the span (DeviceAnchor, AnchorSpan, S334)
+// covers: S334 (the device anchor in the status line)
+do {
+    // 32 kHz keeps every time a whole ns, so the anchors are exact.
+    let nsPerFrame = 1e9 / 32_000
+    // Callbacks `range` of 512 frames on time, against the start's first; with `stepAt`, the host
+    // time steps 150 ms there and stays.
+    func span(_ range: Range<Int>, stepAt: Int?) -> AnchorSpan? {
+        var anchors: [Int64] = []
+        for i in [0] + Array(range) {
+            var stamp = AudioTimeStamp()
+            stamp.mSampleTime = Double(i * 512)
+            stamp.mFlags = [.sampleTimeValid, .hostTimeValid]
+            let stepNs: Double = stepAt.map { i >= $0 ? 150e6 : 0 } ?? 0
+            let hostNs = UInt64((5e12 + Double(i * 512) * nsPerFrame + stepNs).rounded())
+            if let anchor = DeviceAnchor.ns(stamp, hostNs: hostNs, nsPerFrame: nsPerFrame) { anchors.append(anchor) }
+        }
+        let spanned = anchors.dropFirst()
+        guard let base = anchors.first, let low = spanned.min(), let high = spanned.max(), let last = spanned.last else { return nil }
+        return AnchorSpan(base: base, low: low, high: high, last: last)
+    }
+    let steady = span(0..<400, stepAt: nil)
+    check(steady.map { $0.high - $0.low < 10_000 } == true && steady?.text == "device anchor min +0.0 max +0.0 last +0.0 ms",
+          "device anchor: a device on time holds its anchor flat", "\(String(describing: steady))")
+    let stepped = span(0..<300, stepAt: 200)
+    check(stepped.map { abs(Double($0.high - $0.low) / 1e6 - 150) < 0.01 } == true
+              && stepped?.text == "device anchor min +0.0 max +150.0 last +150.0 ms",
+          "device anchor: a 150 ms step that stays reads as max - min of 150 ms", "\(String(describing: stepped))")
+    let after = span(300..<400, stepAt: 200)
+    check(after?.text == "device anchor min +150.0 max +150.0 last +150.0 ms",
+          "device anchor: the next span still shows the step against the start's first anchor", "\(String(describing: after))")
+    var untimed = AudioTimeStamp()
+    untimed.mSampleTime = 512
+    untimed.mFlags = [.sampleTimeValid]
+    check(DeviceAnchor.ns(untimed, hostNs: 5_000_000_000, nsPerFrame: nsPerFrame) == nil
+              && DeviceAnchor.ns(AudioTimeStamp(), hostNs: 5_000_000_000, nsPerFrame: 0) == nil,
+          "device anchor: none without a host time or a rate")
+    let line = SessionTally.statusText(
+        since: SessionTally(),
+        now: SessionTally(outputs: ["BT": SessionTally.Output(number: 1, anchor: stepped)]), seconds: 5)
+    check(line.hasSuffix("; output 1: 0 frames, starved 0 (0 frames), drift skips 0, drift silences 0, "
+                         + "late callbacks 0, IO overloads 0, device anchor min +0.0 max +150.0 last +150.0 ms"),
+          "status line: an output with timed callbacks carries its device anchor", line)
+}
+
 // MARK: Output stall: a render callback that stops while its device stays alive (OutputStall.swift, S334)
 // covers: S334 (frames against the uptime clock, per output; the reopen, its retries and the debug line)
 do {
@@ -7016,6 +7096,29 @@ do {
     check(asFormat.isEmpty && asStall == ["A"] && inARow == .retry(atS: 113),
           "output format: a format change during a stall trial reopens as a format change and leaves the trial as it was",
           "\(asFormat) \(asStall) \(inARow)")
+    // covers: S325 (measured: a Bluetooth output re-added after its restart ran 44100 Hz on a 48000 Hz device)
+    let stereo44 = F(rate: 44_100, channels: 2)
+    let moved = OutputFormatWatch.atStart(unitRate: 44_100, bound: stereo44, now: stereo48)
+    let staleUnit = OutputFormatWatch.atStart(unitRate: 44_100, bound: stereo48, now: stereo48)
+    let settled = OutputFormatWatch.atStart(unitRate: 44_100, bound: stereo44, now: stereo44)
+    let unitUnread = OutputFormatWatch.atStart(unitRate: 0, bound: stereo48, now: stereo48)
+    let unread = OutputFormatWatch.atStart(unitRate: 44_100, bound: nil, now: stereo48)
+    check(moved.baseline == stereo44 && moved.verdict == .reopen(old: stereo44, new: stereo48)
+            && staleUnit.verdict == .reopen(old: stereo44, new: stereo48)
+            && settled.baseline == stereo44 && settled.verdict == .keep
+            && unitUnread.baseline == stereo48 && unitUnread.verdict == .keep
+            && unread.baseline == stereo48 && unread.verdict == .keep,
+          "output format: a device that moves to another rate while its output starts reopens it once the watch listens",
+          "\(moved) \(staleUnit) \(settled) \(unitUnread) \(unread)")
+    var reopens = StartReopens()
+    let first = reopens.take("A"), again = reopens.take("A"), other = reopens.take("B")
+    reopens.settle(enabled: ["A", "B"], listed: ["B"])
+    let afterLeaving = reopens.take("A")
+    reopens.settle(enabled: ["A"], listed: ["A", "B"])
+    let afterSwitchOff = reopens.take("B"), stillUsed = reopens.take("A")
+    check(first && !again && other && afterLeaving && afterSwitchOff && !stillUsed,
+          "output format: a start check reopens an output once, then keeps it until its device leaves or it is switched off",
+          "\(first) \(again) \(other) \(afterLeaving) \(afterSwitchOff) \(stillUsed)")
 }
 
 // MARK: Fades — stops and switch-offs wait for the outputs' fade-outs (OutputFades.swift, S185, S186)
@@ -7333,6 +7436,7 @@ do {
             removed.append(uid)
             activeOutputUIDs.removeAll { $0 == uid }
         }
+        func detachOutputs(uids: [String], keepingLeads: Bool) { for uid in uids { detachOutput(uid: uid) } }
         func setGain(uid: String, g: Double) {
             regained.append(uid)
             gains[uid] = g
@@ -7524,6 +7628,7 @@ do {
         func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {}
         func detachOutput(uid: String) { calls.append([uid]) }
         func detachOutputs(uids: [String]) { calls.append(uids) }
+        func detachOutputs(uids: [String], keepingLeads: Bool) { calls.append(uids) }
         func setGain(uid: String, g: Double) {}
     }
     let batching = BatchingEngine()
@@ -7560,6 +7665,23 @@ do {
             && afterRestart?.enabled == [] && afterRestart?.notices.map(\.uid) == ["usb"],
           "EC1 new ID: a restart that won't start is reported and switched off, with no device left bound",
           "removed \(refused.removed), applied \(failedRestart), report \(String(describing: afterRestart))")
+
+    // covers: S328 (a restart keeps the output's start lead in the session lead; a switch-off lets it go)
+    final class LeadNotingEngine: LocalOutputEngine {
+        var activeOutputUIDs: [String] = ["usb", "bt"]
+        var keptLead: [String: Bool] = [:]
+        func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {}
+        func detachOutput(uid: String) { keptLead[uid] = false }
+        func detachOutputs(uids: [String]) { for uid in uids { keptLead[uid] = false } }
+        func detachOutputs(uids: [String], keepingLeads: Bool) { for uid in uids { keptLead[uid] = keepingLeads } }
+        func setGain(uid: String, g: Double) {}
+    }
+    let leads = LeadNotingEngine()
+    _ = LocalOutputSync.apply(enabled: ["usb"], listing: [usbAgain], to: leads, bound: ["usb": 52],
+                              holdBacks: [:], gain: { _ in 1 })
+    check(leads.keptLead == ["usb": true, "bt": false],
+          "S328 restart: an output restarted on a new device ID keeps its start lead, one switched off lets it go",
+          "kept lead \(leads.keptLead)")
 }
 
 // MARK: The engine's control interface (S112) and the thread it is used on (S113)
@@ -7620,6 +7742,7 @@ do {
             note("detach \(uids)")
             activeOutputUIDs.removeAll { uids.contains($0) }
         }
+        func detachOutputs(uids: [String], keepingLeads: Bool) { detachOutputs(uids: uids) }
         func setGain(uid: String, g: Double) { note("gain \(uid) \(g)") }
     }
     let usb = AudioDevices.Device(id: 52, name: "USB DAC", uid: "usb", transport: kAudioDeviceTransportTypeUSB)
@@ -10775,20 +10898,21 @@ do {
     let suite = "permissions-logictest-\(ProcessInfo.processInfo.processIdentifier)"
     if let defaults = UserDefaults(suiteName: suite) {
         defaults.removePersistentDomain(forName: suite)
-        let firstRun = PermissionAsks.load(defaults)
+        let store = SettingsStore(read: { defaults.object(forKey: $0) }, write: { defaults.set($0, forKey: $1) })
+        let firstRun = PermissionAsks.load(store)
         defaults.set(["local-speaker"], forKey: AppSettings.Keys.enabledLocal)
-        let relaunch = PermissionAsks.load(defaults)
+        let relaunch = PermissionAsks.load(store)
         check(!firstRun.usedBefore && !relaunch.usedBefore
                 && relaunch.step(.localNetwork, state: .unknown, userAction: false) == .offer,
               "permissions: settings a fresh install saved don't skip the explanation on the next launch")
         defaults.removePersistentDomain(forName: suite)
         defaults.set(70, forKey: AppSettings.Keys.master)
-        let updated = PermissionAsks.load(defaults)
+        let updated = PermissionAsks.load(store)
         defaults.removeObject(forKey: AppSettings.Keys.master)
-        check(updated.usedBefore && PermissionAsks.load(defaults).usedBefore,
+        check(updated.usedBefore && PermissionAsks.load(store).usedBefore,
               "permissions: an update from a version without explanations is recognized once and remembered")
         defaults.set(["microphone", 7] as [Any], forKey: PermissionAsks.defaultsKey)
-        check(PermissionAsks.load(defaults).stored == ["microphone"],
+        check(PermissionAsks.load(store).stored == ["microphone"],
               "permissions: a stored entry that isn't a name is dropped alone")
         defaults.removePersistentDomain(forName: suite)
     } else {

@@ -201,7 +201,9 @@ enum NativeSpeakerEvent: Equatable {
         /// Why a speaker it turns off is off.
         var turnOff: NativeTurnOff {
             switch self {
-            case .notResponding, .connectionLost, .busy, .refused: return .unreachable
+            case .notResponding, .connectionLost: return .unreachable
+            case .busy: return .busy
+            case .refused: return .refused
             case .passwordRequired, .wrongPassword: return .needsPassword
             case .pairingRequired: return .needsCode
             // A waiting speaker never goes off; a pairing that ends with a
@@ -314,8 +316,12 @@ enum NativeTurnOff: Equatable {
     /// It asks for a password AudioSync doesn't have, and wasn't turned on
     /// by the user just now.
     case needsPassword
-    /// It didn't answer, or turned the session down, and the sender gave up.
+    /// It didn't answer, or lost the connection, and the sender gave up.
     case unreachable
+    /// It answered busy, and the sender gave up.
+    case busy
+    /// It turned the session down, and the sender gave up.
+    case refused
     /// This sender can't play to it.
     case cantPlay
     /// It plays only AirPlay 2, which the AirPlay 2 switch turns on at the next launch.

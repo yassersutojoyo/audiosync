@@ -80,6 +80,9 @@ pub struct Tray {
     /// The icon variant showing now, so it is replaced only when it changes.
     shown: Cell<Option<IconChoice>>,
     running: Cell<bool>,
+    /// A tooltip not shown yet: Windows refuses it while Explorer restarts,
+    /// and the icon it adds again would keep the old one.
+    tooltip: RefCell<Option<String>>,
     #[cfg(windows)]
     theme_timer: slint::Timer,
 }
@@ -174,6 +177,7 @@ impl Tray {
             login_item,
             shown: Cell::new(Some(choice)),
             running: Cell::new(state.running),
+            tooltip: RefCell::new(None),
             #[cfg(windows)]
             theme_timer: slint::Timer::default(),
         });
@@ -227,6 +231,7 @@ impl Tray {
             tray.theme_timer
                 .start(slint::TimerMode::Repeated, THEME_CHECK, move || {
                     if let Some(tray) = weak.upgrade() {
+                        tray.show_tooltip();
                         tray.show_icon();
                     }
                 });
@@ -240,9 +245,8 @@ impl Tray {
             return;
         };
         let strings = app.strings();
-        let _ = self
-            .icon
-            .set_tooltip(Some(view::tray_tooltip(&strings, state)));
+        *self.tooltip.borrow_mut() = Some(view::tray_tooltip(&strings, state));
+        self.show_tooltip();
         self.toggle_item.set_text(if state.running {
             strings.get_menu_turn_streaming_off()
         } else {
@@ -251,6 +255,12 @@ impl Tray {
         self.login_item.set_checked(app.launch_at_login());
         self.running.set(state.running);
         self.show_icon();
+    }
+
+    fn show_tooltip(&self) {
+        show_pending(&mut self.tooltip.borrow_mut(), |text| {
+            self.icon.set_tooltip(Some(text))
+        });
     }
 
     /// Shows the icon variant for the current theme, scale and state, if it
@@ -263,6 +273,15 @@ impl Tray {
         {
             self.shown.set(Some(choice));
         }
+    }
+}
+
+/// Hands `pending` to `set`, keeping it for the next try when `set` fails.
+fn show_pending<E>(pending: &mut Option<String>, set: impl FnOnce(&str) -> Result<(), E>) {
+    if let Some(text) = pending.take()
+        && set(&text).is_err()
+    {
+        *pending = Some(text);
     }
 }
 
@@ -421,5 +440,24 @@ fn place_flyout(app: &App, icon: Bounds) {
     let origin = slint::PhysicalPosition::new(x.round() as i32, y.round() as i32);
     if flyout.position() != origin {
         flyout.set_position(origin);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::show_pending;
+
+    #[test]
+    fn a_tooltip_windows_refuses_is_kept_until_it_is_shown() {
+        let mut pending = Some("Streaming".to_owned());
+        show_pending(&mut pending, |_| Err(()));
+        assert_eq!(pending.as_deref(), Some("Streaming"));
+        let mut shown = None;
+        show_pending(&mut pending, |text| {
+            shown = Some(text.to_owned());
+            Ok::<(), ()>(())
+        });
+        assert_eq!(shown.as_deref(), Some("Streaming"));
+        assert_eq!(pending, None);
     }
 }

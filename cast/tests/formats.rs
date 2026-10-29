@@ -190,6 +190,7 @@ fn config(device: &FakeDevice, format: StreamFormat) -> SessionConfig {
         metadata: Metadata::default(),
         artwork: None,
         group: None,
+        records: None,
         fingerprints: None,
     }
 }

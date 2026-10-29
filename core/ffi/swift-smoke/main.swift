@@ -41,31 +41,38 @@ func versionVolumeAndEqualizer() {
     gains[5] = 6  // the 1 kHz band
     check(asc_eq_set_settings(eq, true, 0, gains), "settings accepted")
 
-    // One second of a 1 kHz sine at amplitude 0.25 in 512-frame stereo blocks;
-    // RMS over the settled second half.
+    // One second of a sine at amplitude 0.25 in 512-frame stereo blocks; RMS
+    // over the settled second half.
     var block = [Float](repeating: 0, count: frames * 2)
-    var energyIn = 0.0
-    var energyOut = 0.0
-    let blocks = Int(rate) / frames
-    for blockIndex in 0..<blocks {
-        for i in 0..<frames {
-            let t = Double(blockIndex * frames + i) / rate
-            let x = Float(0.25 * sin(2 * Double.pi * 1000 * t))
-            block[2 * i] = x
-            block[2 * i + 1] = x
-        }
-        let input = block
-        block.withUnsafeMutableBufferPointer { buffer in
-            asc_eq_process(eq, buffer.baseAddress, frames)
-        }
-        if blockIndex >= blocks / 2 {
+    func levelDB(_ hz: Double) -> Double {
+        var energyIn = 0.0
+        var energyOut = 0.0
+        let blocks = Int(rate) / frames
+        for blockIndex in 0..<blocks {
             for i in 0..<frames {
-                energyIn += Double(input[2 * i] * input[2 * i])
-                energyOut += Double(block[2 * i] * block[2 * i])
+                let t = Double(blockIndex * frames + i) / rate
+                let x = Float(0.25 * sin(2 * Double.pi * hz * t))
+                block[2 * i] = x
+                block[2 * i + 1] = x
+            }
+            let input = block
+            block.withUnsafeMutableBufferPointer { buffer in
+                asc_eq_process(eq, buffer.baseAddress, frames)
+            }
+            if blockIndex >= blocks / 2 {
+                for i in 0..<frames {
+                    energyIn += Double(input[2 * i] * input[2 * i])
+                    energyOut += Double(block[2 * i] * block[2 * i])
+                }
             }
         }
+        return 10 * log10(energyOut / energyIn)
     }
-    let gainDB = 10 * log10(energyOut / energyIn)
+    // The core takes the curve's peak off the preamp (S26), so the band reads
+    // against 16 kHz, which a 1 kHz band leaves at 0 dB.
+    let reference = levelDB(16_000)
+    check(abs(reference + 6) < 0.2, String(format: "the 6 dB headroom puts 16 kHz at %.2f dB", reference))
+    let gainDB = levelDB(1000) - reference
     check(abs(gainDB - 6) < 0.2, String(format: "+6 dB at 1 kHz measures %.2f dB", gainDB))
 
     block[0] = .nan

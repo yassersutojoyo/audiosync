@@ -13,7 +13,34 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  swift-changes:
+    # Off main, integ/* trains and release/ branches, the macOS build runs only for a push that touches the Swift app.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      swift: ${{ steps.diff.outputs.swift }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Does this push touch Sources/, Tests/, Package.swift or build.sh?
+        id: diff
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = 0000000000000000000000000000000000000000 ]; then
+            BEFORE=$(git merge-base origin/main HEAD)
+          fi
+          files=$(git diff --name-only "$BEFORE" HEAD)
+          if printf '%s\n' "$files" | grep -qE '^(Sources/|Tests/|Package\.swift$|build\.sh$)'; then
+            echo swift=true >> "$GITHUB_OUTPUT"
+          else
+            echo swift=false >> "$GITHUB_OUTPUT"
+          fi
+
   build-and-test:
+    needs: swift-changes
+    if: ${{ !cancelled() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/') || needs.swift-changes.outputs.swift == 'true') }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
@@ -167,6 +194,7 @@ jobs:
     # the core, signing with the local identity make-local-cert.sh
     # creates, then the bundle is checked and started once, and a local
     # identity that can't sign must stop the build.
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/')
     runs-on: macos-15
     timeout-minutes: 45
     steps:

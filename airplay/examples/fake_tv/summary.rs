@@ -1,13 +1,13 @@
 //! The plain lines `fake_tv --summary` prints: one per event a dry-run sheet
-//! judges (pairing, SETUP, RECORD, FLUSH, TEARDOWN, volume either way), each
-//! with its running count, so a cell reads as PASS or FAIL without the raw
-//! request log. Shared with `tests/fake_tv_summary.rs`.
+//! judges (pairing, SETUP, RECORD, SETPEERS, FLUSH, TEARDOWN, volume either
+//! way), each with its running count, so a cell reads as PASS or FAIL
+//! without the raw request log. Shared with `tests/fake_tv_summary.rs`.
 
 use std::collections::HashMap;
 
 use audiosync_airplay::rtsp::{Method, Request};
 
-use crate::common::ap2::request_key;
+use crate::common::ap2::{read_value, request_key};
 use crate::common::hap::{item, untlv};
 
 /// The first volume set from the app after `vol`, this close to the level
@@ -93,6 +93,12 @@ impl Summary {
             }
             Method::Setup => self.line(at, "SETUP session", &refused),
             Method::Record => self.line(at, "RECORD", &format!(" (play starts){refused}")),
+            Method::SetPeers => {
+                let peers = read_value(&request.body)
+                    .and_then(plist::Value::into_array)
+                    .map_or(0, |peers| peers.len());
+                self.line(at, "SETPEERS", &format!(" (peers: {peers}){refused}"))
+            }
             Method::Flush => self.line(at, "FLUSH", &format!(" (pause){refused}")),
             Method::Teardown => self.line(at, "TEARDOWN", &format!(" (stream ends){refused}")),
             Method::SetParameter => return self.volume_set(at, &request.body),

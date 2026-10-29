@@ -173,3 +173,24 @@ fn the_app_undoing_the_vol_level_is_an_overwrite() {
         "only the first set after a vol answers it"
     );
 }
+
+#[test]
+fn setpeers_shows_how_many_addresses_it_names() {
+    let mut summary = Summary::default();
+    let addresses = ["127.0.0.1", "127.0.0.2"]
+        .map(|address| Value::String(address.to_owned()))
+        .to_vec();
+    let setpeers = request(
+        Method::SetPeers,
+        "rtsp://tv/1",
+        &plist(Value::Array(addresses)),
+    );
+    assert_eq!(
+        summary.request(3.0, &setpeers, 200, None),
+        Some("[    3.000] SETPEERS #1 (peers: 2)".to_owned())
+    );
+    assert_eq!(
+        summary.request(4.0, &setpeers, 500, None),
+        Some("[    4.000] SETPEERS #2 (peers: 2) - refused with status 500".to_owned())
+    );
+}
