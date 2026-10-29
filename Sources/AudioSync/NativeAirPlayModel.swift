@@ -573,7 +573,7 @@ struct NativeAirPlayModel {
             }
         case .gone(let id, _):
             receivers.removeValue(forKey: id)
-            receiverLatency.forget(id)
+            if states[id] == nil, memberOf[id].map({ states[$0] != nil }) != true { receiverLatency.forget(id) }
         }
         pruneMembers()
     }
@@ -1030,6 +1030,7 @@ struct NativeAirPlayModel {
         states.removeValue(forKey: id)
         waiting.removeValue(forKey: id)
         retriedErrors.removeValue(forKey: id)
+        for left in [id] + members(of: id) where receivers[left] == nil { receiverLatency.forget(left) }
         pruneMembers()
     }
 
@@ -1447,7 +1448,7 @@ struct NativeReceiverLatency {
     }
 
     /// R_s in microseconds by receiver ID, from this run's latency events;
-    /// never stored, and dropped when discovery loses the receiver.
+    /// never stored, and dropped once the receiver is out of both discovery and the sender.
     private(set) var reportedUs: [String: Int64] = [:]
     /// The Lf last given to the sender.
     private(set) var frames: UInt32 = defaultFrames

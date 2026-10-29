@@ -3531,6 +3531,34 @@ do {
                 && pair.receiverLatency.estimateMs(of: members) == 1600,
               "airplay latency: covers every member of a target", "\(members)")
 
+        // The sender reports R_s only at a speaker's first sound, so a lapse in discovery must not lose it.
+        var lapse = NativeAirPlayModel()
+        lapse.apply(.appeared(NativeReceiver(id: "A1", name: "Kitchen", model: "", availability: .available, reason: nil,
+                                             hints: [])))
+        lapse.added("A1")
+        _ = lapse.apply(.state(id: "A1", .playing, retryMs: nil))
+        lapse.receiverLatency.report("A1", us: 500_000)
+        lapse.apply(.gone(id: "A1", name: nil))
+        let kept = lapse.receiverLatency.reportedUs["A1"]
+        lapse.removed("A1")
+        check(kept == 500_000 && lapse.receiverLatency.reportedUs["A1"] == nil,
+              "airplay latency: a playing speaker that leaves discovery keeps its R_s until it leaves the sender",
+              "\(String(describing: kept))")
+
+        var pairLapse = NativeAirPlayModel()
+        pairLapse.apply(.appeared(NativeReceiver(id: "L1", name: "Left", model: "", availability: .available, reason: nil,
+                                                 hints: [], target: "pair:5f0c")))
+        pairLapse.apply(.appeared(NativeReceiver(id: "R1", name: "Right", model: "", availability: .available, reason: nil,
+                                                 hints: [], target: "pair:5f0c")))
+        pairLapse.added("pair:5f0c")
+        pairLapse.receiverLatency.report("R1", us: 1_600_000)
+        pairLapse.apply(.gone(id: "R1", name: nil))
+        let memberKept = pairLapse.receiverLatency.reportedUs["R1"]
+        pairLapse.removed("pair:5f0c")
+        check(memberKept == 1_600_000 && pairLapse.receiverLatency.reportedUs["R1"] == nil,
+              "airplay latency: a pair member that leaves discovery keeps its R_s until the pair leaves the sender",
+              "\(String(describing: memberKept))")
+
         var estimate = NativeReceiverLatency()
         estimate.report("A1", us: 220_000)
         let one = estimate.updateEstimate(rows: [["A1"]], canChange: true)
