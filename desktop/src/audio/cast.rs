@@ -1797,6 +1797,8 @@ pub mod tests {
         pub targets: Vec<Vec<SocketAddr>>,
         pub events: VecDeque<HostEvent>,
         pub browse: VecDeque<BrowseEvent>,
+        /// The mDNS browser ended: discovery reads as failed.
+        pub discovery_stopped: bool,
         next: u64,
     }
 
@@ -1907,7 +1909,11 @@ pub mod tests {
         }
 
         fn discovery(&self) -> CastDiscovery {
-            CastDiscovery::Browsing
+            if self.state().discovery_stopped {
+                CastDiscovery::Failed
+            } else {
+                CastDiscovery::Browsing
+            }
         }
 
         fn shutdown(&mut self) -> bool {
@@ -2150,6 +2156,29 @@ pub mod tests {
             problem: CastProblem::Busy,
         }));
         assert!(!cast.speakers()[2].enabled);
+    }
+
+    // covers: S339
+    #[test]
+    fn a_speaker_that_left_is_turned_off_with_a_notice_when_discovery_stops_and_another_can_go_on()
+    {
+        let (fake, mut cast) = listed();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        fake.withdraw(KITCHEN, "Kitchen");
+        cast.poll();
+        assert!(cast.is_on());
+
+        fake.state().discovery_stopped = true;
+        let events = cast.poll();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                BackendEvent::CastFailed { id, problem: _ } if id == KITCHEN
+            )),
+            "{events:?}"
+        );
+        assert!(!cast.is_on());
+        assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
     }
 
     fn members(device: &str, members: Vec<GroupMember>) -> HostEvent {
