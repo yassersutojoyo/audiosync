@@ -2831,6 +2831,7 @@ The release side:
 | an_input_device_away_follows_the_same_device_listed_under_a_new_id (`desktop/src/audio/controller.rs`) | S329 |
 | an_input_device_away_never_follows_another_device (`desktop/src/audio/controller.rs`) | S329 |
 | an_input_device_back_under_a_new_endpoint_id_becomes_the_source (`desktop/src/adapter.rs`) | S329 |
+| an_input_followed_by_a_source_listing_opens_on_its_channel_pair (`desktop/src/adapter.rs`) | S329 |
 | an_input_device_away_never_follows_a_twin_plugged_in_while_it_played (`desktop/src/adapter.rs`) | S329 |
 | an_unwatched_app_that_leaves_the_process_list_quits_the_source_within_one_check (`desktop/src/audio/controller.rs`) | S327 |
 | an_unwatched_app_whose_process_id_returns_with_another_start_time_counts_as_quit (`desktop/src/audio/controller.rs`) | S327 |

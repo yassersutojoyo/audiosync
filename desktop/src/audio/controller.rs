@@ -1322,6 +1322,11 @@ impl<D: Driver> Controller<D> {
                      {endpoint_id}): the capture follows it"
                 )
             });
+            // The UI hands the pair over too, but only after a try this
+            // listing may already have made due.
+            if let Some(pair) = self.input_pairs.remove(&endpoint_id) {
+                self.input_pairs.insert(to.clone(), pair);
+            }
             self.inputs_left_behind.insert(endpoint_id.clone());
             let name = listed
                 .iter()
