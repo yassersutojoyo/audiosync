@@ -10280,6 +10280,7 @@ mod tests {
         assert_eq!(app.snapshot().zones.len(), zones, "and made no zone");
     }
 
+    // covers: S270
     #[test]
     fn curves_are_saved_picked_renamed_and_deleted_and_custom_is_no_entry() {
         let mut mock = MockBackend::new();
@@ -10354,6 +10355,7 @@ mod tests {
         assert_eq!(eq_window.get_preset_index(), 0, "Reset reads Flat");
     }
 
+    // covers: S270
     #[test]
     fn a_saved_curve_with_a_presets_gains_can_be_picked_renamed_and_deleted() {
         let app = app_over(MockBackend::new());

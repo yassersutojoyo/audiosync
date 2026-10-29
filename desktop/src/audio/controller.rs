@@ -4976,7 +4976,7 @@ mod tests {
         assert_eq!(backend.driver().renderers_faded(), 2);
     }
 
-    // covers: S114
+    // covers: S114, S121
     #[test]
     fn a_failed_start_leaves_nothing_running_and_every_feed_free() {
         use crate::audio::cast::tests::{FakeCast, KITCHEN};
@@ -7897,6 +7897,7 @@ mod tests {
         assert_eq!(backend.driver().renderers_faded(), 2);
     }
 
+    // covers: S17
     #[test]
     fn frames_captured_count_from_each_start() {
         let mut backend = backend();

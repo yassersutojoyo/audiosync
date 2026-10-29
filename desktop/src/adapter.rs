@@ -6017,6 +6017,7 @@ mod tests {
         );
     }
 
+    // covers: S122
     #[test]
     fn turning_a_speaker_on_starts_streaming_to_it() {
         let mut adapter = adapter();
@@ -6173,6 +6174,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S122
     #[test]
     fn switching_streaming_off_keeps_the_speakers_on() {
         let mut adapter = adapter();
@@ -6460,6 +6462,7 @@ mod tests {
         assert_eq!(adapter.current_settings().speaker_zones[0].volume, 100.0);
     }
 
+    // covers: S142
     #[test]
     fn an_app_that_quits_stops_streaming_and_stays_chosen() {
         let mut adapter = adapter();
@@ -6708,6 +6711,7 @@ mod tests {
         assert!(adapter.snapshot().running);
     }
 
+    // covers: S121
     #[test]
     fn capture_that_cant_start_leaves_streaming_off_with_a_notice() {
         let mut adapter = adapter();
@@ -9083,6 +9087,7 @@ mod tests {
         assert!(state.running);
     }
 
+    // covers: S312
     #[test]
     fn an_airplay2_speaker_row_says_airplay_2_only_with_the_switch_on() {
         let (adapter, _, loft) = airplay2_adapter(false);
@@ -9109,6 +9114,7 @@ mod tests {
     /// Under the AirPlay 2 flag (spec S312) the sender's path is on with the
     /// switch off: an AirPlay 2 only receiver plays over AirPlay 2, one that
     /// speaks both stays on AirPlay 1 until the switch prefers AirPlay 2.
+    // covers: S312
     #[test]
     fn under_the_airplay2_flag_only_the_switch_moves_a_dual_receiver_to_airplay2() {
         for (preferred, dual_kind) in [(false, SpeakerKind::AirPlay), (true, SpeakerKind::AirPlay2)]
@@ -13381,6 +13387,7 @@ mod tests {
         assert_eq!(state.cast_list, CastList::Quiet);
     }
 
+    // covers: S243
     #[test]
     fn a_cast_rows_id_is_the_cores_cast_key() {
         let (adapter, _) = cast_adapter();
@@ -13689,6 +13696,7 @@ mod tests {
         ended_as_a_change(&mut adapter);
     }
 
+    // covers: S71, S249
     #[test]
     fn a_zone_volume_change_reaches_the_playing_members_as_a_master_change_does() {
         let (mut adapter, fake) = cast_adapter();

@@ -1842,6 +1842,7 @@ mod tests {
         );
     }
 
+    // covers: S243
     #[test]
     fn groups_and_auto_connect_keep_leaving_cast_keys_out() {
         let text = r#"{"version": 2,
@@ -2087,6 +2088,7 @@ mod tests {
         assert_eq!(keys(&value["zones"][0]), ["id", "volume"]);
     }
 
+    // covers: S270
     #[test]
     fn equalizer_curves_are_read_leniently_and_left_out_while_none_is() {
         let text = r#"{"version": 2, "master_volume": 40, "equalizer_curves": [

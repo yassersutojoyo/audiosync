@@ -8550,7 +8550,7 @@ pub mod tests {
         row_level(info.device_level)
     }
 
-    // covers: S290
+    // covers: S289, S290
     #[test]
     fn the_row_shows_the_device_level_rounded_down() {
         let fake = FakeAirPlay::new();
@@ -8568,7 +8568,7 @@ pub mod tests {
         }
     }
 
-    // covers: S290
+    // covers: S289, S290
     #[test]
     fn a_row_move_sends_the_row_and_stores_the_row_over_k() {
         let fake = FakeAirPlay::new();
@@ -8795,6 +8795,7 @@ pub mod tests {
         );
     }
 
+    // covers: S249
     #[test]
     fn a_zone_volume_reaches_a_playing_speaker_and_its_read_back_goes_through_it() {
         let fake = FakeAirPlay::new();
