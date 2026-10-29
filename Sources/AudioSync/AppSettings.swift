@@ -410,19 +410,17 @@ struct SettingsStore {
         write(inputPairs.isEmpty ? nil : inputPairs, Keys.inputChannelPairs)
     }
 
-    func save(groups: [SpeakerGroup]) {
-        guard let data = try? JSONEncoder().encode(groups) else { return }
-        write(data, Keys.groups)
-    }
+    func save(groups: [SpeakerGroup]) { writeJSON(groups, Keys.groups) }
 
-    func save(zones: [SpeakerZone]) {
-        guard let data = try? JSONEncoder().encode(zones) else { return }
-        write(data, Keys.zones)
-    }
+    // Saved as load keeps them: JSONEncoder throws on a volume that is NaN or infinite.
+    func save(zones: [SpeakerZone]) { writeJSON(SpeakerZone.normalized(zones), Keys.zones) }
 
-    func save(presets: [SpeakerPreset]) {
-        guard let data = try? JSONEncoder().encode(presets) else { return }
-        write(data, Keys.presets)
+    func save(presets: [SpeakerPreset]) { writeJSON(SpeakerPreset.normalized(presets), Keys.presets) }
+
+    private func writeJSON<T: Encodable>(_ value: T, _ key: String) {
+        do { write(try JSONEncoder().encode(value), key) } catch {
+            DebugTrace.log("[AudioSync] settings: \(key) not saved: \(error)")
+        }
     }
 
     /// Removed once no speaker has a name of the user's.
