@@ -534,6 +534,14 @@ struct Manual {
     found: Option<DeviceId>,
 }
 
+impl Manual {
+    /// The ID its row and its records go by: the one a browse found, else
+    /// its address's.
+    fn listed_id(&self) -> DeviceId {
+        self.found.unwrap_or(self.id)
+    }
+}
+
 /// The session of the device that is on.
 #[derive(Clone, Copy, Debug)]
 struct Attempt {
@@ -807,44 +815,47 @@ impl CastSpeakers {
     /// device a speaker added by address is (C18): one that is on stays on
     /// as that device, and its offset goes with it.
     fn identified(&mut self, from: SocketAddr, id: DeviceId) {
-        let Some(manual) = self
+        let found: Vec<DeviceId> = self
             .manual
             .iter_mut()
-            .find(|manual| manual.resolved == Some(from))
-        else {
-            return;
-        };
-        manual.found = Some(id);
-        let manual = manual.id;
-        self.pending.push(BackendEvent::CastIdentified {
-            from: manual.to_string(),
-            to: id.to_string(),
-        });
-        // 0 ms counts as none: the sender can't forget an offset, so Undo leaves 0.
-        let memory = self.memory();
-        let stored = |device| memory.offset(device).filter(|offset| !offset.is_zero());
-        if let (Some(offset), None, Some(link)) = (stored(&manual), stored(&id), self.link.as_mut())
-        {
-            link.set_offset(id, offset);
-            self.pending.push(BackendEvent::CastMemoryChanged);
-        }
-        if self.enabled == Some(manual) {
-            if self.attempt.is_some() {
-                self.stop_session();
-                self.list.set_in_session(DeviceKey::Id(id), false);
+            .filter(|manual| manual.resolved == Some(from) && manual.found != Some(id))
+            .map(|manual| {
+                manual.found = Some(id);
+                manual.id
+            })
+            .collect();
+        for manual in found {
+            self.pending.push(BackendEvent::CastIdentified {
+                from: manual.to_string(),
+                to: id.to_string(),
+            });
+            // 0 ms counts as none: the sender can't forget an offset, so Undo leaves 0.
+            let memory = self.memory();
+            let stored = |device| memory.offset(device).filter(|offset| !offset.is_zero());
+            if let (Some(offset), None, Some(link)) =
+                (stored(&manual), stored(&id), self.link.as_mut())
+            {
+                link.set_offset(id, offset);
+                self.pending.push(BackendEvent::CastMemoryChanged);
             }
-            self.enabled = Some(id);
-            self.log
-                .log(|| format!("Cast: {from} stays on as {}", self.name(id)));
+            if self.enabled == Some(manual) {
+                if self.attempt.is_some() {
+                    self.stop_session();
+                    self.list.set_in_session(DeviceKey::Id(id), false);
+                }
+                self.enabled = Some(id);
+                self.log
+                    .log(|| format!("Cast: {from} stays on as {}", self.name(id)));
+            }
         }
     }
 
     /// How the list keys device `id`: by its address while it is a speaker
-    /// added by address that no browse has found.
+    /// added by address that no browse lists.
     fn key_of(&self, id: DeviceId) -> DeviceKey {
         self.manual
             .iter()
-            .find(|manual| manual.id == id)
+            .find(|manual| manual.listed_id() == id)
             .and_then(|manual| manual.resolved)
             .map(DeviceKey::Manual)
             .filter(|&key| self.list.get(key).is_some())
@@ -935,7 +946,7 @@ impl CastSpeakers {
                     .manual
                     .iter()
                     .find(|manual| manual.resolved == Some(socket))?;
-                (manual.id, manual.address.text(), None)
+                (manual.listed_id(), manual.address.text(), None)
             }
         };
         Some(self.row(id, name, group, self.added_as(entry), memory))
@@ -1546,10 +1557,7 @@ impl CastSpeakers {
         if self.discovery() != CastDiscovery::Failed
             || self.entry(id).is_some()
             || self.attempt.is_some_and(|attempt| attempt.device == id)
-            || self
-                .manual
-                .iter()
-                .any(|manual| manual.id == id || manual.found == Some(id))
+            || self.manual.iter().any(|manual| manual.id == id)
         {
             return;
         }

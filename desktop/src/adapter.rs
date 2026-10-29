@@ -2899,6 +2899,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// where the device's own records win.
     fn cast_identified(&mut self, from: &str, to: &str) {
         let (from_key, to_key) = (cast_key(from), cast_key(to));
+        if !self.key_kept(&from_key) {
+            return;
+        }
         self.custom_names.move_key(&from_key, &to_key);
         if self.hidden.iter().any(|entry| entry.key == to_key) {
             self.hidden.retain(|entry| entry.key != from_key);
