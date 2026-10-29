@@ -369,6 +369,7 @@ extension AppDelegate {
             localOffsets: localOffsetMs, holdBacks: localHoldBacks, cast: cast,
             airPlay: appModel.airplay.filter { playing.contains($0.id) }.map { (id: $0.id, name: $0.name) },
             airPlayDelayMs: airPlayLatencyMs, airPlayAdjustmentMs: airPlayDelay.adjustmentMs,
+            airPlayBaseMs: nativeSenderLatencyMs,
             airPlayHoldBackMs: NetworkHoldBack.airPlayAppliedMs(wanted),
             airPlaySenderMs: (nativeAirPlay?.model).flatMap {
                 $0.latencyMs > 0 ? $0.latencyMs + $0.receiverLatency.estimateMs : nil
@@ -456,7 +457,8 @@ extension AppDelegate {
             }
             return CalibrateAllSpeaker(id: speaker.id, name: speaker.name, kind: speaker.kind,
                                        offsetMs: calibrateStoredValue(speaker), latencyMs: 0,
-                                       adjustmentMs: kind == .airplay ? airPlayDelay.adjustmentMs : nil)
+                                       adjustmentMs: kind == .airplay ? airPlayDelay.adjustmentMs : nil,
+                                       senderMs: kind == .airplay ? nativeSenderLatencyMs : nil)
         }
         return CalibrateZoneScope(id: zone.id, name: zone.name, members: zone.members, present: Set(present), off: off)
     }
