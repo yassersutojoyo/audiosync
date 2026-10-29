@@ -78,6 +78,7 @@ fn errors_that_need_the_user_stop_the_retries() {
         ErrorKind::WrongPassword,
         ErrorKind::PairingRequired,
         ErrorKind::PairingFailed,
+        ErrorKind::ReceiverUnverified,
         ErrorKind::Unsupported(UnsupportedReason::Codec),
     ] {
         let mut backoff = Backoff::new();

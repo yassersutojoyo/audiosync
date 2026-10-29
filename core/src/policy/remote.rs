@@ -115,8 +115,8 @@ pub struct OwnVolume {
     pub level: f64,
     /// The user drags its slider.
     pub dragging: bool,
-    /// For a DeviceVolume: its level lies within 0.5 dB of the one the host
-    /// sent the speaker in the last 3 s (S271).
+    /// For a DeviceVolume: it is the echo of the level the host sent the
+    /// speaker in the last 3 s (S271, `volume::is_echo_of`).
     pub echo: bool,
     /// For a DeviceVolume: the device level it asks for (S289), at any k;
     /// `None` when the reading has no level.

@@ -5,7 +5,7 @@ mod common;
 #[path = "../examples/fake_tv/television.rs"]
 mod television;
 
-use audiosync_airplay::discovery::DeviceId;
+use audiosync_airplay::discovery::{DeviceId, Features};
 use television::{DEVICE_ID, HOST_LABEL, Pin, parse_device_id};
 
 const OTHER: [u8; 6] = [0x02, 0x00, 0x5E, 0x00, 0x53, 0x56];
@@ -75,4 +75,23 @@ fn another_id_reaches_the_info_answer() {
     let dict = info.as_dictionary().expect("a dictionary");
     let id = dict.get("deviceID").and_then(plist::Value::as_string);
     assert_eq!(id, Some("02:00:5E:00:53:56"));
+}
+
+// The features the traced television announced (S291): the host keeps its
+// 0.6 dB volume grid by this value, so the fake's live cells take that path.
+#[test]
+fn the_txt_record_carries_the_traced_televisions_features() {
+    for features_low in [0, television::FEATURES_METADATA] {
+        let txt = television::txt(Pin::None, features_low, DEVICE_ID);
+        let advertised = txt
+            .iter()
+            .find(|(key, _)| *key == "features")
+            .map(|(_, value)| value.as_str())
+            .expect("a features entry");
+        assert_eq!(
+            Features::parse_txt(advertised),
+            Some(Features(0x038B_CB46_007F_8AD0)),
+            "{advertised}"
+        );
+    }
 }

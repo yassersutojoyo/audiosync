@@ -169,6 +169,9 @@ pub struct CastTarget {
     /// Set when the target is a Cast group, which plays as one device
     /// (C3, C93); the host keeps it current from discovery (C90, C103).
     pub group: Option<GroupRecords>,
+    /// A single device's latest addresses, kept current by the host from
+    /// discovery (C111). A group's are in `group`.
+    pub records: Option<GroupRecords>,
 }
 
 /// Why [`CastHost::start`] refused at once, before any network call.
@@ -841,6 +844,7 @@ impl Worker {
             metadata,
             artwork,
             group: target.group,
+            records: target.records,
             fingerprints: Some(Fingerprints {
                 id: device,
                 book: Arc::clone(&self.fingerprints),
@@ -996,6 +1000,7 @@ mod tests {
             id: DeviceId([byte; 16]),
             addresses: Vec::new(),
             group: None,
+            records: None,
         }
     }
 
