@@ -1209,6 +1209,7 @@ impl CastSpeakers {
         }
         self.feed.hand(None);
         let key = self.key_of(attempt.device);
+        let listed = self.list.get(key).is_some();
         self.list.set_in_session(key, false);
         self.log.log(|| {
             format!(
@@ -1218,6 +1219,9 @@ impl CastSpeakers {
             )
         });
         self.pending.push(BackendEvent::CastChanged);
+        if listed && self.list.get(key).is_none() {
+            self.off_when_gone(attempt.device);
+        }
     }
 
     fn fail(&mut self, id: DeviceId, problem: CastProblem) {
@@ -1512,6 +1516,9 @@ impl CastSpeakers {
                     if let ListEvent::Identified { from, id } = change {
                         self.identified(from, id);
                     }
+                    if let ListEvent::Removed(DeviceKey::Id(id)) = change {
+                        self.off_when_gone(id);
+                    }
                     self.pending.push(BackendEvent::CastChanged);
                 }
             }
@@ -1545,6 +1552,19 @@ impl CastSpeakers {
             .log(|| format!("Cast: {id} switched off, discovery stopped"));
         self.enabled = None;
         self.fail(id, CastProblem::SearchStopped);
+    }
+
+    /// A browsed device that is on with no session and left the list goes
+    /// off at once, so it never refuses another while unlisted (C2, S339).
+    /// A speaker added by address that no browse found is never reported gone.
+    fn off_when_gone(&mut self, id: DeviceId) {
+        if self.enabled != Some(id) {
+            return;
+        }
+        self.log
+            .log(|| format!("Cast: {id} switched off, it left the list"));
+        self.enabled = None;
+        self.fail(id, CastProblem::NotResponding);
     }
 
     /// What a group announces, when it is first listed (C89).
@@ -2180,11 +2200,12 @@ pub mod tests {
 
     // covers: S339
     #[test]
-    fn a_speaker_that_left_is_turned_off_with_a_notice_when_discovery_stops_and_another_can_go_on()
-    {
+    fn an_unlisted_speaker_that_is_on_goes_off_with_a_notice_when_discovery_stops_and_another_can_go_on()
+     {
         let (fake, mut cast) = listed();
-        cast.set_enabled(KITCHEN, true).unwrap();
-        fake.withdraw(KITCHEN, "Kitchen");
+        // Switched on, from a zone or a saved setting, before a browse found it.
+        const UNFOUND: &str = "99999999999999999999999999999999";
+        cast.set_enabled(UNFOUND, true).unwrap();
         cast.poll();
         assert!(cast.is_on());
 
@@ -2196,8 +2217,49 @@ pub mod tests {
                 BackendEvent::CastFailed {
                     id,
                     problem: CastProblem::SearchStopped
-                } if id == KITCHEN
+                } if id == UNFOUND
             )),
+            "{events:?}"
+        );
+        assert!(!cast.is_on());
+        assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
+    }
+
+    // covers: C2, S339
+    #[test]
+    fn a_speaker_on_with_no_session_that_leaves_the_list_goes_off_with_a_notice_and_another_can_go_on()
+     {
+        let (fake, mut cast) = listed();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        fake.withdraw(KITCHEN, "Kitchen");
+        let events = cast.poll();
+        assert!(
+            events.contains(&BackendEvent::CastFailed {
+                id: KITCHEN.to_owned(),
+                problem: CastProblem::NotResponding,
+            }),
+            "{events:?}"
+        );
+        assert!(!cast.is_on());
+        assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
+    }
+
+    // covers: C2, C17, S339
+    #[test]
+    fn a_speaker_whose_row_went_offline_goes_off_with_a_notice_when_its_session_stops() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        fake.withdraw(KITCHEN, "Kitchen");
+        cast.poll();
+        assert!(cast.speakers().iter().any(|speaker| speaker.id == KITCHEN));
+        cast.set_streaming(false);
+        let events = cast.poll();
+        assert!(
+            events.contains(&BackendEvent::CastFailed {
+                id: KITCHEN.to_owned(),
+                problem: CastProblem::NotResponding,
+            }),
             "{events:?}"
         );
         assert!(!cast.is_on());
@@ -2908,6 +2970,50 @@ pub mod tests {
         let speakers = cast.speakers();
         assert_eq!(speakers.len(), 1, "a found device stays");
         assert_eq!(speakers[0].address, None);
+    }
+
+    // covers: C2, C18
+    // As on the Mac, a browse that found it and then loses it turns it off;
+    // only its address row is left.
+    #[test]
+    fn a_found_speaker_added_by_address_goes_off_when_the_browse_loses_it_and_its_address_row_comes_back()
+     {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_probe(|_| true);
+        cast.add_address(address("192.0.2.30"));
+        let manual = address("192.0.2.30").device_id();
+        assert_eq!(cast.set_enabled(&manual.to_string(), true), Ok(()));
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 30),
+        );
+        for _ in 0..200 {
+            cast.poll();
+            if cast.speakers().iter().any(|speaker| speaker.id == KITCHEN) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(cast.speakers()[0].enabled, "{:?}", cast.speakers());
+
+        fake.withdraw(KITCHEN, "Kitchen");
+        let events = cast.poll();
+        assert!(
+            events.contains(&BackendEvent::CastFailed {
+                id: KITCHEN.to_owned(),
+                problem: CastProblem::NotResponding,
+            }),
+            "{events:?}"
+        );
+        assert!(!cast.is_on());
+        let speakers = cast.speakers();
+        assert_eq!(speakers.len(), 1);
+        assert_eq!(speakers[0].id, manual.to_string());
+        assert!(!speakers[0].enabled);
+        assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
     }
 
     // covers: C18
