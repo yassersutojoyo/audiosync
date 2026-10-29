@@ -865,7 +865,8 @@ fn keep_main_min_size(window: &slint::Window) {
 /// Where the main window moves before it shows again: a place on a monitor
 /// that is gone since it hid gets the launch's place, centered in the
 /// `primary` monitor's work area and fitted to it. `None` when it stays
-/// where it is, as a minimized window does: Windows parks it off every monitor.
+/// where it is: while it shows, or while minimized, when Windows parks it off
+/// every monitor.
 fn place_to_show(
     frame: WindowFrame,
     on_a_monitor: bool,
@@ -873,8 +874,7 @@ fn place_to_show(
     visible: bool,
     primary: Option<(crate::placement::Bounds, f64)>,
 ) -> Option<WindowFrame> {
-    let _ = visible;
-    if on_a_monitor || minimized {
+    if on_a_monitor || minimized || visible {
         return None;
     }
     let (work_area, scale) = primary?;
@@ -1277,7 +1277,8 @@ impl App {
             window.is_visible(),
             primary,
         ) {
-            if (fitted.width, fitted.height) != (frame.width, frame.height) {
+            // Sizing a maximized window restores it, and the size is lost.
+            if !fitted.maximized && (fitted.width, fitted.height) != (frame.width, frame.height) {
                 window.set_size(slint::LogicalSize::new(
                     fitted.width as f32,
                     fitted.height as f32,
