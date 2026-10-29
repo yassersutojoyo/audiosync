@@ -70,6 +70,7 @@ fn target(id: DeviceId, device: &FakeDevice) -> CastTarget {
         id,
         addresses: vec![device.address],
         group: None,
+        records: None,
     }
 }
 
@@ -551,6 +552,7 @@ fn a_rate_the_spec_does_not_allow_is_refused_at_once() {
         id: A,
         addresses: Vec::new(),
         group: None,
+        records: None,
     };
     assert_eq!(
         host.start(target, 32_000, Metadata::default(), reader),
@@ -826,6 +828,7 @@ fn connect_retries_follow_events_held_when_the_start_began() {
         id: B,
         addresses: vec![closed],
         group: None,
+        records: None,
     };
     host.start(unreachable, 48_000, Metadata::default(), reader)
         .expect("starts");

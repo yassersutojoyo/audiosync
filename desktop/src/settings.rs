@@ -23,7 +23,8 @@
 //! is ([`SettingsFile::keep_ignored_aside`]). A file that can't be read is
 //! tried once more at launch (another program may hold it for a moment),
 //! then every few seconds, and while it still can't be read nothing is
-//! saved over it, since it may hold the user's settings. Fields this version doesn't know are ignored,
+//! saved over it, since it may hold the user's settings; once it reads as
+//! settings, they apply as if read at launch. Fields this version doesn't know are ignored,
 //! missing ones take their defaults, and values out of range are clamped
 //! ([`Settings::clamped`]). Nothing here panics on a bad file, and the
 //! caller logs what [`Loaded`] says.
@@ -729,6 +730,12 @@ pub struct Settings {
     /// S254). A file without it has not been migrated; the defaults have.
     #[serde(default, deserialize_with = "bool_or_true")]
     pub speaker_presets_migrated: bool,
+    /// The highest zone and preset ID numbers given out, so a deleted one's
+    /// ID is never given again (spec S245, S251); 0 in an older file.
+    #[serde(deserialize_with = "or_default")]
+    pub last_zone_id: u64,
+    #[serde(deserialize_with = "or_default")]
+    pub last_preset_id: u64,
     /// Unreadable settings give the defaults (S212).
     #[serde(deserialize_with = "or_default")]
     pub equalizer: SavedEqualizer,
@@ -874,6 +881,8 @@ impl Default for Settings {
             speaker_zones_migrated: true,
             speaker_presets: Vec::new(),
             speaker_presets_migrated: true,
+            last_zone_id: 0,
+            last_preset_id: 0,
             equalizer: SavedEqualizer::default(),
             equalizer_curves: Vec::new(),
             show_virtual_devices: false,
@@ -1134,6 +1143,8 @@ impl Settings {
             speaker_zones_migrated: self.speaker_zones_migrated,
             speaker_presets,
             speaker_presets_migrated: self.speaker_presets_migrated,
+            last_zone_id: self.last_zone_id,
+            last_preset_id: self.last_preset_id,
             equalizer: SavedEqualizer::from(self.equalizer.settings()),
             equalizer_curves: clamp_curves(&self.equalizer_curves)
                 .iter()
@@ -1305,6 +1316,8 @@ fn unreadable_fields(text: &str) -> Vec<&'static str> {
         ("groups", Value::is_array),
         ("speaker_zones", Value::is_array),
         ("speaker_presets", Value::is_array),
+        ("last_zone_id", Value::is_u64),
+        ("last_preset_id", Value::is_u64),
         ("equalizer", reads::<SavedEqualizer>),
         ("equalizer_curves", Value::is_array),
         ("show_virtual_devices", Value::is_boolean),
@@ -1365,7 +1378,7 @@ impl fmt::Display for Loaded {
             Loaded::Ignored(reason) => write!(
                 f,
                 "ignored: {reason}; the defaults apply, and it is kept aside before a new \
-                 file replaces it"
+                 file replaces it, or applied once it can be read"
             ),
         }
     }
@@ -1392,6 +1405,16 @@ impl KeptAside {
             .to_string_lossy()
             .into_owned()
     }
+}
+
+/// What a later try at the file the last load ignored found.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Retried {
+    /// It reads as settings now (another program held it at launch): these
+    /// apply as if read at launch, and nothing was saved over it.
+    Read(Box<(Settings, Loaded)>),
+    /// It still isn't settings this build reads, so it was copied aside.
+    KeptAside(KeptAside),
 }
 
 /// Where the settings are kept: the file, or nowhere (this run only).
@@ -1464,12 +1487,13 @@ impl SettingsFile {
     /// Keeps the file the last load ignored aside now, without saving
     /// anything, so the user can be told at launch where it is: copied as
     /// [`SettingsFile::save`] would ([`IGNORED_FILE_NAME`]), and the copy
-    /// returned, once. A newer AudioSync's file isn't copied here: `save`
+    /// returned, once; a file that reads as settings now is returned read
+    /// instead (S212). A newer AudioSync's file isn't copied here: `save`
     /// keeps one aside whenever it saves over one. While the file still
     /// can't be read, the error is returned and the next try is due
     /// [`data_folder::KEEP_ASIDE_RETRY_POLLS`] polls later
     /// ([`SettingsFile::keep_ignored_aside_if_due`]), or at the next save.
-    pub fn keep_ignored_aside(&self) -> io::Result<Option<KeptAside>> {
+    pub fn keep_ignored_aside(&self) -> io::Result<Option<Retried>> {
         let Some(path) = &self.path else {
             return Ok(None);
         };
@@ -1478,8 +1502,14 @@ impl SettingsFile {
         }
         let kept = match fs::read(path) {
             Ok(bytes) if written_by_a_newer_build(&bytes) => Ok(None),
-            Ok(bytes) => data_folder::keep_bytes_aside(path, IGNORED_FILE_NAME, &bytes)
-                .map(|kept| Some(KeptAside::Ignored(kept))),
+            Ok(bytes) => match std::str::from_utf8(&bytes)
+                .map_err(|_| String::new())
+                .and_then(Settings::from_json)
+            {
+                Ok(read) => Ok(Some(Retried::Read(Box::new(read)))),
+                Err(_) => data_folder::keep_bytes_aside(path, IGNORED_FILE_NAME, &bytes)
+                    .map(|kept| Some(Retried::KeptAside(KeptAside::Ignored(kept)))),
+            },
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         };
@@ -1503,7 +1533,7 @@ impl SettingsFile {
     /// called at every poll, it tries every
     /// [`data_folder::KEEP_ASIDE_RETRY_POLLS`] polls while the file ignored
     /// at launch couldn't be kept aside yet, and does nothing otherwise.
-    pub fn keep_ignored_aside_if_due(&self) -> io::Result<Option<KeptAside>> {
+    pub fn keep_ignored_aside_if_due(&self) -> io::Result<Option<Retried>> {
         if !self.keep_aside.get() {
             return Ok(None);
         }
@@ -1525,18 +1555,21 @@ impl SettingsFile {
     /// ([`data_folder::keep_bytes_aside`]), so no copy ever replaces an
     /// older one; what was kept is returned. While such a file still can't
     /// be read, or the copy fails, the file is left alone and the error
-    /// returned.
-    pub fn save(&self, settings: &Settings) -> io::Result<Option<KeptAside>> {
+    /// returned; one that reads as settings now is left alone and returned.
+    pub fn save(&self, settings: &Settings) -> io::Result<Option<Retried>> {
         let Some(path) = &self.path else {
             return Ok(None);
         };
         let kept = match fs::read(path) {
-            Ok(bytes) if written_by_a_newer_build(&bytes) => Some(KeptAside::Newer(
-                data_folder::keep_bytes_aside(path, NEWER_FILE_NAME, &bytes)?,
-            )),
-            Ok(_) | Err(_) if self.keep_aside.get() => {
-                data_folder::keep_aside(path, IGNORED_FILE_NAME)?.map(KeptAside::Ignored)
+            Ok(bytes) if written_by_a_newer_build(&bytes) => {
+                Some(Retried::KeptAside(KeptAside::Newer(
+                    data_folder::keep_bytes_aside(path, NEWER_FILE_NAME, &bytes)?,
+                )))
             }
+            Ok(_) | Err(_) if self.keep_aside.get() => match self.keep_ignored_aside()? {
+                read @ Some(Retried::Read(_)) => return Ok(read),
+                kept => kept,
+            },
             _ => None,
         };
         self.keep_aside.set(false);
@@ -1622,6 +1655,86 @@ mod tests {
             gains_db: vec![4.0, 3.0, 0.0, 0.0, -1.5, 0.0, 0.0, 2.0, 2.5, 3.0],
         };
         settings
+    }
+
+    /// Settings with every field away from its default, except the version
+    /// and the migration marks: a file without them is migrated as it loads.
+    pub fn every_field() -> Settings {
+        let sample = sample();
+        Settings {
+            version: VERSION,
+            source: sample.source,
+            input_device: Some(SavedInput {
+                id: "input".to_owned(),
+                name: "Input".to_owned(),
+            }),
+            input_pairs: BTreeMap::from([("input".to_owned(), 2)]),
+            source_mix: Some(SavedMix {
+                mode: MixMode::AllExcept,
+                apps: vec![SavedMixApp {
+                    executable: "player.exe".to_owned(),
+                    name: "Player".to_owned(),
+                }],
+            }),
+            master_volume: sample.master_volume,
+            outputs: sample.outputs,
+            airplay: sample.airplay,
+            auto_connect: sample.auto_connect,
+            speaker_names: sample.speaker_names,
+            hidden_speakers: vec![SavedHidden {
+                key: "lc:hidden".to_owned(),
+                name: "Hidden".to_owned(),
+                kind: "output".to_owned(),
+            }],
+            groups: sample.groups,
+            speaker_zones: vec![SavedZone {
+                id: "z1".to_owned(),
+                name: "Den".to_owned(),
+                members: vec!["lc:{0.0.0.00000000}.{speakers}".to_owned()],
+                volume: 60.0,
+                member_names: BTreeMap::from([(
+                    "lc:{0.0.0.00000000}.{speakers}".to_owned(),
+                    "Desk".to_owned(),
+                )]),
+            }],
+            speaker_zones_migrated: true,
+            speaker_presets: vec![SavedPreset {
+                id: "p1".to_owned(),
+                name: "Evening".to_owned(),
+                members: vec![SavedPresetMember {
+                    key: "lc:{0.0.0.00000000}.{speakers}".to_owned(),
+                    volume: Some(40.0),
+                }],
+                zones: vec![SavedPresetZone {
+                    id: "z1".to_owned(),
+                    volume: 70.0,
+                }],
+                master_volume: 80.0,
+                gains_db: [1.0; BAND_COUNT],
+            }],
+            speaker_presets_migrated: true,
+            last_zone_id: 1,
+            last_preset_id: 1,
+            equalizer: sample.equalizer,
+            equalizer_curves: vec![SavedCurve {
+                name: "Curve".to_owned(),
+                gains_db: vec![1.0; BAND_COUNT],
+            }],
+            show_virtual_devices: sample.show_virtual_devices,
+            appearance: sample.appearance,
+            window: sample.window,
+            airplay_adjustment_ms: 120.0,
+            when_source_quits: WhenSourceQuits::SwitchToSystem.stored().to_owned(),
+            remote: sample.remote,
+            cast_addresses: sample.cast_addresses,
+            airplay2_experimental: true,
+            check_updates_automatically: false,
+            last_update_check: Some(1_800_000_000),
+            update_record: Some(UpdateRecord {
+                version: "9.9.9".to_owned(),
+                reason: crate::ui_model::UpdateRecordReason::Blocked,
+            }),
+        }
     }
 
     #[test]
@@ -2013,12 +2126,83 @@ mod tests {
     }
 
     #[test]
+    fn every_field_moves_each_field_from_its_default() {
+        let default = Settings::default();
+        // No `..`: a new field breaks this until it is checked here too.
+        let Settings {
+            version: _,
+            source,
+            input_device,
+            input_pairs,
+            source_mix,
+            master_volume,
+            outputs,
+            airplay,
+            auto_connect,
+            speaker_names,
+            hidden_speakers,
+            groups,
+            speaker_zones,
+            speaker_zones_migrated: _,
+            speaker_presets,
+            speaker_presets_migrated: _,
+            last_zone_id,
+            last_preset_id,
+            equalizer,
+            equalizer_curves,
+            show_virtual_devices,
+            appearance,
+            window,
+            airplay_adjustment_ms,
+            when_source_quits,
+            remote,
+            cast_addresses,
+            airplay2_experimental,
+            check_updates_automatically,
+            last_update_check,
+            update_record,
+        } = every_field();
+        assert_ne!(source, default.source);
+        assert_ne!(input_device, default.input_device);
+        assert_ne!(input_pairs, default.input_pairs);
+        assert_ne!(source_mix, default.source_mix);
+        assert_ne!(master_volume, default.master_volume);
+        assert_ne!(outputs, default.outputs);
+        assert_ne!(airplay, default.airplay);
+        assert_ne!(auto_connect, default.auto_connect);
+        assert_ne!(speaker_names, default.speaker_names);
+        assert_ne!(hidden_speakers, default.hidden_speakers);
+        assert_ne!(groups, default.groups);
+        assert_ne!(speaker_zones, default.speaker_zones);
+        assert_ne!(speaker_presets, default.speaker_presets);
+        assert_ne!(last_zone_id, default.last_zone_id);
+        assert_ne!(last_preset_id, default.last_preset_id);
+        assert_ne!(equalizer, default.equalizer);
+        assert_ne!(equalizer_curves, default.equalizer_curves);
+        assert_ne!(show_virtual_devices, default.show_virtual_devices);
+        assert_ne!(appearance, default.appearance);
+        assert_ne!(window, default.window);
+        assert_ne!(airplay_adjustment_ms, default.airplay_adjustment_ms);
+        assert_ne!(when_source_quits, default.when_source_quits);
+        assert_ne!(remote, default.remote);
+        assert_ne!(cast_addresses, default.cast_addresses);
+        assert_ne!(airplay2_experimental, default.airplay2_experimental);
+        assert_ne!(
+            check_updates_automatically,
+            default.check_updates_automatically
+        );
+        assert_ne!(last_update_check, default.last_update_check);
+        assert_ne!(update_record, default.update_record);
+    }
+
+    // covers: S212
+    #[test]
     fn settings_survive_a_save_and_a_load() {
         let file = SettingsFile::at(test_dir("settings-roundtrip").join(FILE_NAME));
         assert_eq!(file.load(), (Settings::default(), Loaded::NoFile));
-        file.save(&sample()).expect("saved");
+        file.save(&every_field()).expect("saved");
         let (loaded, found) = file.load();
-        assert_eq!(loaded, sample());
+        assert_eq!(loaded, every_field());
         assert_eq!(
             found,
             Loaded::Read {
@@ -2066,34 +2250,7 @@ mod tests {
     fn every_stored_field_is_named_when_it_does_not_read() {
         // The fields left out of the file while empty are set too, so each
         // one is checked.
-        let every_field = Settings {
-            input_device: Some(SavedInput {
-                id: "input".to_owned(),
-                name: "Input".to_owned(),
-            }),
-            input_pairs: BTreeMap::from([("input".to_owned(), 2)]),
-            source_mix: Some(SavedMix {
-                mode: MixMode::AllExcept,
-                apps: vec![SavedMixApp {
-                    executable: "player.exe".to_owned(),
-                    name: "Player".to_owned(),
-                }],
-            }),
-            hidden_speakers: vec![SavedHidden {
-                key: "output:hidden".to_owned(),
-                name: "Hidden".to_owned(),
-                kind: "output".to_owned(),
-            }],
-            equalizer_curves: vec![SavedCurve {
-                name: "Curve".to_owned(),
-                gains_db: vec![1.0; BAND_COUNT],
-            }],
-            update_record: Some(UpdateRecord {
-                version: "9.9.9".to_owned(),
-                reason: crate::ui_model::UpdateRecordReason::Blocked,
-            }),
-            ..sample()
-        };
+        let every_field = every_field();
         let serde_json::Value::Object(stored) =
             serde_json::from_str(&every_field.to_json()).expect("an object")
         else {
@@ -2813,17 +2970,21 @@ mod tests {
         assert!(file.save(&Settings::default()).is_err());
         assert!(path.is_dir());
 
-        // Readable again, holding the user's settings: they are kept aside
-        // before the first save replaces the file.
+        // Readable again, holding the user's settings: the save leaves the
+        // file alone and returns them read, and keeps nothing aside.
         fs::remove_dir(&path).expect("the folder is removed");
         let good = sample().to_json();
         fs::write(&path, &good).expect("written");
-        file.save(&Settings::default()).expect("saved");
-        assert_eq!(kept(), [good.clone().into_bytes()]);
+        let read = Settings::from_json(&good).expect("settings");
+        assert_eq!(
+            file.save(&Settings::default()).expect("not saved"),
+            Some(Retried::Read(Box::new(read)))
+        );
+        assert_eq!(fs::read_to_string(&path).expect("read"), good);
+        // Once read, the next save replaces the file.
+        assert_eq!(file.save(&Settings::default()).expect("saved"), None);
         assert_eq!(file.load().0, Settings::default());
-        // Once replaced, the next save leaves the copy alone.
-        file.save(&sample()).expect("saved again");
-        assert_eq!(kept(), [good.into_bytes()]);
+        assert!(kept().is_empty());
     }
 
     #[test]
@@ -2844,7 +3005,8 @@ mod tests {
             assert!(matches!(found, Loaded::Ignored(_)), "{found}");
             fs::remove_dir(&path).expect("the folder is removed");
             fs::rename(&held, &path).expect("moved back");
-            file.save(settings).expect("saved");
+            let read = file.save(settings).expect("not saved");
+            assert!(matches!(read, Some(Retried::Read(_))), "{read:?}");
         };
         let mut changed = Settings {
             master_volume: 12.0,
@@ -2853,11 +3015,9 @@ mod tests {
         launch(&changed);
         changed.master_volume = 13.0;
         launch(&changed);
-        // The user's settings are still kept, next to the first launch's.
-        let kept = copies_kept_aside(&folder, "settings.ignored");
-        assert!(kept.contains(&users.into_bytes()), "{kept:?}");
-        assert_eq!(kept.len(), 2);
-        assert_eq!(SettingsFile::at(path).load().0, changed);
+        // The user's settings are still the file, and nothing is kept aside.
+        assert_eq!(fs::read_to_string(&path).expect("read"), users);
+        assert!(copies_kept_aside(&folder, "settings.ignored").is_empty());
     }
 
     #[test]

@@ -207,6 +207,9 @@ pub enum Command {
     MoveToIpv6,
     /// Forget the running apps without telling anyone.
     ClearApps,
+    /// Replace the running apps without telling anyone, as an app opened
+    /// on the device while the sender is cut off.
+    SetApps(Vec<Value>),
     /// Stop reading the current connection, so the sender's writes fill
     /// the socket buffers and then block.
     Stall,
@@ -838,6 +841,7 @@ fn serve(
                     write(&mut stream, &status);
                 }
                 Ok(Command::ClearApps) => device.apps.clear(),
+                Ok(Command::SetApps(apps)) => device.apps = apps,
                 Ok(Command::Stall) => stalled = true,
                 Ok(Command::DropConnection) => {
                     let _ = stream.sock.0.shutdown(std::net::Shutdown::Both);

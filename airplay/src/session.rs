@@ -313,7 +313,7 @@ enum Kind {
     Setup,
     Record,
     Volume(Volume),
-    ReadVolume,
+    ReadVolume(u32),
     Metadata(Metadata),
     Flush { seq: u16, rtptime: u32 },
     Teardown,
@@ -328,7 +328,7 @@ impl Kind {
             Kind::Setup => Method::Setup,
             Kind::Record => Method::Record,
             Kind::Volume(_) | Kind::Metadata(_) => Method::SetParameter,
-            Kind::ReadVolume => Method::GetParameter,
+            Kind::ReadVolume(_) => Method::GetParameter,
             Kind::Flush { .. } => Method::Flush,
             Kind::Teardown => Method::Teardown,
         }
@@ -382,6 +382,8 @@ pub struct Session {
     outputs: VecDeque<Output>,
     pending_volume: Option<Volume>,
     pending_read_volume: bool,
+    /// Moves with each host volume; a read sent before it is old (P122).
+    volume_generation: u32,
     pending_flush: Option<(u16, u32)>,
     metadata_queue: VecDeque<Queued>,
     /// P185: an AirPlay 1 session sends the small image.
@@ -424,6 +426,7 @@ impl Session {
             outputs: VecDeque::new(),
             pending_volume: None,
             pending_read_volume: false,
+            volume_generation: 0,
             pending_flush: None,
             metadata_queue: VecDeque::new(),
             artwork: ArtworkLadder::new(ArtworkSize::Small),
@@ -775,6 +778,7 @@ impl Session {
         if matches!(volume, Volume::Db(db) if db.is_nan()) {
             return;
         }
+        self.volume_generation = self.volume_generation.wrapping_add(1);
         match self.state {
             State::Closed | State::TearingDown => {}
             State::Playing if self.sends_volume(volume) => {
@@ -970,7 +974,7 @@ impl Session {
                 }
                 if self.pending_read_volume {
                     self.pending_read_volume = false;
-                    return self.send(Kind::ReadVolume, now, false);
+                    return self.send(Kind::ReadVolume(self.volume_generation), now, false);
                 }
                 while let Some(queued) = self.metadata_queue.pop_front() {
                     let metadata = match queued {
@@ -1052,7 +1056,7 @@ impl Session {
                 headers.push("Content-Type", "text/parameters");
                 request.body = volume.parameter_body().into_bytes();
             }
-            Kind::ReadVolume => {
+            Kind::ReadVolume(_) => {
                 headers.push("Content-Type", "text/parameters");
                 request.body = volume::READ_BODY.as_bytes().to_vec();
             }
@@ -1293,14 +1297,16 @@ impl Session {
             Kind::Metadata(Metadata::Artwork { .. }) => {
                 self.artwork_answered(success, Some(code));
             }
-            Kind::Volume(_) | Kind::Metadata(_) | Kind::ReadVolume if !success => {
+            Kind::Volume(_) | Kind::Metadata(_) | Kind::ReadVolume(_) if !success => {
                 self.event(SessionEvent::Warning(Warning::RequestFailed {
                     method,
                     status: code,
                 }));
             }
-            Kind::ReadVolume => {
-                if let Some(db) = volume::parse_reported(&response.body) {
+            Kind::ReadVolume(generation) => {
+                if let Some(db) = volume::parse_reported(&response.body)
+                    && generation == self.volume_generation
+                {
                     self.event(SessionEvent::VolumeReported(db));
                 }
             }

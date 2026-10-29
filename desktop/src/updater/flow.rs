@@ -5,8 +5,8 @@
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use ed25519_dalek::VerifyingKey;
@@ -156,6 +156,7 @@ pub fn install(
     update: &Update,
     progress: &dyn Fn(Option<u8>),
     cancel: &AtomicBool,
+    closed: &Mutex<bool>,
 ) -> Installed {
     let dir = match new_temp_folder(&env.temp_root) {
         Ok(dir) => dir,
@@ -169,7 +170,7 @@ pub fn install(
             };
         }
     };
-    let outcome = install_in(env, update, &dir, progress, cancel);
+    let outcome = install_in(env, update, &dir, progress, cancel, closed);
     let removed = fs::remove_dir_all(&dir);
     env.log.log(|| {
         let said = match &outcome {
@@ -195,6 +196,7 @@ fn install_in(
     dir: &Path,
     progress: &dyn Fn(Option<u8>),
     cancel: &AtomicBool,
+    closed: &Mutex<bool>,
 ) -> Installed {
     let files = Retrying {
         inner: env.files.as_ref(),
@@ -314,8 +316,10 @@ fn install_in(
         Err(ArchiveError::Blocked) => return Installed::Blocked,
         Err(_) => return Installed::BrokenDownload,
     };
-    // The last point where a Cancel still leaves the install folder untouched.
-    if cancel.load(Ordering::Relaxed) {
+    // The last point where a Cancel or a quit still leaves the install
+    // folder untouched; past it, a quit waits for the guard.
+    let closed = closed.lock().unwrap_or_else(PoisonError::into_inner);
+    if *closed || cancel.load(Ordering::Relaxed) {
         return Installed::Cancelled;
     }
 
@@ -327,6 +331,7 @@ fn install_in(
         &files,
         &mut steps,
     );
+    drop(closed);
     for (step, code) in &steps {
         env.log
             .log(|| format!("updater: swap {step} (error {code})"));
@@ -526,7 +531,13 @@ pub mod tests {
     }
 
     fn run(env: &Env, update: &Update) -> Installed {
-        install(env, update, &|_| {}, &AtomicBool::new(false))
+        install(
+            env,
+            update,
+            &|_| {},
+            &AtomicBool::new(false),
+            &Mutex::new(false),
+        )
     }
 
     #[test]
@@ -545,6 +556,7 @@ pub mod tests {
             &update,
             &|p| percents.lock().unwrap().push(p),
             &AtomicBool::new(false),
+            &Mutex::new(false),
         );
         assert!(matches!(done, Installed::Done(_)), "{done:?}");
         let exe = fs::read(f.env.install_dir.join(archive::EXE_NAME)).unwrap();

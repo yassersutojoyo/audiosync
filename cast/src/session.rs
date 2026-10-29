@@ -200,6 +200,9 @@ pub struct SessionConfig {
     /// latest records instead of `addresses` (C90, C93), and the stream
     /// server answers its members too (C103).
     pub group: Option<GroupRecords>,
+    /// A single device's latest addresses: every reconnect takes them
+    /// instead of `addresses`, and the stream server answers them (C111).
+    pub records: Option<GroupRecords>,
     /// Where every connect records the device's certificate fingerprint
     /// (C21) once the start succeeded; `None`, or a group, records nothing.
     pub fingerprints: Option<Fingerprints>,
@@ -317,6 +320,9 @@ pub struct CastSession {
     /// [`QUIT_BUDGET`] (C88).
     quitting: Arc<AtomicBool>,
     group: Option<GroupRecords>,
+    /// Where every reconnect goes: the group's records or a single
+    /// device's (C90, C111).
+    records: Option<GroupRecords>,
     members: MemberList,
     group_types_logged: LoggedTypes,
     fingerprints: Option<Fingerprints>,
@@ -387,7 +393,8 @@ impl CastSession {
         on_failure: impl FnMut(ConnectError, Duration),
     ) -> Result<CastSession, SessionError> {
         let group = config.group.clone();
-        let connected = match &group {
+        let records = group.clone().or_else(|| config.records.clone());
+        let connected = match &records {
             Some(records) => connect_retrying_with(|| records.get().group, &selected, on_failure),
             None => connect_retrying(&config.addresses, &selected, on_failure),
         };
@@ -433,8 +440,10 @@ impl CastSession {
                 return Err(error.into());
             }
         };
-        if let Some(records) = &group {
+        if let Some(records) = &records {
             server.follow_group(records.clone());
+        }
+        if group.is_some() {
             server.set_group_limit(1);
         }
         let mut addresses = vec![client.address()];
@@ -479,6 +488,7 @@ impl CastSession {
             clock: Arc::new(Instant::now),
             quitting,
             group,
+            records,
             members: MemberList::new(),
             group_types_logged: LoggedTypes::default(),
             fingerprints: None,
@@ -962,6 +972,8 @@ impl CastSession {
             self.load_until_playing()
                 .map(|()| false)
                 .map_err(SessionError::from)
+        } else if self.client.status().is_some_and(|status| !status.is_idle()) {
+            return self.end(SessionEnd::TakenOver);
         } else {
             match self.client.launch() {
                 Ok(app) => {
@@ -986,8 +998,9 @@ impl CastSession {
 
 impl CastSession {
     /// Connects again, spaced by [`ReconnectPacer`] while the device stays
-    /// selected (C81). A group is resolved afresh before every attempt: its
-    /// leader may have handed over (C90, C97).
+    /// selected (C81). The device is resolved afresh before every attempt: a
+    /// group's leader may have handed over (C90, C97), a single device may
+    /// have moved (C111).
     fn reconnect(&mut self) -> Result<CastClient, Option<ConnectError>> {
         if self.announced.swap(false, Ordering::SeqCst) {
             self.pacer.announced();
@@ -997,7 +1010,7 @@ impl CastSession {
             if !self.pause(wait) {
                 return Err(None);
             }
-            let addresses = match &self.group {
+            let addresses = match &self.records {
                 Some(records) => records.get().group,
                 None => self.addresses.clone(),
             };

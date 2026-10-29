@@ -15,3 +15,5 @@ getrandom = "0.4.3"
 serde_json = { version = "1.0.140", default-features = false, features = ["std"] }
 # Device token hashes and the page's Content-Security-Policy hashes.
 sha2 = { version = "0.11.0", default-features = false }
+# An IPv6 listener that takes IPv6 only, on every OS.
+socket2 = "0.6.5"
