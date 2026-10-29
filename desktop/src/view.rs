@@ -868,8 +868,10 @@ fn keep_main_min_size(window: &slint::Window) {
 fn place_to_show(
     frame: WindowFrame,
     on_a_monitor: bool,
+    minimized: bool,
     primary: Option<(crate::placement::Bounds, f64)>,
 ) -> Option<(i32, i32)> {
+    let _ = minimized;
     if on_a_monitor {
         return None;
     }
@@ -1267,7 +1269,7 @@ impl App {
         };
         let on_a_monitor = crate::platform::is_on_a_monitor(frame.x, frame.y);
         let primary = crate::platform::monitor_at(0.0, 0.0);
-        if let Some((x, y)) = place_to_show(frame, on_a_monitor, primary) {
+        if let Some((x, y)) = place_to_show(frame, on_a_monitor, window.is_minimized(), primary) {
             window.set_position(slint::PhysicalPosition::new(x, y));
         }
         if let Err(error) = self.main.show() {
@@ -8008,11 +8010,24 @@ mod tests {
         };
         let centered = fitted_main_frame(frame, primary, 1.0, false);
         assert_eq!(
-            place_to_show(frame, false, Some((primary, 1.0))),
+            place_to_show(frame, false, false, Some((primary, 1.0))),
             Some((centered.x, centered.y))
         );
-        assert_eq!(place_to_show(frame, true, Some((primary, 1.0))), None);
-        assert_eq!(place_to_show(frame, false, None), None);
+        assert_eq!(
+            place_to_show(frame, true, false, Some((primary, 1.0))),
+            None
+        );
+        assert_eq!(place_to_show(frame, false, false, None), None);
+        // Windows parks a minimized window at (-32000, -32000), on no monitor.
+        let minimized = WindowFrame {
+            x: -32000,
+            y: -32000,
+            ..frame
+        };
+        assert_eq!(
+            place_to_show(minimized, false, true, Some((primary, 1.0))),
+            None
+        );
     }
 
     /// Windows makes the PIN dialog at the height its layout has before the
