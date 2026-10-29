@@ -511,8 +511,7 @@ struct InputChannelPair: Equatable {
         change(from: resolve(saved: saved, channels: channels).pair.index, to: chosen, streaming: streaming)
     }
 
-    /// Whether picking `chosen` replaces the stored `saved`, also when it
-    /// changes nothing that plays: the user's latest pick is the one kept.
+    /// Kept even when nothing plays differently, so a fallen-back saved pair never returns over the latest pick.
     static func stores(_ chosen: Int, over saved: Int) -> Bool {
         chosen >= 0 && chosen != saved
     }
