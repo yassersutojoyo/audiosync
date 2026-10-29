@@ -3582,6 +3582,36 @@ pub mod tests {
         assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
     }
 
+    // covers: S339
+    #[test]
+    fn an_unfound_speaker_added_by_address_that_is_on_stays_on_when_a_browse_loses_others() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_probe(|_| true);
+        cast.add_address(address("192.0.2.21"));
+        cast.poll();
+        let manual = address("192.0.2.21").device_id().to_string();
+        assert_eq!(cast.set_enabled(&manual, true), Ok(()));
+        fake.announce_at(LIVING, "Living", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 32));
+        cast.poll();
+        fake.withdraw(LIVING, "Living");
+        let events = cast.poll();
+
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::CastFailed { .. })),
+            "{events:?}"
+        );
+        assert!(cast.is_on());
+        let speakers = cast.speakers();
+        let row = speakers
+            .iter()
+            .find(|speaker| speaker.id == manual)
+            .expect("its address row");
+        assert!(row.enabled);
+    }
+
     // covers: C18
     #[test]
     fn removing_the_address_of_a_found_speaker_the_browse_lost_turns_it_off() {

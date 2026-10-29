@@ -8986,6 +8986,32 @@ mod tests {
 
     // covers: S223
     #[test]
+    fn an_every_time_pairing_under_way_at_a_sleep_that_fails_after_the_wake_says_pairing_failed() {
+        let (mut adapter, fake, den) = every_time_adapter();
+        let id = ap(&den);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&den, PairingEvent::PinRequested);
+        adapter.poll();
+
+        adapter
+            .audio
+            .notify_power(crate::audio::controller::PowerNotice::Suspend);
+        adapter.poll();
+        adapter
+            .audio
+            .notify_power(crate::audio::controller::PowerNotice::Resume);
+        adapter.poll();
+        assert!(adapter.running(), "the woken stream runs");
+
+        adapter.submit_pin(&id, "4821");
+        fail_pairing(&fake, &den, ErrorKind::PairingFailed);
+        adapter.poll();
+        says_cant_play(&adapter, ui_model::AirPlayProblem::PairingFailed);
+    }
+
+    // covers: S223
+    #[test]
     fn an_every_time_speaker_whose_password_prompt_waits_in_line_turns_on_once_paired() {
         let (mut adapter, fake, den) = every_time_adapter();
         let study = airplay2_every_time_tv(11, "Study");
