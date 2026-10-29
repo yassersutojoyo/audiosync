@@ -125,6 +125,7 @@ pub trait RowText {
 fn asks_for_code(state: &AppState, speaker: &Speaker) -> bool {
     speaker.availability == Availability::NeedsCode
         && !speaker.paired
+        && !speaker.holds_password
         && state.speaker_state(speaker).click_turns_on()
 }
 

@@ -459,7 +459,7 @@ struct CastModel {
     private var leftOn: (device: CastDevice, at: Date)?
     /// The sender reports its browsed devices gone just before discovery
     /// stops: one that left earlier keeps its not-responding notice.
-    static let goneBurstLasts: TimeInterval = 5
+    private static let goneBurstLasts: TimeInterval = 5
 
     /// The devices listed, by name.
     var rows: [String] {
