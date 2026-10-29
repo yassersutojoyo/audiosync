@@ -862,6 +862,25 @@ fn keep_main_min_size(window: &slint::Window) {
     crate::platform::hold_min_size(window, crate::settings::MIN_WINDOW);
 }
 
+/// Where the main window moves before it shows again: a place on a monitor
+/// that is gone since it hid gets the launch's place, centered in the
+/// `primary` monitor's work area and fitted to it. `None` when it stays
+/// where it is: while it shows, or while minimized, when Windows parks it off
+/// every monitor.
+fn place_to_show(
+    frame: WindowFrame,
+    on_a_monitor: bool,
+    minimized: bool,
+    visible: bool,
+    primary: Option<(crate::placement::Bounds, f64)>,
+) -> Option<WindowFrame> {
+    if on_a_monitor || minimized || visible {
+        return None;
+    }
+    let (work_area, scale) = primary?;
+    Some(fitted_main_frame(frame, work_area, scale, false))
+}
+
 /// The saved main window `frame` as it opens on the monitor with
 /// `work_area` (physical pixels) and `scale`: its inner size (logical
 /// pixels) and outer position (physical pixels), fitted inside the work
@@ -1255,6 +1274,38 @@ impl App {
 
     /// Shows the main window and brings it to the front.
     pub fn show_main(&self) {
+        let window = self.main.window();
+        let position = window.position();
+        let size = window.size().to_logical(window.scale_factor());
+        let frame = WindowFrame {
+            x: position.x,
+            y: position.y,
+            width: f64::from(size.width),
+            height: f64::from(size.height),
+            maximized: window.is_maximized(),
+        };
+        let on_a_monitor = crate::platform::is_on_a_monitor(frame.x, frame.y);
+        let primary = crate::platform::monitor_at(0.0, 0.0);
+        if let Some(fitted) = place_to_show(
+            frame,
+            on_a_monitor,
+            window.is_minimized(),
+            window.is_visible(),
+            primary,
+        ) {
+            // Sizing a maximized window restores it, and the size is lost.
+            if !fitted.maximized && (fitted.width, fitted.height) != (frame.width, frame.height) {
+                window.set_size(slint::LogicalSize::new(
+                    fitted.width as f32,
+                    fitted.height as f32,
+                ));
+            }
+            window.set_position(slint::PhysicalPosition::new(fitted.x, fitted.y));
+            // Moving a maximized window restores it.
+            if fitted.maximized {
+                window.set_maximized(true);
+            }
+        }
         if let Err(error) = self.main.show() {
             self.show_window_error(&error);
             return;
@@ -8059,6 +8110,49 @@ mod tests {
             maximized: false,
         };
         assert_eq!(fitted_main_frame(small, laptop, 1.0, true), small);
+    }
+
+    #[test]
+    fn a_main_window_on_a_monitor_that_is_gone_shows_on_the_primary_one() {
+        let primary = crate::placement::Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1366.0,
+            height: 728.0,
+        };
+        let frame = WindowFrame {
+            x: 2200,
+            y: 100,
+            width: 800.0,
+            height: 500.0,
+            maximized: false,
+        };
+        let centered = fitted_main_frame(frame, primary, 1.0, false);
+        assert_eq!(
+            place_to_show(frame, false, false, false, Some((primary, 1.0))),
+            Some(centered)
+        );
+        assert_eq!(
+            place_to_show(frame, true, false, false, Some((primary, 1.0))),
+            None
+        );
+        assert_eq!(place_to_show(frame, false, false, false, None), None);
+        // Windows parks a minimized window at (-32000, -32000), on no monitor.
+        let minimized = WindowFrame {
+            x: -32000,
+            y: -32000,
+            ..frame
+        };
+        assert_eq!(
+            place_to_show(minimized, false, true, false, Some((primary, 1.0))),
+            None
+        );
+        // A window the user dragged partly off the screen stays where it is.
+        let dragged = WindowFrame { x: -250, ..frame };
+        assert_eq!(
+            place_to_show(dragged, false, false, true, Some((primary, 1.0))),
+            None
+        );
     }
 
     /// Windows makes the PIN dialog at the height its layout has before the
