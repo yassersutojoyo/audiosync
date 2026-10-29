@@ -195,7 +195,7 @@ struct UIStrings {
     func calibrationButtonHint(running: Bool, unavailable: CalibrationFailure?, held: Bool) -> String {
         if running { return "" }
         if let unavailable { return calibrationUnavailable(unavailable) }
-        return calibrationHint
+        return held ? calibrateAllUnavailable(.busy) : calibrationHint
     }
 
     /// What a calibration needs that is off, in the order streaming, the
