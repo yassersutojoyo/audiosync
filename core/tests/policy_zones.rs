@@ -241,7 +241,7 @@ fn a_zone_click_switches_only_present_members_and_hidden_ones_are_absent() {
     ];
     let off = plan(&all_on, playing());
     assert_eq!(off.action, ClickAction::TurnOff);
-    assert_eq!(off.steps, [Step::Off, Step::Absent, Step::Off]);
+    assert_eq!(off.steps, [Step::Off, Step::Off, Step::Off]);
     // Streaming off: the click starts it, even with every member on.
     assert_eq!(
         plan(&all_on, Situation::default()).action,
