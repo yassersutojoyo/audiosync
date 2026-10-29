@@ -3598,9 +3598,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Picking the source or pair already in use answers its notice while
     /// streaming; while stopped the notice says why streaming stopped (S163).
     /// While streaming a capture notice means another app still holds the
-    /// input (S333), which no pick answers.
+    /// input (S333), which no pick answers, and the not-connected notice
+    /// means the device is still unplugged (S329).
     fn clear_source_notice_if_running(&mut self) {
-        if self.running() {
+        if self.running() && !self.audio.waits_for_input() {
             self.clear_if(NoticeSubject::Source, |message| {
                 !matches!(message, NoticeMessage::CaptureFailed)
             });
@@ -4440,7 +4441,12 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             return;
         }
         let (endpoint_id, name) = (endpoint_id.clone(), name.clone());
-        self.note_switch_from();
+        // A session waiting for its unplugged input opens on the new pair
+        // once the device is listed again (S329).
+        let waits = self.audio.waits_for_input();
+        if !waits {
+            self.note_switch_from();
+        }
         self.log.log(|| {
             let channels = InputPair::offered(self.listed_channels(&endpoint_id))
                 .get(usize::from(pair))
@@ -4456,6 +4462,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             self.input_pairs.insert(endpoint_id.clone(), pair);
         }
         self.audio.set_input_pair(&endpoint_id, pair);
+        if waits {
+            return;
+        }
         self.notices
             .clear(&[NoticeSubject::Source, NoticeSubject::Capture]);
         let switch = source_switch(self.running());
@@ -6092,6 +6101,89 @@ mod tests {
                 source: "Microphone (USB Audio)".to_owned()
             }]
         );
+    }
+
+    // covers: S329
+    #[test]
+    fn a_channel_pair_picked_while_the_input_device_is_away_waits_for_it() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Interface (USB Audio)", "USB");
+        adapter.audio.set_input_channels(MIC, 6);
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.set_running(true);
+        adapter.audio.disconnect_input(MIC);
+        for _ in 0..10 {
+            adapter.poll();
+        }
+        let away = [NoticeMessage::InputNotConnected {
+            source: "Interface (USB Audio)".to_owned(),
+        }];
+        assert_eq!(messages(&adapter), away);
+        let noted = |adapter: &AudioAdapter<MockBackend>| {
+            adapter
+                .switched_from
+                .as_ref()
+                .map(|from| (from.chosen.key(), from.pair))
+        };
+        let before = noted(&adapter);
+        adapter.select_input_pair(1);
+        assert_eq!(noted(&adapter), before, "no switch to go back from");
+        adapter.poll();
+        let attempts = adapter.audio.driver().capture_attempts();
+        for _ in 0..20 {
+            adapter.poll();
+            assert!(adapter.snapshot().running, "streaming stays on");
+        }
+        assert_eq!(
+            adapter.audio.driver().capture_attempts(),
+            attempts,
+            "no timed tries"
+        );
+        assert_eq!(adapter.snapshot().source_id, mic());
+        assert_eq!(adapter.snapshot().input_pair, 1);
+        assert_eq!(messages(&adapter), away);
+        adapter
+            .audio
+            .connect_input(MIC, "Interface (USB Audio)", "USB");
+        adapter.audio.set_input_channels(MIC, 6);
+        for _ in 0..4 {
+            adapter.poll();
+        }
+        assert!(adapter.snapshot().running);
+        assert_eq!(
+            input_pair_captures(&adapter).last(),
+            Some(&(MIC.to_owned(), 1))
+        );
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    // covers: S329
+    #[test]
+    fn picking_the_same_input_or_pair_while_the_device_is_away_keeps_the_notice() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.set_running(true);
+        adapter.audio.disconnect_input(MIC);
+        for _ in 0..10 {
+            adapter.poll();
+        }
+        let away = [NoticeMessage::InputNotConnected {
+            source: "Microphone (USB Audio)".to_owned(),
+        }];
+        assert_eq!(messages(&adapter), away);
+        adapter.select_input_pair(0);
+        assert_eq!(messages(&adapter), away, "the same pair");
+        adapter.select_source(&mic());
+        assert_eq!(messages(&adapter), away, "the same input");
     }
 
     #[test]

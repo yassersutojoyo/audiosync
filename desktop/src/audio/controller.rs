@@ -3520,6 +3520,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .or_else(|| self.next_start.clone())
     }
 
+    fn waits_for_input(&self) -> bool {
+        self.waiting_input().is_some()
+    }
+
     fn input_peak(&mut self) -> Option<f32> {
         self.session
             .as_ref()

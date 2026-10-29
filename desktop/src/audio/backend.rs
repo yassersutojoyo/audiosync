@@ -835,6 +835,10 @@ pub trait AudioBackend {
     /// The source being captured, or `None` when stopped.
     fn running_source(&self) -> Option<SourceId>;
 
+    /// Whether the running session waits for its input device to be listed
+    /// again (S329).
+    fn waits_for_input(&self) -> bool;
+
     /// While an input device is captured, the largest sample magnitude
     /// captured since the last call (1 is full scale), for the level meter;
     /// `None` for any other source and while stopped.
