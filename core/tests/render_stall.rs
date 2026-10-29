@@ -51,22 +51,24 @@ fn run(
     stopping: bool,
 ) -> (Vec<(f64, f64)>, RendererControl) {
     let stall = (STALL_AT_S * 1000, capture_gap_ms, output_gap_ms);
-    let (delays, control, _) = run_stalls(&[stall], stopping);
+    let (delays, control, _) = run_stalls(&[stall], 0, stopping);
     (delays, control)
 }
 
 /// [`run`] with a stall at each `(at_ms, capture_gap_ms, output_gap_ms)`,
-/// the first at [`STALL_AT_S`], and the times in s of the callbacks that
-/// made a resync.
+/// the first at [`STALL_AT_S`], and a device clock `slow_ppm` slow; with
+/// the times in s of the callbacks that made a resync.
 fn run_stalls(
     stalls: &[(u128, u128, u128)],
+    slow_ppm: u128,
     stopping: bool,
 ) -> (Vec<(f64, f64)>, RendererControl, Vec<f64>) {
     let ring = Ring::for_rate(RATE).unwrap();
     let mut writer = ring.writer().unwrap();
     let gain = Arc::new(SharedGain::new(1.0));
     let write_period = BLOCK as u128 * SECOND / u128::from(RATE);
-    let callback_period = CALLBACK as u128 * SECOND / u128::from(DEVICE_RATE);
+    let callback_period =
+        CALLBACK as u128 * SECOND * (1_000_000 + slow_ppm) / u128::from(DEVICE_RATE) / 1_000_000;
     let stall_at = STALL_AT_S * SECOND;
     let within = |at: u128, gap: fn(&(u128, u128, u128)) -> u128| {
         stalls.iter().any(|stall| {
@@ -214,9 +216,10 @@ fn an_output_late_by_a_gap_of_89_ms_is_back_at_its_delay_within_1_5_s() {
     // The Mac's sitting of 2026-10-29: one stall made both Bluetooth outputs
     // call back up to 89.2 ms late, below the stall gap; left to the trim,
     // the output was still 47.7 ms late a second later.
-    let (delays, _) = run(40, 89, false);
+    let (delays, control) = run(40, 89, false);
     let worst = worst_offset(&delays, STALL_AT_S as f64 + 1.5);
     assert!(worst.abs() <= 2.0, "off its delay by up to {worst:.2} ms");
+    assert_eq!(control.late_reanchors(), 1);
 }
 
 // covers: S207
@@ -227,9 +230,18 @@ fn a_second_lasting_lateness_within_5_s_waits_for_the_5_s() {
         (STALL_AT_S * 1000, 40, 89),
         (STALL_AT_S * 1000 + 2000, 40, 75),
     ];
-    let (delays, control, resyncs) = run_stalls(&stalls, false);
+    let (delays, control, resyncs) = run_stalls(&stalls, 0, false);
     assert_eq!(control.late_reanchors(), 2, "resyncs at {resyncs:?} s");
     assert!(resyncs[1] - resyncs[0] >= 5.0, "resyncs at {resyncs:?} s");
     let worst = worst_offset(&delays, resyncs[1] + 0.5);
     assert!(worst.abs() <= 2.0, "off its delay by up to {worst:.2} ms");
+}
+
+// covers: S207
+#[test]
+fn a_device_clock_5000_ppm_slow_never_re_anchors_as_a_lasting_lateness() {
+    // The Mac's measure of 2026-10-29: a Bluetooth output's lateness climbed
+    // about 5 ms a second, a rate for the trim rather than a step.
+    let (_, control, resyncs) = run_stalls(&[], 5000, false);
+    assert_eq!(control.late_reanchors(), 0, "resyncs at {resyncs:?} s");
 }
