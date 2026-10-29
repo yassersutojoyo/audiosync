@@ -100,7 +100,7 @@ enum StreamingPolicy {
     /// The speakers the panel counts as on. AirPlay rows are hidden while the
     /// sender has failed (`AppModel.shownAirPlay`), so those don't count.
     static func activeSpeakers(airPlay: [Bool], senderFailed: Bool, others: [Bool]) -> Int {
-        (airPlay + others).filter { $0 }.count
+        ((senderFailed ? [] : airPlay) + others).filter { $0 }.count
     }
 }
 
