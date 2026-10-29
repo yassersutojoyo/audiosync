@@ -12858,6 +12858,107 @@ mod tests {
         );
     }
 
+    fn hidden_cast(key: &str, name: &str) -> SavedHidden {
+        SavedHidden {
+            key: key.to_owned(),
+            name: name.to_owned(),
+            kind: "Google Cast".to_owned(),
+        }
+    }
+
+    /// Adds 192.0.2.31 by address, then lets a browse find Den there.
+    fn browse_finds_den(adapter: &mut AudioAdapter<MockBackend>, fake: &FakeCast) {
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        adapter.poll();
+        fake.announce_at(
+            DEN,
+            "Den",
+            DEVICE_PORT,
+            std::net::Ipv4Addr::new(192, 0, 2, 31),
+        );
+        adapter.poll();
+    }
+
+    const DEN: &str = "00112233445566778899aabbccddeeff";
+
+    // covers: S341
+    #[test]
+    fn a_speaker_added_by_address_that_a_browse_finds_keeps_its_zone_presets_name_and_hidden_mark()
+    {
+        let (mut adapter, fake) = cast_adapter();
+        let address = cc_address("192.0.2.31");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), address.clone()])],
+            speaker_presets: vec![saved_preset(&[
+                (key(SPEAKERS), None),
+                (address.clone(), Some(40.0)),
+            ])],
+            speaker_names: BTreeMap::from([(address.clone(), "Study".to_owned())]),
+            hidden_speakers: vec![hidden_cast(&address, "Study")],
+            ..Settings::default()
+        });
+        browse_finds_den(&mut adapter, &fake);
+
+        let saved = adapter.current_settings();
+        assert_eq!(saved.speaker_zones[0].members, [key(SPEAKERS), cc(DEN)]);
+        let preset: Vec<(String, Option<f64>)> = saved.speaker_presets[0]
+            .members
+            .iter()
+            .map(|member| (member.key.clone(), member.volume))
+            .collect();
+        assert_eq!(preset, [(key(SPEAKERS), None), (cc(DEN), Some(40.0))]);
+        assert_eq!(
+            saved.speaker_names,
+            BTreeMap::from([(cc(DEN), "Study".to_owned())])
+        );
+        assert_eq!(saved.hidden_speakers, [hidden_cast(&cc(DEN), "Study")]);
+    }
+
+    // covers: S341
+    #[test]
+    fn where_the_id_a_browse_found_has_a_zone_preset_entry_name_or_hidden_mark_its_own_wins() {
+        let (mut adapter, fake) = cast_adapter();
+        let address = cc_address("192.0.2.31");
+        let upstairs = SavedZone {
+            id: "zone:2".to_owned(),
+            name: "Upstairs".to_owned(),
+            ..zone(vec![cc(DEN), cc(CAST_LIVING)])
+        };
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), address.clone()]), upstairs],
+            speaker_presets: vec![saved_preset(&[
+                (address.clone(), Some(40.0)),
+                (cc(DEN), Some(60.0)),
+            ])],
+            speaker_names: BTreeMap::from([
+                (address.clone(), "Study".to_owned()),
+                (cc(DEN), "Den TV".to_owned()),
+            ]),
+            hidden_speakers: vec![
+                hidden_cast(&address, "Study"),
+                hidden_cast(&cc(DEN), "Den TV"),
+            ],
+            ..Settings::default()
+        });
+        browse_finds_den(&mut adapter, &fake);
+
+        let saved = adapter.current_settings();
+        assert_eq!(saved.speaker_zones[0].members, [key(SPEAKERS)]);
+        assert_eq!(saved.speaker_zones[1].members, [cc(DEN), cc(CAST_LIVING)]);
+        let preset: Vec<(String, Option<f64>)> = saved.speaker_presets[0]
+            .members
+            .iter()
+            .map(|member| (member.key.clone(), member.volume))
+            .collect();
+        assert_eq!(preset, [(cc(DEN), Some(60.0))]);
+        assert_eq!(
+            saved.speaker_names,
+            BTreeMap::from([(cc(DEN), "Den TV".to_owned())])
+        );
+        assert_eq!(saved.hidden_speakers, [hidden_cast(&cc(DEN), "Den TV")]);
+    }
+
     // covers: S246
     #[test]
     fn only_this_speaker_on_an_offline_cast_row_changes_nothing() {

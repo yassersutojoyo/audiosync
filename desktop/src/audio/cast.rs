@@ -2980,6 +2980,78 @@ pub mod tests {
         assert_eq!(offset(LIVING), Some(100.0), "the ID's own offset stays");
     }
 
+    // covers: S341
+    #[test]
+    fn a_playing_speaker_added_by_address_that_a_browse_finds_plays_as_loud_as_before() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_probe(|_| true);
+        cast.add_address(address("192.0.2.30"));
+        let manual = address("192.0.2.30").device_id().to_string();
+        cast.set_zones(BTreeMap::from([(manual.clone(), 50.0)]));
+        cast.set_volume(&manual, 80.0);
+        assert_eq!(cast.set_enabled(&manual, true), Ok(()));
+        cast.set_streaming(true);
+        poll_until_started(&fake, &mut cast);
+        fake.report(reported(&manual, 0.4, ControlType::Attenuation));
+        cast.poll();
+
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 30),
+        );
+        cast.poll();
+        // The host moves the zone to the ID the browse found (S341).
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 50.0)]));
+        let before = sent(&fake);
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(2),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.4,
+                control_type: ControlType::Attenuation,
+                has_level: true,
+                ..DeviceVolume::default()
+            }),
+        });
+        cast.poll();
+        assert_eq!(sent(&fake), before, "it keeps playing at 0.4");
+        assert!((shown(&cast, KITCHEN) - 80.0).abs() < 1e-9);
+    }
+
+    // covers: S339
+    #[test]
+    fn a_speaker_added_by_address_that_a_browse_found_is_left_on_when_discovery_stops() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_probe(|_| true);
+        cast.add_address(address("192.0.2.30"));
+        cast.poll();
+        let manual = address("192.0.2.30").device_id().to_string();
+        assert_eq!(cast.set_enabled(&manual, true), Ok(()));
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 30),
+        );
+        cast.poll();
+        fake.withdraw(KITCHEN, "Kitchen");
+        cast.poll();
+
+        fake.state().discovery_stopped = true;
+        let events = cast.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::CastFailed { .. })),
+            "{events:?}"
+        );
+        assert!(cast.is_on());
+    }
+
     // covers: C18
     #[test]
     fn a_host_name_is_listed_at_once_and_plays_once_looked_up() {
