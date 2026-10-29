@@ -71,6 +71,7 @@ extension AppDelegate {
     private func castDevicesChanged(_ changes: [CastDeviceChange]) {
         for sent in changes {
             let change = castModel.listed(sent)
+            if let id = castModel.takeCopiedOffset() { castSender?.setOffset(id, ms: 0) }
             DebugTrace.log("[AudioSync] Cast discovery: " + Self.castLogLine(change))
             let name = castName(change.id)   // read before the change takes the row away
             if case .turnedOff(let id, let problem?)? = castModel.apply(change) {

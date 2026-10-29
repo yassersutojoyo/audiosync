@@ -11332,6 +11332,32 @@ do {
             && dropped.foundIDs.isEmpty && dropped.senderID(of: realID) == realID,
           "cast: removing an address listed under a saved id forgets the id, and a change the sender queued "
             + "before the removal doesn't bring the row back")
+    // covers: S341
+    var copiedOffset = CastModel()
+    copiedOffset.foundIDs = [lounge.text: realID]
+    copiedOffset.addedManually(manualID, address: lounge)
+    let savedListed = copiedOffset.listed(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: 240))
+    copiedOffset.apply(savedListed)
+    let otherAnswers = copiedOffset.listed(.appeared(CastDevice(id: otherID, name: "Den"), offsetMs: 240,
+                                                     former: manualID))
+    copiedOffset.apply(otherAnswers)
+    let clearedInSender = copiedOffset.takeCopiedOffset()
+    check(copiedOffset.offset(of: realID) == 240 && copiedOffset.offsets[otherID] == nil
+            && clearedInSender == otherID && copiedOffset.takeCopiedOffset() == nil,
+          "cast: another speaker a browse finds at a saved id's address starts with no offset, not the saved one's, "
+            + "and the sender's copy is cleared once")
+    var ownOffset = CastModel()
+    ownOffset.foundIDs = [lounge.text: realID]
+    _ = ownOffset.setOffset(otherID, ms: 240)
+    ownOffset.addedManually(manualID, address: lounge)
+    let ownSaved = ownOffset.listed(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: 240))
+    ownOffset.apply(ownSaved)
+    let ownAnswers = ownOffset.listed(.appeared(CastDevice(id: otherID, name: "Den"), offsetMs: 240,
+                                                former: manualID))
+    ownOffset.apply(ownAnswers)
+    check(ownOffset.offset(of: otherID) == 240 && ownOffset.takeCopiedOffset() == nil,
+          "cast: another speaker at a saved id's address keeps an offset the user gave it, even one equal to the "
+            + "saved one's")
     check(nextRun.offsetIDs(of: realID) == [realID, manualID] && sameRun.offsetIDs(of: realID) == [realID]
             && nextRun.manualSenderIDs(of: realID) == [manualID] && sameRun.manualSenderIDs(of: realID).isEmpty
             && firstRun.manualSenderIDs(of: manualID) == [manualID],
@@ -11458,6 +11484,25 @@ do {
     var idle = rekeyedModel(zones: [manualID: 50, realID: 80], playing: false)
     check(idle.takeLevelDue() == nil && idle.zoneLevels == [realID: 0.8],
           "cast model: a speaker added by address that a browse finds with no session gets no level sent")
+    // covers: S341
+    var ownReport = CastModel()
+    ownReport.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    ownReport.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    _ = ownReport.turnOn(manualID)
+    ownReport.startSent(manualID)
+    _ = ownReport.started(manualID, attempt: 7, refusal: 0)
+    _ = ownReport.apply(.volume(attempt: 7, CastVolume(level: 0.4, muted: false, fixed: true)))
+    ownReport.turnOff(manualID)
+    ownReport.stopSent()
+    _ = ownReport.turnOn(realID)
+    ownReport.startSent(realID)
+    _ = ownReport.started(realID, attempt: 8, refusal: 0)
+    _ = ownReport.apply(.volume(attempt: 8, CastVolume(level: 0.4, muted: false, fixed: false)))
+    ownReport.apply(.gone(id: manualID))
+    if let browsed { ownReport.apply(browsed) }
+    check(ownReport.volumes[realID]?.fixed == false && ownReport.volumes[manualID] == nil,
+          "cast model: a browse that finds an address of a device playing under its id keeps the volume its "
+            + "session reported")
 
     // covers: S339
     var stopped = CastModel()

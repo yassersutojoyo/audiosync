@@ -439,6 +439,7 @@ struct CastModel {
     private var unanswered: [Double] = []
     /// A level a re-key left to send once (S341).
     private var levelDue: Double?
+    private var offsetCopiedTo: String?
     private static let maxUnanswered = 16
     /// The offset the device memory holds, per device, in ms. 0 ms counts as
     /// none: the sender can't forget an offset, so Undo leaves 0 ms behind.
@@ -554,11 +555,12 @@ struct CastModel {
         if enabled == old { enabled = new }
         if savedOn == old { savedOn = new }
         if starting == old { starting = new }
+        let reportedUnderNew = attempt?.device == new && attempt?.heardVolume == true
         if let current = attempt, current.device == old {
             attempt = Attempt(number: current.number, device: new, status: current.status,
                               heardVolume: current.heardVolume, connectFailures: current.connectFailures)
         }
-        if let volume = volumes.removeValue(forKey: old) { volumes[new] = volume }
+        if let volume = volumes.removeValue(forKey: old), !reportedUnderNew { volumes[new] = volume }
         if let level = levels.removeValue(forKey: old) { levels[new] = level }
         let playedZone = zoneLevels.removeValue(forKey: old)
         if let playedZone, zoneLevels[new] == nil { zoneLevels[new] = playedZone }
@@ -585,6 +587,13 @@ struct CastModel {
     mutating func takeLevelDue() -> Double? {
         defer { levelDue = nil }
         return levelDue
+    }
+
+    /// The device whose offset the sender copied from a saved one, to clear
+    /// in the sender's memory once; nil when none is due.
+    mutating func takeCopiedOffset() -> String? {
+        defer { offsetCopiedTo = nil }
+        return offsetCopiedTo
     }
 
     /// The sender listed `id` for an address the user added: it shows again
@@ -625,7 +634,11 @@ struct CastModel {
                     foundIDs[address.text] = device.id
                     if enabled == saved { (enabled, savedOn) = (nil, saved) }
                 }
-                return .appeared(device, offsetMs: offset, former: nil)
+                // The sender's re-key copied the saved one's offset to the other speaker.
+                let copied = saved != device.id && offset != nil && offset == offsets[saved]
+                    && offsets[device.id] == nil && !offsetsWritten.contains(device.id)
+                if copied { offsetCopiedTo = device.id }
+                return .appeared(device, offsetMs: copied ? nil : offset, former: nil)
             }
             strandListing(of: device.id)
             return .appeared(relisted(device), offsetMs: offset, former: former)
