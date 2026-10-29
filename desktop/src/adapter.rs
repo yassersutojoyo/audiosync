@@ -2590,7 +2590,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
-            own_volume: None,
+            own_volume: speaker.volume_known.then_some(speaker.volume),
             device_volume: None,
             waiting: (speaker.enabled && speaker.status == CastStatus::Reconnecting)
                 .then_some(Waiting::Reconnecting),
@@ -12899,6 +12899,26 @@ mod tests {
         let level = *fake.state().volumes.last().expect("a Cast volume");
         assert!((level - 0.21).abs() < 1e-9, "{level}");
         assert_eq!(speaker_of(&adapter, &cc(CAST_KITCHEN)).volume, 30.0);
+    }
+
+    // covers: S251
+    #[test]
+    fn a_preset_skips_the_volume_of_a_cast_speaker_that_never_reported_one() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        let kitchen = |adapter: &AudioAdapter<MockBackend>| {
+            let preset = adapter.capture_preset("preset:1", "Evening").unwrap();
+            preset
+                .members
+                .iter()
+                .find(|m| m.key == cc(CAST_KITCHEN))
+                .unwrap()
+                .volume
+        };
+        assert_eq!(kitchen(&adapter), None, "no status reported a level yet");
+
+        cast_first_status(&mut adapter, &fake, 0.8);
+        assert!(kitchen(&adapter).is_some());
     }
 
     fn cast_first_status(adapter: &mut AudioAdapter<MockBackend>, fake: &FakeCast, level: f64) {

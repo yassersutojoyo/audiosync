@@ -943,7 +943,7 @@ impl CastSpeakers {
         let reported = self.volumes.get(&id);
         let level = self
             .own_of(id)
-            .unwrap_or_else(|| reported.map_or(1.0, |volume| volume.level));
+            .or_else(|| reported.map(|volume| volume.level));
         let session = self.attempt.filter(|attempt| attempt.device == id);
         let status = session.map_or(CastStatus::Idle, |attempt| attempt.status);
         CastInfo {
@@ -953,7 +953,8 @@ impl CastSpeakers {
             address,
             offline: !self.entry(id).is_some_and(|entry| entry.online),
             enabled: self.enabled == Some(id),
-            volume: (level * 100.0).clamp(0.0, 100.0),
+            volume: (level.unwrap_or(1.0) * 100.0).clamp(0.0, 100.0),
+            volume_known: level.is_some(),
             muted: reported.is_some_and(|volume| volume.muted),
             volume_fixed: reported.is_some_and(|volume| volume.control_type == ControlType::Fixed),
             volume_step: volume_step(reported),
