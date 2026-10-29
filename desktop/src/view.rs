@@ -3456,13 +3456,20 @@ impl App {
     /// Saves the settings now, with the main window's frame: the app is
     /// about to quit. Returns whether no change is left unsaved.
     pub fn save_settings(&self) -> bool {
-        // Quit drops a typed delay or name that wasn't applied, so a focus
-        // loss as the window goes applies nothing either.
-        {
+        // Quit drops a typed delay that wasn't applied and applies an open
+        // rename, so a focus loss as the window goes applies nothing more.
+        let rename = {
             let mut ui = self.ui.borrow_mut();
             ui.delay_drafts.clear();
             ui.airplay_delay_draft.cancel();
-            ui.rename = None;
+            ui.rename.take().map(|open| (open, ui.rename_place))
+        };
+        match rename {
+            Some(((id, text), RenamePlace::Zone)) => {
+                self.backend.borrow_mut().rename_zone(&id, &text)
+            }
+            Some(((id, text), _)) => self.backend.borrow_mut().rename_speaker(&id, &text),
+            None => {}
         }
         self.remember_view();
         self.backend.borrow_mut().save_settings()
