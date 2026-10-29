@@ -1018,6 +1018,8 @@ struct Added {
     /// A target's members by speaker ID, with the last state each reported.
     members: BTreeMap<String, Option<SpeakerState>>,
     read: VolumeRead,
+    /// Retried errors since it last played or went unannounced.
+    retried: u8,
 }
 
 impl Added {
@@ -1032,7 +1034,15 @@ impl Added {
                 .collect(),
             members: BTreeMap::new(),
             read: VolumeRead::new(Instant::now()),
+            retried: 0,
         }
+    }
+
+    /// Counts a retried error; true from the second failed retry, about 3 s
+    /// in, so a blip its first retry heals never shows (S222).
+    fn reconnecting(&mut self) -> bool {
+        self.retried = self.retried.saturating_add(1);
+        self.retried >= 3
     }
 
     fn key(&self) -> Option<&DeviceKey> {
@@ -3283,6 +3293,7 @@ impl AirPlaySpeakers {
                 .map(|(key, counters)| (speaker_id(&key), counters))
                 .collect(),
             read: VolumeRead::new(Instant::now()),
+            retried: 0,
         }
     }
 
@@ -3967,6 +3978,9 @@ impl AirPlaySpeakers {
         let was_playing = added.state == SpeakerState::Playing;
         let was_unannounced = added.state == SpeakerState::Unannounced;
         added.state = state;
+        if matches!(state, SpeakerState::Playing | SpeakerState::Unannounced) {
+            added.retried = 0;
+        }
         let mut relisted = false;
         if state == SpeakerState::Playing {
             // Its password worked: one turned down later turns it off.
@@ -4044,10 +4058,12 @@ impl AirPlaySpeakers {
                     && problem.retried()
                 {
                     added.state = SpeakerState::Retrying { at: *at };
-                    events.push(BackendEvent::AirPlayTrouble {
-                        id: target.to_owned(),
-                        problem,
-                    });
+                    if added.reconnecting() {
+                        events.push(BackendEvent::AirPlayTrouble {
+                            id: target.to_owned(),
+                            problem,
+                        });
+                    }
                 } else if problem.waits() {
                     events.push(BackendEvent::AirPlayTrouble {
                         id: target.to_owned(),
@@ -4288,10 +4304,12 @@ impl AirPlaySpeakers {
                         self.reconcile();
                         return true;
                     }
-                    events.push(BackendEvent::AirPlayTrouble {
-                        id: id.to_owned(),
-                        problem,
-                    });
+                    if added.reconnecting() {
+                        events.push(BackendEvent::AirPlayTrouble {
+                            id: id.to_owned(),
+                            problem,
+                        });
+                    }
                 } else if problem.waits() {
                     // The sender starts it once it has a place or PTP is free.
                     events.push(BackendEvent::AirPlayTrouble {
@@ -4798,6 +4816,13 @@ pub mod tests {
                     retry_at,
                 }),
             });
+        }
+
+        /// [`FakeAirPlay::fail`], and its retries at 1 s and 3 s fail too.
+        pub fn lose(&self, device: &Device, kind: ErrorKind) {
+            for _ in 0..3 {
+                self.fail(device, kind);
+            }
         }
 
         /// The timeline restarted with a new L.
@@ -7119,7 +7144,7 @@ pub mod tests {
                 BackendEvent::AirPlayPlaying { id: id.clone() }
             ]
         );
-        fake.fail(&kitchen, ErrorKind::Lost);
+        fake.lose(&kitchen, ErrorKind::Lost);
         assert_eq!(
             airplay.poll(),
             [
@@ -9172,7 +9197,7 @@ pub mod tests {
             "{events:?}"
         );
 
-        fake.fail(&left, ErrorKind::Lost);
+        fake.lose(&left, ErrorKind::Lost);
         let events = airplay.poll();
         assert!(events.contains(&BackendEvent::AirPlayTrouble {
             id: PAIR.to_owned(),
@@ -10346,7 +10371,7 @@ pub mod tests {
         fake.take_calls();
         fake.fail(b2, ErrorKind::PasswordRequired);
         fake.fail(c3, ErrorKind::PairingRequired);
-        fake.fail(d4, ErrorKind::Unreachable);
+        fake.lose(d4, ErrorKind::Unreachable);
         let mut events = airplay.poll();
         assert_eq!(
             airplay.password_prompt().map(|prompt| prompt.id),

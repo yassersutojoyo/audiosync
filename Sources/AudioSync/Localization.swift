@@ -684,6 +684,20 @@ struct UIStrings {
     let waitingForAirPlay2 = "Waiting: too many AirPlay 2 speakers"
     /// Under the name of a speaker waiting for PTP (S285).
     let waitingForPtp = "Waiting: AirPlay 2 speakers on another network"
+    /// From its second failed retry, an AirPlay speaker the sender keeps
+    /// trying to reach stays on, with this notice (S222).
+    func nativeAirPlayRetrying(_ problem: NativeSpeakerEvent.Problem, name: String) -> String {
+        switch problem {
+        case .connectionLost: return "\(name) lost its connection. AudioSync keeps trying to reconnect."
+        case .busy: return "\(name) seems to be playing from another device. AudioSync keeps trying."
+        case .refused: return "\(name) declined the stream. AudioSync tries again shortly."
+        default: return "\(name) isn't responding. AudioSync keeps trying to reach it."
+        }
+    }
+    /// That notice's title.
+    func nativeAirPlayReconnectingTitle(name: String) -> String { "\(name) reconnecting" }
+    /// Under its name meanwhile.
+    let reconnecting = "Reconnecting…"
     /// Under the name of an AirPlay speaker that is not announced on the
     /// network right now; it starts by itself once it is again (P215).
     let notOnNetwork = "Not on the network right now, plays once it's back"
@@ -1235,11 +1249,12 @@ struct UIStrings {
     /// what a Cast speaker does, that an AirPlay 2 speaker waits, that an
     /// AirPlay speaker is off the network, or what a stereo pair or home
     /// theater group is made of.
-    func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, waitingForPtp: Bool = false,
+    func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, waitingForPtp: Bool = false, reconnecting: Bool = false,
                  unannounced: Bool, target: AirPlayTargetRow?) -> String? {
         if let cast { return castNote(cast) }
         if waitingForPtp { return self.waitingForPtp }
         if waitingForAirPlay2 { return self.waitingForAirPlay2 }
+        if reconnecting { return self.reconnecting }
         if unannounced { return notOnNetwork }
         return target.map(airPlayTargetNote)
     }

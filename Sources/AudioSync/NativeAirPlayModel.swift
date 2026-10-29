@@ -444,6 +444,10 @@ enum NativeAirPlayOutcome: Equatable {
     /// The speaker (app ID) went out of view on the network or came back
     /// without its playing changing: its row's note follows (P215).
     case unannouncedChanged(String)
+    /// The speaker (app ID) failed its second retry in a row and stays on
+    /// while the sender keeps trying, or its records lapsed meanwhile (nil):
+    /// its notice and row note follow (S222).
+    case reconnecting(String, NativeSpeakerEvent.Problem?)
 }
 
 /// The native sender's receivers and speakers as the app sees them (main
@@ -947,6 +951,7 @@ struct NativeAirPlayModel {
     mutating func removed(_ id: String) {
         states.removeValue(forKey: id)
         waiting.removeValue(forKey: id)
+        retriedErrors.removeValue(forKey: id)
         pruneMembers()
     }
 
@@ -960,12 +965,22 @@ struct NativeAirPlayModel {
     /// The speaker in the sender is out of view on the network (P215).
     func isUnannounced(_ id: String) -> Bool { states[id] == .unannounced }
 
+    /// Retried errors in a row since the speaker last played or went out of
+    /// view: the loss, then each failed retry.
+    private var retriedErrors: [String: Int] = [:]
+
+    /// From the second failed retry, about 3 s in, so a blip its first retry
+    /// heals never shows (S222).
+    func isReconnecting(_ id: String) -> Bool { retriedErrors[id, default: 0] >= 3 }
+
     /// Takes a sender event in, and says what the app does about it.
     mutating func apply(_ event: NativeSpeakerEvent) -> NativeAirPlayOutcome? {
         switch event {
         case .state(let id, let state, _):
             guard let before = states[id] else { return nil }
             states[id] = state
+            let reconnected = isReconnecting(id)
+            if state == .playing || state == .unannounced { retriedErrors.removeValue(forKey: id) }
             if state == .playing { endAttempt(id) }   // it plays: the user's attempt worked
             // The refusal's failed state keeps it waiting; any other state
             // means the sender started it again.
@@ -973,6 +988,7 @@ struct NativeAirPlayModel {
             let (was, now) = (before == .playing, state == .playing)
             if was != now { return .playingChanged(NativeAirPlayID.app(id), playing: now) }
             if waited { return .waiting(NativeAirPlayID.app(id), nil) }
+            if reconnected && state == .unannounced { return .reconnecting(NativeAirPlayID.app(id), nil) }
             return (before == .unannounced) != (state == .unannounced) ? .unannouncedChanged(NativeAirPlayID.app(id)) : nil
         case .error(let id, let problem, let retryMs, _):
             guard states[id] != nil else { return memberError(id, problem) }
@@ -986,7 +1002,9 @@ struct NativeAirPlayModel {
             }
             waiting.removeValue(forKey: id)
             if retryMs != nil && problem.retried {
-                return nil   // a retrying state event follows
+                // A retrying state event follows.
+                retriedErrors[id, default: 0] += 1
+                return retriedErrors[id] == 3 ? .reconnecting(NativeAirPlayID.app(id), problem) : nil
             }
             switch problem {
             case .passwordRequired, .wrongPassword, .pairingRequired:

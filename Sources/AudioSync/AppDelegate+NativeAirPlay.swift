@@ -175,6 +175,16 @@ extension AppDelegate {
             updatePtpPortNotice { $0.portsFree() }
         case .unannouncedChanged:
             pushModel()   // the row says it is off the network, or no longer
+        case .reconnecting(let id, let problem):
+            let subject = SpeakerKey.make(id: id, airplay: true)
+            if let problem {
+                let name = shownName(airPlay: id)
+                postNotice(text.nativeAirPlayRetrying(problem, name: name), subject: subject,
+                           title: text.nativeAirPlayReconnectingTitle(name: name))
+            } else {
+                clearNotices([subject])
+            }
+            pushModel()   // the row says it reconnects, or that it is off the network
         }
     }
 

@@ -9261,7 +9261,7 @@ mod tests {
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         fake.state(&kitchen, AirPlayState::Playing);
         adapter.poll();
-        fake.fail(&kitchen, ErrorKind::Unreachable);
+        fake.lose(&kitchen, ErrorKind::Unreachable);
         assert!(adapter.poll());
         assert_eq!(
             messages(&adapter),
@@ -9297,7 +9297,7 @@ mod tests {
         fake.state(&kitchen, AirPlayState::Playing);
         adapter.poll();
         assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
-        fake.fail(&kitchen, ErrorKind::Unreachable);
+        fake.lose(&kitchen, ErrorKind::Unreachable);
         adapter.poll();
         assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
         // The row keeps saying so after the notice is dismissed.
@@ -9308,7 +9308,7 @@ mod tests {
         adapter.poll();
         assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
         // Retrying, then turned off: off, and turned on again a new attempt.
-        fake.fail(&kitchen, ErrorKind::Unreachable);
+        fake.lose(&kitchen, ErrorKind::Unreachable);
         adapter.poll();
         assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
         adapter.set_speaker_enabled(&ap(&kitchen), false);
@@ -9316,7 +9316,7 @@ mod tests {
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
         // Streaming stopped and started again: no stale wait either.
-        fake.fail(&kitchen, ErrorKind::Unreachable);
+        fake.lose(&kitchen, ErrorKind::Unreachable);
         adapter.poll();
         assert_eq!(state_of(&adapter, &ap(&kitchen)), reconnecting);
         adapter.set_running(false);
@@ -9467,7 +9467,7 @@ mod tests {
     #[test]
     fn one_airplay_2_speaker_failing_leaves_the_others_playing() {
         let (mut adapter, fake, kitchen, den) = two_playing();
-        fake.fail(&den, ErrorKind::Unreachable);
+        fake.lose(&den, ErrorKind::Unreachable);
         adapter.poll();
         assert_ne!(state_of(&adapter, &ap(&den)), SpeakerState::Playing);
         assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
