@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import SwiftUI
 
 // Starting and stopping the engine, notices and alerts.
 
@@ -268,7 +269,9 @@ extension AppDelegate {
 
     func postNotice(_ message: String, subject: String, title: String? = nil, settings: PrivacyPane? = nil,
                     info: Bool = false) {
+        let repeated = appModel.notices.items.contains { $0.subject == subject && $0.text == message }
         appModel.notices.post(message, subject: subject, title: title, settings: settings, info: info)
+        if !repeated { AccessibilityNotification.Announcement(message).post() }
     }
 
     /// Drop the notices about `subjects`; their cause is gone (or the user

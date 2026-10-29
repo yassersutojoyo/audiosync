@@ -11700,6 +11700,25 @@ do {
           lines(box: false, note: false, cast: true))
 }
 
+// MARK: A dimmed volume slider says why (UIStrings.volumeLocked)
+do {
+    let t = UIStrings()
+    func castRow(_ status: CastStatus, fixed: Bool = false) -> CastRow {
+        CastRow(status: status, muted: false, volumeFixed: fixed, group: nil)
+    }
+    check(t.volumeLocked(enabled: true, cast: nil) == nil
+            && t.volumeLocked(enabled: true, cast: castRow(.playing)) == nil,
+          "volume: no reason while the slider moves")
+    check(t.volumeLocked(enabled: false, cast: nil) != nil
+            && t.volumeLocked(enabled: false, cast: castRow(.idle)) != nil,
+          "volume: a speaker that is off says why its slider is dimmed")
+    check(t.volumeLocked(enabled: true, cast: castRow(.idle)) != nil
+            && t.volumeLocked(enabled: true, cast: castRow(.idle)) != t.volumeLocked(enabled: false, cast: nil),
+          "volume: a Cast speaker with no session says why, apart from a speaker that is off")
+    check(t.volumeLocked(enabled: true, cast: castRow(.playing, fixed: true)) == t.castVolumeFixed,
+          "volume: a fixed Cast volume keeps its own reason")
+}
+
 // MARK: About panel shows the version without the build number (AboutPanel.options)
 do {
     let options = AboutPanel.options(credits: NSAttributedString(string: "credits"), copyright: "copyright",
