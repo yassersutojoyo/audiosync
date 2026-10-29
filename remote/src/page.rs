@@ -161,6 +161,15 @@ mod tests {
     }
 
     #[test]
+    fn a_change_made_elsewhere_clears_the_error_it_settles() {
+        let script = only_element(PAGE, "script").unwrap();
+        assert!(script.contains("if (speaker.on !== was.on || speaker.volume !== was.volume || speaker.delay_ms !== was.delay_ms) { showError(row.error, \"\"); }"));
+        assert!(script.contains("if (zone.volume !== row.zone.volume || zone.counts.on !== row.zone.counts.on) { showError(row.error, \"\"); }"));
+        assert!(script.contains("if ((button.getAttribute(\"aria-current\") === \"true\") !== (preset.current === true)) { showError(ui.presetError, \"\"); }"));
+        assert!(script.contains("presetButtons.delete(id); showError(ui.presetError, \"\"); }"));
+    }
+
+    #[test]
     fn a_fixed_delay_hides_its_row_and_an_unpair_error_shows_under_the_button() {
         let script = only_element(PAGE, "script").unwrap();
         assert!(

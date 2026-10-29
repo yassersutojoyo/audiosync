@@ -854,6 +854,9 @@ function showDelay(row, value) {
 }
 
 function updateRow(row, speaker) {
+  // A change made elsewhere settles whatever this phone's last change failed at.
+  const was = row.speaker;
+  if (speaker.on !== was.on || speaker.volume !== was.volume || speaker.delay_ms !== was.delay_ms) { showError(row.error, ""); }
   row.speaker = speaker;
   row.name.textContent = speaker.name;
   row.kind.textContent = speaker.kind;
@@ -977,6 +980,7 @@ function makeZone(zone) {
 }
 
 function updateZone(row, zone, speakers) {
+  if (zone.volume !== row.zone.volume || zone.counts.on !== row.zone.counts.on) { showError(row.error, ""); }
   row.zone = zone;
   row.name.textContent = zone.name;
   const counts = zone.counts;
@@ -1045,6 +1049,7 @@ function renderPresets(next) {
       presetButtons.set(preset.id, button);
     }
     button.textContent = preset.name;
+    if ((button.getAttribute("aria-current") === "true") !== (preset.current === true)) { showError(ui.presetError, ""); }
     // The current preset is filled, not only tinted, and named current to screen readers.
     button.classList.toggle("primary", preset.current === true);
     if (preset.current === true) { button.setAttribute("aria-current", "true"); } else { button.removeAttribute("aria-current"); }
@@ -1053,7 +1058,7 @@ function renderPresets(next) {
     previous = button;
   }
   for (const [id, button] of presetButtons) {
-    if (!seen.has(id)) { button.remove(); presetButtons.delete(id); }
+    if (!seen.has(id)) { button.remove(); presetButtons.delete(id); showError(ui.presetError, ""); }
   }
   if (hadFocus && !focused.isConnected) { (previous || ui.title).focus(); }
   ui.presets.hidden = presets.length === 0;
