@@ -119,9 +119,9 @@ pub struct Updater {
     manual_waiting: bool,
     cancel: Arc<AtomicBool>,
     swapped: Option<(String, swap::Swapped)>,
-    /// Held by the restart's worker through its undo; a quit that stops
-    /// waiting for that worker sets it, so no undo starts that the end of
-    /// the process could cut in half.
+    /// Held by a worker through its swap (and that swap's restore) or a
+    /// restart's undo; a quit sets it, so no swap or undo starts that the
+    /// end of the process could cut in half.
     undo_closed: Arc<Mutex<bool>>,
     /// Runs on the worker right after it releases `undo_closed`.
     #[cfg(test)]
@@ -453,12 +453,13 @@ impl Updater {
         let env = self.env.clone();
         let sender = self.sender.clone();
         let cancel = self.cancel.clone();
+        let closed = self.undo_closed.clone();
         self.spawn(move || {
             let progress_sender = sender.clone();
             let progress = move |percent| {
                 let _ = progress_sender.send(Event::Progress(percent));
             };
-            let installed = flow::install(&env, &update, &progress, &cancel);
+            let installed = flow::install(&env, &update, &progress, &cancel, &closed);
             let _ = sender.send(Event::Installed(update.version_text.clone(), installed));
         });
     }
@@ -559,8 +560,8 @@ impl Updater {
         }));
     }
 
-    /// At quit, after a swap: a failed restart's undo still running ends
-    /// first (spec S303), and an exe Windows security removed gets the
+    /// At quit: a swap under way or a failed restart's undo ends first
+    /// (spec S303), and an exe Windows security removed gets the
     /// `.bak` back, so the next start finds one (spec S315). Lock retries
     /// share [`files::QUIT_RETRY_BUDGET`]. True when the record changed.
     pub fn at_quit(&mut self) -> bool {
@@ -568,6 +569,12 @@ impl Updater {
         let mut polled = Polled::default();
         if self.work == Work::Restarting {
             self.finish_restart(&mut polled);
+        } else {
+            // Waits for a swap under way, so an exe is in place (spec S303).
+            *self
+                .undo_closed
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = true;
         }
         let Some((_, swapped)) = &self.swapped else {
             return polled.record_changed;
