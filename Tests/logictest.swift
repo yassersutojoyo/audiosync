@@ -9436,6 +9436,15 @@ do {
     _ = choseOther.turnOff(den)
     choseOther.apply(.appeared(CastDevice(id: kitchen, name: "Kitchen"), offsetMs: nil))
     check(choseOther.enabled == nil, "cast: a speaker the user switched first wins over the one saved as on (C112)")
+    var hiddenCast = castStore.load()
+    _ = hiddenCast.hiddenSpeakers.hide(key: CastID.app(kitchen), name: "Kitchen", kind: "Cast")
+    check(castStore.load().castOnAtLaunch == kitchen && hiddenCast.castOnAtLaunch == nil,
+          "cast: a hidden speaker saved as on stays off after a launch (C112)")
+    var endedAlone = m
+    _ = endedAlone.apply(.ended(attempt: 3, .failed(.connect)))
+    castStore.save(cast: endedAlone, was: m)
+    check(endedAlone.enabled == nil && castStore.load().enabledCast == nil,
+          "cast: a speaker that stops on its own is saved as off (C112)")
 
     // C108: the sender hears the selection at its start and at every change, played or not.
     var naming = CastModel()

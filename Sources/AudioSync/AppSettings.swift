@@ -118,6 +118,8 @@ struct AppSettings: Equatable {
     var enabledAirPlay: Set<String> = []
     var enabledLocal: Set<String> = []
     var enabledCast: String?
+    /// The Cast speaker to turn on once listed: the one saved as on, unless hidden (C112).
+    var castOnAtLaunch: String? { enabledCast.filter { !hiddenSpeakers.contains(CastID.app($0)) } }
     var master = AppSettings.defaultMaster
     var localVolumes: [String: Double] = [:]
     /// The absolute delays from before the local delay model (S77), as the
@@ -407,6 +409,11 @@ struct SettingsStore {
     func save(ids: Set<String>, forKey key: String) { write(ids.sorted(), key) }
 
     func save(cast id: String?) { write(id, Keys.enabledCast) }
+
+    /// Saves the Cast speaker that is on whenever it changes, by the user or on its own.
+    func save(cast model: CastModel, was old: CastModel) {
+        if model.enabled != old.enabled { save(cast: model.enabled) }
+    }
 
     func save(levels: [String: Double], forKey key: String) { write(levels, key) }
 
