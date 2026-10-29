@@ -758,6 +758,8 @@ struct CastModel {
         let level = volume.level
         let first = attempt?.heardVolume == false
         attempt?.heardVolume = true
+        // The sender sends no level before the device's first status.
+        if first { unanswered = [] }
         let answered = unanswered.lastIndex { asc_cast_level_answers($0, level) }
         if let answered { unanswered.removeFirst(answered + 1) }
         let own: Double
