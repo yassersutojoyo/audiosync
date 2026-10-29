@@ -101,6 +101,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the menu bar panel grows as soon as its content does, so its bottom is no longer cut off.
 - On the Mac, a zone or preset volume that isn't a valid number no longer keeps your zones and presets from being saved.
 - On the Mac, an AirPlay pairings file AudioSync can't read is left as it is instead of being written over.
+- On Windows, picking other input channels while the input device is unplugged no longer turns streaming off; the new channels play once the device is back.
 
 ## [0.7.1] - 2026-10-27
 
