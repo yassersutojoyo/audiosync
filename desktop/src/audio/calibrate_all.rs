@@ -1624,6 +1624,29 @@ pub(crate) mod tests {
         start_zone(&mut FakeRig::new(), &kitchen_zone()).expect("it starts")
     }
 
+    /// The results of a Calibrate Zone run whose off AirPlay speaker comes
+    /// first, read with L_s 0 as no sender gives one, and whose measured
+    /// AirPlay speaker was read with L_s `sender_ms`.
+    pub(crate) fn zone_sheet_with_an_off_airplay_row_first(
+        sender_ms: f64,
+    ) -> (Sheet, Vec<Member>, u32) {
+        let mut rig = FakeRig::new();
+        for member in &mut rig.lineup.members {
+            member.sender_ms = sender_ms;
+        }
+        let members: Vec<String> = ["ap:patio", "ap:kitchen"].map(str::to_owned).into();
+        let zone = ZoneScope {
+            present: members.iter().cloned().collect(),
+            members,
+            off: vec![member(Class::AirPlay, "patio", None, 0.0)],
+        };
+        let mut run = start_zone(&mut rig, &zone).expect("it starts");
+        let finished = run_to_end(&mut rig, &mut run, |_, _| {});
+        let sheet = finished.sheet.expect("a sheet");
+        assert!(sheet.is_off(1), "the off row comes first");
+        (sheet, run.members().to_vec(), run.rate())
+    }
+
     // covers: S255
     #[test]
     fn a_zone_run_sweeps_its_members_in_zone_order_and_keeps_the_rest_silenced() {

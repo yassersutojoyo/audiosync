@@ -11382,6 +11382,28 @@ mod tests {
         assert_eq!(adapter.audio.airplay_adjustment(), -1450.0);
     }
 
+    // covers: S238, S255
+    #[test]
+    fn an_off_airplay_row_first_in_a_zone_leaves_apply_on_the_measured_rows_l_s() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        turn_on(&mut adapter, "builtin");
+        assert_eq!(adapter.audio.airplay_sender_latency_ms(), None);
+        let base = adapter.audio.airplay_adjustment_base_ms();
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::zone_sheet_with_an_off_airplay_row_first(base),
+        );
+        adapter.apply_calibrate_all();
+        assert_eq!(
+            adapter.audio.airplay_adjustment(),
+            applied_airplay_ms(&adapter) - base
+        );
+    }
+
     /// Keeps a run's results, its reference row's output made the reference
     /// of S174 (built in), since a run starts only with one.
     fn keep(
