@@ -467,9 +467,12 @@ where
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SavedEqualizer {
+    #[serde(deserialize_with = "bool_or_false")]
     pub enabled: bool,
+    #[serde(deserialize_with = "number_or_nan")]
     pub preamp_db: f64,
     /// Band 0 (32 Hz) to band 9 (16 kHz), in dB.
+    #[serde(deserialize_with = "gains_that_read")]
     pub gains_db: Vec<f64>,
 }
 
@@ -660,6 +663,7 @@ pub fn clamp_curves(saved: &[SavedCurve]) -> Vec<UserCurve> {
 #[serde(default)]
 pub struct Settings {
     /// The format version the file was written in.
+    #[serde(deserialize_with = "version_or_current")]
     pub version: u32,
     /// The source; the whole system while [`Settings::input_device`] names
     /// the source, so an older build falls back to it.
@@ -795,6 +799,30 @@ pub struct Settings {
 fn number_or_nan<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
     let value = serde_json::Value::deserialize(deserializer)?;
     Ok(value.as_f64().unwrap_or(f64::NAN))
+}
+
+/// The stored gains, NaN for each that isn't a number, which `settings`
+/// makes flat; anything but a list is no gains.
+fn gains_that_read<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<f64>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_array().map_or_else(Vec::new, |gains| {
+        gains
+            .iter()
+            .map(|gain| gain.as_f64().unwrap_or(f64::NAN))
+            .collect()
+    }))
+}
+
+/// A stored format version; one that isn't a whole number counts as the
+/// current format, so a hand-broken current file keeps its offsets instead
+/// of going through the format 1 migration (S212).
+fn version_or_current<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value.as_u64().map_or(VERSION, |version| {
+        u32::try_from(version).unwrap_or(u32::MAX)
+    }))
 }
 
 fn record_that_reads<'de, D: serde::Deserializer<'de>>(
@@ -1255,7 +1283,7 @@ impl Settings {
         /// before its fields are looked at.
         #[derive(Deserialize)]
         struct Header {
-            #[serde(default)]
+            #[serde(default, deserialize_with = "version_or_current")]
             version: u32,
         }
         let header: Header =
@@ -1289,9 +1317,10 @@ impl Settings {
 }
 
 /// The fields of `text` whose value the lenient reader replaced with the
-/// default, in [`Settings`] order. Entries skipped inside a list or map
-/// that reads count toward `adjusted` instead.
-fn unreadable_fields(text: &str) -> Vec<&'static str> {
+/// default, in [`Settings`] order, then the equalizer values that did not
+/// read. Entries skipped inside a list or map that reads count toward
+/// `adjusted` instead.
+fn unreadable_fields(text: &str) -> Vec<String> {
     use serde_json::Value;
     fn reads<T: serde::de::DeserializeOwned>(value: &Value) -> bool {
         T::deserialize(value).is_ok()
@@ -1303,6 +1332,7 @@ fn unreadable_fields(text: &str) -> Vec<&'static str> {
     // set on purpose (spec S248, S254), so nothing falls back.
     type Reads = fn(&Value) -> bool;
     const FIELDS: &[(&str, Reads)] = &[
+        ("version", Value::is_u64),
         ("source", reads::<SavedSource>),
         ("input_device", reads::<Option<SavedInput>>),
         ("input_pairs", Value::is_object),
@@ -1335,11 +1365,31 @@ fn unreadable_fields(text: &str) -> Vec<&'static str> {
     let Ok(Value::Object(stored)) = serde_json::from_str::<Value>(text) else {
         return Vec::new();
     };
-    FIELDS
+    let mut unreadable: Vec<String> = FIELDS
         .iter()
         .filter(|(name, reads)| stored.get(*name).is_some_and(|value| !reads(value)))
-        .map(|(name, _)| *name)
-        .collect()
+        .map(|(name, _)| (*name).to_owned())
+        .collect();
+    if let Some(Value::Object(equalizer)) = stored.get("equalizer") {
+        let values: [(&str, Reads); 3] = [
+            ("enabled", Value::is_boolean),
+            ("preamp_db", Value::is_number),
+            ("gains_db", Value::is_array),
+        ];
+        for (name, reads) in values {
+            if equalizer.get(name).is_some_and(|value| !reads(value)) {
+                unreadable.push(format!("equalizer.{name}"));
+            }
+        }
+        if let Some(Value::Array(gains)) = equalizer.get("gains_db") {
+            for (band, gain) in gains.iter().enumerate() {
+                if !gain.is_number() {
+                    unreadable.push(format!("equalizer.gains_db[{band}]"));
+                }
+            }
+        }
+    }
+    unreadable
 }
 
 /// What reading the file found, for the debug log.
@@ -1353,7 +1403,7 @@ pub enum Loaded {
     Read {
         version: u32,
         adjusted: bool,
-        unreadable: Vec<&'static str>,
+        unreadable: Vec<String>,
     },
     /// The file was ignored, and why.
     Ignored(String),
@@ -1582,7 +1632,7 @@ impl SettingsFile {
 fn written_by_a_newer_build(bytes: &[u8]) -> bool {
     #[derive(Deserialize)]
     struct Header {
-        #[serde(default)]
+        #[serde(default, deserialize_with = "version_or_current")]
         version: u32,
     }
     serde_json::from_slice::<Header>(bytes).is_ok_and(|header| header.version > VERSION)
@@ -2383,7 +2433,6 @@ mod tests {
             &b"{\"version\": 1, \"master_volume\": "[..],
             b"not json at all",
             b"[1, 2, 3]",
-            b"{\"version\": \"one\", \"master_volume\": 40}",
             b"\xff\xfe\x00garbage",
             b"",
         ] {
@@ -3079,7 +3128,7 @@ mod tests {
         settings
     }
 
-    // covers: S212 (a value that isn't a number costs only that value; unreadable groups, IDs and the equalizer fall back to their defaults)
+    // covers: S212 (a value that isn't a number costs only that value, an equalizer value too; unreadable groups, IDs and an equalizer that isn't an object fall back to their defaults)
     #[test]
     fn an_unreadable_value_in_any_field_costs_only_that_value() {
         let outputs = read_beside_a_kept_master(
@@ -3101,15 +3150,51 @@ mod tests {
             read_beside_a_kept_master(whole);
         }
 
-        for equalizer in [
-            r#"{"enabled": true, "preamp_db": -3, "gains_db": [1, null]}"#,
-            r#"{"enabled": "on", "preamp_db": -3, "gains_db": [1]}"#,
-            r#"{"enabled": true, "preamp_db": "loud", "gains_db": [1]}"#,
-            "null",
+        let first_band = |enabled, preamp_db| {
+            let mut gains_db = vec![0.0; BAND_COUNT];
+            gains_db[0] = 1.0;
+            SavedEqualizer {
+                enabled,
+                preamp_db,
+                gains_db,
+            }
+        };
+        for (equalizer, expected) in [
+            (
+                r#"{"enabled": true, "preamp_db": -3, "gains_db": [1, null, "x"]}"#,
+                first_band(true, -3.0),
+            ),
+            (
+                r#"{"enabled": "on", "preamp_db": -3, "gains_db": [1]}"#,
+                first_band(false, -3.0),
+            ),
+            (
+                r#"{"enabled": true, "preamp_db": "loud", "gains_db": [1]}"#,
+                first_band(true, 0.0),
+            ),
+            (
+                r#"{"enabled": true, "preamp_db": -3, "gains_db": "flat"}"#,
+                SavedEqualizer {
+                    enabled: true,
+                    preamp_db: -3.0,
+                    ..SavedEqualizer::default()
+                },
+            ),
+            ("null", SavedEqualizer::default()),
         ] {
             let read = read_beside_a_kept_master(&format!(r#""equalizer": {equalizer}"#));
-            assert_eq!(read.equalizer, SavedEqualizer::default(), "{equalizer}");
+            assert_eq!(read.equalizer, expected, "{equalizer}");
         }
+        assert_eq!(
+            unreadable_fields(
+                r#"{"version": 3, "equalizer": {"enabled": "on", "gains_db": [1, null, "x"]}}"#
+            ),
+            [
+                "equalizer.enabled",
+                "equalizer.gains_db[1]",
+                "equalizer.gains_db[2]"
+            ]
+        );
 
         for groups in [r#""none""#, "null"] {
             let read = read_beside_a_kept_master(&format!(r#""groups": {groups}"#));
@@ -3246,14 +3331,40 @@ mod tests {
 
     // covers: S212 (a file that isn't settings at all still gives the defaults)
     #[test]
-    fn a_file_that_isnt_json_or_has_no_readable_version_is_still_refused() {
-        for text in [
-            "not json",
-            r#"{"version": "x", "master_volume": 40}"#,
-            "null",
-        ] {
+    fn a_file_that_isnt_json_or_isnt_an_object_is_still_refused() {
+        for text in ["not json", "null"] {
             assert!(Settings::from_json(text).is_err(), "{text}");
         }
+    }
+
+    // covers: S212 (a version that isn't a whole number costs only itself)
+    #[test]
+    fn a_version_that_isnt_a_whole_number_reads_as_the_current_format() {
+        for version in [r#""3""#, r#""x""#, "1.5", "-2", "null", "true"] {
+            let text = format!(
+                r#"{{"version": {version}, "master_volume": 40,
+                    "outputs": {{"desk": {{"enabled": true, "volume": 50, "delay_ms": -200}}}}}}"#
+            );
+            let (read, found) =
+                Settings::from_json(&text).unwrap_or_else(|why| panic!("{version}: {why}"));
+            assert_eq!(read.master_volume, 40.0, "{version}");
+            assert_eq!(read.outputs["desk"].delay_ms, -200.0, "{version}");
+            assert!(
+                matches!(
+                    found,
+                    Loaded::Read {
+                        version: VERSION,
+                        ..
+                    }
+                ),
+                "{version}: {found:?}"
+            );
+            assert!(!written_by_a_newer_build(text.as_bytes()), "{version}");
+            assert_eq!(unreadable_fields(&text), ["version"], "{version}");
+        }
+        let beyond = r#"{"version": 5000000000, "master_volume": 40}"#;
+        assert!(Settings::from_json(beyond).is_err_and(|why| why.contains("newer")));
+        assert!(written_by_a_newer_build(beyond.as_bytes()));
     }
 
     // covers: S245 (a zone volume that isn't a number is the default), S212
