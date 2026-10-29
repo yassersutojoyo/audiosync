@@ -25,7 +25,7 @@ enum StartOrigin: Equatable {
 
     /// The speakers of `ids`, just switched on, that begin attempts
     /// (`AppDelegate.beginNativeAttempts`); nil when this origin begins none.
-    func attemptsToBegin(_ ids: [String]) -> [String]? { ids }
+    func attemptsToBegin(_ ids: [String]) -> [String]? { beginsAttempts ? ids : nil }
 }
 
 /// The decisions behind the app's launch, when the speakers are reconciled, a
