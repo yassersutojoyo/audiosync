@@ -45,13 +45,13 @@ extension AppDelegate {
         // Input devices sit behind the microphone permission. Ask first; the
         // HAL would otherwise just deliver silence.
         if case .input = audioSource {
-            switch AVCaptureDevice.authorizationStatus(for: .audio) {
-            case .authorized:
+            switch MicrophoneStart.decide(AVCaptureDevice.authorizationStatus(for: .audio)) {
+            case .start:
                 break
-            case .notDetermined:
+            case .ask:
                 askMicrophone(origin: origin)
                 return
-            default:
+            case .fail:
                 failStart(text.microphoneDenied, origin: origin, settings: .microphone)
                 return
             }
@@ -452,14 +452,7 @@ extension AppDelegate {
         // Only a live reading counts: the monitor polls while the window is
         // open or AirPlay receivers show the track, and a stopped monitor
         // keeps its last (possibly stale) track.
-        guard nowPlaying.isRunning, let track = nowPlaying.reading, track.isPlaying else { return nil }
-        switch audioSource {
-        case .system: return track
-        case .app(let bundleID): return track.bundleID == bundleID ? track : nil
-        case .mix(.only, let ids): return ids.contains(track.bundleID) ? track : nil
-        case .mix(.allExcept, let ids): return ids.contains(track.bundleID) ? nil : track
-        case .input: return nil
-        }
+        NowPlayingMonitor.sourcePlaying(nowPlaying.reading, running: nowPlaying.isRunning, source: audioSource)
     }
 
     private func sourceDisplayName() -> String? {

@@ -17,6 +17,19 @@ enum VolumeCurve {
     }
 }
 
+enum LocalOutputGain {
+    /// A local speaker's linear gain through its zone, on the core's volume
+    /// curve (S71, S249); 0 while a calibration plays its signal through
+    /// another output, `solo` (S232, S235).
+    static func gain(_ uid: String, solo: String?, volumes: [String: Double], zones: [SpeakerZone],
+                     master: Double) -> Double {
+        if let solo, solo != uid { return 0 }
+        let zone = SpeakerZone.volume(of: SpeakerKey.make(id: uid, kind: .local), in: zones)
+        return CoreGainCurve().outputGain(localPosition: volumes[uid] ?? AppSettings.defaultVolume,
+                                          zonePosition: zone, masterPosition: master)
+    }
+}
+
 /// An AirPlay speaker's device level, decided by the core from the stored
 /// own volume, the zone and the master (S290).
 enum AirPlayDeviceLevel {

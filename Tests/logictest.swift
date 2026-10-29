@@ -3,6 +3,7 @@
 import Foundation
 import AppKit
 import AudioToolbox
+import AVFoundation
 import CAudioSyncCore
 import CoreAudio
 import CoreServices
@@ -19,6 +20,7 @@ func check(_ ok: Bool, _ name: String, _ detail: @autoclosure () -> String = "")
 func approx(_ a: Double, _ b: Double, _ tol: Double) -> Bool { abs(a - b) <= tol }
 
 // MARK: Volume curve
+// covers: S70 (the curve, its inverse and the reference values)
 check(VolumeCurve.gain(position: 0) == 0, "volume: 0 is silent")
 check(VolumeCurve.gain(position: 100) == 1, "volume: 100 is unity")
 let halfDB = 20 * log10(VolumeCurve.gain(position: 50))
@@ -30,6 +32,20 @@ check(approx(VolumeCurve.position(gain: 0.0349), 32.7, 0.1), "volume: legacy 3.4
 var mono = true
 for p in stride(from: 0.0, to: 100, by: 1) where VolumeCurve.gain(position: p + 1) <= VolumeCurve.gain(position: p) { mono = false }
 check(mono, "volume: strictly increasing")
+// covers: S71 (the Mac host's local output gain)
+do {
+    let den = SpeakerZone(id: "z1", name: "Den", members: ["lc:usb"], volume: 50)
+    func gain(_ uid: String, solo: String? = nil, master: Double = 100) -> Double {
+        LocalOutputGain.gain(uid, solo: solo, volumes: ["usb": 80], zones: [den], master: master)
+    }
+    let g = VolumeCurve.gain(position:)
+    check(AppSettings.defaultVolume == 60 && approx(gain("new", master: 70), g(60) * g(70), 1e-12),
+          "volume: a local speaker with no stored volume plays at 60, in no zone at zone volume 100", "\(gain("new", master: 70))")
+    check(approx(gain("usb", master: 70), g(80) * g(50) * g(70), 1e-12),
+          "volume: a local speaker's gain is its own volume times its zone's times the master's", "\(gain("usb", master: 70))")
+    check(gain("usb", solo: "bt") == 0 && gain("new", solo: "") == 0 && approx(gain("usb", solo: "usb"), g(80) * g(50), 1e-12),
+          "volume: a calibration playing through one output silences every other local speaker")
+}
 
 // covers: S290, S291 (a level set on the speaker is kept for its next session)
 do {
@@ -169,6 +185,7 @@ do {
 }
 
 // MARK: Audio source persistence
+// covers: S12 (the stored form)
 for src in [AudioSource.system, .app(bundleID: "com.spotify.client"), .input(uid: "BuiltInMicrophoneDevice")] {
     check(AudioSource(defaultsValue: src.defaultsValue) == src, "source: round-trip \(src)")
 }
@@ -258,6 +275,7 @@ do {
 }
 
 // MARK: Source apps — display names and the picker's app list
+// covers: S12 (the picker's apps and their names)
 check(SourceApps.displayName(running: "Music", installed: "Apple Music", bundleID: "com.apple.Music") == "Music",
       "source apps: a running app's name comes first")
 check(SourceApps.displayName(running: nil, installed: "Music", bundleID: "com.apple.Music") == "Music",
@@ -349,6 +367,7 @@ check(AppAppearance.light.appearanceName == .aqua && AppAppearance.dark.appearan
 check(SpeakerKey.make(id: "123", airplay: true) == "ap:123", "speaker key: AirPlay prefix")
 check(SpeakerKey.parse("lc:58-18:output").map { $0.id == "58-18:output" && !$0.airplay } == true, "speaker key: local parse keeps colons")
 check(SpeakerKey.parse("zz:1") == nil, "speaker key: unknown prefix rejected")
+// covers: S243 (the Cast key and the app ID it maps to)
 check(SpeakerKey.parseAny("CC:tv") == nil && SpeakerKey.parseAny("cast:tv") == nil && SpeakerKey.parseAny("tv") == nil
       && SpeakerKey.make(id: "manual:203.0.113.20:8009", kind: .cast) == "cc:manual:203.0.113.20:8009"
       && SpeakerKey.parseAny("cc:manual:203.0.113.20:8009").map { $0.id == "manual:203.0.113.20:8009" && $0.kind == .cast } == true
@@ -484,6 +503,7 @@ do {
     let stored = Stored()
     let store = SettingsStore(read: { stored.values[$0] },
                               write: { value, key in stored.values[key] = value; stored.order.append(key) })
+    // covers: S248 (the Mac host)
     let groups = [
         SpeakerGroup(id: "g1", name: "Living Room", members: ["lc:BuiltInSpeakerDevice", "ap:native:AABBCCDDEE01"]),
         SpeakerGroup(id: "g2", name: "Group 2", members: ["ap:native:AABBCCDDEE01", "cc:Chromecast-1"]),
@@ -551,6 +571,7 @@ do {
                          SpeakerZone(id: "z4", name: "Fine", members: [], volume: 40)],
           "zones: a stored value that can't be read loses only that value, or its zone, never the others", "\(oneBadZone)")
 
+    // covers: S286 (the Mac host: a kept name is saved, moves and leaves with its key; older zones load unchanged)
     let unnamed = [SpeakerZone(id: "z1", name: "Kitchen", members: ["ap:native:X", "lc:blank"], volume: 80),
                    SpeakerZone(id: "z2", name: "Den", members: [], volume: 100)]
     let named = SpeakerZone.remembering(["ap:native:X": "Kitchen HomePod", "lc:blank": " ", "lc:other": "Desk"],
@@ -592,6 +613,7 @@ do {
     let store = SettingsStore(read: { stored.values[$0] },
                               write: { value, key in stored.values[key] = value; stored.order.append(key) })
     let flat = [Double](repeating: 0, count: 10)
+    // covers: S254 (the presets the overlapping groups become, once)
     store.save(groups: [
         SpeakerGroup(id: "g1", name: "Living Room", members: ["lc:BuiltInSpeakerDevice", "ap:native:AABBCCDDEE01"]),
         SpeakerGroup(id: "g2", name: "Group 2", members: ["ap:native:AABBCCDDEE01", "cc:Chromecast-1"]),
@@ -1026,6 +1048,7 @@ do {
     check(Equalizer.save("One more", gains: gains, in: &full) == nil && Equalizer.save("c7", gains: gains, in: &full) == 7,
           "eq curves: a full list refuses a new name but replaces a taken one")
 
+    // covers: S23 (the host steps and clamps a stored curve's band gains)
     let stored = Data(#"[{"name":" Desk ","gains":[1.3,"loud",30,-30]},{"name":"desk","gains":[]},{"gains":[1]},7,{"name":"Late","gains":[0]}]"#.utf8)
     let read = StoredCurves.decode(stored)
     check(read.map(\.name) == ["Desk", "Late"] && read[0].gains == [1.5, 0, 12, -12, 0, 0, 0, 0, 0, 0],
@@ -1039,6 +1062,7 @@ do {
 }
 
 // MARK: Notices — several at once, one per subject, newest first
+// covers: S153 (the list: newest first, one per subject, at most 4, clearing, Automation and privacy panes)
 do {
     let t0 = Date(timeIntervalSince1970: 1_000_000)
     var list = NoticeList()
@@ -1665,6 +1689,7 @@ check(!NativeReceiver.isThisMac("My Mac", computerName: nil), "own receiver: an 
 check(!NativeReceiver.isThisMac("", computerName: ""), "own receiver: an empty computer name hides nothing")
 
 // MARK: Capture check — "nothing yet" is not an error until the source is known to play
+// covers: S17 (no sound yet is waiting, not an error, until the source is known to play)
 check(CaptureCheck.verdict(sessionHeard: true, runHeard: false, knownPlayingFor: 60) == .flowing, "capture: sound this session → flowing")
 check(CaptureCheck.verdict(sessionHeard: false, runHeard: false, knownPlayingFor: nil) == .waiting, "capture: no sound, unknown source → waiting")
 check(CaptureCheck.verdict(sessionHeard: false, runHeard: false, knownPlayingFor: 2) == .waiting, "capture: playing only briefly → still waiting")
@@ -1675,6 +1700,34 @@ check(CaptureCheck.provesPermission(.system) && CaptureCheck.provesPermission(.a
       "capture: sound from a system or app tap proves the permission")
 check(!CaptureCheck.provesPermission(.input(uid: "BuiltInMicrophoneDevice")),
       "capture: a microphone or line-in heard never proves the tap permission")
+// covers: S19
+do {
+    let spotify = "com.spotify.client", music = "com.apple.Music"
+    func track(_ bundleID: String, playing: Bool = true) -> NowPlayingMonitor.Track {
+        NowPlayingMonitor.Track(bundleID: bundleID, appName: "Player", title: "Song", artist: "Band", album: "Record",
+                                isPlaying: playing, artwork: nil)
+    }
+    func plays(_ reading: NowPlayingMonitor.Track?, _ source: AudioSource, running: Bool = true) -> Bool {
+        NowPlayingMonitor.sourcePlaying(reading, running: running, source: source) != nil
+    }
+    check(plays(track(spotify), .system) && plays(track(music), .system),
+          "known playing: for the whole system any playing player counts")
+    check(plays(track(spotify), .app(bundleID: spotify)) && !plays(track(music), .app(bundleID: spotify)),
+          "known playing: for an app source only that app's reading counts")
+    check(plays(track(spotify), .mix(.only, bundleIDs: [spotify, "com.apple.Safari"]))
+            && !plays(track(music), .mix(.only, bundleIDs: [spotify]))
+            && plays(track(music), .mix(.allExcept, bundleIDs: [spotify]))
+            && !plays(track(spotify), .mix(.allExcept, bundleIDs: [spotify])),
+          "known playing: a mix counts only the readings of the apps it captures")
+    check(!plays(track(spotify), .input(uid: "mic")), "known playing: an input device is never known to play")
+    check(!plays(track(spotify, playing: false), .system) && !plays(nil, .system)
+            && !plays(track(spotify), .system, running: false),
+          "known playing: a paused reading, no reading or a stopped monitor's last reading never counts")
+}
+// covers: S15 (the decision by permission status; the notice is the call site's)
+check(MicrophoneStart.decide(.authorized) == .start && MicrophoneStart.decide(.notDetermined) == .ask
+        && MicrophoneStart.decide(.denied) == .fail && MicrophoneStart.decide(.restricted) == .fail,
+      "microphone: an input starts once allowed, asks while undecided, and fails when denied or restricted")
 do {
     let old = NowPlayingMonitor.Position(elapsed: 10, length: 200, readAt: 50, playing: true)
     let moved = NowPlayingMonitor.Position(elapsed: 12, length: 200, readAt: 52, playing: true)
@@ -4022,6 +4075,7 @@ do {
 }
 
 // MARK: Pairing store — plaintext by design, so its folder stays out of backups
+// covers: S224 (the folder, its backup mark and the move from where older builds kept the file)
 do {
     let fm = FileManager.default
     let support = fm.temporaryDirectory.appendingPathComponent("audiosync-pairingstest-\(getpid())", isDirectory: true)
@@ -4087,6 +4141,7 @@ do {
     typealias P = LocalOutputSync.Plan
 
     // EC1 / EC2: a local speaker's device goes away and comes back.
+    // covers: S161, S117, S68 (a speaker whose output went stays on, the others play, it is attached once listed)
     check(LocalOutputSync.plan(enabled: ["usb"], active: ["usb"], available: ["usb"]) == P(attach: [], detach: []),
           "EC1 unplug: a playing speaker that is still present is left alone")
     check(LocalOutputSync.plan(enabled: ["usb"], active: [], available: []) == P(attach: [], detach: []),
@@ -4235,12 +4290,14 @@ do {
     }
 
     // EC4 / EC9: the capture rate changes under a running session.
+    // covers: S157
     check(CaptureRate.needsRestart(current: 48000, reported: 44100), "EC4 rate: a new capture rate rebuilds the session")
     check(CaptureRate.needsRestart(current: 44100, reported: 96000), "EC4 rate: a higher capture rate rebuilds the session")
     check(!CaptureRate.needsRestart(current: 48000, reported: 48000), "EC4 rate: the same rate keeps playing")
     check(!CaptureRate.needsRestart(current: 48000, reported: 0), "EC4 rate: an unreadable rate keeps playing")
 
     // EC5: switching the source.
+    // covers: S163 (the decision and the notices a pick clears)
     let music = AudioSource.app(bundleID: "com.apple.Music")
     check(SourceSwitch.decide(from: .system, to: music, streaming: true) == .restart,
           "EC5 source: switching while streaming rebuilds the capture")
@@ -4372,6 +4429,7 @@ do {
           "EC6 app quit: the switch to the whole system never waits on the microphone prompt (S227)")
 
     // EC8: every speaker off, then one on again.
+    // covers: S162, S118, S119 (the stop and start decisions; a local speaker joining is the sync plan above)
     check(StreamingPolicy.isIdle(streaming: true, enabledAirPlay: [], enabledLocal: []),
           "EC8 all off: streaming stops when the last speaker is switched off")
     check(!StreamingPolicy.isIdle(streaming: true, enabledAirPlay: ["a"], enabledLocal: []),
@@ -5376,6 +5434,7 @@ do {
             == ["lc:usb", "ap:native:den"],
           "zones: a zone member keeps a compact row in its own section, in the section's order")
 
+    // covers: S246 (Only This Speaker: present members only, one Cast place, a Cast member that can't start changes nothing)
     func onlyThis(_ key: String, _ members: [ZoneLayout.Member]) -> [String] {
         ZoneLayout.onlyThis(key, members: members).map { "\($0.key) \($0.on ? "on" : "off")" }
     }
@@ -6054,6 +6113,7 @@ do {
           "settings: a stored group value that can't be read loses only that member, or its group, never the others",
           "\(oneBadGroup)")
 
+    // covers: S75
     stored.values = [Keys.legacyLocalGains: ["a": 3.49, "b": 150.0, "c": Double.nan] as [String: Any],
                      Keys.legacyDelayMs: 1500.0]
     let migrated = store.load()
@@ -6143,6 +6203,7 @@ do {
             && LocalDelay.shownOffset(r, reference: r, offsets: [r: 300]) == nil,
           "local delay: a switched-off reference is still the reference", "\(holds([usb, bt]))")
 
+    // covers: S8 (only local outputs get a hold-back; they wait L for the AirPlay speakers)
     check(holds([r, usb, bt], airPlay: true) == [r: 2000, usb: 2150, bt: 1750]
             && holds([bt], airPlay: true) == [bt: 1750],
           "local delay: AirPlay chosen adds the AirPlay delay on top", "\(holds([r, usb, bt], airPlay: true))")
@@ -6402,6 +6463,7 @@ do {
     check(store.load().speakerNames.custom == ["c": "Den"],
           "speaker names: a stored entry that isn't a name is skipped")
 
+    // covers: S243 (a Cast name kept under lc:cast: moves to cc: once; one under the new key wins)
     let before = SpeakerNames(custom: ["lc:cast:nest-1": "Den", "lc:cast:tv": "Old", "cc:tv": "Lounge",
                                        "lc:cast:": "Blank ID", "lc:usb-uid": "Desk"])
     let moved = before.castKeysMoved()
@@ -7624,6 +7686,7 @@ do {
     let usbAgain = AudioDevices.Device(id: 99, name: "USB DAC", uid: "usb", transport: kAudioDeviceTransportTypeUSB)
     let bt = AudioDevices.Device(id: 61, name: "Headphones", uid: "bt", transport: kAudioDeviceTransportTypeBluetooth)
 
+    // covers: S69
     // The user switches on a Bluetooth headset that won't start, next to a USB
     // DAC that does, a speaker whose device is missing, and one switched off.
     let engine = RefusingEngine(active: ["old"], refusing: ["bt"])
@@ -7995,6 +8058,7 @@ do {
     check(AppLifecycle.exitStatus(signal: SIGTERM) == 143 && AppLifecycle.exitStatus(signal: SIGINT) == 130,
           "quit: after a signal's clean exit the status is 128 plus its number, so a calling script sees the interrupt (S111)",
           "\(AppLifecycle.exitStatus(signal: SIGTERM)), \(AppLifecycle.exitStatus(signal: SIGINT))")
+    // covers: S20 (the host restarts the session the engine stopped for a format change)
     check(AppLifecycle.restartsAfterFormatChange(userStopped: false)
             && !AppLifecycle.restartsAfterFormatChange(userStopped: true),
           "EC4 rate: a format change rebuilds the session the engine stopped, unless the user switched streaming off")
@@ -8005,6 +8069,7 @@ do {
         guard let answer = AppLifecycle.sourceQuit(report, source: source ?? music, setting: setting) else { return "keep" }
         return "\(answer.action) \(answer.bundleID)"
     }
+    // covers: S164 (only the source app's own quit ends an app source)
     let musicQuit = Report.terminated(bundleID: "com.apple.Music", streaming: true)
     check(quit(musicQuit) == "stop com.apple.Music",
           "EC6 app quit: the source app quitting while streaming stops the session", quit(musicQuit))
@@ -8030,6 +8095,7 @@ do {
     check(quit(lost) == "stop com.apple.Music" && quit(lost, music, .system) == "switchToSystem com.apple.Music",
           "source quit: the capture finding its app gone counts as that app quitting (S227 f)",
           "\(quit(lost)), \(quit(lost, music, .system))")
+    // covers: S21 (a capture lost for any cause but its app quitting goes on to the stop)
     check(quit(.captureLost(.inputDisconnected), music, .system) == "keep"
             && quit(.captureLost(.aggregateDeviceFailed(1)), music, .system) == "keep",
           "source quit: a capture lost for another cause is no app quit (S21 still applies)")
@@ -8132,6 +8198,7 @@ do {
                    finish: { meanwhile = $0 })
     check(meanwhile == true, "source quit: a start during the wait ends the switch as started, with its notice (S227 g)",
           "\(String(describing: meanwhile))")
+    // covers: S164 (a mix ends only with its last app, judged again a second later)
     // macOS's app list can miss the mix's other apps in the turn one of them quits.
     let mix3 = AudioSource.mixed(.only, bundleIDs: ["com.spotify.client", "com.apple.Safari", "com.apple.TextEdit"])
     func mixQuit(_ report: Report, running: Set<String> = []) -> String {
@@ -10358,6 +10425,10 @@ do {
     let offFirst = plan("{\"type\":\"speaker\",\"id\":\"hp\",\"on\":false,\"volume\":10}") == [.setEnabled(id: "hp", on: false)]
     let masterClamped = plan("{\"type\":\"master\",\"volume\":150}") == [.setMaster(position: 100)]
     check(offFirst && masterClamped, "web remote: a speaker turned off takes no volume; the master volume is clamped")
+    // covers: S76 (a phone's volume, before it reaches a speaker, a zone or the master)
+    check(RemoteSnapshot.volume(-20) == 0 && RemoteSnapshot.volume(150) == 100 && RemoteSnapshot.volume(.nan) == 0
+            && RemoteSnapshot.volume(37) == 37,
+          "web remote: a volume is clamped to 0 to 100 before use; one that isn't a number is 0")
 
     // covers: S256, S253
     let zoneRows = [
@@ -10453,6 +10524,7 @@ do {
     check(RemoteDevicesFile.canForget(count: 0, failed: true) && RemoteDevicesFile.canForget(count: 2, failed: false)
             && !RemoteDevicesFile.canForget(count: 0, failed: false),
           "web remote: Forget All stays available after a failed save, when no device is left in memory")
+    // covers: S287 (the Mac asks the core for pairing codes only while the debug log is on)
     let debugStart = RemoteStartConfig.make(port: 7655, localName: nil, devicesPath: nil, debugLog: true)
     let normalStart = RemoteStartConfig.make(port: 8080, localName: "den", devicesPath: "/devices.json", debugLog: false)
     check(debugStart["log_pairing_codes"] as? Bool == true && debugStart["port"] as? Int == 7655
@@ -11164,6 +11236,7 @@ do {
     check(Set(lines).count == all.count, "session stop: every reason has its own log line", lines.joined(separator: " | "))
     check(lines.allSatisfy { $0.hasPrefix("[AudioSync] session stops: ") || $0.hasPrefix("[AudioSync] session restarts: ") },
           "session stop: each line says whether the session stops or restarts", lines.joined(separator: " | "))
+    // covers: S20 (a format change restarts the session)
     check(all.filter(\.restarts) == [.sourceSwitchedToSystem, .sourceChanged, .inputPairChanged, .formatChanged, .rebuild],
           "session stop: only a source switch, a channel pair change, a format change and a rebuild restart")
     check(SessionStop.powerSwitch.logLine(detail: "key code 49 in NSWindow")
