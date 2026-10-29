@@ -22,6 +22,10 @@ enum StartOrigin: Equatable {
     /// code (`NativeAirPlayModel.turnedOnByUser`); a speaker the phone turns
     /// on that asks for one goes off with a notice instead.
     var beginsAttempts: Bool { self == .user }
+
+    /// The speakers of `ids`, just switched on, that begin attempts
+    /// (`AppDelegate.beginNativeAttempts`); nil when this origin begins none.
+    func attemptsToBegin(_ ids: [String]) -> [String]? { ids }
 }
 
 /// The decisions behind the app's launch, when the speakers are reconciled, a
