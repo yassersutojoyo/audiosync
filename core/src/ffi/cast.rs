@@ -2650,15 +2650,21 @@ mod tests {
         let at = |ip| record(KITCHEN, "Kitchen", DEVICE_PORT, ip);
         browse(
             handle,
-            vec![BrowseEvent::Resolved(at(Ipv4Addr::new(192, 0, 2, 5)))],
+            vec![BrowseEvent::Resolved(at(Ipv4Addr::new(127, 0, 0, 2)))],
             false,
         );
         devices(handle);
         let (attempt, _) = start(handle, KITCHEN);
         assert!(attempt > 0);
+        let failed_at = |address: &'static str| {
+            move |event: &Pending| {
+                event.kind == CAST_EVENT_CONNECT_FAILED && event.detail.contains(address)
+            }
+        };
+        events_until(handle, failed_at("127.0.0.2:8009"));
         browse(
             handle,
-            vec![BrowseEvent::Resolved(at(Ipv4Addr::new(192, 0, 2, 9)))],
+            vec![BrowseEvent::Resolved(at(Ipv4Addr::new(127, 0, 0, 3)))],
             false,
         );
         devices(handle);
@@ -2668,8 +2674,10 @@ mod tests {
             .expect("a single device's records");
         assert_eq!(
             records.get().group,
-            [SocketAddr::new(IpAddr::from([192, 0, 2, 9]), DEVICE_PORT)]
+            [SocketAddr::new(IpAddr::from([127, 0, 0, 3]), DEVICE_PORT)]
         );
+        // The session's next attempt goes where the entry moved.
+        events_until(handle, failed_at("127.0.0.3:8009"));
         // SAFETY: a live handle.
         unsafe { asc_cast_stop(handle) };
         destroy(handle);
