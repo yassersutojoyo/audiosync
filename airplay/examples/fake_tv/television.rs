@@ -146,7 +146,8 @@ pub fn ptp_only(fake: &mut FakeAp2) {
     fake.refuse_timing.push("NTP".to_owned());
 }
 
-/// `entries` from [`txt`] with bit 41 added to the high word of `features`.
+/// `entries` from [`txt`] with the high word of `features` set to the
+/// AirPlay 2 bits and bit 41.
 pub fn ptp_only_txt(entries: Vec<(&'static str, String)>) -> Vec<(&'static str, String)> {
     entries
         .into_iter()

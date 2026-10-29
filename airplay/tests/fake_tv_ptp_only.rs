@@ -73,8 +73,8 @@ fn the_ptp_only_television_announces_bit_41_and_refuses_ntp() {
             .cloned()
             .collect()
     }
-    assert_eq!(features_of(&plain), Some("0x0,0x10040"));
-    assert_eq!(features_of(&txt), Some("0x0,0x10240"));
+    assert_eq!(features_of(&plain), Some("0x7f8ad0,0x38bcb46"));
+    assert_eq!(features_of(&txt), Some("0x7f8ad0,0x10240"));
     assert_eq!(others(&txt), others(&plain));
 
     let mut fake = television(
