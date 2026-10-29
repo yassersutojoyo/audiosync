@@ -662,14 +662,14 @@ export component TrayFlyout inherits Window {
 
                     Divider { }
 
-                    if root.no-speaker-on: SecondaryText {
+                    if root.no-speaker-on && (root.zones.length > 0 || root.speakers.length > 0 || root.this-pc.length > 0): SecondaryText {
                         text: Strings.no-speaker-on;
                     }
 
                     // "No speakers found" waits for 20 seconds of AirPlay discovery;
                     // until then it says it looks, as the main window's note does.
-                    if root.zones.length == 0 && root.speakers.length == 0 && root.this-pc.length == 0 && (root.all-hidden || root.airplay-none-found || root.airplay-searching): SecondaryText {
-                        text: root.all-hidden ? Strings.flyout-all-hidden : root.airplay-none-found ? Strings.no-speakers : Strings.looking-for-speakers;
+                    if root.zones.length == 0 && root.speakers.length == 0 && root.this-pc.length == 0: SecondaryText {
+                        text: root.all-hidden ? Strings.flyout-all-hidden : root.airplay-none-found ? Strings.no-speakers : root.airplay-searching ? Strings.looking-for-speakers : Strings.connected-none;
                     }
 
                     if root.zones.length > 0 || root.speakers.length > 0: ScrollView {

@@ -2048,7 +2048,7 @@ export component MainWindow inherits Window {
                     // Rows keep their height when the list is shorter than the view.
                     alignment: start;
 
-                    if root.no-speaker-on: HorizontalLayout {
+                    if root.no-speaker-on && (root.this-pc.length > 0 || root.this-pc-zoned.length > 0 || root.connected.length > 0 || root.connected-zoned.length > 0): HorizontalLayout {
                         padding-left: 4px;
                         SecondaryText {
                             text: Strings.no-speaker-on;

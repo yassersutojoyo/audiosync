@@ -40,6 +40,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - When a saved input channel pair the device doesn't have plays as channels 1-2, picking 1-2 no longer restarts the capture, and the pick is kept, so the old pair doesn't come back once the device has those channels again. On the Mac and on Windows.
 - On Windows, settings a newer version of AudioSync added are kept when an older version saves. Before, going back a version lost them.
 - The PIN prompt of a speaker set to ask for a code every time no longer says it connects without a PIN after pairing. On the Mac and on Windows.
+- On Windows, the tray panel says "No connected speakers" when it has nothing to list, as the main window does, instead of staying blank.
 - On Windows, with the equalizer off, its gain values and band labels stay readable; only the sliders fade.
 - On the Mac, the line under a speaker list's In zones box no longer runs into the box's rounded corners.
 - On the Mac, after macOS restarts its audio service AudioSync keeps following each speaker's volume and mute, and the list of outputs.

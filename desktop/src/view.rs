@@ -7061,6 +7061,49 @@ mod tests {
         assert!(!app.main.get_airplay_searching());
     }
 
+    /// With AirPlay discovery off or failed and no output on this PC, the
+    /// flyout says no speaker is connected instead of staying blank.
+    #[test]
+    fn an_empty_flyout_says_no_speaker_is_connected() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        backend.retain_speakers(|_| false);
+        let app = app_over(backend);
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        assert!(
+            ElementHandle::find_by_accessible_label(&app.flyout, "No connected speakers")
+                .next()
+                .is_some(),
+            "the empty flyout says so"
+        );
+    }
+
+    /// Streaming with no speaker listed at all: neither window asks to turn
+    /// one on, which there is none to turn on.
+    #[test]
+    fn streaming_with_no_speaker_listed_asks_for_none_to_be_turned_on() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        backend.retain_speakers(|_| false);
+        backend.set_no_speaker_on(true);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let text = "No speaker is on. The first one you turn on starts playing.";
+        assert!(
+            ElementHandle::find_by_accessible_label(&app.main, text)
+                .next()
+                .is_none()
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&app.flyout, text)
+                .next()
+                .is_none()
+        );
+    }
+
     #[test]
     fn streaming_with_every_speaker_off_says_the_first_one_on_plays() {
         let mut backend = MockBackend::new();
