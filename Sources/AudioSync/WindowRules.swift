@@ -197,7 +197,8 @@ struct PanelMotion: Equatable {
 
 /// When the open panel takes a new size from its content. Changes that come
 /// within `gather` of the first go in one animated step, which waits for the
-/// panel to finish growing in. The latest size wins.
+/// panel to finish growing in; content that grew starts it at once. The
+/// latest size wins.
 struct PanelResize: Equatable {
     static let gather: TimeInterval = 0.1
     static let duration: TimeInterval = 0.2
@@ -206,10 +207,13 @@ struct PanelResize: Equatable {
     private(set) var due: TimeInterval?
 
     /// When to apply the step this change joins. `settled` is when the
-    /// panel's open animation ends.
-    mutating func changed(to size: CGSize, at now: TimeInterval, settled: TimeInterval) -> TimeInterval {
+    /// panel's open animation ends; `current` is the content size on screen.
+    mutating func changed(to size: CGSize, at now: TimeInterval, settled: TimeInterval,
+                          from current: CGSize? = nil) -> TimeInterval {
         pending = size
-        let when = due ?? max(now + Self.gather, settled)
+        // Grown content runs off the bottom edge until its step starts, so a grow never waits out the gather.
+        let grows = current.map { size.height > $0.height } ?? false
+        let when = min(due ?? .infinity, max(now + (grows ? 0 : Self.gather), settled))
         due = when
         return when
     }

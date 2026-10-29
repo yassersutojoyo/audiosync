@@ -5905,6 +5905,13 @@ do {
           "menu bar panel: the step goes to the latest size, once")
     check(near(resize.changed(to: taller, at: 60, settled: 60.28), 60.28),
           "menu bar panel: a size change while the panel grows in waits until it has settled")
+    var growing = PanelResize()
+    let short = CGSize(width: 306, height: 420)
+    check(near(growing.changed(to: tall, at: 80, settled: 60, from: short), 80) && growing.take(at: 80) == tall,
+          "menu bar panel: content that grew starts its step at once, so its bottom is never cut off while a step gathers")
+    check(near(growing.changed(to: short, at: 90, settled: 60, from: tall), 90.1)
+            && near(growing.changed(to: taller, at: 90.02, settled: 60, from: tall), 90.02) && growing.take(at: 90.02) == taller,
+          "menu bar panel: a shrink waits for the gather, but content that grows meanwhile brings the step forward")
 
     func sizing(_ events: [PanelSizing.Event]) -> PanelSizing {
         events.reduce(PanelSizing.closed) { $0.after($1) }
