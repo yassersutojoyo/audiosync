@@ -2754,20 +2754,9 @@ impl<D: Driver> Controller<D> {
                 executables,
             } => {
                 let processes = self.driver.processes()?;
-                // Without the sessions, the chosen top processes still play,
-                // but none of them running says nothing of a later instance.
-                let sessions = self.driver.session_pids();
-                let target = decide_apps_capture(
-                    &processes,
-                    sessions.as_deref().unwrap_or_default(),
-                    own_pid,
-                    root_pids,
-                    executables,
-                );
-                match (target, sessions) {
-                    (Err(BackendError::SourceGone), Err(error)) => Err(error),
-                    (target, _) => target,
-                }
+                // Without the sessions, the chosen top processes still play.
+                let sessions = self.driver.session_pids().unwrap_or_default();
+                decide_apps_capture(&processes, &sessions, own_pid, root_pids, executables)
             }
             SourceId::AppsExcept { executables } => {
                 let processes = self.driver.processes()?;
@@ -2779,6 +2768,32 @@ impl<D: Driver> Controller<D> {
                     executables,
                 ))
             }
+        }
+    }
+
+    /// The capture a mix's follow moves to. A mix whose top processes all
+    /// quit may still play an instance only the audio sessions name, so a
+    /// list that can't be read then decides nothing.
+    fn follow_target(&mut self, source: &SourceId) -> Result<CaptureTarget, BackendError> {
+        let SourceId::Apps {
+            root_pids,
+            executables,
+        } = source
+        else {
+            return self.capture_target(source);
+        };
+        let processes = self.driver.processes()?;
+        let sessions = self.driver.session_pids();
+        let target = decide_apps_capture(
+            &processes,
+            sessions.as_deref().unwrap_or_default(),
+            self.driver.own_pid(),
+            root_pids,
+            executables,
+        );
+        match (target, sessions) {
+            (Err(BackendError::SourceGone), Err(error)) => Err(error),
+            (target, _) => target,
         }
     }
 
@@ -2971,7 +2986,7 @@ impl<D: Driver> Controller<D> {
         }
         self.mix_checked = Some(now);
         let (source, running) = (session.source.clone(), session.target.clone());
-        let target = match self.capture_target(&source) {
+        let target = match self.follow_target(&source) {
             Ok(target) => target,
             // One app Windows won't let AudioSync wait for leaves the whole
             // mix unwatched, so its capture never reports the quit itself.
@@ -2981,12 +2996,13 @@ impl<D: Driver> Controller<D> {
                     self.switch_to_system();
                     return;
                 }
+                let reason = StopReason::SourceQuit;
+                self.log
+                    .log(|| format!("the capture ended: {}", describe_stop(&reason)));
                 self.end_session();
                 self.airplay_streaming(false);
                 self.release_busy();
-                self.pending.push(BackendEvent::Stopped {
-                    reason: StopReason::SourceQuit,
-                });
+                self.pending.push(BackendEvent::Stopped { reason });
                 return;
             }
             Err(_) => return,
