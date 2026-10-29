@@ -1229,4 +1229,34 @@ mod tests {
         assert_eq!(public_notices(&app), 0, "the remote is off");
         assert!(!app.remote_window.get_public_network());
     }
+
+    /// The note for speakers not found names Windows Firewall only while a
+    /// connected network is Public, as the Mac names Local Network only
+    /// after macOS refused it.
+    #[cfg(windows)]
+    #[test]
+    fn the_none_found_note_names_the_firewall_only_on_a_public_network() {
+        let mut backend = MockBackend::new();
+        backend.set_airplay_none_found(true);
+        let app = app_over(backend);
+        let fake = Arc::new(FakeProfiles(std::sync::Mutex::new(vec![Category::Private])));
+        app.remote.borrow_mut().profiles = Some(fake.clone());
+        let firewall = || {
+            app.poll();
+            app.main
+                .global::<crate::Strings>()
+                .get_airplay_none_found()
+                .contains("Windows Firewall")
+        };
+        for _ in 0..20 {
+            assert!(!firewall(), "a Private network");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        *fake.0.lock().unwrap() = vec![Category::Private, Category::Public];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !firewall() {
+            assert!(std::time::Instant::now() < deadline, "no Public reading");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
 }
