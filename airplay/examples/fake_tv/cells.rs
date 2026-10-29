@@ -422,13 +422,32 @@ pub fn d4(paused: Duration, pause: Pause) -> Cell {
     Cell::new("D4", status, value)
 }
 
-/// Whether D6's grep shows a debug-log line: the hosts' warning and error
-/// lines, never the sender's traces, which carry receiver answers such as
-/// the 500 a refused volume set gets (P183).
+/// D6 shows the hosts' warning and error lines, never the sender's traces,
+/// which carry receiver answers such as the 500 a refused volume set gets
+/// (P183).
+const D6_SHOWS: [&str; 2] = [" warning: ", " error: "];
+const D6_SKIPS: [&str; 2] = ["[AirPlay] trace ", " trace: "];
+
+/// Whether D6's grep shows a debug-log line.
 #[cfg(test)]
 pub fn d6_flags(line: &str) -> bool {
-    let trace = line.contains("[AirPlay] trace ") || line.contains(" trace: ");
-    !trace && (line.contains(" warning: ") || line.contains(" error: "))
+    D6_SHOWS.iter().any(|text| line.contains(text))
+        && !D6_SKIPS.iter().any(|text| line.contains(text))
+}
+
+fn d6_step() -> String {
+    let args = |texts: &[&str]| {
+        texts
+            .iter()
+            .map(|text| format!("-e \"{text}\""))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    format!(
+        "Mac app: grep -F {} /tmp/audiosync-debug.log | grep -v -F {} prints nothing",
+        args(&D6_SHOWS),
+        args(&D6_SKIPS)
+    )
 }
 
 /// The cells only a person with the app, a player or the real television
@@ -459,10 +478,7 @@ pub fn manual() -> Vec<Cell> {
             "D5",
             "Mac app: a failed switch notice clears when the playing source is picked again",
         ),
-        (
-            "D6",
-            "Mac app: grep -F -e \" warning: \" -e \" error: \" /tmp/audiosync-debug.log | grep -v -F -e \"[AirPlay] trace \" -e \" trace: \" prints nothing",
-        ),
+        ("D6", &d6_step()),
         (
             "W1",
             "real TV at master 63: TV 20 by its remote reads 20 in AudioSync and AudioSync 20 reads 20 on the TV, within about 1 s; remote presses stay put",
