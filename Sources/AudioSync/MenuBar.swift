@@ -36,6 +36,8 @@ final class AppModel: ObservableObject {
         /// An AirPlay 2 speaker waiting for PTP, which runs for speakers on
         /// another network (S285).
         var waitingForPtp = false
+        /// An AirPlay speaker the sender keeps trying to reach (S222).
+        var reconnecting = false
         /// An AirPlay speaker in the sender that is out of view on the
         /// network, waiting to be announced again (P215).
         var unannounced = false
@@ -1814,7 +1816,7 @@ struct MenuBarView: View {
         return CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
                           text: t, height: rowHeight,
                           hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
-                                          waitingForPtp: speaker.waitingForPtp,
+                                          waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
                                           unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? note,
                           renamedFrom: speaker.renamedFrom, kind: speaker.tag, airPlay2: speaker.airPlay2,
                           availability: speaker.availability,

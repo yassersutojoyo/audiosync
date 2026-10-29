@@ -1126,6 +1126,15 @@ do {
             && AirPlaySearch.endsAt(access: .allowed, senderUp: true, emptySince: t0, now: t0 + wait) == nil
             && AirPlaySearch.endsAt(access: .denied, senderUp: true, emptySince: t0, now: t0) == nil,
           "AirPlay search: the host looks again when the first look ends, even with access allowed")
+    let woke = t0 + 8 * 3600
+    let wokeSince = AirPlaySearch.sinceAfterWake(t0, now: woke)
+    check(wokeSince == woke && AirPlaySearch.sinceAfterWake(nil, now: woke) == nil
+            && searching(.unknown, empty: wokeSince, at: woke + 1) && hint(.unknown, empty: wokeSince, at: woke + 1) == .none
+            && CastModel.Discovery.browsing(since: t0).afterWake(now: woke) == .browsing(since: woke)
+            && CastModel.Discovery.failed.afterWake(now: woke) == .failed
+            && CastModel.Discovery.off.afterWake(now: woke) == .off,
+          "AirPlay search: a wake starts the 20 s of an empty AirPlay or Cast list over, so no hint shows at once (S154)",
+          "\(String(describing: wokeSince))")
     let lookingText = UIStrings()
     check(lookingText.networkSpeakersNote(airPlayNone: true, cast: .quiet, airPlaySearching: true) == "Looking for speakers…"
             && lookingText.networkSpeakersNote(airPlayNone: true, cast: .searching, airPlaySearching: true)
@@ -2767,6 +2776,67 @@ do {
     check(quit.plan(streaming: true, enabled: studyOn).isEmpty
             && quit.apply(.state(id: "Q1", .playing, retryMs: nil)) == .playingChanged("native:Q1", playing: true),
           "native airplay: a speaker off the network plays again once announced, without joining the sender anew")
+
+    // Mac sitting 29 Oct: a receiver killed mid-stream sat plain "On", with
+    // no notice, for over a minute while the sender retried it.
+    var killed = NativeAirPlayModel()
+    killed.apply(.appeared(receiver("R1", "Den", .available)))
+    killed.added("R1")
+    _ = killed.apply(.state(id: "R1", .playing, retryMs: nil))
+    func fails(_ retryMs: Int64) -> NativeAirPlayOutcome? {
+        let outcome = killed.apply(.error(id: "R1", .notResponding, retryMs: retryMs, detail: "Unreachable"))
+        _ = killed.apply(.state(id: "R1", .retrying, retryMs: retryMs))
+        return outcome
+    }
+    let quietFails = [fails(1000), fails(2000)]
+    check(quietFails == [nil, nil] && !killed.isReconnecting("R1"),
+          "native airplay: a lost speaker and its first retry fail quietly", "\(quietFails)")
+    let secondRetry = fails(4000)
+    check(secondRetry == .reconnecting("native:R1", .notResponding) && killed.isReconnecting("R1") && fails(8000) == nil,
+          "native airplay: from its second failed retry a speaker says it is reconnecting, with a notice once",
+          "\(secondRetry)")
+    check(killed.apply(.state(id: "R1", .playing, retryMs: nil)) == .playingChanged("native:R1", playing: true)
+            && !killed.isReconnecting("R1"),
+          "native airplay: the first retry that works ends reconnecting")
+    _ = fails(1000)
+    _ = killed.apply(.state(id: "R1", .playing, retryMs: nil))
+    let afterBlip = [fails(1000), fails(2000)]
+    check(afterBlip == [nil, nil] && !killed.isReconnecting("R1"),
+          "native airplay: a speaker that played again counts its failed retries anew", "\(afterBlip)")
+    _ = fails(4000)
+    let lapse = killed.apply(.state(id: "R1", .unannounced, retryMs: nil))
+    check(lapse == .reconnecting("native:R1", nil) && !killed.isReconnecting("R1") && killed.isUnannounced("R1"),
+          "native airplay: a reconnecting speaker whose records lapse is off the network, its notice gone", "\(String(describing: lapse))")
+    var dropped = NativeAirPlayModel()
+    dropped.apply(.appeared(receiver("R2", "Hall", .available)))
+    dropped.added("R2")
+    _ = dropped.apply(.state(id: "R2", .playing, retryMs: nil))
+    _ = dropped.apply(.error(id: "R2", .notResponding, retryMs: 1000, detail: "Unreachable"))
+    let quietLeaves = dropped.clearsNoticeOnRemoval("R2")
+    for retryMs: Int64 in [2000, 4000] {
+        _ = dropped.apply(.error(id: "R2", .notResponding, retryMs: retryMs, detail: "Unreachable"))
+    }
+    check(!quietLeaves && dropped.plan(streaming: true, enabled: []).remove == ["R2"]
+            && dropped.plan(streaming: false, enabled: ["native:R2"]).remove == ["R2"] && dropped.clearsNoticeOnRemoval("R2"),
+          "native airplay: switch-off after the third error clears the reconnecting notice")
+    _ = dropped.apply(.error(id: "R2", .pairingRequired, retryMs: nil, detail: ""))
+    check(!dropped.isReconnecting("R2") && !dropped.clearsNoticeOnRemoval("R2"),
+          "native airplay: a reconnecting speaker refused for good keeps its turn-off notice when it leaves the sender")
+    check(UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, reconnecting: true, unannounced: false, target: nil) == "Reconnecting…",
+          "native airplay: a reconnecting speaker's row says so")
+    for problem: NativeSpeakerEvent.Problem in [.notResponding, .connectionLost, .busy] {
+        var retried = NativeAirPlayModel()
+        retried.apply(.appeared(receiver("R3", "Study", .available)))
+        retried.added("R3")
+        let outcomes = [1000, 2000, 4000].map { (retryMs: Int64) -> NativeAirPlayOutcome? in
+            let outcome = retried.apply(.error(id: "R3", problem, retryMs: retryMs, detail: ""))
+            _ = retried.apply(.state(id: "R3", .retrying, retryMs: retryMs))
+            return outcome
+        }
+        check(outcomes == [nil, nil, .reconnecting("native:R3", problem)] && retried.isReconnecting("R3"),
+              "native airplay: a speaker not responding, lost or busy says reconnecting from its second failed retry",
+              "\(problem): \(outcomes)")
+    }
 
     // P169, S285: a 17th AirPlay 2 speaker waits for a place, switched on,
     // and the sender starts it once one of the others stops.
@@ -7064,6 +7134,44 @@ do {
     check(unstalled == nil && playing == ["B"] && settled.isEmpty && other.tracked.isEmpty,
           "output stall: a refused start that followed no stall is switched off as before; 5 s of play or a switch-off ends a stall",
           "\(String(describing: unstalled)) \(playing) \(settled) \(other.tracked)")
+    var notice = OutputStallRetry()
+    _ = notice.stalled("A", nowS: 100)
+    let quietFirst = notice.lost
+    notice.started("A", nowS: 100.5)
+    _ = notice.stalled("A", nowS: 103)
+    let afterSecond = notice.lost
+    _ = notice.refused("A", nowS: 113.1)
+    notice.started("A", nowS: 123.2)
+    let whilePlaying = notice.settle(enabled: ["A"], nowS: 128.1)
+    let keptLost = notice.lost
+    let played = notice.settle(enabled: ["A"], nowS: 128.3)
+    _ = notice.stalled("B", nowS: 130)
+    notice.started("B", nowS: 130.5)
+    _ = notice.stalled("B", nowS: 131)
+    let switchedOff = notice.settle(enabled: [], nowS: 131.1)
+    _ = notice.stalled("C", nowS: 140)
+    notice.started("C", nowS: 140.5)
+    let firstOnly = notice.settle(enabled: ["C"], nowS: 146)
+    _ = notice.stalled("D", nowS: 150)
+    notice.started("D", nowS: 150.5)
+    _ = notice.stalled("D", nowS: 151)
+    check(quietFirst.isEmpty && afterSecond == ["A"] && whilePlaying.isEmpty && keptLost == ["A"] && played == ["A"]
+            && switchedOff == ["B"] && firstOnly.isEmpty && notice.lost == ["D"]
+            && UIStrings().outputLost(name: "Desk") == "Desk was disconnected. It plays again as soon as it's back.",
+          "output stall: a second stall brings the disconnected notice; 5 s of play or a switch-off ends it, a stop clears it",
+          "\(afterSecond) \(whilePlaying) \(played) \(switchedOff) \(firstOnly) \(notice.lost)")
+    // Lost inside its trial, then a format reopen that fails for good: switched off with its could-not-start notice.
+    var failed = OutputStallRetry()
+    _ = failed.stalled("E", nowS: 200)
+    failed.started("E", nowS: 200.5)
+    _ = failed.stalled("E", nowS: 201)
+    failed.started("E", nowS: 211.2)
+    failed.forget("E")
+    let failedLost = failed.lost
+    let failedEnds = failed.settle(enabled: [], nowS: 212)
+    check(failedLost.isEmpty && failedEnds.isEmpty,
+          "output stall: an output switched off for a failed start leaves its stall, so its could-not-start notice stays",
+          "\(failedLost) \(failedEnds)")
 }
 // covers: S334, S335 (a Mac sitting on 2026-10-28: both watches fired between the will-sleep notice and the sleep)
 do {
@@ -9443,12 +9551,20 @@ do {
             && cleared && senderGone.items.map(\.subject) == [Notice.source],
           "cast: a sender that stopped clears every speaker's notice, and only those")
     check(t.castSenderStopped(speaker: "Kitchen").contains("Kitchen"), "cast: the sender's notice names the speaker that went off")
+    var named = CastModel()
+    named.apply(.appeared(CastDevice(id: "kitchen", name: "Kitchen"), offsetMs: nil))
+    _ = named.turnOn("kitchen")
+    let namedBefore = named.listedOn
+    _ = named.apply(.failed(detail: ""))
+    check(namedBefore == ["kitchen": "Kitchen"] && named.listedName("kitchen").isEmpty,
+          "cast: the speaker that was on is named as listed before the sender's failure empties the list",
+          "\(namedBefore)")
     var idleFailure = CastModel()
     check(idleFailure.apply(.failed(detail: "")) == .senderFailed(wasOn: nil), "cast: no speaker named when none was on")
     check(t.castList(.noneFound, localNetworkRefused: true)?.contains("Local Network") == true
             && t.castList(.noneFound)?.contains("Local Network") == false,
           "cast: none found points to Local Network access only once it was refused")
-    let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost]
+    let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost, .searchStopped]
     check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
           "cast: every notice names the speaker, with no em dash")
     let bothNone = t.networkSpeakersNote(airPlayNone: true, cast: .noneFound) ?? ""
@@ -10578,6 +10694,20 @@ do {
     _ = stopped.apply(.discoveryStopped)
     check(stopped.devices[manualID] != nil && stopped.devices[realID] == nil,
           "cast model: when discovery stops, a speaker added by address stays listed, as the sender keeps it")
+    var unplayed = CastModel()
+    unplayed.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    _ = unplayed.turnOn(realID)
+    let unfound = unplayed.apply(.discoveryStopped)
+    var keptOn = CastModel()
+    keptOn.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    _ = keptOn.turnOn(manualID)
+    let keptOutcome = keptOn.apply(.discoveryStopped)
+    check(unfound == .turnedOff(realID, problem: .searchStopped) && unplayed.enabled == nil
+            && keptOutcome == .changed && keptOn.enabled == manualID
+            && t.castProblem(.searchStopped, name: "Lounge")
+                == "AudioSync stopped looking for Google Cast speakers, so Lounge is off. Restart AudioSync to try again.",
+          "cast model: a speaker on with no session that leaves the list when discovery stops goes off with a notice",
+          "\(String(describing: unfound)) \(String(describing: keptOutcome))")
 
     // The sender reports the browsed speaker gone just before or just after it reports discovery stopped.
     var goneFirst = CastModel()
