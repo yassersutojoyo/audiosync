@@ -1356,21 +1356,23 @@ impl AirPlaySpeakers {
         }
     }
 
-    /// Replaces the sender with `link`, a new one: what the old one listed,
-    /// played and paired is gone with it, while the user's settings stay, so
-    /// the speakers that were on join again once the new one lists them.
     /// Whether the sender stopped by itself (see `sender_stopped`); only
     /// then does a Retry replace it.
     pub fn is_stopped(&self) -> bool {
         self.stopped
     }
 
+    /// Replaces the sender with `link`, a new one: what the old one listed,
+    /// played and paired is gone with it, while the user's settings stay, so
+    /// the speakers that were on join again once the new one lists them.
     pub fn replace_link(&mut self, link: Box<dyn AirPlayLink>) {
         // The old sender stops as it is dropped.
         self.link = link;
         self.pause.forget();
         self.listed.clear();
         self.added.clear();
+        self.paired_for_session.clear();
+        self.paired_by_user.clear();
         self.targets.clear();
         self.target_missing.clear();
         self.gone_targets.clear();
@@ -1429,6 +1431,7 @@ impl AirPlaySpeakers {
         self.every_time_stream_ended(events);
         self.listed.clear();
         self.added.clear();
+        self.paired_for_session.clear();
         self.targets.clear();
         self.target_missing.clear();
         self.gone_targets.clear();
@@ -4306,9 +4309,9 @@ impl AirPlaySpeakers {
                 {
                     added.state = SpeakerState::Retrying { at };
                     if !self.listed.contains_key(id) {
-                        // It played on after its announcement lapsed: lost
-                        // now, it has no row to retry for.
-                        self.reconcile();
+                        // It played on after its announcement lapsed: it
+                        // stays in the sender, with no retry notice for a
+                        // speaker the list no longer shows.
                         return true;
                     }
                     if added.reconnecting() {
@@ -5638,6 +5641,55 @@ pub mod tests {
             }),
             "it failed within the new stream: {events:?}"
         );
+    }
+
+    #[test]
+    fn a_tv_that_asks_every_time_needs_its_pin_again_on_a_new_sender() {
+        let tv = airplay2_every_time_tv(9, "Den");
+        let id = id_of(&tv);
+        let paired = |fake: &FakeAirPlay| {
+            fake.set_airplay2(true);
+            let mut airplay = speakers(fake);
+            airplay.set_streaming(true);
+            pin_shown(fake, &mut airplay, &tv);
+            assert!(airplay.submit_pin(&id, "4821"));
+            fake.pairing(&tv, PairingEvent::PairedForSession);
+            airplay.poll();
+            assert_eq!(
+                airplay.speakers()[0].availability,
+                AirPlayAvailability::Open
+            );
+            airplay
+        };
+        let retried = |airplay: &mut AirPlaySpeakers, mut events: Vec<BackendEvent>| {
+            let second = FakeAirPlay::new();
+            second.set_airplay2(true);
+            airplay.replace_link(second.link());
+            second.appear(&tv);
+            events.extend(airplay.poll());
+            assert_eq!(
+                airplay.speakers()[0].availability,
+                AirPlayAvailability::NeedsPin
+            );
+            assert!(!airplay.speakers()[0].enabled, "left on it never joins");
+            assert!(
+                events.contains(&BackendEvent::AirPlayFailed {
+                    id: id.clone(),
+                    problem: AirPlayProblem::NeedsPin,
+                }),
+                "off with the notice: {events:?}"
+            );
+        };
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = paired(&fake);
+        fake.stop_running();
+        let events = airplay.poll();
+        retried(&mut airplay, events);
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = paired(&fake);
+        retried(&mut airplay, Vec::new());
     }
 
     #[test]
