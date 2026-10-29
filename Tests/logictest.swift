@@ -9867,6 +9867,25 @@ do {
             && refused.enabled == nil && refused.status(of: den) == .idle,
           "cast: attempt 0 means refused, and the speaker goes off")
 
+    var tvOff = CastModel()
+    tvOff.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
+    tvOff.apply(.appeared(CastDevice(id: "group1", name: "Everywhere", group: true), offsetMs: nil))
+    _ = tvOff.turnOn(den)
+    tvOff.startSent(den)
+    _ = tvOff.started(den, attempt: 4, refusal: ASC_CAST_REFUSED_NONE)
+    let noAnswer = CastEvent.connectFailed(attempt: 4, error: .connect, retryMs: 1000)
+    check(tvOff.apply(noAnswer) == nil && tvOff.apply(noAnswer) == nil && tvOff.status(of: den) == .connecting
+            && tvOff.apply(noAnswer) == .turnedOff(den, problem: .notResponding)
+            && tvOff.enabled == nil && tvOff.plan(streaming: true) == .stop,
+          "cast: a speaker that never answers goes off at its third connect failure while connecting (C80)")
+    tvOff.stopSent()
+    _ = tvOff.turnOn("group1")
+    tvOff.startSent("group1")
+    _ = tvOff.started("group1", attempt: 5, refusal: ASC_CAST_REFUSED_NONE)
+    let groupFailed = CastEvent.connectFailed(attempt: 5, error: .connect, retryMs: 1000)
+    check((1...4).allSatisfy { _ in tvOff.apply(groupFailed) == nil } && tvOff.enabled == "group1",
+          "cast: a group keeps trying while connecting, as one with no address yet must (C80, C81)")
+
     check(CastEnd.failed(.connect).problem == .notResponding && CastEnd.failed(.launch).problem == .refused
             && CastEnd.failed(.noFetch).problem == .blocked && CastEnd.failed(.stream).problem == .connectionLost
             && CastEnd.failed(nil).problem == .notResponding

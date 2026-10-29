@@ -166,7 +166,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a source of several apps is named "Chrome and Spotify" in its notices, as in the source list. Before, the notices read "Chrome, Spotify".
 - On Windows, an offset you set on an output that you unplug before AudioSync saves its settings is kept at the next launch. Before, it was lost.
 - On Windows, after you forget an AirPlay speaker's pairing, turning it on from the web remote no longer starts a PIN pairing.
-- On Windows, a Google Cast speaker that doesn't answer when you turn it on, for example a TV that's switched off, turns off after a few tries and tells you it isn't responding. Before, its row said Connecting forever.
+- A Google Cast speaker that doesn't answer when you turn it on, for example a TV that's switched off, turns off after a few tries and tells you it isn't responding. Before, its row said Connecting forever. On the Mac and on Windows.
 - On Windows, picking other input channels while the input device is unplugged no longer turns streaming off; the new channels play once the device is back.
 
 ## [0.7.1] - 2026-10-27

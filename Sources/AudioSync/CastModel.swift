@@ -404,7 +404,11 @@ struct CastModel {
         var format: Int32 = 0
         /// Whether the session reported the device's volume yet (C104).
         var heardVolume = false
+        var connectFailures = 0
     }
+
+    /// The connect failures before a first connect that turn the device off (C80).
+    static let failuresBeforeOff = 3
 
     var discovery = Discovery.off
     private(set) var devices: [String: CastDevice] = [:]
@@ -539,7 +543,7 @@ struct CastModel {
         if starting == old { starting = new }
         if let current = attempt, current.device == old {
             attempt = Attempt(number: current.number, device: new, status: current.status,
-                              heardVolume: current.heardVolume)
+                              heardVolume: current.heardVolume, connectFailures: current.connectFailures)
         }
         if let volume = volumes.removeValue(forKey: old) { volumes[new] = volume }
         if let level = levels.removeValue(forKey: old) { levels[new] = level }
@@ -719,7 +723,13 @@ struct CastModel {
         case .recovering:
             return setStatus(.reconnecting)
         case .connectFailed:
-            return current.status == .connecting ? nil : setStatus(.reconnecting)
+            guard current.status == .connecting else { return setStatus(.reconnecting) }
+            // The core reports a group with no address yet as a plain connect failure, and C81 keeps it trying.
+            guard devices[id]?.group != true else { return nil }
+            attempt?.connectFailures += 1
+            guard attempt?.connectFailures == Self.failuresBeforeOff else { return nil }
+            enabled = nil
+            return .turnedOff(id, problem: .notResponding)
         case .volume(_, let volume):
             return volumeReported(id, volume)
         case .members(_, let list):
