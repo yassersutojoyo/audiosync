@@ -3386,6 +3386,46 @@ mod tests {
     }
 
     #[test]
+    fn a_picked_saved_curve_shows_beside_a_curve_with_the_same_gains() {
+        let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
+        let gains_db = eq::PRESETS[rock].gains_db;
+        let mut backend = MockBackend::new();
+        backend.set_equalizer_curves(vec![
+            UserCurve {
+                name: "Mine".into(),
+                gains_db,
+            },
+            UserCurve {
+                name: "Twin".into(),
+                gains_db,
+            },
+        ]);
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: 0.0,
+            gains_db,
+        });
+        let state = backend.snapshot();
+        assert_eq!(shown_curve(&state, None), Some(CurveMatch::Preset(rock)));
+        for picked in [
+            CurveMatch::User(0),
+            CurveMatch::User(1),
+            CurveMatch::Preset(rock),
+        ] {
+            assert_eq!(shown_curve(&state, Some(picked)), Some(picked));
+        }
+        let mut moved = gains_db;
+        moved[0] += 1.0;
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: 0.0,
+            gains_db: moved,
+        });
+        let state = backend.snapshot();
+        assert_eq!(shown_curve(&state, Some(CurveMatch::User(0))), None);
+    }
+
+    #[test]
     fn the_presets_preview_reads_the_values_of_its_switch() {
         assert_eq!(
             PresetsPreview::from_value("list"),
