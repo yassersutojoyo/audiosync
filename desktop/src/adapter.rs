@@ -1315,7 +1315,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .iter()
             .zip(&kept.members)
             .any(|(row, m)| match row.state {
-                RowState::Reference => reference.as_deref() != Some(m.id.as_str()),
+                RowState::Reference => reference.as_ref().is_some_and(|now| *now != m.id),
                 _ => !holds(self.calibrated_now(m.class, &m.id), m.offset_ms),
             });
         if !moved {
@@ -4989,6 +4989,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn apply_calibrate_all(&mut self) {
+        if self.follow_calibrate_all() {
+            return;
+        }
         if self.calibrate_all.run.is_some() {
             return;
         }
