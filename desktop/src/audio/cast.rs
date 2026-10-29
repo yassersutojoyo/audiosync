@@ -855,6 +855,10 @@ impl CastSpeakers {
             }
             if self.enabled == Some(manual) {
                 if self.attempt.is_some() {
+                    // It played: the restarted session's first status gives the own level that keeps it as loud (S341).
+                    if self.attempt.is_some_and(|attempt| attempt.heard_volume) {
+                        self.levels.remove(&id);
+                    }
                     self.stop_session();
                     self.list.set_in_session(DeviceKey::Id(id), false);
                 }
@@ -3281,6 +3285,56 @@ pub mod tests {
         cast.poll();
         assert_eq!(sent(&fake), before, "it keeps playing at 0.4");
         assert!((shown(&cast, KITCHEN) - 80.0).abs() < 1e-9);
+    }
+
+    // covers: S341
+    #[test]
+    fn a_playing_speaker_a_browse_finds_keeps_its_loudness_over_a_level_kept_for_the_device_id() {
+        let rekeyed_into = |zone: f64| {
+            let fake = FakeCast::default();
+            let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+            cast.set_probe(|_| true);
+            cast.set_volume(KITCHEN, 30.0);
+            cast.add_address(address("192.0.2.30"));
+            let manual = address("192.0.2.30").device_id().to_string();
+            cast.set_zones(BTreeMap::from([(manual.clone(), 50.0)]));
+            cast.set_volume(&manual, 80.0);
+            assert_eq!(cast.set_enabled(&manual, true), Ok(()));
+            cast.set_streaming(true);
+            poll_until_started(&fake, &mut cast);
+            fake.report(reported(&manual, 0.4, ControlType::Attenuation));
+            cast.poll();
+
+            fake.announce_at(
+                KITCHEN,
+                "Kitchen",
+                DEVICE_PORT,
+                Ipv4Addr::new(192, 0, 2, 30),
+            );
+            cast.poll();
+            cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), zone)]));
+            let before = sent(&fake);
+            fake.report(HostEvent::Session {
+                attempt: AttemptId(2),
+                device: id(KITCHEN),
+                event: SessionEvent::Volume(DeviceVolume {
+                    level: 0.4,
+                    control_type: ControlType::Attenuation,
+                    has_level: true,
+                    ..DeviceVolume::default()
+                }),
+            });
+            cast.poll();
+            (sent(&fake)[before.len()..].to_vec(), shown(&cast, KITCHEN))
+        };
+
+        let (sent_after, shown_after) = rekeyed_into(80.0);
+        assert_eq!(sent_after, Vec::<f64>::new(), "it keeps playing at 0.4");
+        assert!((shown_after - 50.0).abs() < 1e-9, "shown {shown_after}");
+
+        let (sent_after, shown_after) = rekeyed_into(25.0);
+        assert_eq!(sent_after, vec![0.25], "the loudest the new zone reaches");
+        assert!((shown_after - 100.0).abs() < 1e-9, "shown {shown_after}");
     }
 
     // covers: S339
