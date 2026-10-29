@@ -2704,10 +2704,12 @@ do {
             && model.access("C3") == .code(password: true) && model.access("D4") == nil,
           "native airplay: a needs-PIN or password receiver shows as asking for a code")
     check(model.soundingIDs == ["native:A1"], "native airplay: only a receiver able to play holds local outputs back")
+    // covers: S222 (auto-connect never pairs or prompts)
     check(model.joinable(model.rows(enabled: []) + ["native:Z9"], after: ["native:C3"], stopped: false) == ["native:A1"]
             && model.joinable(model.rows(enabled: []), after: ["native:A1"], stopped: false).isEmpty,
           "native airplay: auto-connect may switch on only a new row whose receiver can play",
           "\(model.joinable(model.rows(enabled: []), after: [], stopped: false))")
+    // covers: S120 (a stop suppresses auto-connect's starts)
     check(model.joinable(model.rows(enabled: []), after: [], stopped: true).isEmpty,
           "native airplay: rows rebuilt by a stop are not auto-connected, so the stop doesn't restart streaming")
 
@@ -2721,9 +2723,11 @@ do {
         asking.apply(.appeared(r))
     }
     let askingRows = asking.rows(enabled: [])
+    // covers: S223
     check(asking.joinable(askingRows, after: [], stopped: false) == ["native:A1"],
           "native airplay: auto-connect never switches on a receiver that asks for a code every time",
           "\(asking.joinable(askingRows, after: [], stopped: false))")
+    // covers: S223
     check(asking.askingEveryTime(askingRows) == ["native:H8", "native:G7"]
             && asking.asksEveryTime("H8") && !asking.asksEveryTime("B2") && !asking.asksEveryTime("A1"),
           "native airplay: a receiver that asks for a code every time goes off whenever it is listed asking and doesn't play, at launch or later",
@@ -2737,16 +2741,19 @@ do {
     for r in [lounge, den] { retried.apply(.appeared(r)) }
     let relisted = retried.askingEveryTime(retried.rows(enabled: []))
     let goOff = handOn.turnsOff(relisted, enabled: ["native:G7", "native:H8"])
+    // covers: S223
     check(goOff == ["native:H8"],
           "native airplay: a speaker that asks every time and was switched on by hand stays on when it appears again, also after a Retry",
           "\(goOff)")
     let afterOff = handOn.turnsOff(["native:G7"], enabled: [])
     let onAgain = handOn.turnsOff(["native:G7"], enabled: ["native:G7"])
+    // covers: S223
     check(afterOff.isEmpty && onAgain == ["native:G7"],
           "native airplay: switched off, it is no longer on by hand", "\(onAgain)")
 
     let all: Set<String> = ["native:A1", "native:B2", "native:C3", "native:D4", "123456789012"]
     check(model.plan(streaming: false, enabled: all).isEmpty, "native airplay: nothing joins while not streaming")
+    // covers: S222, S223
     check(model.plan(streaming: true, enabled: all)
             == NativeAirPlayPlan(add: ["A1"], remove: [],
                                  turnOff: [.init(id: "B2", reason: .needsCode), .init(id: "C3", reason: .needsPassword)]),
@@ -2777,8 +2784,10 @@ do {
             && model.apply(.error(id: "A1", .airPlay2Only, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsAirPlay2)
             && model.apply(.error(id: "A1", .timingUnavailable, retryMs: nil, detail: "")) == .turnOff("native:A1", .timingUnavailable),
           "native airplay: an error the sender won't retry turns the speaker off, with why")
+    // covers: S222
     check(model.apply(.error(id: "A1", .incompatible, retryMs: 5, detail: "")) == nil,
           "native airplay: a malformed or unexpected answer the sender retries keeps the speaker on (P142)")
+    // covers: S222
     check(model.apply(.error(id: "A1", .busy, retryMs: nil, detail: "")) == .turnOff("native:A1", .busy)
             && model.apply(.error(id: "A1", .refused, retryMs: nil, detail: "")) == .turnOff("native:A1", .refused),
           "native airplay: a speaker that answered busy or refused is off for that reason, not as unreachable")
@@ -3035,6 +3044,7 @@ do {
     paths.apply(.changed(NativeReceiver(id: "H8", name: "Loft", model: "", availability: .available, reason: nil,
                                         hints: ["airplay", "airplay2", "over-airplay2", "paired"], overAirPlay2: true,
                                         paired: true)))
+    // covers: S224
     check(paths.isPaired("H8") && !paths.isPaired("I9") && !paths.isPaired("J0"),
           "native airplay: only a receiver AudioSync keeps a pairing for offers Forget Pairing")
     check(kinds.nativePairPINMessage(name: "Loft").hasPrefix("Loft shows a 4-digit PIN on its screen. Enter it to pair; "
@@ -3043,6 +3053,7 @@ do {
           "native airplay: the PIN prompt reads as on Windows, for an Apple TV and an AirPlay 2 receiver alike")
     paths.apply(.appeared(NativeReceiver(id: "K1", name: "Attic", model: "", availability: .needsPin, reason: nil,
                                          hints: ["airplay", "airplay2", "pairing", "over-airplay2"], overAirPlay2: true)))
+    // covers: S223
     check(paths.turnedOnByUser("K1") == .startPairing("K1") && paths.apply(.pinNeeded(id: "K1")) == .prompt,
           "native airplay: a click on an AirPlay 2 receiver asking for a PIN pairs and prompts, as for an Apple TV")
     check(model.apply(.timeline(latencyMs: 1750, restarted: false)) == .latencyChanged
@@ -10620,6 +10631,7 @@ do {
     let usbRange = range("usb") == [-2000, 150, 20000]
     let airPlayRange = range("hp") == [0, 1750, 20000]
     let castRange = range("cast") == [0, 300, 20000]
+    // covers: S175 (a local output's offset range)
     check(usbRange && airPlayRange && castRange, "web remote: each delay carries the range its field in the window takes",
           "\(range("usb")) \(range("hp")) \(range("cast"))")
     let groupOpen = field("group", "available") as? Bool == true
@@ -10628,12 +10640,14 @@ do {
     let codeNote = field("tv", "notice") as? String == t.remoteTurnOnInApp
     let pairedOpen = field("tv2", "available") as? Bool == true
     let pairedQuiet = field("tv2", "notice") is NSNull
+    // covers: S257 (a speaker that would ask for a code stays off)
     check(groupOpen && groupNote && codeOff && codeNote && pairedOpen && pairedQuiet,
           "web remote: a Cast group plays from the phone; a speaker that would ask for a code on the Mac can't")
     check(snapshot.json == RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows).json,
           "web remote: the same state gives the same text, so the core sends nothing new")
     let playing = RemoteSnapshot(computerName: "", master: 50,
                                  nowPlaying: .init(title: "Song", artist: "Band", source: "Music"), rows: []).json
+    // covers: S340 (playing goes out as true)
     check(playing.contains("\"now_playing\":{\"artist\":\"Band\",\"playing\":true,\"source\":\"Music\",\"title\":\"Song\"}"),
           "web remote: Now Playing goes out with title, artist and source app", playing)
     let paused = RemoteSnapshot(computerName: "", master: 50,
@@ -10723,15 +10737,18 @@ do {
     let toAirPlay = plan("{\"type\":\"speaker\",\"id\":\"hp\",\"delay_ms\":1800}") == [.setAirPlayDelay(ms: 1800)]
     let noDelay = plan("{\"type\":\"speaker\",\"id\":\"builtin\",\"delay_ms\":100}").isEmpty
     let unchanged = plan("{\"type\":\"speaker\",\"id\":\"usb\",\"delay_ms\":150}").isEmpty
+    // covers: S175 (a local output's offset is clamped)
     check(toLocal && toCast && toAirPlay && noDelay && unchanged,
           "web remote: each delay goes to its own control, clamped like the window's field; the reference has none")
     let leftAlone = ["tv", "gone"].allSatisfy { plan("{\"type\":\"speaker\",\"id\":\"\($0)\",\"on\":true}").isEmpty }
     let pairedOn = plan("{\"type\":\"speaker\",\"id\":\"tv2\",\"on\":true}") == [.setEnabled(id: "tv2", on: true)]
     let groupOn = plan("{\"type\":\"speaker\",\"id\":\"group\",\"on\":true}") == [.setEnabled(id: "group", on: true)]
+    // covers: S257 (a speaker that would ask for a code stays off)
     check(leftAlone && pairedOn && groupOn,
           "web remote: a speaker that can't be driven or isn't listed is left alone; a paired one and a Cast group turn on")
     let offFirst = plan("{\"type\":\"speaker\",\"id\":\"hp\",\"on\":false,\"volume\":10}") == [.setEnabled(id: "hp", on: false)]
     let masterClamped = plan("{\"type\":\"master\",\"volume\":150}") == [.setMaster(position: 100)]
+    // covers: S76 (the master volume)
     check(offFirst && masterClamped, "web remote: a speaker turned off takes no volume; the master volume is clamped")
     // covers: S76 (a phone's volume, before it reaches a speaker, a zone or the master)
     check(RemoteSnapshot.volume(-20) == 0 && RemoteSnapshot.volume(150) == 100 && RemoteSnapshot.volume(.nan) == 0

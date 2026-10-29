@@ -1072,7 +1072,14 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | native airplay: rows by name | S222 |
 | native airplay: a needs-PIN or password receiver shows as asking for a code | S106, S222 |
 | native airplay: only a receiver able to play holds local outputs back | S176, S222 |
+| native airplay: auto-connect may switch on only a new row whose receiver can play | S222 |
+| native airplay: rows rebuilt by a stop are not auto-connected, so the stop doesn't restart streaming | S120 |
+| native airplay: auto-connect never switches on a receiver that asks for a code every time | S223 |
+| native airplay: a receiver that asks for a code every time goes off whenever it is listed asking and doesn't play, at launch or later | S223 |
+| native airplay: a speaker that asks every time and was switched on by hand stays on when it appears again, also after a Retry | S223 |
+| native airplay: switched off, it is no longer on by hand | S223 |
 | native airplay: nothing joins while not streaming | S222 |
+| native airplay: while streaming, the able join, the PIN and password ones not turned on by a click go off (auto-connect and restored switches never pair or prompt), the rest wait | S222, S223 |
 | native airplay: while streaming, the able join, the PIN and password ones not turned on by a click go off (auto-connect and restored switches never pair or prompt), the rest wait | S222 |
 | native airplay: an added speaker stays | S222 |
 | EC13 native airplay: a speaker leaves when switched off or when streaming stops | S118, S222 |
@@ -1081,7 +1088,11 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | native airplay: a lost speaker the sender retries stays on | S222 |
 | EC12 native airplay: gone and not playing, it keeps its row while in the sender and holds nothing back | S167, S222 |
 | native airplay: an error the sender won't retry turns the speaker off, with why | S222 |
+| native airplay: a malformed or unexpected answer the sender retries keeps the speaker on (P142) | S222 |
+| native airplay: a speaker that answered busy or refused is off for that reason, not as unreachable | S222 |
 | native airplay: events of a removed speaker are passed over | S222 |
+| native airplay: only a receiver AudioSync keeps a pairing for offers Forget Pairing | S224 |
+| native airplay: a click on an AirPlay 2 receiver asking for a PIN pairs and prompts, as for an Apple TV | S223 |
 | native airplay: a retrying speaker whose receiver is gone stays in the sender until switched off | S222 |
 | native airplay: a speaker gone from the sender waits, on, while its receiver is unlisted | S222 |
 | native airplay: a speaker whose receiver was gone joins again when announced able to play | S222 |
@@ -2630,6 +2641,12 @@ The checks for S256 to S258, S287, S288, S337 and S338 in the remote crate (`rem
 | a_paused_track_and_a_zone_with_no_member_here_read_as_on_the_mac (`remote/src/page.rs`) | S340 |
 | a_paused_track_goes_out_as_paused (`desktop/src/remote.rs`) | S340 |
 | web remote: a paused track goes out as paused | S340 |
+| web remote: each delay carries the range its field in the window takes | S175 |
+| web remote: a Cast group plays from the phone; a speaker that would ask for a code on the Mac can't | S257 |
+| web remote: Now Playing goes out with title, artist and source app | S340 |
+| web remote: each delay goes to its own control, clamped like the window's field; the reference has none | S175 |
+| web remote: a speaker that can't be driven or isn't listed is left alone; a paired one and a Cast group turn on | S257 |
+| web remote: a speaker turned off takes no volume; the master volume is clamped | S76 |
 | the_pairing_code_switch_reads_from_json_and_is_off_by_default | S287 |
 | debug_mode_puts_each_pairing_code_in_the_log_lines | S287 |
 | the_debug_log_gets_each_pairing_code_and_a_normal_run_none | S287 |
