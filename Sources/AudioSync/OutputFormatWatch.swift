@@ -58,6 +58,8 @@ struct StartReopens {
     /// Whether output `uid` may reopen for a start check; uses it up.
     mutating func take(_ uid: String) -> Bool { used.insert(uid).inserted }
 
+    mutating func relinked(_ uid: String) {}
+
     mutating func settle(enabled: Set<String>, listed: Set<String>) {
         used.formIntersection(enabled.intersection(listed))
     }

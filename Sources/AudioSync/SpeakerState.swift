@@ -321,6 +321,8 @@ final class FreshLinkWatch {
         listed = current
     }
 
+    func relinked(uid: String, now: Double) {}
+
     /// What to do with output `uid` that has just started at `now` in
     /// `session`. A restart uses up the appearance and arms a ticket
     /// (`pendingTicket`) that only that session can use.
