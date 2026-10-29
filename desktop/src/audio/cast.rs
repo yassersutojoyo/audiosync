@@ -812,8 +812,9 @@ impl CastSpeakers {
     }
 
     /// A browse, or a lookup that lands on a browsed address, found the
-    /// device a speaker added by address is (C18): one that is on stays on
-    /// as that device, and its offset goes with it.
+    /// device the speakers added by address at `from` are (C18), each
+    /// reported once: one that is on stays on as that device, and its offset
+    /// goes with it.
     fn identified(&mut self, from: SocketAddr, id: DeviceId) {
         let found: Vec<DeviceId> = self
             .manual

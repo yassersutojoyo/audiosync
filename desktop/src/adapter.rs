@@ -2896,7 +2896,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// A browse found the device Cast speaker `from`, added by address, is
     /// (S341): its name, hidden entry, zone and preset entries move to `to`,
-    /// where the device's own records win.
+    /// where the device's own records win; with none under `from`, nothing
+    /// is saved.
     fn cast_identified(&mut self, from: &str, to: &str) {
         let (from_key, to_key) = (cast_key(from), cast_key(to));
         if !self.key_kept(&from_key) {
