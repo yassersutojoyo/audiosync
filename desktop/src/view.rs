@@ -864,20 +864,19 @@ fn keep_main_min_size(window: &slint::Window) {
 
 /// Where the main window moves before it shows again: a place on a monitor
 /// that is gone since it hid gets the launch's place, centered in the
-/// `primary` monitor's work area. `None` when it stays where it is.
+/// `primary` monitor's work area and fitted to it. `None` when it stays
+/// where it is, as a minimized window does: Windows parks it off every monitor.
 fn place_to_show(
     frame: WindowFrame,
     on_a_monitor: bool,
     minimized: bool,
     primary: Option<(crate::placement::Bounds, f64)>,
-) -> Option<(i32, i32)> {
-    let _ = minimized;
-    if on_a_monitor {
+) -> Option<WindowFrame> {
+    if on_a_monitor || minimized {
         return None;
     }
     let (work_area, scale) = primary?;
-    let fitted = fitted_main_frame(frame, work_area, scale, false);
-    Some((fitted.x, fitted.y))
+    Some(fitted_main_frame(frame, work_area, scale, false))
 }
 
 /// The saved main window `frame` as it opens on the monitor with
@@ -1265,12 +1264,22 @@ impl App {
             y: position.y,
             width: f64::from(size.width),
             height: f64::from(size.height),
-            maximized: false,
+            maximized: window.is_maximized(),
         };
         let on_a_monitor = crate::platform::is_on_a_monitor(frame.x, frame.y);
         let primary = crate::platform::monitor_at(0.0, 0.0);
-        if let Some((x, y)) = place_to_show(frame, on_a_monitor, window.is_minimized(), primary) {
-            window.set_position(slint::PhysicalPosition::new(x, y));
+        if let Some(fitted) = place_to_show(frame, on_a_monitor, window.is_minimized(), primary) {
+            if (fitted.width, fitted.height) != (frame.width, frame.height) {
+                window.set_size(slint::LogicalSize::new(
+                    fitted.width as f32,
+                    fitted.height as f32,
+                ));
+            }
+            window.set_position(slint::PhysicalPosition::new(fitted.x, fitted.y));
+            // Moving a maximized window restores it.
+            if fitted.maximized {
+                window.set_maximized(true);
+            }
         }
         if let Err(error) = self.main.show() {
             self.show_window_error(&error);
@@ -8011,7 +8020,7 @@ mod tests {
         let centered = fitted_main_frame(frame, primary, 1.0, false);
         assert_eq!(
             place_to_show(frame, false, false, Some((primary, 1.0))),
-            Some((centered.x, centered.y))
+            Some(centered)
         );
         assert_eq!(
             place_to_show(frame, true, false, Some((primary, 1.0))),
