@@ -1657,6 +1657,84 @@ mod tests {
         settings
     }
 
+    /// Settings with every field away from its default, except the version
+    /// and the migration marks: a file without them is migrated as it loads.
+    pub fn every_field() -> Settings {
+        let sample = sample();
+        Settings {
+            version: VERSION,
+            source: sample.source,
+            input_device: Some(SavedInput {
+                id: "input".to_owned(),
+                name: "Input".to_owned(),
+            }),
+            input_pairs: BTreeMap::from([("input".to_owned(), 2)]),
+            source_mix: Some(SavedMix {
+                mode: MixMode::AllExcept,
+                apps: vec![SavedMixApp {
+                    executable: "player.exe".to_owned(),
+                    name: "Player".to_owned(),
+                }],
+            }),
+            master_volume: sample.master_volume,
+            outputs: sample.outputs,
+            airplay: sample.airplay,
+            auto_connect: sample.auto_connect,
+            speaker_names: sample.speaker_names,
+            hidden_speakers: vec![SavedHidden {
+                key: "lc:hidden".to_owned(),
+                name: "Hidden".to_owned(),
+                kind: "output".to_owned(),
+            }],
+            groups: sample.groups,
+            speaker_zones: vec![SavedZone {
+                id: "z1".to_owned(),
+                name: "Den".to_owned(),
+                members: vec!["lc:{0.0.0.00000000}.{speakers}".to_owned()],
+                volume: 60.0,
+                member_names: BTreeMap::from([(
+                    "lc:{0.0.0.00000000}.{speakers}".to_owned(),
+                    "Desk".to_owned(),
+                )]),
+            }],
+            speaker_zones_migrated: true,
+            speaker_presets: vec![SavedPreset {
+                id: "p1".to_owned(),
+                name: "Evening".to_owned(),
+                members: vec![SavedPresetMember {
+                    key: "lc:{0.0.0.00000000}.{speakers}".to_owned(),
+                    volume: Some(40.0),
+                }],
+                zones: vec![SavedPresetZone {
+                    id: "z1".to_owned(),
+                    volume: 70.0,
+                }],
+                master_volume: 80.0,
+                gains_db: [1.0; BAND_COUNT],
+            }],
+            speaker_presets_migrated: true,
+            equalizer: sample.equalizer,
+            equalizer_curves: vec![SavedCurve {
+                name: "Curve".to_owned(),
+                gains_db: vec![1.0; BAND_COUNT],
+            }],
+            show_virtual_devices: sample.show_virtual_devices,
+            appearance: sample.appearance,
+            window: sample.window,
+            airplay_adjustment_ms: 120.0,
+            when_source_quits: WhenSourceQuits::SwitchToSystem.stored().to_owned(),
+            remote: sample.remote,
+            cast_addresses: sample.cast_addresses,
+            airplay2_experimental: true,
+            check_updates_automatically: false,
+            last_update_check: Some(1_800_000_000),
+            update_record: Some(UpdateRecord {
+                version: "9.9.9".to_owned(),
+                reason: crate::ui_model::UpdateRecordReason::Blocked,
+            }),
+        }
+    }
+
     #[test]
     fn speaker_names_are_kept_cleared_and_unusable_entries_skipped() {
         let file = SettingsFile::at(test_dir("settings-speaker-names").join(FILE_NAME));
@@ -2046,12 +2124,79 @@ mod tests {
     }
 
     #[test]
+    fn every_field_moves_each_field_from_its_default() {
+        let default = Settings::default();
+        // No `..`: a new field breaks this until it is checked here too.
+        let Settings {
+            version: _,
+            source,
+            input_device,
+            input_pairs,
+            source_mix,
+            master_volume,
+            outputs,
+            airplay,
+            auto_connect,
+            speaker_names,
+            hidden_speakers,
+            groups,
+            speaker_zones,
+            speaker_zones_migrated: _,
+            speaker_presets,
+            speaker_presets_migrated: _,
+            equalizer,
+            equalizer_curves,
+            show_virtual_devices,
+            appearance,
+            window,
+            airplay_adjustment_ms,
+            when_source_quits,
+            remote,
+            cast_addresses,
+            airplay2_experimental,
+            check_updates_automatically,
+            last_update_check,
+            update_record,
+        } = every_field();
+        assert_ne!(source, default.source);
+        assert_ne!(input_device, default.input_device);
+        assert_ne!(input_pairs, default.input_pairs);
+        assert_ne!(source_mix, default.source_mix);
+        assert_ne!(master_volume, default.master_volume);
+        assert_ne!(outputs, default.outputs);
+        assert_ne!(airplay, default.airplay);
+        assert_ne!(auto_connect, default.auto_connect);
+        assert_ne!(speaker_names, default.speaker_names);
+        assert_ne!(hidden_speakers, default.hidden_speakers);
+        assert_ne!(groups, default.groups);
+        assert_ne!(speaker_zones, default.speaker_zones);
+        assert_ne!(speaker_presets, default.speaker_presets);
+        assert_ne!(equalizer, default.equalizer);
+        assert_ne!(equalizer_curves, default.equalizer_curves);
+        assert_ne!(show_virtual_devices, default.show_virtual_devices);
+        assert_ne!(appearance, default.appearance);
+        assert_ne!(window, default.window);
+        assert_ne!(airplay_adjustment_ms, default.airplay_adjustment_ms);
+        assert_ne!(when_source_quits, default.when_source_quits);
+        assert_ne!(remote, default.remote);
+        assert_ne!(cast_addresses, default.cast_addresses);
+        assert_ne!(airplay2_experimental, default.airplay2_experimental);
+        assert_ne!(
+            check_updates_automatically,
+            default.check_updates_automatically
+        );
+        assert_ne!(last_update_check, default.last_update_check);
+        assert_ne!(update_record, default.update_record);
+    }
+
+    // covers: S212
+    #[test]
     fn settings_survive_a_save_and_a_load() {
         let file = SettingsFile::at(test_dir("settings-roundtrip").join(FILE_NAME));
         assert_eq!(file.load(), (Settings::default(), Loaded::NoFile));
-        file.save(&sample()).expect("saved");
+        file.save(&every_field()).expect("saved");
         let (loaded, found) = file.load();
-        assert_eq!(loaded, sample());
+        assert_eq!(loaded, every_field());
         assert_eq!(
             found,
             Loaded::Read {
@@ -2099,34 +2244,7 @@ mod tests {
     fn every_stored_field_is_named_when_it_does_not_read() {
         // The fields left out of the file while empty are set too, so each
         // one is checked.
-        let every_field = Settings {
-            input_device: Some(SavedInput {
-                id: "input".to_owned(),
-                name: "Input".to_owned(),
-            }),
-            input_pairs: BTreeMap::from([("input".to_owned(), 2)]),
-            source_mix: Some(SavedMix {
-                mode: MixMode::AllExcept,
-                apps: vec![SavedMixApp {
-                    executable: "player.exe".to_owned(),
-                    name: "Player".to_owned(),
-                }],
-            }),
-            hidden_speakers: vec![SavedHidden {
-                key: "output:hidden".to_owned(),
-                name: "Hidden".to_owned(),
-                kind: "output".to_owned(),
-            }],
-            equalizer_curves: vec![SavedCurve {
-                name: "Curve".to_owned(),
-                gains_db: vec![1.0; BAND_COUNT],
-            }],
-            update_record: Some(UpdateRecord {
-                version: "9.9.9".to_owned(),
-                reason: crate::ui_model::UpdateRecordReason::Blocked,
-            }),
-            ..sample()
-        };
+        let every_field = every_field();
         let serde_json::Value::Object(stored) =
             serde_json::from_str(&every_field.to_json()).expect("an object")
         else {

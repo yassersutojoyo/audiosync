@@ -7944,7 +7944,7 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
-    // covers: S290, S291, S276, S271
+    // covers: S290, S291, S276, S271, S289
     #[test]
     fn the_s290_vector_cases_land_on_the_television() {
         use serde_json::Value;
@@ -8216,6 +8216,7 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // covers: S291
     #[test]
     fn a_target_reads_its_volume_through_a_member() {
         let mut handle = create_with(quiet);
@@ -8247,6 +8248,11 @@ mod tests {
         assert_eq!(events[0].kind, AIRPLAY_EVENT_VOLUME);
         assert_eq!(events[0].id, "pair:volume-pair");
         assert_eq!(events[0].volume, 0.0, "muted on the speaker");
+        assert_eq!(
+            inside(handle).added["pair:volume-pair"].read_back.echo_of(),
+            Some(-144.0),
+            "the members get the level as a set"
+        );
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }

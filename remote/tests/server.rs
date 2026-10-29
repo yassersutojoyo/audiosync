@@ -1239,6 +1239,7 @@ fn pairing_code_lines(remote: &Remote) -> Vec<String> {
         .collect()
 }
 
+// covers: S287
 #[test]
 fn debug_mode_logs_each_new_pairing_code_and_a_normal_run_never_does() {
     let line = |code: &str| format!("remote: pairing code {code} (debug only)");
