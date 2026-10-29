@@ -358,7 +358,6 @@ const ui = {
   presetError: byId("preset-error"),
   zones: byId("zones"),
   zoneList: byId("zone-list"),
-  playingLabel: byId("playing-label"),
   playingTitle: byId("playing-title"),
   playingDetail: byId("playing-detail"),
   master: byId("master"),
@@ -1141,7 +1140,6 @@ function render(next) {
 
   const playing = next.now_playing;
   const paused = playing && playing.playing === false;
-  ui.playingLabel.textContent = paused ? TEXT.paused : TEXT.nowPlaying;
   if (playing && (playing.title || playing.artist)) {
     ui.playingTitle.textContent = playing.title || playing.artist;
     ui.playingDetail.textContent = [playing.title ? playing.artist : "", playing.source, paused ? TEXT.paused : ""].filter(Boolean).join(" · ");

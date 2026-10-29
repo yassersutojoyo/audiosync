@@ -208,6 +208,8 @@ struct RemoteSource: Equatable {
 struct RemoteSnapshot: Equatable {
     struct Playing: Equatable {
         var title, artist, source: String
+        /// False while the app is paused.
+        var playing = true
     }
 
     var computerName: String
@@ -225,7 +227,7 @@ struct RemoteSnapshot: Equatable {
 
     /// One line, keys sorted, so an unchanged snapshot gives the same text.
     var json: String {
-        let playing: Any = nowPlaying.map { ["title": $0.title, "artist": $0.artist, "source": $0.source] } ?? NSNull()
+        let playing: Any = nowPlaying.map { ["title": $0.title, "artist": $0.artist, "source": $0.source, "playing": $0.playing] } ?? NSNull()
         let root: [String: Any] = [
             "computer_name": computerName,
             "master": ["volume": Self.volume(master)],

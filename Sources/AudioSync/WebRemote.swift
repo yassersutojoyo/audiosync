@@ -247,7 +247,7 @@ final class WebRemote {
 
     private func snapshot() -> RemoteSnapshot {
         let playing = model.nowPlaying.map {
-            RemoteSnapshot.Playing(title: $0.title, artist: $0.artist, source: $0.appName)
+            RemoteSnapshot.Playing(title: $0.title, artist: $0.artist, source: $0.appName, playing: $0.isPlaying)
         }
         let listed = rows()
         let (sources, current) = sourceList()

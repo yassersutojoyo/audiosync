@@ -1173,6 +1173,7 @@ mod tests {
         assert!(State::from_json(&snapshot.to_json(0)).is_ok());
     }
 
+    // covers: S343
     #[test]
     fn a_paused_track_goes_out_as_paused() {
         let track = crate::now_playing_card::fake::track("Spotify.exe", "Song", "Band", false);

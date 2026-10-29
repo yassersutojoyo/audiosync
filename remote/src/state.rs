@@ -831,6 +831,7 @@ mod tests {
         assert_eq!(again, state);
     }
 
+    // covers: S343
     #[test]
     fn a_paused_track_says_so_and_a_snapshot_without_the_field_plays() {
         let with = |playing: &str| {

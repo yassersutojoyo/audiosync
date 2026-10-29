@@ -9874,8 +9874,12 @@ do {
           "web remote: the same state gives the same text, so the core sends nothing new")
     let playing = RemoteSnapshot(computerName: "", master: 50,
                                  nowPlaying: .init(title: "Song", artist: "Band", source: "Music"), rows: []).json
-    check(playing.contains("\"now_playing\":{\"artist\":\"Band\",\"source\":\"Music\",\"title\":\"Song\"}"),
+    check(playing.contains("\"now_playing\":{\"artist\":\"Band\",\"playing\":true,\"source\":\"Music\",\"title\":\"Song\"}"),
           "web remote: Now Playing goes out with title, artist and source app", playing)
+    let paused = RemoteSnapshot(computerName: "", master: 50,
+                                nowPlaying: .init(title: "Song", artist: "Band", source: "Music", playing: false),
+                                rows: []).json
+    check(paused.contains("\"playing\":false"), "web remote: a paused track goes out as paused", paused)
 
     let entries = SourceList.entries(systemName: "All System Audio", apps: [(bundleID: "com.apple.Music", name: "Music")],
                                      inputs: [SourceList.Input(uid: "BuiltInMic", name: "MacBook Microphone",
