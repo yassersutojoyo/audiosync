@@ -163,9 +163,8 @@ extension AppDelegate {
             }
             pushModel()   // the row says it waits, or no longer
         case .volumeChanged(let id, let position, let level):
-            let silenced = calibrateAllRun?.silences(airPlay: id) == true
             guard let receiver = NativeAirPlayID.receiver(id),
-                  nativeAirPlay?.volumeEvents.applies(receiver, silenced: silenced) == true else { return }
+                  nativeAirPlay?.volumeEvents.applies(receiver) == true else { return }
             airplayVolume[id] = position
             airplayHeldLevel[id] = AirPlayDeviceLevel.held(level: level, zone: airPlayZoneVolume(id), master: masterVolume)
             pushModel()
