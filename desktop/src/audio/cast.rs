@@ -1512,6 +1512,9 @@ impl CastSpeakers {
                     if let ListEvent::Identified { from, id } = change {
                         self.identified(from, id);
                     }
+                    if let ListEvent::Removed(DeviceKey::Id(id)) = change {
+                        self.off_when_gone(id);
+                    }
                     self.pending.push(BackendEvent::CastChanged);
                 }
             }
@@ -1545,6 +1548,21 @@ impl CastSpeakers {
             .log(|| format!("Cast: {id} switched off, discovery stopped"));
         self.enabled = None;
         self.fail(id, CastProblem::SearchStopped);
+    }
+
+    /// A browsed device that is on with no session and left the list goes
+    /// off at once, so it never refuses another while unlisted (C2, S339).
+    fn off_when_gone(&mut self, id: DeviceId) {
+        if self.enabled != Some(id)
+            || self.attempt.is_some_and(|attempt| attempt.device == id)
+            || self.manual.iter().any(|manual| manual.id == id)
+        {
+            return;
+        }
+        self.log
+            .log(|| format!("Cast: {id} switched off, it left the list"));
+        self.enabled = None;
+        self.fail(id, CastProblem::NotResponding);
     }
 
     /// What a group announces, when it is first listed (C89).
@@ -2183,8 +2201,12 @@ pub mod tests {
     fn a_speaker_that_left_is_turned_off_with_a_notice_when_discovery_stops_and_another_can_go_on()
     {
         let (fake, mut cast) = listed();
+        cast.set_streaming(true);
         cast.set_enabled(KITCHEN, true).unwrap();
         fake.withdraw(KITCHEN, "Kitchen");
+        cast.poll();
+        // The session's end drops the offline row and leaves the speaker on.
+        cast.set_streaming(false);
         cast.poll();
         assert!(cast.is_on());
 

@@ -14237,8 +14237,9 @@ mod tests {
     }
 
     /// As on the Mac, the Cast note reads the Cast speaker that is on, not
-    /// the listed rows: one that left the network while streaming is off
-    /// still refuses the zone's Cast member, so the member keeps its note.
+    /// the listed rows: one whose row went with its session after it left
+    /// the network still refuses the zone's Cast member, so the member keeps
+    /// its note.
     // covers: S246
     #[test]
     fn a_cast_member_kept_off_by_an_unlisted_cast_speaker_keeps_its_note() {
@@ -14246,8 +14247,10 @@ mod tests {
         adapter.add_zone("Lounge", &[key(SPEAKERS), cc(CAST_LIVING)]);
         adapter.set_speaker_enabled(&key(SPEAKERS), true);
         adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
-        adapter.set_running(false);
+        adapter.set_running(true);
         fake.withdraw(CAST_KITCHEN, "Kitchen");
+        adapter.poll();
+        adapter.set_running(false);
         adapter.poll();
         let state = adapter.snapshot();
         assert!(!state.running);
