@@ -7320,36 +7320,65 @@ mod tests {
         );
     }
 
+    // covers: S329, S335
     #[test]
-    fn an_input_device_unplugged_while_streaming_stops_streaming_once_the_restart_tries_run_out() {
+    fn an_input_device_unplugged_while_streaming_waits_for_it_without_timed_tries() {
         let mut backend = backend();
         backend.connect_input("mic", "Microphone", "USB");
         let source = SourceId::Input {
             endpoint_id: "mic".to_owned(),
         };
+        let mic = CaptureTarget::Input {
+            endpoint_id: "mic".to_owned(),
+            pair: 0,
+        };
         backend.start(&source).unwrap();
-        assert_eq!(
-            backend.driver().captures_started(),
-            [CaptureTarget::Input {
-                endpoint_id: "mic".to_owned(),
-                pair: 0,
-            }]
-        );
+        assert_eq!(backend.driver().captures_started(), [mic.clone()]);
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
         backend.disconnect_input("mic");
-        // The stream fails as one lost to a Windows audio restart does, and
-        // is tried again as that one is: a USB device can be inactive for a
-        // moment after a wake.
-        poll_quietly(&mut backend, 5 * RESTART_DELAY_POLLS);
+        // The first try finds the device gone from the list; none follows.
+        let events: Vec<BackendEvent> = (0..10 * RESTART_DELAY_POLLS)
+            .flat_map(|_| backend.poll())
+            .collect();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::Stopped { .. })),
+            "{events:?}"
+        );
+        assert_eq!(backend.driver().capture_attempts(), 1 + 1);
+        assert_eq!(backend.running_source(), Some(source.clone()));
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS], "the outputs play on");
+        backend.connect_input("mic", "Microphone", "USB");
+        for _ in 0..2 * RESTART_DELAY_POLLS {
+            backend.poll();
+        }
+        assert_eq!(backend.driver().captures_started(), [mic.clone(), mic]);
+        assert_eq!(backend.driver().capture_attempts(), 1 + 1 + 1);
+        assert_eq!(backend.running_source(), Some(source));
+    }
+
+    // covers: S329, S335
+    #[test]
+    fn an_input_still_listed_whose_capture_fails_gets_the_five_tries() {
+        let mut backend = backend();
+        backend.connect_input("mic", "Microphone", "USB");
+        backend
+            .start(&SourceId::Input {
+                endpoint_id: "mic".to_owned(),
+            })
+            .unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        poll_quietly(&mut backend, RESTART_TRIES * RESTART_DELAY_POLLS);
         assert_eq!(
             backend.poll(),
             [BackendEvent::Stopped {
-                reason: StopReason::CaptureFailed(BackendError::InputGone),
+                reason: StopReason::CaptureFailed(BackendError::DeviceGone),
             }]
         );
         assert_eq!(backend.driver().capture_attempts(), 1 + 5);
         assert_eq!(backend.running_source(), None);
-        assert!(playing(&backend).is_empty());
     }
 
     #[test]
