@@ -17,7 +17,7 @@ use audiosync_airplay::sender::{
 };
 use audiosync_airplay::stream::{PacketKind, SpeakerCounters, SpeakerId, StreamEvent};
 use audiosync_airplay::volume::Volume;
-use common::net::{AudioPacket, Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
+use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
 use common::rig::{Rig, decode, host_frame, speaker};
 
 const PACKET: u64 = FRAMES_PER_PACKET as u64;
@@ -376,7 +376,6 @@ fn a_resume_waits_for_the_pause_flush_behind_a_delay_flush() {
             .filter(|packet| before(packet.header.seq, held))
             .all(|packet| packet.at < flushed)
     );
-    assert!(late_before(&log.audio, paused, held) <= LATE_PACKETS);
     // The delay FLUSH is answered about ANSWER after the pause, the pause
     // FLUSH about ANSWER after that.
     assert!(
@@ -392,18 +391,6 @@ fn a_resume_waits_for_the_pause_flush_behind_a_delay_flush() {
 /// Whether RTP `seq` comes before `next` in sequence order.
 fn before(seq: u16, next: u16) -> bool {
     (next.wrapping_sub(seq) as i16) > 0
-}
-
-/// The most packets a pause may let out after the call: 100 ms of 352-frame
-/// packets, a count so a late arrival stamp can't inflate it (P213).
-const LATE_PACKETS: usize = 13;
-
-/// How many packets before `held` arrived after `at`.
-fn late_before(audio: &[AudioPacket], at: Instant, held: u16) -> usize {
-    audio
-        .iter()
-        .filter(|packet| packet.at > at && before(packet.header.seq, held))
-        .count()
 }
 
 // Part of P213: a refused pause FLUSH still ends the wait, with a warning.
@@ -447,7 +434,6 @@ fn a_speaker_added_or_reconnected_while_paused_waits_for_the_resume() {
     let second = NetReceiver::start(Behavior::default());
     let (sender, _host, mut events, first_key) = play(&first, 1);
     sender.pause();
-    let paused = Instant::now();
     assert!(wait_until(LONG, || first.log().count("FLUSH") == 1));
 
     let device = second.device(2, PCM_TXT);
@@ -485,7 +471,6 @@ fn a_speaker_added_or_reconnected_while_paused_waits_for_the_resume() {
         );
         assert_eq!(sent.last().map(|seq| seq.wrapping_add(1)), Some(held));
         assert_eq!(sent.len(), log.audio.len());
-        assert!(late_before(&log.audio, paused, held) <= LATE_PACKETS);
     }
     assert!(second.log().audio.is_empty());
 

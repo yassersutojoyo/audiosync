@@ -837,7 +837,7 @@ impl CastSession {
     fn on_event(&mut self, event: Event) {
         match event {
             Event::Status(status) => {
-                if self.last_volume.as_ref() != Some(&status.volume) {
+                if status.volume.has_level && self.last_volume.as_ref() != Some(&status.volume) {
                     self.last_volume = Some(status.volume.clone());
                     self.report(SessionEvent::Volume(status.volume));
                 }

@@ -72,6 +72,39 @@ struct SpeakerNames: Equatable {
     }
 }
 
+/// What the user set for a Cast device under its key, moved from the key of
+/// the address it was added by to its ID once a browse finds it (C18). A
+/// setting the ID already has wins.
+struct CastUserSettings {
+    var names: SpeakerNames
+    var zones: [SpeakerZone]
+    var presets: [SpeakerPreset]
+    var hidden: HiddenSpeakers
+
+    func moved(from old: String, to new: String) -> CastUserSettings {
+        let (from, to) = (CastID.key(old), CastID.key(new))
+        var out = self
+        var names = self.names.custom
+        if let name = names.removeValue(forKey: from), names[to] == nil { names[to] = name }
+        out.names = SpeakerNames(custom: names)
+        if zones.contains(where: { $0.members.contains(to) }) {
+            out.zones = ZoneEdit.removing(from, from: zones)
+        } else {
+            out.zones = zones.map { zone in
+                var copy = zone
+                copy.members = zone.members.map { $0 == from ? to : $0 }
+                if let name = copy.memberNames?.removeValue(forKey: from) { copy.memberNames?[to] = name }
+                return copy
+            }
+        }
+        out.presets = presets.map { $0.renamingKey(from, to: to) }
+        if let entry = out.hidden.show(CastID.app(old)) {
+            out.hidden.hide(key: CastID.app(new), name: entry.name, kind: entry.kind)
+        }
+        return out
+    }
+}
+
 /// The rename typed in place in a speaker's row or a zone's header, one name
 /// at a time. Every way out of it but Escape hands back what to apply
 /// (`SpeakerNames.rename`, `ZoneEdit.renaming`), so no typing is lost.

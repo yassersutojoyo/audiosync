@@ -55,9 +55,6 @@ final class StreamEngine {
     /// Now Playing's latest reading, nil while the monitor doesn't run (S335 D3).
     var nowPlayingReading: (() -> NowPlayingMonitor.Track?)?
 
-    /// The core's volume curve, for the host's gain arithmetic (S70, S71).
-    let gainCurve = CoreGainCurve()
-
     /// True from a successful `start` until `stop`; false while a stop's
     /// outputs still fade out.
     private(set) var isRunning = false

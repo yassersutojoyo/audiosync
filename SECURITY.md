@@ -14,7 +14,7 @@ The native sender doesn't run a server or an API of its own, and it publishes no
 
 ### Network
 
-AudioSync sends no telemetry. Its network traffic is AirPlay and Google Cast discovery (mDNS browsing), streaming to the speakers you turn on, the web remote when you turn it on, album artwork for Spotify's Now Playing, fetched from the https URL Spotify provides, and, in release builds of the Mac app only, the update check: Sparkle fetches `appcast.xml` from the latest GitHub release over https, and the update itself when you install one. It sends nothing beyond those requests (no system profile). Builds you make yourself never check.
+AudioSync sends no telemetry. Its network traffic is AirPlay and Google Cast discovery (mDNS browsing), streaming to the speakers you turn on, the web remote when you turn it on, album artwork for Spotify's Now Playing, fetched from the https URL Spotify provides, and, in release builds, the update check: both apps fetch `appcast.xml` from the latest GitHub release over https (the Mac app through Sparkle, the Windows app on its own, which you can turn off under File > Check for Updates Automatically), and the update itself when you install one. It sends nothing beyond those requests (no system profile). Builds you make yourself never check.
 
 Google Cast speakers get the audio, and the cover art of what's playing, over plain HTTP on your local network. For each stream AudioSync opens a server on a port the system picks, under a random path, and only answers the addresses of the Cast speaker or group it's streaming to.
 

@@ -1099,6 +1099,32 @@ fn a_reconnect_whose_first_status_has_no_level_keeps_the_known_level() {
     device.join();
 }
 
+// covers: C37, C105
+#[test]
+fn a_fresh_sessions_first_status_without_a_level_sets_no_level() {
+    let device = FakeDevice::start(Behavior {
+        volume: json!({"muted": false, "controlType": "attenuation"}),
+        ..Behavior::default()
+    });
+    let (mut session, _feed) = start(&device);
+    session.run_for(Duration::from_millis(500));
+    let seen: Vec<_> = std::iter::from_fn(|| session.poll_event()).collect();
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Volume(_))),
+        "{seen:?}"
+    );
+    session.set_volume(0.3).expect("sent");
+    run_until(
+        &mut session,
+        Duration::from_secs(3),
+        |event| matches!(event, SessionEvent::Volume(volume) if (volume.level - 0.3).abs() < 1e-9),
+    );
+    session.stop();
+    device.join();
+}
+
 // covers: C25, C81
 #[test]
 fn an_oversized_frame_from_the_device_is_a_fault_the_session_recovers_from() {

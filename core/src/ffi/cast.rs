@@ -251,6 +251,9 @@ pub struct AscCastEvent {
     pub muted: bool,
     /// The device's volume can't be changed (C68).
     pub volume_fixed: bool,
+    /// A volume event's status gave the level; `level` means nothing
+    /// without it (C105).
+    pub has_level: bool,
     /// The device's volume step; 0 when it reports none (C69).
     pub step: f64,
     /// Diagnostics: dropped audio plus rebuffering since the `LOAD` (C79).
@@ -308,6 +311,7 @@ struct Pending {
     level: f64,
     muted: bool,
     volume_fixed: bool,
+    has_level: bool,
     step: f64,
     drift_ms: f64,
     queued_ms: f64,
@@ -330,6 +334,7 @@ impl Pending {
             level: 0.0,
             muted: false,
             volume_fixed: false,
+            has_level: false,
             step: 0.0,
             drift_ms: 0.0,
             queued_ms: 0.0,
@@ -1006,6 +1011,7 @@ impl AscCast {
             level: pending.level,
             muted: pending.muted,
             volume_fixed: pending.volume_fixed,
+            has_level: pending.has_level,
             step: pending.step,
             drift_ms: pending.drift_ms,
             queued_ms: pending.queued_ms,
@@ -1035,6 +1041,7 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             pending.level = volume.level;
             pending.muted = volume.muted;
             pending.volume_fixed = volume.control_type == ControlType::Fixed;
+            pending.has_level = volume.has_level;
             pending.step = volume.step_interval.unwrap_or(0.0);
             pending
         }
@@ -2258,6 +2265,7 @@ mod tests {
             level: 0.0,
             muted: false,
             volume_fixed: false,
+            has_level: false,
             step: 0.0,
             drift_ms: 0.0,
             queued_ms: 0.0,
@@ -2354,6 +2362,20 @@ mod tests {
         assert_eq!(event.underrun_frames, 4_800);
         assert_eq!((event.drift_ms, event.queued_ms), (40.0, 250.0));
         destroy(handle);
+    }
+
+    // CAST_SPEC: C105
+    #[test]
+    fn a_volume_event_says_whether_its_status_gave_the_level() {
+        for has_level in [false, true] {
+            let volume = status::DeviceVolume {
+                level: 0.4,
+                has_level,
+                ..Default::default()
+            };
+            let pending = session_event(SessionEvent::Volume(volume), |_| {});
+            assert_eq!(pending.has_level, has_level);
+        }
     }
 
     // CAST_SPEC: C21
