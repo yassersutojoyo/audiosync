@@ -3826,6 +3826,7 @@ impl App {
     /// Recalls preset `id` (spec S265) from any path; it opens, raises and
     /// focuses nothing (S266).
     fn recall_preset(&self, id: &str) {
+        self.ui.borrow_mut().chosen_curve = None;
         self.update(|b| b.recall_preset(id));
     }
 
