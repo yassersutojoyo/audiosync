@@ -2667,12 +2667,22 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.stop_if_idle();
     }
 
+    /// A Cast speaker's own name, where the address it was added with gives
+    /// way to the name its zone kept (S286).
+    fn cast_own_name(&self, speaker: &CastInfo) -> String {
+        let kept = (speaker.address.as_ref() == Some(&speaker.name))
+            .then(|| self.zones.member_name(&cast_key(&speaker.id)))
+            .flatten();
+        kept.map_or_else(|| speaker.name.clone(), ToOwned::to_owned)
+    }
+
     /// A Google Cast speaker's row.
     fn cast_speaker(&self, speaker: CastInfo) -> Speaker {
         let id = cast_key(&speaker.id);
+        let system = self.cast_own_name(&speaker);
         Speaker {
-            name: self.custom_names.shown(&id, &speaker.name),
-            system_name: speaker.name,
+            name: self.custom_names.shown(&id, &system),
+            system_name: system,
             id,
             kind: SpeakerKind::Cast,
             enabled: speaker.enabled,
@@ -3908,7 +3918,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     .audio
                     .cast_speakers()
                     .into_iter()
-                    .map(|speaker| (speaker.id, speaker.name))
+                    .map(|speaker| (speaker.id.clone(), self.cast_own_name(&speaker)))
                     .collect();
                 names.retain(|id, _| self.key_kept(&cast_key(id)));
                 names.extend(listed);
@@ -13752,6 +13762,36 @@ mod tests {
         let saved = adapter.current_settings();
         assert!(saved.cast_addresses.is_empty() && saved.cast_found_ids.is_empty());
         assert!(adapter.snapshot().speaker(&cc(CAST_KITCHEN)).is_some());
+    }
+
+    // covers: S286
+    #[test]
+    fn an_address_added_cast_zone_member_keeps_its_announced_name_once_it_leaves_the_list() {
+        let dir = test_dir("adapter-cast-zone-name");
+        let path = dir.join(settings::FILE_NAME);
+        let (mut adapter, fake) = cast_launch(&path, &[], false);
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        fake.announce_at(
+            DEN,
+            "Living TV",
+            DEVICE_PORT,
+            std::net::Ipv4Addr::new(192, 0, 2, 31),
+        );
+        adapter.poll();
+        adapter.new_zone_with(&cc(DEN), "Lounge");
+        adapter.poll();
+        fake.withdraw(DEN, "Living TV");
+        adapter.poll();
+        assert_eq!(adapter.zones.member_name(&cc(DEN)), Some("Living TV"));
+        assert_eq!(speaker_of(&adapter, &cc(DEN)).name, "Living TV");
+        assert!(adapter.save_settings());
+
+        let (mut adapter, _fake) = cast_launch(&path, &[], false);
+        adapter.poll();
+        assert_eq!(adapter.zones.member_name(&cc(DEN)), Some("Living TV"));
+        assert_eq!(speaker_of(&adapter, &cc(DEN)).name, "Living TV");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The UI's ID of a Google Cast speaker.

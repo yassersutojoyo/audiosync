@@ -240,7 +240,7 @@ extension AppDelegate {
         guard let (id, kind) = SpeakerKey.parseAny(key) else { return "" }
         switch kind {
         case .airplay: return airplayNames[id] ?? ""
-        case .cast: return castModel.lastListedName(id)
+        case .cast: return castModel.zoneListedName(id, kept: SpeakerZone.storedName(of: key, in: zones))
         case .local: return localDevices[id]?.name ?? ""
         }
     }

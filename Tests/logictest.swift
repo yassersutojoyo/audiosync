@@ -616,6 +616,39 @@ do {
             && !SpeakerZone.differInNamesOnly(louder, unnamed)
             && !SpeakerZone.differInNamesOnly(ZoneEdit.removing("lc:blank", from: unnamed), unnamed),
           "zones: an absent member reads its kept name, a listed one its name now, and a name alone re-applies no volume")
+
+    // covers: S286 (the Mac host: an address a Cast device was added with is not its name)
+    let tvID = "0123456789abcdef0123456789abcdef", tvAddress = CastManualAddress("192.0.2.7")!
+    let tvManual = CastModel.manualPrefix + tvAddress.text, tvKey = CastID.key(tvID)
+    func rememberTV(_ zones: [SpeakerZone], _ model: CastModel) -> [SpeakerZone] {
+        let listed = model.zoneListedName(tvID, kept: SpeakerZone.storedName(of: tvKey, in: zones))
+        return SpeakerZone.remembering([tvKey: listed], in: zones)
+    }
+    func tvName(_ zones: [SpeakerZone], _ model: CastModel) -> String {
+        let listed = model.zoneListedName(tvID, kept: SpeakerZone.storedName(of: tvKey, in: zones))
+        return SpeakerZone.systemName(of: tvKey, listed: listed, in: zones)
+    }
+    var tv = CastModel()
+    tv.addedManually(tvManual, address: tvAddress)
+    tv.apply(.appeared(CastDevice(id: tvID, name: "Living TV"), offsetMs: nil, former: tvManual))
+    let tvListed = rememberTV([SpeakerZone(id: "z", name: "Lounge", members: [tvKey], volume: 100)], tv)
+    tv.apply(.gone(id: tvID))
+    let tvGone = rememberTV(tvListed, tv)
+    var tvNextRun = CastModel()
+    tvNextRun.foundIDs = [tvAddress.text: tvID]
+    tvNextRun.addedManually(tvManual, address: tvAddress)
+    let tvRelisted = tvNextRun.listed(.appeared(CastDevice(id: tvManual, name: "", manual: true), offsetMs: nil))
+    tvNextRun.apply(tvRelisted)
+    let tvRelaunched = rememberTV(tvGone, tvNextRun)
+    var neverNamed = CastModel()
+    neverNamed.addedManually(tvManual, address: tvAddress)
+    neverNamed.apply(.appeared(CastDevice(id: tvManual, name: "", manual: true), offsetMs: nil))
+    check(SpeakerZone.storedName(of: tvKey, in: tvGone) == "Living TV" && tvName(tvGone, tv) == "Living TV"
+            && SpeakerZone.storedName(of: tvKey, in: tvRelaunched) == "Living TV"
+            && tvName(tvRelaunched, tvNextRun) == "Living TV"
+            && neverNamed.zoneListedName(tvManual, kept: nil) == tvAddress.text,
+          "zones: an address-added Cast member keeps its announced name once it leaves the list",
+          "\(tvGone) \(tvRelaunched) \(tvName(tvGone, tv))")
 }
 
 // MARK: Presets — overlapping groups become presets once (Presets.swift, AppSettings.swift, S251, S254)
@@ -5854,18 +5887,18 @@ do {
     var goneCast = CastModel()
     goneCast.apply(.appeared(CastDevice(id: "K1", name: "Kitchen"), offsetMs: nil))
     goneCast.apply(.gone(id: "K1"))
-    check(goneCast.lastListedName("K1") == "Kitchen",
+    check(goneCast.zoneListedName("K1", kept: nil) == "Kitchen",
           "presets: the notice names a Cast member gone from the network by its last listed name",
-          goneCast.lastListedName("K1"))
+          goneCast.zoneListedName("K1", kept: nil))
     // covers: S265
     var stoppedCast = CastModel(), failedCast = CastModel()
     stoppedCast.apply(.appeared(CastDevice(id: "K1", name: "Kitchen"), offsetMs: nil))
     failedCast.apply(.appeared(CastDevice(id: "K1", name: "Kitchen"), offsetMs: nil))
     _ = stoppedCast.apply(.discoveryStopped)
     _ = failedCast.apply(.failed(detail: ""))
-    check(stoppedCast.lastListedName("K1") == "Kitchen" && failedCast.lastListedName("K1") == "Kitchen",
+    check(stoppedCast.zoneListedName("K1", kept: nil) == "Kitchen" && failedCast.zoneListedName("K1", kept: nil) == "Kitchen",
           "presets: a Cast member dropped by a stopped search or sender keeps its last listed name",
-          "\(stoppedCast.lastListedName("K1")) \(failedCast.lastListedName("K1"))")
+          "\(stoppedCast.zoneListedName("K1", kept: nil)) \(failedCast.zoneListedName("K1", kept: nil))")
     // covers: S265
     let goneManualID = "manual:192.0.2.9:8009"
     var goneManual = CastModel()
@@ -5873,9 +5906,18 @@ do {
     goneManual.apply(.appeared(CastDevice(id: goneManualID, name: "Den", manual: true), offsetMs: nil))
     goneManual.apply(.gone(id: goneManualID))
     _ = goneManual.removeManual(goneManualID)
-    check(goneManual.lastListedName(goneManualID).isEmpty,
+    check(goneManual.zoneListedName(goneManualID, kept: nil).isEmpty,
           "presets: Remove forgets the name a gone Cast speaker added by address was listed under",
-          goneManual.lastListedName(goneManualID))
+          goneManual.zoneListedName(goneManualID, kept: nil))
+    // covers: S265
+    let goneFoundID = "0123456789abcdef0123456789abcdef"
+    var goneFound = CastModel()
+    goneFound.addedManually(goneManualID, address: CastManualAddress("192.0.2.9")!)
+    goneFound.apply(.appeared(CastDevice(id: goneFoundID, name: "Living TV"), offsetMs: nil, former: goneManualID))
+    goneFound.apply(.gone(id: goneFoundID))
+    check(goneFound.zoneListedName(goneFoundID, kept: nil) == "Living TV",
+          "presets: the notice names a gone Cast speaker added by address by its announced name, not its address",
+          goneFound.zoneListedName(goneFoundID, kept: nil))
 
     let noneHere = PresetRecall.plan([.init(kind: .local, found: false), .init(kind: .cast, found: true, busy: true)],
                                      others: [true], streaming: true)

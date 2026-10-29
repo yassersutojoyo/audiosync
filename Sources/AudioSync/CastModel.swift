@@ -1025,11 +1025,12 @@ struct CastModel {
         for (id, device) in dropped where !device.name.isEmpty { goneNames[id] = device.name }
     }
 
-    /// The name `id` is listed under, else the one it had when it left the
-    /// list in this run, so a recall notice can still name it (S265).
-    func lastListedName(_ id: String) -> String {
-        let listed = listedName(id)
-        return listed.isEmpty ? goneNames[id] ?? "" : listed
+    /// The name zone member `id` is listed under: its own, else the address
+    /// it was added with, but only while its zone kept no name for it (S286).
+    func zoneListedName(_ id: String, kept: String?) -> String {
+        let announced = devices[id]?.name ?? ""
+        let own = announced.isEmpty ? goneNames[id] ?? "" : announced
+        return own.isEmpty && kept == nil ? manualAddresses[id]?.text ?? "" : own
     }
 
     /// The device that is on and its listed name, read before an event that
