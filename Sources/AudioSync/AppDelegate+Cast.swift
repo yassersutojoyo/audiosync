@@ -71,6 +71,7 @@ extension AppDelegate {
         for change in changes {
             DebugTrace.log("[AudioSync] Cast discovery: " + Self.castLogLine(change))
             castModel.apply(change)
+            if let level = castModel.takeLevelDue() { castSender?.setVolume(level) }
             if case .appeared(let device, _, let former?) = change {
                 moveCastNotices(from: former, to: device.id)
                 moveCastSettings(from: former, to: device.id)

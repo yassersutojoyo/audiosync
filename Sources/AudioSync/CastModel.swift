@@ -469,7 +469,7 @@ struct CastModel {
         switch change {
         case .appeared(let device, let offset, _), .changed(let device, let offset):
             if removedManual.contains(device.id) { return false }
-            if case .appeared(_, _, let former?) = change { identified(former, as: device.id) }
+            if case .appeared(_, _, let former?) = change { levelDue = identified(former, as: device.id) }
             if let offset, !offsetsWritten.contains(device.id) { offsets[device.id] = offset > 0 ? offset : nil }
             let changed = devices[device.id] != device
             devices[device.id] = device
@@ -507,7 +507,7 @@ struct CastModel {
     /// (C18), and the sender moved its session there: what the app holds
     /// about it moves too, so it stays on and playing, and Remove still
     /// forgets its address.
-    private mutating func identified(_ old: String, as new: String) {
+    private mutating func identified(_ old: String, as new: String) -> Double? {
         if let address = manualAddresses.removeValue(forKey: old) { manualAddresses[new] = address }
         if takenOver.remove(old) != nil { takenOver.insert(new) }
         if enabled == old { enabled = new }
@@ -518,10 +518,25 @@ struct CastModel {
         }
         if let volume = volumes.removeValue(forKey: old) { volumes[new] = volume }
         if let level = levels.removeValue(forKey: old) { levels[new] = level }
-        if let zone = zoneLevels.removeValue(forKey: old), zoneLevels[new] == nil { zoneLevels[new] = zone }
+        let playedZone = zoneLevels.removeValue(forKey: old)
+        if let playedZone, zoneLevels[new] == nil { zoneLevels[new] = playedZone }
         if let wanted = requested, wanted.id == old { requested = (new, wanted.level) }
         // As the sender: it moves the offset over none or 0 ms (a cleared one), and keeps any other.
         if offsets[new] == nil, let offset = offsets.removeValue(forKey: old) { offsets[new] = offset }
+        return keptLoudness(new, playedZone: playedZone ?? 1)
+    }
+
+    /// The session's own level rescaled so master × zone × own still gives
+    /// what it played in `playedZone` (S342); the level to send when the
+    /// clamp to 0 to 1 keeps it from that.
+    private mutating func keptLoudness(_ id: String, playedZone: Double) -> Double? {
+        let zone = self.zone(of: id)
+        guard attempt?.device == id, zone != playedZone, let own = ownLevel(of: id) else { return nil }
+        let played = asc_cast_zone_level(master, playedZone, own)
+        let kept = asc_cast_zone_own_level(played, master, zone, own)
+        if requested?.id == id { requested = (id, kept) } else { levels[id] = kept }
+        if asc_cast_level_answers(asc_cast_zone_level(master, zone, kept), played) { return nil }
+        return levelToSend(id, own: kept)
     }
 
     /// The level a re-key left to send, once; nil when none is due.
