@@ -3471,13 +3471,30 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         if !running {
             self.busy.clear();
-            self.reconnecting.clear();
+            self.forget_waits(|_| false);
             return;
         }
         let outputs = self.audio.enabled_outputs();
         self.busy.retain(|id| outputs.contains(id));
         let airplay = self.audio.enabled_airplay();
-        self.reconnecting.retain(|id, _| airplay.contains(id));
+        self.forget_waits(|id| airplay.contains(id));
+    }
+
+    /// Drops the AirPlay waits `keep` turns down, with their notices: nothing
+    /// retries or starts those speakers any more.
+    fn forget_waits(&mut self, keep: impl Fn(&String) -> bool) {
+        let stale: Vec<String> = self
+            .reconnecting
+            .keys()
+            .filter(|id| !keep(id))
+            .cloned()
+            .collect();
+        for id in stale {
+            self.reconnecting.remove(&id);
+            self.clear_if(airplay_subject(&id), |message| {
+                matches!(message, NoticeMessage::AirPlayRetrying { .. })
+            });
+        }
     }
 
     /// The stream ended, and with it the PIN session each click bought
@@ -3677,7 +3694,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             // Its Retry starts a new sender (`retry_airplay`).
             BackendEvent::AirPlayStopped => {
-                self.reconnecting.clear();
+                self.forget_waits(|_| false);
                 // Retry starts a new stream, though capture runs on.
                 self.end_hand_marks();
                 self.post(NoticeSubject::AirPlay, NoticeMessage::AirPlayStopped);

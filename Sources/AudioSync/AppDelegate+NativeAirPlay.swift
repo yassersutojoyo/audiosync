@@ -337,8 +337,9 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] native AirPlay: the sender stopped after an internal error; Retry starts a new one")
         nativeAirPlay = nil
         nativeStarts.senderFailed()
-        // Nothing starts a waiting speaker once its sender is gone.
-        clearNotices(native.model.waiting.keys.map { SpeakerKey.make(id: NativeAirPlayID.app($0), airplay: true) })
+        // Nothing starts or retries a speaker once its sender is gone.
+        clearNotices(native.model.states.keys.filter { native.model.clearsNoticeOnRemoval($0) }
+            .map { SpeakerKey.make(id: NativeAirPlayID.app($0), airplay: true) })
         native.discard()
         if codePromptBusy { closeCodePrompt() }   // its prompt went with it
         airplayOrder = []
@@ -413,8 +414,8 @@ extension AppDelegate {
         let released = Set(plan.release.map(NativeAirPlayID.app))
         airplayOrder.removeAll { released.contains($0) }   // their target's row stands for them now
         for id in plan.remove {
-            // Its wait for the slot ends.
-            if native.model.isWaiting(id) { clearNotices([SpeakerKey.make(id: NativeAirPlayID.app(id), airplay: true)]) }
+            // Its wait for the slot, or its reconnecting, ends.
+            if native.model.clearsNoticeOnRemoval(id) { clearNotices([SpeakerKey.make(id: NativeAirPlayID.app(id), airplay: true)]) }
             native.remove(id)
             DebugTrace.log("[AudioSync] native AirPlay: removed \(nativeLabel(id))")
         }

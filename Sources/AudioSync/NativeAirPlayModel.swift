@@ -973,6 +973,9 @@ struct NativeAirPlayModel {
     /// heals never shows (S222).
     func isReconnecting(_ id: String) -> Bool { retriedErrors[id, default: 0] >= 3 }
 
+    /// Its notice says it waits or reconnects, which ends once it leaves the sender.
+    func clearsNoticeOnRemoval(_ id: String) -> Bool { isWaiting(id) || isReconnecting(id) }
+
     /// Takes a sender event in, and says what the app does about it.
     mutating func apply(_ event: NativeSpeakerEvent) -> NativeAirPlayOutcome? {
         switch event {

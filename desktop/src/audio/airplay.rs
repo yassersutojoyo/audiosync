@@ -1038,11 +1038,12 @@ impl Added {
         }
     }
 
-    /// Counts a retried error; true from the second failed retry, about 3 s
-    /// in, so a blip its first retry heals never shows (S222).
+    /// Counts a retried error; true at the second failed retry, about 3 s
+    /// in, so a blip its first retry heals never shows, and a dismissed
+    /// notice stays dismissed until it plays again (S222).
     fn reconnecting(&mut self) -> bool {
         self.retried = self.retried.saturating_add(1);
-        self.retried >= 3
+        self.retried == 3
     }
 
     fn key(&self) -> Option<&DeviceKey> {
