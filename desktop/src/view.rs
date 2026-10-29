@@ -75,8 +75,8 @@ enum DialogPurpose {
     RenamePreset(String),
     /// Save Curve in the equalizer.
     SaveCurve,
-    /// Rename in the equalizer, for the saved curve at this index.
-    RenameCurve(usize),
+    /// Rename in the equalizer, for the saved curve of this name.
+    RenameCurve(String),
 }
 
 /// Where a name is edited: a speaker's full row (in its section or under
@@ -3819,7 +3819,7 @@ impl App {
         let name = state.equalizer_curves[index].name.as_str();
         let strings = self.strings();
         let dialog = &self.zone_dialog;
-        *self.dialog_purpose.borrow_mut() = DialogPurpose::RenameCurve(index);
+        *self.dialog_purpose.borrow_mut() = DialogPurpose::RenameCurve(name.to_owned());
         dialog.set_heading(strings.get_rename_curve_title());
         dialog.set_message(strings.invoke_rename_message(name.into()));
         dialog.set_placeholder(strings.get_curve_name_field_label());
@@ -4069,8 +4069,11 @@ impl App {
                     );
                 }
             }
-            DialogPurpose::RenameCurve(index) => {
+            DialogPurpose::RenameCurve(old) => {
                 let mut curves = self.snapshot().equalizer_curves;
+                let Some(index) = curves.iter().position(|curve| curve.name == old) else {
+                    return;
+                };
                 if eq::rename_curve(&mut curves, index, name) {
                     self.update(|b| b.set_equalizer_curves(curves));
                 } else if let Some(taken) = eq::curve_name(name) {
@@ -10167,6 +10170,29 @@ mod tests {
     }
 
     #[test]
+    fn reopening_add_by_address_during_a_check_drops_the_old_answer() {
+        let app = app_over(MockBackend::new());
+        let speakers = app.snapshot().speakers.len();
+        let window = app.cast_address_dialog.window();
+        let held = MOCK_CAST_HOLD
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        app.main.invoke_cast_add_address_requested();
+        type_text(window, "speaker.held");
+        press(window, Key::Return);
+        assert!(app.cast_address_dialog.get_checking());
+
+        app.ask_cast_address();
+        drop(held);
+        settle_cast_check(&app);
+        std::thread::sleep(Duration::from_millis(200));
+        draw_frames();
+        assert!(window.is_visible(), "the reopened dialog stays open");
+        assert!(app.snapshot().speaker("cc:speaker.held").is_none());
+        assert_eq!(app.snapshot().speakers.len(), speakers);
+    }
+
+    #[test]
     fn escape_on_the_add_by_address_dialog_cancels_from_the_field_or_a_button() {
         for tabs in [0, 1, 2] {
             let app = app_over(MockBackend::new());
@@ -10361,6 +10387,31 @@ mod tests {
         app.recall_preset(&ids[1]);
         assert_eq!(eq_window.get_preset_index(), rock);
         assert!(!eq_window.get_saved_curve_shown());
+    }
+
+    #[test]
+    fn a_curve_deleted_while_its_rename_is_open_renames_no_other_curve() {
+        let app = app_over(MockBackend::new());
+        let eq_window = &app.equalizer;
+        let presets = eq::PRESETS.len();
+        for (gain, name) in [(1.0, "A"), (2.0, "B"), (3.0, "C")] {
+            eq_window.invoke_gain_changed(0, gain);
+            eq_window.invoke_save_curve();
+            app.zone_dialog.invoke_confirmed(name.into());
+        }
+        eq_window.invoke_preset_selected(presets as i32 + 1);
+        assert_eq!(eq_window.get_preset_index(), presets as i32 + 1, "B");
+
+        eq_window.invoke_rename_curve();
+        eq_window.invoke_delete_curve();
+        app.zone_dialog.invoke_confirmed("X".into());
+        let names: Vec<String> = app
+            .snapshot()
+            .equalizer_curves
+            .into_iter()
+            .map(|curve| curve.name)
+            .collect();
+        assert_eq!(names, ["A", "C"]);
     }
 
     #[test]
