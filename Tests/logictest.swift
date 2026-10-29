@@ -2692,6 +2692,11 @@ do {
             && model.apply(.error(id: "A1", .airPlay2Only, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsAirPlay2)
             && model.apply(.error(id: "A1", .timingUnavailable, retryMs: nil, detail: "")) == .turnOff("native:A1", .timingUnavailable),
           "native airplay: an error the sender won't retry turns the speaker off, with why")
+    let busyOff = model.apply(.error(id: "A1", .busy, retryMs: nil, detail: ""))
+    let refusedOff = model.apply(.error(id: "A1", .refused, retryMs: nil, detail: ""))
+    check(busyOff != nil && refusedOff != nil && busyOff != refusedOff
+            && busyOff != .turnOff("native:A1", .unreachable) && refusedOff != .turnOff("native:A1", .unreachable),
+          "native airplay: a speaker that answered busy or refused is off for that reason, not as unreachable")
     model.removed("A1")
     check(model.apply(.state(id: "A1", .playing, retryMs: nil)) == nil
             && model.apply(.error(id: "A1", .notResponding, retryMs: nil, detail: "")) == nil,
