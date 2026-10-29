@@ -1318,7 +1318,8 @@ impl CastSpeakers {
             {
                 self.requested = None;
             }
-        } else {
+        } else if self.unanswered.last() != Some(&level) {
+            // The same level sent twice in a row gets one answer.
             self.unanswered.push(level);
         }
         if let Some(link) = self.link.as_mut() {
