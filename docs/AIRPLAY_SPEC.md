@@ -513,7 +513,8 @@ The crate's tests run against a fake receiver in the same process: an RTSP serve
 | set_latency_before_first_sound | P201 | Lf set while the started speakers' first-sound times lie ahead flushes them, moves their first-sound times by the change and reports the new L |
 | set_latency_held_while_sounding | P201, P143 | Lf set after one speaker's first-sound time sends no FLUSH and leaves every stated time unchanged; the value applies when the last speaker leaves, or at a timeline restart, whichever comes first; a second set replaces the pending one |
 | receiver_latency_shortfall_warning | P201 | a speaker that reports 1.8 s and joins a sounding stream at 1.75 s plays in step at 1.75 s with one warning for the session |
-| hardware_receiver_latency | P203 | *hardware*: the check of P203 on the receivers at hand |
+| fake_tv_latency_reaches_the_sender_as_r_s (`fake_tv_latency.rs`) | P203 | the fake television reports `outputLatencyMicros` 320 000 in `/info`, and the sender's latency event gives the host R_s 320 000 µs with the `audioLatencies` source |
+| hardware_receiver_latency | P203 | *hardware*: Calibrate All on a licensed receiver, measured against its R_s, stays untested |
 | hardware_stereo_pair | P177, P178, P179, P180, P181 | *hardware*: the checks of G18 with a HomePod stereo pair |
 | hardware_two_speaker_sync | P95, P102, P99, P109 | *hardware*: two receivers with a known delay difference play in step by ear and by microphone (G9) |
 | hardware_pcm_and_names | P30, P5 | *hardware*: PCM and AudioSync names accepted by the receivers at hand (G10, G11) |
