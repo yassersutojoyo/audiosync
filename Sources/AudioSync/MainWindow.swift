@@ -792,8 +792,6 @@ private struct ZoneCard: View {
                 countLine(t)
                     .onTapGesture { hit(.count) }
             }
-            // The name field keeps full contrast while the user types.
-            .opacity(nonePresent && !model.isRenaming(zone) ? 0.45 : 1)
 
             Spacer(minLength: 8)
 

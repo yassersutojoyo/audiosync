@@ -118,7 +118,6 @@ struct EqualizerView: View {
                     }
                 }
             }
-            .opacity(s.enabled ? 1 : 0.45)
 
             HStack {
                 Text(text.equalizerCaption(maxGain: Int(Equalizer.maxGain)))
@@ -177,6 +176,8 @@ struct EqualizerView: View {
                 .accessibilityHidden(true)   // the slider reads its own value
             VerticalSlider(value: value, range: Equalizer.maxGain, onChange: set)
                 .frame(width: 26, height: 140)
+                // Only the slider dims with the EQ off, so the gains and bands stay readable.
+                .opacity(model.settings.enabled ? 1 : 0.45)
                 .accessibilityLabel(name)
                 .accessibilityValue(text.equalizerGainValue(value))
             Text(label).font(.caption2).foregroundStyle(Brand.secondaryText)
