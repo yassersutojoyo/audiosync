@@ -563,15 +563,26 @@ final class StreamEngine {
         detachOutputs(uids: uids, then: nil)
     }
 
+    /// The `LocalOutputEngine` requirement; see `detachOutputs(uids:keepingLeads:then:)`.
+    func detachOutputs(uids: [String], keepingLeads: Bool) {
+        detachOutputs(uids: uids, keepingLeads: keepingLeads, then: nil)
+    }
+
     /// Switches outputs off (S185, S186): all of them fade out at once and
     /// stop together once their devices have played the fades, at most
     /// 500 ms later, without holding up the main thread. Unknown UIDs are
     /// skipped. `completion` runs on the main thread once they stopped, at
-    /// once when none of `uids` is attached.
-    func detachOutputs(uids: [String], then completion: (() -> Void)?) {
+    /// once when none of `uids` is attached. With `keepingLeads`, each
+    /// output's start lead stays held as a lost speaker's does (S328).
+    func detachOutputs(uids: [String], keepingLeads: Bool = false, then completion: (() -> Void)?) {
         let bluetooth = bluetoothOutputs
         let leaving = uids.sorted().compactMap { uid in
             renderers.removeValue(forKey: uid).map { (uid: uid, renderer: $0) }
+        }
+        for output in leaving where keepingLeads {
+            if let lead = output.renderer.holdLead() {
+                heldLeads[output.uid] = (lead, ProcessInfo.processInfo.systemUptime)
+            }
         }
         guard !leaving.isEmpty else {
             completion?()

@@ -4655,6 +4655,7 @@ mod tests {
     use crate::audio::backend::OutputKind;
     use crate::audio::capture::Activation;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
+    use crate::audio::now_playing::DROP_AFTER;
     use crate::audio::now_playing::fake::{FakeReader, shared_labels, track};
     use crate::audio::outputs::{EndpointProperties, EndpointReading};
     use crate::audio::render::StallSign;
@@ -4874,6 +4875,8 @@ mod tests {
             "every output reads the capture's ring"
         );
 
+        // Past the 10 ms on ramp (S28).
+        backend.feed_capture_level(480, 0.25);
         let before = ring.frames_written();
         let raised = 0.25 * 10f32.powf(6.0 / 20.0);
         let written = backend.feed_capture_level(4, 0.25);
@@ -5097,10 +5100,12 @@ mod tests {
             "nothing of the last session is left in the ring"
         );
         let raised = 0.25 * 10f32.powf(6.0 / 20.0);
+        // Past the 10 ms on ramp (S28).
+        backend.feed_capture_level(480, 0.25);
         let first = backend.feed_capture_level(4, 0.25);
         assert!(
             first.iter().all(|s| (s - raised).abs() < 1e-4),
-            "the first captured block is equalized: {first:?}"
+            "captured audio is equalized: {first:?}"
         );
         let peak = backend.input_peak().unwrap();
         assert!((peak - raised).abs() < 1e-4, "{peak}");
@@ -7835,11 +7840,14 @@ mod tests {
         });
         backend.start(&SourceId::WholeSystem).unwrap();
         let raised = 0.25 * 10f32.powf(6.0 / 20.0);
+        // Past the 10 ms on and off ramps (S27, S28).
+        backend.feed_capture_level(480, 0.25);
         let out = backend.feed_capture_level(4, 0.25);
         assert_eq!(out.len(), 8);
         assert!(out.iter().all(|s| (s - raised).abs() < 1e-4), "{out:?}");
 
         backend.set_equalizer(EqSettings::default());
+        backend.feed_capture_level(480, 0.25);
         assert_eq!(backend.feed_capture_level(4, 0.25), [0.25; 8], "off");
     }
 
@@ -9047,6 +9055,11 @@ mod tests {
         backend.poll();
         assert!(now_playing_sent(&fake).is_empty(), "nothing changed");
 
+        for _ in 1..DROP_AFTER {
+            reader.read(None);
+            backend.poll();
+            assert!(now_playing_sent(&fake).is_empty(), "the paused track stays");
+        }
         reader.read(None);
         backend.poll();
         let sent = now_playing_sent(&fake);

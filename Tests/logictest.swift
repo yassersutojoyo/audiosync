@@ -5230,7 +5230,7 @@ do {
     check(gone.action == .nothing && gone.steps == [.absent],
           "zones: a zone with no member listed does nothing on a click")
 
-    // covers: S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel)
+    // covers: S259, S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel)
     let presetText = UIStrings()
     let presetFlat = [Double](repeating: 0, count: Equalizer.frequencies.count)
     let livingZone = SpeakerZone(id: "z1", name: "Living Room", members: ["lc:usb:out", "lc:tv"], volume: 60)
@@ -6001,6 +6001,16 @@ do {
     check(keeps(listed: false, published: false) && keeps(listed: true, published: false)
             && !keeps(listed: true, published: true) && !keeps(listed: false, published: false, now: 15),
           "local delay: a lost output's start lead counts until its new renderer publishes one, 10 s at most")
+    // A restart holds the lead with no brief loss: the next check still comes
+    // in 0.5 s while it plays again, and at the 10 s bound while it doesn't.
+    let restarted = LocalBriefLoss()
+    let whileOff = restarted.nextCheck(now: 21, held: [bt: 20], playing: [r])
+    let whilePlaying = restarted.nextCheck(now: 23, held: [bt: 20], playing: [r, bt])
+    let released = restarted.nextCheck(now: 24, held: [:], playing: [r, bt])
+    check(whileOff == 30 && whilePlaying == 23.5 && released == nil,
+          "local delay: a restarted output's held start lead is checked until it publishes, 10 s at most",
+          "while off \(String(describing: whileOff)), while playing \(String(describing: whilePlaying)), "
+            + "released \(String(describing: released))")
 
     // covers: S178, S181 (the AirPlay delay field)
     var native = AirPlayDelay(adjustmentMs: 250)
@@ -7317,6 +7327,7 @@ do {
             removed.append(uid)
             activeOutputUIDs.removeAll { $0 == uid }
         }
+        func detachOutputs(uids: [String], keepingLeads: Bool) { for uid in uids { detachOutput(uid: uid) } }
         func setGain(uid: String, g: Double) {
             regained.append(uid)
             gains[uid] = g
@@ -7508,6 +7519,7 @@ do {
         func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {}
         func detachOutput(uid: String) { calls.append([uid]) }
         func detachOutputs(uids: [String]) { calls.append(uids) }
+        func detachOutputs(uids: [String], keepingLeads: Bool) { calls.append(uids) }
         func setGain(uid: String, g: Double) {}
     }
     let batching = BatchingEngine()
@@ -7544,6 +7556,23 @@ do {
             && afterRestart?.enabled == [] && afterRestart?.notices.map(\.uid) == ["usb"],
           "EC1 new ID: a restart that won't start is reported and switched off, with no device left bound",
           "removed \(refused.removed), applied \(failedRestart), report \(String(describing: afterRestart))")
+
+    // covers: S328 (a restart keeps the output's start lead in the session lead; a switch-off lets it go)
+    final class LeadNotingEngine: LocalOutputEngine {
+        var activeOutputUIDs: [String] = ["usb", "bt"]
+        var keptLead: [String: Bool] = [:]
+        func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {}
+        func detachOutput(uid: String) { keptLead[uid] = false }
+        func detachOutputs(uids: [String]) { for uid in uids { keptLead[uid] = false } }
+        func detachOutputs(uids: [String], keepingLeads: Bool) { for uid in uids { keptLead[uid] = keepingLeads } }
+        func setGain(uid: String, g: Double) {}
+    }
+    let leads = LeadNotingEngine()
+    _ = LocalOutputSync.apply(enabled: ["usb"], listing: [usbAgain], to: leads, bound: ["usb": 52],
+                              holdBacks: [:], gain: { _ in 1 })
+    check(leads.keptLead == ["usb": true, "bt": false],
+          "S328 restart: an output restarted on a new device ID keeps its start lead, one switched off lets it go",
+          "kept lead \(leads.keptLead)")
 }
 
 // MARK: The engine's control interface (S112) and the thread it is used on (S113)
@@ -7604,6 +7633,7 @@ do {
             note("detach \(uids)")
             activeOutputUIDs.removeAll { uids.contains($0) }
         }
+        func detachOutputs(uids: [String], keepingLeads: Bool) { detachOutputs(uids: uids) }
         func setGain(uid: String, g: Double) { note("gain \(uid) \(g)") }
     }
     let usb = AudioDevices.Device(id: 52, name: "USB DAC", uid: "usb", transport: kAudioDeviceTransportTypeUSB)

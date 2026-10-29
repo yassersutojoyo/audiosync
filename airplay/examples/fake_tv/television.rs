@@ -11,9 +11,14 @@ use crate::common::ap2::{FakeAp2, dict, int, plist, read_dict};
 
 /// Bits 38 (CoreUtils pairing) and 48 (transient pairing): AirPlay 2 capable.
 pub const FEATURES_HIGH: u64 = 0x1_0040;
-/// Bits 15 to 17 (artwork, progress, text): track info reaches it. The
-/// traced television sets none, so only the cells profile has them.
+/// The `features` the traced television announced (UT5500, 2026-10-25),
+/// which the host keeps its 0.6 dB volume grid by (S291).
+pub const TRACED_FEATURES: u64 = 0x038B_CB46_007F_8AD0;
+/// Bits 15 to 17 (artwork, progress, text): track info reaches it. The TXT
+/// carries them in the traced features; `/info` only in the cells profile.
 pub const FEATURES_METADATA: u64 = 0x3_8000;
+/// Bit 41 (PTP), in the high word: the receiver takes PTP timing (P16).
+pub const FEATURE_PTP_HIGH: u64 = 0x200;
 /// The label of its own mDNS host name, in the `.local.` domain.
 pub const HOST_LABEL: &str = "audiosync-test-tv";
 pub const NAME: &str = "AudioSync Test TV";
@@ -90,11 +95,15 @@ pub fn parse_device_id(text: &str) -> Result<[u8; 6], String> {
         })
 }
 
-/// The `_airplay._tcp` TXT entries it advertises, with `features_low` as
-/// the low word of its features.
+/// The `_airplay._tcp` TXT entries it advertises: the traced television's
+/// features, with `features_low` added to their low word.
 pub fn txt(pin: Pin, features_low: u64, id: [u8; 6]) -> Vec<(&'static str, String)> {
+    let features = TRACED_FEATURES | features_low;
     vec![
-        ("features", format!("{features_low:#x},{FEATURES_HIGH:#x}")),
+        (
+            "features",
+            format!("{:#x},{:#x}", features & 0xFFFF_FFFF, features >> 32),
+        ),
         ("flags", format!("{:#x}", status_flags(pin))),
         ("model", MODEL.to_owned()),
         ("deviceid", device_id_text(id)),
@@ -118,6 +127,41 @@ pub fn television(name: &str, pin: Pin, code: &str, features_low: u64, id: [u8; 
         ("deviceID", Value::String(device_id_text(id))),
     ]));
     fake
+}
+
+/// Makes `fake` a television that times with PTP only: bit 41 in its
+/// `/info` features, and a session SETUP asking for NTP answered 501
+/// (P157). Its TXT entries come from [`ptp_only_txt`].
+pub fn ptp_only(fake: &mut FakeAp2) {
+    let mut info = read_dict(&fake.info_body).expect("the television's /info is a dictionary");
+    let features = info
+        .get("features")
+        .and_then(Value::as_signed_integer)
+        .unwrap_or(0);
+    info.insert(
+        "features".to_owned(),
+        int(features | (FEATURE_PTP_HIGH << 32) as i64),
+    );
+    fake.info_body = plist(Value::Dictionary(info));
+    fake.refuse_timing.push("NTP".to_owned());
+}
+
+/// `entries` from [`txt`] with the high word of `features` set to the
+/// AirPlay 2 bits and bit 41.
+pub fn ptp_only_txt(entries: Vec<(&'static str, String)>) -> Vec<(&'static str, String)> {
+    entries
+        .into_iter()
+        .map(|(key, value)| {
+            if key != "features" {
+                return (key, value);
+            }
+            let low = value.split(',').next().unwrap_or_default();
+            (
+                key,
+                format!("{low},{:#x}", FEATURES_HIGH | FEATURE_PTP_HIGH),
+            )
+        })
+        .collect()
 }
 
 /// Reads [`LATENCY_VAR`]: unset or empty reports nothing, as before it
