@@ -222,8 +222,10 @@ final class CastSender {
     /// device under: a new `manual:` one, or the one already listed with
     /// that address. Nil when nothing answers there, the sender is gone, or
     /// `stillWanted`, asked on the main queue before the add, says no.
-    func addDevice(_ address: CastManualAddress, probe: Bool, stillWanted: @escaping () -> Bool = { true },
-                   completion: @escaping (String?) -> Void) {
+    /// `offsetFrom` names a device whose stored offset the new `manual:` ID
+    /// takes first (C18).
+    func addDevice(_ address: CastManualAddress, probe: Bool, offsetFrom: String? = nil,
+                   stillWanted: @escaping () -> Bool = { true }, completion: @escaping (String?) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let ip = address.isIPv4 ? address.host : CastSender.ipv4Address(of: address.host)
             guard let ip, !probe || CastSender.answers(ip: ip, port: address.port, timeout: CastSender.probeTimeout),
@@ -234,12 +236,12 @@ final class CastSender {
             let target = "\(ip):\(address.port)"
             DispatchQueue.main.async { [weak self] in
                 guard let self, stillWanted() else { return completion(nil) }
-                self.addOnQueue(target, completion: completion)
+                self.addOnQueue(target, offsetFrom: offsetFrom, completion: completion)
             }
         }
     }
 
-    private func addOnQueue(_ target: String, completion: @escaping (String?) -> Void) {
+    private func addOnQueue(_ target: String, offsetFrom: String?, completion: @escaping (String?) -> Void) {
         queue.async { [weak self] in
             guard let self, let handle = self.handle else {
                 DispatchQueue.main.async { completion(nil) }
@@ -247,6 +249,11 @@ final class CastSender {
             }
             // What waited goes out first, so the add's own change leads what follows.
             self.poll()
+            // Before the add, so its change carries the offset the session plays with.
+            if let from = offsetFrom, let ms = self.offset(handle, from),
+               asc_cast_set_offset(handle, CastModel.manualPrefix + target, ms) {
+                self.saveMemory()
+            }
             guard asc_cast_add_device(handle, target) else {
                 DispatchQueue.main.async { completion(nil) }
                 return

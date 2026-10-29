@@ -75,6 +75,9 @@ struct AppSettings: Equatable {
         static let airPlay2 = "airPlay2Enabled"
         /// Google Cast devices added by address (C18), as `CastManualAddress.text` strings.
         static let castManualAddresses = "castManualAddresses"
+        /// The `id` a browse found at each of those addresses (C18), by
+        /// `CastManualAddress.text`; missing when none.
+        static let castFoundIDs = "castFoundIDs"
         /// One delay in ms for every local speaker, from before delays were
         /// per speaker: where a speaker without its own delay started (S77).
         /// Read once by the migration (S179), never written.
@@ -412,9 +415,14 @@ struct SettingsStore {
 
     func save(cast id: String?) { write(id, Keys.enabledCast) }
 
-    /// Saves the Cast speaker that is on whenever it changes, by the user or on its own.
+    /// Saves the Cast speaker that is on whenever it changes, by the user or
+    /// on its own, and the `id`s a browse found at the addresses added by hand.
     func save(cast model: CastModel, was old: CastModel) {
-        if model.enabled != old.enabled { save(cast: model.enabled) }
+        // One left to come back on once listed (`savedOn`) stays saved as on (C112).
+        if model.enabled != old.enabled, model.enabled != nil || model.savedOn != old.enabled {
+            save(cast: model.enabled)
+        }
+        if model.foundIDs != old.foundIDs { write(model.foundIDs.isEmpty ? nil : model.foundIDs, Keys.castFoundIDs) }
     }
 
     func save(levels: [String: Double], forKey key: String) { write(levels, key) }

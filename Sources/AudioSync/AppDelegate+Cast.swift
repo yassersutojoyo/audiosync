@@ -21,6 +21,7 @@ extension AppDelegate {
                                 onChanges: { [weak self] changes in self?.castDevicesChanged(changes) },
                                 onEvents: { [weak self] events in self?.castEventsArrived(events) })
         castSender = sender
+        castModel.foundIDs = store.castFoundIDs
         sender.start { [weak self] running, discovering in
             self?.castSenderStarted(sender, running: running, discovering: discovering)
         }
@@ -55,7 +56,7 @@ extension AppDelegate {
     private func addStoredCastAddresses(_ sender: CastSender) {
         for address in store.castManualList.addresses {
             // Not probed: a speaker that is off now still comes back once it answers.
-            sender.addDevice(address, probe: false) { [weak self] id in
+            sender.addDevice(address, probe: false, offsetFrom: castModel.foundIDs[address.text]) { [weak self] id in
                 guard let self, self.castSender === sender else { return }
                 guard let id else {
                     DebugTrace.log("[AudioSync] Cast: the stored address \(address.text) could not be added")
@@ -68,7 +69,8 @@ extension AppDelegate {
     }
 
     private func castDevicesChanged(_ changes: [CastDeviceChange]) {
-        for change in changes {
+        for sent in changes {
+            let change = castModel.listed(sent)
             DebugTrace.log("[AudioSync] Cast discovery: " + Self.castLogLine(change))
             let name = castName(change.id)   // read before the change takes the row away
             if case .turnedOff(let id, let problem?)? = castModel.apply(change) {
@@ -169,7 +171,7 @@ extension AppDelegate {
             castModel.stopSent()
         case .start(let id):
             castModel.startSent(id)
-            sender.startSession(id) { [weak self, weak sender] attempt, refused in
+            sender.startSession(castModel.senderID(of: id)) { [weak self, weak sender] attempt, refused in
                 guard let self, let sender, self.castSender === sender else { return }
                 DebugTrace.log("[AudioSync] Cast: \(self.castLabel(id)) "
                     + (attempt == 0 ? "was refused (\(refused))" : "connects (attempt \(attempt))"))
@@ -182,7 +184,9 @@ extension AppDelegate {
     /// A selected speaker that isn't playing would otherwise be the first a
     /// flood of announced devices pushes out of the sender's list (C108).
     private func nameCastSelection(to sender: CastSender) {
-        if let selection = castModel.selectionToName() { sender.setSelected(selection.id) }
+        if let selection = castModel.selectionToName() {
+            sender.setSelected(selection.id.map { castModel.senderID(of: $0) })
+        }
     }
 
     // MARK: - What the user does
@@ -245,7 +249,7 @@ extension AppDelegate {
     func setCastOffset(_ appID: String, _ ms: Double) {
         guard let id = CastID.device(appID), let offset = castModel.setOffset(id, ms: ms) else { return }
         DebugTrace.log("[AudioSync] Cast: offset of \(castLabel(id)) set to \(Int(offset)) ms")
-        castSender?.setOffset(id, ms: offset)
+        for target in castModel.offsetIDs(of: id) { castSender?.setOffset(target, ms: offset) }
         retimeLocalOutputs()
         pushModel()
     }
@@ -255,7 +259,7 @@ extension AppDelegate {
     func clearCastOffset(_ appID: String) {
         guard let id = CastID.device(appID), castModel.clearOffset(id) else { return }
         DebugTrace.log("[AudioSync] Cast: offset of \(castLabel(id)) cleared")
-        castSender?.setOffset(id, ms: 0)
+        for target in castModel.offsetIDs(of: id) { castSender?.setOffset(target, ms: 0) }
         retimeLocalOutputs()
         pushModel()
     }
@@ -303,12 +307,15 @@ extension AppDelegate {
         guard let id = CastID.device(appID), castModel.manualAddresses[id] != nil else { return }
         if castModel.devices[id]?.manual == true, castModel.enabled == id { setCastEnabled(appID, false) }
         let unfound = castModel.devices[id]?.manual == true
+        let manualIDs = castModel.manualSenderIDs(of: id)
         guard let address = castModel.removeManual(id) else { return }
-        if unfound { castSender?.removeDevice(id) }
+        for manualID in manualIDs { castSender?.removeDevice(manualID) }
         zones = ZoneEdit.removingCast(id, offList: unfound, from: zones)
         DebugTrace.log("[AudioSync] Cast: \(address.text) removed")
         var list = store.castManualList
         list.remove(address)
+        let stranded = castModel.forgetAddresses(of: id)
+        for other in list.addresses where stranded.contains(other.text) { list.remove(other) }
         store.save(list)
         clearNotices([Notice.cast(id)])
         castFollow()

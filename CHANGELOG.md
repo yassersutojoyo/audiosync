@@ -35,7 +35,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Fixed
 
 - On Windows, a Google Cast speaker you added by address keeps the volume you set for it when AudioSync finds it on the network while it isn't playing.
-- On Windows, a Google Cast speaker you added by address keeps the name and settings AudioSync found for it after a relaunch, before the network search finds it again. If the search finds it at another address, it shows as one row you can remove.
+- A Google Cast speaker you added by address keeps the name and settings AudioSync found for it after a relaunch, its zone, presets and on state included, before the network search finds it again. If the search finds it at another address, it shows as one row you can remove. On the Mac and on Windows.
+- On the Mac, adding an address whose speaker AudioSync already found at another address leaves that speaker's row as it is.
 - When a saved input channel pair the device doesn't have plays as channels 1-2, picking 1-2 no longer restarts the capture, and the pick is kept, so the old pair doesn't come back once the device has those channels again. On the Mac and on Windows.
 - On Windows, settings a newer version of AudioSync added are kept when an older version saves. Before, going back a version lost them.
 - On the Mac, the line under a speaker list's In zones box no longer runs into the box's rounded corners.

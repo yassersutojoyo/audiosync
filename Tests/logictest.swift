@@ -11277,6 +11277,110 @@ do {
           "cast model: a speaker added by address that a browse finds keeps its offset under its id, as the sender "
             + "does: over none or a cleared one, never over one the id already had")
 
+    // covers: C18
+    let foundKey = AppSettings.Keys.castFoundIDs
+    let noneSaved = store.castFoundIDs.isEmpty
+    var firstRun = CastModel()
+    firstRun.addedManually(manualID, address: lounge)
+    firstRun.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    firstRun.apply(.gone(id: manualID))
+    let beforeBrowse = firstRun
+    if let browsed { firstRun.apply(browsed) }
+    store.save(cast: firstRun, was: beforeBrowse)
+    let savedFound = stored.values[foundKey] as? [String: String]
+    var nextRun = CastModel()
+    nextRun.foundIDs = store.castFoundIDs
+    nextRun.addedManually(manualID, address: lounge)
+    let relisted = nextRun.listed(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    nextRun.apply(relisted)
+    let listedOnce = nextRun.rows == [realID] && nextRun.manualAddresses == [realID: lounge]
+        && nextRun.senderID(of: realID) == manualID
+    var sameRun = nextRun
+    let sameGone = sameRun.listed(.gone(id: manualID))
+    sameRun.apply(sameGone)
+    var sameFound: CastDeviceChange?
+    if let browsed { sameFound = sameRun.listed(browsed) }
+    if let sameFound { sameRun.apply(sameFound) }
+    let sameKept = sameFound == .appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil, former: nil)
+        && sameRun.rows == [realID] && sameRun.senderID(of: realID) == realID
+    let otherID = "ffeeddccbbaa99887766554433221100"
+    var movedOn = nextRun
+    _ = movedOn.turnOn(realID)
+    let movedGone = movedOn.listed(.gone(id: manualID))
+    movedOn.apply(movedGone)
+    let beforeOther = movedOn
+    let otherFound = movedOn.listed(.appeared(CastDevice(id: otherID, name: "Den"), offsetMs: nil, former: manualID))
+    movedOn.apply(otherFound)
+    stored.values[AppSettings.Keys.enabledCast] = realID
+    store.save(cast: movedOn, was: beforeOther)
+    let replacedFound = otherFound == .appeared(CastDevice(id: otherID, name: "Den"), offsetMs: nil, former: nil)
+        && movedOn.manualAddresses == [otherID: lounge] && store.castFoundIDs == [lounge.text: otherID]
+        && movedOn.enabled == nil && movedOn.savedOn == realID && movedOn.devices[realID] == nil
+        && movedOn.rows == [otherID] && stored.values[AppSettings.Keys.enabledCast] as? String == realID
+    let beforeRemove = movedOn
+    let removedFound = movedOn.removeManual(otherID)
+    store.save(cast: movedOn, was: beforeRemove)
+    check(noneSaved && savedFound == [lounge.text: realID] && listedOnce && sameKept && replacedFound
+            && removedFound == lounge && stored.values[foundKey] == nil,
+          "cast: the id a browse found for an address is saved, lists the address under it after a relaunch "
+            + "before any browse, gives way to another speaker a browse finds there, which is listed as a new one "
+            + "while the saved one stays off until listed, and goes with the address")
+    var dropped = nextRun
+    let droppedAddress = dropped.removeManual(realID)
+    let queued = dropped.listed(.changed(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    check(droppedAddress == lounge && dropped.apply(queued) == nil && dropped.rows.isEmpty
+            && dropped.foundIDs.isEmpty && dropped.senderID(of: realID) == realID,
+          "cast: removing an address listed under a saved id forgets the id, and a change the sender queued "
+            + "before the removal doesn't bring the row back")
+    check(nextRun.offsetIDs(of: realID) == [realID, manualID] && sameRun.offsetIDs(of: realID) == [realID]
+            && nextRun.manualSenderIDs(of: realID) == [manualID] && sameRun.manualSenderIDs(of: realID).isEmpty
+            && firstRun.manualSenderIDs(of: manualID) == [manualID],
+          "cast: an offset for a speaker listed under a saved id goes to the sender's own id too, and Remove takes "
+            + "back the sender's manual entry behind the row")
+    var movedAway = nextRun
+    _ = movedAway.turnOn(realID)
+    let namedBefore = movedAway.selectionToName()
+    let elsewhere = movedAway.listed(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    movedAway.apply(elsewhere)
+    let stale = movedAway.listed(.changed(CastDevice(id: manualID, name: "", offline: true, manual: true),
+                                          offsetMs: nil))
+    check(namedBefore == CastSelection(id: realID) && elsewhere == .appeared(CastDevice(id: realID, name: "Lounge"),
+                                                                             offsetMs: nil)
+            && movedAway.apply(stale) == nil && movedAway.devices[realID]?.manual == false
+            && !movedAway.cantStartNow(realID) && movedAway.senderID(of: realID) == realID
+            && movedAway.selectionToName() == CastSelection(id: realID)
+            && movedAway.manualSenderIDs(of: realID) == [manualID] && movedAway.removeManual(realID) == lounge
+            && movedAway.foundIDs.isEmpty && movedAway.manualSenderIDs(of: realID).isEmpty,
+          "cast: a browse that lists the saved id at another address ends the listing under it: the old address's "
+            + "changes are left out, the sender is told the selection again, and Remove still takes the entry back")
+    var browsedFirst = CastModel()
+    browsedFirst.foundIDs = [lounge.text: realID]
+    let atB = browsedFirst.listed(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    browsedFirst.apply(atB)
+    browsedFirst.addedManually(manualID, address: lounge)
+    let atA = browsedFirst.listed(.appeared(CastDevice(id: manualID, name: "", offline: true, manual: true),
+                                            offsetMs: nil))
+    check(browsedFirst.apply(atA) == nil && browsedFirst.devices[realID]?.manual == false
+            && browsedFirst.rows == [realID] && !browsedFirst.cantStartNow(realID)
+            && browsedFirst.senderID(of: realID) == realID && browsedFirst.manualSenderIDs(of: realID) == [manualID]
+            && browsedFirst.removeManual(realID) == lounge && browsedFirst.devices[realID] != nil,
+          "cast: a saved address added after a browse listed its saved id at another address leaves the browsed "
+            + "row alone, and Remove still takes the address's entry back")
+    let loungeB = CastManualAddress("192.0.2.10")!, manualB = "manual:192.0.2.10:8009"
+    var twoAddresses = CastModel()
+    twoAddresses.foundIDs = [lounge.text: realID, loungeB.text: realID]
+    twoAddresses.addedManually(manualID, address: lounge)
+    let earlierReplaced = twoAddresses.addedManually(manualB, address: loungeB)
+    let fromEarlier = twoAddresses.listed(.appeared(CastDevice(id: manualID, name: "", offline: true, manual: true),
+                                                    offsetMs: nil))
+    check(earlierReplaced == lounge && twoAddresses.senderID(of: realID) == manualB
+            && twoAddresses.manualSenderIDs(of: realID) == [manualB, manualID] && twoAddresses.apply(fromEarlier) == nil
+            && twoAddresses.manualAddresses == [realID: loungeB] && twoAddresses.foundIDs.count == 2
+            && twoAddresses.removeManual(realID) == loungeB && twoAddresses.forgetAddresses(of: realID) == [lounge.text]
+            && twoAddresses.foundIDs.isEmpty,
+          "cast: two saved addresses a browse found for one device list it after a relaunch through the later one; "
+            + "the earlier stays saved but stranded, and Remove takes both back")
+
     // covers: S341
     let manualKey = CastID.key(manualID), realKey = CastID.key(realID)
     let flatGains = Array(repeating: 0.0, count: Equalizer.frequencies.count)

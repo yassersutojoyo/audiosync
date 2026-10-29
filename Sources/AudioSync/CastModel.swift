@@ -456,6 +456,16 @@ struct CastModel {
     /// Devices added by hand that the user removed: a change the sender
     /// queued before it dropped one doesn't bring the row back.
     private(set) var removedManual: Set<String> = []
+    /// The `id` a browse found at each address added by hand, by
+    /// `CastManualAddress.text`, kept from one launch to the next (C18).
+    var foundIDs: [String: String] = [:]
+    /// The saved `id` each device added by hand is listed under, by the
+    /// sender's `manual:` ID, until a browse finds it again.
+    private var listedUnder: [String: String] = [:]
+    /// The sender's `manual:` ID of a saved listing that a browse at another
+    /// address ended, by the saved `id`: its changes are left out, and
+    /// Remove still takes it back.
+    private var stranded: [String: String] = [:]
     /// Devices another app took over, until the user turns one on again.
     private(set) var takenOver: Set<String> = []
     /// A browsed device turned off by leaving the list with no session, and
@@ -536,7 +546,10 @@ struct CastModel {
     /// about it moves too, so it stays on and playing, and Remove still
     /// forgets its address.
     private mutating func identified(_ old: String, as new: String) -> Double? {
-        if let address = manualAddresses.removeValue(forKey: old) { manualAddresses[new] = address }
+        if let address = manualAddresses.removeValue(forKey: old) {
+            manualAddresses[new] = address
+            foundIDs[address.text] = new
+        }
         if takenOver.remove(old) != nil { takenOver.insert(new) }
         if enabled == old { enabled = new }
         if savedOn == old { savedOn = new }
@@ -575,12 +588,88 @@ struct CastModel {
     }
 
     /// The sender listed `id` for an address the user added: it shows again
-    /// if it was removed. Returns the address it had before, if another one.
+    /// if it was removed, under the `id` a browse found at the address
+    /// before, if any. Returns the address it had before, if another one.
     @discardableResult
     mutating func addedManually(_ id: String, address: CastManualAddress) -> CastManualAddress? {
         removedManual.remove(id)
-        let before = manualAddresses.updateValue(address, forKey: id)
+        let found = id.hasPrefix(Self.manualPrefix) ? foundIDs[address.text] : nil
+        let browsed = found.flatMap { devices[$0] }?.manual == false
+        if let found, !browsed, let earlier = listedUnder.first(where: { $0.value == found && $0.key != id })?.key {
+            // Two stored addresses of one device: the later lists it, and the earlier stays saved, stranded.
+            endListing(earlier)
+            removedManual.insert(earlier)
+            stranded[found] = earlier
+        }
+        listedUnder[id] = browsed ? nil : found
+        if let found, browsed {
+            // A browse already lists the saved `id`, at another address.
+            removedManual.insert(id)
+            stranded[found] = id
+        }
+        let before = manualAddresses.updateValue(address, forKey: found ?? id)
         return before == address ? nil : before
+    }
+
+    /// A change the sender reported, with the device under the ID it is
+    /// listed by. A browse that finds it ends the saved listing; another
+    /// speaker found at the address is listed as a new one.
+    mutating func listed(_ change: CastDeviceChange) -> CastDeviceChange {
+        switch change {
+        case .appeared(let device, let offset, let former):
+            if let former, let saved = listedUnder[former] {
+                endListing(former)
+                if saved != device.id, let address = manualAddresses.removeValue(forKey: saved) {
+                    // Another speaker answers at the address: it takes the address, not the saved one's place.
+                    manualAddresses[device.id] = address
+                    foundIDs[address.text] = device.id
+                    if enabled == saved { (enabled, savedOn) = (nil, saved) }
+                }
+                return .appeared(device, offsetMs: offset, former: nil)
+            }
+            strandListing(of: device.id)
+            return .appeared(relisted(device), offsetMs: offset, former: former)
+        case .changed(let device, let offset):
+            strandListing(of: device.id)
+            return .changed(relisted(device), offsetMs: offset)
+        case .gone(let id): return .gone(id: listedUnder[id] ?? id)
+        }
+    }
+
+    private mutating func endListing(_ senderID: String) {
+        listedUnder[senderID] = nil
+        // The sender still holds the `manual:` ID as the selection (C108).
+        namedSelection = nil
+    }
+
+    /// A browse lists the saved `id` itself, at another address.
+    private mutating func strandListing(of id: String) {
+        guard listedUnder[id] == nil, let senderID = listedUnder.first(where: { $0.value == id })?.key else { return }
+        endListing(senderID)
+        removedManual.insert(senderID)
+        stranded[id] = senderID
+    }
+
+    private func relisted(_ device: CastDevice) -> CastDevice {
+        guard let id = listedUnder[device.id] else { return device }
+        return CastDevice(id: id, name: device.name, model: device.model, group: device.group,
+                          offline: device.offline, manual: device.manual)
+    }
+
+    /// The ID the sender knows the listed device `id` by.
+    func senderID(of id: String) -> String { listedUnder.first { $0.value == id }?.key ?? id }
+
+    /// Where an offset for `id` is written: under the sender's ID too while
+    /// it is listed under a saved `id`, so a browse that finds it keeps it.
+    func offsetIDs(of id: String) -> [String] {
+        let sender = senderID(of: id)
+        return sender == id ? [id] : [id, sender]
+    }
+
+    /// The sender's `manual:` IDs behind the listed `id`, for Remove to take back.
+    func manualSenderIDs(of id: String) -> [String] {
+        if id.hasPrefix(Self.manualPrefix) { return [id] }
+        return listedUnder.filter { $0.value == id }.map(\.key) + (stranded[id].map { [$0] } ?? [])
     }
 
     /// The user's Remove on a device added by address. One no browse found
@@ -589,12 +678,24 @@ struct CastModel {
     mutating func removeManual(_ id: String) -> CastManualAddress? {
         let unfound = devices[id]?.manual == true
         guard !(unfound && enabled == id), let address = manualAddresses.removeValue(forKey: id) else { return nil }
+        foundIDs[address.text] = nil
+        stranded[id] = nil
         if unfound {
-            removedManual.insert(id)
+            // The sender's own ID: the saved `id` stays free for a browse to list.
+            removedManual.insert(senderID(of: id))
+            listedUnder = listedUnder.filter { $0.value != id }
             devices.removeValue(forKey: id)
             offsets.removeValue(forKey: id)
         }
         return address
+    }
+
+    /// After Remove on `id`: the texts of its other saved addresses, which a
+    /// later one stranded, forgotten too.
+    mutating func forgetAddresses(of id: String) -> [String] {
+        let texts = foundIDs.filter { $0.value == id }.map(\.key)
+        for text in texts { foundIDs[text] = nil }
+        return texts
     }
 
     /// The device that is on while its session plays, a group included: the
@@ -1221,6 +1322,8 @@ struct CastManualList: Equatable {
 
 extension SettingsStore {
     var castManualList: CastManualList { CastManualList(stored: read(Keys.castManualAddresses)) }
+
+    var castFoundIDs: [String: String] { read(Keys.castFoundIDs) as? [String: String] ?? [:] }
 
     func save(_ list: CastManualList) {
         write(list.addresses.isEmpty ? nil : list.stored, Keys.castManualAddresses)
