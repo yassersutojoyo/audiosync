@@ -2771,6 +2771,32 @@ impl<D: Driver> Controller<D> {
         }
     }
 
+    /// The capture a mix's follow moves to. A mix whose top processes all
+    /// quit may still play an instance only the audio sessions name, so a
+    /// list that can't be read then decides nothing.
+    fn follow_target(&mut self, source: &SourceId) -> Result<CaptureTarget, BackendError> {
+        let SourceId::Apps {
+            root_pids,
+            executables,
+        } = source
+        else {
+            return self.capture_target(source);
+        };
+        let processes = self.driver.processes()?;
+        let sessions = self.driver.session_pids();
+        let target = decide_apps_capture(
+            &processes,
+            sessions.as_deref().unwrap_or_default(),
+            self.driver.own_pid(),
+            root_pids,
+            executables,
+        );
+        match (target, sessions) {
+            (Err(BackendError::SourceGone), Err(error)) => Err(error),
+            (target, _) => target,
+        }
+    }
+
     /// Starts a session capturing `source` now, after the running one ended.
     fn start_session(&mut self, source: &SourceId) -> Result<(), BackendError> {
         let target = self.capture_target(source)?;
@@ -2960,8 +2986,26 @@ impl<D: Driver> Controller<D> {
         }
         self.mix_checked = Some(now);
         let (source, running) = (session.source.clone(), session.target.clone());
-        let Ok(target) = self.capture_target(&source) else {
-            return;
+        let target = match self.follow_target(&source) {
+            Ok(target) => target,
+            // One app Windows won't let AudioSync wait for leaves the whole
+            // mix unwatched, so its capture never reports the quit itself.
+            Err(BackendError::SourceGone) if matches!(source, SourceId::Apps { .. }) => {
+                if self.decide_quit(&source, Streaming::Running) == SourceQuitAction::SwitchToSystem
+                {
+                    self.switch_to_system();
+                    return;
+                }
+                let reason = StopReason::SourceQuit;
+                self.log
+                    .log(|| format!("the capture ended: {}", describe_stop(&reason)));
+                self.end_session();
+                self.airplay_streaming(false);
+                self.release_busy();
+                self.pending.push(BackendEvent::Stopped { reason });
+                return;
+            }
+            Err(_) => return,
         };
         if same_mix(&target, &running) {
             // An app whose loopback failed to open, or failed while it runs,
@@ -4232,7 +4276,15 @@ fn describe_source(source: &SourceId) -> String {
     }
 }
 
-/// What a capture captures, and the format Windows delivers it in.
+/// The audio system that converts between AudioSync's float samples and a
+/// device's format.
+const CONVERTER: &str = if cfg!(target_os = "linux") {
+    "PipeWire"
+} else {
+    "Windows"
+};
+
+/// What a capture captures, and the format the audio system delivers it in.
 fn describe_capture(target: &CaptureTarget, setup: Option<CaptureAttempt>) -> String {
     let what = match target {
         CaptureTarget::Loopback(activation) => {
@@ -4268,9 +4320,9 @@ fn describe_capture(target: &CaptureTarget, setup: Option<CaptureAttempt>) -> St
                 SampleType::I16 => "16-bit integer",
             };
             let converted = if attempt.autoconvert {
-                ", converted by Windows"
+                format!(", converted by {CONVERTER}")
             } else {
-                ""
+                String::new()
             };
             format!(
                 "{} Hz, {} ch, {sample}{converted}",
@@ -4289,9 +4341,9 @@ fn describe_stream(setup: Option<StreamSetup>) -> String {
     };
     let format = setup.format;
     let samples = if format.convert {
-        "float, converted by Windows to the device's format"
+        format!("float, converted by {CONVERTER} to the device's format")
     } else {
-        "float, the device's own format"
+        "float, the device's own format".to_owned()
     };
     let buffer_ms = f64::from(setup.buffer_frames) * 1_000.0 / f64::from(format.rate.max(1));
     format!(
@@ -6405,6 +6457,61 @@ mod tests {
 
     // covers: S327
     #[test]
+    fn a_mix_with_an_unwatched_app_gets_the_same_quit_handling_once_all_its_apps_quit() {
+        const ADMIN_PID: u32 = PLAYER_PID + 10;
+        let mix = SourceId::Apps {
+            root_pids: vec![PLAYER_PID, ADMIN_PID],
+            executables: vec!["player.exe".to_owned(), "admin.exe".to_owned()],
+        };
+        for setting in [WhenSourceQuits::Stop, WhenSourceQuits::SwitchToSystem] {
+            let outcome = |refused: bool| {
+                let mut backend = backend();
+                backend.add_app(ADMIN_PID, "admin.exe");
+                backend.set_when_source_quits(setting);
+                if refused {
+                    backend.refuse_watch(ADMIN_PID);
+                }
+                backend.start(&mix).unwrap();
+                backend.quit_app(PLAYER_PID);
+                backend.quit_app(ADMIN_PID);
+                let events = backend.poll();
+                poll_quietly(&mut backend, 2);
+                (events, backend.running_source(), playing(&backend))
+            };
+            let watched = outcome(false);
+            assert!(!watched.0.is_empty(), "{setting:?}");
+            assert_eq!(outcome(true), watched, "{setting:?}");
+        }
+    }
+
+    // covers: S327
+    #[test]
+    fn a_mix_on_a_later_instance_streams_on_when_the_session_list_fails_once() {
+        let mut backend = backend();
+        let source = SourceId::Apps {
+            root_pids: vec![PLAYER_PID],
+            executables: vec!["player.exe".to_owned()],
+        };
+        backend.start(&source).unwrap();
+        backend.add_app(PLAYER_PID + 100, "player.exe");
+        poll_quietly(&mut backend, 1);
+        backend.quit_app(PLAYER_PID);
+        backend.mix_checked = None;
+        poll_quietly(&mut backend, 1);
+        let outputs = playing(&backend);
+        backend.fail_session_listing(Some(BackendError::DeviceGone));
+        backend.mix_checked = None;
+        poll_quietly(&mut backend, 1);
+        backend.fail_session_listing(None);
+        backend.mix_checked = None;
+        poll_quietly(&mut backend, 1);
+        assert_eq!(backend.running_source(), Some(source));
+        assert_eq!(backend.driver().captures_started().len(), 1);
+        assert_eq!(playing(&backend), outputs);
+    }
+
+    // covers: S327
+    #[test]
     fn an_unwatched_app_whose_process_id_another_app_took_counts_as_quit_without_a_start_time() {
         let mut backend = backend();
         start_player(&mut backend, true);
@@ -7720,6 +7827,26 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
+    // covers: S327
+    #[test]
+    fn a_mix_that_quit_while_its_capture_waits_gives_way_though_the_session_list_fails() {
+        let mut backend = backend();
+        backend.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
+        backend
+            .start(&SourceId::Apps {
+                root_pids: vec![PLAYER_PID],
+                executables: vec!["player.exe".to_owned()],
+            })
+            .unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        backend.quit_app(PLAYER_PID);
+        backend.fail_session_listing(Some(BackendError::DeviceGone));
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS - 1);
+        assert_eq!(backend.poll(), [BackendEvent::SwitchedToSystem]);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+    }
+
     #[test]
     fn an_app_picked_while_the_last_session_fades_that_quits_before_its_start_gives_way_when_set() {
         let (mut backend, fake, kitchen) = with_airplay();
@@ -7956,8 +8083,10 @@ mod tests {
             &messages,
             &[
                 "starting: capturing the whole system",
-                "capture started: everything except process 1000 and its children; \
-                 48000 Hz, 2 ch, 32-bit float, converted by Windows",
+                &format!(
+                    "capture started: everything except process 1000 and its children; \
+                     48000 Hz, 2 ch, 32-bit float, converted by {CONVERTER}"
+                ),
                 "output \"Headphones\" (headphones) started: 48000 Hz, 2 ch (mask 0x3), \
                  float, the device's own format; buffer 960 frames (20.0 ms); delay 0 ms, volume ",
                 "output \"Speakers\" (speakers) started: 48000 Hz",
