@@ -4048,7 +4048,7 @@ do {
     do {
         let links = FreshLinkWatch()
         links.noteListing(["builtin", "bt-old"], now: 100)
-        check(links.decide(uid: "bt-old", bluetooth: true, now: 100.5, session: 1) == .settled(linkAgeS: nil),
+        check(links.decide(uid: "bt-old", bluetooth: true, now: 100.5, session: 1) == .settled,
               "EC2 Bluetooth fresh link: a device listed at launch starts as is")
         links.noteListing(["builtin", "bt-old", "bt", "usb"], now: 200)
         check(links.decide(uid: "usb", bluetooth: false, now: 200.5, session: 1) == .notBluetooth,
@@ -4061,7 +4061,7 @@ do {
         check(!links.begin(uid: "bt", ticket: ticket ?? -1, session: 1),
               "EC2 Bluetooth fresh link: a ticket restarts it only once")
         links.release(uid: "bt")
-        check(links.held.isEmpty && links.decide(uid: "bt", bluetooth: true, now: 203, session: 1) == .settled(linkAgeS: nil),
+        check(links.held.isEmpty && links.decide(uid: "bt", bluetooth: true, now: 203, session: 1) == .settled,
               "EC2 Bluetooth fresh link: its start after the restart plays as is")
         links.noteListing(["builtin", "bt-old", "usb"], now: 300)
         links.noteListing(["builtin", "bt-old", "usb", "bt"], now: 400)

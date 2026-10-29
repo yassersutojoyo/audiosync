@@ -50,15 +50,15 @@ enum OutputFormatWatch {
     }
 }
 
-/// One start-check reopen per output UID, until its device leaves the list
-/// or the output is switched off.
+/// One start-check reopen per output UID, until its device leaves the list,
+/// its link drops and comes back while listed, or the output is switched off.
 struct StartReopens {
     private var used: Set<String> = []
 
     /// Whether output `uid` may reopen for a start check; uses it up.
     mutating func take(_ uid: String) -> Bool { used.insert(uid).inserted }
 
-    mutating func relinked(_ uid: String) {}
+    mutating func relinked(_ uid: String) { used.remove(uid) }
 
     mutating func settle(enabled: Set<String>, listed: Set<String>) {
         used.formIntersection(enabled.intersection(listed))

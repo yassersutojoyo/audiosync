@@ -203,7 +203,7 @@ extension LocalOutputSync {
     /// attach starts at its target hold-back (0 without one) and its gain; one
     /// that throws is logged and comes back as a failure.
     static func apply(enabled: Set<String>, listing: [AudioDevices.Device], to engine: LocalOutputEngine,
-                      bound: [String: AudioObjectID] = [:],
+                      bound: [String: AudioObjectID] = [:], relinked: (String) -> Void = { _ in },
                       holdBacks: [String: Double], gain: (String) -> Double) -> Applied {
         var deviceByUID: [String: AudioDevices.Device] = [:]
         for device in listing where deviceByUID[device.uid] == nil {
@@ -216,6 +216,7 @@ extension LocalOutputSync {
             DebugTrace.log("[AudioSync] local output(s) on a new device ID, restarting: "
                 + steps.restart.joined(separator: ", "))
             engine.detachOutputs(uids: steps.restart, keepingLeads: true)
+            steps.restart.forEach(relinked)
             applied.restarted = steps.restart
         }
         for uid in steps.attach {
@@ -284,11 +285,9 @@ extension LocalOutputSync {
 /// A Bluetooth speaker's first stream on a link that has just come up can
 /// play later than its reported latency for the whole stream, while the same
 /// output started again a moment later plays in time (S325). This watch tells
-/// which starts are on such a link and restarts each of those once. Main
-/// thread only.
+/// which starts are the first on such a link and restarts each of those once.
+/// Main thread only.
 final class FreshLinkWatch {
-    /// A start this long after its device appeared, or longer, is on a settled link.
-    static let windowS = 3.0
     /// How long after its fresh-link start an output restarts.
     static let restartAfterS = 2.0
     /// The rest between the old output's fade and the new start; the sitting's
@@ -297,9 +296,8 @@ final class FreshLinkWatch {
 
     enum Decision: Equatable {
         case notBluetooth
-        /// `linkAgeS` is nil when the device was listed at launch or its
-        /// appearance was used up by a restart.
-        case settled(linkAgeS: Double?)
+        /// The device was listed at launch or its appearance was used up by a restart.
+        case settled
         case restart(linkAgeS: Double)
     }
 
@@ -321,20 +319,20 @@ final class FreshLinkWatch {
         listed = current
     }
 
-    func relinked(uid: String, now: Double) {}
+    /// Output `uid`'s link dropped and came back while its UID stayed listed:
+    /// a stall, a restart on a new device ID or a loss inside one rescan.
+    func relinked(uid: String, now: Double) { appearedAt[uid] = now }
 
     /// What to do with output `uid` that has just started at `now` in
     /// `session`. A restart uses up the appearance and arms a ticket
     /// (`pendingTicket`) that only that session can use.
     func decide(uid: String, bluetooth: Bool, now: Double, session: Int) -> Decision {
         guard bluetooth else { return .notBluetooth }
-        guard let appeared = appearedAt[uid] else { return .settled(linkAgeS: nil) }
-        let age = now - appeared
-        guard age < Self.windowS else { return .settled(linkAgeS: age) }
-        appearedAt[uid] = nil
+        // No window: a start refused every 3 s (S331) can play first long after the link came up.
+        guard let appeared = appearedAt.removeValue(forKey: uid) else { return .settled }
         nextTicket += 1
         pending[uid] = (nextTicket, session)
-        return .restart(linkAgeS: age)
+        return .restart(linkAgeS: now - appeared)
     }
 
     func pendingTicket(uid: String) -> Int? { pending[uid]?.ticket }

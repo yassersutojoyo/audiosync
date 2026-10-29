@@ -432,9 +432,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 // Its device stays listed: it starts again now, in the new format (S330).
                 self.syncLocalOutputs(origin: .automatic, formatReopens: [lostUID])
             case .stalled:
+                self.noteRelinked(lostUID)
                 self.outputStalled(lostUID)
                 self.devicesChanged()
             case .deviceGone:
+                self.noteRelinked(lostUID)   // it may return inside one rescan, never missing from a list
                 DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
                 self.devicesChanged()
             }

@@ -385,7 +385,7 @@ extension AppDelegate {
                                                 .subtracting(stallRetry.held(nowS: now))
                                                 .subtracting(refusalRetry.held(nowS: now)), listing: listing,
                                             to: engine,
-                                            bound: localBoundDevices,
+                                            bound: localBoundDevices, relinked: { noteRelinked($0) },
                                             holdBacks: localHoldBackTargets(), gain: { effectiveGain($0) })
         for (uid, holdBack) in applied.attached {
             localHoldBacks[uid] = holdBack
@@ -488,6 +488,13 @@ extension AppDelegate {
         }
     }
 
+    /// Output `uid`'s link dropped and came back while its UID stayed listed:
+    /// its next start is on a fresh link (S325) and its start check may reopen again.
+    func noteRelinked(_ uid: String) {
+        freshLinks.relinked(uid: uid, now: ProcessInfo.processInfo.systemUptime)
+        OutputFormatWatch.startReopens.relinked(uid)
+    }
+
     /// A Bluetooth output that started on a link that just came up gets one
     /// quiet restart (S325); every Bluetooth start logs the decision.
     private func noteFreshLinkStart(_ uid: String, _ device: AudioDevices.Device) {
@@ -496,9 +503,8 @@ extension AppDelegate {
                                  session: session) {
         case .notBluetooth:
             return
-        case .settled(let age):
-            let link = age.map { "its device appeared \(String(format: "%.1f", $0)) s ago" } ?? "its link is not new"
-            DebugTrace.log("[AudioSync] fresh link: Bluetooth output \(uid) started as is, \(link)")
+        case .settled:
+            DebugTrace.log("[AudioSync] fresh link: Bluetooth output \(uid) started as is, its link is not new")
         case .restart(let age):
             DebugTrace.log("[AudioSync] fresh link: Bluetooth output \(uid) started \(String(format: "%.1f", age)) s "
                 + "after its device appeared; one quiet restart in \(FreshLinkWatch.restartAfterS) s")
