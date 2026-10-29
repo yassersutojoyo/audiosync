@@ -5298,6 +5298,8 @@ do {
           "sources: a chosen app that isn't running stays listed, sorted among the apps")
     check(list(.input(uid: "gone")).count == 4,
           "sources: a chosen input device that is unplugged is not listed")
+    check(list(.input(uid: "gone")).last.map { $0.id == "input:gone" && $0.isInput && $0.name != "All System Audio" } == true,
+          "sources: an unplugged chosen input isn't labelled as the whole system")
     check(list(.app(bundleID: "com.spotify.client")).count == 4,
           "sources: a chosen app that is running is listed once")
 
