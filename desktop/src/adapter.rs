@@ -6346,6 +6346,48 @@ mod tests {
         assert!(!adapter.snapshot().running);
     }
 
+    // covers: S246
+    #[test]
+    fn a_zone_switched_off_turns_its_gone_airplay_member_off() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.poll();
+        adapter.add_zone("Lounge", &[key(SPEAKERS), ap(&kitchen)]);
+        // Gone while streaming is down: the sender drops it, so it isn't listed.
+        adapter.audio_mut().fail_capture(BackendError::System {
+            call: "IAudioCaptureClient::GetBuffer",
+            code: 1,
+        });
+        adapter.poll();
+        fake.gone(&kitchen);
+        adapter.poll();
+        turn_on(&mut adapter, HEADPHONES);
+        assert!(adapter.snapshot().running);
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_none());
+        assert_eq!(adapter.audio.enabled_airplay(), [id_of(&kitchen)]);
+        adapter.toggle_zone("zone:1");
+        assert!(!enabled(&adapter, SPEAKERS));
+        assert!(adapter.audio.enabled_airplay().is_empty());
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_switched_off_turns_its_gone_cast_member_off() {
+        let (mut adapter, fake) = cast_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.poll();
+        adapter.add_zone("Lounge", &[key(SPEAKERS), cc(CAST_KITCHEN)]);
+        fake.withdraw(CAST_KITCHEN, "Kitchen");
+        adapter.poll();
+        // Offline, a Cast speaker that is on stays listed, so the click counts it.
+        assert!(adapter.snapshot().speaker(&cc(CAST_KITCHEN)).is_some());
+        adapter.toggle_zone("zone:1");
+        assert!(!adapter.audio.cast_speakers().iter().any(|s| s.enabled));
+        assert!(!adapter.snapshot().running);
+    }
+
     #[test]
     fn a_new_zone_needs_a_speaker_that_is_on_and_names_can_change() {
         let mut adapter = adapter();
