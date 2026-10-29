@@ -9785,6 +9785,14 @@ do {
     check(approx(starting.volume(of: tv), 40, 1e-9),
           "cast master: two levels set while the speaker starts are both sent, so their echoes leave it at the second")
 
+    var resent = session(master: 100, attempt: 10)
+    _ = resent.setVolume(tv, position: 30)
+    check(resent.apply(.volume(attempt: 10, reported(0.8))) == .setVolume(0.3),
+          "cast master: the level set while starting goes again at the first status")
+    for level in [0.3, 0.7, 0.3] { _ = resent.apply(.volume(attempt: 10, reported(level))) }
+    check(approx(resent.volume(of: tv), 30, 1e-9),
+          "cast master: a level re-sent at the first status is answered once, so a later change to it from elsewhere moves the speaker")
+
     var quiet = session(master: 100, attempt: 5)
     _ = quiet.apply(.volume(attempt: 5, reported(0.5)))
     _ = quiet.setVolume(tv, position: 80)
