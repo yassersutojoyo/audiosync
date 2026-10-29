@@ -108,7 +108,7 @@ extension AppDelegate {
 
     /// What the user kept under a device added by address (its zone,
     /// presets, name, auto-connect and hidden entry) goes with it to the ID
-    /// a browse found it under (S342).
+    /// a browse found it under (S341).
     private func moveCastSettings(from old: String, to new: String) {
         let saved = SpeakerIDMigration.Saved(enabledAirPlay: enabledAirPlay, airplayVolumes: airplayVolume,
                                              groups: groups, autoConnect: autoConnect, zones: zones,

@@ -56,7 +56,7 @@ struct SpeakerNames: Equatable {
         return SpeakerNames(custom: moved)
     }
 
-    /// The name kept under `old` moves to `new`, unless `new` has one (S342).
+    /// The name kept under `old` moves to `new`, unless `new` has one (S341).
     func movingKey(_ old: String, to new: String) -> SpeakerNames {
         var moved = custom
         if let name = moved.removeValue(forKey: old), moved[new] == nil { moved[new] = name }
@@ -69,39 +69,6 @@ struct SpeakerNames: Equatable {
         let oneLine = typed.components(separatedBy: .newlines).joined(separator: " ")
         let trimmed = oneLine.trimmingCharacters(in: .whitespaces)
         return String(trimmed.prefix(maxLength)).trimmingCharacters(in: .whitespaces)
-    }
-}
-
-/// What the user set for a Cast device under its key, moved from the key of
-/// the address it was added by to its ID once a browse finds it (C18). A
-/// setting the ID already has wins.
-struct CastUserSettings {
-    var names: SpeakerNames
-    var zones: [SpeakerZone]
-    var presets: [SpeakerPreset]
-    var hidden: HiddenSpeakers
-
-    func moved(from old: String, to new: String) -> CastUserSettings {
-        let (from, to) = (CastID.key(old), CastID.key(new))
-        var out = self
-        var names = self.names.custom
-        if let name = names.removeValue(forKey: from), names[to] == nil { names[to] = name }
-        out.names = SpeakerNames(custom: names)
-        if zones.contains(where: { $0.members.contains(to) }) {
-            out.zones = ZoneEdit.removing(from, from: zones)
-        } else {
-            out.zones = zones.map { zone in
-                var copy = zone
-                copy.members = zone.members.map { $0 == from ? to : $0 }
-                if let name = copy.memberNames?.removeValue(forKey: from) { copy.memberNames?[to] = name }
-                return copy
-            }
-        }
-        out.presets = presets.map { $0.renamingKey(from, to: to) }
-        if let entry = out.hidden.show(CastID.app(old)) {
-            out.hidden.hide(key: CastID.app(new), name: entry.name, kind: entry.kind)
-        }
-        return out
     }
 }
 

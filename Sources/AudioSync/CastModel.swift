@@ -430,7 +430,7 @@ struct CastModel {
     /// The levels sent in this session that no status has answered yet,
     /// oldest first; a drag sends one every 100 ms at most (C70).
     private var unanswered: [Double] = []
-    /// A level a re-key left to send once (S342).
+    /// A level a re-key left to send once (S341).
     private var levelDue: Double?
     private static let maxUnanswered = 16
     /// The offset the device memory holds, per device, in ms. 0 ms counts as
@@ -541,7 +541,7 @@ struct CastModel {
     }
 
     /// The session's own level rescaled so master × zone × own still gives
-    /// what it played in `playedZone` (S342); the level to send when the
+    /// what it played in `playedZone` (S341); the level to send when the
     /// clamp to 0 to 1 keeps it from that.
     private mutating func keptLoudness(_ id: String, playedZone: Double) -> Double? {
         let zone = self.zone(of: id)

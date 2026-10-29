@@ -84,7 +84,7 @@ struct HiddenSpeakers: Equatable {
         }
     }
 
-    /// The entry hidden under `old` moves to `new`; one already under `new` stays (S342).
+    /// The entry hidden under `old` moves to `new`; one already under `new` stays (S341).
     mutating func move(_ old: String, to new: String) {
         guard let index = entries.firstIndex(where: { $0.key == old }) else { return }
         let entry = entries.remove(at: index)
