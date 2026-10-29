@@ -204,6 +204,9 @@ final class OutputRenderer: FadingOutput {
     var lateCallbacks: Int64 { target?.renderer.lateCallbacks ?? 0 }
     /// The device's IO overloads since the latest start (S229).
     var ioOverloads: Int64 { target?.overloads.load(ordering: .relaxed) ?? 0 }
+    /// The device anchor's span since the previous call (S334), for the
+    /// status line; nil without a timed callback since. Main thread.
+    func takeAnchorSpan() -> AnchorSpan? { target?.takeAnchorSpan() }
 
     /// The latest start's counters and the observer's values (S229), for the
     /// debug log; main thread.
@@ -256,10 +259,12 @@ final class OutputRenderer: FadingOutput {
         if let owner = Self.hogOwner(device), owner != getpid() {
             throw StartFailure.deviceDidNotStart(OSStatus(kAudioDevicePermissionsError))
         }
+        // Its channels, against the rate the unit binds at: a move during the start sends no notice (S325's relink).
+        let boundFormat = Self.deviceFormat(device)
         let fresh = try Self.makeUnit()
         let bluetooth = BluetoothIOBuffer.isBluetooth(
             transport: Self.uint32(device, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal) ?? 0)
-        let started: (channels: Int, rate: Double)
+        let started: (channels: Int, rate: Double, unitRate: Double)
         var initialized = false
         do {
             started = try configure(fresh, device: device, captureRate: captureRate, delayMs: delayMs,
@@ -281,7 +286,6 @@ final class OutputRenderer: FadingOutput {
         formatChanged = false
         formatCheckQueued = false
         startedDevice = device
-        startedFormat = Self.deviceFormat(device)
         stopNote = "running"
         let reportedNs = Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
         let uid = Self.deviceString(device, kAudioDevicePropertyDeviceUID)
@@ -293,6 +297,19 @@ final class OutputRenderer: FadingOutput {
         installDeviceAliveListener(device)
         installOverloadListener(device)
         installFormatListener(device)
+        let check = OutputFormatWatch.atStart(unitRate: started.unitRate, bound: boundFormat,
+                                              now: Self.deviceFormat(device))
+        startedFormat = check.baseline
+        if case .reopen(let old, let new) = check.verdict {
+            if let uid, OutputFormatWatch.startReopens.take(uid), let listener = formatListener {
+                var address = Self.formatAddresses[0]
+                listener.block(1, &address)   // checked as a notice would be
+            } else {
+                startedFormat = new   // later notices then reopen only for a real change
+                DebugTrace.log("[AudioSync] output unit on device \(device) bound at \(old.text) on a device at "
+                    + "\(new.text); already reopened once for this, kept as is")
+            }
+        }
         startDebugReport()
         startLateCallbackReport(device: device)
         let extraLeadMs = target?.renderer.extraLeadMs ?? 0
@@ -374,9 +391,9 @@ final class OutputRenderer: FadingOutput {
     /// Enables output, binds the unit to `device`, sets the format the render
     /// callback fills (the device's channels at the device's rate), makes the
     /// renderer for it at `delayMs` and installs the callback. Returns the
-    /// channel count and the rate.
+    /// channel count, the rate and the rate the unit bound the device at.
     private func configure(_ unit: AudioUnit, device: AudioObjectID, captureRate: Double,
-                           delayMs: Double, bluetooth: Bool) throws -> (channels: Int, rate: Double) {
+                           delayMs: Double, bluetooth: Bool) throws -> (channels: Int, rate: Double, unitRate: Double) {
         var status = Self.setProperty(unit, kAudioOutputUnitProperty_EnableIO, scope: kAudioUnitScope_Output,
                                       to: UInt32(1))
         guard status == noErr else { throw StartFailure.outputNotEnabled(status) }
@@ -432,7 +449,7 @@ final class OutputRenderer: FadingOutput {
         // The previous start's unit is gone (`halt` ran first), so nothing
         // renders through the old target any more.
         self.target = target
-        return (channels, rate)
+        return (channels, rate, deviceRate)
     }
 
     /// Interleaved, packed Float32 with `channels` channels at `rate` Hz, as
@@ -452,8 +469,7 @@ final class OutputRenderer: FadingOutput {
     /// address with its own size.
     private static func setProperty<Value>(_ unit: AudioUnit, _ property: AudioUnitPropertyID,
                                            scope: AudioUnitScope, to value: Value) -> OSStatus {
-        var copy = value
-        return AudioUnitSetProperty(unit, property, scope, 0, &copy, UInt32(MemoryLayout<Value>.size))
+        withUnsafeBytes(of: value) { AudioUnitSetProperty(unit, property, scope, 0, $0.baseAddress, UInt32($0.count)) }
     }
 
     // MARK: - Output timing (S185)
@@ -789,13 +805,14 @@ final class OutputRenderer: FadingOutput {
 
     /// While the debug log is on: a line for each late callback of this
     /// start, within `LateCallbackLog`'s limit for the whole process, and for
-    /// each re-anchor after a stall (S207). Polls the render callback's slot
+    /// each re-anchor after a stall or a lasting lateness (S207). Polls the render callback's slot
     /// on that log's queue and reads only atomics.
     private func startLateCallbackReport(device: AudioObjectID) {
         guard DebugTrace.enabled, let target else { return }
         let name = Self.deviceName(device) ?? "device \(device)"
         var seen = target.lateCount.load(ordering: .acquiring)
         var reanchors = target.renderer.stallReanchors
+        var lateReanchors = target.renderer.lateReanchors
         let timer = DispatchSource.makeTimerSource(queue: LateCallbackLog.queue)
         timer.schedule(deadline: .now() + .milliseconds(20), repeating: .milliseconds(20),
                        leeway: .milliseconds(10))
@@ -812,6 +829,11 @@ final class OutputRenderer: FadingOutput {
             if stalls != reanchors {
                 reanchors = stalls
                 DebugTrace.log("[AudioSync] \"\(name)\" re-anchored at its delay after a stall")
+            }
+            let late = target.renderer.lateReanchors
+            if late != lateReanchors {
+                lateReanchors = late
+                DebugTrace.log("[AudioSync] \"\(name)\" re-anchored at its delay after a lasting lateness")
             }
         }
         timer.setCancelHandler {
@@ -1012,6 +1034,38 @@ struct OutputObservation {
     }
 }
 
+/// Where a device's clock puts its sample 0 on the host clock, `host time −
+/// sample time / rate`, from a render callback's time stamp (S334). It holds
+/// still while the device's timeline follows the host's, so a step that
+/// stays is the device's timeline moving against the host clock.
+enum DeviceAnchor {
+    /// In host ns; nil without both times or a rate. Safe on an audio thread.
+    @inline(__always)
+    static func ns(_ stamp: AudioTimeStamp, hostNs: UInt64, nsPerFrame: Double) -> Int64? {
+        guard stamp.mFlags.contains(.hostTimeValid), stamp.mFlags.contains(.sampleTimeValid),
+              nsPerFrame > 0 else { return nil }
+        let played = stamp.mSampleTime * nsPerFrame
+        guard played.isFinite, abs(played) < 9e18 else { return nil }
+        return Int64(truncatingIfNeeded: hostNs) &- Int64(played)
+    }
+}
+
+/// One output's device anchor over a status line's span, and the first one
+/// of its start, in host ns.
+struct AnchorSpan: Equatable {
+    var base: Int64
+    var low: Int64
+    var high: Int64
+    var last: Int64
+
+    /// Against the start's first value, so a step reads as a jump and stays
+    /// in every later line.
+    var text: String {
+        func ms(_ value: Int64) -> String { String(format: "%+.1f", Double(value - base) / 1e6) }
+        return "device anchor min \(ms(low)) max \(ms(high)) last \(ms(last)) ms"
+    }
+}
+
 /// The Mac's Wi-Fi link as the debug log shows it once per session (S229):
 /// band, channel and signal strength, never the network's name or address.
 enum WiFiNote {
@@ -1051,6 +1105,13 @@ private final class RenderTarget {
     /// reads), and the latest one as `LateCallbackLog.pack` made it.
     let lateCount = Atomic<UInt64>(0)
     let lateLatest = Atomic<UInt64>(0)
+    /// The device anchor (`DeviceAnchor`): the render thread notes, the
+    /// status line takes the span. `anchorBase`, the start's first anchor,
+    /// is `Int64.min` until then and no take clears it.
+    let anchorBase = Atomic<Int64>(.min)
+    let anchorLow = Atomic<Int64>(.max)
+    let anchorHigh = Atomic<Int64>(.min)
+    let anchorLast = Atomic<Int64>(0)
 
     init(owner: OutputRenderer, renderer: CoreRenderer, channels: Int, leadNs: UInt64, rate: Double) {
         self.owner = owner
@@ -1074,12 +1135,38 @@ private final class RenderTarget {
         _ = lateCount.wrappingAdd(1, ordering: .releasing)
     }
 
+    /// Lock-free stores only; a store that races the status line's take
+    /// lands in either span.
+    @inline(__always)
+    private func noteAnchor(_ stamp: AudioTimeStamp) {
+        guard let anchor = DeviceAnchor.ns(stamp, hostNs: clock.nanoseconds(ticks: stamp.mHostTime),
+                                           nsPerFrame: nsPerFrame) else { return }
+        anchorLast.store(anchor, ordering: .relaxed)
+        let low = anchorLow.load(ordering: .relaxed)
+        if anchor < low { _ = anchorLow.compareExchange(expected: low, desired: anchor, ordering: .relaxed) }
+        let high = anchorHigh.load(ordering: .relaxed)
+        if anchor > high { _ = anchorHigh.compareExchange(expected: high, desired: anchor, ordering: .relaxed) }
+        _ = anchorBase.compareExchange(expected: .min, desired: anchor, ordering: .relaxed)
+    }
+
+    /// The anchor's span since the previous take, and starts the next. Main thread.
+    func takeAnchorSpan() -> AnchorSpan? {
+        let low = anchorLow.exchange(.max, ordering: .relaxed)
+        let high = anchorHigh.exchange(.min, ordering: .relaxed)
+        let base = anchorBase.load(ordering: .relaxed)
+        guard base != .min, low <= high else { return nil }
+        return AnchorSpan(base: base, low: low, high: high, last: anchorLast.load(ordering: .relaxed))
+    }
+
     /// Fills the unit's buffer with `frames` frames through the renderer,
     /// stamped with the output time of its first frame (S185). Real-time
     /// safe.
     @inline(__always)
     func render(frames: Int, timeStamp: UnsafePointer<AudioTimeStamp>, into data: UnsafeMutablePointer<AudioBufferList>) {
-        if watchesLateness { timeBuffer(timeStamp.pointee, frames: frames) }
+        if watchesLateness {
+            timeBuffer(timeStamp.pointee, frames: frames)
+            noteAnchor(timeStamp.pointee)
+        }
         let buffers = UnsafeMutableAudioBufferListPointer(data)
         guard let first = buffers.first else { return }
         // The interleaved format gives one buffer; anything beyond it stays silent.

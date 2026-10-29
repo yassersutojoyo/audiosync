@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use audiosync_cast::discovery::mdns::{MdnsBrowser, browse_event};
 use audiosync_cast::discovery::reach::{CHECK_INTERVAL, Reachability, connects};
 use audiosync_cast::discovery::{
-    BrowseEvent, CastDevice, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent,
-    MAX_DEVICES, SERVICE_TYPE, ServiceRecord, Skipped, Txt,
+    Announcements, BrowseEvent, CastDevice, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind,
+    DeviceList, ListEvent, MAX_DEVICES, SERVICE_TYPE, ServiceRecord, Skipped, Txt,
 };
 use common::{Behavior, FakeDevice};
 use mdns_sd::{ServiceEvent, ServiceInfo, TxtProperty};
@@ -326,6 +326,51 @@ fn a_goodbye_during_a_session_keeps_the_device_listed_as_offline() {
     list.apply(BrowseEvent::Resolved(device));
     assert_eq!(list.apply(goodbye), ListEvent::Removed(key));
     assert!(list.entries().is_empty());
+}
+
+// covers: C17, C81, C90
+#[test]
+fn only_a_device_found_back_or_at_other_addresses_is_announced() {
+    let mut list = DeviceList::new();
+    let mut announcements = Announcements::default();
+    let id = DeviceId::parse(ID).expect("id");
+    let name = "A._googlecast._tcp.local.";
+    let mut device = record(name, 8009, &[b"id=3f2a8c41d27e4b8f9a06c1d5e7f80b12"]);
+    let mut apply = |list: &mut DeviceList, event| {
+        let change = list.apply(event);
+        announcements.note(list, &change)
+    };
+    assert_eq!(
+        apply(&mut list, BrowseEvent::Resolved(device.clone())),
+        Some(id)
+    );
+    assert_eq!(
+        apply(&mut list, BrowseEvent::Resolved(device.clone())),
+        None
+    );
+    device.txt.push(b"st=1".to_vec());
+    assert_eq!(
+        apply(&mut list, BrowseEvent::Resolved(device.clone())),
+        None,
+        "a TXT change"
+    );
+
+    list.set_in_session(DeviceKey::Id(id), true);
+    let goodbye = BrowseEvent::Removed {
+        fullname: name.to_owned(),
+    };
+    assert_eq!(apply(&mut list, goodbye), None);
+    assert_eq!(
+        apply(&mut list, BrowseEvent::Resolved(device.clone())),
+        Some(id),
+        "back"
+    );
+    device.addresses = vec![v4(11)];
+    assert_eq!(
+        apply(&mut list, BrowseEvent::Resolved(device)),
+        Some(id),
+        "other addresses"
+    );
 }
 
 fn numbered(n: u32) -> (DeviceKey, BrowseEvent) {

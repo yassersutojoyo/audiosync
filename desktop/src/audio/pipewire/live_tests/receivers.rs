@@ -152,6 +152,7 @@ fn the_whole_system_reaches_mock_airplay_and_cast_receivers() {
         id: DeviceId([0xC5; 16]),
         addresses: vec![cast.address],
         group: None,
+        records: None,
     };
     host.start(target, SESSION_RATE, Metadata::default(), reader)
         .expect("the Cast session starts");

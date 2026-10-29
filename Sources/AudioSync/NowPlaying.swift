@@ -220,6 +220,13 @@ final class NowPlayingMonitor {
     /// errAETimeout (a player busy or quitting) both mean "no track this time".
     static func meansNoTrack(_ code: Int?) -> Bool { code == -1728 || code == -1712 }
 
+    /// The debug-log line for a failed script; a refusal is the user's answer, not a fault.
+    static func scriptErrorLine(target: String, code: Int?, error: String) -> String {
+        code == notPermitted
+            ? "[AudioSync] Automation access to \(target) was denied"
+            : "[AudioSync] AppleScript error: \(error)"
+    }
+
     /// Which player to follow (main thread): the source app itself if it is a
     /// supported player, "" for none, nil for whichever player is playing.
     var preferredBundleID: String?
@@ -526,7 +533,9 @@ final class NowPlayingMonitor {
         var error: NSDictionary?
         let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
         let code = error?[NSAppleScript.errorNumber] as? Int
-        if let error, command || !Self.meansNoTrack(code) { DebugTrace.log("[AudioSync] AppleScript error: \(error)") }
+        if let error, command || !Self.meansNoTrack(code) {
+            DebugTrace.log(Self.scriptErrorLine(target: target, code: code, error: "\(error)"))
+        }
         consent.noted(target, code: error == nil ? 0 : code ?? -1)
         return error == nil ? result : nil
     }
