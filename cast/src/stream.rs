@@ -1124,6 +1124,58 @@ fn stream_body(
     }
 }
 
+/// What the pump sends next for a due 20 ms block.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug)]
+pub enum Pace {
+    Audio,
+    Silence,
+    /// Nothing is due, or the ring is short within the underrun wait.
+    Wait,
+}
+
+/// The pump's clock (C52, C64): which due blocks go out as audio and which
+/// as silence, never ahead of real time.
+#[doc(hidden)]
+#[derive(Debug, Default)]
+pub struct Pacer {
+    emitted: u64,
+    // Once the ring has run dry, silence keeps the stream on the clock until
+    // audio returns, so no debt goes out later as a burst.
+    dry: bool,
+    // Debt that outlasts the underrun wait while audio flows again is audio
+    // lost upstream: silence pays it too.
+    caught_up: Duration,
+}
+
+impl Pacer {
+    /// The next block at `now`, the time since the stream's start, with
+    /// `audio` saying whether the ring holds a whole block.
+    pub fn next(&mut self, now: Duration, audio: bool) -> Pace {
+        let due = (now.as_millis() / BLOCK.as_millis()) as u64;
+        if self.emitted >= due {
+            self.caught_up = now;
+            return Pace::Wait;
+        }
+        let pace = if audio {
+            self.dry = false;
+            Pace::Audio
+        } else if self.dry || now.saturating_sub(self.caught_up) > UNDERRUN {
+            self.dry = true;
+            Pace::Silence
+        } else {
+            return Pace::Wait;
+        };
+        self.emitted += 1;
+        pace
+    }
+
+    /// Blocks sent so far.
+    pub fn emitted(&self) -> u64 {
+        self.emitted
+    }
+}
+
 /// Moves 20 ms blocks from the ring to the queue, never ahead of real time
 /// (C64). Without a response the ring is drained, so a new response starts
 /// at the newest audio (C61).
@@ -1131,10 +1183,9 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
     let format = shared.pump_format;
     let block_frames = format.block_frames();
     let backlog_frames = format.rate() as usize * RING_BACKLOG.as_millis() as usize / 1000;
-    let underrun_blocks = (UNDERRUN.as_millis() / BLOCK.as_millis()) as u64;
     let queue_blocks = (QUEUE_LIMIT.as_millis() / BLOCK.as_millis()) as u64;
     let mut start = Instant::now();
-    let mut emitted: u64 = 0;
+    let mut pacer = Pacer::default();
     let mut overflow = reader.overflow();
     while !shared.stopped.load(Ordering::SeqCst) {
         // Frames the full ring refused never reach a block: dropped too (C79).
@@ -1148,7 +1199,7 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
             if live.restart {
                 live.restart = false;
                 start = Instant::now();
-                emitted = 0;
+                pacer = Pacer::default();
                 reader.skip_to_newest(0);
             }
             !live.responses.is_empty()
@@ -1158,30 +1209,31 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
             thread::sleep(BLOCK);
             continue;
         }
-        let mut due = (start.elapsed().as_millis() / BLOCK.as_millis()) as u64;
-        if due - emitted > queue_blocks {
+        let mut now = start.elapsed();
+        if (now.as_millis() / BLOCK.as_millis()) as u64 - pacer.emitted() > queue_blocks {
             // After a stall longer than the queue (a sleeping computer), the
             // missed time is gone; silence for all of it would only be
             // dropped again.
             start = Instant::now();
-            emitted = 0;
-            due = 0;
+            pacer = Pacer::default();
+            now = Duration::ZERO;
         }
         let mut blocks = Vec::new();
-        while emitted < due {
-            if reader.available() >= block_frames {
-                let mut block = Vec::with_capacity(block_frames * FRAME_BYTES);
-                reader.read_into(&mut block, block_frames);
-                blocks.push(block);
-            } else if due - emitted > underrun_blocks {
-                blocks.push(vec![0; block_frames * FRAME_BYTES]);
-                shared
-                    .underrun_frames
-                    .fetch_add(block_frames as u64, Ordering::Relaxed);
-            } else {
-                break;
+        loop {
+            match pacer.next(now, reader.available() >= block_frames) {
+                Pace::Audio => {
+                    let mut block = Vec::with_capacity(block_frames * FRAME_BYTES);
+                    reader.read_into(&mut block, block_frames);
+                    blocks.push(block);
+                }
+                Pace::Silence => {
+                    blocks.push(vec![0; block_frames * FRAME_BYTES]);
+                    shared
+                        .underrun_frames
+                        .fetch_add(block_frames as u64, Ordering::Relaxed);
+                }
+                Pace::Wait => break,
             }
-            emitted += 1;
         }
         let excess = reader.available().saturating_sub(backlog_frames);
         if excess > 0 {
@@ -1200,7 +1252,7 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
             drop(live);
             shared.wake.notify_all();
         }
-        let next = start + BLOCK * (emitted as u32 + 1);
+        let next = start + BLOCK * (pacer.emitted() as u32 + 1);
         thread::sleep(
             next.saturating_duration_since(Instant::now())
                 .min(BLOCK)

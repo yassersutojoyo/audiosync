@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
 use audiosync_cast::stream::{
-    BlockQueue, FetchHeaders, MAX_LOGGED_NAMES, MAX_LOGGED_TEXT, ResponseEnd, ServerEvent,
-    StreamConfig, StreamServer, image_size,
+    BlockQueue, FetchHeaders, MAX_LOGGED_NAMES, MAX_LOGGED_TEXT, Pace, Pacer, ResponseEnd,
+    ServerEvent, StreamConfig, StreamServer, image_size,
 };
 use common::http;
 
@@ -544,6 +544,95 @@ fn a_silent_input_keeps_the_response_open_with_silence() {
     // Those five blocks and more were the pump's underrun silence.
     assert!(stats.underrun_frames >= 5 * 960, "{stats:?}");
     server.stop();
+}
+
+/// Steps a pacer through `ms` milliseconds on a test clock; `input(t)` is
+/// the audio, in ms, that reaches the ring at `t`. Returns the debt in
+/// blocks after each step and the length in blocks of each silent run.
+fn pace(ms: u64, input: impl Fn(u64) -> u64) -> (Vec<u64>, Vec<u64>) {
+    let mut pacer = Pacer::default();
+    let (mut ring, mut run, mut silent, mut debt) = (0, 0, Vec::new(), Vec::new());
+    for t in 0..ms {
+        ring += input(t);
+        loop {
+            match pacer.next(Duration::from_millis(t), ring >= 20) {
+                Pace::Audio if run > 0 => {
+                    ring -= 20;
+                    silent.push(std::mem::take(&mut run));
+                }
+                Pace::Audio => ring -= 20,
+                Pace::Silence => run += 1,
+                Pace::Wait => break,
+            }
+        }
+        debt.push(t / 20 - pacer.emitted());
+    }
+    if run > 0 {
+        silent.push(run);
+    }
+    (debt, silent)
+}
+
+/// 10 ms of audio every 10 ms, none of it in `lost`.
+fn chunks_except(lost: std::ops::Range<u64>) -> impl Fn(u64) -> u64 {
+    move |t| {
+        if t % 10 == 0 && !lost.contains(&t) {
+            10
+        } else {
+            0
+        }
+    }
+}
+
+// covers: C52
+#[test]
+fn an_input_gap_past_100_ms_is_filled_with_silence_and_the_stream_stays_on_the_clock() {
+    let (debt, silent) = pace(1000, chunks_except(200..700));
+    let silent: u64 = silent.iter().sum();
+    assert!(silent >= 24, "{silent} silent blocks for a 500 ms gap");
+    // A debt left by the gap would go out as a burst once the input
+    // resumes, ahead of the calibrated delay.
+    assert!(debt[350..].iter().all(|blocks| *blocks == 0), "{debt:?}");
+}
+
+// covers: C52
+#[test]
+fn audio_lost_for_less_than_100_ms_leaves_no_debt_once_the_input_returns() {
+    let (debt, _) = pace(1000, chunks_except(200..280));
+    assert!(debt[600..].iter().all(|blocks| *blocks == 0), "{debt:?}");
+}
+
+// covers: C52
+#[test]
+fn audio_late_by_less_than_100_ms_is_sent_without_silence() {
+    let late = chunks_except(200..260);
+    let (debt, silent) = pace(1000, |t| if t == 260 { 70 } else { late(t) });
+    assert!(silent.is_empty(), "{silent:?}");
+    assert!(debt[300..].iter().all(|blocks| *blocks == 0), "{debt:?}");
+}
+
+// covers: C52
+#[test]
+fn a_capture_slower_than_the_clock_is_paid_one_silent_block_at_a_time() {
+    // 10 ms chunks every 10.01 ms: 0.1 % slow for 60 s.
+    let arrivals: Vec<u64> = (0..)
+        .map(|chunk: u64| chunk * 10_010 / 1000)
+        .take_while(|t| *t < 60_000)
+        .collect();
+    let drift_ms = 60_000 - 10 * arrivals.len() as u64;
+    let (_, silent) = pace(60_000, |t| {
+        if arrivals.binary_search(&t).is_ok() {
+            10
+        } else {
+            0
+        }
+    });
+    assert!(silent.iter().all(|run| *run == 1), "{silent:?}");
+    let silent_ms = 20 * silent.len() as u64;
+    assert!(
+        silent_ms.abs_diff(drift_ms) <= 20,
+        "{silent_ms} ms of silence for {drift_ms} ms of drift"
+    );
 }
 
 // covers: C64
