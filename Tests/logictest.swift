@@ -5826,6 +5826,19 @@ do {
           "settings: unreadable groups, IDs or appearance fall back to the defaults; an AirPlay own volume above 100 stays (S290)")
     stored.values = [Keys.master: 130]
     check(store.load().master == 100, "settings: a master above 100 is clamped")
+    // JSONEncoder throws on NaN or infinity, which used to skip the whole save.
+    stored.values = [:]
+    store.save(zones: [SpeakerZone(id: "z1", name: "Den", members: ["lc:usb:out"], volume: .nan)])
+    store.save(presets: [SpeakerPreset(id: "p1", name: "Evening", members: [.init(key: "lc:usb:out", volume: 40)],
+                                       zones: [.init(id: "z1", volume: .infinity)], master: .nan,
+                                       gains: [Double](repeating: 0, count: 10))])
+    let nanZones = AppSettings.decodeZones(stored.values[Keys.zones] as? Data)
+    check(nanZones.map(\.members) == [["lc:usb:out"]] && nanZones.allSatisfy { $0.volume.isFinite },
+          "settings: a zone whose volume isn't finite is still saved, with a finite volume", "\(nanZones)")
+    let nanPresets = AppSettings.decodePresets(stored.values[Keys.presets] as? Data)
+    check(nanPresets.map(\.members) == [[.init(key: "lc:usb:out", volume: 40)]]
+            && nanPresets.allSatisfy { $0.master.isFinite && $0.zones.allSatisfy { $0.volume.isFinite } },
+          "settings: a preset whose master or zone volume isn't finite is still saved, with finite volumes", "\(nanPresets)")
     // covers: S212 (unreadable groups fall back to their defaults, one group or member at a time)
     stored.values = [Keys.groups: Data(#"""
         [{"id":"g1","name":"A","members":["lc:a",7]},{"id":"g2","members":["lc:b"]},"junk",{"id":"g3","name":"C","members":["lc:c"]}]
