@@ -2220,6 +2220,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         zone: &Zone,
         keep_off: &[String],
     ) -> Vec<(SpeakerKey, bool, zones::Member)> {
+        let enabled_outputs = self.audio.enabled_outputs();
+        let enabled_airplay = self.audio.enabled_airplay();
+        let enabled_cast = self.audio.cast_enabled();
         zone.members
             .iter()
             .filter_map(|text| {
@@ -2232,7 +2235,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     (SpeakerKey::AirPlay(id), _) if is_airplay_target(id) => MemberKind::AirPlay2,
                     (SpeakerKey::AirPlay(_), _) => MemberKind::AirPlay,
                 };
-                let on = listed.is_some_and(|speaker| speaker.enabled);
+                // An unplugged output or a gone speaker stays on until its zone goes off.
+                let on = match (listed, &key) {
+                    (Some(speaker), _) => speaker.enabled,
+                    (None, SpeakerKey::Local(id)) => enabled_outputs.contains(id),
+                    (None, SpeakerKey::AirPlay(id)) => enabled_airplay.contains(id),
+                    (None, SpeakerKey::Cast(id)) => enabled_cast.as_ref() == Some(id),
+                };
                 let member = zones::Member {
                     kind,
                     listed: listed.is_some() && !keep_off.contains(text),
@@ -6378,13 +6387,63 @@ mod tests {
         assert_eq!(state.zone_state(&zone), SpeakerState::Playing);
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
 
-        // An absent member is left alone.
+        // An absent member goes off with its zone, so it stays off when it is back.
         adapter.audio_mut().disconnect_output(HEADPHONES);
         adapter.poll();
         adapter.toggle_zone(&zone.id);
         assert!(!enabled(&adapter, SPEAKERS));
-        assert_eq!(adapter.audio.enabled_outputs(), [HEADPHONES]);
-        assert!(adapter.snapshot().running, "the absent member is still on");
+        assert!(adapter.audio.enabled_outputs().is_empty());
+        assert!(!adapter.snapshot().running);
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_switched_off_turns_its_gone_airplay_member_off() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.poll();
+        adapter.add_zone("Lounge", &[key(SPEAKERS), ap(&kitchen)]);
+        // Gone while streaming is down: the sender drops it, so it isn't listed.
+        adapter.audio_mut().fail_capture(BackendError::System {
+            call: "IAudioCaptureClient::GetBuffer",
+            code: 1,
+        });
+        adapter.poll();
+        fake.gone(&kitchen);
+        adapter.poll();
+        turn_on(&mut adapter, HEADPHONES);
+        assert!(adapter.snapshot().running);
+        assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_none());
+        assert_eq!(adapter.audio.enabled_airplay(), [id_of(&kitchen)]);
+        adapter.toggle_zone("zone:1");
+        assert!(!enabled(&adapter, SPEAKERS));
+        assert!(adapter.audio.enabled_airplay().is_empty());
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_switched_off_turns_its_gone_cast_member_off() {
+        let (mut adapter, fake) = cast_adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.poll();
+        adapter.add_zone("Lounge", &[key(SPEAKERS), cc(CAST_KITCHEN)]);
+        // Gone with no session: it leaves the list but stays on.
+        adapter.audio_mut().fail_capture(BackendError::System {
+            call: "IAudioCaptureClient::GetBuffer",
+            code: 1,
+        });
+        adapter.poll();
+        fake.withdraw(CAST_KITCHEN, "Kitchen");
+        adapter.poll();
+        turn_on(&mut adapter, HEADPHONES);
+        assert!(adapter.snapshot().running);
+        assert!(adapter.snapshot().speaker(&cc(CAST_KITCHEN)).is_none());
+        assert!(adapter.audio.cast_on());
+        adapter.toggle_zone("zone:1");
+        assert!(!enabled(&adapter, SPEAKERS));
+        assert!(!adapter.audio.cast_on());
     }
 
     #[test]

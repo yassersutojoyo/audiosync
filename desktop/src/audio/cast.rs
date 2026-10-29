@@ -1003,6 +1003,11 @@ impl CastSpeakers {
         self.enabled.is_some()
     }
 
+    /// The ID of the device that is on, listed or not.
+    pub fn enabled_id(&self) -> Option<String> {
+        self.enabled.map(|id| id.to_string())
+    }
+
     /// Whether a device is on and either listed or in a session: then local
     /// outputs wait for it by [`CastSpeakers::anchor`].
     pub fn chosen(&self) -> bool {

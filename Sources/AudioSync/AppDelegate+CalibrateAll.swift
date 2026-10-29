@@ -146,7 +146,9 @@ extension AppDelegate {
         guard !calibrateAllRunning, let sheet = calibrateAllSheet, var shown = appModel.calibrateAll.sheet,
               shown.canApply
         else { return }
-        guard CalibrateAllFlow.unchanged(sheet.speakers, current: calibrateStoredValue) else {
+        guard CalibrateAllFlow.unchanged(sheet.speakers, reference: localReference,
+                                         airPlayAdjustmentMs: airPlayDelay.adjustmentMs, current: calibrateStoredValue)
+        else {
             appModel.calibrateAll.line = .changedSinceMeasured
             return
         }
@@ -159,7 +161,8 @@ extension AppDelegate {
             switch write {
             case .local(let id, let ms, _): setLocalOffset(id, ms)
             case .cast(let id, let ms, _): setCastOffset(id, ms)
-            case .airPlay(let ms, _): setAirPlayDelay(ms)
+            case .airPlay(let ms, let old):
+                setAirPlayDelay(ms, senderMs: CalibrateAllFlow.airPlaySenderMs(old: old, speakers: sheet.speakers))
             }
         }
         // Kept only after every write, so the check that each write runs doesn't drop it halfway.
@@ -365,7 +368,9 @@ extension AppDelegate {
             referenceOn: localReference.map(enabledLocal.contains) ?? false, localOutputs: localOutputs,
             localOffsets: localOffsetMs, holdBacks: localHoldBacks, cast: cast,
             airPlay: appModel.airplay.filter { playing.contains($0.id) }.map { (id: $0.id, name: $0.name) },
-            airPlayDelayMs: airPlayLatencyMs, airPlayHoldBackMs: NetworkHoldBack.airPlayAppliedMs(wanted),
+            airPlayDelayMs: airPlayLatencyMs, airPlayAdjustmentMs: airPlayDelay.adjustmentMs,
+            airPlayBaseMs: nativeSenderLatencyMs,
+            airPlayHoldBackMs: NetworkHoldBack.airPlayAppliedMs(wanted),
             airPlaySenderMs: (nativeAirPlay?.model).flatMap {
                 $0.latencyMs > 0 ? $0.latencyMs + $0.receiverLatency.estimateMs : nil
             },
@@ -419,7 +424,8 @@ extension AppDelegate {
         if let device = castModel.enabled { switchedOn.insert(CastID.app(device)) }
         return CalibrateAllContext(source: audioSource.defaultsValue, session: session, streaming: engine.isRunning,
                                    switchedOn: switchedOn, playing: calibratePlayingIDs(), delays: delays,
-                                   zoneMembers: zone.flatMap { id in zones.first { $0.id == id }?.members })
+                                   zoneMembers: zone.flatMap { id in zones.first { $0.id == id }?.members },
+                                   reference: localReference)
     }
 
     /// Zone `id` as Calibrate Zone reads it now (S255): its present members,
@@ -450,7 +456,9 @@ extension AppDelegate {
                                               latencyMs: 0)
             }
             return CalibrateAllSpeaker(id: speaker.id, name: speaker.name, kind: speaker.kind,
-                                       offsetMs: calibrateStoredValue(speaker), latencyMs: 0)
+                                       offsetMs: calibrateStoredValue(speaker), latencyMs: 0,
+                                       adjustmentMs: kind == .airplay ? airPlayDelay.adjustmentMs : nil,
+                                       senderMs: kind == .airplay ? nativeSenderLatencyMs : nil)
         }
         return CalibrateZoneScope(id: zone.id, name: zone.name, members: zone.members, present: Set(present), off: off)
     }

@@ -67,7 +67,7 @@ fn member(member: &AscZoneMember) -> Member {
     };
     Member {
         kind: kind.unwrap_or(MemberKind::Local),
-        // A member of an unknown kind is never switched.
+        // A member of an unknown kind is never switched on.
         listed: member.listed && kind.is_some(),
         on: member.on,
         busy: member.busy,
@@ -305,7 +305,7 @@ mod tests {
                 true,
                 false
             ),
-            (ZONE_CLICK_TURN_OFF, vec![ZONE_STEP_ABSENT, ZONE_STEP_OFF])
+            (ZONE_CLICK_TURN_OFF, vec![ZONE_STEP_OFF, ZONE_STEP_OFF])
         );
         assert_eq!(plan(&[member(7, false)], true, false).0, ZONE_CLICK_NOTHING);
         let mut steps = [99u32; 2];

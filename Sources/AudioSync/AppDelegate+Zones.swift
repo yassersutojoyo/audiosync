@@ -124,7 +124,7 @@ extension AppDelegate {
                 continue
             }
         }
-        if origin.beginsAttempts { beginNativeAttempts(attempts) }   // before the sender's speakers follow
+        if let ids = origin.attemptsToBegin(attempts) { beginNativeAttempts(ids) }   // before the sender's speakers follow
         if turnOn && !engine.isRunning {
             startEngine(origin: origin)
         } else if engine.isRunning {
