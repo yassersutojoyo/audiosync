@@ -32,6 +32,8 @@ struct CalibrateAllSpeaker: Equatable {
     let latencyMs: Double
     /// For an AirPlay row, the adjustment A of S178 stored when `offsetMs` was read.
     var adjustmentMs: Double? = nil
+    /// For an AirPlay row, the sender's latency L_s that `offsetMs` was read with.
+    var senderMs: Double? = nil
 
     var core: AscCalibrationSpeaker {
         AscCalibrationSpeaker(kind: kind.core, has_offset: offsetMs != nil, offset_ms: offsetMs ?? 0,
