@@ -4084,7 +4084,7 @@ do {
                 && links.pendingTicket(uid: "bt") == nil,
               "EC2 Bluetooth fresh link: a restart armed in a session that has ended is dropped")
     }
-    // covers: S325, S334 (a link that drops and comes back while its UID stays listed is fresh again)
+    // covers: S325 (a link that restarts on a new device ID while its UID stays listed is fresh again)
     do {
         let links = FreshLinkWatch()
         links.noteListing(["bt"], now: 0)
@@ -4094,7 +4094,7 @@ do {
         for uid in restart { links.relinked(uid: uid, now: 1) }
         let decision = links.decide(uid: "bt", bluetooth: true, now: 1.5, session: 1)
         check(restart == ["bt"] && decision == .restart(linkAgeS: 0.5),
-              "EC2 Bluetooth fresh link: a restart on a new device ID, a stall or a loss inside one rescan counts as a fresh link",
+              "EC2 Bluetooth fresh link: a restart on a new device ID counts as a fresh link",
               "\(restart) \(decision)")
     }
     // covers: S325, S331 (a start refused once on a fresh link still restarts once it plays)
