@@ -431,13 +431,11 @@ final class AppModel: ObservableObject {
 
     /// Hide Speaker in a row's menu: the host turns it off first when it is on.
     func hide(_ speaker: Speaker) {
-        // H11: the next row's switch takes the focus, else the previous row's.
         let sections = layout
         let section = sections.thisMac.contains { $0.id == speaker.id } ? sections.thisMac : sections.connected
-        var neighbour: Speaker?
-        if let at = section.firstIndex(where: { $0.id == speaker.id }) {
-            neighbour = at + 1 < section.count ? section[at + 1] : (at > 0 ? section[at - 1] : nil)
-        }
+        let members = zone(holding: speaker.key)?.members.compactMap { self.speaker(of: $0) } ?? []
+        let neighbour = ZoneLayout.focusAfterHiding(speaker.key, in: section, zone: members, key: \.key,
+                                                    zoned: zonedKeys)
         actions.hideSpeaker(HiddenSpeakers.key(id: speaker.id, tag: speaker.tag), speaker.name,
                             text.speakerTag(speaker.tag, airPlay2: speaker.airPlay2))
         focusSwitch = neighbour?.id

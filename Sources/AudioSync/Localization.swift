@@ -847,11 +847,11 @@ struct UIStrings {
     /// A local output that stalled again before playing 5 s; it stays on (S334).
     func outputLost(name: String) -> String { "\(name) was disconnected. It plays again as soon as it's back." }
 
-    /// `refusedCaptureRate`: the capture rate (Hz) when that was the reason;
-    /// `count`: how many speakers `names` lists.
-    func outputCouldNotStart(names: String, count: Int = 1, refusedCaptureRate: Double? = nil) -> String {
-        let deviceName = names.isEmpty ? unknownDevice : names
-        let one = count <= 1
+    /// `refusedCaptureRate`: the capture rate (Hz) when that was the reason.
+    func outputCouldNotStart(names: [String], refusedCaptureRate: Double? = nil) -> String {
+        let shown = listed(names)
+        let deviceName = shown.isEmpty ? unknownDevice : shown
+        let one = names.count <= 1
         let first = "\(deviceName) couldn't start, so " + (one ? "it's off. " : "they're off. ")
         let again = one ? "turn the speaker on again." : "turn the speakers on again."
         guard let rate = refusedCaptureRate else {

@@ -358,6 +358,7 @@ extension AppDelegate {
             guard let self, visible != self.nowPlayingOnScreen else { return }
             self.nowPlayingOnScreen = visible   // Now Playing polls only while someone sees it
             self.syncTrackInfo()
+            self.appModel.inputLevel.setVisible(visible)
         }
         a.dismissNotice = { [weak self] subject in self?.clearNotices([subject]) }
         a.permissionContinue = { [weak self] permission in self?.resumeAfterPermission(permission) }
