@@ -119,7 +119,7 @@ struct AppSettings: Equatable {
     var enabledLocal: Set<String> = []
     var enabledCast: String?
     /// The Cast speaker to turn on once listed: the one saved as on, unless hidden (C112).
-    var castOnAtLaunch: String? { enabledCast.filter { !hiddenSpeakers.contains(CastID.app($0)) } }
+    var castOnAtLaunch: String? { enabledCast.flatMap { hiddenSpeakers.contains(CastID.app($0)) ? nil : $0 } }
     var master = AppSettings.defaultMaster
     var localVolumes: [String: Double] = [:]
     /// The absolute delays from before the local delay model (S77), as the
