@@ -1713,6 +1713,8 @@ mod tests {
                 gains_db: [1.0; BAND_COUNT],
             }],
             speaker_presets_migrated: true,
+            last_zone_id: 1,
+            last_preset_id: 1,
             equalizer: sample.equalizer,
             equalizer_curves: vec![SavedCurve {
                 name: "Curve".to_owned(),
@@ -2144,6 +2146,8 @@ mod tests {
             speaker_zones_migrated: _,
             speaker_presets,
             speaker_presets_migrated: _,
+            last_zone_id,
+            last_preset_id,
             equalizer,
             equalizer_curves,
             show_virtual_devices,
@@ -2171,6 +2175,8 @@ mod tests {
         assert_ne!(groups, default.groups);
         assert_ne!(speaker_zones, default.speaker_zones);
         assert_ne!(speaker_presets, default.speaker_presets);
+        assert_ne!(last_zone_id, default.last_zone_id);
+        assert_ne!(last_preset_id, default.last_preset_id);
         assert_ne!(equalizer, default.equalizer);
         assert_ne!(equalizer_curves, default.equalizer_curves);
         assert_ne!(show_virtual_devices, default.show_virtual_devices);
