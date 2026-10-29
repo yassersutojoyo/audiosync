@@ -88,7 +88,7 @@ use super::now_playing::{Follow, SharedLabels, TrackInfo, TrackReader, TrackSour
 use super::outputs::OutputParams;
 use super::outputs::{
     AirPlay, Endpoint, EndpointReading, Listing, ListingNote, OutputPolicy, RenderFormat,
-    StreamSetup,
+    StreamSetup, output_kind, unnumbered,
 };
 use super::pairings::PairingStore;
 use super::process::ProcessTable;
@@ -645,6 +645,11 @@ pub struct Controller<D: Driver> {
     /// Why the input devices couldn't be listed last time, if they couldn't:
     /// the log tells once per failure, and the list goes on without them.
     inputs_error: Option<BackendError>,
+    /// The name and kind of each input device listed in this run, and the
+    /// endpoint IDs a device left when a capture followed it to another
+    /// (S329).
+    inputs_seen: BTreeMap<String, (String, OutputKind)>,
+    inputs_left_behind: BTreeSet<String>,
     /// The notes of the last listing: notes that repeat at every listing
     /// are logged once.
     listing_notes: Vec<ListingNote>,
@@ -753,6 +758,8 @@ impl<D: Driver> Controller<D> {
             listing_error: None,
             sources_error: None,
             inputs_error: None,
+            inputs_seen: BTreeMap::new(),
+            inputs_left_behind: BTreeSet::new(),
             listing_notes: Vec::new(),
             last_status: None,
             routing: RoutingState::default(),
@@ -1262,7 +1269,8 @@ impl<D: Driver> Controller<D> {
     }
 
     /// Lets a capture that waits for its input device try at the next poll
-    /// once the device is listed again (S329).
+    /// once the device is listed again, under its endpoint ID or under a new
+    /// one ([`Self::moved_input`]), which becomes the source (S329).
     fn reopen_listed_input(&mut self) {
         let Some(SourceId::Input { endpoint_id }) = self
             .session
@@ -1276,17 +1284,84 @@ impl<D: Driver> Controller<D> {
         else {
             return;
         };
-        let listed = self.driver.inputs().is_ok_and(|readings| {
-            readings
-                .iter()
-                .any(|input| input.id.as_deref() == Ok(endpoint_id.as_str()))
-        });
-        if let Some(reopen) = self.session.as_mut().and_then(|s| s.reopen.as_mut())
-            && listed
-        {
-            reopen.wait = 1;
+        let Ok(readings) = self.driver.inputs() else {
+            return;
+        };
+        let listed = listed_inputs(&readings);
+        let to = if listed.iter().any(|(id, ..)| *id == endpoint_id) {
+            Some(endpoint_id.clone())
+        } else {
+            self.moved_input(&endpoint_id, &listed)
+        };
+        self.note_inputs(&listed);
+        let Some(to) = to else {
+            return;
+        };
+        if to == endpoint_id {
             self.log
                 .log(|| "the capture's input device is listed again: it opens again".to_owned());
+        } else {
+            self.log.log(|| {
+                format!(
+                    "the capture's input device is listed under a new endpoint ID ({to}, was \
+                     {endpoint_id}): the capture follows it"
+                )
+            });
+            if let Some(pair) = self.input_pairs.remove(&endpoint_id) {
+                self.input_pairs.insert(to.clone(), pair);
+            }
+            self.inputs_left_behind.insert(endpoint_id.clone());
+            self.pending.push(BackendEvent::InputMoved {
+                from: endpoint_id,
+                to: to.clone(),
+            });
+        }
+        if let Some(session) = self.session.as_mut() {
+            session.source = SourceId::Input { endpoint_id: to };
+            if let Some(reopen) = session.reopen.as_mut() {
+                reopen.wait = 1;
+            }
+        }
+    }
+
+    /// The endpoint ID input device `from`, no longer listed, most likely
+    /// has now among `listed`, by the rule outputs follow a device to a new
+    /// ID with (S329): the only one listed with its name, unnumbered, and
+    /// kind that is new in this run or an ID a device left, while `from` is
+    /// the only one with that name and kind that was listed and is gone.
+    fn moved_input(&self, from: &str, listed: &[(String, String, OutputKind)]) -> Option<String> {
+        let (name, kind) = self.inputs_seen.get(from)?;
+        let own_name = unnumbered(name);
+        let same = |name: &str, other: &OutputKind| other == kind && unnumbered(name) == own_name;
+        let new: Vec<&String> = listed
+            .iter()
+            .filter(|(id, name, kind)| {
+                same(name, kind)
+                    && (!self.inputs_seen.contains_key(id) || self.inputs_left_behind.contains(id))
+            })
+            .map(|(id, ..)| id)
+            .collect();
+        let gone = self
+            .inputs_seen
+            .iter()
+            .filter(|(id, (name, kind))| {
+                same(name, kind)
+                    && !self.inputs_left_behind.contains(*id)
+                    && !listed.iter().any(|(listed, ..)| listed == *id)
+            })
+            .count();
+        match new.as_slice() {
+            [to] if gone == 1 => Some((*to).clone()),
+            _ => None,
+        }
+    }
+
+    /// Remembers the input devices `listed` now; an ID a device left that is
+    /// listed again is a device of its own once more.
+    fn note_inputs(&mut self, listed: &[(String, String, OutputKind)]) {
+        for (id, name, kind) in listed {
+            self.inputs_left_behind.remove(id);
+            self.inputs_seen.insert(id.clone(), (name.clone(), *kind));
         }
     }
 
@@ -2838,6 +2913,11 @@ impl<D: Driver> Controller<D> {
 
     /// Starts a session capturing `source` now, after the running one ended.
     fn start_session(&mut self, source: &SourceId) -> Result<(), BackendError> {
+        if matches!(source, SourceId::Input { .. })
+            && let Ok(readings) = self.driver.inputs()
+        {
+            self.note_inputs(&listed_inputs(&readings));
+        }
         let target = self.capture_target(source)?;
         let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
         let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
@@ -4082,6 +4162,24 @@ fn another_format(started: Option<CaptureAttempt>, now: Option<CaptureAttempt>) 
     }
 }
 
+/// The endpoint ID, name and kind of each input device in `readings` that
+/// has an ID; one whose name can't be read goes by its ID.
+fn listed_inputs(readings: &[EndpointReading]) -> Vec<(String, String, OutputKind)> {
+    readings
+        .iter()
+        .filter_map(|reading| {
+            let id = reading.id.clone().ok()?;
+            let properties = reading.properties.clone().unwrap_or_default();
+            let kind = output_kind(
+                properties.form_factor,
+                properties.enumerator.as_deref().unwrap_or_default(),
+                properties.display_port,
+            );
+            Some((id.clone(), properties.name.unwrap_or(id), kind))
+        })
+        .collect()
+}
+
 /// Whether a capture that couldn't start again after a loss may start at a
 /// later try: Windows audio isn't back yet, the device is held or failed for
 /// now, or a running capture's input device went inactive while a sleep is
@@ -4618,6 +4716,9 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
             format!("output {} no longer waits for its device", label(names, id))
         }
         BackendEvent::CaptureBusy => "capture busy: another app holds its input".to_owned(),
+        BackendEvent::InputMoved { from, to } => {
+            format!("the capture follows its input device from {from} to {to}")
+        }
         BackendEvent::InputAway => "the capture waits for its input device to be listed".to_owned(),
         BackendEvent::CaptureFree => "the capture no longer waits for its input".to_owned(),
         BackendEvent::OutputStalled { id } => {

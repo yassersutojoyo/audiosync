@@ -93,7 +93,7 @@ use audiosync_core::calibrate_all::{
 use crate::audio::calibrate_all::{self, AllRun, Finished, Member, Progress, ZoneScope};
 use crate::audio::calibration::{self, CalibrationRun, Failure};
 use crate::audio::capture::{WHOLE_SYSTEM_NAME, describe_pair};
-use crate::audio::outputs::MicKind;
+use crate::audio::outputs::{MicKind, unnumbered};
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::data_folder;
 use crate::debug_log::DebugLog;
@@ -3549,6 +3549,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     NoticeMessage::InputNotConnected { source },
                 );
             }
+            BackendEvent::InputMoved { from, to } => {
+                if let Chosen::Input { endpoint_id, .. } = &mut self.chosen
+                    && *endpoint_id == from
+                {
+                    endpoint_id.clone_from(&to);
+                }
+                if let Some(pair) = self.input_pairs.remove(&from) {
+                    self.input_pairs.insert(to, pair);
+                }
+            }
             BackendEvent::CaptureFree => {
                 self.clear_if(NoticeSubject::Source, |message| {
                     matches!(
@@ -5139,27 +5149,6 @@ fn speaker_kind(kind: OutputKind) -> SpeakerKind {
         OutputKind::Virtual => SpeakerKind::Virtual,
         OutputKind::Other => SpeakerKind::Other,
     }
-}
-
-/// An output's name without the number Windows may put before the device's
-/// name inside its parentheses (digits, then "- "), as it does for a USB
-/// device in another port or a second device of the same model:
-/// "Speakers (2- USB DAC)" gives "Speakers (USB DAC)".
-fn unnumbered(name: &str) -> String {
-    let mut plain = String::with_capacity(name.len());
-    let mut rest = name;
-    while let Some(open) = rest.find('(') {
-        plain.push_str(&rest[..=open]);
-        rest = &rest[open + 1..];
-        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-        if digits > 0
-            && let Some(after) = rest[digits..].strip_prefix("- ")
-        {
-            rest = after;
-        }
-    }
-    plain.push_str(rest);
-    plain
 }
 
 /// The kind microphone calibration leaves `output` out for, if any. The

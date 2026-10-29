@@ -162,6 +162,27 @@ pub fn output_kind(form_factor: Option<u32>, enumerator: &str, display_port: boo
     }
 }
 
+/// An endpoint's name without the number Windows may put before the device's
+/// name inside its parentheses (digits, then "- "), as it does for a USB
+/// device in another port or a second device of the same model:
+/// "Speakers (2- USB DAC)" gives "Speakers (USB DAC)".
+pub fn unnumbered(name: &str) -> String {
+    let mut plain = String::with_capacity(name.len());
+    let mut rest = name;
+    while let Some(open) = rest.find('(') {
+        plain.push_str(&rest[..=open]);
+        rest = &rest[open + 1..];
+        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0
+            && let Some(after) = rest[digits..].strip_prefix("- ")
+        {
+            rest = after;
+        }
+    }
+    plain.push_str(rest);
+    plain
+}
+
 /// What the listing read about one render endpoint, before deciding whether
 /// to list it. A call that failed keeps its error text.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -507,6 +507,14 @@ pub enum BackendEvent {
     /// stays on and the capture opens again once the device is listed;
     /// [`BackendEvent::CaptureFree`] tells once it no longer waits.
     InputAway,
+    /// A capture waiting for its input device follows that device to a new
+    /// endpoint ID, as an output's settings do (S329): it is the source now.
+    InputMoved {
+        /// The endpoint ID the device left.
+        from: String,
+        /// The endpoint ID it is listed under now.
+        to: String,
+    },
     /// A capture reported busy, or waiting for its input device, no longer
     /// waits for its input: it captures again, or its session ended.
     CaptureFree,
