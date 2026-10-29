@@ -49,7 +49,7 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
 ## 3. Equalizer
 
 - **S22** *Observed* (`Equalizer.swift:12`). Ten bands, centered at 32, 64, 125, 250, 500, 1000, 2000, 4000, 8000 and 16 000 Hz (band indices 0–9).
-- **S23** *Observed* (`Equalizer.swift:13`; `EqualizerWindow.swift:96`, `:107-118`, `:169`). Band gains and the preamp range from −12 to +12 dB in 0.5 dB steps (the host quantizes and clamps). *Required:* the DSP applies any finite value it is given.
+- **S23** *Observed* (`Equalizer.swift:13`; `EqualizerWindow.swift:96`, `:107-118`, `:169`). Band gains and the preamp range from −12 to +12 dB in 0.5 dB steps (the host quantizes and clamps). *Required:* the DSP applies any finite value it is given. Saved settings read back put the preamp and every gain on these steps, so a value out of range loads clamped.
 - **S24** *Observed* (`Equalizer.swift:15-19`; `AppSettings.swift:40`). Settings: `enabled` (default false), `preamp` in dB (default 0), `gains[10]` in dB (default all 0). The host persists them as JSON.
 - **S25** *Observed* (`Equalizer.swift:106-122`). Each band is an RBJ-cookbook peaking biquad with Q = 1.41 (about one octave). With fs = Rc, G = band gain in dB and f = min(center, 0.45 × fs):
   `A = 10^(G/40)`, `w0 = 2π f / fs`, `alpha = sin(w0) / (2 × 1.41)`, `a0 = 1 + alpha/A`;

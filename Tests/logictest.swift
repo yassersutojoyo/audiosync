@@ -5383,6 +5383,12 @@ do {
     fewBands.gains = [1, 2, 3]
     check(StoredEqualizer.decode(StoredEqualizer.encode(fewBands)) == Equalizer.Settings(),
           "equalizer storage: settings with another band count give the defaults")
+    var outOfRange = tuned
+    outOfRange.preamp = 60; outOfRange.gains[1] = -40
+    let clamped = StoredEqualizer.decode(StoredEqualizer.encode(outOfRange))
+    check(clamped.preamp == 12 && clamped.gains[1] == -12 && clamped.gains[0] == 6,
+          "equalizer storage: an out-of-range preamp or gain is clamped to ±12 dB (S23)",
+          "preamp \(clamped.preamp), gains \(clamped.gains)")
 
     func fades(content: CGFloat, top: CGFloat, height: CGFloat = 400) -> ScrollEdgeFades {
         ScrollEdgeFades.of(contentHeight: content, visibleTop: top, visibleHeight: height, fade: 12)
