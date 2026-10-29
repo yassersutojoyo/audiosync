@@ -708,6 +708,11 @@ export global Strings {
         return @tr("{0} in {1} asks for a password, so {1} is off. Turn {1} on again to enter it.", member, target);
     }
 
+    // An AirPlay speaker refused with no retry left, so it was turned off.
+    public pure function notice-airplay-refused-off(speaker: string) -> string {
+        return @tr("{} declined the stream, so it's off. Turn it on again to try once more.", speaker);
+    }
+
     // An AirPlay speaker stopped playing or can't play. For the first four
     // problems it stays on and AudioSync keeps trying, and one waiting for
     // the AirPlay 2 slot stays on too; for the others it is off, because

@@ -5275,6 +5275,10 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::PairFirst { speaker } => {
             strings.invoke_notice_pair_first(speaker.as_str().into())
         }
+        NoticeMessage::AirPlayCantPlay {
+            speaker,
+            problem: ui_model::AirPlayProblem::Refused,
+        } => strings.invoke_notice_airplay_refused_off(speaker.as_str().into()),
         NoticeMessage::AirPlayRetrying { speaker, problem }
         | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
@@ -10496,6 +10500,33 @@ mod tests {
             assert!(text.starts_with(says), "{text}");
             assert!(!text.contains('\u{2014}'), "no em dash: {text}");
         }
+    }
+
+    #[test]
+    fn a_refusing_airplay_speaker_promises_a_retry_only_while_it_stays_on() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let problem = ui_model::AirPlayProblem::Refused;
+        let speaker = "Den TV".to_owned();
+        let retrying = notice_text(
+            &strings,
+            &NoticeMessage::AirPlayRetrying {
+                speaker: speaker.clone(),
+                problem,
+            },
+        );
+        assert_eq!(
+            retrying,
+            "Den TV declined the stream. AudioSync tries again shortly."
+        );
+        let off = notice_text(
+            &strings,
+            &NoticeMessage::AirPlayCantPlay { speaker, problem },
+        );
+        assert_eq!(
+            off,
+            "Den TV declined the stream, so it's off. Turn it on again to try once more."
+        );
     }
 
     // covers: S242

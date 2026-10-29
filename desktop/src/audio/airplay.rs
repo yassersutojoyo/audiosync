@@ -4226,11 +4226,6 @@ impl AirPlaySpeakers {
                 retry_at,
             }) => {
                 let mut problem = problem(reason);
-                // Errors 1 and 3 to 6 to a verify with stored credentials
-                // describe the receiver, not them: a refusal (P154).
-                if error.kind == ErrorKind::PairingFailed && self.store.homekit(id).is_some() {
-                    problem = AirPlayProblem::Refused;
-                }
                 self.paired_for_session.remove(id);
                 self.note_path_switch(id, error.kind, retry_at.is_some());
                 // Outside the user's attempt its row keeps no code request:
@@ -4830,6 +4825,21 @@ pub mod tests {
             for _ in 0..3 {
                 self.fail(device, kind);
             }
+        }
+
+        /// A pair-verify error about the receiver's state ended a session:
+        /// the sender reports a refusal and retries after the wait (P154).
+        pub fn refuse_for_state(&self, device: &Device) {
+            let mut error = SessionError::new(ErrorKind::PairingFailed);
+            error.retry_after = Some(Duration::from_secs(5));
+            self.push(SenderEvent::Speaker {
+                key: device.key.clone(),
+                event: SpeakerEvent::Error(SpeakerError {
+                    error,
+                    reason: UserReason::Refused,
+                    retry_at: Some(Instant::now() + Duration::from_secs(5)),
+                }),
+            });
         }
 
         /// The timeline restarted with a new L.
@@ -6865,6 +6875,44 @@ pub mod tests {
         assert!(airplay.store.contains(&id), "the pairing stays");
         assert!(airplay.speakers()[0].paired);
         assert!(airplay.enabled_ids().is_empty());
+    }
+
+    #[test]
+    fn a_paired_tv_reads_as_refusing_only_when_its_pairing_failure_waits_to_retry() {
+        let fake = FakeAirPlay::new();
+        let mut store = PairingStore::in_memory();
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        store
+            .insert(
+                &id,
+                crate::audio::pairings::tests::credentials("0123456789ABCDEF", 3),
+            )
+            .unwrap();
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.appear(&tv);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.refuse_for_state(&tv);
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayTrouble {
+                id: id.clone(),
+                problem: AirPlayProblem::Refused
+            }),
+            "{events:?}"
+        );
+
+        fake.fail(&tv, ErrorKind::PairingFailed);
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayFailed {
+                id: id.clone(),
+                problem: AirPlayProblem::NeedsPin
+            }),
+            "a failure with no wait keeps its own problem: {events:?}"
+        );
     }
 
     #[test]
