@@ -22,7 +22,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, AudioSync now tells Windows that its AirPlay sending is audio work, so it gets the same priority as AudioSync's local outputs already had.
 - On the Mac, AudioSync's AirPlay sending now asks macOS for a higher priority, as it does on Windows.
 - A Google Cast speaker that loses its connection tries again after 1, 2, 4 and 8 seconds, then every 10 seconds, and right away when it shows up on the network again. On the Mac and on Windows.
-- An AirPlay speaker that loses its connection shows Reconnecting… once its first retry, about 3 seconds in, has failed, and the first retry that works clears it. On the Mac its row and a notice now say so too, as on Windows.
+- An AirPlay speaker that loses its connection shows Reconnecting… once its second retry, about 3 seconds in, has failed, and the first retry that works clears it. On the Mac its row and a notice now say so too, as on Windows.
 - The web remote now lets in phones on a carrier-grade NAT address, such as the ones Tailscale gives its devices. On the Mac and on Windows.
 - On the Mac, while a calibration is running, the calibrate button's hint says another calibration is still running.
 
