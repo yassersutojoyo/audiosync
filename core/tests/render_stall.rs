@@ -51,16 +51,18 @@ fn run(
     stopping: bool,
 ) -> (Vec<(f64, f64)>, RendererControl) {
     let stall = (STALL_AT_S * 1000, capture_gap_ms, output_gap_ms);
-    let (delays, control, _) = run_stalls(&[stall], 0, stopping);
+    let (delays, control, _) = run_stalls(&[stall], 0, None, stopping);
     (delays, control)
 }
 
 /// [`run`] with a stall at each `(at_ms, capture_gap_ms, output_gap_ms)`,
-/// the first at [`STALL_AT_S`], and a device clock `slow_ppm` slow; with
-/// the times in s of the callbacks that made a resync.
+/// the first at [`STALL_AT_S`], a device clock `slow_ppm` slow and, from
+/// `stray_ms` on, one callback that reads 85 ms late with its output time
+/// as late; with the times in s of the callbacks that made a resync.
 fn run_stalls(
     stalls: &[(u128, u128, u128)],
     slow_ppm: u128,
+    mut stray_ms: Option<u128>,
     stopping: bool,
 ) -> (Vec<(f64, f64)>, RendererControl, Vec<f64>) {
     let ring = Ring::for_rate(RATE).unwrap();
@@ -120,7 +122,14 @@ fn run_stalls(
         }
         let output_at = pull_at + SECOND / 5;
         let before = control.counters().resyncs;
-        renderer.render_timed_at(&mut out, ns(output_at), ns(pull_at));
+        let stray = match stray_ms {
+            Some(ms) if pull_at >= ms * SECOND / 1000 => {
+                stray_ms = None;
+                SECOND * 85 / 1000
+            }
+            _ => 0,
+        };
+        renderer.render_timed_at(&mut out, ns(output_at + stray), ns(pull_at + stray));
         if control.counters().resyncs != before {
             resyncs.push(pull_at as f64 / SECOND as f64);
         }
@@ -230,7 +239,7 @@ fn a_second_lasting_lateness_within_5_s_waits_for_the_5_s() {
         (STALL_AT_S * 1000, 40, 89),
         (STALL_AT_S * 1000 + 2000, 40, 75),
     ];
-    let (delays, control, resyncs) = run_stalls(&stalls, 0, false);
+    let (delays, control, resyncs) = run_stalls(&stalls, 0, None, false);
     assert_eq!(control.late_reanchors(), 2, "resyncs at {resyncs:?} s");
     assert!(resyncs[1] - resyncs[0] >= 5.0, "resyncs at {resyncs:?} s");
     let worst = worst_offset(&delays, resyncs[1] + 0.5);
@@ -242,6 +251,19 @@ fn a_second_lasting_lateness_within_5_s_waits_for_the_5_s() {
 fn a_device_clock_5000_ppm_slow_never_re_anchors_as_a_lasting_lateness() {
     // The Mac's measure of 2026-10-29: a Bluetooth output's lateness climbed
     // about 5 ms a second, a rate for the trim rather than a step.
-    let (_, control, resyncs) = run_stalls(&[], 5000, false);
+    let (_, control, resyncs) = run_stalls(&[], 5000, None, false);
     assert_eq!(control.late_reanchors(), 0, "resyncs at {resyncs:?} s");
+}
+
+// covers: S207
+#[test]
+fn one_stray_callback_late_in_the_hold_keeps_no_step_from_its_re_anchor() {
+    // Near the hold's end a least-squares line tilts most for one point.
+    let stall = (STALL_AT_S * 1000, 40, 89);
+    let (_, control, resyncs) = run_stalls(&[stall], 0, Some(6090), false);
+    assert_eq!(control.late_reanchors(), 1, "resyncs at {resyncs:?} s");
+    assert!(
+        resyncs[0] <= STALL_AT_S as f64 + 1.5,
+        "resyncs at {resyncs:?} s"
+    );
 }
