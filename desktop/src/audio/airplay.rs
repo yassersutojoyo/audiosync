@@ -4203,14 +4203,6 @@ impl AirPlaySpeakers {
                 retry_at,
             }) => {
                 let mut problem = problem(reason);
-                // Errors 1 and 3 to 6 to a verify with stored credentials
-                // describe the receiver, not them: a refusal (P154).
-                if error.kind == ErrorKind::PairingFailed
-                    && error.retry_after.is_some()
-                    && self.store.homekit(id).is_some()
-                {
-                    problem = AirPlayProblem::Refused;
-                }
                 self.paired_for_session.remove(id);
                 self.note_path_switch(id, error.kind, retry_at.is_some());
                 // Outside the user's attempt its row keeps no code request:
@@ -6883,10 +6875,10 @@ pub mod tests {
         fake.fail(&tv, ErrorKind::PairingFailed);
         let events = airplay.poll();
         assert!(
-            events.iter().any(|event| matches!(
-                event,
-                BackendEvent::AirPlayFailed { problem, .. } if *problem != AirPlayProblem::Refused
-            )),
+            events.contains(&BackendEvent::AirPlayFailed {
+                id: id.clone(),
+                problem: AirPlayProblem::NeedsPin
+            }),
             "a failure with no wait keeps its own problem: {events:?}"
         );
     }
