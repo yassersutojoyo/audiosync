@@ -2894,6 +2894,29 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// A browse found the device Cast speaker `from`, added by address, is
+    /// (S341): its name, hidden entry, zone and preset entries move to `to`,
+    /// where the device's own records win; with none under `from`, nothing
+    /// is saved.
+    fn cast_identified(&mut self, from: &str, to: &str) {
+        let (from_key, to_key) = (cast_key(from), cast_key(to));
+        if !self.key_kept(&from_key) {
+            return;
+        }
+        self.custom_names.move_key(&from_key, &to_key);
+        if self.hidden.iter().any(|entry| entry.key == to_key) {
+            self.hidden.retain(|entry| entry.key != from_key);
+        } else if let Some(entry) = self.hidden.iter_mut().find(|entry| entry.key == from_key) {
+            entry.key = to_key.clone();
+        }
+        self.zones.rename_key(&from_key, &to_key);
+        for preset in &mut self.presets {
+            preset.rename_key(&from_key, &to_key);
+        }
+        self.push_zone_volumes();
+        self.must_save = true;
+    }
+
     /// Takes in the AirPlay speakers as last listed: remembers their names,
     /// and switches on the auto-connect speakers that appeared. One that
     /// asks for a code every time and doesn't play goes off instead, when
@@ -3742,6 +3765,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 names.extend(listed);
                 self.cast_names = names;
             }
+            BackendEvent::CastIdentified { from, to } => self.cast_identified(&from, &to),
             BackendEvent::CastPlaying { id } => {
                 self.notices.clear(&[NoticeSubject::Cast(id)]);
                 self.note_speakers();
@@ -12867,6 +12891,145 @@ mod tests {
             adapter.current_settings().speaker_zones[0].members,
             [key(SPEAKERS), cc(den)]
         );
+    }
+
+    fn hidden_cast(key: &str, name: &str) -> SavedHidden {
+        SavedHidden {
+            key: key.to_owned(),
+            name: name.to_owned(),
+            kind: "Google Cast".to_owned(),
+        }
+    }
+
+    /// Adds 192.0.2.31 by address, then lets a browse find Den there.
+    fn browse_finds_den(adapter: &mut AudioAdapter<MockBackend>, fake: &FakeCast) {
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        adapter.poll();
+        fake.announce_at(
+            DEN,
+            "Den",
+            DEVICE_PORT,
+            std::net::Ipv4Addr::new(192, 0, 2, 31),
+        );
+        adapter.poll();
+    }
+
+    const DEN: &str = "00112233445566778899aabbccddeeff";
+
+    // covers: S341
+    #[test]
+    fn a_speaker_added_by_address_that_a_browse_finds_keeps_its_zone_presets_name_and_hidden_mark()
+    {
+        let (mut adapter, fake) = cast_adapter();
+        let address = cc_address("192.0.2.31");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), address.clone()])],
+            speaker_presets: vec![saved_preset(&[
+                (key(SPEAKERS), None),
+                (address.clone(), Some(40.0)),
+            ])],
+            speaker_names: BTreeMap::from([(address.clone(), "Study".to_owned())]),
+            hidden_speakers: vec![hidden_cast(&address, "Study")],
+            ..Settings::default()
+        });
+        browse_finds_den(&mut adapter, &fake);
+
+        let saved = adapter.current_settings();
+        assert_eq!(saved.speaker_zones[0].members, [key(SPEAKERS), cc(DEN)]);
+        let preset: Vec<(String, Option<f64>)> = saved.speaker_presets[0]
+            .members
+            .iter()
+            .map(|member| (member.key.clone(), member.volume))
+            .collect();
+        assert_eq!(preset, [(key(SPEAKERS), None), (cc(DEN), Some(40.0))]);
+        assert_eq!(
+            saved.speaker_names,
+            BTreeMap::from([(cc(DEN), "Study".to_owned())])
+        );
+        assert_eq!(saved.hidden_speakers, [hidden_cast(&cc(DEN), "Study")]);
+    }
+
+    // covers: S341
+    #[test]
+    fn a_found_speaker_that_the_browse_loses_keeps_its_name_zone_and_hidden_mark() {
+        let (mut adapter, fake) = cast_adapter();
+        let address = cc_address("192.0.2.31");
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), address.clone()])],
+            speaker_names: BTreeMap::from([(address.clone(), "Study".to_owned())]),
+            ..Settings::default()
+        });
+        browse_finds_den(&mut adapter, &fake);
+        fake.withdraw(DEN, "Den");
+        adapter.poll();
+
+        let state = adapter.snapshot();
+        assert!(state.speaker(&address).is_none());
+        assert_eq!(
+            state.speaker(&cc(DEN)).map(|row| row.name.as_str()),
+            Some("Study")
+        );
+        assert_eq!(
+            adapter.current_settings().speaker_zones[0].members,
+            [key(SPEAKERS), cc(DEN)]
+        );
+
+        adapter.hide_speaker(&cc(DEN), "Google Cast");
+        let state = adapter.snapshot();
+        assert!(state.speaker(&cc(DEN)).is_none() && state.speaker(&address).is_none());
+    }
+
+    // covers: S341
+    #[test]
+    fn identifying_a_speaker_again_writes_no_settings() {
+        let (mut adapter, fake) = cast_adapter();
+        let address = cc_address("192.0.2.31");
+        adapter.restore(Settings {
+            speaker_names: BTreeMap::from([(address.clone(), "Study".to_owned())]),
+            ..Settings::default()
+        });
+        browse_finds_den(&mut adapter, &fake);
+        adapter.must_save = false;
+        adapter.handle(BackendEvent::CastIdentified {
+            from: address["cc:".len()..].to_owned(),
+            to: DEN.to_owned(),
+        });
+        assert!(!adapter.must_save);
+    }
+
+    // covers: S341
+    #[test]
+    fn where_the_id_a_browse_found_has_a_zone_name_or_hidden_mark_its_own_wins() {
+        let (mut adapter, fake) = cast_adapter();
+        let address = cc_address("192.0.2.31");
+        let upstairs = SavedZone {
+            id: "zone:2".to_owned(),
+            name: "Upstairs".to_owned(),
+            ..zone(vec![cc(DEN), cc(CAST_LIVING)])
+        };
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS), address.clone()]), upstairs],
+            speaker_names: BTreeMap::from([
+                (address.clone(), "Study".to_owned()),
+                (cc(DEN), "Den TV".to_owned()),
+            ]),
+            hidden_speakers: vec![
+                hidden_cast(&address, "Study"),
+                hidden_cast(&cc(DEN), "Den TV"),
+            ],
+            ..Settings::default()
+        });
+        browse_finds_den(&mut adapter, &fake);
+
+        let saved = adapter.current_settings();
+        assert_eq!(saved.speaker_zones[0].members, [key(SPEAKERS)]);
+        assert_eq!(saved.speaker_zones[1].members, [cc(DEN), cc(CAST_LIVING)]);
+        assert_eq!(
+            saved.speaker_names,
+            BTreeMap::from([(cc(DEN), "Den TV".to_owned())])
+        );
+        assert_eq!(saved.hidden_speakers, [hidden_cast(&cc(DEN), "Den TV")]);
     }
 
     // covers: S246

@@ -4670,6 +4670,9 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
             format!("output {}: its own volume changed", label(names, id))
         }
         BackendEvent::CastChanged => "the Google Cast speakers changed".to_owned(),
+        BackendEvent::CastIdentified { from, to } => {
+            format!("Google Cast speaker {from}, added by address, is {to}")
+        }
         BackendEvent::CastPlaying { id } => format!("Google Cast speaker ({id}) plays"),
         BackendEvent::CastFailed { id, problem } => {
             format!("Google Cast speaker ({id}) can't play ({problem:?}); it is turned off")
