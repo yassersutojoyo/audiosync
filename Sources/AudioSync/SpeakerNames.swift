@@ -129,6 +129,9 @@ struct InlineRename: Equatable {
         return finish()
     }
 
+    /// Quit: whichever rename is open ends and is handed back.
+    mutating func commitOpen() -> Apply? { finish() }
+
     /// Escape: the typing is dropped.
     mutating func drop() { target = nil }
 
