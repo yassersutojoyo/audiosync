@@ -233,6 +233,29 @@ fn a_failing_cast_session_never_blocks_the_host_or_its_audio() {
     working.join();
 }
 
+// covers: C65 (the host's commands run in order, so a level waits for the launch)
+#[test]
+fn a_level_set_while_starting_reaches_the_device_after_the_launch() {
+    let device = FakeDevice::start(Behavior::default());
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let (_feed, reader) = ring();
+    host.start(target(A, &device), 48_000, Metadata::default(), reader)
+        .expect("starts");
+    host.set_volume(0.3);
+    assert!(device.wait_for("SET_VOLUME", Duration::from_secs(10)));
+    let types = device.types();
+    let launch = types
+        .iter()
+        .position(|kind| kind == "LAUNCH")
+        .expect("LAUNCH");
+    let level = types.iter().position(|kind| kind == "SET_VOLUME");
+    assert!(level > Some(launch), "{types:?}");
+    let sent = device.payloads(NS_RECEIVER, "SET_VOLUME");
+    assert_eq!(sent[0]["volume"]["level"], 0.3);
+    assert!(host.shutdown());
+    device.join();
+}
+
 // covers: C73, C76
 #[test]
 fn a_whole_session_sends_no_clock_and_nothing_for_group_delay() {

@@ -1318,7 +1318,8 @@ impl CastSpeakers {
             {
                 self.requested = None;
             }
-        } else {
+        } else if self.unanswered.last() != Some(&level) {
+            // The same level sent twice in a row gets one answer.
             self.unanswered.push(level);
         }
         if let Some(link) = self.link.as_mut() {
@@ -1341,10 +1342,6 @@ impl CastSpeakers {
             .attempt
             .as_mut()
             .is_some_and(|attempt| !std::mem::replace(&mut attempt.heard_volume, true));
-        if first {
-            // The sender sends no level before the device's first status.
-            self.unanswered.clear();
-        }
         // Answers come back in send order, so the oldest copy of a level a
         // drag passed twice is the one this answers.
         let answered = self
@@ -2605,14 +2602,29 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 36.0);
     }
 
-    // covers: C70, C104, C105 (nothing is sent before the first status)
+    // covers: C70, C104, C105 (a level set while starting goes after the launch)
     #[test]
-    fn a_level_set_before_the_first_status_never_swallows_a_later_change_from_elsewhere() {
+    fn two_levels_set_while_starting_both_count_as_sent() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_volume(KITCHEN, 30.0);
+        cast.set_volume(KITCHEN, 40.0);
+        report(&fake, &mut cast, 0.8);
+        report(&fake, &mut cast, 0.3);
+        report(&fake, &mut cast, 0.4);
+        assert_eq!(shown(&cast, KITCHEN), 40.0);
+    }
+
+    // covers: C70, C105 (the device echoes a level sent twice in a row once)
+    #[test]
+    fn a_level_resent_at_the_first_status_never_swallows_a_later_change_to_it() {
         let (fake, mut cast) = listed();
         cast.set_streaming(true);
         cast.set_enabled(KITCHEN, true).unwrap();
         cast.set_volume(KITCHEN, 30.0);
         report(&fake, &mut cast, 0.8);
+        assert_eq!(sent(&fake), [0.3, 0.3], "re-sent at the first status");
         report(&fake, &mut cast, 0.3);
         report(&fake, &mut cast, 0.7);
         assert_eq!(shown(&cast, KITCHEN), 70.0);
