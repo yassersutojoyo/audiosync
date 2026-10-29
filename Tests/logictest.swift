@@ -2797,6 +2797,9 @@ do {
     check(!quietLeaves && dropped.plan(streaming: true, enabled: []).remove == ["R2"]
             && dropped.plan(streaming: false, enabled: ["native:R2"]).remove == ["R2"] && dropped.clearsNoticeOnRemoval("R2"),
           "native airplay: switch-off after the third error clears the reconnecting notice")
+    _ = dropped.apply(.error(id: "R2", .pairingRequired, retryMs: nil, detail: ""))
+    check(!dropped.isReconnecting("R2") && !dropped.clearsNoticeOnRemoval("R2"),
+          "native airplay: a reconnecting speaker refused for good keeps its turn-off notice when it leaves the sender")
     check(UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, reconnecting: true, unannounced: false, target: nil) == "Reconnecting…",
           "native airplay: a reconnecting speaker's row says so")
 
