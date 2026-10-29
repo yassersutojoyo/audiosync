@@ -546,6 +546,90 @@ fn a_silent_input_keeps_the_response_open_with_silence() {
     server.stop();
 }
 
+/// How many frames the pump's output lags the clock since `origin`: the
+/// least over 100 ms, so its 20 ms steps fall away.
+fn lag(server: &StreamServer, origin: Instant) -> i64 {
+    let until = Instant::now() + Duration::from_millis(100);
+    let mut least = i64::MAX;
+    while Instant::now() < until {
+        let stats = server.stats();
+        let clock = (origin.elapsed().as_secs_f64() * 48_000.0) as i64;
+        least = least.min(clock - (stats.frames_sent + stats.frames_queued) as i64);
+        thread::sleep(Duration::from_millis(2));
+    }
+    least
+}
+
+// covers: C52
+#[test]
+fn an_input_gap_past_100_ms_is_all_silence_and_the_stream_stays_on_the_clock() {
+    let (server, writer) = server(vec![LOCAL]);
+    let paused = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
+    let feeder = {
+        let (paused, stop) = (Arc::clone(&paused), Arc::clone(&stop));
+        thread::spawn(move || {
+            let block = vec![7i16; 960];
+            let start = Instant::now();
+            let mut ticks = 0u32;
+            while !stop.load(Ordering::SeqCst) {
+                if !paused.load(Ordering::SeqCst) {
+                    writer.write_i16(&block);
+                }
+                ticks += 1;
+                let next = start + Duration::from_millis(10) * ticks;
+                thread::sleep(next.saturating_duration_since(Instant::now()));
+            }
+        })
+    };
+    let mut stream = streaming(&server);
+    let origin = Instant::now();
+    let drain = {
+        let stop = Arc::clone(&stop);
+        thread::spawn(move || {
+            let mut buffer = [0u8; 8192];
+            while !stop.load(Ordering::SeqCst) {
+                match http::read_timed(&mut stream, &mut buffer) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(error) if error.kind() == io::ErrorKind::TimedOut => {}
+                    Err(_) => break,
+                }
+            }
+        })
+    };
+    thread::sleep(Duration::from_millis(200));
+    let before = lag(&server, origin);
+    paused.store(true, Ordering::SeqCst);
+    let silent = server.stats().underrun_frames;
+    thread::sleep(Duration::from_millis(500));
+    let during = lag(&server, origin);
+    assert!(
+        server.stats().underrun_frames > silent,
+        "the gap was not filled with silence"
+    );
+    paused.store(false, Ordering::SeqCst);
+    thread::sleep(Duration::from_millis(300));
+    let after = lag(&server, origin);
+    // A debt left by the gap would go out as a burst once the input
+    // resumes, ahead of the calibrated delay.
+    assert!(
+        during - before < 2 * 960,
+        "the gap left {} frames of debt",
+        during - before
+    );
+    assert!(
+        (after - before).abs() < 2 * 960,
+        "after the gap the stream lags {} frames more",
+        after - before
+    );
+    stop.store(true, Ordering::SeqCst);
+    feeder.join().expect("feeder");
+    drain.join().expect("drain");
+    server.stop();
+}
+
 // covers: C64
 #[test]
 fn a_backlog_in_the_ring_past_100_ms_is_dropped_and_counted() {
