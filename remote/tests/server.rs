@@ -844,6 +844,32 @@ fn a_device_keeps_two_event_streams_and_a_third_ends_the_oldest() {
     }
 }
 
+#[test]
+fn a_reloaded_page_does_not_end_the_devices_other_live_stream() {
+    let remote = start("stream-reload");
+    let token = pair(&remote);
+    remote.server.publish(sample());
+    let mut kept = Events::open(&remote, &token);
+    kept.read_until(|events| !events.revisions().is_empty());
+    let mut reloaded = Events::open(&remote, &token);
+    reloaded.read_until(|events| !events.revisions().is_empty());
+    drop(reloaded);
+    let mut fresh = Events::open(&remote, &token);
+    fresh.read_until(|events| !events.revisions().is_empty());
+    assert!(
+        kept.read_for(Duration::from_secs(1)),
+        "the live stream was ended"
+    );
+    assert!(!kept.data.contains("event: replaced"), "{:?}", kept.data);
+    let mut state = sample();
+    state.master_volume = 5.0;
+    remote.server.publish(state);
+    for events in [&mut kept, &mut fresh] {
+        events.read_until(|events| events.revisions().len() >= 2);
+        assert_eq!(events.revisions(), [1, 2]);
+    }
+}
+
 fn idle_connection(remote: &Remote) -> TcpStream {
     TcpStream::connect((Ipv4Addr::LOCALHOST, remote.server.port())).unwrap()
 }
@@ -1192,6 +1218,28 @@ fn after_stop_the_port_is_free_and_no_command_arrives() {
     assert_eq!(again.server.port(), port);
     assert_eq!(get(&again, "/api/state", Some(&token)).status, 401);
     assert!(received.lock().unwrap().is_empty());
+}
+
+#[test]
+fn stop_returns_at_once_while_a_stream_is_stuck_sending() {
+    let remote = start("stop-stuck");
+    let token = pair(&remote);
+    // The page never reads, so the server's send blocks once the socket buffers are full.
+    let _stuck = Events::open(&remote, &token);
+    let mut state = sample();
+    state.computer_name = "x".repeat(1 << 20);
+    for volume in 0..32 {
+        state.master_volume = f64::from(volume);
+        remote.server.publish(state.clone());
+    }
+    thread::sleep(Duration::from_millis(500));
+    let started = Instant::now();
+    remote.server.stop();
+    assert!(
+        started.elapsed() < Duration::from_millis(250),
+        "stop took {:?}",
+        started.elapsed()
+    );
 }
 
 #[test]
