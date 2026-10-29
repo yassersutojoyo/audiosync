@@ -108,6 +108,8 @@ enum SpeakerIDMigration {
         var autoConnect: Set<String>
         var zones: [SpeakerZone] = []
         var presets: [SpeakerPreset] = []
+        var names = SpeakerNames()
+        var hidden = HiddenSpeakers()
     }
 
     /// The largest device ID: six bytes.
@@ -212,6 +214,12 @@ enum SpeakerIDMigration {
             }
         }
         return out
+    }
+
+    /// `saved` once a browse found the Cast device added by address as
+    /// `old` under the device ID `new` (S340).
+    static func castIdentified(_ old: String, as new: String, in saved: Saved) -> Saved {
+        saved
     }
 
     /// `apply(renames(saved, receivers:), to: saved)`.
