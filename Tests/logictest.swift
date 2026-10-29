@@ -8886,6 +8886,9 @@ do {
     check(tips == ["Turn on streaming to calibrate.", "Turn on this speaker to calibrate it.",
                    "Turn on streaming and this speaker to calibrate it."],
           "calibration refusal: the tooltip names only streaming or the speaker that is off", "\(tips)")
+    let heldHint = t.calibrationButtonHint(running: false, unavailable: nil, held: true)
+    check(heldHint == t.calibrateAllUnavailable(.busy),
+          "calibration refusal: while another calibration holds the outputs, the tooltip and hint say so", heldHint)
 
     let everyone = CalibrateAllFlow.Inputs(
         streaming: true, reference: "mac",
