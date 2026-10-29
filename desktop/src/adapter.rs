@@ -2178,7 +2178,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
                             .shown(&member.key, system.as_deref().unwrap_or(id))
                     }
                     SpeakerKey::AirPlay(id) => self.airplay_name(id),
-                    _ => self.custom_names.shown(&member.key, key.id()),
+                    SpeakerKey::Local(id) => self.output_name(id),
+                    SpeakerKey::Cast(id) => self.cast_name(id),
                 });
             if keep_off.contains(&member.key) {
                 self.post_pair_first(&key, &name);
