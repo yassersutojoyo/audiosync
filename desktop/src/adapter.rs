@@ -3027,7 +3027,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             name,
         } = &mut chosen
         {
-            let same_app = |source: &&SourceInfo| source.executable == *executable;
+            let same_app =
+                |source: &&SourceInfo| source.executable.eq_ignore_ascii_case(executable);
             let found = sources
                 .iter()
                 .filter(same_app)

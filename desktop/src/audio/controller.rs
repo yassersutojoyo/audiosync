@@ -2960,8 +2960,27 @@ impl<D: Driver> Controller<D> {
         }
         self.mix_checked = Some(now);
         let (source, running) = (session.source.clone(), session.target.clone());
-        let Ok(target) = self.capture_target(&source) else {
-            return;
+        let target = match self.capture_target(&source) {
+            Ok(target) => target,
+            // One app Windows won't let AudioSync wait for leaves the whole
+            // mix unwatched, so its capture never reports the quit itself.
+            Err(BackendError::SourceGone) if matches!(source, SourceId::Apps { .. }) => {
+                if self.decide_quit(&source, Streaming::Running) == SourceQuitAction::SwitchToSystem
+                {
+                    self.switch_to_system();
+                    return;
+                }
+                self.log
+                    .log(|| "the check found none of the mix's apps running".to_owned());
+                self.end_session();
+                self.airplay_streaming(false);
+                self.release_busy();
+                self.pending.push(BackendEvent::Stopped {
+                    reason: StopReason::SourceQuit,
+                });
+                return;
+            }
+            Err(_) => return,
         };
         if same_mix(&target, &running) {
             // An app whose loopback failed to open, or failed while it runs,
