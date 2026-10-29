@@ -214,7 +214,7 @@ pub struct Speaker {
     /// 0 to 100: an AirPlay row's device level rounded down (spec S290),
     /// any other row's own volume.
     pub volume: f64,
-    /// An AirPlay row's own volume s behind `volume`, which a preset keeps
+    /// An AirPlay row's own volume sits behind `volume`, which a preset keeps
     /// (spec S290); a Cast row's `volume` once it is known (spec S251).
     pub own_volume: Option<f64>,
     /// The offset of a local output relative to the reference; the
