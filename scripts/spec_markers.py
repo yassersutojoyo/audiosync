@@ -12,6 +12,10 @@ note may run on to the next lines:
 
     // covers: S290, S291 (a level set on the speaker is kept)
 
+It also fails when a row of a spec's test map names a test function that no
+tracked Rust file defines (names in parentheses are notes, and a *hardware*
+row names a check run by hand).
+
 Usage:
     scripts/spec_markers.py              check every tracked file in scope
     scripts/spec_markers.py --self-test  check the parser on made-up input
@@ -31,6 +35,10 @@ _ID = re.compile(r"[SPC][1-9][0-9]*[a-z]?")
 _CLAUSE = re.compile(r"\s*- \*\*([SPC][1-9][0-9]*[a-z]?)\*\*(.*)")
 # Only the opening words: a live clause may mention withdrawn things later on.
 _WITHDRAWN = re.compile(r"\s*[*(]*(withdrawn|(retired|superseded)(?! in part))", re.IGNORECASE)
+_TEST_MAP = re.compile(r"## [0-9]+\. Test map")
+_FN = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
+# Snake case with at least one underscore, not part of a path or a longer word.
+_TEST_NAME = re.compile(r"(?<![\w./-])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![\w./-])")
 
 
 def in_scope(path):
@@ -100,6 +108,40 @@ def problems_in(path, text, known):
             f"{path}:{number}: {clause} is not a clause of {SPECS[clause[0]]}"
             for clause in ids
             if clause not in known
+        ]
+    return found
+
+
+def _outside_parens(text):
+    depth = 0
+    kept = []
+    for char in text:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(depth - 1, 0)
+        elif depth == 0:
+            kept.append(char)
+    return "".join(kept)
+
+
+def test_map_problems(spec, text, fns):
+    """Test-map rows of one spec that name a function missing from `fns`."""
+    found = []
+    in_map = False
+    for number, line in enumerate(text.splitlines(), 1):
+        if line.startswith("## "):
+            in_map = bool(_TEST_MAP.match(line))
+            continue
+        cells = line.split("|")
+        if not in_map or len(cells) < 3 or cells[0].strip():
+            continue
+        if len(cells) > 3 and cells[3].strip().startswith("*hardware*"):
+            continue
+        found += [
+            f"docs/{spec}:{number}: the test map names {name}, which no tracked Rust file defines"
+            for name in _TEST_NAME.findall(_outside_parens(cells[1]))
+            if name not in fns
         ]
     return found
 
@@ -178,9 +220,18 @@ def self_test():
     for path, want in scope.items():
         if in_scope(path) != want:
             failures.append(f"scope of {path}: expected {want}")
+    doc = (
+        "## 9. Notes\n| a_gone_name | S1 |\n## 10. Test map\n| Test | Clauses |\n|---|---|\n"
+        "| a_real_test, a_gone_test (`x/y_z.rs`) | S1 |\n| a check (by a_note_name) | S2 |\n"
+        "| a_hand_check | P1 | *hardware*: by ear |\n## 11. After\n| another_gone | S1 |\n"
+    )
+    got = test_map_problems("X_SPEC.md", doc, {"a_real_test"})
+    want = ["docs/X_SPEC.md:6: the test map names a_gone_test, which no tracked Rust file defines"]
+    if got != want:
+        failures.append(f"test_map_problems: expected {want}, got {got}")
     for failure in failures:
         print(f"self-test: {failure}", file=sys.stderr)
-    cases = len(ids) + 4 + len(titled) + len(scope)
+    cases = len(ids) + 5 + len(titled) + len(scope)
     print(f"self-test: {cases} cases, {len(failures)} failure(s)")
     return 1 if failures else 0
 
@@ -198,14 +249,22 @@ def main(argv):
             known |= spec_ids(f.read())
     found = []
     markers = 0
+    fns = set()
     for path in tracked_files(root):
-        if not in_scope(path):
+        if not (in_scope(path) or path.endswith(".rs")):
             continue
         with open(os.path.join(root, path), encoding="utf-8") as f:
             text = f.read()
+        if path.endswith(".rs"):
+            fns.update(_FN.findall(text))
+        if not in_scope(path):
+            continue
         marker = marker_for(path)
         markers += sum(1 for line in text.splitlines() if line.strip().startswith(marker))
         found += problems_in(path, text, known)
+    for spec in SPECS.values():
+        with open(os.path.join(root, "docs", spec), encoding="utf-8") as f:
+            found += test_map_problems(spec, f.read(), fns)
     for problem in found:
         print(problem)
     print(f"{markers} host markers, {len(found)} problem(s)")

@@ -8270,6 +8270,7 @@ mod tests {
         assert_eq!(backend.driver().captures_started().len(), 1);
     }
 
+    // covers: S227
     #[test]
     fn an_app_that_quits_gives_way_to_the_whole_system_when_set_and_airplay_plays_on() {
         let (mut backend, fake, kitchen) = with_airplay();

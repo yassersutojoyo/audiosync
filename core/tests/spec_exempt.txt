@@ -4,7 +4,7 @@
 # `// covers:` test, so keep this list honest and short.
 # A clause retired or superseded as a whole needs no line; one may stay as a record.
 S6 Architecture overview only; each component it names has its own clauses.
-S10 Mac host only: the process tap leaves AudioSync's own process out; its logic suite checks it for app sources, mixes and their taps.
+S10 Hosts only: the capture leaves AudioSync's own process out; the Mac logic suite checks it for app sources, mixes and their taps, and the Windows tests for the whole system.
 S11 Mac host only: the Core Audio process objects that make up an app source; its logic suite checks it.
 S13 Mac host only: the process tap mutes the tapped processes' own output; its logic suite checks that every tap is set up muted and private (SourceCapture.configureTap) and that a retap keeps the app muted.
 S60 Mac host only: Core Audio output device enumeration and device object IDs; the --hardware engine suite checks it.
@@ -20,7 +20,7 @@ S113 Host only: the Mac host makes its control calls and gets its callbacks on t
 S114 Session start orchestration, which starts the host's capture after the core's ring and equalizer; the Windows controller's a_failed_start_leaves_nothing_running_and_every_feed_free tests its failure path.
 S115 Session stop orchestration, which stops the host's capture and renderers; the Windows controller's a_second_stop_is_safe_and_no_capture_runs_once_a_stop_finished tests it.
 S154 Mac host only: the Local Network hint and the Bonjour browser states behind it; its logic suite checks it.
-S155 Mac host only: the AppKit appearance setting; its logic suite checks it.
+S155 Hosts only: the appearance setting and its stored value; the Mac logic suite and the Windows tests check it.
 S156 Repository shell tooling (shellcheck), checked by CI and Tests/run-tests.sh.
 S167 Retired in part with the bundled engine: its list and reconcile; what stands, the Local Network hint for an empty list, is the host's (S154), which the Mac logic suite checks.
 S170 The hosts' debug log files, which the Mac logic suite and the Windows host's tests check; neither lives in the core.
@@ -39,18 +39,18 @@ S199 Hosts only: the hint's wording in UIStrings (Mac) and strings.slint (Window
 S200 Hosts only: VoiceOver and Narrator labels of the hint and its fix button; the Mac logic suite and the Windows tests check it.
 S202 Hosts only: re-reads when a device goes away, comes back or its row is switched on again; the Mac logic suite and the Windows tests check it.
 S204 Mac host only: settings the Mac app saved under the bundled engine's output IDs move to the native sender's receiver IDs; its logic suite checks it.
-S211 Mac host only: the source picker's entries; its logic suite checks it.
+S211 Hosts only: the source picker's entries; the Mac logic suite and the Windows tests check it.
 S212 Hosts only: stored settings read back and clamped (the user defaults on the Mac, a JSON file on Windows); the Mac logic suite and the Windows host's tests check it.
 S213 Mac host only: notes on choices older builds read; its logic suite checks it.
 S214 Mac host only: where a window reopens; its logic suite checks it.
-S215 Mac host only: login-item launches, second launches and the core-setup start message; its logic suite checks it.
+S215 Hosts only: login-item launches, second launches and the core-setup start message; the Mac logic suite and the Windows tests check it.
 S216 Mac host only: closing a Core Audio process tap and its aggregate device; its logic suite checks it.
 S217 Hosts only: artwork encoded as a JPEG for the AirPlay sender; the Mac logic suite and the Windows host's tests check it.
 S218 Hosts only: the now-playing fields and artwork the receivers show; the Mac logic suite and the Windows host's tests check it.
 S219 Hosts only: what the app hands its own AirPlay sender as track info; the Mac logic suite and the Windows host's tests check it.
 S220 Hosts only: the delay field's typed text and when it applies; the Mac logic suite and the Windows host's tests check it.
 S221 Mac host only: the delay panels of the speaker rows; its logic suite checks it.
-S222 Mac host only: the window's model of the native AirPlay sender's receivers, speakers and failures; its logic suite checks it.
+S222 Hosts only: the window's model of the native AirPlay sender's receivers, speakers and failures; the Mac logic suite and the Windows tests check it.
 S225 Test harness only: the soak run's memory rule; the soak rules suite checks it.
 S228 Hosts only: the names the user gives speakers and the inline rename; the Mac logic suite and the Windows host's tests check it.
 S256 Web remote and hosts only: the snapshot's zones, presets and calibrating flag; the remote crate's, the Windows host's and the Mac logic suites check it.
@@ -104,7 +104,7 @@ S326 Hosts only: the Windows output thread ending a stream that takes no frame f
 S327 Hosts only: the Windows host checking every 2 s for an app source it can't watch; the Windows tests named in the clause check it.
 S329 Hosts only: the Windows host reopening only the capture after DeviceGone; the Windows tests named in the clause check it.
 S330 Hosts only: the Windows host reopening an output in its new format when Windows invalidates its stream under it, and the Mac host when its device's rate or channel count changes; the Windows tests and the Mac logic suite named in the clause check it.
-S331 Hosts only: the Windows host retrying an output Windows refuses while it rebuilds the endpoint; controller.rs a_refusal_or_an_app_check_never_counts_the_time_asleep checks the 30 s refusal count, and what follows the 30 s awaits a decision.
+S331 Hosts only: the Windows and Mac hosts keeping on and retrying an output the system refuses to open; the Windows tests and the Mac logic suite check it.
 S332 Hosts only: the Windows host following sleep and resume and trying a lost capture for 60 s after a wake; the Windows tests named in the clause check it.
 S333 Hosts only: the Windows capture reading an input another app holds as busy and the controller retrying it every 3 s; the Windows tests named in the clause check it.
 S334 Hosts only: the Mac host ending an output whose render callback hands its device no frame for 2 s after it took frames once and attaching it again; the Mac logic suite checks it.
