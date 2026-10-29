@@ -22,6 +22,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A zone is renamed in place, like a speaker, instead of in a dialog. On the Mac, double-click its name in the main window or choose Rename… from its menu: Return keeps the new name, Escape the old one. On Windows, double-click its name, press F2 or choose Rename…, type, then press Enter; a speaker in its row under In zones renames the same way.
 - A zone's menu item now says Rename…, as a speaker's does, and a zone name is cut to 60 characters with line breaks turned into spaces, as a speaker name is. On the Mac and on Windows.
 - On the Mac, the notice for an AirPlay speaker turned off because it asks for a code now says whether it needs a PIN or a password, as on Windows.
+- On the Mac, the notices after a source switch fails or a speaker asks for a PIN or password now say what to do next: pick the source again, turn streaming on again, or, for a speaker the web remote turned on, turn it on again on this Mac.
 - On Windows, AudioSync now tells Windows that its AirPlay sending is audio work, so it gets the same priority as AudioSync's local outputs already had.
 - On the Mac, AudioSync's AirPlay sending now asks macOS for a higher priority, as it does on Windows.
 - A Google Cast speaker that loses its connection tries again after 1, 2, 4 and 8 seconds, then every 10 seconds, and right away when it shows up on the network again. On the Mac and on Windows.

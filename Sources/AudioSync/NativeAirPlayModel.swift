@@ -61,10 +61,23 @@ struct EveryTimeGuard: Equatable {
     private(set) var byHand: Set<String> = []
     /// Marks kept past a stream end for a pairing or prompt still open.
     private(set) var outlived: Set<String> = []
+    /// Speakers the phone switched on: they began no attempt, so a PIN or
+    /// password they ask for can be entered only at the Mac.
+    private(set) var byPhone: Set<String> = []
 
     mutating func turnedOnByHand(_ ids: [String]) {
         byHand.formUnion(ids)
+        byPhone.subtract(ids)
         outlived.subtract(ids)   // a new attempt
+    }
+
+    mutating func turnedOnByPhone(_ ids: [String]) {
+        byPhone.formUnion(ids)
+    }
+
+    /// The speaker `id` was switched off, by anyone.
+    mutating func switchedOff(_ id: String) {
+        byPhone.remove(id)
     }
 
     /// Of `asking` (rows asking for a code every time,

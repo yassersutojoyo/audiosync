@@ -596,25 +596,28 @@ struct UIStrings {
     /// `started` false when streaming couldn't start with it.
     func sourceSwitchedToSystem(name: String, started: Bool) -> String {
         started ? "\(name) quit, so AudioSync switched to \(sourceSystem)."
-            : "\(name) quit, so the source is now \(sourceSystem), but streaming couldn't start with it."
+            : "\(name) quit, so the source is now \(sourceSystem), but streaming couldn't start with it. "
+                + "Turn streaming on again to retry."
     }
     var switchToSystemWhenSourceQuits: String { "Switch to \(sourceSystem) When the Source App Quits" }
     /// A source or channel pair picked while streaming couldn't start, so
     /// the one before it plays on (S141); names as the source picker shows them.
     func sourceSwitchFailed(new: String, old: String) -> String {
-        "Couldn't start \(new), still on \(old)."
+        "Couldn't start \(new), still on \(old). Pick \(new) again to retry."
     }
 
     /// An AirPlay speaker was switched off by AudioSync, not by the user.
-    func airPlayTurnedOff(name: String, reason: AirPlayPairing.Reason) -> String {
+    /// `onThisMac`: the phone turned it on, and a PIN or password is entered only at the Mac.
+    func airPlayTurnedOff(name: String, reason: AirPlayPairing.Reason, onThisMac: Bool = false) -> String {
+        let place = onThisMac ? " on this Mac" : ""
         switch reason {
         case .unreachable:
             return "\(name) couldn't be reached, so it's off. "
                 + "Check that the speaker is on and on the same network, then turn it on again."
         case .needsPin:
-            return "\(name) needs pairing with a PIN, so it's off. Turn it on again to pair."
+            return "\(name) needs pairing with a PIN, so it's off. Turn it on again\(place) to pair."
         case .needsPassword:
-            return "\(name) asks for a password, so it's off. Turn it on again to enter it. "
+            return "\(name) asks for a password, so it's off. Turn it on again\(place) to enter it. "
                 + "To use it without a password, set Allow Speaker & TV Access on the speaker (or in the Home app) "
                 + "to “Anyone on the Same Network” and turn off Require Password."
         case .cancelled:
@@ -646,11 +649,11 @@ struct UIStrings {
     /// A native speaker turned off because it asks for a PIN or password;
     /// nil for every other reason. `unasked`: it turned the session down
     /// before asking for either.
-    func nativeAirPlayAsksForCode(name: String, reason: NativeTurnOff, unasked: Bool) -> String? {
+    func nativeAirPlayAsksForCode(name: String, reason: NativeTurnOff, unasked: Bool, onThisMac: Bool = false) -> String? {
         switch reason {
         case .needsCode where unasked: return nativeAirPlayNotAccepted(name: name)
-        case .needsCode: return airPlayTurnedOff(name: name, reason: .needsPin)
-        case .needsPassword: return airPlayTurnedOff(name: name, reason: .needsPassword)
+        case .needsCode: return airPlayTurnedOff(name: name, reason: .needsPin, onThisMac: onThisMac)
+        case .needsPassword: return airPlayTurnedOff(name: name, reason: .needsPassword, onThisMac: onThisMac)
         case .unreachable, .busy, .refused, .cantPlay, .needsAirPlay2, .timingUnavailable, .playsThroughSpeakers,
              .receiverUnverified, .memberNeedsPassword, .cancelled, .pairingFailed, .stillNeedsCode:
             return nil

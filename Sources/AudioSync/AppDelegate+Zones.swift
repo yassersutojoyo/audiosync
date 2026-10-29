@@ -125,6 +125,7 @@ extension AppDelegate {
             }
         }
         if let ids = origin.attemptsToBegin(attempts) { beginNativeAttempts(ids) }   // before the sender's speakers follow
+        if origin == .remote { everyTimeGuard.turnedOnByPhone(attempts) }
         if turnOn && !engine.isRunning {
             startEngine(origin: origin)
         } else if engine.isRunning {

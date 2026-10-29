@@ -1246,6 +1246,43 @@ do {
     check(text.nativeAirPlayAsksForCode(name: "Den", reason: .needsCode, unasked: true)
             == text.nativeAirPlayNotAccepted(name: "Den"),
           "native off: a speaker that turned the session down unasked says it didn't accept")
+    check(text.airPlayTurnedOff(name: "Den", reason: .needsPin, onThisMac: true).contains("on again on this Mac to pair")
+            && text.airPlayTurnedOff(name: "Den", reason: .needsPassword, onThisMac: true).contains("on again on this Mac")
+            && !pinOff.contains("this Mac") && !passwordOff.contains("this Mac")
+            && text.nativeAirPlayAsksForCode(name: "Den", reason: .needsCode, unasked: false, onThisMac: true)
+                == text.airPlayTurnedOff(name: "Den", reason: .needsPin, onThisMac: true),
+          "web remote: a speaker the phone turned on that needs a PIN or password says to turn it on again on this Mac")
+    // The app's marks in its order: setNativeAirPlayEnabled and toggleZone
+    // from the phone, recallPreset by its source, beginNativeAttempts for a
+    // click at the Mac, endNativeAttempt at every switch-off; turnOffNativeSpeaker
+    // reads the mark for its notice. Copied from AppDelegate: keep them alike.
+    func turnedOn(_ g: inout EveryTimeGuard, _ id: String, origin: StartOrigin) {
+        if let ids = origin.attemptsToBegin([id]) { g.turnedOnByHand(ids) }
+        if origin == .remote { g.turnedOnByPhone([id]) }
+    }
+    func recalled(_ g: inout EveryTimeGuard, _ id: String, from source: PresetRecallSource) {
+        if source.beginsAttempts { g.turnedOnByHand([id]) } else { g.turnedOnByPhone([id]) }
+    }
+    func offNotice(_ g: EveryTimeGuard, _ id: String) -> String? {
+        text.nativeAirPlayAsksForCode(name: "Den", reason: .needsCode, unasked: false, onThisMac: g.byPhone.contains(id))
+    }
+    var phone = EveryTimeGuard()
+    turnedOn(&phone, "native:D1", origin: .remote)
+    recalled(&phone, "native:D2", from: .phone)
+    check(offNotice(phone, "native:D1")?.contains("on this Mac") == true && offNotice(phone, "native:D2")?.contains("on this Mac") == true,
+          "web remote: a speaker the phone switched on, by itself or by a recall, that needs a PIN says to turn it on again on this Mac")
+    var mac = EveryTimeGuard()
+    turnedOn(&mac, "native:D1", origin: .user)
+    turnedOn(&mac, "native:D3", origin: .automatic)
+    recalled(&mac, "native:D2", from: .app)
+    check(PresetRecallSource.app.origin == .remote
+            && [offNotice(mac, "native:D1"), offNotice(mac, "native:D2"), offNotice(mac, "native:D3")].allSatisfy { $0 == pinOff },
+          "web remote: a speaker the Mac switched on, a recall in the app or auto-connect included, gets the PIN notice without this Mac")
+    turnedOn(&phone, "native:D1", origin: .user)
+    phone.switchedOff("native:D2")
+    turnedOn(&phone, "native:D2", origin: .automatic)
+    check(offNotice(phone, "native:D1") == pinOff && offNotice(phone, "native:D2") == pinOff,
+          "web remote: a click at the Mac or a switch-off ends the phone's mark")
     check(text.nativeAirPlayAsksForCode(name: "Den", reason: .unreachable, unasked: false) == nil,
           "native off: other reasons keep their own notice")
     let unreachableOff = text.airPlayTurnedOff(name: "Den", reason: .unreachable)
@@ -4507,8 +4544,8 @@ do {
           "EC5 source: a failed switch logs that the speakers stayed",
           CaptureSwitch.logLine(.keptOld(.startFailed), kept: 1, fromRate: 48000, toRate: 48000))
     check(UIStrings().sourceSwitchFailed(new: "Music", old: "All System Audio")
-            == "Couldn't start Music, still on All System Audio.",
-          "EC5 source: the failed switch notice names both sources plainly")
+            == "Couldn't start Music, still on All System Audio. Pick Music again to retry.",
+          "EC5 source: the failed switch notice names both sources plainly and the next step")
     check(CaptureSwitch.start(starts: true, microphone: .notNeeded) == .rebuildCapture
             && CaptureSwitch.start(starts: true, microphone: .allowed) == .rebuildCapture,
           "EC5 source: a switch rebuilds only the capture and keeps the session")
@@ -8738,6 +8775,8 @@ do {
             && notStarted.contains("Music") && notStarted.contains(t.sourceSystem) && notStarted != switched,
           "source quit: the notice names the app and All System Audio, also when the whole system couldn't start (S227)",
           "\(switched) / \(notStarted)")
+    check(notStarted.hasSuffix(" Turn streaming on again to retry.") && !switched.contains("retry"),
+          "source quit: when the whole system couldn't start, the notice says to turn streaming on again")
 }
 
 // MARK: The way out on an exit signal (SignalQuit, AppLifecycle.swift)

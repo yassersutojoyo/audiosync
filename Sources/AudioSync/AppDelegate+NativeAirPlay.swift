@@ -239,6 +239,7 @@ extension AppDelegate {
     /// its prompt is dropped, and a pairing under way stops, since the
     /// sender would otherwise wait for its PIN forever.
     func endNativeAttempt(_ id: String) {
+        everyTimeGuard.switchedOff(id)
         guard let receiver = NativeAirPlayID.receiver(id), let native = nativeAirPlay else { return }
         if native.model.turnedOff(receiver) { native.cancelPairing(receiver) }
         closeWithdrawnPrompt()
@@ -394,6 +395,7 @@ extension AppDelegate {
         }
         for id in adoption.turnOff {
             enabledAirPlay.remove(id)
+            everyTimeGuard.switchedOff(id)
             DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) stays off, it asks for a code every time")
         }
         airplayOrder = rows
@@ -410,6 +412,7 @@ extension AppDelegate {
         guard !plan.isEmpty else { return }
         for id in plan.release {
             enabledAirPlay.remove(NativeAirPlayID.app(id))
+            everyTimeGuard.switchedOff(NativeAirPlayID.app(id))
             DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(id)) switched off: it plays as part of its stereo pair or home theater group")
         }
         let released = Set(plan.release.map(NativeAirPlayID.app))
@@ -446,6 +449,7 @@ extension AppDelegate {
         if on { clearNotices([SpeakerKey.make(id: id, airplay: true)]) }   // a new attempt
         if on { enabledAirPlay.insert(id) } else { enabledAirPlay.remove(id) }
         if !on { endNativeAttempt(id) } else if let ids = origin.attemptsToBegin([id]) { beginNativeAttempts(ids) }
+        if on, origin == .remote { everyTimeGuard.turnedOnByPhone([id]) }
         if StreamingPolicy.startsStreaming(turnedOn: on, streaming: engine.isRunning) {
             startEngine(origin: origin)
         } else {
@@ -562,12 +566,13 @@ extension AppDelegate {
     /// whether or not it is still switched on: a cancelled prompt leaves its
     /// stage in the model so that this stops the pairing that waited for it.
     func turnOffNativeSpeaker(_ id: String, reason: NativeTurnOff, origin: StartOrigin) {
+        let onThisMac = everyTimeGuard.byPhone.contains(id)
         let reason = everyTimeGuard.turnedOff(id, reason: reason)
         endNativeAttempt(id)
         guard enabledAirPlay.contains(id) else { return }
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) turned off (\(reason))")
         enabledAirPlay.remove(id)
-        notify(nativeTurnOffText(id, reason), origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
+        notify(nativeTurnOffText(id, reason, onThisMac: onThisMac), origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
         let timing = reason == .timingUnavailable
         updatePtpPortNotice { $0.turnedOff(id, timing: timing) }
         syncNativeSpeakers()
@@ -575,12 +580,13 @@ extension AppDelegate {
         pushModel()
     }
 
-    private func nativeTurnOffText(_ id: String, _ reason: NativeTurnOff) -> String {
+    private func nativeTurnOffText(_ id: String, _ reason: NativeTurnOff, onThisMac: Bool) -> String {
         let name = shownName(airPlay: id)
         let unasked = NativeAirPlayID.receiver(id).map { nativeAirPlay?.model.refusedUnasked($0) == true } ?? false
         switch reason {
         case .needsCode, .needsPassword:
-            guard let words = text.nativeAirPlayAsksForCode(name: name, reason: reason, unasked: unasked) else {
+            guard let words = text.nativeAirPlayAsksForCode(name: name, reason: reason, unasked: unasked,
+                                                            onThisMac: onThisMac) else {
                 assertionFailure("no PIN or password notice for \(reason)")
                 return text.nativeAirPlayNotAccepted(name: name)
             }
