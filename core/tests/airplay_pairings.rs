@@ -309,6 +309,34 @@ fn a_newer_file_is_ignored_and_left_as_it_is() {
     assert_eq!(fs::read(&path).expect("still there"), newer);
 }
 
+// covers: S224
+#[cfg(unix)]
+#[test]
+fn a_file_that_cant_be_read_keeps_every_pairing_it_holds() {
+    use std::os::unix::fs::PermissionsExt;
+    let path = folder("unreadable").join("airplay-pairings.dat");
+    let (mut store, _) = PairingStore::open(path.clone());
+    store
+        .insert("02005E005301", credentials("0123456789ABCDEF", 3))
+        .expect("written");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).expect("mode set");
+    if fs::File::open(&path).is_ok() {
+        // Root reads it all the same.
+        return;
+    }
+    let (mut store, loaded) = PairingStore::open(path.clone());
+    assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+    let written = store.insert("02005E005302", credentials("FEDCBA9876543210", 4));
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode set back");
+    assert!(written.is_err(), "the unreadable file isn't written over");
+    assert!(store.contains("02005E005302"), "kept for this run");
+    let (store, _) = PairingStore::open(path);
+    assert!(
+        store.contains("02005E005301"),
+        "the first pairing is still there"
+    );
+}
+
 #[test]
 fn a_leftover_temporary_file_does_not_block_a_write() {
     let base = folder("leftover");
