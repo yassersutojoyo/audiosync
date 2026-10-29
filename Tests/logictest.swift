@@ -9437,6 +9437,22 @@ do {
           "calibrate all: the progress line names the speaker and the sweep, and says when a Cast speaker is searched")
 }
 
+// MARK: A calibrate button that is off says why under it; the Calibrate All row looks off only when it can't open
+do {
+    let t = UIStrings()
+    let reasons = [t.calibrationButtonReason(running: false, unavailable: nil, held: false),
+                   t.calibrationButtonReason(running: true, unavailable: .notPlaying(.speaker), held: true),
+                   t.calibrationButtonReason(running: false, unavailable: .notPlaying(.speaker), held: false),
+                   t.calibrationButtonReason(running: false, unavailable: nil, held: true)]
+    check(reasons == [nil, nil, "Turn on this speaker to calibrate it.", "Another calibration is still running."],
+          "calibration reason: the line under an off button repeats its tooltip, and an enabled or running one has none",
+          "\(reasons)")
+    let rows = [CalibrateAllFlow.rowBlocker(nil), CalibrateAllFlow.rowBlocker(.onlyLeftOut),
+                CalibrateAllFlow.rowBlocker(.busy), CalibrateAllFlow.rowBlocker(.notPlaying(.reference))]
+    check(rows == [nil, nil, .busy, .notPlaying(.reference)],
+          "calibrate all row: only a blocker that keeps the sheet shut dims the row and shows a reason", "\(rows)")
+}
+
 // MARK: A calibration that can't start names only what is off, in the order streaming, the speaker, the reference
 do {
     let t = UIStrings()

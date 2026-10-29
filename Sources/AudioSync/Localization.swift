@@ -201,6 +201,12 @@ struct UIStrings {
         return held ? calibrateAllUnavailable(.busy) : calibrationHint
     }
 
+    /// The line under the calibrate button while it is off; nil while it can be pressed.
+    func calibrationButtonReason(running: Bool, unavailable: CalibrationFailure?, held: Bool) -> String? {
+        guard !running, unavailable != nil || held else { return nil }
+        return calibrationButtonHint(running: running, unavailable: unavailable, held: held)
+    }
+
     /// What a calibration needs that is off, in the order streaming, the
     /// speaker (`speaker`), the built-in speakers; all three when none is given.
     func calibrationNeeds(_ missing: CalibrationMissing, speaker: String = "this speaker") -> String {

@@ -406,6 +406,12 @@ enum CalibrateAllFlow {
         }
     }
 
+    /// The blocker the Calibrate All row shows as off. With only headphones
+    /// or virtual outputs on, the row still opens the sheet, which says why.
+    static func rowBlocker(_ blocker: CalibrateAllBlocker?) -> CalibrateAllBlocker? {
+        blocker == .onlyLeftOut ? nil : blocker
+    }
+
     /// Whether a zone's Calibrate Zone… can be chosen: some member is here
     /// and no calibration holds the outputs, since a start then does nothing.
     static func offersZoneRun(_ status: CalibrateAllStatus, singleHoldsOutputs: Bool, present: Int) -> Bool {
