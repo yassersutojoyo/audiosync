@@ -6308,6 +6308,7 @@ mod tests {
                         class: audiosync_core::calibrate_all::Class::Local,
                         offset_ms: Some(0.0),
                         latency_ms: 2500.0,
+                        sender_ms: 0.0,
                     })
                     .collect(),
                 ..Default::default()
