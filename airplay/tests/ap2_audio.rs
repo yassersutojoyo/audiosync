@@ -60,12 +60,10 @@ fn before(seq: u16, next: u16) -> bool {
     (next.wrapping_sub(seq) as i16) > 0
 }
 
-/// The most packets a pause may let out after the call: 100 ms of 352-frame
-/// packets, a count so a late arrival stamp can't inflate it (P213).
-const LATE_PACKETS: usize = 13;
-
 /// The seqs of the datagrams that arrived after `at` and come before `held`,
-/// asserted to be the run that ends right before it, each packet once.
+/// asserted to be the run that ends right before it, each packet once. Its
+/// length is a busy runner's lag, so the stop itself is checked on a fake
+/// clock in `pause_flushes_and_resumes` (P213).
 fn tail_before(datagrams: &[Datagram], at: Instant, held: u16) -> Vec<u16> {
     let tail: Vec<u16> = datagrams
         .iter()
@@ -81,7 +79,6 @@ fn tail_before(datagrams: &[Datagram], at: Instant, held: u16) -> Vec<u16> {
         tail.last().is_none_or(|last| last.wrapping_add(1) == held),
         "{tail:?} before {held}"
     );
-    assert!(tail.len() <= LATE_PACKETS, "{tail:?}");
     tail
 }
 
