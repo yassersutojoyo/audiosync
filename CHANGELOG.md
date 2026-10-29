@@ -89,6 +89,17 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a settings save that fails is tried again about every 30 seconds and at quit, so a change made just before you sign out isn't lost. Before, a failed save counted as saved.
 - On Windows, a new zone or preset never takes the number of a deleted one, so an old preset or a web remote page still open can't reach it. Deleting a zone also takes it out of every preset.
 - On Windows, the main window opens on the main screen when the screen it was on is gone, and opening it from the tray leaves it where you put it.
+- On the Mac, quitting while you rename a speaker or zone in place keeps the name you typed.
+- On the Mac, a Google Cast speaker you turned on is on again after you quit and reopen AudioSync, as AirPlay and local speakers already were. A hidden speaker stays off.
+- A new zone's name is cleaned the way a renamed one is: line breaks become spaces and it's cut to 60 characters. On the Mac and on Windows.
+- On the Mac, a Google Cast speaker you added by address keeps its zone, presets, name, auto-connect and Hide Speaker mark once AudioSync finds it on the network, and one that's playing keeps its loudness.
+- On the Mac, an AirPlay speaker that answers with an error AudioSync retries stays on while it retries, and one that turns the stream down says it declined the stream.
+- On the Mac, after Hide Speaker the keyboard focus lands on a row the window still shows, and the "couldn't start" alert lists speakers the way the rest of the app does.
+- On the Mac, VoiceOver announces a new notice once, announces the new delay after a delay step, reads the preset picker as Presets and the current preset, and says whether a delay's controls are open. A dimmed volume slider says why it's dimmed: the speaker is off, or a Google Cast speaker isn't playing yet.
+- On the Mac, a volume change from a TV's remote during calibration is kept, and an old volume report that arrives late no longer moves the slider.
+- On the Mac, the menu bar panel grows as soon as its content does, so its bottom is no longer cut off.
+- On the Mac, a zone or preset volume that isn't a valid number no longer keeps your zones and presets from being saved.
+- On the Mac, an AirPlay pairings file AudioSync can't read is left as it is instead of being written over.
 
 ## [0.7.1] - 2026-10-27
 

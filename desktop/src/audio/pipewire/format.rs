@@ -1,16 +1,14 @@
-//! The one format the capture asks PipeWire for, and the check of the
-//! format it gets: interleaved 32-bit float, stereo, at the session rate.
+//! The format the capture asks PipeWire for, and the check of the format
+//! it gets: interleaved 32-bit float at the session rate, stereo, or every
+//! channel of an input device that plays a pair past 1-2.
 //! PipeWire's adapter converts whatever the output plays to it, so the
 //! converter never resamples.
 
-#[cfg(target_os = "linux")]
 use audiosync_core::channels::InputPair;
 
 use crate::audio::SESSION_RATE;
 use crate::audio::backend::BackendError;
-#[cfg(target_os = "linux")]
-use crate::audio::capture::CaptureAttempt;
-use crate::audio::capture::{SampleType, StreamFormat};
+use crate::audio::capture::{CaptureAttempt, SampleType, StreamFormat};
 
 /// What the capture asks for and accepts.
 pub const CAPTURE_FORMAT: StreamFormat = StreamFormat {
@@ -20,12 +18,36 @@ pub const CAPTURE_FORMAT: StreamFormat = StreamFormat {
 };
 
 /// How the capture is set up once PipeWire agreed: the adapter converts.
-#[cfg(target_os = "linux")]
 pub const SETUP: CaptureAttempt = CaptureAttempt {
     format: CAPTURE_FORMAT,
     autoconvert: true,
     pair: InputPair::FIRST,
 };
+
+/// The most channels a capture asks for: SPA's audio format holds a
+/// position for 64 (`SPA_AUDIO_MAX_CHANNELS`).
+pub const MAX_CHANNELS: u16 = 64;
+
+/// How an input device with `channels` channels is captured for the pair
+/// stored as `saved`: pair 1-2, or a pair the device no longer has, keeps
+/// the adapter's stereo mix of the device, as Windows does; any other pair
+/// takes every channel unmixed, up to [`MAX_CHANNELS`], and plays that pair.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn input_setup(saved: u16, channels: u16) -> CaptureAttempt {
+    let channels = channels.min(MAX_CHANNELS);
+    let (pair, _) = InputPair::resolve(saved, channels);
+    if pair.index == 0 {
+        return SETUP;
+    }
+    CaptureAttempt {
+        format: StreamFormat {
+            channels,
+            ..CAPTURE_FORMAT
+        },
+        autoconvert: true,
+        pair,
+    }
+}
 
 /// The format PipeWire settled on, as it reported it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,14 +60,14 @@ pub struct Negotiated {
     pub channels: u32,
 }
 
-/// Whether `negotiated` is [`CAPTURE_FORMAT`]: anything else is
+/// Whether `negotiated` is the `asked` format: anything else is
 /// [`BackendError::UnsupportedFormat`], since the converter is built for
 /// that format before the stream connects.
-pub fn check(negotiated: Negotiated) -> Result<(), BackendError> {
+pub fn check(negotiated: Negotiated, asked: StreamFormat) -> Result<(), BackendError> {
     let expected = negotiated.raw_audio
         && negotiated.f32_interleaved
-        && negotiated.rate == CAPTURE_FORMAT.rate
-        && negotiated.channels == u32::from(CAPTURE_FORMAT.channels);
+        && negotiated.rate == asked.rate
+        && negotiated.channels == u32::from(asked.channels);
     if expected {
         Ok(())
     } else {
@@ -54,12 +76,12 @@ pub fn check(negotiated: Negotiated) -> Result<(), BackendError> {
 }
 
 /// The frames a buffer of `size` bytes holds at `stride` bytes per frame;
-/// a stride of 0 (not set) means the format's own.
-pub fn frames_in(size: u32, stride: i32) -> usize {
+/// a stride of 0 (not set) means `block_align`, the format's own.
+pub fn frames_in(size: u32, stride: i32, block_align: usize) -> usize {
     let stride = usize::try_from(stride)
         .ok()
         .filter(|&stride| stride > 0)
-        .unwrap_or_else(|| CAPTURE_FORMAT.block_align());
+        .unwrap_or(block_align);
     size as usize / stride
 }
 
@@ -74,9 +96,14 @@ mod tests {
         channels: 2,
     };
 
+    const AGREED_SIX: Negotiated = Negotiated {
+        channels: 6,
+        ..AGREED
+    };
+
     #[test]
     fn the_asked_format_is_accepted() {
-        assert_eq!(check(AGREED), Ok(()));
+        assert_eq!(check(AGREED, CAPTURE_FORMAT), Ok(()));
     }
 
     #[test]
@@ -100,15 +127,64 @@ mod tests {
             },
         ];
         for other in others {
-            assert_eq!(check(other), Err(BackendError::UnsupportedFormat));
+            assert_eq!(
+                check(other, CAPTURE_FORMAT),
+                Err(BackendError::UnsupportedFormat)
+            );
         }
+    }
+
+    // covers: S14
+    #[test]
+    fn a_pair_past_1_2_takes_every_channel_unmixed() {
+        let setup = input_setup(1, 6);
+        assert_eq!(
+            setup.format,
+            StreamFormat {
+                sample: SampleType::F32,
+                rate: SESSION_RATE,
+                channels: 6,
+            }
+        );
+        assert_eq!(
+            setup.pair,
+            InputPair {
+                index: 1,
+                left: 2,
+                right: 3,
+            }
+        );
+        assert_eq!(check(AGREED_SIX, setup.format), Ok(()));
+        assert_eq!(
+            check(AGREED, setup.format),
+            Err(BackendError::UnsupportedFormat)
+        );
+    }
+
+    // covers: S14
+    #[test]
+    fn pair_1_2_and_a_pair_the_device_lost_keep_the_stereo_mix() {
+        for (saved, channels) in [(0, 6), (5, 6), (1, 2)] {
+            let setup = input_setup(saved, channels);
+            assert_eq!(setup.format, CAPTURE_FORMAT);
+            assert_eq!(setup.pair, InputPair::FIRST);
+        }
+    }
+
+    // covers: S14
+    #[test]
+    fn a_device_past_64_channels_is_captured_on_its_first_64() {
+        let setup = input_setup(1, 128);
+        assert_eq!(setup.format.channels, 64);
+        assert_eq!(setup.pair.index, 1);
+        assert_eq!(input_setup(32, 128), SETUP);
     }
 
     #[test]
     fn frames_follow_the_stride() {
-        assert_eq!(frames_in(8192, 8), 1024);
-        assert_eq!(frames_in(8190, 8), 1023);
-        assert_eq!(frames_in(8192, 0), 1024);
-        assert_eq!(frames_in(8192, -8), 1024);
+        assert_eq!(frames_in(8192, 8, 8), 1024);
+        assert_eq!(frames_in(8190, 8, 8), 1023);
+        assert_eq!(frames_in(8192, 0, 8), 1024);
+        assert_eq!(frames_in(8192, -8, 8), 1024);
     }
 }

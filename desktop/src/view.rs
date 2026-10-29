@@ -75,8 +75,8 @@ enum DialogPurpose {
     RenamePreset(String),
     /// Save Curve in the equalizer.
     SaveCurve,
-    /// Rename in the equalizer, for the saved curve at this index.
-    RenameCurve(usize),
+    /// Rename in the equalizer, for the saved curve of this name.
+    RenameCurve(String),
 }
 
 /// Where a name is edited: a speaker's full row (in its section or under
@@ -131,6 +131,9 @@ struct UiState {
     collapsed: HashSet<String>,
     /// Whether the source was a mix at the last refresh.
     source_was_mix: bool,
+    /// The equalizer curve last picked or saved, so the picker tells it from
+    /// a curve with the same gains (spec S270).
+    chosen_curve: Option<CurveMatch>,
 }
 
 /// The virtual outputs the speaker lists have shown this session. With Show
@@ -2262,7 +2265,7 @@ impl App {
                     .map(|c| c.name.as_str().into()),
             )
             .collect();
-        let shown = ui_model::shown_curve(state);
+        let shown = self.shown_curve(state);
         let preset_index = ui_model::picker_index(shown);
         let curve_name = usize::try_from(preset_index)
             .ok()
@@ -2752,6 +2755,7 @@ impl App {
         let w = weak.clone();
         eq_window.on_gain_changed(move |band, db| {
             with_app(&w, |app| {
+                app.ui.borrow_mut().chosen_curve = None;
                 app.change_equalizer(|s| {
                     if let Some(gain) = usize::try_from(band)
                         .ok()
@@ -2766,11 +2770,13 @@ impl App {
         eq_window.on_preset_selected(move |index| {
             with_app(&w, |app| {
                 let curves = app.snapshot().equalizer_curves;
-                let gains_db = match ui_model::picked_curve(index, curves.len()) {
+                let picked = ui_model::picked_curve(index, curves.len());
+                let gains_db = match picked {
                     Some(CurveMatch::Preset(i)) => eq::PRESETS[i].gains_db,
                     Some(CurveMatch::User(i)) => curves[i].gains_db,
                     None => return,
                 };
+                app.ui.borrow_mut().chosen_curve = picked;
                 // Like the Mac: picking a curve turns the equalizer on.
                 app.change_equalizer(|s| {
                     s.gains_db = gains_db;
@@ -2786,15 +2792,21 @@ impl App {
         eq_window.on_delete_curve(move || {
             with_app(&w, |app| {
                 let state = app.snapshot();
-                if let Some(CurveMatch::User(index)) = ui_model::shown_curve(&state) {
+                if let Some(CurveMatch::User(index)) = app.shown_curve(&state) {
                     let mut curves = state.equalizer_curves;
                     eq::delete_curve(&mut curves, index);
+                    app.ui.borrow_mut().chosen_curve = None;
                     app.update(|b| b.set_equalizer_curves(curves));
                 }
             })
         });
         let w = weak.clone();
-        eq_window.on_reset(move || with_app(&w, |app| app.change_equalizer(EqSettings::reset)));
+        eq_window.on_reset(move || {
+            with_app(&w, |app| {
+                app.ui.borrow_mut().chosen_curve = None;
+                app.change_equalizer(EqSettings::reset);
+            })
+        });
         let w = weak;
         eq_window.on_close_requested(move || {
             with_app(&w, |app| {
@@ -3705,6 +3717,10 @@ impl App {
         }
     }
 
+    fn shown_curve(&self, state: &AppState) -> Option<CurveMatch> {
+        ui_model::shown_curve(state, self.ui.borrow().chosen_curve)
+    }
+
     fn change_equalizer(&self, change: impl FnOnce(&mut EqSettings)) {
         let mut settings = self.snapshot().equalizer;
         change(&mut settings);
@@ -3768,7 +3784,7 @@ impl App {
         let state = self.snapshot();
         let strings = self.strings();
         let dialog = &self.zone_dialog;
-        let shown = match ui_model::shown_curve(&state) {
+        let shown = match self.shown_curve(&state) {
             Some(CurveMatch::User(index)) => Some(&state.equalizer_curves[index]),
             _ => None,
         };
@@ -3797,13 +3813,13 @@ impl App {
 
     fn ask_rename_curve(&self) {
         let state = self.snapshot();
-        let Some(CurveMatch::User(index)) = ui_model::shown_curve(&state) else {
+        let Some(CurveMatch::User(index)) = self.shown_curve(&state) else {
             return;
         };
         let name = state.equalizer_curves[index].name.as_str();
         let strings = self.strings();
         let dialog = &self.zone_dialog;
-        *self.dialog_purpose.borrow_mut() = DialogPurpose::RenameCurve(index);
+        *self.dialog_purpose.borrow_mut() = DialogPurpose::RenameCurve(name.to_owned());
         dialog.set_heading(strings.get_rename_curve_title());
         dialog.set_message(strings.invoke_rename_message(name.into()));
         dialog.set_placeholder(strings.get_curve_name_field_label());
@@ -3886,6 +3902,7 @@ impl App {
     /// Recalls preset `id` (spec S265) from any path; it opens, raises and
     /// focuses nothing (S266).
     fn recall_preset(&self, id: &str) {
+        self.ui.borrow_mut().chosen_curve = None;
         self.update(|b| b.recall_preset(id));
     }
 
@@ -4041,7 +4058,8 @@ impl App {
                 if eq::curve_name(name).is_none() {
                     return;
                 }
-                if eq::save_curve(&mut curves, name, &state.equalizer.gains_db).is_some() {
+                if let Some(index) = eq::save_curve(&mut curves, name, &state.equalizer.gains_db) {
+                    self.ui.borrow_mut().chosen_curve = Some(CurveMatch::User(index));
                     self.update(|b| b.set_equalizer_curves(curves));
                 } else {
                     let strings = self.strings();
@@ -4051,8 +4069,11 @@ impl App {
                     );
                 }
             }
-            DialogPurpose::RenameCurve(index) => {
+            DialogPurpose::RenameCurve(old) => {
                 let mut curves = self.snapshot().equalizer_curves;
+                let Some(index) = curves.iter().position(|curve| curve.name == old) else {
+                    return;
+                };
                 if eq::rename_curve(&mut curves, index, name) {
                     self.update(|b| b.set_equalizer_curves(curves));
                 } else if let Some(taken) = eq::curve_name(name) {
@@ -4408,6 +4429,7 @@ fn cast_problem(problem: ui_model::CastProblem) -> CastProblem {
         P::Blocked => CastProblem::Blocked,
         P::TakenOver => CastProblem::TakenOver,
         P::ConnectionLost => CastProblem::ConnectionLost,
+        P::SearchStopped => CastProblem::SearchStopped,
     }
 }
 
@@ -5638,12 +5660,12 @@ mod tests {
     }
 
     /// The App over `backend`, with headless windows.
-    pub(super) fn app_over(backend: MockBackend) -> Rc<App> {
+    pub(super) fn app_over(backend: impl Backend + 'static) -> Rc<App> {
         app_logging(backend, DebugLog::new(None))
     }
 
     /// [`app_over`] writing to `log`.
-    pub(super) fn app_logging(backend: MockBackend, log: DebugLog) -> Rc<App> {
+    pub(super) fn app_logging(backend: impl Backend + 'static, log: DebugLog) -> Rc<App> {
         // The platform is set per thread: a thread that already built an
         // App has it, which is fine.
         let _ = slint::platform::set_platform(Box::new(Headless));
@@ -7295,6 +7317,33 @@ mod tests {
             "Loft waits while AudioSync plays to AirPlay 2 speakers on another network. \
              Turn those speakers off and Loft starts."
         );
+    }
+
+    #[test]
+    fn the_code_notes_carry_the_macs_tooltips() {
+        let app = app_over(MockBackend::new());
+        let strings = app.main.global::<Strings>();
+        let help = |a, every_time, state| {
+            strings
+                .invoke_speaker_availability_help(a, every_time, state)
+                .to_string()
+        };
+        let every_time = "This speaker asks for a code each time it connects, so \
+                          auto-connect leaves it off. AudioSync asks you for the code \
+                          when you turn the speaker on.";
+        assert_eq!(
+            help(Availability::NeedsCode, true, RowState::Off),
+            every_time
+        );
+        assert_eq!(help(Availability::Open, true, RowState::Off), every_time);
+        assert_eq!(
+            help(Availability::NeedsCode, false, RowState::Off),
+            "This speaker asks for a PIN or password. AudioSync asks you for it when you \
+             turn the speaker on."
+        );
+        // No note, no tooltip.
+        assert_eq!(help(Availability::Open, true, RowState::Playing), "");
+        assert_eq!(help(Availability::Pairing, false, RowState::Off), "");
     }
 
     #[test]
@@ -10121,6 +10170,29 @@ mod tests {
     }
 
     #[test]
+    fn reopening_add_by_address_during_a_check_drops_the_old_answer() {
+        let app = app_over(MockBackend::new());
+        let speakers = app.snapshot().speakers.len();
+        let window = app.cast_address_dialog.window();
+        let held = MOCK_CAST_HOLD
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        app.main.invoke_cast_add_address_requested();
+        type_text(window, "speaker.held");
+        press(window, Key::Return);
+        assert!(app.cast_address_dialog.get_checking());
+
+        app.ask_cast_address();
+        drop(held);
+        settle_cast_check(&app);
+        std::thread::sleep(Duration::from_millis(200));
+        draw_frames();
+        assert!(window.is_visible(), "the reopened dialog stays open");
+        assert!(app.snapshot().speaker("cc:speaker.held").is_none());
+        assert_eq!(app.snapshot().speakers.len(), speakers);
+    }
+
+    #[test]
     fn escape_on_the_add_by_address_dialog_cancels_from_the_field_or_a_button() {
         for tabs in [0, 1, 2] {
             let app = app_over(MockBackend::new());
@@ -10247,6 +10319,99 @@ mod tests {
         let state = app.snapshot();
         assert_eq!(state.equalizer.preamp_db, 0.0);
         assert_eq!(eq_window.get_preset_index(), 0, "Reset reads Flat");
+    }
+
+    #[test]
+    fn a_saved_curve_with_a_presets_gains_can_be_picked_renamed_and_deleted() {
+        let app = app_over(MockBackend::new());
+        let eq_window = &app.equalizer;
+        let presets = eq::PRESETS.len() as i32;
+        let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
+        eq_window.invoke_preset_selected(rock);
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Mine".into());
+        assert_eq!(
+            eq_window.get_preset_index(),
+            presets,
+            "a save shows the curve"
+        );
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Twin".into());
+        assert_eq!(eq_window.get_preset_index(), presets + 1);
+
+        eq_window.invoke_preset_selected(rock);
+        assert_eq!(eq_window.get_preset_index(), rock);
+        assert!(!eq_window.get_saved_curve_shown());
+        eq_window.invoke_preset_selected(presets);
+        assert_eq!(eq_window.get_preset_index(), presets);
+        assert_eq!(app.main.get_equalizer_curve(), "Mine");
+        assert!(eq_window.get_saved_curve_shown());
+        eq_window.invoke_rename_curve();
+        assert_eq!(app.zone_dialog.get_name(), "Mine");
+        app.zone_dialog.invoke_confirmed("Ours".into());
+        assert_eq!(
+            app.main.get_equalizer_curve(),
+            "Ours",
+            "a rename keeps it shown"
+        );
+
+        eq_window.invoke_delete_curve();
+        let names: Vec<_> = app
+            .snapshot()
+            .equalizer_curves
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(names, ["Twin"]);
+        assert_eq!(eq_window.get_preset_index(), rock, "the gains stay");
+
+        eq_window.invoke_preset_selected(presets);
+        eq_window.invoke_reset();
+        assert_eq!(eq_window.get_preset_index(), 0, "Reset reads Flat");
+    }
+
+    #[test]
+    fn a_preset_recall_lets_go_of_the_picked_curve() {
+        let app = app_over(MockBackend::new());
+        app.update(|b| b.set_speaker_enabled("local:desk", true));
+        app.save_preset("Flat");
+        let eq_window = &app.equalizer;
+        let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
+        eq_window.invoke_preset_selected(rock);
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Mine".into());
+        app.save_preset("Rock");
+        let ids = preset_ids(&app);
+
+        app.recall_preset(&ids[0]);
+        app.recall_preset(&ids[1]);
+        assert_eq!(eq_window.get_preset_index(), rock);
+        assert!(!eq_window.get_saved_curve_shown());
+    }
+
+    #[test]
+    fn a_curve_deleted_while_its_rename_is_open_renames_no_other_curve() {
+        let app = app_over(MockBackend::new());
+        let eq_window = &app.equalizer;
+        let presets = eq::PRESETS.len();
+        for (gain, name) in [(1.0, "A"), (2.0, "B"), (3.0, "C")] {
+            eq_window.invoke_gain_changed(0, gain);
+            eq_window.invoke_save_curve();
+            app.zone_dialog.invoke_confirmed(name.into());
+        }
+        eq_window.invoke_preset_selected(presets as i32 + 1);
+        assert_eq!(eq_window.get_preset_index(), presets as i32 + 1, "B");
+
+        eq_window.invoke_rename_curve();
+        eq_window.invoke_delete_curve();
+        app.zone_dialog.invoke_confirmed("X".into());
+        let names: Vec<String> = app
+            .snapshot()
+            .equalizer_curves
+            .into_iter()
+            .map(|curve| curve.name)
+            .collect();
+        assert_eq!(names, ["A", "C"]);
     }
 
     #[test]

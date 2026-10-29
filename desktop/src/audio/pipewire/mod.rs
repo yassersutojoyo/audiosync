@@ -78,7 +78,7 @@ mod driver {
     use audiosync_core::volume::SharedGain;
 
     use super::registry::Registry;
-    use super::{microphone, playback, procfs, stream};
+    use super::{format, microphone, playback, procfs, stream};
     use crate::audio::backend::BackendError;
     use crate::audio::calibration::{Microphone, MicrophoneError};
     use crate::audio::capture::{CaptureTarget, Feeds};
@@ -168,30 +168,29 @@ mod driver {
             equalizer: EqProcessor,
             feeds: Feeds,
         ) -> Result<stream::MonitorCapture, BackendError> {
-            let plan = match &target {
+            let (plan, setup) = match &target {
                 CaptureTarget::Input { endpoint_id, pair } => {
-                    // Only the first two channels are offered.
-                    if *pair > 0 {
-                        return Err(BackendError::NotOffered);
-                    }
                     let graph = self.registry.graph()?;
-                    let serial = graph
-                        .named(endpoint_id)
-                        .and_then(|(_, node)| node.prop("object.serial"))
-                        .ok_or(BackendError::DeviceGone)?;
-                    stream::Plan {
+                    let (_, node) = graph.named(endpoint_id).ok_or(BackendError::DeviceGone)?;
+                    let serial = node.prop("object.serial").ok_or(BackendError::DeviceGone)?;
+                    let channels = node.prop_channels().unwrap_or(2);
+                    let plan = stream::Plan {
                         wiring: stream::Wiring::Input,
                         filter: None,
                         serial: Some(serial.to_owned()),
-                    }
+                    };
+                    (plan, format::input_setup(*pair, channels))
                 }
-                _ => stream::Plan {
-                    wiring: stream::Wiring::Links,
-                    filter: stream::filter_of(&target, self.own_pid),
-                    serial: None,
-                },
+                _ => {
+                    let plan = stream::Plan {
+                        wiring: stream::Wiring::Links,
+                        filter: stream::filter_of(&target, self.own_pid),
+                        serial: None,
+                    };
+                    (plan, format::SETUP)
+                }
             };
-            stream::start_plan(plan, writer, equalizer, feeds)
+            stream::start_setup(plan, setup, writer, equalizer, feeds)
         }
 
         fn start_renderer(
