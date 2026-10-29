@@ -483,6 +483,19 @@ fn a_step_before_any_reported_level_builds_only_on_a_level_sent() {
     );
 }
 
+// covers: C69, C70
+#[test]
+fn a_level_sent_before_any_reported_level_is_awaited() {
+    let start = Instant::now();
+    let no_level = json!({"controlType": "attenuation", "stepInterval": 0.05});
+    let mut channel = running(start, no_level);
+    channel.set_volume(start, 0.98).expect("sent");
+    let level = channel
+        .step_volume(start + VOLUME_INTERVAL, false)
+        .expect("builds on the 0.98 sent");
+    assert!((level - 0.93).abs() < 1e-9, "{level}");
+}
+
 // covers: C69, C70, C104
 #[test]
 fn a_level_equal_to_the_reported_one_is_not_awaited() {
