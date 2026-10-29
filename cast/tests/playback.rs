@@ -4,6 +4,7 @@
 
 mod common;
 
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -11,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
 use audiosync_cast::error::ConnectError;
+use audiosync_cast::group::GroupRecords;
 use audiosync_cast::media::{IdleReason, MediaError, Metadata};
 use audiosync_cast::message::{NS_CONNECTION, NS_MEDIA, NS_RECEIVER, PLATFORM};
 use audiosync_cast::session::{
@@ -71,6 +73,7 @@ fn config(device: &FakeDevice) -> SessionConfig {
         },
         artwork: None,
         group: None,
+        records: None,
         fingerprints: None,
     }
 }
@@ -472,6 +475,99 @@ fn a_dead_channel_reconnects_and_reuses_or_relaunches_the_app() {
     assert_eq!(session.app().transport_id, "transport-2");
     session.stop();
     device.join();
+}
+
+// covers: C81
+#[test]
+fn after_a_drop_only_an_idle_device_is_relaunched_on() {
+    let other_app = json!({"appId": "233637DE", "sessionId": "other-1", "transportId": "other-1"});
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    device.send(Command::SetApps(vec![other_app]));
+    device.send(Command::DropConnection);
+    let seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(
+            event,
+            SessionEvent::Ended(_) | SessionEvent::Recovered { .. }
+        )
+    });
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Ended(SessionEnd::TakenOver))),
+        "{seen:?}"
+    );
+    assert_eq!(
+        count(&device, NS_RECEIVER, "LAUNCH"),
+        1,
+        "no LAUNCH after the drop"
+    );
+    device.join();
+
+    let backdrop = json!({
+        "appId": "E8C28D3C", "sessionId": "idle-1", "transportId": "idle-1", "isIdleScreen": true,
+    });
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    device.send(Command::SetApps(vec![backdrop]));
+    device.send(Command::DropConnection);
+    run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { relaunched: true })
+    });
+    assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 2);
+    session.stop();
+    device.join();
+}
+
+// covers: C111
+#[test]
+fn a_device_that_moves_during_recovery_is_reconnected_at_its_new_address() {
+    let device = FakeDevice::start(Behavior::default());
+    let moved = FakeDevice::start(Behavior::default());
+    let records = GroupRecords::new(vec![device.address]);
+    let (writer, reader) = audio_ring(48_000);
+    let _feed = feed(writer, 9);
+    let config = SessionConfig {
+        records: Some(records.clone()),
+        ..config(&device)
+    };
+    let selected = Arc::new(AtomicBool::new(true));
+    let deselect = Arc::clone(&selected);
+    let mut session = CastSession::start(config, reader, selected, |_, _| {}).expect("plays");
+    records.set_group(vec![moved.address]);
+    device.join();
+    // Retries at the old address would hold the session forever.
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(15));
+        deselect.store(false, Ordering::SeqCst);
+    });
+    let seen = run_until(&mut session, Duration::from_secs(20), |event| {
+        matches!(
+            event,
+            SessionEvent::Recovered { .. } | SessionEvent::Ended(_)
+        )
+    });
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Recovered { relaunched: true })),
+        "{seen:?}"
+    );
+    assert_eq!(moved.connection_count(), 1);
+    assert!(!moved.fetches().is_empty(), "the new address is served");
+
+    // The allowlist follows the entry: the address it dropped gets 403.
+    let elsewhere = SocketAddr::new(IpAddr::from([127, 0, 0, 2]), moved.address.port());
+    records.set_group(vec![elsewhere]);
+    let loads = moved.payloads(NS_MEDIA, "LOAD");
+    let url = loads[0]["media"]["contentId"]
+        .as_str()
+        .expect("the stream URL");
+    let (address, path) = http::split_url(url).expect("url");
+    let request = format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n");
+    let mut old = http::request(address, &request).expect("connects");
+    let (head, _) = http::read_response(&mut old, Duration::ZERO);
+    assert_eq!(http::status(&head), 403);
+    session.stop();
+    moved.join();
 }
 
 // covers: C80

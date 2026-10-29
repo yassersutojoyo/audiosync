@@ -1047,8 +1047,8 @@ impl CastSpeakers {
             .collect()
     }
 
-    /// Hands the group in a session its latest records and its members'
-    /// addresses (C90, C103).
+    /// Hands the device or group in a session its latest records, and a
+    /// group its members' addresses (C90, C103, C111).
     fn follow_group(&self) {
         let (Some(records), Some(attempt)) = (&self.records, self.attempt) else {
             return;
@@ -1146,13 +1146,13 @@ impl CastSpeakers {
         let Some(entry) = self.entry(id) else {
             return;
         };
-        let records = entry
-            .is_group()
-            .then(|| GroupRecords::new(entry.addresses.clone()));
+        let records = Some(GroupRecords::new(entry.addresses.clone()));
+        let group = entry.is_group();
         let target = CastTarget {
             id,
             addresses: entry.addresses.clone(),
-            group: records.clone(),
+            group: records.clone().filter(|_| group),
+            records: records.clone().filter(|_| !group),
         };
         let Some(link) = self.link.as_mut() else {
             return;
@@ -1173,7 +1173,7 @@ impl CastSpeakers {
                     codec: None,
                     heard_volume: false,
                 });
-                if records.is_some() {
+                if group {
                     self.members.remove(&id);
                 }
                 self.records = records;
@@ -1788,6 +1788,8 @@ pub mod tests {
         pub readers: Vec<AudioReader>,
         /// The group records each start was handed.
         pub groups: Vec<Option<GroupRecords>>,
+        /// The single-device records each start was handed.
+        pub records: Vec<Option<GroupRecords>>,
         /// The addresses each start was handed.
         pub targets: Vec<Vec<SocketAddr>>,
         pub events: VecDeque<HostEvent>,
@@ -1855,6 +1857,7 @@ pub mod tests {
             state.started.push(target.id);
             state.targets.push(target.addresses);
             state.groups.push(target.group);
+            state.records.push(target.records);
             state.readers.push(reader);
             state.next += 1;
             Ok(AttemptId(state.next))
@@ -2168,6 +2171,24 @@ pub mod tests {
             .clone()
             .expect("Attic is a group")
             .members
+    }
+
+    #[test]
+    fn a_single_device_session_follows_its_announced_address() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        assert_eq!(fake.state().groups[0], None);
+        let records = fake.state().records[0]
+            .clone()
+            .expect("a single device's records");
+        let moved = Ipv4Addr::new(192, 0, 2, 30);
+        fake.announce_at(KITCHEN, "Kitchen", DEVICE_PORT, moved);
+        cast.poll();
+        assert_eq!(
+            records.get().group,
+            [SocketAddr::new(IpAddr::V4(moved), DEVICE_PORT)]
+        );
     }
 
     #[test]

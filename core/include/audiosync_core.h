@@ -1708,6 +1708,14 @@ bool asc_airplay_set_device_level(AscAirPlay *airplay, const char *id, double ow
 bool asc_airplay_set_volume_dragging(AscAirPlay *airplay, const char *id, bool dragging);
 
 /*
+ * Keeps the speaker added under `id` muted while another speaker is
+ * measured, its own volume unchanged; a level set on it meanwhile is kept,
+ * not sent. Unsilenced, it sends nothing: the host sends its level. Returns
+ * false when the handle or id is NULL or no speaker was added under id.
+ */
+bool asc_airplay_set_silenced(AscAirPlay *airplay, const char *id, bool silenced);
+
+/*
  * Sets the zone position (0 to 100, 100 for no zone) of speaker `id`: it
  * plays at its own position times the zone's times the master, live once
  * added and from its start when added later, and a level read back from it

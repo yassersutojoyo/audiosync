@@ -359,6 +359,8 @@ struct Attempt {
     id: String,
     /// A group's addresses, kept current from discovery (C90, C103).
     group: Option<GroupRecords>,
+    /// A single device's addresses, kept current from discovery (C111).
+    records: Option<GroupRecords>,
 }
 
 /// What the handle and its input share: the writing end of the running
@@ -703,8 +705,8 @@ impl AscCast {
         }
     }
 
-    /// Hands the playing group's latest records and its members' addresses
-    /// to its session (C90, C103).
+    /// Hands the playing device or group its latest records, and a group
+    /// its members' addresses (C90, C103, C111).
     fn follow_groups(&mut self) {
         let member_ips: Vec<IpAddr> = self
             .members
@@ -713,13 +715,15 @@ impl AscCast {
             .flat_map(|entry| entry.addresses.iter().map(SocketAddr::ip))
             .collect();
         for attempt in &self.attempts {
-            let Some(records) = &attempt.group else {
+            let Some(records) = attempt.group.as_ref().or(attempt.records.as_ref()) else {
                 continue;
             };
             if let Some(entry) = self.list.get(attempt.key) {
                 records.set_group(entry.addresses.clone());
             }
-            records.set_members(member_ips.clone());
+            if attempt.group.is_some() {
+                records.set_members(member_ips.clone());
+            }
         }
     }
 
@@ -930,13 +934,17 @@ impl AscCast {
         self.pump_discovery();
         let key = device_key(id).ok_or(CAST_REFUSED_UNKNOWN)?;
         let entry = self.list.get(key).ok_or(CAST_REFUSED_UNKNOWN)?;
-        let group = entry
-            .is_group()
-            .then(|| GroupRecords::new(entry.addresses.clone()));
+        let all = GroupRecords::new(entry.addresses.clone());
+        let (group, records) = if entry.is_group() {
+            (Some(all), None)
+        } else {
+            (None, Some(all))
+        };
         let target = CastTarget {
             id: memory_id(key),
             addresses: entry.addresses.clone(),
             group: group.clone(),
+            records: records.clone(),
         };
         let (writer, reader) = audio_ring(RING_FRAMES);
         let attempt = self
@@ -963,6 +971,7 @@ impl AscCast {
             key,
             id: device_id_text(key),
             group,
+            records,
         });
         Ok(attempt)
     }
@@ -2634,6 +2643,46 @@ mod tests {
             records.get().group,
             [SocketAddr::new(IpAddr::from([192, 0, 2, 6]), 32_000)]
         );
+        // SAFETY: a live handle.
+        unsafe { asc_cast_stop(handle) };
+        destroy(handle);
+    }
+
+    // CAST_SPEC: C111
+    #[test]
+    fn a_single_devices_session_follows_its_latest_address() {
+        let handle = create();
+        let at = |ip| record(KITCHEN, "Kitchen", DEVICE_PORT, ip);
+        browse(
+            handle,
+            vec![BrowseEvent::Resolved(at(Ipv4Addr::new(127, 0, 0, 2)))],
+            false,
+        );
+        devices(handle);
+        let (attempt, _) = start(handle, KITCHEN);
+        assert!(attempt > 0);
+        let failed_at = |address: &'static str| {
+            move |event: &Pending| {
+                event.kind == CAST_EVENT_CONNECT_FAILED && event.detail.contains(address)
+            }
+        };
+        events_until(handle, failed_at("127.0.0.2:8009"));
+        browse(
+            handle,
+            vec![BrowseEvent::Resolved(at(Ipv4Addr::new(127, 0, 0, 3)))],
+            false,
+        );
+        devices(handle);
+        let records = inside(handle).attempts[0]
+            .records
+            .clone()
+            .expect("a single device's records");
+        assert_eq!(
+            records.get().group,
+            [SocketAddr::new(IpAddr::from([127, 0, 0, 3]), DEVICE_PORT)]
+        );
+        // The session's next attempt goes where the entry moved.
+        events_until(handle, failed_at("127.0.0.3:8009"));
         // SAFETY: a live handle.
         unsafe { asc_cast_stop(handle) };
         destroy(handle);
