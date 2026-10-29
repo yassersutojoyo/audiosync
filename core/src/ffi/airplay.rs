@@ -8431,16 +8431,20 @@ mod tests {
                 wrong_pin: false,
             },
         });
-        let events = events_until(handle, |events| {
+        let mut events = events_until(handle, |events| {
             events
                 .iter()
                 .any(|e| e.kind == AIRPLAY_EVENT_PAIRING_FAILED)
         });
-        let kinds: Vec<_> = pairing_events(&events)
-            .into_iter()
-            .map(|(kind, _, _)| kind)
+        events.extend(std::iter::from_fn(|| take_event(handle)));
+        // Every event the host gets besides the sender's timeline ticks: the
+        // failure, and no PAIRED or state that would turn the speaker on.
+        let all: Vec<_> = events
+            .iter()
+            .filter(|e| e.kind != AIRPLAY_EVENT_TIMELINE)
+            .map(|e| (e.kind, e.id.as_str()))
             .collect();
-        assert_eq!(kinds, [AIRPLAY_EVENT_PAIRING_FAILED]);
+        assert_eq!(all, [(AIRPLAY_EVENT_PAIRING_FAILED, id)]);
         assert!(inside(handle).pairing.is_empty());
         assert_eq!(inside(handle).identity.get(id), Some(&credentials));
         // SAFETY: destroyed once, by this thread.
