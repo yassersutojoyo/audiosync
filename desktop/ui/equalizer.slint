@@ -14,6 +14,8 @@ component Band inherits VerticalLayout {
     in property <string> short-label;
     in property <string> name;
     in property <float> max-gain;
+    // The equalizer is off: the slider fades, its text stays readable.
+    in property <bool> dimmed;
     callback changed(float);
 
     spacing: 8px;
@@ -31,6 +33,8 @@ component Band inherits VerticalLayout {
     HorizontalLayout {
         vertical-stretch: 1;
         alignment: center;
+        opacity: root.dimmed ? Tokens.disabled-opacity : 1;
+        animate opacity { duration: Fluent.normal; }
         slider := Slider {
             orientation: vertical;
             min-height: 140px;
@@ -193,8 +197,6 @@ export component EqualizerWindow inherits Window {
 
                 HorizontalLayout {
                     spacing: 2px;
-                    opacity: root.enabled ? 1 : Tokens.disabled-opacity;
-                    animate opacity { duration: Fluent.normal; }
 
                     Band {
                         horizontal-stretch: 1;
@@ -202,6 +204,7 @@ export component EqualizerWindow inherits Window {
                         short-label: Strings.equalizer-preamp;
                         name: Strings.equalizer-preamp-accessibility;
                         max-gain: root.max-gain;
+                        dimmed: !root.enabled;
                         changed(value) => {
                             root.preamp-changed(value);
                         }
@@ -224,6 +227,7 @@ export component EqualizerWindow inherits Window {
                         short-label: Strings.equalizer-band-short(root.band-hz[index]);
                         name: Strings.equalizer-band-name(root.band-hz[index]);
                         max-gain: root.max-gain;
+                        dimmed: !root.enabled;
                         changed(value) => {
                             root.gain-changed(index, value);
                         }

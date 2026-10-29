@@ -2886,10 +2886,13 @@ do {
                                         paired: true)))
     check(paths.isPaired("H8") && !paths.isPaired("I9") && !paths.isPaired("J0"),
           "native airplay: only a receiver AudioSync keeps a pairing for offers Forget Pairing")
-    check(kinds.nativePairPINMessage(name: "Loft").hasPrefix("Loft shows a 4-digit PIN on its screen. Enter it to pair; "
-                                                              + "after that, it connects without a PIN.")
+    check(kinds.nativePairPINMessage(name: "Loft", everyTime: false).hasPrefix("Loft shows a 4-digit PIN on its screen. Enter it to pair; "
+                                                                               + "after that, it connects without a PIN.")
             && !kinds.nativePairWrongPINMessage(name: "Loft").contains("TV"),
           "native airplay: the PIN prompt reads as on Windows, for an Apple TV and an AirPlay 2 receiver alike")
+    check(kinds.nativePairPINMessage(name: "Loft", everyTime: true)
+            == "Loft shows a 4-digit PIN on its screen. Enter it to pair. Cancel turns the speaker off; turn it on again to retry.",
+          "native airplay: the PIN prompt of a speaker that asks every time promises no lasting pairing, as on Windows")
     paths.apply(.appeared(NativeReceiver(id: "K1", name: "Attic", model: "", availability: .needsPin, reason: nil,
                                          hints: ["airplay", "airplay2", "pairing", "over-airplay2"], overAirPlay2: true)))
     check(paths.turnedOnByUser("K1") == .startPairing("K1") && paths.apply(.pinNeeded(id: "K1")) == .prompt,

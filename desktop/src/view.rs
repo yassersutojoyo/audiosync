@@ -1936,7 +1936,12 @@ impl App {
         }
         self.refresh_guide(&state);
         self.refresh_help(&state);
-        self.show_pin_prompt(state.pin_prompt.as_ref());
+        let every_time = state
+            .pin_prompt
+            .as_ref()
+            .and_then(|prompt| state.speaker(&prompt.speaker_id))
+            .is_some_and(|speaker| speaker.code_every_time);
+        self.show_pin_prompt(state.pin_prompt.as_ref(), every_time);
         self.show_password_prompt(state.password_prompt.as_ref());
 
         let live_hint = match state.live_input_airplay_wait() {
@@ -2777,7 +2782,7 @@ impl App {
     /// a PIN. It opens when the Apple TV first shows a PIN, stays open while
     /// that pairing runs (a wrong PIN clears the field for the new one), and
     /// closes when it ends.
-    fn show_pin_prompt(&self, prompt: Option<&PinPrompt>) {
+    fn show_pin_prompt(&self, prompt: Option<&PinPrompt>, every_time: bool) {
         if self.pin_preview.get() {
             return;
         }
@@ -2796,6 +2801,7 @@ impl App {
         dialog.set_speaker(prompt.name.as_str().into());
         dialog.set_phase(phase);
         dialog.set_wrong_pin(prompt.wrong_pin);
+        dialog.set_every_time(every_time);
         if opening {
             *self.pin_for.borrow_mut() = Some(prompt.speaker_id.clone());
             dialog.set_pin(SharedString::new());

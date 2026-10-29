@@ -260,7 +260,7 @@ extension AppDelegate {
         switch (prompt.password, prompt.wrong) {
         case (true, false): message = text.pairPasswordMessage(name: name)
         case (true, true): message = text.pairWrongPasswordMessage(name: name)
-        case (false, false): message = text.nativePairPINMessage(name: name)
+        case (false, false): message = text.nativePairPINMessage(name: name, everyTime: native.model.asksEveryTime(prompt.id))
         case (false, true): message = text.nativePairWrongPINMessage(name: name)
         }
         DebugTrace.log("[AudioSync] native AirPlay: asking for the \(prompt.password ? "password" : "PIN") of \(nativeLabel(prompt.id))"

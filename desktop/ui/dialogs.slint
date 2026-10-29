@@ -117,12 +117,13 @@ export component PinDialog inherits Dialog {
     in property <string> speaker;
     in property <PinPhase> phase;
     in property <bool> wrong-pin;
+    in property <bool> every-time;
     in-out property <string> pin;
     callback pin-edited(string);
     callback confirmed(string);
     callback cancelled();
 
-    property <string> message: Strings.pin-message(root.speaker, root.phase, root.wrong-pin);
+    property <string> message: Strings.pin-message(root.speaker, root.phase, root.wrong-pin, root.every-time);
     property <bool> can-pair: root.phase == PinPhase.ready && root.pin.character-count == 4;
 
     title: Strings.pin-dialog-title(root.speaker);
