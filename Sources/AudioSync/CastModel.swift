@@ -472,7 +472,7 @@ struct CastModel {
     /// `.changed` when the change altered what the list shows, `.turnedOff`
     /// when the device that is on left it with no session; else nil.
     @discardableResult
-    mutating func apply(_ change: CastDeviceChange) -> CastOutcome? {
+    mutating func apply(_ change: CastDeviceChange, now: Date = Date()) -> CastOutcome? {
         switch change {
         case .appeared(let device, let offset, _), .changed(let device, let offset):
             leftOn = nil
@@ -672,7 +672,7 @@ struct CastModel {
 
     /// Takes in one event. One of an attempt that isn't the current one is
     /// dropped (nil), as is one that changes nothing shown.
-    mutating func apply(_ event: CastEvent) -> CastOutcome? {
+    mutating func apply(_ event: CastEvent, now: Date = Date()) -> CastOutcome? {
         switch event {
         case .memoryChanged: return .memoryChanged
         case .groupLog: return nil

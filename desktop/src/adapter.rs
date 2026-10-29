@@ -6331,13 +6331,13 @@ mod tests {
         assert_eq!(state.zone_state(&zone), SpeakerState::Playing);
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
 
-        // An absent member is left alone.
+        // An absent member goes off with its zone, so it stays off when it is back.
         adapter.audio_mut().disconnect_output(HEADPHONES);
         adapter.poll();
         adapter.toggle_zone(&zone.id);
         assert!(!enabled(&adapter, SPEAKERS));
-        assert_eq!(adapter.audio.enabled_outputs(), [HEADPHONES]);
-        assert!(adapter.snapshot().running, "the absent member is still on");
+        assert!(adapter.audio.enabled_outputs().is_empty());
+        assert!(!adapter.snapshot().running);
     }
 
     #[test]

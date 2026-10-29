@@ -78,6 +78,8 @@ extension RemoteRow {
         /// Asks for a PIN or password.
         var needsCode = false
         var paired = false
+        /// A password speaker whose password this run holds: turning it on asks nothing.
+        var holdsPassword = false
         /// A stereo pair or home theater whose member asks for a password
         /// this run hasn't had: turning it on prompts for that member (P176).
         var memberAsksPassword = false

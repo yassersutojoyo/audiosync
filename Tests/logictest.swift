@@ -5694,6 +5694,9 @@ do {
     let gone = zonePlan([local(false, listed: false)], streaming: true)
     check(gone.action == .nothing && gone.steps == [.absent],
           "zones: a zone with no member listed does nothing on a click")
+    let unplugged = zonePlan([local(true), local(true, listed: false)], streaming: true)
+    check(unplugged.action == .turnOff && unplugged.steps == [.off, .off],
+          "zones: a zone switched off turns its unplugged members off too, so they stay off when plugged back")
 
     // covers: S259, S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel)
     let presetText = UIStrings()
@@ -10599,6 +10602,10 @@ do {
     let pairedTV = RemoteRow(Facts(id: "tv2", name: "TV 2", kind: "AirPlay", on: false, volume: 50, isAirPlay: true,
                                    needsCode: true, paired: true), text: t)
     let rows = [reference, usb, homePod, castIdle, castGroup, locked, pairedTV]
+    let heldPassword = RemoteRow(Facts(id: "tv3", name: "TV 3", kind: "AirPlay", on: false, volume: 50,
+                                       isAirPlay: true, needsCode: true, paired: false, holdsPassword: true), text: t)
+    check(heldPassword.available && heldPassword.notice == nil && !heldPassword.asksForCode,
+          "web remote: a password speaker whose password this run holds can be turned on from the phone")
 
     let snapshot = RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows)
     let object = (try? JSONSerialization.jsonObject(with: Data(snapshot.json.utf8))) as? [String: Any]
@@ -11211,6 +11218,16 @@ do {
     check(cameBackOutcome == .changed && cameBack.enabled == nil,
           "cast model: a speaker that left the list and came back off gets no search-stopped notice when discovery stops",
           "\(String(describing: cameBackOutcome))")
+    // Hours later, with no Cast event between, its not-responding notice stays the one it has.
+    var neverBack = CastModel()
+    neverBack.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))
+    _ = neverBack.turnOn(realID)
+    let leftAt = Date()
+    neverBack.apply(.gone(id: realID), now: leftAt)
+    let neverBackOutcome = neverBack.apply(.discoveryStopped, now: leftAt.addingTimeInterval(3 * 3600))
+    check(neverBackOutcome == .changed && neverBack.enabled == nil,
+          "cast model: a speaker that left the list long before discovery stops gets no search-stopped notice",
+          "\(String(describing: neverBackOutcome))")
 
     var startStopped = CastModel()
     startStopped.apply(.appeared(CastDevice(id: realID, name: "Lounge"), offsetMs: nil))

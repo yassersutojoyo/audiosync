@@ -266,6 +266,29 @@ fn a_zone_click_switches_only_present_members_and_hidden_ones_are_absent() {
 
 // covers: S246
 #[test]
+fn a_zone_switched_off_turns_its_absent_members_off() {
+    let unplugged = Member {
+        listed: false,
+        ..member(MemberKind::Local, true)
+    };
+    let in_pair = Member {
+        listed: false,
+        in_target: true,
+        ..member(MemberKind::AirPlay2, true)
+    };
+    let off = plan(
+        &[member(MemberKind::Local, true), unplugged, in_pair],
+        playing(),
+    );
+    assert_eq!(off.action, ClickAction::TurnOff);
+    assert_eq!(off.steps, [Step::Off, Step::Off, Step::Absent]);
+    // Switched on, it stays absent: nothing to start until it is back.
+    let on = plan(&[member(MemberKind::Local, false), unplugged], playing());
+    assert_eq!(on.steps, [Step::On, Step::Absent]);
+}
+
+// covers: S246
+#[test]
 fn a_zone_click_turns_on_one_cast_member_the_first_not_busy() {
     let busy = Member {
         busy: true,
