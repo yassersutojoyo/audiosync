@@ -508,6 +508,6 @@ struct InputChannelPair: Equatable {
     /// `change` from the pair a device with `channels` input channels plays
     /// for the stored `saved`, which is 1-2 when the device lacks it.
     static func change(from saved: Int, to chosen: Int, channels: Int, streaming: Bool) -> SourceSwitch.Step {
-        change(from: saved, to: chosen, streaming: streaming)
+        change(from: resolve(saved: saved, channels: channels).pair.index, to: chosen, streaming: streaming)
     }
 }
