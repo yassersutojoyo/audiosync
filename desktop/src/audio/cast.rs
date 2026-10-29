@@ -2204,6 +2204,25 @@ pub mod tests {
         assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
     }
 
+    // covers: C2, S339
+    #[test]
+    fn a_speaker_on_with_no_session_that_leaves_the_list_goes_off_with_a_notice_and_another_can_go_on()
+     {
+        let (fake, mut cast) = listed();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        fake.withdraw(KITCHEN, "Kitchen");
+        let events = cast.poll();
+        assert!(
+            events.contains(&BackendEvent::CastFailed {
+                id: KITCHEN.to_owned(),
+                problem: CastProblem::NotResponding,
+            }),
+            "{events:?}"
+        );
+        assert!(!cast.is_on());
+        assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
+    }
+
     fn members(device: &str, members: Vec<GroupMember>) -> HostEvent {
         HostEvent::Session {
             attempt: AttemptId(1),
