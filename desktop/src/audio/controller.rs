@@ -7509,6 +7509,75 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
+    /// A session capturing input "mic", a USB "Microphone (USB Audio)",
+    /// whose device has left the list.
+    fn input_away() -> MockBackend {
+        let mut backend = backend();
+        backend.connect_input("mic", "Microphone (USB Audio)", "USB");
+        backend
+            .start(&SourceId::Input {
+                endpoint_id: "mic".to_owned(),
+            })
+            .unwrap();
+        backend.disconnect_input("mic");
+        for _ in 0..2 * RESTART_DELAY_POLLS {
+            backend.poll();
+        }
+        assert_eq!(backend.driver().capture_attempts(), 1 + 1);
+        backend
+    }
+
+    // covers: S329
+    #[test]
+    fn an_input_device_away_follows_the_same_device_listed_under_a_new_id() {
+        let mut backend = input_away();
+        backend.connect_input("mic-port-2", "Microphone (2- USB Audio)", "USB");
+        for _ in 0..RESTART_DELAY_POLLS {
+            backend.poll();
+        }
+        let moved = SourceId::Input {
+            endpoint_id: "mic-port-2".to_owned(),
+        };
+        assert_eq!(backend.running_source(), Some(moved));
+        assert_eq!(
+            backend.driver().captures_started().last(),
+            Some(&CaptureTarget::Input {
+                endpoint_id: "mic-port-2".to_owned(),
+                pair: 0,
+            })
+        );
+        assert!(backend.driver().capture_running());
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S329
+    #[test]
+    fn an_input_device_away_never_follows_another_device() {
+        let mic = Some(SourceId::Input {
+            endpoint_id: "mic".to_owned(),
+        });
+        // Another name, the same name on another bus, and two that could
+        // each be the device.
+        for others in [
+            &[("webcam", "Microphone (Webcam)", "USB")][..],
+            &[("bt", "Microphone (USB Audio)", "BTHENUM")],
+            &[
+                ("port-2", "Microphone (2- USB Audio)", "USB"),
+                ("port-3", "Microphone (3- USB Audio)", "USB"),
+            ],
+        ] {
+            let mut backend = input_away();
+            for (id, name, enumerator) in others {
+                backend.connect_input(id, name, enumerator);
+            }
+            for _ in 0..4 * RESTART_DELAY_POLLS {
+                backend.poll();
+            }
+            assert_eq!(backend.running_source(), mic, "{others:?}");
+            assert_eq!(backend.driver().capture_attempts(), 1 + 1, "{others:?}");
+        }
+    }
+
     #[test]
     fn a_failed_input_listing_leaves_the_inputs_out_and_keeps_the_apps() {
         let mut backend = backend();

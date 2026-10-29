@@ -5748,6 +5748,35 @@ mod tests {
         assert!(adapter.snapshot().running);
     }
 
+    // covers: S329
+    #[test]
+    fn an_input_device_back_under_a_new_endpoint_id_becomes_the_source() {
+        const MOVED: &str = "{0.0.1.00000000}.{mic-port-2}";
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.set_running(true);
+        adapter.audio.disconnect_input(MIC);
+        for _ in 0..10 {
+            adapter.poll();
+        }
+        assert_eq!(messages(&adapter).len(), 1, "the not-connected notice");
+        adapter
+            .audio
+            .connect_input(MOVED, "Microphone (2- USB Audio)", "USB");
+        for _ in 0..4 {
+            adapter.poll();
+        }
+        let state = adapter.snapshot();
+        assert!(state.running);
+        assert_eq!(state.source_id, format!("input:{MOVED}"));
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
     #[test]
     fn the_snapshot_shows_the_sources_and_outputs_listed() {
         let state = adapter().snapshot();
