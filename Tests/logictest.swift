@@ -9527,6 +9527,20 @@ do {
     check(quiet.apply(.volume(attempt: 7, reported(0.1, fixed: true))) != .setVolume(0.8),
           "cast master: a fixed volume is not set at the start (C68)")
 
+    var early = CastModel()
+    early.apply(.appeared(CastDevice(id: tv, name: "Living room TV"), offsetMs: nil))
+    _ = early.turnOn(tv)
+    early.startSent(tv)
+    _ = early.setVolume(tv, position: 50)
+    _ = early.started(tv, attempt: 9, refusal: ASC_CAST_REFUSED_NONE)
+    _ = early.setVolume(tv, position: 30)
+    check(early.apply(.volume(attempt: 9, reported(0.8))) == .setVolume(0.3),
+          "cast master: the first status sets the level last set while the speaker started (C105)")
+    _ = early.apply(.volume(attempt: 9, reported(0.5)))
+    check(approx(early.volume(of: tv), 50, 1e-9),
+          "cast master: a level set before the first status was never sent, so the TV's own move to it is read back (C70, C105)",
+          "\(early.volume(of: tv))")
+
     var group = CastModel()
     group.apply(.appeared(CastDevice(id: "group1", name: "Everywhere", group: true), offsetMs: nil))
     _ = group.setMaster(50)
