@@ -93,7 +93,7 @@ use audiosync_core::calibrate_all::{
 use crate::audio::calibrate_all::{self, AllRun, Finished, Member, Progress, ZoneScope};
 use crate::audio::calibration::{self, CalibrationRun, Failure};
 use crate::audio::capture::{WHOLE_SYSTEM_NAME, describe_pair};
-use crate::audio::outputs::MicKind;
+use crate::audio::outputs::{MicKind, unnumbered};
 use crate::audio::routing::{DirectPath, DirectReason};
 use crate::data_folder;
 use crate::debug_log::DebugLog;
@@ -3678,6 +3678,21 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     NoticeMessage::InputNotConnected { source },
                 );
             }
+            BackendEvent::InputMoved { from, to, name } => {
+                if let Chosen::Input { endpoint_id, .. } = &self.chosen
+                    && *endpoint_id == from
+                {
+                    self.chosen = Chosen::Input {
+                        endpoint_id: to.clone(),
+                        name,
+                    };
+                }
+                if let Some(pair) = self.input_pairs.remove(&from) {
+                    self.audio.set_input_pair(&from, 0);
+                    self.audio.set_input_pair(&to, pair);
+                    self.input_pairs.insert(to, pair);
+                }
+            }
             BackendEvent::CaptureFree => {
                 self.clear_if(NoticeSubject::Source, |message| {
                     matches!(
@@ -5283,27 +5298,6 @@ fn speaker_kind(kind: OutputKind) -> SpeakerKind {
     }
 }
 
-/// An output's name without the number Windows may put before the device's
-/// name inside its parentheses (digits, then "- "), as it does for a USB
-/// device in another port or a second device of the same model:
-/// "Speakers (2- USB DAC)" gives "Speakers (USB DAC)".
-fn unnumbered(name: &str) -> String {
-    let mut plain = String::with_capacity(name.len());
-    let mut rest = name;
-    while let Some(open) = rest.find('(') {
-        plain.push_str(&rest[..=open]);
-        rest = &rest[open + 1..];
-        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-        if digits > 0
-            && let Some(after) = rest[digits..].strip_prefix("- ")
-        {
-            rest = after;
-        }
-    }
-    plain.push_str(rest);
-    plain
-}
-
 /// The kind microphone calibration leaves `output` out for, if any. The
 /// reference is never left out: it is what the others are measured against.
 fn left_out(output: &OutputInfo) -> Option<MicKind> {
@@ -5888,6 +5882,108 @@ mod tests {
         }
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
         assert!(adapter.snapshot().running);
+    }
+
+    // covers: S329
+    #[test]
+    fn an_input_device_back_under_a_new_endpoint_id_becomes_the_source() {
+        const MOVED: &str = "{0.0.1.00000000}.{mic-port-2}";
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.set_running(true);
+        adapter.audio.disconnect_input(MIC);
+        for _ in 0..10 {
+            adapter.poll();
+        }
+        assert_eq!(messages(&adapter).len(), 1, "the not-connected notice");
+        adapter
+            .audio
+            .connect_input(MOVED, "Microphone (2- USB Audio)", "USB");
+        for _ in 0..4 {
+            adapter.poll();
+        }
+        let state = adapter.snapshot();
+        assert!(state.running);
+        assert_eq!(state.source_id, format!("input:{MOVED}"));
+        assert_eq!(adapter.chosen_name(), "Microphone (2- USB Audio)");
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    // covers: S329
+    #[test]
+    fn an_input_followed_by_a_source_listing_opens_on_its_channel_pair() {
+        const MOVED: &str = "{0.0.1.00000000}.{mic-port-2}";
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Interface (USB Audio)", "USB");
+        adapter.audio.set_input_channels(MIC, 6);
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.set_running(true);
+        adapter.select_input_pair(1);
+        adapter.audio.disconnect_input(MIC);
+        for _ in 0..10 {
+            adapter.poll();
+        }
+        adapter
+            .audio
+            .connect_input(MOVED, "Interface (2- USB Audio)", "USB");
+        adapter.audio.set_input_channels(MOVED, 6);
+        // The source listing finds the device before a poll does.
+        adapter.refresh_sources();
+        for _ in 0..4 {
+            adapter.poll();
+        }
+        assert_eq!(
+            input_pair_captures(&adapter).last(),
+            Some(&(MOVED.to_owned(), 1))
+        );
+        assert_eq!(adapter.snapshot().input_pair, 1);
+    }
+
+    // covers: S329
+    #[test]
+    fn an_input_device_away_never_follows_a_twin_plugged_in_while_it_played() {
+        const TWIN: &str = "{0.0.1.00000000}.{mic-twin}";
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.set_running(true);
+        adapter
+            .audio
+            .connect_input(TWIN, "Microphone (2- USB Audio)", "USB");
+        for _ in 0..2 * SOURCE_POLLS {
+            adapter.poll();
+        }
+        adapter.audio.disconnect_input(MIC);
+        for _ in 0..10 {
+            adapter.poll();
+        }
+        // Any later change of the devices lists the inputs again.
+        adapter
+            .audio
+            .connect_input("{0.0.1.00000000}.{line-in}", "Line In", "HDAUDIO");
+        for _ in 0..4 {
+            adapter.poll();
+        }
+        assert_eq!(adapter.snapshot().source_id, mic());
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::InputNotConnected {
+                source: "Microphone (USB Audio)".to_owned()
+            }]
+        );
     }
 
     #[test]
