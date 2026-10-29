@@ -2754,9 +2754,20 @@ impl<D: Driver> Controller<D> {
                 executables,
             } => {
                 let processes = self.driver.processes()?;
-                // Without the sessions, the chosen top processes still play.
-                let sessions = self.driver.session_pids().unwrap_or_default();
-                decide_apps_capture(&processes, &sessions, own_pid, root_pids, executables)
+                // Without the sessions, the chosen top processes still play,
+                // but none of them running says nothing of a later instance.
+                let sessions = self.driver.session_pids();
+                let target = decide_apps_capture(
+                    &processes,
+                    sessions.as_deref().unwrap_or_default(),
+                    own_pid,
+                    root_pids,
+                    executables,
+                );
+                match (target, sessions) {
+                    (Err(BackendError::SourceGone), Err(error)) => Err(error),
+                    (target, _) => target,
+                }
             }
             SourceId::AppsExcept { executables } => {
                 let processes = self.driver.processes()?;
@@ -2970,8 +2981,6 @@ impl<D: Driver> Controller<D> {
                     self.switch_to_system();
                     return;
                 }
-                self.log
-                    .log(|| "the check found none of the mix's apps running".to_owned());
                 self.end_session();
                 self.airplay_streaming(false);
                 self.release_busy();

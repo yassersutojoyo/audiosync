@@ -154,6 +154,24 @@ struct CaptureLink {
     /// The error code its app's process refused a wait with, as an app
     /// running as administrator does (S327).
     watch_refused: Option<i32>,
+    /// The processes that refuse a wait, for the apps a mix follows.
+    unwatchable: BTreeSet<u32>,
+}
+
+/// The error a wait on `target`'s apps is refused with. As on Windows, one
+/// app of a mix that can't be waited for leaves the whole mix unwatched.
+fn refused_watch(target: &CaptureTarget, unwatchable: &BTreeSet<u32>) -> Option<i32> {
+    let refused = match target {
+        CaptureTarget::Loopback(activation) => {
+            activation.mode == LoopbackMode::IncludeTree
+                && unwatchable.contains(&activation.target_pid)
+        }
+        CaptureTarget::Mix(activations) => activations
+            .iter()
+            .any(|activation| unwatchable.contains(&activation.target_pid)),
+        CaptureTarget::Input { .. } => false,
+    };
+    refused.then_some(ACCESS_DENIED)
 }
 
 fn lock(link: &Mutex<CaptureLink>) -> std::sync::MutexGuard<'_, CaptureLink> {
@@ -185,6 +203,7 @@ impl CaptureHandle for MockCapture {
             return false;
         }
         link.target = target.clone();
+        link.watch_refused = refused_watch(target, &link.unwatchable);
         link.retargets += 1;
         link.missing = false;
         true
@@ -742,24 +761,7 @@ impl Driver for MockDriver {
             return Err(BackendError::InputGone);
         }
         self.captures_started.push(target.clone());
-        let watch_refused = match &target {
-            CaptureTarget::Loopback(activation)
-                if activation.mode == LoopbackMode::IncludeTree
-                    && self.unwatchable.contains(&activation.target_pid) =>
-            {
-                Some(ACCESS_DENIED)
-            }
-            // As on Windows, one app that can't be waited for leaves the
-            // whole mix unwatched.
-            CaptureTarget::Mix(activations)
-                if activations
-                    .iter()
-                    .any(|activation| self.unwatchable.contains(&activation.target_pid)) =>
-            {
-                Some(ACCESS_DENIED)
-            }
-            _ => None,
-        };
+        let watch_refused = refused_watch(&target, &self.unwatchable);
         let link = Arc::new(Mutex::new(CaptureLink {
             target,
             state: CaptureState::Running,
@@ -770,6 +772,7 @@ impl Driver for MockDriver {
             retargets: 0,
             setup: self.capture_setup,
             watch_refused,
+            unwatchable: self.unwatchable.clone(),
         }));
         self.capture = Some(Arc::clone(&link));
         Ok(MockCapture { link })
@@ -903,7 +906,11 @@ impl Controller<MockDriver> {
     /// as an app running as administrator: a capture of its tree then
     /// doesn't notice when it quits.
     pub fn refuse_watch(&mut self, pid: u32) {
-        self.driver_mut().unwatchable.insert(pid);
+        let driver = self.driver_mut();
+        driver.unwatchable.insert(pid);
+        if let Some(link) = &driver.capture {
+            lock(link).unwatchable.insert(pid);
+        }
     }
 
     /// Makes the creation time of process `pid` one that can't be read.
