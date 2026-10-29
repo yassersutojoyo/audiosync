@@ -3549,13 +3549,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     NoticeMessage::InputNotConnected { source },
                 );
             }
-            BackendEvent::InputMoved { from, to } => {
-                if let Chosen::Input { endpoint_id, .. } = &mut self.chosen
+            BackendEvent::InputMoved { from, to, name } => {
+                if let Chosen::Input { endpoint_id, .. } = &self.chosen
                     && *endpoint_id == from
                 {
-                    endpoint_id.clone_from(&to);
+                    self.chosen = Chosen::Input {
+                        endpoint_id: to.clone(),
+                        name,
+                    };
                 }
                 if let Some(pair) = self.input_pairs.remove(&from) {
+                    self.audio.set_input_pair(&from, 0);
+                    self.audio.set_input_pair(&to, pair);
                     self.input_pairs.insert(to, pair);
                 }
             }
@@ -5763,6 +5768,7 @@ mod tests {
         let state = adapter.snapshot();
         assert!(state.running);
         assert_eq!(state.source_id, format!("input:{MOVED}"));
+        assert_eq!(adapter.chosen_name(), "Microphone (2- USB Audio)");
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
 

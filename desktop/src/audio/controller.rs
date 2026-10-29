@@ -1268,33 +1268,48 @@ impl<D: Driver> Controller<D> {
         }
     }
 
-    /// Lets a capture that waits for its input device try at the next poll
-    /// once the device is listed again, under its endpoint ID or under a new
-    /// one ([`Self::moved_input`]), which becomes the source (S329).
+    /// Lists the input devices when the capture waits for its own
+    /// ([`Self::take_inputs`]).
     fn reopen_listed_input(&mut self) {
-        let Some(SourceId::Input { endpoint_id }) = self
-            .session
-            .as_ref()
-            .filter(|session| {
-                session
+        if self.waiting_input().is_some()
+            && let Ok(readings) = self.driver.inputs()
+        {
+            self.take_inputs(&readings);
+        }
+    }
+
+    /// The endpoint ID of the input device the capture waits for, if it does.
+    fn waiting_input(&self) -> Option<String> {
+        let session = self.session.as_ref()?;
+        match &session.source {
+            SourceId::Input { endpoint_id }
+                if session
                     .reopen
-                    .is_some_and(|reopen| reopen.away && reopen.wait == 0)
-            })
-            .map(|session| session.source.clone())
-        else {
-            return;
-        };
-        let Ok(readings) = self.driver.inputs() else {
-            return;
-        };
-        let listed = listed_inputs(&readings);
-        let to = if listed.iter().any(|(id, ..)| *id == endpoint_id) {
-            Some(endpoint_id.clone())
-        } else {
-            self.moved_input(&endpoint_id, &listed)
-        };
+                    .is_some_and(|reopen| reopen.away && reopen.wait == 0) =>
+            {
+                Some(endpoint_id.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Takes in the input devices as `readings` list them now: each listing
+    /// is remembered, and a capture that waits for its input device tries at
+    /// the next poll once the device is listed again, under its endpoint ID
+    /// or under a new one ([`Self::moved_input`]), which becomes the source
+    /// (S329).
+    fn take_inputs(&mut self, readings: &[EndpointReading]) {
+        let listed = listed_inputs(readings);
+        let found = self.waiting_input().and_then(|from| {
+            let to = if listed.iter().any(|(id, ..)| *id == from) {
+                Some(from.clone())
+            } else {
+                self.moved_input(&from, &listed)
+            };
+            to.map(|to| (from, to))
+        });
         self.note_inputs(&listed);
-        let Some(to) = to else {
+        let Some((endpoint_id, to)) = found else {
             return;
         };
         if to == endpoint_id {
@@ -1307,13 +1322,15 @@ impl<D: Driver> Controller<D> {
                      {endpoint_id}): the capture follows it"
                 )
             });
-            if let Some(pair) = self.input_pairs.remove(&endpoint_id) {
-                self.input_pairs.insert(to.clone(), pair);
-            }
             self.inputs_left_behind.insert(endpoint_id.clone());
+            let name = listed
+                .iter()
+                .find(|(id, ..)| *id == to)
+                .map_or_else(|| to.clone(), |(_, name, _)| name.clone());
             self.pending.push(BackendEvent::InputMoved {
                 from: endpoint_id,
                 to: to.clone(),
+                name,
             });
         }
         if let Some(session) = self.session.as_mut() {
@@ -3250,6 +3267,7 @@ impl<D: Driver> Controller<D> {
                     self.log
                         .log(|| "listing the input devices works again".to_owned());
                 }
+                self.take_inputs(&readings);
                 sources.extend(input_sources(readings));
             }
             Err(error) => {
@@ -4716,7 +4734,7 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
             format!("output {} no longer waits for its device", label(names, id))
         }
         BackendEvent::CaptureBusy => "capture busy: another app holds its input".to_owned(),
-        BackendEvent::InputMoved { from, to } => {
+        BackendEvent::InputMoved { from, to, .. } => {
             format!("the capture follows its input device from {from} to {to}")
         }
         BackendEvent::InputAway => "the capture waits for its input device to be listed".to_owned(),
