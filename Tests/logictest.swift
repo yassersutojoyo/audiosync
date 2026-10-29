@@ -12203,5 +12203,27 @@ do {
     check(options[.credits] is NSAttributedString, "about: the license credits stay")
 }
 
+// MARK: Panel status counts only the AirPlay speakers it shows (StreamingPolicy.activeSpeakers)
+do {
+    let running = StreamingPolicy.activeSpeakers(airPlay: [true, true, false], senderFailed: false, others: [true, false])
+    check(running == 3, "status count: AirPlay and local speakers that are on", "\(running)")
+    let failed = StreamingPolicy.activeSpeakers(airPlay: [true, true], senderFailed: true, others: [true])
+    check(failed == 1, "status count: AirPlay rows hidden while the sender has failed don't count", "\(failed)")
+    let hintOn = StreamingPolicy.activeSpeakers(airPlay: [true], senderFailed: true, others: []) > 0
+    check(!hintOn, "status count: no live input AirPlay note for a hidden AirPlay speaker")
+}
+
+// MARK: Panel keeps room for what its compact notices show (PanelChrome.height)
+do {
+    let bare = PanelChrome.height(notices: 0)
+    let oneNotice = PanelChrome.height(notices: 1)
+    let twoNotices = PanelChrome.height(notices: 2)
+    check(oneNotice > bare && twoNotices - oneNotice <= 30 && PanelChrome.height(notices: 5) == twoNotices,
+          "panel chrome: one banner however many notices wait, plus its footer line",
+          "\(bare) \(oneNotice) \(twoNotices)")
+    let card = PanelChrome.height(notices: 0, permissionCard: true) - bare
+    check(card >= 120, "panel chrome: the permission card's room is kept", "\(card)")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

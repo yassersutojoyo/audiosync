@@ -406,7 +406,9 @@ final class AppModel: ObservableObject {
     /// The note under the source while an input device plays through an AirPlay speaker.
     var liveInputAirPlayHint: String? {
         LiveInputAirPlayHint.tenths(source: AudioSource(defaultsValue: sourceID),
-                                    airPlayOn: airplay.contains { $0.enabled },
+                                    airPlayOn: StreamingPolicy.activeSpeakers(airPlay: airplay.map(\.enabled),
+                                                                              senderFailed: airplaySenderFailed,
+                                                                              others: []) > 0,
                                     airPlayDelayMs: airPlayDelayMs)
             .map(text.liveInputAirPlayHint(tenths:))
     }
@@ -522,7 +524,10 @@ final class AppModel: ObservableObject {
     }
 
     /// Speakers switched on right now, AirPlay and local.
-    var activeSpeakers: Int { (airplay + local + cast).filter(\.enabled).count }
+    var activeSpeakers: Int {
+        StreamingPolicy.activeSpeakers(airPlay: airplay.map(\.enabled), senderFailed: airplaySenderFailed,
+                                       others: (local + cast).map(\.enabled))
+    }
 
     var statusText: String { running ? text.statusStreaming(speakers: activeSpeakers) : text.statusOff }
 
@@ -1589,14 +1594,10 @@ struct MenuBarView: View {
     /// margins), plus room for what may show around it: the list grows until
     /// the panel would pass the bottom of the screen, and only then scrolls.
     private var chromeHeight: CGFloat {
-        var height: CGFloat = 220
-        height += CGFloat(min(model.notices.items.count, 2)) * 90
-        if model.airPlayProblem != nil || model.localNetworkHint != .none { height += 70 }
-        if castAddRow != .none { height += 20 }
-        if PresetPanel.showsRow(model.presets) { height += 38 }
-        if model.liveInputAirPlayHint != nil { height += 48 }
-        if model.noSpeakerOn { height += 32 }
-        return height
+        PanelChrome.height(notices: model.notices.items.count, permissionCard: model.permissionOffer != nil,
+                           airPlayNote: model.airPlayProblem != nil || model.localNetworkHint != .none,
+                           castAddRow: castAddRow != .none, presets: PresetPanel.showsRow(model.presets),
+                           liveInputHint: model.liveInputAirPlayHint != nil, noSpeakerOn: model.noSpeakerOn)
     }
 
     /// While the Google Cast search finds nothing, the panel offers adding
