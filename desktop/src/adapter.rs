@@ -1330,7 +1330,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// counts as 0 for a local or Cast speaker.
     fn write_calibrated(&mut self, members: &[Member], target: &Target, value: Option<f64>) {
         match target {
-            // Against the L_s the run read with L, which a clamped L can't give back.
             Target::AirPlay => {
                 let sender = members.iter().find(|m| m.class == Class::AirPlay);
                 if let Some(adjustment) = value
@@ -1546,7 +1545,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// present members, and those that don't play with their stored delays.
     fn zone_scope(&self, zone: &zones::Zone) -> ZoneScope {
         let state = self.snapshot();
-        let sender_ms = self.audio.airplay_sender_latency_ms().unwrap_or(0.0);
+        let sender_ms = self.audio.airplay_adjustment_base_ms();
         let playing: Vec<String> = calibrate_all::lineup(&self.audio)
             .members
             .iter()
@@ -5169,7 +5168,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 return;
             }
         };
-        let members = kept.members.clone();
+        // An off row's L_s was read while it didn't play: convert with a measured row's.
+        let members: Vec<Member> = kept
+            .members
+            .iter()
+            .enumerate()
+            .filter(|(row, _)| !kept.sheet.is_off(*row))
+            .map(|(_, member)| member.clone())
+            .collect();
         self.log
             .log(|| format!("Calibrate All applied: {:?}", applied.changes));
         let before = self.audio.airplay_adjustment();
