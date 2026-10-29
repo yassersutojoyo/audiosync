@@ -237,6 +237,7 @@ extension AppDelegate {
         guard let id = CastID.device(appID), castModel.isLive(id) else { return }
         DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) " + (muted ? "muted" : "unmuted") + " by the user")
         castSender?.setMuted(muted)
+        if castModel.setMuted(id, muted) { pushModel() }
     }
 
     /// The user's Resync: the stream loads again, with a short gap.

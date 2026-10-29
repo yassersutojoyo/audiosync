@@ -962,6 +962,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | cast model: a speaker added by address that a browse finds with no session gets no level sent | S341 |
 | cast model: a speaker that is on with no session leaves the list, says so in a notice and no longer blocks another | C2 |
 | cast model: a speaker added by address that is on with no session stays on under the id a browse finds | C2 |
+| cast: a mute toggle shows at once and the device's next status wins | C70 |
 | quit: SIGTERM and Ctrl-C's SIGINT both take the clean exit path (S111) | S111 |
 | quit: after a signal's clean exit the status is 128 plus its number, so a calling script sees the interrupt (S111) | S111 |
 | local network probe: a browser waiting on PolicyDenied means denied | S154 |

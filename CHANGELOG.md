@@ -174,6 +174,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, picking other input channels while the input device is unplugged no longer turns streaming off; the new channels play once the device is back.
 - On the Mac, an AirPlay speaker that plays only AirPlay 2 and that you turn on while AirPlay 2 is off now says so, and that AirPlay 2 needs to be on. Before, it said it couldn't play.
 - On the Mac, an AirPlay speaker that briefly drops off the network while it plays keeps the latency it reported, so its timing against the other speakers stays as it was. Before, AudioSync forgot that latency until the speaker started again.
+- On the Mac, a Google Cast speaker's Mute button changes to Unmute, and back, as soon as you click it. Before, it waited for the speaker to answer.
 
 ## [0.7.1] - 2026-10-27
 

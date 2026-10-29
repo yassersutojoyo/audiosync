@@ -892,6 +892,14 @@ struct CastModel {
         return levelToSend(id, own: own)
     }
 
+    /// Shows a mute the user asked for until the device's next status (C70);
+    /// true when the row changes.
+    mutating func setMuted(_ id: String, _ muted: Bool) -> Bool {
+        guard isLive(id), volumes[id] != nil, volumes[id]?.muted != muted else { return false }
+        volumes[id]?.muted = muted
+        return true
+    }
+
     /// The master position, 0 to 100 (C104). Returns the level to send to
     /// the device in a session; nil when none runs, the master is unchanged,
     /// the device's own level isn't known yet or its volume is fixed.

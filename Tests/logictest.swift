@@ -9955,6 +9955,11 @@ do {
     check(m.apply(.volume(attempt: 3, CastVolume(level: 0.4, muted: true, fixed: false))) == .changed
             && approx(m.volume(of: kitchen), 40, 1e-9) && m.volumes[kitchen]?.muted == true,
           "cast: the device's volume and mute follow its status")
+    // covers: C70
+    check(m.setMuted(kitchen, false) && m.volumes[kitchen]?.muted == false
+            && m.apply(.volume(attempt: 3, CastVolume(level: 0.4, muted: true, fixed: false))) == .changed
+            && m.volumes[kitchen]?.muted == true,
+          "cast: a mute toggle shows at once and the device's next status wins")
     check(m.setVolume(kitchen, position: 70) == 0.7 && approx(m.volume(of: kitchen), 70, 1e-9)
             && m.setVolume(den, position: 50) == nil && m.setVolume(kitchen, position: .nan) == nil,
           "cast: the slider sets the device's level only while its session runs")
