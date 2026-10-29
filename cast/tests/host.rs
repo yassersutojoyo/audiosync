@@ -530,6 +530,13 @@ fn device_memory_keeps_formats_and_offsets_and_skips_damaged_entries() {
     let damaged = DeviceMemory::from_json(&format!(r#"{{"{A}": {{"offsetMs": 60000}}}}"#));
     assert_eq!(damaged.offset(&A), Some(MAX_OFFSET), "clamped on load");
     assert_eq!(MAX_OFFSET, Duration::from_secs(20));
+    let mut long = DeviceMemory::default();
+    long.set_offset(A, Duration::from_secs(30));
+    assert_eq!(
+        DeviceMemory::from_json(&long.to_json()).offset(&A),
+        long.offset(&A),
+        "an offset reads back after a restart as it was set"
+    );
 
     let mut host = CastHost::new(memory).expect("worker");
     host.set_offset(B, Duration::from_millis(40));
@@ -746,6 +753,101 @@ fn held_events_do_not_hold_back_a_later_recovery() {
         ),
         "{order:?}"
     );
+    host.stop();
+    wait_for(&host, Duration::from_secs(3), ended(A));
+    assert!(host.shutdown());
+}
+
+// covers: C70
+#[test]
+fn a_volume_change_while_the_host_falls_behind_still_reaches_it() {
+    let device = FakeDevice::start(Behavior::default());
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let (_feed, reader) = ring();
+    host.start(target(A, &device), 48_000, Metadata::default(), reader)
+        .expect("starts");
+    wait_for(&host, Duration::from_secs(10), started(A));
+    // Each fails at once and fills the outbox while the host doesn't poll.
+    for _ in 0..MAX_HOST_EVENTS + 16 {
+        host.set_volume(f64::NAN);
+    }
+    thread::sleep(Duration::from_millis(500));
+    for level in [0.6, 0.7] {
+        device.send(Command::Send(json_message(
+            PLATFORM,
+            "*",
+            NS_RECEIVER,
+            json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {
+                "volume": {"level": level, "muted": false, "controlType": "attenuation", "stepInterval": 0.05},
+            }}),
+        )));
+        thread::sleep(Duration::from_millis(500));
+    }
+    let events = wait_for(&host, Duration::from_secs(5), |event| {
+        matches!(
+            event,
+            HostEvent::Session { event: SessionEvent::Volume(volume), .. }
+                if (volume.level - 0.7).abs() < 1e-9
+        )
+    });
+    let levels: Vec<f64> = events
+        .iter()
+        .filter_map(|event| match event {
+            HostEvent::Session {
+                event: SessionEvent::Volume(volume),
+                ..
+            } => Some(volume.level),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(levels, [0.7], "the newer level replaces the waiting one");
+    host.stop();
+    wait_for(&host, Duration::from_secs(3), ended(A));
+    assert!(host.shutdown());
+}
+
+// covers: C81
+#[test]
+fn reconnects_are_spaced_and_an_announcement_cuts_the_wait_short() {
+    let device = FakeDevice::start(Behavior::default());
+    let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
+    let (_feed, reader) = ring();
+    host.start(target(A, &device), 48_000, Metadata::default(), reader)
+        .expect("starts");
+    wait_for(&host, Duration::from_secs(10), started(A));
+    let recovered = |event: &HostEvent| {
+        matches!(
+            event,
+            HostEvent::Session {
+                event: SessionEvent::Recovered { .. },
+                ..
+            }
+        )
+    };
+    device.send(Command::DropConnection);
+    wait_for(&host, Duration::from_secs(10), recovered);
+    assert_eq!(device.connection_count(), 2, "the first one at once");
+
+    let dropped = Instant::now();
+    device.send(Command::DropConnection);
+    wait_for(&host, Duration::from_secs(10), recovered);
+    assert!(
+        dropped.elapsed() >= Duration::from_secs(1),
+        "the next one waits 1 s: {:?}",
+        dropped.elapsed()
+    );
+
+    // The one after waits 2 s, unless the device announces itself.
+    let dropped = Instant::now();
+    device.send(Command::DropConnection);
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(device.connection_count(), 3, "still waiting");
+    host.announced(A);
+    while device.connection_count() < 4 && dropped.elapsed() < Duration::from_millis(1_500) {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(device.connection_count(), 4, "{:?}", dropped.elapsed());
+    wait_for(&host, Duration::from_secs(10), recovered);
     host.stop();
     wait_for(&host, Duration::from_secs(3), ended(A));
     assert!(host.shutdown());

@@ -46,7 +46,9 @@ use std::time::{Duration, Instant};
 use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, audio_ring};
 use audiosync_cast::discovery::mdns::MdnsBrowser;
 use audiosync_cast::discovery::reach::Reachability;
-use audiosync_cast::discovery::{BrowseEvent, DeviceId, DeviceKey, DeviceList, Entry, ListEvent};
+use audiosync_cast::discovery::{
+    Announcements, BrowseEvent, DeviceId, DeviceKey, DeviceList, Entry, ListEvent,
+};
 use audiosync_cast::group::{GroupMember, GroupRecords};
 use audiosync_cast::host::{
     AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, StartRefused,
@@ -54,7 +56,7 @@ use audiosync_cast::host::{
 use audiosync_cast::media::{MediaError, Metadata};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
 use audiosync_cast::status::{
-    ControlType, DeviceVolume, NO_ZONE_LEVEL, answers_level, device_level, own_level,
+    ControlType, DeviceVolume, NO_ZONE_LEVEL, answers_volume, device_level, own_level,
     start_own_level,
 };
 use audiosync_core::fade::Fade;
@@ -82,10 +84,6 @@ const PAGE_BYTES: usize = 4096;
 
 /// The volume step of a device that reports none, 0 to 100.
 const DEFAULT_VOLUME_STEP: f64 = 1.0;
-
-/// The unanswered levels kept to recognize their answers: a slider drag
-/// sends one every 100 ms at most (C70).
-const MAX_UNANSWERED: usize = 16;
 
 /// Discovery answers handled per UI tick, so a flood of mDNS answers
 /// cannot stall the UI thread; the rest wait for the next tick (C106).
@@ -407,6 +405,8 @@ pub trait CastLink: Send {
     fn memory(&self) -> DeviceMemory;
     fn poll_event(&mut self) -> Option<HostEvent>;
     fn poll_browse(&mut self) -> Option<BrowseEvent>;
+    /// The device announced itself: a reconnect to it goes at once (C81).
+    fn announced(&mut self, device: DeviceId);
     fn discovery(&self) -> CastDiscovery;
     /// Tears down whatever runs within C88's budget; the one call that
     /// waits. Returns whether it finished in time.
@@ -493,6 +493,10 @@ impl CastLink for HostLink {
         self.browser.as_mut()?.poll_event()
     }
 
+    fn announced(&mut self, device: DeviceId) {
+        self.host.announced(device);
+    }
+
     fn discovery(&self) -> CastDiscovery {
         match &self.browser {
             Some(browser) if !browser.is_dead() => CastDiscovery::Browsing,
@@ -544,6 +548,7 @@ pub struct CastSpeakers {
     link: Option<Box<dyn CastLink>>,
     feed: CastFeed,
     list: DeviceList,
+    announcements: Announcements,
     /// The one device the user turned on.
     enabled: Option<DeviceId>,
     /// Each device's volume as its latest status reports it.
@@ -559,7 +564,8 @@ pub struct CastSpeakers {
     /// here is in no zone.
     zones: BTreeMap<DeviceId, f64>,
     /// The levels sent in this session that no status has answered yet,
-    /// oldest first.
+    /// oldest first; all of them, since the sender paces a drag later (C70)
+    /// and may send any of them.
     unanswered: Vec<f64>,
     attempt: Option<Attempt>,
     /// How long the feed waits for L, in ms (C77).
@@ -591,6 +597,7 @@ impl CastSpeakers {
             link: Some(link),
             feed: CastFeed::new(),
             list: DeviceList::new(),
+            announcements: Announcements::default(),
             enabled: None,
             volumes: BTreeMap::new(),
             requested: None,
@@ -734,6 +741,17 @@ impl CastSpeakers {
                     manual.resolved = Some(socket);
                     self.log.log(|| format!("Cast: {text} is at {socket}"));
                     self.pending.push(BackendEvent::CastChanged);
+                    let browsed = self
+                        .list
+                        .entries()
+                        .iter()
+                        .find_map(|entry| match entry.key {
+                            DeviceKey::Id(id) if entry.addresses.contains(&socket) => Some(id),
+                            _ => None,
+                        });
+                    if let Some(id) = browsed {
+                        self.identified(socket, id);
+                    }
                 }
                 Err(error) => {
                     manual.retry_at = Some(Instant::now() + LOOKUP_RETRY);
@@ -781,8 +799,9 @@ impl CastSpeakers {
         }
     }
 
-    /// A browse found the device a speaker added by address is (C18): one
-    /// that is on stays on as that device, and its offset goes with it.
+    /// A browse, or a lookup that lands on a browsed address, found the
+    /// device a speaker added by address is (C18): one that is on stays on
+    /// as that device, and its offset goes with it.
     fn identified(&mut self, from: SocketAddr, id: DeviceId) {
         let Some(manual) = self
             .manual
@@ -1209,15 +1228,20 @@ impl CastSpeakers {
     }
 
     /// The device's own level, 0 to 100, sent times the master (C69,
-    /// C104); shown until the device's next status answers it.
+    /// C104); shown until the device's next status answers it. Without a
+    /// session it is kept, and the next session's first status sets it (C105).
     pub fn set_volume(&mut self, id: &str, position: f64) {
-        let Some(device) = self.playing_device(id) else {
+        let Some(device) = DeviceId::parse(id) else {
             return;
         };
         if !position.is_finite() {
             return;
         }
         let own = (position / 100.0).clamp(0.0, 1.0);
+        if self.playing_device(id).is_none() {
+            self.levels.insert(device, own);
+            return;
+        }
         self.requested = Some((device, own));
         self.send_level(device, own);
     }
@@ -1283,7 +1307,7 @@ impl CastSpeakers {
         if reported.is_some_and(|volume| volume.control_type == ControlType::Fixed) {
             return;
         }
-        if reported.is_some_and(|volume| answers_level(level, volume.level)) {
+        if reported.is_some_and(|volume| answers_volume(level, volume)) {
             // The device reports only changes, so this level gets no answer,
             // and the latest level sent replaces whatever was still in flight.
             self.unanswered.clear();
@@ -1295,9 +1319,6 @@ impl CastSpeakers {
                 self.requested = None;
             }
         } else {
-            if self.unanswered.len() == MAX_UNANSWERED {
-                self.unanswered.remove(0);
-            }
             self.unanswered.push(level);
         }
         if let Some(link) = self.link.as_mut() {
@@ -1317,10 +1338,16 @@ impl CastSpeakers {
             .attempt
             .as_mut()
             .is_some_and(|attempt| !std::mem::replace(&mut attempt.heard_volume, true));
+        if first {
+            // The sender sends no level before the device's first status.
+            self.unanswered.clear();
+        }
+        // Answers come back in send order, so the oldest copy of a level a
+        // drag passed twice is the one this answers.
         let answered = self
             .unanswered
             .iter()
-            .rposition(|&sent| answers_level(sent, level));
+            .position(|&sent| answers_volume(sent, &volume));
         if let Some(index) = answered {
             self.unanswered.drain(..=index);
         }
@@ -1344,7 +1371,11 @@ impl CastSpeakers {
             self.pending.push(BackendEvent::CastChanged);
         }
         let allowed = device_level(self.master, zone, own);
-        if first && !answers_level(allowed, level) {
+        let at_level = self
+            .volumes
+            .get(&device)
+            .is_some_and(|volume| answers_volume(allowed, volume));
+        if first && !at_level {
             self.log.log(|| {
                 format!(
                     "Cast: {} reports level {level:.2} at the start, set to {allowed:.2}",
@@ -1460,6 +1491,11 @@ impl CastSpeakers {
                 ListEvent::Skipped(_) => {}
                 change => {
                     self.log.log(|| format!("Cast discovery: {change:?}"));
+                    if let Some(id) = self.announcements.note(&self.list, &change)
+                        && let Some(link) = self.link.as_mut()
+                    {
+                        link.announced(id);
+                    }
                     if let ListEvent::Added(DeviceKey::Id(id))
                     | ListEvent::Displaced {
                         added: DeviceKey::Id(id),
@@ -1746,6 +1782,7 @@ pub mod tests {
         pub tracks: Vec<CastTrack>,
         pub resyncs: usize,
         pub shutdowns: usize,
+        pub announced: Vec<DeviceId>,
         pub memory: DeviceMemory,
         pub refuse: Option<StartRefused>,
         pub readers: Vec<AudioReader>,
@@ -1860,6 +1897,10 @@ pub mod tests {
 
         fn poll_browse(&mut self) -> Option<BrowseEvent> {
             self.state().browse.pop_front()
+        }
+
+        fn announced(&mut self, device: DeviceId) {
+            self.state().announced.push(device);
         }
 
         fn discovery(&self) -> CastDiscovery {
@@ -2027,6 +2068,38 @@ pub mod tests {
         let kitchen = &cast.speakers()[1];
         assert!(!kitchen.enabled);
         assert_eq!(kitchen.status, CastStatus::Idle);
+    }
+
+    // covers: C81
+    #[test]
+    fn only_a_device_coming_back_after_its_records_went_away_is_an_announcement() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.poll();
+        assert_eq!(fake.state().announced.len(), 3, "each one found");
+        fake.state().announced.clear();
+        fake.announce(KITCHEN, "Kitchen", DEVICE_PORT);
+        cast.poll();
+        assert!(fake.state().announced.is_empty(), "a re-resolve");
+        fake.withdraw(KITCHEN, "Kitchen");
+        cast.poll();
+        fake.announce(KITCHEN, "Kitchen", DEVICE_PORT);
+        cast.poll();
+        assert_eq!(fake.state().announced, [id(KITCHEN)]);
+    }
+
+    // covers: C81, C90
+    #[test]
+    fn a_group_whose_leader_handed_over_counts_as_announced() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        cast.poll();
+        fake.state().announced.clear();
+        fake.announce_at(ATTIC, "Attic", 32_123, Ipv4Addr::new(192, 0, 2, 11));
+        cast.poll();
+        assert_eq!(fake.state().announced, [id(ATTIC)]);
     }
 
     #[test]
@@ -2397,6 +2470,151 @@ pub mod tests {
         assert_eq!(cast.speakers()[1].volume, 100.0, "ended");
     }
 
+    // covers: C105, S252 (a preset sets the volume before streaming starts)
+    #[test]
+    fn a_volume_set_before_the_session_is_kept_and_set_at_its_first_status() {
+        let (fake, mut cast) = listed();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_volume(KITCHEN, 30.0);
+        assert!(sent(&fake).is_empty(), "no session to send it to");
+        assert_eq!(shown(&cast, KITCHEN), 30.0, "the slider stays");
+
+        cast.set_streaming(true);
+        report(&fake, &mut cast, 0.8);
+        assert_eq!(sent(&fake), [0.3]);
+        assert_eq!(shown(&cast, KITCHEN), 30.0);
+    }
+
+    // covers: C70, C104 (the sender paces a drag after the host recorded it)
+    #[test]
+    fn the_answer_to_the_first_level_of_a_fast_drag_is_not_read_as_a_change() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 1.0);
+        for position in (40..100).rev() {
+            cast.set_volume(KITCHEN, f64::from(position));
+        }
+        report(&fake, &mut cast, 0.99);
+        report(&fake, &mut cast, 0.4);
+        assert_eq!(shown(&cast, KITCHEN), 40.0);
+    }
+
+    // covers: C70, C104 (answers come back in send order)
+    #[test]
+    fn a_late_answer_to_a_level_the_drag_passed_again_matches_the_one_sent_first() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in (51..=60).chain((52..60).rev()) {
+            cast.set_volume(KITCHEN, f64::from(position));
+        }
+        // What 100 ms pacing put on the wire, answered in that order.
+        for answer in [0.51, 0.56, 0.6, 0.55, 0.52] {
+            report(&fake, &mut cast, answer);
+        }
+        assert_eq!(shown(&cast, KITCHEN), 52.0);
+    }
+
+    // covers: C70, C104 (a drag of 60 levels, 100 ms pacing, 400 ms echoes)
+    #[test]
+    fn a_long_fast_drag_ends_on_the_last_level_once_its_echoes_arrive() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.2);
+        let moves: Vec<(u32, f64)> = (0..60)
+            .map(|i| (i * 1000 / 59, f64::from(21 + i)))
+            .collect();
+        let mut position = 20.0;
+        let mut on_wire = 20.0;
+        let mut echoes = Vec::new();
+        for now in 0..=1400 {
+            if let Some(&(_, next)) = moves.iter().find(|(at, _)| *at == now) {
+                cast.set_volume(KITCHEN, next);
+                position = next;
+            }
+            if now % 100 == 0 && position != on_wire {
+                on_wire = position;
+                echoes.push((now + 400, position / 100.0));
+            }
+            for &(_, level) in echoes.iter().filter(|(at, _)| *at == now) {
+                report(&fake, &mut cast, level);
+            }
+        }
+        assert_eq!(shown(&cast, KITCHEN), 80.0);
+    }
+
+    // covers: C70, C104 (a device that rounds to its 0.05 step)
+    #[test]
+    fn a_device_that_rounds_to_its_step_answers_within_half_a_step() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        let stepped = |level| {
+            fake.report(HostEvent::Session {
+                attempt: AttemptId(1),
+                device: id(KITCHEN),
+                event: SessionEvent::Volume(DeviceVolume {
+                    level,
+                    step_interval: Some(0.05),
+                    ..DeviceVolume::default()
+                }),
+            });
+        };
+        stepped(0.5);
+        cast.poll();
+        cast.set_volume(KITCHEN, 33.0);
+        stepped(0.35);
+        cast.poll();
+        assert_eq!(shown(&cast, KITCHEN), 33.0, "the answer to 0.33");
+
+        // 0.36 rounds to the 0.35 it has, so no answer comes.
+        cast.set_volume(KITCHEN, 36.0);
+        stepped(0.4);
+        cast.poll();
+        stepped(0.35);
+        cast.poll();
+        assert_eq!(shown(&cast, KITCHEN), 35.0, "a change from elsewhere");
+    }
+
+    // covers: C105 (a device that rounds to its 0.05 step)
+    #[test]
+    fn a_first_status_within_half_a_step_of_the_slider_is_not_set_again() {
+        let (fake, mut cast) = listed();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_volume(KITCHEN, 36.0);
+        cast.set_streaming(true);
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(DeviceVolume {
+                level: 0.35,
+                step_interval: Some(0.05),
+                ..DeviceVolume::default()
+            }),
+        });
+        cast.poll();
+        assert!(sent(&fake).is_empty(), "{:?}", sent(&fake));
+        assert_eq!(shown(&cast, KITCHEN), 36.0);
+    }
+
+    // covers: C70, C104, C105 (nothing is sent before the first status)
+    #[test]
+    fn a_level_set_before_the_first_status_never_swallows_a_later_change_from_elsewhere() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_volume(KITCHEN, 30.0);
+        report(&fake, &mut cast, 0.8);
+        report(&fake, &mut cast, 0.3);
+        report(&fake, &mut cast, 0.7);
+        assert_eq!(shown(&cast, KITCHEN), 70.0);
+        report(&fake, &mut cast, 0.3);
+        assert_eq!(shown(&cast, KITCHEN), 30.0);
+    }
+
     #[test]
     fn the_capture_feeds_the_current_session() {
         let (fake, mut cast) = listed();
@@ -2745,6 +2963,28 @@ pub mod tests {
         assert_eq!(speakers[0].address.as_deref(), Some("speaker.local"));
         cast.remove_address(&address("speaker.local"));
         assert!(cast.speakers().is_empty());
+    }
+
+    // covers: C2, C18
+    #[test]
+    fn a_host_name_that_looks_up_to_a_browsed_device_plays_as_that_device() {
+        let fake = FakeCast::default();
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 50),
+        );
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.poll();
+        cast.set_resolver(|_, port| Ok(SocketAddr::from(([192, 0, 2, 50], port))));
+        cast.add_address(address("kitchen.local"));
+        let manual = address("kitchen.local").device_id().to_string();
+        assert_eq!(cast.set_enabled(&manual, true), Ok(()));
+        cast.set_streaming(true);
+        poll_until_started(&fake, &mut cast);
+        assert_eq!(fake.state().started, [id(KITCHEN)]);
+        assert_eq!(cast.set_enabled(KITCHEN, true), Ok(()), "not busy");
     }
 
     fn track(title: &str, artwork: Option<&[u8]>) -> CastTrack {

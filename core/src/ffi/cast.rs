@@ -42,7 +42,7 @@ use audiosync_cast::audio::{AudioWriter, Codec, audio_ring};
 use audiosync_cast::discovery::mdns::MdnsBrowser;
 use audiosync_cast::discovery::reach::Reachability;
 use audiosync_cast::discovery::{
-    BrowseEvent, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent,
+    Announcements, BrowseEvent, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent,
 };
 use audiosync_cast::error::ConnectError;
 use audiosync_cast::group::{GroupMember, GroupRecords};
@@ -191,8 +191,8 @@ const INPUT_CHUNK_FRAMES: usize = 4096;
 const MAX_HOLD_BACK_FRAMES: usize = MAX_HOLD_BACK_MS as usize * CAST_RATE as usize / 1000;
 /// The largest artwork [`asc_cast_set_artwork`] keeps.
 const MAX_ARTWORK_BYTES: usize = 8 << 20;
-/// The largest offset [`asc_cast_set_offset`] stores: C74 reports latencies
-/// beyond 30 s.
+/// The largest offset [`asc_cast_set_offset`] accepts: C74 reports latencies
+/// beyond 30 s. The sender stores at most `MAX_OFFSET`, 20 s.
 const MAX_OFFSET_MS: f64 = 120_000.0;
 
 /// One device change. The strings are NUL-terminated UTF-8 owned by the
@@ -477,6 +477,7 @@ pub struct AscCast {
     shared: Arc<Shared>,
     input_taken: bool,
     list: DeviceList,
+    announcements: Announcements,
     browser: Option<Box<dyn Browse>>,
     open_browser: OpenBrowser,
     changes: VecDeque<Change>,
@@ -727,6 +728,9 @@ impl AscCast {
     }
 
     fn listed(&mut self, event: ListEvent) {
+        if let Some(id) = self.announcements.note(&self.list, &event) {
+            self.host.announced(id);
+        }
         match event {
             ListEvent::Added(key) => {
                 self.change(CAST_APPEARED, key);
@@ -1167,6 +1171,7 @@ fn create_with(memory_json: &str, open_browser: OpenBrowser) -> *mut AscCast {
             shared: Arc::new(Shared::new()),
             input_taken: false,
             list: DeviceList::new(),
+            announcements: Announcements::default(),
             browser: None,
             open_browser,
             changes: VecDeque::new(),
@@ -1747,8 +1752,8 @@ pub unsafe extern "C" fn asc_cast_resync(cast: *mut AscCast) -> bool {
 }
 
 /// Stores the user's measured offset for device `id`, in ms, rounded to
-/// whole ms (C77): the host delays its other outputs by it. The device
-/// needn't be listed. Store [`asc_cast_memory_json`] afterwards. False for
+/// whole ms and capped at 20 s (C77): the host delays its other outputs by
+/// it. The device needn't be listed. Store [`asc_cast_memory_json`] afterwards. False for
 /// a null or dead handle, an ID that doesn't read, or an offset outside 0
 /// to 120 000 ms.
 ///
@@ -2854,6 +2859,37 @@ mod tests {
         assert!(devices(handle).is_empty());
         let (attempt, refused) = start(handle, &id);
         assert_eq!((attempt, refused), (0, CAST_REFUSED_UNKNOWN));
+        destroy(handle);
+    }
+
+    // The handle feeds every list change to the announcement rule: a change
+    // it already saw announces nothing a second time.
+    // CAST_SPEC: C81, C90
+    #[test]
+    fn list_changes_reach_the_announcement_rule() {
+        let handle = create();
+        let id = DeviceId::parse(KITCHEN).expect("id");
+        let key = DeviceKey::Id(id);
+        let seen_again = |handle| {
+            let cast = inside(handle);
+            cast.announcements
+                .note(&cast.list, &ListEvent::Updated(key))
+                .is_none()
+        };
+        let at = |last| {
+            record(
+                KITCHEN,
+                "Kitchen",
+                DEVICE_PORT,
+                Ipv4Addr::new(192, 0, 2, last),
+            )
+        };
+        browse(handle, vec![BrowseEvent::Resolved(at(6))], false);
+        devices(handle);
+        assert!(seen_again(handle), "found");
+        browse(handle, vec![BrowseEvent::Resolved(at(7))], false);
+        devices(handle);
+        assert!(seen_again(handle), "at another address");
         destroy(handle);
     }
 

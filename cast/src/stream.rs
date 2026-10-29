@@ -557,6 +557,8 @@ pub struct StreamServer {
     address: SocketAddr,
     token: String,
     accept: Option<JoinHandle<()>>,
+    /// Ends only the current accept loop, for [`StreamServer::rebind`].
+    accept_quit: Arc<AtomicBool>,
     pump: Option<JoinHandle<()>>,
 }
 
@@ -618,13 +620,8 @@ impl StreamServer {
             events: Mutex::new(VecDeque::new()),
             connections: Mutex::new(Vec::new()),
         });
-        let accept = {
-            let shared = Arc::clone(&shared);
-            thread::Builder::new()
-                .name("cast-http".to_owned())
-                .spawn(move || accept_loop(listener, shared))
-                .map_err(StreamError::Bind)?
-        };
+        let accept_quit = Arc::new(AtomicBool::new(false));
+        let accept = spawn_accept(listener, &shared, &accept_quit)?;
         let pump = {
             let shared = Arc::clone(&shared);
             thread::Builder::new()
@@ -637,8 +634,37 @@ impl StreamServer {
             address,
             token,
             accept: Some(accept),
+            accept_quit,
             pump: Some(pump),
         })
+    }
+
+    /// Moves the listener to `local_ip` under the same paths, for a channel
+    /// that came back on another local address (C55). A response already
+    /// open runs on.
+    pub fn rebind(&mut self, local_ip: IpAddr) -> Result<(), StreamError> {
+        if self.address.ip() == local_ip {
+            return Ok(());
+        }
+        let listener = TcpListener::bind((local_ip, 0)).map_err(StreamError::Bind)?;
+        let address = listener.local_addr().map_err(StreamError::Bind)?;
+        listener.set_nonblocking(true).map_err(StreamError::Bind)?;
+        let quit = Arc::new(AtomicBool::new(false));
+        let accept = spawn_accept(listener, &self.shared, &quit)?;
+        self.accept_quit.store(true, Ordering::SeqCst);
+        if let Some(old) = self.accept.replace(accept) {
+            let _ = old.join();
+        }
+        self.accept_quit = quit;
+        self.address = address;
+        Ok(())
+    }
+
+    /// The URL of the artwork being served, if any (C53).
+    pub fn artwork_url(&self) -> Option<String> {
+        let artwork = lock(&self.shared.artwork);
+        let path = &artwork.as_ref()?.path;
+        Some(format!("http://{}{path}", authority(self.address)))
     }
 
     /// The listener's address.
@@ -777,9 +803,22 @@ impl Drop for StreamServer {
     }
 }
 
-fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
+fn spawn_accept(
+    listener: TcpListener,
+    shared: &Arc<Shared>,
+    quit: &Arc<AtomicBool>,
+) -> Result<JoinHandle<()>, StreamError> {
+    let shared = Arc::clone(shared);
+    let quit = Arc::clone(quit);
+    thread::Builder::new()
+        .name("cast-http".to_owned())
+        .spawn(move || accept_loop(listener, shared, quit))
+        .map_err(StreamError::Bind)
+}
+
+fn accept_loop(listener: TcpListener, shared: Arc<Shared>, quit: Arc<AtomicBool>) {
     let mut refused: VecDeque<(TcpStream, Instant)> = VecDeque::new();
-    while !shared.stopped.load(Ordering::SeqCst) {
+    while !shared.stopped.load(Ordering::SeqCst) && !quit.load(Ordering::SeqCst) {
         drain_refused(&mut refused);
         match listener.accept() {
             Ok((stream, peer)) => {

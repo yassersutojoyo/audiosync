@@ -590,7 +590,7 @@ fn connect_retries_wait_1_s_then_double_while_the_device_stays_selected() {
             selected.store(false, Ordering::SeqCst);
         }
     });
-    assert!(matches!(result, Err(None)), "deselected ends the retries");
+    assert!(result.is_none(), "deselected ends the retries");
     assert_eq!(
         waits,
         [
@@ -896,6 +896,35 @@ fn a_resumed_app_without_its_media_reloads_once() {
     }
 }
 
+// covers: C55, C81
+#[test]
+fn a_recovery_on_another_local_address_streams_from_that_address() {
+    // The media still plays after the reconnect: only the new address
+    // brings the second LOAD.
+    let device = FakeDevice::start(Behavior::default());
+    let (writer, reader) = audio_ring(48_000);
+    let _feed = feed(writer, 9);
+    let mut config = config(&device);
+    config.addresses.push(device.address_v6);
+    let selected = Arc::new(AtomicBool::new(true));
+    let mut session =
+        CastSession::start(config, reader, selected, |_, _| {}).expect("plays on 127.0.0.1");
+    assert!(session.stream_url().starts_with("http://127.0.0.1:"));
+
+    device.send(Command::MoveToIpv6);
+    let until = Instant::now() + Duration::from_secs(20);
+    while count(&device, NS_MEDIA, "LOAD") < 2 && Instant::now() < until {
+        session.run_for(Duration::from_millis(50));
+    }
+    let loads = device.payloads(NS_MEDIA, "LOAD");
+    assert_eq!(loads.len(), 2, "loaded again after the reconnect on ::1");
+    let url = loads[1]["media"]["contentId"].as_str().expect("a URL");
+    assert!(url.starts_with("http://[::1]:"), "{url}");
+    assert_eq!(session.stream_url(), url);
+    session.stop();
+    device.join();
+}
+
 /// The header of a PNG of `width` by `height` pixels: all the stream server
 /// reads of it.
 fn png(width: u32, height: u32) -> Vec<u8> {
@@ -996,6 +1025,76 @@ fn device_volume_changes_never_touch_the_samples() {
         samples.iter().all(|sample| *sample == 9 || *sample == 0),
         "samples as captured, or the silence of a gap"
     );
+    session.stop();
+    device.join();
+}
+
+// covers: C70, C81
+#[test]
+fn a_level_waiting_for_its_interval_reaches_the_device_after_a_reconnect() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    let mut landed = false;
+    for (attempt, last) in [0.3, 0.5, 0.7].into_iter().enumerate() {
+        let first = Instant::now();
+        session.set_volume(last - 0.1).expect("sent");
+        session.set_volume(last).expect("waits for the interval");
+        device.send(Command::DropConnection);
+        assert!(device.wait_for_hangup(HANG_GUARD));
+        // Past the interval the old channel sends the level itself before it reads the drop.
+        let in_time = first.elapsed() < Duration::from_millis(80);
+        run_until(&mut session, Duration::from_secs(10), |event| {
+            matches!(event, SessionEvent::Recovered { .. })
+        });
+        if !in_time {
+            continue;
+        }
+        let last_sent = |device: &FakeDevice| {
+            device
+                .payloads(NS_RECEIVER, "SET_VOLUME")
+                .last()
+                .map(|payload| payload["volume"]["level"].clone())
+        };
+        let until = Instant::now() + Duration::from_secs(3);
+        while last_sent(&device) != Some(json!(last)) {
+            assert!(
+                Instant::now() < until,
+                "the level waiting at the drop never reached the device: {:?}",
+                device.payloads(NS_RECEIVER, "SET_VOLUME")
+            );
+            session.run_for(Duration::from_millis(50));
+        }
+        assert_eq!(device.connection_count() as usize, attempt + 2);
+        landed = true;
+        break;
+    }
+    assert!(landed, "no drop landed inside the 100 ms interval");
+    session.stop();
+    device.join();
+}
+
+// covers: C37, C81
+#[test]
+fn a_reconnect_whose_first_status_has_no_level_keeps_the_known_level() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    let known = session.volume().expect("volume").level;
+    while session.poll_event().is_some() {}
+    device.send(Command::ForgetLevel);
+    device.send(Command::DropConnection);
+    let mut seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { .. })
+    });
+    session.run_for(Duration::from_millis(500));
+    seen.extend(std::iter::from_fn(|| session.poll_event()));
+    assert_eq!(device.connection_count(), 2);
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Volume(_))),
+        "{seen:?}"
+    );
+    assert_eq!(session.volume().expect("volume").level, known);
     session.stop();
     device.join();
 }

@@ -14,7 +14,7 @@ use audiosync_cast::client::{
     CastClient, Fingerprint, FingerprintBook, FingerprintChange, MAX_EVENTS, QUIT_BUDGET,
 };
 use audiosync_cast::discovery::DeviceId;
-use audiosync_cast::error::{Backoff, ConnectError, EndReason, LaunchError};
+use audiosync_cast::error::{Backoff, ConnectError, EndReason, LaunchError, ReconnectPacer};
 use audiosync_cast::host::SHUTDOWN_MARGIN;
 use audiosync_cast::ids::RequestIds;
 use audiosync_cast::message::{
@@ -272,7 +272,7 @@ fn connect_deselected_after(addresses: &[SocketAddr], delay: Duration) -> Connec
     let flag = Arc::clone(&selected);
     let addresses = addresses.to_vec();
     let connecting = thread::spawn(move || {
-        let result = CastClient::connect_while(&addresses, RequestIds::starting_at(1), &flag);
+        let result = CastClient::connect_while(&addresses, RequestIds::starting_at(1), &flag, None);
         let _ = sender.send(result.err());
     });
     thread::sleep(delay);
@@ -623,4 +623,77 @@ fn a_device_that_stops_reading_holds_no_write_or_teardown_past_the_quit_budget()
         "the teardown took {took:?}"
     );
     device.join();
+}
+
+/// Reconnects to a receiver that closes each channel right after its first
+/// status, on a test clock from `start`: 50 ms per connect, 10 ms of life
+/// after it. The times of the attempts before `start + span`.
+fn reconnects_within(pacer: &mut ReconnectPacer, start: Instant, span: Duration) -> Vec<Duration> {
+    let mut now = start;
+    let mut attempts = Vec::new();
+    loop {
+        now += pacer.next_wait(now);
+        if now >= start + span {
+            return attempts;
+        }
+        attempts.push(now - start);
+        now += Duration::from_millis(50);
+        pacer.connected(now);
+        now += Duration::from_millis(10);
+    }
+}
+
+fn gaps_in_seconds(attempts: &[Duration]) -> Vec<u64> {
+    attempts
+        .windows(2)
+        .map(|pair| (pair[1] - pair[0]).as_secs())
+        .collect()
+}
+
+// covers: C81
+#[test]
+fn reconnects_to_a_receiver_that_keeps_closing_are_spaced_out() {
+    let start = Instant::now();
+    let mut pacer = ReconnectPacer::default();
+    let attempts = reconnects_within(&mut pacer, start, Duration::from_secs(10));
+    assert!(attempts.len() <= 4, "{} reconnects in 10 s", attempts.len());
+    assert_eq!(
+        gaps_in_seconds(&attempts),
+        [1, 2, 4],
+        "at once, then 1, 2, 4 s"
+    );
+    let later = gaps_in_seconds(&reconnects_within(
+        &mut pacer,
+        start,
+        Duration::from_secs(40),
+    ));
+    assert!(later.iter().all(|gap| *gap <= 10), "{later:?}");
+    assert!(later.ends_with(&[10, 10]), "{later:?}");
+
+    // 60 s on a working channel start the spacing over.
+    let mut pacer = ReconnectPacer::default();
+    reconnects_within(&mut pacer, start, Duration::from_secs(10));
+    let healthy = start + Duration::from_secs(10);
+    pacer.connected(healthy);
+    let after = healthy + Duration::from_secs(60);
+    assert_eq!(pacer.next_wait(after), Duration::ZERO);
+    assert_eq!(pacer.next_wait(after), Duration::from_secs(1));
+}
+
+// covers: C81
+#[test]
+fn an_announcement_of_the_receiver_retries_at_once_and_starts_the_spacing_over() {
+    let start = Instant::now();
+    let mut pacer = ReconnectPacer::default();
+    let attempts = reconnects_within(&mut pacer, start, Duration::from_secs(30));
+    assert!(attempts.len() >= 5, "{attempts:?}");
+    let now = start + Duration::from_secs(30);
+    assert!(pacer.next_wait(now) > Duration::ZERO, "spaced before");
+    pacer.announced();
+    assert_eq!(pacer.next_wait(now), Duration::ZERO, "at once");
+    assert_eq!(
+        pacer.next_wait(now),
+        Duration::from_secs(1),
+        "from the start"
+    );
 }
