@@ -122,7 +122,7 @@ final class AppModel: ObservableObject {
         var pairs: [String] = []
         /// False for the chosen input device while it is unplugged.
         var connected = true
-        static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name && a.pairs == b.pairs }
+        static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name && a.pairs == b.pairs && a.connected == b.connected }
     }
 
     struct Actions {
