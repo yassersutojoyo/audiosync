@@ -3612,7 +3612,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 names.retain(|id, _| self.key_kept(&cast_key(id)));
                 names.extend(listed);
                 self.cast_names = names;
-                // A session that ended with no problem turned its speaker off.
+                // Safe on every list change: idle only once a speaker played and none is on.
                 self.stop_if_idle();
             }
             BackendEvent::CastPlaying { id } => {
@@ -13653,6 +13653,29 @@ mod tests {
         let state = adapter.snapshot();
         assert!(!state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
         assert!(!state.running);
+    }
+
+    // covers: S162
+    #[test]
+    fn a_cast_speaker_that_leaves_the_list_while_reconnecting_keeps_streaming() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: cast_device(CAST_KITCHEN),
+            event: SessionEvent::Playing,
+        });
+        adapter.poll();
+        fake.withdraw(CAST_KITCHEN, "Kitchen");
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: cast_device(CAST_KITCHEN),
+            event: SessionEvent::Recovering(audiosync_cast::error::EndReason::Silent),
+        });
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert!(state.running);
+        assert!(state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
     }
 
     #[test]
