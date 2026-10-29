@@ -3086,6 +3086,30 @@ pub mod tests {
         assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
     }
 
+    // covers: C18
+    #[test]
+    fn removing_the_address_of_a_found_speaker_the_browse_lost_turns_it_off() {
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.set_probe(|_| true);
+        cast.add_address(address("192.0.2.30"));
+        fake.announce_at(LIVING, "Living", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 32));
+        fake.announce_at(
+            KITCHEN,
+            "Kitchen",
+            DEVICE_PORT,
+            Ipv4Addr::new(192, 0, 2, 30),
+        );
+        cast.poll();
+        assert_eq!(cast.set_enabled(KITCHEN, true), Ok(()));
+        fake.withdraw(KITCHEN, "Kitchen");
+        cast.poll();
+
+        cast.remove_address(&address("192.0.2.30"));
+        assert!(!cast.is_on());
+        assert_eq!(cast.set_enabled(LIVING, true), Ok(()));
+    }
+
     // covers: S341
     #[test]
     fn each_address_of_a_device_a_browse_finds_is_reported_once() {
