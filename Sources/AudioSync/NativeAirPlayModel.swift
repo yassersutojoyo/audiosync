@@ -552,7 +552,10 @@ struct NativeAirPlayModel {
         }
         let missing = named(ids.filter { receivers[$0] == nil })
         return AirPlayTargetRow(kind: kind, members: named(ids), missing: missing,
-                                incomplete: receivers[id]?.incomplete == true || !missing.isEmpty)
+                                incomplete: receivers[id]?.incomplete == true || !missing.isEmpty,
+                                asksPassword: ids.contains {
+                                    receivers[$0]?.availability == .needsPassword && !passwords.contains($0)
+                                })
     }
 
     func isPlaying(_ id: String) -> Bool { states[id] == .playing }
