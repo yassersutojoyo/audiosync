@@ -71,7 +71,15 @@ extension AppDelegate {
         for change in changes {
             DebugTrace.log("[AudioSync] Cast discovery: " + Self.castLogLine(change))
             castModel.apply(change)
-            if case .appeared(let device, _, let former?) = change { moveCastNotices(from: former, to: device.id) }
+            if case .appeared(let device, _, let former?) = change {
+                moveCastNotices(from: former, to: device.id)
+                let moved = CastUserSettings(names: speakerNames, zones: zones, presets: presets, hidden: hiddenSpeakers)
+                    .moved(from: former, to: device.id)
+                speakerNames = moved.names
+                zones = moved.zones
+                presets = moved.presets
+                hiddenSpeakers = moved.hidden
+            }
         }
         castFollow()
     }

@@ -10488,7 +10488,7 @@ do {
     ).moved(from: manualID, to: realID)
     check(kept.names.renamed(key: byID) == "Patio" && kept.names.renamed(key: byAddress) == nil
             && kept.zones.map(\.members) == [["lc:usb", byID]] && kept.zones.first?.memberNames == [byID: "192.0.2.9"]
-            && kept.presets.first?.members == [.init(key: byID, volume: 40)]
+            && kept.presets.first?.members == [SpeakerPreset.Member(key: byID, volume: 40)]
             && kept.hidden.contains(CastID.app(realID)) && !kept.hidden.contains(CastID.app(manualID)),
           "cast: a device added by address that a browse finds keeps its name, zone and presets")
 
