@@ -155,7 +155,7 @@ mod tests {
             Box::new(AutostartStore::at(path.clone())),
             Some(PathBuf::from("/usr/bin/audiosync")),
         );
-        assert_eq!(again.status(), Status::Elsewhere);
+        assert_eq!(again.status(), Status::Missing);
 
         login.set(false, time);
         assert!(!path.exists());

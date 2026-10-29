@@ -708,6 +708,11 @@ export global Strings {
         return @tr("{0} in {1} asks for a password, so {1} is off. Turn {1} on again to enter it.", member, target);
     }
 
+    // An AirPlay speaker refused with no retry left, so it was turned off.
+    public pure function notice-airplay-refused-off(speaker: string) -> string {
+        return @tr("{} declined the stream, so it's off. Turn it on again to try once more.", speaker);
+    }
+
     // An AirPlay speaker stopped playing or can't play. For the first four
     // problems it stays on and AudioSync keeps trying, and one waiting for
     // the AirPlay 2 slot stays on too; for the others it is off, because
@@ -1359,9 +1364,13 @@ export global Strings {
     out property <string> speaker-name-field-hint: @tr("Press Enter to apply or Escape to cancel. Leave it empty for the device's own name.");
     out property <string> zone-name-field-hint: @tr("Press Enter to apply or Escape to cancel.");
 
-    // The line under a renamed speaker's name: the name its device reports.
-    public pure function speaker-device-caption(system: string) -> string {
-        return @tr("Device name: {}", system);
+    // The tooltip on a speaker's name in the tray flyout: the full name,
+    // which the row may elide, then the device's own name once renamed.
+    public pure function speaker-tooltip(name: string, system: string) -> string {
+        if system != "" {
+            return @tr("{}\nDevice name: {}", name, system);
+        }
+        return name;
     }
 
     // The tooltip on a speaker's name: the full name, which the row may
@@ -1414,8 +1423,8 @@ export global Strings {
         return @tr("{}. {}", group-note, description);
     }
 
-    // The line under a speaker's name: its kind, its note, or both
-    // ("AirPlay · Asks for a code"); either may be empty.
+    // Two parts of a row's note joined ("2 of 3 on · Waiting for device");
+    // either may be empty.
     public pure function speaker-caption(kind: string, note: string) -> string {
         if kind == "" {
             return note;

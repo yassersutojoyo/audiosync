@@ -710,6 +710,85 @@ fn delay_change_flushes_one_speaker() {
     assert_eq!(flushes(&rig, moved).len(), 3);
 }
 
+// covers: P100
+#[test]
+fn delay_changes_behind_a_request_in_flight_give_one_flush() {
+    let mut rig = Rig::with_host();
+    let moved = rig.add(speaker(1, Codec::Alac));
+    rig.run_for(Duration::from_secs(3));
+    let changed_at = rig.t();
+    rig.busy = true;
+    rig.stream
+        .set_delay(moved, Duration::from_millis(300), rig.now);
+    rig.run_for(Duration::from_millis(400));
+    rig.stream
+        .set_delay(moved, Duration::from_millis(500), rig.now);
+    rig.run_for(Duration::from_secs(1));
+
+    // While the FLUSH waits, the old delay plays on.
+    assert!(flushes(&rig, moved).is_empty());
+    assert!(rig.audio(moved)[1..].iter().all(|a| !a.header.marker));
+    let waited: Vec<_> = rig
+        .syncs(moved)
+        .into_iter()
+        .filter(|(at, _)| *at >= changed_at)
+        .collect();
+    assert!(!waited.is_empty());
+    for (_, sync) in &waited {
+        let n = rig.frame_of(moved, sync.rtp_heard);
+        assert!((stated(&rig, sync) - (rig.c(n) + rig.latency())).abs() < 1e-6);
+    }
+
+    // One FLUSH once the session is free, under the last delay.
+    rig.busy = false;
+    let freed = rig.t();
+    rig.run_for(Duration::from_secs(1));
+    let flush = flushes(&rig, moved);
+    assert_eq!(flush.len(), 1);
+    let after: Vec<_> = rig
+        .syncs(moved)
+        .into_iter()
+        .filter(|(at, _)| *at >= freed)
+        .collect();
+    assert!(after[0].1.first);
+    assert_eq!(after[0].1.next_rtp, flush[0].1);
+    for (_, sync) in &after {
+        let n = rig.frame_of(moved, sync.rtp_heard);
+        let time = stated(&rig, sync);
+        assert!((time - (rig.c(n) + rig.latency() + 0.5)).abs() < 1e-6);
+    }
+}
+
+// covers: P100
+#[test]
+fn a_delay_flush_holds_the_speaker_until_its_answer() {
+    let mut rig = Rig::with_host();
+    let moved = rig.add(speaker(1, Codec::Alac));
+    rig.run_for(Duration::from_secs(3));
+    rig.busy = true;
+    rig.stream
+        .set_delay(moved, Duration::from_millis(200), rig.now);
+    rig.run_for(Duration::from_millis(300));
+    rig.stream.apply_delay(moved, rig.now);
+    rig.drain();
+    assert_eq!(flushes(&rig, moved).len(), 1);
+    let applied = rig.t();
+    rig.run_for(Duration::from_millis(500));
+    assert!(rig.of(moved).iter().all(|sent| sent.at < applied));
+    assert!(rig.stream.waits_for_flush(moved));
+
+    rig.stream.flush_answered(moved);
+    let answered = rig.t();
+    rig.run_for(Duration::from_millis(500));
+    let audio = rig.audio(moved);
+    let resumed = audio
+        .iter()
+        .find(|a| a.at >= answered)
+        .expect("audio after the answer");
+    assert!(resumed.header.marker);
+    assert_eq!(resumed.header.seq, flushes(&rig, moved)[0].0);
+}
+
 // covers: P103
 #[test]
 fn join_mid_stream() {
@@ -1123,6 +1202,32 @@ fn volume_software() {
     link.advance(Duration::from_secs(1));
     let volume_requests = link.keys().iter().filter(|k| *k == "SET_PARAMETER").count();
     assert_eq!(volume_requests, 1, "mute stays in the samples");
+}
+
+// covers: P121
+#[test]
+fn a_muted_sm_speaker_joining_a_running_stream_sends_only_silence() {
+    let mut rig = Rig::with_host();
+    rig.add(speaker(1, Codec::Alac));
+    rig.run_for(Duration::from_secs(3));
+
+    let mut config = speaker(2, Codec::Alac);
+    config.software_mute = true;
+    config.delay = Duration::from_millis(500);
+    config.muted = true;
+    let muted = rig.add(config);
+    rig.run_for(Duration::from_secs(2));
+    let audio = rig.audio(muted);
+    assert!(!audio.is_empty());
+    for packet in &audio {
+        assert!(
+            decode(Codec::Alac, &packet.payload)
+                .iter()
+                .all(|f| *f == [0, 0]),
+            "audible packet at {:.3} s",
+            packet.at
+        );
+    }
 }
 
 fn half(sample: i16) -> i16 {

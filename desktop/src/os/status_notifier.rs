@@ -3,8 +3,8 @@
 //! tray-icon (over ksni) doesn't say when an icon can't show, so the
 //! session bus is asked first, on a worker thread with a time budget. The
 //! same thread then follows the watcher: a shown icon whose watcher stays
-//! gone hands over to the main window, and a host that turns up after
-//! launch is logged (the icon shows after a restart).
+//! gone hands over to the main window, and without an icon it looks again
+//! every few seconds and adds the icon once a host turns up.
 
 // tray.rs is built on tray-icon, a Windows and Linux dependency only.
 #[path = "../tray.rs"]
@@ -32,14 +32,19 @@ const HOST_PROPERTY: &str = "IsStatusNotifierHostRegistered";
 /// How long the launch waits for the session bus to answer.
 const PROBE_BUDGET: Duration = Duration::from_secs(1);
 
-/// How often a shown icon's watcher is looked at again.
+/// How often the watcher is looked at again, for a shown icon or for a host.
 const POLL_EVERY: Duration = Duration::from_secs(2);
 
 pub type Tray = Rc<tray::Tray>;
 
+/// The app, its log and the watcher thread's mode, for what that thread
+/// reports.
+type Target = (Weak<App>, DebugLog, mpsc::Sender<bool>);
+
 thread_local! {
-    /// The app and its log, for what the watcher thread reports.
-    static TARGET: RefCell<Option<(Weak<App>, DebugLog)>> = const { RefCell::new(None) };
+    static TARGET: RefCell<Option<Target>> = const { RefCell::new(None) };
+    /// The icon added after launch.
+    static LATE_TRAY: RefCell<Option<Tray>> = const { RefCell::new(None) };
 }
 
 /// What the watcher thread reports to the UI thread.
@@ -53,9 +58,9 @@ enum Report {
 /// Adds the tray icon for `app` where a host shows it; `None` otherwise,
 /// so closing the main window quits.
 pub fn create_tray(app: &Rc<App>, log: &DebugLog) -> Option<Tray> {
-    TARGET.with(|cell| *cell.borrow_mut() = Some((Rc::downgrade(app), log.clone())));
     let (answer, answered) = mpsc::channel();
     let (mode, told) = mpsc::channel();
+    TARGET.with(|cell| *cell.borrow_mut() = Some((Rc::downgrade(app), log.clone(), mode.clone())));
     let spawned = thread::Builder::new()
         .name("tray watch".to_owned())
         .spawn(move || watch(&answer, &told));
@@ -70,6 +75,16 @@ pub fn create_tray(app: &Rc<App>, log: &DebugLog) -> Option<Tray> {
         Ok(watcher) => Err(watcher.missing_reason().unwrap_or_default().to_owned()),
         Err(reason) => Err(reason),
     };
+    settle(app, log, &mode, tray)
+}
+
+/// Tells the watcher thread and the app whether the icon shows.
+fn settle(
+    app: &Rc<App>,
+    log: &DebugLog,
+    mode: &mpsc::Sender<bool>,
+    tray: Result<Tray, String>,
+) -> Option<Tray> {
     let _ = mode.send(tray.is_ok());
     match tray {
         Ok(tray) => {
@@ -94,14 +109,17 @@ fn watch(answer: &mpsc::Sender<Result<Watcher, String>>, told: &mpsc::Receiver<b
             return;
         }
     };
-    let first = ask(&connection).map_err(|error| format!("the session bus: {error}"));
-    if answer.send(first).is_err() {
-        return;
+    // A late answer still leads to the waiting below: the launch has gone on
+    // without an icon by then.
+    let _ = answer.send(ask(&connection).map_err(|error| format!("the session bus: {error}")));
+    let mut shown = told.recv();
+    if shown == Ok(false) {
+        wait_for_host(&connection);
+        report(Report::HostAppeared);
+        shown = told.recv();
     }
-    match told.recv() {
-        Ok(true) => follow_shown(&connection),
-        Ok(false) => wait_for_host(&connection),
-        Err(_) => {}
+    if shown == Ok(true) {
+        follow_shown(&connection);
     }
 }
 
@@ -135,28 +153,17 @@ fn follow_shown(connection: &Connection) {
     }
 }
 
-/// Blocks on the watcher's host signal, which costs nothing while it
-/// never comes; the bus delivers it from whoever owns the name by then.
+/// Asks again until a watcher has a host. Polled rather than signalled: a
+/// watcher that starts with its host already registered sends no signal.
 fn wait_for_host(connection: &Connection) {
-    let proxy = zbus::blocking::proxy::Builder::<zbus::blocking::Proxy<'_>>::new(connection)
-        .destination(WATCHER_NAME)
-        .and_then(|builder| builder.path(WATCHER_PATH))
-        .and_then(|builder| builder.interface(WATCHER_NAME))
-        .map(|builder| builder.cache_properties(zbus::proxy::CacheProperties::No))
-        .and_then(|builder| builder.build());
-    let Ok(proxy) = proxy else {
-        return;
-    };
-    if let Ok(mut signals) = proxy.receive_signal("StatusNotifierHostRegistered")
-        && signals.next().is_some()
-    {
-        report(Report::HostAppeared);
+    while ask(connection).ok() != Some(Watcher::Ready) {
+        thread::sleep(POLL_EVERY);
     }
 }
 
 fn report(report: Report) {
     let _ = slint::invoke_from_event_loop(move || {
-        let Some((app, log)) = TARGET.with(|cell| cell.borrow().clone()) else {
+        let Some((app, log, mode)) = TARGET.with(|cell| cell.borrow().clone()) else {
             return;
         };
         match report {
@@ -173,10 +180,15 @@ fn report(report: Report) {
                     app.show_main();
                 }
             }
-            Report::HostAppeared => log.log(|| {
-                "tray icon: a StatusNotifier host registered after launch; the icon shows after a restart"
-                    .to_owned()
-            }),
+            Report::HostAppeared => {
+                log.log(|| "tray icon: a StatusNotifier host registered after launch".to_owned());
+                let Some(app) = app.upgrade() else {
+                    return;
+                };
+                let tray = tray::Tray::create(&app).map_err(|error| error.to_string());
+                let tray = settle(&app, &log, &mode, tray);
+                LATE_TRAY.with(|cell| *cell.borrow_mut() = tray);
+            }
         }
     });
 }

@@ -212,6 +212,8 @@ pub struct Rig {
     pub margins: Vec<(f64, f64)>,
     /// (time, R̂) after every step.
     pub rates: Vec<(f64, f64)>,
+    /// Every session has a request in flight, so no delay FLUSH goes out.
+    pub busy: bool,
 }
 
 impl Rig {
@@ -230,6 +232,7 @@ impl Rig {
             events: Vec::new(),
             margins: Vec::new(),
             rates: Vec::new(),
+            busy: false,
         }
     }
 
@@ -294,6 +297,14 @@ impl Rig {
             host.write_due(&mut self.writer, &self.clock, t);
         }
         self.stream.handle_timeout(self.now);
+        // A free session sends a delay FLUSH at once and the receiver
+        // answers it at once (P100).
+        if !self.busy {
+            for id in self.stream.delays_due() {
+                self.stream.apply_delay(id, self.now);
+                self.stream.flush_answered(id);
+            }
+        }
         self.drain();
         self.margins.push((t, self.stream.margin().as_secs_f64()));
         self.rates.push((t, self.stream.rate()));

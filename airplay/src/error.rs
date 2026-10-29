@@ -175,6 +175,8 @@ pub struct SessionError {
     /// the credentials (a pair-verify error item, P154): the speaker is
     /// retried as usual (P142), no sooner than this wait.
     pub retry_after: Option<Duration>,
+    /// The wait a pairing error item asked for (P150, item 8).
+    pub back_off: Option<Duration>,
     /// A short diagnostic for protocol errors. Never contains the password.
     pub detail: Option<&'static str>,
 }
@@ -187,6 +189,7 @@ impl SessionError {
             status: None,
             fallback: None,
             retry_after: None,
+            back_off: None,
             detail: None,
         }
     }
@@ -204,6 +207,9 @@ impl fmt::Display for SessionError {
         }
         if let Some(detail) = self.detail {
             write!(f, ": {detail}")?;
+        }
+        if let Some(wait) = self.back_off {
+            write!(f, " ({} s)", wait.as_secs())?;
         }
         Ok(())
     }

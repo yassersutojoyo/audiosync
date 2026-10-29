@@ -14,7 +14,8 @@ use audiosync_core::eq::{self, CurveMatch, EqSettings, UserCurve};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::presets::{self as policy_presets, Preset, Scene, SpeakerNow};
 use audiosync_core::policy::source_quit::WhenSourceQuits;
-use audiosync_core::policy::zones::{Zone, Zones};
+use audiosync_core::policy::speakers::{NoticeSubject, SpeakerKey};
+use audiosync_core::policy::zones::{self, ClickAction, MemberKind, Situation, Zone, Zones};
 #[cfg(any(test, feature = "mock-backend"))]
 use audiosync_core::volume;
 
@@ -737,6 +738,9 @@ pub enum NoticeMessage {
         left_off: Vec<(String, PresetLeftOff)>,
         nothing_changed: bool,
     },
+    /// What the name dialog would have shown while it was open for a name,
+    /// its heading and text in the UI's words.
+    DialogMessage { title: String, text: String },
 }
 
 impl NoticeMessage {
@@ -1198,10 +1202,28 @@ impl AppState {
         self.absent.iter().find(|member| member.id == id)
     }
 
-    /// A zone is on when a click would switch it off (spec S246): each
-    /// present member it switches on is on, which is every one but those
-    /// playing as part of a stereo pair or home theater, and one Cast
-    /// member when it has any. Playing, it waits when each of those waits.
+    /// Whether another app took Cast speaker `id` over: only its notice
+    /// records it, in the subject the adapter writes.
+    fn cast_taken_over(&self, id: &str) -> bool {
+        let Some(device) = SpeakerKey::cast_id(id) else {
+            return false;
+        };
+        let subject = format!("{:?}", NoticeSubject::Cast(device.to_owned()));
+        self.notices.iter().any(|notice| {
+            notice.subject == subject
+                && matches!(
+                    notice.message,
+                    NoticeMessage::CastCantPlay {
+                        problem: CastProblem::TakenOver,
+                        ..
+                    }
+                )
+        })
+    }
+
+    /// A zone is on when a click with streaming on would switch it off
+    /// (spec S246), so a Cast member the click leaves off counts toward
+    /// neither. Playing, it waits when each member it counts waits.
     pub fn zone_state(&self, zone: &Zone) -> SpeakerState {
         let switched: Vec<&Speaker> = self
             .zone_members(zone)
@@ -1210,9 +1232,32 @@ impl AppState {
         let (cast, others): (Vec<&Speaker>, Vec<&Speaker>) =
             switched.iter().partition(|s| s.kind == SpeakerKind::Cast);
         let cast_on: Vec<&Speaker> = cast.iter().copied().filter(|s| s.enabled).collect();
-        let on = !switched.is_empty()
-            && others.iter().all(|s| s.enabled)
-            && (cast.is_empty() || !cast_on.is_empty());
+        let members: Vec<zones::Member> = self
+            .zone_members(zone)
+            .map(|s| zones::Member {
+                // The action tells only Cast members apart.
+                kind: if s.kind == SpeakerKind::Cast {
+                    MemberKind::Cast
+                } else {
+                    MemberKind::Local
+                },
+                listed: true,
+                on: s.enabled,
+                busy: s.cast.as_ref().is_some_and(|cast| cast.offline)
+                    || self.cast_taken_over(&s.id),
+                needs_airplay2: false,
+                in_target: s.in_target.is_some(),
+            })
+            .collect();
+        let situation = Situation {
+            streaming: true,
+            cast_on_elsewhere: self
+                .speakers
+                .iter()
+                .any(|s| s.kind == SpeakerKind::Cast && s.enabled && !zone.members.contains(&s.id)),
+            ..Situation::default()
+        };
+        let on = zones::click_plan(&members, situation).action == ClickAction::TurnOff;
         match SpeakerState::new(on, self.running) {
             SpeakerState::Playing => {
                 let waiting: Option<Vec<Waiting>> = others
@@ -3180,6 +3225,68 @@ mod tests {
         assert_eq!(state.zone_state(&state.zones[0]), SpeakerState::Playing);
     }
 
+    // covers: S246
+    #[test]
+    fn a_cast_member_left_off_counts_toward_neither_in_the_zone_header() {
+        let mut backend = MockBackend::new();
+        let cast = Speaker {
+            kind: SpeakerKind::Cast,
+            enabled: false,
+            ..backend.snapshot().speakers[3].clone()
+        };
+        backend.add_speaker(Speaker {
+            id: "cc:kitchen".into(),
+            ..cast.clone()
+        });
+        backend.add_speaker(Speaker {
+            id: "cc:living".into(),
+            enabled: true,
+            ..cast
+        });
+        backend.add_zone("zone:a", "Kitchen", &["local:speakers", "cc:kitchen"]);
+        backend.set_speaker_enabled("local:speakers", true);
+        let state = backend.snapshot();
+        assert_eq!(
+            state.zone_state(&state.zones[0]),
+            SpeakerState::Playing,
+            "another Cast speaker plays"
+        );
+        backend.set_speaker_enabled("cc:living", false);
+        backend.speaker_mut("cc:kitchen").unwrap().cast = Some(CastRow {
+            state: CastState::Idle,
+            muted: false,
+            volume_fixed: false,
+            volume_step: 1.0,
+            group: None,
+            added_by_address: false,
+            offline: true,
+        });
+        let state = backend.snapshot();
+        assert_eq!(
+            state.zone_state(&state.zones[0]),
+            SpeakerState::Playing,
+            "an offline Cast member"
+        );
+        if let Some(cast) = backend.speaker_mut("cc:kitchen").unwrap().cast.as_mut() {
+            cast.offline = false;
+        }
+        backend.state.notices.push(Notice {
+            id: 9,
+            subject: format!("{:?}", NoticeSubject::Cast("kitchen".into())),
+            message: NoticeMessage::CastCantPlay {
+                speaker: "Kitchen".into(),
+                problem: CastProblem::TakenOver,
+            },
+            time: "09.40".into(),
+        });
+        let state = backend.snapshot();
+        assert_eq!(
+            state.zone_state(&state.zones[0]),
+            SpeakerState::Playing,
+            "a Cast member another app took over"
+        );
+    }
+
     #[test]
     fn a_new_zone_needs_a_speaker_that_is_on_and_takes_it_from_its_zone() {
         let mut backend = MockBackend::new();
@@ -3410,6 +3517,7 @@ mod tests {
         assert_eq!(picker_index(None), -1, "Custom is not an entry");
     }
 
+    // covers: S270
     #[test]
     fn the_picker_lists_the_presets_then_the_saved_curves() {
         let mut backend = MockBackend::new();
@@ -3442,6 +3550,7 @@ mod tests {
         assert_eq!(picked_curve(-1, 1), None);
     }
 
+    // covers: S270
     #[test]
     fn a_picked_saved_curve_shows_beside_a_curve_with_the_same_gains() {
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();

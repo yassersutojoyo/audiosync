@@ -30,7 +30,7 @@ pub const FEED_URL: &str =
     "https://github.com/yassersutojoyo/audiosync/releases/latest/download/appcast.xml";
 /// How long a quit waits for a failed restart's undo (spec S303) or an
 /// ended swap's result (spec S301).
-const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+pub const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 pub const RELEASE_PAGE: &str = "https://github.com/yassersutojoyo/audiosync/releases/latest";
 

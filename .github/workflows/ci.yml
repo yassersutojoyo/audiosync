@@ -119,11 +119,14 @@ jobs:
             xcrun nm -gU --no-llvm-bc -arch "$arch" "$probe_lib" | grep -q ' T _asc_airplay_panic_probe$'
             # The app's library and the app itself never have the probe, not even as
             # a hidden local symbol (no -g: local symbols count too).
-            if xcrun nm -U --no-llvm-bc -arch "$arch" "$app_lib" | grep -q '_asc_airplay_panic_probe'; then
+            # Captured first, so a failing nm stops the step instead of reading as no probe.
+            app_syms=$(xcrun nm -U --no-llvm-bc -arch "$arch" "$app_lib")
+            if grep -q '_asc_airplay_panic_probe' <<< "$app_syms"; then
               echo "the app's core library ($arch) has the panic probe"; exit 1
             fi
           done
-          if nm -U .build/release/AudioSync | grep -q '_asc_airplay_panic_probe'; then
+          app_syms=$(nm -U .build/release/AudioSync)
+          if grep -q '_asc_airplay_panic_probe' <<< "$app_syms"; then
             echo "the app has the panic probe"; exit 1
           fi
           for arch in arm64 x86_64; do

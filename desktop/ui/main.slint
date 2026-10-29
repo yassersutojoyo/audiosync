@@ -9,7 +9,7 @@ import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, Disclosure, Divider, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, NoticeStack, PairPicker, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, CardTitle, Disclosure, Divider, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -31,6 +31,8 @@ component SpeakerRows inherits VerticalLayout {
     in property <[SpeakerItem]> speakers;
     // The zones a row's Move to Zone submenu lists.
     in property <[ZoneItem]> zones;
+    // Rows in a zone's tinted box, which shows that they play together.
+    in property <bool> grouped;
     callback toggled(string);
     callback volume-changed(string, float);
     callback volume-editing(string, bool);
@@ -75,6 +77,7 @@ component SpeakerRows inherits VerticalLayout {
         SpeakerRow {
             item: speaker;
             zones: root.zones;
+            grouped: root.grouped;
             init => {
                 if speaker.id == root.focus-id {
                     root.focus-id = "";
@@ -238,6 +241,7 @@ component ZoneCard inherits VerticalLayout {
     in-out property <RowPart> focus-zone-part;
     in-out property <string> focus-id <=> rows.focus-id;
     in-out property <RowPart> focus-part <=> rows.focus-part;
+    property <bool> members-shown: root.item.expanded && root.item.members.length > 0;
 
     accessible-role: groupbox;
     accessible-label: root.item.name;
@@ -262,15 +266,20 @@ component ZoneCard inherits VerticalLayout {
             }
         }
 
-        if root.item.expanded && root.item.members.length > 0: HorizontalLayout {
-            padding-left: Fluent.name-inset;
-            padding-right: 8px;
-            Divider { }
-        }
+        // Its speakers while unfolded, in one tinted box as on the Mac.
+        Rectangle {
+            background: root.members-shown ? Tokens.playing-row : transparent;
+            border-width: root.members-shown ? 1px : 0px;
+            border-color: Tokens.teal.with-alpha(0.35);
+            border-radius: Fluent.radius-control;
 
-        rows := SpeakerRows {
-            speakers: root.item.expanded ? root.item.members : [];
-            zones: root.zones;
+            VerticalLayout {
+                rows := SpeakerRows {
+                    speakers: root.item.expanded ? root.item.members : [];
+                    zones: root.zones;
+                    grouped: true;
+                }
+            }
         }
     }
 }
@@ -329,7 +338,7 @@ component SpeakerSection inherits VerticalLayout {
     accessible-role: groupbox;
     accessible-label: root.title;
 
-    SectionTitle {
+    CardTitle {
         text: root.title;
     }
 
@@ -438,6 +447,9 @@ component SpeakerSection inherits VerticalLayout {
                 }
             }
         }
+
+        // Rows after the list and its note: Connected Speakers' AirPlay delay.
+        @children
     }
 }
 
@@ -643,18 +655,8 @@ component PresetsCard inherits Card {
     VerticalLayout {
         spacing: 8px;
 
-        HorizontalLayout {
-            spacing: 10px;
-
-            Glyph {
-                glyph: Glyphs.presets;
-                color: Tokens.teal-text;
-                width: 20px;
-            }
-
-            SectionTitle {
-                text: Strings.presets;
-            }
+        CardTitle {
+            text: Strings.presets;
         }
 
         if root.presets.length == 0: SecondaryText {
@@ -834,22 +836,9 @@ component CalibrationCard inherits Card {
     VerticalLayout {
         spacing: 8px;
 
-        HorizontalLayout {
-            spacing: 10px;
-
-            Glyph {
-                glyph: Glyphs.microphone;
-                color: Tokens.teal-text;
-                width: 20px;
-            }
-
-            SectionTitle {
-                text: Strings.calibrate-all-title;
-            }
-        }
-
-        // One button for both, so the keyboard focus stays on it when a run
-        // starts or ends.
+        // No title above the button, as on the Mac: the button names the
+        // card. One button for both, so the keyboard focus stays on it when
+        // a run starts or ends.
         HorizontalLayout {
             alignment: LayoutAlignment.start;
 
@@ -946,7 +935,7 @@ component CalibrationCard inherits Card {
 
             Divider { }
 
-            SectionTitle {
+            CardTitle {
                 text: Strings.calibrate-all-results;
             }
 
@@ -1834,28 +1823,8 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             spacing: 10px;
 
-                            HorizontalLayout {
-                                spacing: 10px;
-
-                                Glyph {
-                                    glyph: Glyphs.source;
-                                    color: Tokens.teal-text;
-                                    width: 20px;
-                                }
-
-                                SectionTitle {
-                                    text: Strings.source-label;
-                                }
-
-                                Rectangle { }
-
-                                Disclosure {
-                                    text: Strings.source-mix-title;
-                                    expanded: root.mix-open;
-                                    toggled => {
-                                        root.mix-open = !root.mix-open;
-                                    }
-                                }
+                            CardTitle {
+                                text: Strings.source-label;
                             }
 
                             source := ComboBox {
@@ -1871,21 +1840,17 @@ export component MainWindow inherits Window {
                                 }
                             }
 
-                            if root.input-pairs.length > 0: VerticalLayout {
-                                spacing: 4px;
+                            // Right under the sources, where the Mac's source
+                            // menu ends in its Several Apps submenu; a
+                            // drop-down can't hold one, so it unfolds here.
+                            HorizontalLayout {
+                                alignment: start;
 
-                                SecondaryText {
-                                    text: Strings.input-channels-label;
-                                }
-
-                                PairPicker {
-                                    model: root.input-pairs;
-                                    chosen: root.input-pair-index;
-                                    changed has-focus => {
-                                        root.control-focus-changed(MainControl.input-pair, self.has-focus);
-                                    }
-                                    picked(index) => {
-                                        root.input-pair-selected(index);
+                                Disclosure {
+                                    text: Strings.source-mix-title;
+                                    expanded: root.mix-open;
+                                    toggled => {
+                                        root.mix-open = !root.mix-open;
                                     }
                                 }
                             }
@@ -1917,6 +1882,25 @@ export component MainWindow inherits Window {
 
                                 if root.mix-apps.length > 0 && root.mix-all-except && Strings.source-mix-all-except-note != "": SecondaryText {
                                     text: Strings.source-mix-all-except-note;
+                                }
+                            }
+
+                            if root.input-pairs.length > 0: VerticalLayout {
+                                spacing: 4px;
+
+                                SecondaryText {
+                                    text: Strings.input-channels-label;
+                                }
+
+                                PairPicker {
+                                    model: root.input-pairs;
+                                    chosen: root.input-pair-index;
+                                    changed has-focus => {
+                                        root.control-focus-changed(MainControl.input-pair, self.has-focus);
+                                    }
+                                    picked(index) => {
+                                        root.input-pair-selected(index);
+                                    }
                                 }
                             }
 
@@ -1953,18 +1937,8 @@ export component MainWindow inherits Window {
                         VerticalLayout {
                             spacing: 6px;
 
-                            HorizontalLayout {
-                                spacing: 10px;
-
-                                Glyph {
-                                    glyph: Glyphs.volume-high;
-                                    color: Tokens.teal-text;
-                                    width: 20px;
-                                }
-
-                                SectionTitle {
-                                    text: Strings.master-volume-title;
-                                }
+                            CardTitle {
+                                text: Strings.master-volume-title;
                             }
 
                             VolumeSlider {
@@ -2189,7 +2163,7 @@ export component MainWindow inherits Window {
                         accessible-role: groupbox;
                         accessible-label: Strings.zones;
 
-                        SectionTitle {
+                        CardTitle {
                             text: Strings.zones;
                         }
 
@@ -2438,26 +2412,31 @@ export component MainWindow inherits Window {
                         calibration-privacy => {
                             root.calibration-privacy-requested();
                         }
-                    }
 
-                    if root.airplay-delay-shown: AirPlayDelayControls {
-                        delay-text: root.airplay-delay-text;
-                        pending: root.airplay-delay-pending;
-                        range-hint: root.airplay-delay-range-hint;
-                        stepped(delta) => {
-                            root.airplay-delay-stepped(delta);
-                        }
-                        edited(text) => {
-                            root.airplay-delay-edited(text);
-                        }
-                        committed => {
-                            root.airplay-delay-committed();
-                        }
-                        cancelled => {
-                            root.airplay-delay-cancelled();
-                        }
-                        focus-changed(has) => {
-                            root.control-focus-changed(MainControl.airplay-delay, has);
+                        // After the speakers, inside their card, as on the Mac.
+                        if root.airplay-delay-shown: VerticalLayout {
+                            Divider { }
+
+                            AirPlayDelayControls {
+                                delay-text: root.airplay-delay-text;
+                                pending: root.airplay-delay-pending;
+                                range-hint: root.airplay-delay-range-hint;
+                                stepped(delta) => {
+                                    root.airplay-delay-stepped(delta);
+                                }
+                                edited(text) => {
+                                    root.airplay-delay-edited(text);
+                                }
+                                committed => {
+                                    root.airplay-delay-committed();
+                                }
+                                cancelled => {
+                                    root.airplay-delay-cancelled();
+                                }
+                                focus-changed(has) => {
+                                    root.control-focus-changed(MainControl.airplay-delay, has);
+                                }
+                            }
                         }
                     }
                 }

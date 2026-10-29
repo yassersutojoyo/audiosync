@@ -35,8 +35,9 @@ use windows::core::{BOOL, GUID, HSTRING, PCWSTR};
 use windows_core::implement;
 
 use super::com::{
-    Apartment, ComMemory, Event, ProAudioTask, Ready, Worker, device_error, float_format,
-    read_mix_format, spawn_worker,
+    Apartment, Awaited, ComMemory, Event, ProAudioTask, READY_TIMEOUT, Ready, StuckThreads,
+    WINDOWS_AUDIO, Worker, awaited, device_error, float_format, read_mix_format,
+    spawn_ready_within, spawn_worker,
 };
 use super::devices::enumerator;
 use crate::audio::backend::BackendError;
@@ -199,6 +200,57 @@ pub(super) fn current_format(id: &str) -> Result<RenderFormat, BackendError> {
     );
     // SAFETY: the mix format lives until `mix` drops.
     render_format(unsafe { read_mix_format(mix.as_ptr()) })
+}
+
+/// The outputs' format reads ([`current_format`]), each on a thread of its
+/// own: the read given up on while still in its Windows call, if any.
+#[derive(Default)]
+pub(super) struct FormatReads(Option<Awaited>);
+
+impl FormatReads {
+    /// The format an output on the endpoint `id` would open in now, or
+    /// [`BackendError::NotResponding`] when Windows audio didn't answer in
+    /// [`READY_TIMEOUT`] or an earlier read, of any output, still hangs.
+    pub(super) fn current(&mut self, id: &str) -> Result<RenderFormat, BackendError> {
+        self.read_within(id, READY_TIMEOUT, &WINDOWS_AUDIO, current_format)
+    }
+
+    fn read_within(
+        &mut self,
+        id: &str,
+        timeout: Duration,
+        stuck: &'static StuckThreads,
+        read: impl FnOnce(&str) -> Result<RenderFormat, BackendError> + Send + 'static,
+    ) -> Result<RenderFormat, BackendError> {
+        // Every read waits on the same audio service, so one hang answers for all.
+        if self.0.as_ref().is_some_and(Awaited::pending) {
+            return Err(BackendError::NotResponding);
+        }
+        let (running, end) = awaited(stuck);
+        let endpoint = id.to_owned();
+        let started = spawn_ready_within("audiosync-format", timeout, move |ready| {
+            let _running = running;
+            match read(&endpoint) {
+                Ok(format) => {
+                    let _ = ready.ok(format);
+                }
+                Err(error) => ready.fail(error),
+            }
+        });
+        match started {
+            Ok((thread, format)) => {
+                let _ = thread.join();
+                Ok(format)
+            }
+            Err(BackendError::NotResponding) => {
+                if end.let_go() {
+                    self.0 = Some(end);
+                }
+                Err(BackendError::NotResponding)
+            }
+            Err(error) => Err(error),
+        }
+    }
 }
 
 /// An audio client on the endpoint `id`.
@@ -712,6 +764,7 @@ fn clock_queued(stream: &RenderStream, written: u64) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -906,5 +959,62 @@ mod tests {
         assert_eq!(done.recv_timeout(HANG * 3), Ok(true));
         assert!(STUCK.none_within(HANG), "the thread ends");
         answers.join().expect("the answer comes");
+    }
+
+    #[test]
+    fn a_format_read_that_hangs_answers_in_time_and_starts_no_second_read() {
+        static STUCK: StuckThreads = StuckThreads::new();
+        const FORMAT: RenderFormat = RenderFormat {
+            rate: 48_000,
+            channels: 2,
+            channel_mask: 0x3,
+            convert: false,
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hangs = |calls: &Arc<AtomicUsize>| {
+            let calls = Arc::clone(calls);
+            move |_: &str| {
+                calls.fetch_add(1, Ordering::AcqRel);
+                thread::sleep(HANG);
+                Ok(FORMAT)
+            }
+        };
+        let mut reads = FormatReads::default();
+        let started = Instant::now();
+        let first = reads.read_within("speakers", TIMEOUT, &STUCK, hangs(&calls));
+        let second = reads.read_within("speakers", TIMEOUT, &STUCK, hangs(&calls));
+        let waited = started.elapsed();
+        assert!(waited < HANG / 2, "the poll waited {waited:?}");
+        assert_eq!(first, Err(BackendError::NotResponding));
+        assert_eq!(second, Err(BackendError::NotResponding));
+        assert_eq!(calls.load(Ordering::Acquire), 1, "one read hangs at a time");
+        assert!(STUCK.any(), "the read counts as stuck");
+        assert!(STUCK.none_within(HANG * 2), "the read ends once it answers");
+        let answered = reads.read_within("speakers", TIMEOUT, &STUCK, |_| Ok(FORMAT));
+        assert_eq!(answered, Ok(FORMAT));
+    }
+
+    #[test]
+    fn a_format_read_that_hangs_answers_every_other_output_at_once() {
+        static STUCK: StuckThreads = StuckThreads::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hangs = |calls: &Arc<AtomicUsize>| {
+            let calls = Arc::clone(calls);
+            move |_: &str| {
+                calls.fetch_add(1, Ordering::AcqRel);
+                thread::sleep(HANG);
+                Err(BackendError::UnsupportedFormat)
+            }
+        };
+        let mut reads = FormatReads::default();
+        let first = reads.read_within("speakers", TIMEOUT, &STUCK, hangs(&calls));
+        let started = Instant::now();
+        let other = reads.read_within("headphones", TIMEOUT, &STUCK, hangs(&calls));
+        let waited = started.elapsed();
+        assert_eq!(first, Err(BackendError::NotResponding));
+        assert_eq!(other, Err(BackendError::NotResponding));
+        assert!(waited < TIMEOUT / 2, "the other output waited {waited:?}");
+        assert_eq!(calls.load(Ordering::Acquire), 1, "no read starts meanwhile");
+        assert!(STUCK.none_within(HANG * 2), "the read ends once it answers");
     }
 }

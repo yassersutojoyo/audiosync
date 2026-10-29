@@ -162,6 +162,27 @@ pub fn output_kind(form_factor: Option<u32>, enumerator: &str, display_port: boo
     }
 }
 
+/// An endpoint's name without the number Windows may put before the device's
+/// name inside its parentheses (digits, then "- "), as it does for a USB
+/// device in another port or a second device of the same model:
+/// "Speakers (2- USB DAC)" gives "Speakers (USB DAC)".
+pub fn unnumbered(name: &str) -> String {
+    let mut plain = String::with_capacity(name.len());
+    let mut rest = name;
+    while let Some(open) = rest.find('(') {
+        plain.push_str(&rest[..=open]);
+        rest = &rest[open + 1..];
+        let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0
+            && let Some(after) = rest[digits..].strip_prefix("- ")
+        {
+            rest = after;
+        }
+    }
+    plain.push_str(rest);
+    plain
+}
+
 /// What the listing read about one render endpoint, before deciding whether
 /// to list it. A call that failed keeps its error text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1274,6 +1295,7 @@ mod tests {
         policy
     }
 
+    // covers: S161
     #[test]
     fn enabled_connected_outputs_play_sorted_by_id() {
         let policy = policy_with(&["c", "a", "b"]);
@@ -1283,6 +1305,7 @@ mod tests {
         assert!(plan.detach.is_empty());
     }
 
+    // covers: S161
     #[test]
     fn an_output_that_already_plays_is_not_added_again() {
         let policy = policy_with(&["a", "b"]);
@@ -1297,6 +1320,7 @@ mod tests {
         assert!(plan.is_empty());
     }
 
+    // covers: S161
     #[test]
     fn an_output_turned_off_is_removed() {
         let mut policy = policy_with(&["a", "b"]);
@@ -1306,12 +1330,14 @@ mod tests {
         assert_eq!(plan.detach, ["b"]);
     }
 
+    // covers: S161
     #[test]
     fn an_enabled_output_that_is_not_connected_waits() {
         let policy = policy_with(&["gone"]);
         assert!(policy.plan(true, &[endpoint("other")], &[]).is_empty());
     }
 
+    // covers: S161
     #[test]
     fn a_renderer_whose_device_disappeared_is_kept_until_the_output_is_turned_off() {
         // The renderer stops by itself when its device goes away (S68); the
@@ -1320,6 +1346,7 @@ mod tests {
         assert!(policy.plan(true, &[], &["a"]).is_empty());
     }
 
+    // covers: S161
     #[test]
     fn a_device_removed_and_added_again_plays_again() {
         let policy = policy_with(&["a"]);
@@ -1332,6 +1359,7 @@ mod tests {
         assert!(policy.settings("a").enabled);
     }
 
+    // covers: S71
     #[test]
     fn a_new_output_starts_off_at_volume_60_and_no_delay() {
         let policy = OutputPolicy::new(AirPlay::Unavailable);

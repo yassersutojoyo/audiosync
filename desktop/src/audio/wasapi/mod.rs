@@ -49,6 +49,8 @@ pub struct WasapiDriver {
     /// The thread that reads, follows and sets the outputs' own volumes,
     /// from the first call on.
     volumes: volume::Volumes,
+    /// The outputs' format reads, none waiting on another that hangs.
+    formats: endpoint::FormatReads,
     own_pid: u32,
     power: power::PowerWatch,
 }
@@ -59,6 +61,7 @@ impl WasapiDriver {
         Ok(WasapiDriver {
             watcher: devices::DeviceWatcher::start()?,
             volumes: volume::Volumes::default(),
+            formats: endpoint::FormatReads::default(),
             own_pid: std::process::id(),
             power: power::PowerWatch::start(),
         })
@@ -98,7 +101,7 @@ impl Driver for WasapiDriver {
     }
 
     fn output_format(&mut self, id: &str) -> Result<RenderFormat, BackendError> {
-        endpoint::current_format(id)
+        self.formats.current(id)
     }
 
     fn inputs(&mut self) -> Result<Vec<EndpointReading>, BackendError> {

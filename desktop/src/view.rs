@@ -125,6 +125,8 @@ struct UiState {
     /// Says the item applies at the next launch, while it differs from
     /// `airplay2_at_launch`.
     airplay2_notice: Option<ui_model::Notice>,
+    /// A message the name dialog couldn't show while it asked for a name.
+    dialog_notice: Option<ui_model::Notice>,
     listed_virtual: ListedVirtual,
     /// The zones whose speakers are hidden by their arrow, by ID; a zone
     /// opens expanded.
@@ -238,8 +240,10 @@ struct Models {
     /// The compact rows of the speakers in a zone, under their own section.
     this_pc_zoned: Rc<VecModel<SpeakerItem>>,
     connected_zoned: Rc<VecModel<SpeakerItem>>,
-    /// The flyout's speakers in no zone.
-    all_speakers: Rc<VecModel<SpeakerItem>>,
+    /// The flyout's speakers in no zone: this PC's, under the volume, and
+    /// the connected ones, after the zones.
+    flyout_this_pc: Rc<VecModel<SpeakerItem>>,
+    flyout_connected: Rc<VecModel<SpeakerItem>>,
     zones: Rc<VecModel<ZoneItem>>,
     /// Each zone's rows by zone ID, kept between refreshes so an unchanged
     /// zone's item compares equal and its rows aren't rebuilt.
@@ -322,8 +326,10 @@ enum Announcement {
 /// are not news.
 #[derive(Debug, Default)]
 struct NoticeAnnouncer {
-    /// The newest notice id seen so far; `None` until the first refresh.
-    seen: Option<u64>,
+    /// The ids listed at the last refresh, oldest posted first; `None`
+    /// until the first refresh. The view's own notices have fixed ids far
+    /// above the backend's, so an id says nothing about post order.
+    posted: Option<Vec<u64>>,
     /// The subject and title of each notice listed at the last refresh.
     listed: Vec<(String, SharedString)>,
     /// The subject of the notice last said, until it leaves the list.
@@ -331,22 +337,33 @@ struct NoticeAnnouncer {
 }
 
 impl NoticeAnnouncer {
-    /// What to announce for `notices`. Ids only grow, so a notice with a
-    /// higher id than any seen was posted since the last refresh.
+    /// The listed notices' ids, oldest posted first.
+    fn posted(&self) -> &[u64] {
+        self.posted.as_deref().unwrap_or_default()
+    }
+
+    /// What to announce for `notices`. A notice whose id wasn't listed at
+    /// the last refresh was posted since.
     fn next(&mut self, notices: &[Listed]) -> Announcement {
         let repeats = |n: &Listed| {
             self.listed
                 .iter()
                 .any(|(subject, title)| *subject == n.subject && *title == n.title)
         };
-        let fresh = self.seen.and_then(|seen| {
-            notices
-                .iter()
-                .filter(|n| n.id > seen && !repeats(n))
-                .max_by_key(|n| n.id)
-        });
-        let top = notices.iter().map(|n| n.id).max().unwrap_or(0);
-        self.seen = Some(self.seen.map_or(top, |seen| seen.max(top)));
+        let known = self.posted.take();
+        let mut new: Vec<&Listed> = notices
+            .iter()
+            .filter(|n| !known.as_ref().is_some_and(|ids| ids.contains(&n.id)))
+            .collect();
+        new.sort_by_key(|n| n.id);
+        let fresh = known
+            .is_some()
+            .then(|| new.iter().rev().find(|n| !repeats(n)).copied())
+            .flatten();
+        let mut posted = known.unwrap_or_default();
+        posted.retain(|id| notices.iter().any(|n| n.id == *id));
+        posted.extend(new.iter().map(|n| n.id));
+        self.posted = Some(posted);
         self.listed = notices
             .iter()
             .map(|n| (n.subject.clone(), n.title.clone()))
@@ -390,6 +407,9 @@ const REMOTE_PUBLIC_NOTICE_ID: u64 = AIRPLAY2_NOTICE_ID - 1;
 /// The Windows updater's notice's id, next to those.
 const UPDATER_NOTICE_ID: u64 = REMOTE_PUBLIC_NOTICE_ID - 1;
 
+/// The id of the notice that holds a name dialog message, next to those.
+const DIALOG_NOTICE_ID: u64 = UPDATER_NOTICE_ID - 1;
+
 /// How often, 20 ms apart, the saved main window size waits for the native
 /// window before it gives up (about two seconds).
 const NATIVE_WINDOW_TRIES: u8 = 100;
@@ -421,13 +441,15 @@ impl FlyoutParts {
 }
 
 /// What the tray flyout shows: how many notices there are and how many of
-/// them it lists, how many zones and speakers in no zone, and the shape of
-/// the zones' member lists ([`zone_shape`]).
+/// them it lists, how many zones, how many of this PC's and connected
+/// speakers in no zone, and the shape of the zones' member lists
+/// ([`zone_shape`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutCounts {
     notices: usize,
     listed_notices: usize,
     zones: usize,
+    this_pc: usize,
     speakers: usize,
     zone_members: u64,
 }
@@ -446,7 +468,9 @@ impl FlyoutCounts {
             notices: self.listed_notices != next.listed_notices,
             more_notices: self.shows_more_notices() && !next.shows_more_notices(),
             zones: self.zones != next.zones,
-            speakers: self.speakers != next.speakers || self.zone_members != next.zone_members,
+            speakers: self.this_pc != next.this_pc
+                || self.speakers != next.speakers
+                || self.zone_members != next.zone_members,
         }
     }
 }
@@ -937,7 +961,8 @@ impl App {
             this_pc_zoned: Rc::new(VecModel::default()),
             connected_zoned: Rc::new(VecModel::default()),
             connected: Rc::new(VecModel::default()),
-            all_speakers: Rc::new(VecModel::default()),
+            flyout_this_pc: Rc::new(VecModel::default()),
+            flyout_connected: Rc::new(VecModel::default()),
             zones: Rc::new(VecModel::default()),
             zone_models: RefCell::default(),
             notices: Rc::new(VecModel::default()),
@@ -1016,6 +1041,12 @@ impl App {
         app.restore_view(true);
         app.restore_remote();
         app.launch_update_check();
+        if app.login.borrow().status() == launch_at_login::Status::Missing {
+            app.log.log(|| {
+                "launch at sign-in: the startup entry names an exe that is gone; shown off, left as it is"
+                    .to_owned()
+            });
+        }
         app.refresh();
         let weak = Rc::downgrade(&app);
         app.poll_timer
@@ -1064,7 +1095,14 @@ impl App {
             .extend(self.ui.borrow().airplay2_notice.clone());
         state.notices.extend(self.remote_public_notice());
         state.notices.extend(self.updater_notice());
+        state.notices.extend(self.ui.borrow().dialog_notice.clone());
         state
+    }
+
+    /// The listed notices' ids, oldest posted first, for [`tray_tooltip`].
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn notices_posted(&self) -> Vec<u64> {
+        self.notice_announcer.borrow().posted().to_vec()
     }
 
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -1106,7 +1144,9 @@ impl App {
     fn dismiss_notice(&self, id: u64) {
         let airplay2 =
             id == AIRPLAY2_NOTICE_ID && self.ui.borrow_mut().airplay2_notice.take().is_some();
+        let dialog = id == DIALOG_NOTICE_ID && self.ui.borrow_mut().dialog_notice.take().is_some();
         if airplay2
+            || dialog
             || self.login.borrow_mut().dismiss(id)
             || self.dismiss_remote_notice(id)
             || self.dismiss_updater_notice(id)
@@ -1120,6 +1160,7 @@ impl App {
     fn dismiss_all_notices(&self) {
         self.login.borrow_mut().dismiss_notice();
         self.ui.borrow_mut().airplay2_notice = None;
+        self.ui.borrow_mut().dialog_notice = None;
         self.dismiss_remote_notice(REMOTE_PUBLIC_NOTICE_ID);
         self.dismiss_updater_notice(UPDATER_NOTICE_ID);
         self.update(|b| b.dismiss_all_notices());
@@ -1611,7 +1652,9 @@ impl App {
         self.flyout
             .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
         self.flyout
-            .set_speakers(ModelRc::from(m.all_speakers.clone()));
+            .set_this_pc(ModelRc::from(m.flyout_this_pc.clone()));
+        self.flyout
+            .set_speakers(ModelRc::from(m.flyout_connected.clone()));
         self.flyout.set_zones(ModelRc::from(m.zones.clone()));
         self.flyout
             .set_notices(ModelRc::from(m.flyout_notices.clone()));
@@ -1837,9 +1880,9 @@ impl App {
             .set_can_save_preset(state.presets.len() < MAX_PRESETS);
         self.flyout
             .set_current_preset(current_preset_name(&state).into());
-        let flyout_speakers: Vec<SpeakerItem> = this_pc.iter().chain(&connected).cloned().collect();
-        let all: Vec<SpeakerItem> = flyout_speakers
+        let all: Vec<SpeakerItem> = this_pc
             .iter()
+            .chain(&connected)
             .cloned()
             .chain(zones.iter().flat_map(|zone| zone.members.iter().cloned()))
             .collect();
@@ -1933,14 +1976,16 @@ impl App {
             notices: usize::try_from(self.flyout.get_notice_count()).unwrap_or(0),
             listed_notices: m.flyout_notices.row_count(),
             zones: m.zones.row_count(),
-            speakers: m.all_speakers.row_count(),
+            this_pc: m.flyout_this_pc.row_count(),
+            speakers: m.flyout_connected.row_count(),
             zone_members: self.zone_shape_shown(),
         };
         let flyout_removed = flyout_shown.removed_by(FlyoutCounts {
             notices: notices.len(),
             listed_notices: flyout_notices.len(),
             zones: zones.len(),
-            speakers: flyout_speakers.len(),
+            this_pc: this_pc.len(),
+            speakers: connected.len(),
             zone_members: zone_shape(
                 zones
                     .iter()
@@ -1991,11 +2036,12 @@ impl App {
         if became_mix {
             self.main.set_mix_open(true);
         }
+        sync_model(&m.flyout_this_pc, this_pc.clone());
+        sync_model(&m.flyout_connected, connected.clone());
         sync_model(&m.this_pc, this_pc);
         sync_model(&m.connected, connected);
         sync_model(&m.this_pc_zoned, this_pc_zoned);
         sync_model(&m.connected_zoned, connected_zoned);
-        sync_model(&m.all_speakers, flyout_speakers);
         self.sync_zones(zones);
         sync_model(&m.notices, main_notices);
         sync_model(&m.flyout_notices, flyout_notices);
@@ -3456,13 +3502,20 @@ impl App {
     /// Saves the settings now, with the main window's frame: the app is
     /// about to quit. Returns whether no change is left unsaved.
     pub fn save_settings(&self) -> bool {
-        // Quit drops a typed delay or name that wasn't applied, so a focus
-        // loss as the window goes applies nothing either.
-        {
+        // Quit drops a typed delay that wasn't applied and applies an open
+        // rename, so a focus loss as the window goes applies nothing more.
+        let rename = {
             let mut ui = self.ui.borrow_mut();
             ui.delay_drafts.clear();
             ui.airplay_delay_draft.cancel();
-            ui.rename = None;
+            ui.rename.take().map(|open| (open, ui.rename_place))
+        };
+        match rename {
+            Some(((id, text), RenamePlace::Zone)) => {
+                self.backend.borrow_mut().rename_zone(&id, &text)
+            }
+            Some(((id, text), _)) => self.backend.borrow_mut().rename_speaker(&id, &text),
+            None => {}
         }
         self.remember_view();
         self.backend.borrow_mut().save_settings()
@@ -3740,6 +3793,9 @@ impl App {
     /// Speakers > New Zone from Active Speakers… (Ctrl+N): a name for a
     /// zone of the speakers that are on, or why none can be made yet.
     fn ask_new_zone(&self) {
+        if self.dialog_already_open() {
+            return;
+        }
         let strings = self.strings();
         let dialog = &self.zone_dialog;
         if self.snapshot().active_speakers() == 0 {
@@ -3759,6 +3815,9 @@ impl App {
 
     /// New Zone… in a speaker's menu: a name for a zone of that speaker.
     fn ask_new_zone_with(&self, speaker_id: &str) {
+        if self.dialog_already_open() {
+            return;
+        }
         let Some(speaker) = self.snapshot().speaker(speaker_id).cloned() else {
             return;
         };
@@ -3781,6 +3840,9 @@ impl App {
     }
 
     fn ask_save_curve(&self) {
+        if self.dialog_already_open() {
+            return;
+        }
         let state = self.snapshot();
         let strings = self.strings();
         let dialog = &self.zone_dialog;
@@ -3812,6 +3874,9 @@ impl App {
     }
 
     fn ask_rename_curve(&self) {
+        if self.dialog_already_open() {
+            return;
+        }
         let state = self.snapshot();
         let Some(CurveMatch::User(index)) = self.shown_curve(&state) else {
             return;
@@ -3830,8 +3895,24 @@ impl App {
         self.open_dialog();
     }
 
-    /// Shows `message` in the name dialog, without a field.
+    /// Shows `message` in the name dialog, without a field. While the
+    /// dialog is open, a notice and Narrator say it instead, so a name being
+    /// typed stays.
     fn show_dialog_message(&self, heading: SharedString, message: SharedString) {
+        if self.zone_dialog.window().is_visible() {
+            self.ui.borrow_mut().dialog_notice = Some(ui_model::Notice {
+                id: DIALOG_NOTICE_ID,
+                subject: "dialog".to_owned(),
+                message: NoticeMessage::DialogMessage {
+                    title: heading.to_string(),
+                    text: message.to_string(),
+                },
+                time: crate::platform::notice_time(),
+            });
+            self.refresh();
+            self.announce(message);
+            return;
+        }
         let dialog = &self.zone_dialog;
         *self.dialog_purpose.borrow_mut() = DialogPurpose::Message;
         dialog.set_heading(heading);
@@ -3917,6 +3998,9 @@ impl App {
     }
 
     fn ask_save_preset(&self) {
+        if self.dialog_already_open() {
+            return;
+        }
         let strings = self.strings();
         let state = self.snapshot();
         if state.presets.len() >= MAX_PRESETS {
@@ -3943,6 +4027,9 @@ impl App {
     }
 
     fn ask_rename_preset(&self, id: &str) {
+        if self.dialog_already_open() {
+            return;
+        }
         let Some(preset) = self.snapshot().presets.into_iter().find(|p| p.id == id) else {
             return;
         };
@@ -4022,6 +4109,16 @@ impl App {
             .strings()
             .invoke_preset_deleted(presets[index].name.as_str().into());
         self.announce(said);
+    }
+
+    /// Brings the name dialog to the front while it is open: one dialog
+    /// serves every name, so a second request would drop the typed one.
+    fn dialog_already_open(&self) -> bool {
+        let open = self.zone_dialog.window().is_visible();
+        if open {
+            crate::platform::bring_to_front(self.zone_dialog.window());
+        }
+        open
     }
 
     fn open_dialog(&self) {
@@ -4255,11 +4352,17 @@ fn clear_announcement(main: &slint::Weak<MainWindow>, flyout: &slint::Weak<TrayF
 
 /// The tray icon's tooltip: AudioSync and its status, then the newest
 /// notice's title on a second line while there is a notice, so Narrator
-/// reads it on the tray icon even with every window closed.
+/// reads it on the tray icon even with every window closed. `posted` is
+/// [`App::notices_posted`]; notices missing from it rank below listed
+/// ones, by id.
 #[cfg(any(windows, target_os = "linux", test))]
-pub fn tray_tooltip(strings: &Strings<'_>, state: &AppState) -> String {
+pub fn tray_tooltip(strings: &Strings<'_>, state: &AppState, posted: &[u64]) -> String {
     let speakers = count(state.active_speakers());
-    let text = match state.notices.iter().max_by_key(|n| n.id) {
+    let newest = state
+        .notices
+        .iter()
+        .max_by_key(|n| (posted.iter().position(|id| *id == n.id), n.id));
+    let text = match newest {
         Some(notice) => strings.invoke_tray_tooltip_notice(
             state.running,
             speakers,
@@ -5278,6 +5381,10 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::PairFirst { speaker } => {
             strings.invoke_notice_pair_first(speaker.as_str().into())
         }
+        NoticeMessage::AirPlayCantPlay {
+            speaker,
+            problem: ui_model::AirPlayProblem::Refused,
+        } => strings.invoke_notice_airplay_refused_off(speaker.as_str().into()),
         NoticeMessage::AirPlayRetrying { speaker, problem }
         | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
@@ -5318,6 +5425,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::RemoteOnPublicNetwork => strings.get_remote_public_network(),
         NoticeMessage::GroupsBecameZones => strings.get_notice_groups_became_zones(),
         NoticeMessage::Update(notice) => update_notice_text(strings, notice),
+        NoticeMessage::DialogMessage { text, .. } => text.as_str().into(),
         NoticeMessage::PresetLeftOff {
             preset,
             left_off,
@@ -5472,6 +5580,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::RemoteOnPublicNetwork => (NoticeKind::RemotePublicNetwork, ""),
         NoticeMessage::GroupsBecameZones => (NoticeKind::GroupsBecameZones, ""),
         NoticeMessage::Update(_) => (NoticeKind::Update, ""),
+        NoticeMessage::DialogMessage { title, .. } => return title.as_str().into(),
         NoticeMessage::PresetLeftOff { .. } => (NoticeKind::PresetsLeftOff, ""),
         NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
     };
@@ -6016,8 +6125,9 @@ mod tests {
         let app = app_over(backend);
         let listed = || {
             app.models
-                .all_speakers
+                .flyout_this_pc
                 .iter()
+                .chain(app.models.flyout_connected.iter())
                 .any(|s| s.id == "local:cable")
         };
         assert!(!app.ui.borrow().show_virtual, "Show Virtual Devices is off");
@@ -6060,8 +6170,9 @@ mod tests {
         let app = app_over(backend);
         let row = |id: &str| {
             app.models
-                .all_speakers
+                .flyout_this_pc
                 .iter()
+                .chain(app.models.flyout_connected.iter())
                 .find(|s| s.id == id)
                 .expect("listed")
         };
@@ -6125,8 +6236,9 @@ mod tests {
     /// The desk's row.
     fn desk_row(app: &App) -> SpeakerItem {
         app.models
-            .all_speakers
+            .flyout_this_pc
             .iter()
+            .chain(app.models.flyout_connected.iter())
             .chain(app.models.this_pc.iter())
             .chain(app.models.connected.iter())
             .find(|s| s.id == "local:desk")
@@ -6311,6 +6423,7 @@ mod tests {
                         class: audiosync_core::calibrate_all::Class::Local,
                         offset_ms: Some(0.0),
                         latency_ms: 2500.0,
+                        sender_ms: 0.0,
                     })
                     .collect(),
                 ..Default::default()
@@ -7050,7 +7163,7 @@ mod tests {
         app.main.invoke_sync_toggled("local:desk".into());
         // As if the second notice came with the keystroke.
         *app.notice_announcer.borrow_mut() = NoticeAnnouncer {
-            seen: Some(1),
+            posted: Some(vec![1]),
             ..NoticeAnnouncer::default()
         };
         app.main
@@ -7297,6 +7410,31 @@ mod tests {
         let state = app.snapshot();
         assert_eq!(state.speaker("local:desk").unwrap().delay_ms, Some(120.0));
         assert_eq!(state.airplay_delay_ms, Some(1750.0));
+    }
+
+    #[test]
+    fn quitting_applies_an_open_rename() {
+        let app = app_over(MockBackend::new());
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "Desk left".into());
+        app.save_settings();
+        assert_eq!(name_of(&app, "local:desk"), "Desk left");
+        assert!(app.ui.borrow().rename.is_none());
+    }
+
+    #[test]
+    fn quitting_applies_an_open_zone_rename_to_the_zone() {
+        let app = app_over(MockBackend::zones_preview());
+        app.main.invoke_zone_rename_requested("zone:office".into());
+        app.main
+            .invoke_zone_rename_edited("zone:office".into(), "Study".into());
+        app.save_settings();
+        let state = app.snapshot();
+        let office = state.zones.iter().find(|z| z.id == "zone:office");
+        assert_eq!(office.unwrap().name, "Study");
+        assert!(app.ui.borrow().rename.is_none());
     }
 
     fn name_of(app: &App, id: &str) -> String {
@@ -7826,7 +7964,7 @@ mod tests {
     }
 
     #[test]
-    fn a_renamed_row_shows_its_device_name_under_the_new_one() {
+    fn a_renamed_row_shows_its_device_name_in_the_name_tooltip() {
         let app = app_over(MockBackend::new());
         let strings = app.main.global::<Strings>();
         assert_eq!(
@@ -7854,13 +7992,19 @@ mod tests {
             .invoke_speaker_rename_committed("local:desk".into());
         let row = row_of(&app, "local:desk");
         assert_eq!(
-            strings.invoke_speaker_device_caption(row.system_name.clone()),
-            "Device name: Desk Speaker"
+            strings.invoke_speaker_name_tooltip(row.name.clone(), row.system_name.clone()),
+            "Desk left\nDevice name: Desk Speaker. Double-click to rename."
+        );
+        assert_eq!(
+            strings.invoke_speaker_tooltip(row.name.clone(), row.system_name.clone()),
+            "Desk left\nDevice name: Desk Speaker",
+            "the tray flyout's tooltip names it too"
         );
         let flyout_row = app
             .flyout
-            .get_speakers()
+            .get_this_pc()
             .iter()
+            .chain(app.flyout.get_speakers().iter())
             .find(|s| s.id == "local:desk")
             .unwrap();
         assert_eq!(
@@ -7946,7 +8090,7 @@ mod tests {
         rename("Desk");
         // The master volume's slider, in the left column, below the source
         // card's level meter row.
-        click(window, 150.0, 289.0);
+        click(window, 150.0, 310.0);
         assert_eq!(
             app.main_focus.borrow().control,
             Some(MainControl::MasterVolume)
@@ -7958,9 +8102,10 @@ mod tests {
         assert_eq!(name_of(&app, "local:desk"), "Desk");
 
         rename("Desk left");
-        // The AirPlay delay's field, under the lists scrolled to the end.
+        // The AirPlay delay's field, at the end of the Connected Speakers
+        // card, scrolled to the end.
         scroll(window, 640.0, 600.0, -2000.0);
-        click(window, 470.0, 620.0);
+        click(window, 520.0, 624.0);
         assert_eq!(
             app.main_focus.borrow().control,
             Some(MainControl::AirplayDelay)
@@ -9159,8 +9304,8 @@ mod tests {
         assert!(ids(&m.this_pc).iter().any(|id| id == "local:speakers"));
         assert!(ids(&m.connected).iter().any(|id| id == "airplay:living"));
         assert_eq!(
-            ids(&m.all_speakers),
-            [ids(&m.this_pc), ids(&m.connected)].concat()
+            [ids(&m.flyout_this_pc), ids(&m.flyout_connected)],
+            [ids(&m.this_pc), ids(&m.connected)]
         );
         let living = m.zones.row_data(0).unwrap();
         assert_eq!(
@@ -9795,12 +9940,13 @@ mod tests {
         assert_eq!(model.iter().collect::<Vec<_>>(), [4]);
     }
 
-    /// The flyout with two notices (it lists the newest), one zone and
-    /// three speakers.
+    /// The flyout with two notices (it lists the newest), one zone, one
+    /// speaker of this PC's and three connected ones.
     const FLYOUT: FlyoutCounts = FlyoutCounts {
         notices: 2,
         listed_notices: 1,
         zones: 1,
+        this_pc: 1,
         speakers: 3,
         zone_members: 1,
     };
@@ -9818,6 +9964,14 @@ mod tests {
                 speakers: true,
                 ..FlyoutParts::default()
             }
+        );
+        let headphones_unplugged = FlyoutCounts {
+            this_pc: 0,
+            ..FLYOUT
+        };
+        assert!(
+            FLYOUT.removed_by(headphones_unplugged).speakers,
+            "this PC's rows are speaker rows too"
         );
         let zone_added = FlyoutCounts { zones: 2, ..FLYOUT };
         assert!(FLYOUT.removed_by(zone_added).zones, "rows are rebuilt");
@@ -10257,6 +10411,24 @@ mod tests {
         assert_eq!(app.snapshot().zones.len(), zones, "and made no zone");
     }
 
+    // covers: S270
+    #[test]
+    fn ctrl_n_while_a_curve_is_named_keeps_the_open_dialog() {
+        let app = app_over(MockBackend::new());
+        let zones = app.snapshot().zones.len();
+        app.equalizer.invoke_save_curve();
+        app.zone_dialog.set_name("Late night".into());
+        let heading = app.zone_dialog.get_heading();
+
+        app.main.invoke_new_zone_requested();
+        assert!(app.zone_dialog.window().is_visible());
+        assert_eq!(app.zone_dialog.get_heading(), heading);
+        assert_eq!(app.zone_dialog.get_name(), "Late night");
+        app.zone_dialog.invoke_confirmed("Late night".into());
+        assert_eq!(app.snapshot().equalizer_curves[0].name, "Late night");
+        assert_eq!(app.snapshot().zones.len(), zones, "no zone was made");
+    }
+
     #[test]
     fn curves_are_saved_picked_renamed_and_deleted_and_custom_is_no_entry() {
         let mut mock = MockBackend::new();
@@ -10331,6 +10503,7 @@ mod tests {
         assert_eq!(eq_window.get_preset_index(), 0, "Reset reads Flat");
     }
 
+    // covers: S270
     #[test]
     fn a_saved_curve_with_a_presets_gains_can_be_picked_renamed_and_deleted() {
         let app = app_over(MockBackend::new());
@@ -10557,6 +10730,33 @@ mod tests {
             assert!(text.starts_with(says), "{text}");
             assert!(!text.contains('\u{2014}'), "no em dash: {text}");
         }
+    }
+
+    #[test]
+    fn a_refusing_airplay_speaker_promises_a_retry_only_while_it_stays_on() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let problem = ui_model::AirPlayProblem::Refused;
+        let speaker = "Den TV".to_owned();
+        let retrying = notice_text(
+            &strings,
+            &NoticeMessage::AirPlayRetrying {
+                speaker: speaker.clone(),
+                problem,
+            },
+        );
+        assert_eq!(
+            retrying,
+            "Den TV declined the stream. AudioSync tries again shortly."
+        );
+        let off = notice_text(
+            &strings,
+            &NoticeMessage::AirPlayCantPlay { speaker, problem },
+        );
+        assert_eq!(
+            off,
+            "Den TV declined the stream, so it's off. Turn it on again to try once more."
+        );
     }
 
     // covers: S242
@@ -10938,8 +11138,8 @@ mod tests {
         draw_frames();
         let window = app.main.window();
         assert!(!app.main.get_mix_open(), "folded until asked for");
-        // The main switch, then Several apps.
-        tab(window, 2);
+        // The main switch, the source, then Several apps under it.
+        tab(window, 3);
         press(window, " ");
         draw_frames();
         assert!(app.main.get_mix_open());
@@ -11197,6 +11397,33 @@ mod tests {
             "Turn on the speakers you want in the preset first, then save it."
         );
         assert!(preset_rows(&app).is_empty());
+    }
+
+    #[test]
+    fn an_update_that_fails_while_a_name_is_typed_says_why_and_keeps_the_dialog() {
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        let id = preset_ids(&app)[0].clone();
+        for speaker in app.snapshot().speakers {
+            app.update(|b| b.set_speaker_enabled(&speaker.id, false));
+        }
+        app.equalizer.invoke_save_curve();
+        app.zone_dialog.set_name("Late night".into());
+        let heading = app.zone_dialog.get_heading();
+
+        app.update_preset(&id);
+        let why = "Turn on the speakers you want in the preset first, then save it.";
+        assert!(app.zone_dialog.window().is_visible());
+        assert_eq!(app.zone_dialog.get_heading(), heading);
+        assert_eq!(app.zone_dialog.get_name(), "Late night");
+        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::SaveCurve);
+        assert_eq!(app.main.get_notice_announcement(), why);
+        let notices = app.snapshot().notices;
+        let notice = notices.last().expect("a notice says it");
+        assert_eq!(notice_text(&app.strings(), &notice.message), why);
+
+        app.dismiss_notice(notice.id);
+        assert!(app.snapshot().notices.is_empty());
     }
 
     // covers: S267
@@ -11717,6 +11944,93 @@ mod tests {
         assert_eq!(announce_for(&mut a, &cant(5)), "say Kitchen can't play");
     }
 
+    /// The view's own notices have fixed ids far above the backend's, so an
+    /// id says nothing about when a notice was posted: a backend notice
+    /// after one is news, and so is the fixed one coming back after it left.
+    // covers: S153
+    #[test]
+    fn a_notice_after_a_fixed_id_notice_is_still_announced() {
+        let mut a = NoticeAnnouncer::default();
+        assert_eq!(announce_for(&mut a, &[]), "keep");
+        let update = (UPDATER_NOTICE_ID, "update", "Update");
+        assert_eq!(announce_for(&mut a, &[update]), "say Update");
+        let capture = (1, "source", "Capture lost");
+        assert_eq!(announce_for(&mut a, &[capture, update]), "say Capture lost");
+        assert_eq!(announce_for(&mut a, &[capture]), "keep", "update left");
+        assert_eq!(
+            announce_for(&mut a, &[capture, update]),
+            "say Update",
+            "and came back"
+        );
+    }
+
+    /// A view notice and a backend notice new in the same refresh: the
+    /// higher id is announced.
+    #[test]
+    fn a_tie_between_a_view_and_a_backend_notice_announces_the_higher_id() {
+        let mut a = NoticeAnnouncer::default();
+        assert_eq!(announce_for(&mut a, &[]), "keep");
+        let both = [
+            (1, "source", "Capture lost"),
+            (UPDATER_NOTICE_ID, "update", "Update"),
+        ];
+        assert_eq!(announce_for(&mut a, &both), "say Update");
+    }
+
+    /// The tray tooltip once the notices were listed as `history` shows,
+    /// one refresh each.
+    fn tooltip_after(strings: &Strings<'_>, history: &[&[ui_model::Notice]]) -> String {
+        let mut announcer = NoticeAnnouncer::default();
+        let mut state = MockBackend::new().snapshot();
+        for notices in history {
+            let listed: Vec<Listed> = notices
+                .iter()
+                .map(|n| Listed {
+                    id: n.id,
+                    subject: n.subject.clone(),
+                    title: notice_title(strings, &n.message),
+                })
+                .collect();
+            announcer.next(&listed);
+            state.notices = notices.to_vec();
+        }
+        tray_tooltip(strings, &state, announcer.posted())
+    }
+
+    /// The tooltip names the notice posted last, also when an older one has
+    /// a fixed id far above the backend's.
+    // covers: S153
+    #[test]
+    fn the_tray_tooltip_names_a_notice_posted_after_a_fixed_id_one() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let notice = |id, subject: &str, message| ui_model::Notice {
+            id,
+            subject: subject.into(),
+            message,
+            time: "09.40".into(),
+        };
+        let airplay2 = notice(
+            AIRPLAY2_NOTICE_ID,
+            "AirPlay 2 (Experimental)",
+            NoticeMessage::AirPlay2NextLaunch {
+                on: true,
+                prefer: false,
+            },
+        );
+        let capture = notice(1, "source", NoticeMessage::CaptureLost);
+        let title = notice_title(&strings, &NoticeMessage::CaptureLost);
+        let tooltip = tooltip_after(
+            &strings,
+            &[
+                &[],
+                std::slice::from_ref(&airplay2),
+                &[capture, airplay2.clone()],
+            ],
+        );
+        assert!(tooltip.ends_with(&format!("Notice: {title}")), "{tooltip}");
+    }
+
     /// The live region empties as soon as the notice it names is gone, so
     /// Narrator's scan mode finds no stray announcement; other notices
     /// leaving keep it.
@@ -11748,7 +12062,7 @@ mod tests {
         let said = strings.invoke_notice_announcement(title);
         // As if only the first notice had been there at launch.
         let only_the_first = || NoticeAnnouncer {
-            seen: Some(1),
+            posted: Some(vec![1]),
             ..NoticeAnnouncer::default()
         };
         *app.notice_announcer.borrow_mut() = only_the_first();
@@ -11792,18 +12106,18 @@ mod tests {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
         let plain = strings.invoke_tray_tooltip(false, 0).to_string();
-        assert_eq!(tray_tooltip(&strings, &backend.snapshot()), plain);
+        assert_eq!(tray_tooltip(&strings, &backend.snapshot(), &[]), plain);
 
         backend.post("source", NoticeMessage::CaptureLost, "09.40");
         backend.post("start", NoticeMessage::NoSpeaker, "09.41");
         let title = notice_title(&strings, &NoticeMessage::NoSpeaker);
         assert_eq!(
-            tray_tooltip(&strings, &backend.snapshot()),
+            tray_tooltip(&strings, &backend.snapshot(), &[]),
             format!("{plain}\nNotice: {title}")
         );
 
         backend.dismiss_all_notices();
-        assert_eq!(tray_tooltip(&strings, &backend.snapshot()), plain);
+        assert_eq!(tray_tooltip(&strings, &backend.snapshot(), &[]), plain);
 
         backend.post(
             "speaker",
@@ -11812,7 +12126,7 @@ mod tests {
             },
             "09.42",
         );
-        let long = tray_tooltip(&strings, &backend.snapshot());
+        let long = tray_tooltip(&strings, &backend.snapshot(), &[]);
         assert!(long.encode_utf16().count() <= 127, "{long}");
         assert!(long.ends_with('…'), "{long}");
         assert!(long.starts_with(&format!("{plain}\nNotice: Kitchen")));
