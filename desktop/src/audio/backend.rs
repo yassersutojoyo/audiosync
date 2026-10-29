@@ -624,6 +624,14 @@ pub enum BackendEvent {
     /// Google Cast speakers appeared, changed or went away, or one's state
     /// changed: list them again.
     CastChanged,
+    /// A browse found the device a Cast speaker added by address is (S341):
+    /// what is kept under the ID `from` moves to the device's ID `to`.
+    CastIdentified {
+        /// The ID the speaker had as an address.
+        from: String,
+        /// The device's own ID.
+        to: String,
+    },
     /// A Google Cast speaker plays.
     CastPlaying {
         /// The speaker's ID.

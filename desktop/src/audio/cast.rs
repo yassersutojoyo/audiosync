@@ -529,6 +529,9 @@ struct Manual {
     looking_up: bool,
     /// When a lookup that failed is tried again.
     retry_at: Option<Instant>,
+    /// The device ID a browse found at its address (C18), kept after the
+    /// browse loses it.
+    found: Option<DeviceId>,
 }
 
 /// The session of the device that is on.
@@ -649,6 +652,7 @@ impl CastSpeakers {
             resolved: socket,
             looking_up: false,
             retry_at: None,
+            found: None,
         });
         if socket.is_none() {
             self.look_up(self.manual.len() - 1);
@@ -805,12 +809,17 @@ impl CastSpeakers {
     fn identified(&mut self, from: SocketAddr, id: DeviceId) {
         let Some(manual) = self
             .manual
-            .iter()
+            .iter_mut()
             .find(|manual| manual.resolved == Some(from))
-            .map(|manual| manual.id)
         else {
             return;
         };
+        manual.found = Some(id);
+        let manual = manual.id;
+        self.pending.push(BackendEvent::CastIdentified {
+            from: manual.to_string(),
+            to: id.to_string(),
+        });
         // 0 ms counts as none: the sender can't forget an offset, so Undo leaves 0.
         let memory = self.memory();
         let stored = |device| memory.offset(device).filter(|offset| !offset.is_zero());
@@ -1537,7 +1546,10 @@ impl CastSpeakers {
         if self.discovery() != CastDiscovery::Failed
             || self.entry(id).is_some()
             || self.attempt.is_some_and(|attempt| attempt.device == id)
-            || self.manual.iter().any(|manual| manual.id == id)
+            || self
+                .manual
+                .iter()
+                .any(|manual| manual.id == id || manual.found == Some(id))
         {
             return;
         }

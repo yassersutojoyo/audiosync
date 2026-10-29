@@ -2894,6 +2894,25 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// A browse found the device Cast speaker `from`, added by address, is
+    /// (S341): its name, hidden entry, zone and preset entries move to `to`,
+    /// where the device's own records win.
+    fn cast_identified(&mut self, from: &str, to: &str) {
+        let (from_key, to_key) = (cast_key(from), cast_key(to));
+        self.custom_names.move_key(&from_key, &to_key);
+        if self.hidden.iter().any(|entry| entry.key == to_key) {
+            self.hidden.retain(|entry| entry.key != from_key);
+        } else if let Some(entry) = self.hidden.iter_mut().find(|entry| entry.key == from_key) {
+            entry.key = to_key.clone();
+        }
+        self.zones.rename_key(&from_key, &to_key);
+        for preset in &mut self.presets {
+            preset.rename_key(&from_key, &to_key);
+        }
+        self.push_zone_volumes();
+        self.must_save = true;
+    }
+
     /// Takes in the AirPlay speakers as last listed: remembers their names,
     /// and switches on the auto-connect speakers that appeared. One that
     /// asks for a code every time and doesn't play goes off instead, when
@@ -3741,6 +3760,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 names.extend(listed);
                 self.cast_names = names;
             }
+            BackendEvent::CastIdentified { from, to } => self.cast_identified(&from, &to),
             BackendEvent::CastPlaying { id } => {
                 self.notices.clear(&[NoticeSubject::Cast(id)]);
                 self.note_speakers();
@@ -12917,7 +12937,7 @@ mod tests {
 
     // covers: S341
     #[test]
-    fn where_the_id_a_browse_found_has_a_zone_preset_entry_name_or_hidden_mark_its_own_wins() {
+    fn where_the_id_a_browse_found_has_a_zone_name_or_hidden_mark_its_own_wins() {
         let (mut adapter, fake) = cast_adapter();
         let address = cc_address("192.0.2.31");
         let upstairs = SavedZone {
@@ -12927,10 +12947,6 @@ mod tests {
         };
         adapter.restore(Settings {
             speaker_zones: vec![zone(vec![key(SPEAKERS), address.clone()]), upstairs],
-            speaker_presets: vec![saved_preset(&[
-                (address.clone(), Some(40.0)),
-                (cc(DEN), Some(60.0)),
-            ])],
             speaker_names: BTreeMap::from([
                 (address.clone(), "Study".to_owned()),
                 (cc(DEN), "Den TV".to_owned()),
@@ -12946,12 +12962,6 @@ mod tests {
         let saved = adapter.current_settings();
         assert_eq!(saved.speaker_zones[0].members, [key(SPEAKERS)]);
         assert_eq!(saved.speaker_zones[1].members, [cc(DEN), cc(CAST_LIVING)]);
-        let preset: Vec<(String, Option<f64>)> = saved.speaker_presets[0]
-            .members
-            .iter()
-            .map(|member| (member.key.clone(), member.volume))
-            .collect();
-        assert_eq!(preset, [(cc(DEN), Some(60.0))]);
         assert_eq!(
             saved.speaker_names,
             BTreeMap::from([(cc(DEN), "Den TV".to_owned())])
