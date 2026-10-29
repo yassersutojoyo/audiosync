@@ -191,7 +191,7 @@ struct OutputStallRetry {
     }
 
     mutating func failed(_ failure: LocalOutputSync.Failure, afterStall: Bool, nowS: Double) -> Failed {
-        if afterStall, let at = refused(failure.uid, nowS: nowS) { return .retry(atS: at) }
+        if afterStall, failure.refusal != nil, let at = refused(failure.uid, nowS: nowS) { return .retry(atS: at) }
         if let refusal = failure.refusal { return .refused(refusal) }
         forget(failure.uid)
         return .hard
