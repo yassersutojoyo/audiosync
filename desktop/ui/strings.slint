@@ -1205,6 +1205,17 @@ export global Strings {
         return root.availability(a);
     }
 
+    // The tooltip on the two code notes; the same text as on the Mac.
+    public pure function speaker-availability-help(a: Availability, every-time: bool, state: RowState) -> string {
+        if every-time && (a == Availability.needs-code || (a == Availability.open && state == RowState.off)) {
+            return @tr("This speaker asks for a code each time it connects, so auto-connect leaves it off. AudioSync asks you for the code when you turn the speaker on.");
+        }
+        if a == Availability.needs-code {
+            return @tr("This speaker asks for a PIN or password. AudioSync asks you for it when you turn the speaker on.");
+        }
+        return "";
+    }
+
     // The note next to an AirPlay speaker that can't simply play.
     public pure function availability(a: Availability) -> string {
         if a == Availability.needs-code {
