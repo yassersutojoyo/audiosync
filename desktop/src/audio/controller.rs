@@ -7301,6 +7301,7 @@ mod tests {
         assert_eq!(backend.running_source(), None);
     }
 
+    // covers: S211 (the order: whole system, apps, inputs)
     #[test]
     fn input_devices_are_listed_after_the_apps() {
         let mut backend = backend();

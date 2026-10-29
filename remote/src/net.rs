@@ -133,6 +133,7 @@ mod tests {
         text.parse().unwrap()
     }
 
+    // covers: S338 (private, link-local, loopback and IPv4-mapped peers)
     #[test]
     fn only_private_link_local_and_loopback_peers_connect() {
         let unique_local = IpAddr::V6(Ipv6Addr::new(0xfdab, 0, 0, 0, 0, 0, 0, 5));
@@ -169,6 +170,7 @@ mod tests {
         }
     }
 
+    // covers: S338 (an IPv6 peer in the computer's own /64)
     #[test]
     fn a_global_ipv6_peer_on_the_same_link_is_let_in() {
         // A phone that resolved the .local name to a global AAAA connects
@@ -200,6 +202,7 @@ mod tests {
         assert!(admits_peer(v6("fe80::1"), local));
     }
 
+    // covers: S338
     #[test]
     fn a_carrier_nat_peer_is_let_in() {
         let loopback = v4(127, 0, 0, 1);

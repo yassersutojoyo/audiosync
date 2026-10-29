@@ -1654,6 +1654,7 @@ mod tests {
         assert_eq!(display_name("é.exe"), "É");
     }
 
+    // covers: S211 (the whole system's entry)
     #[test]
     fn the_source_list_starts_with_the_whole_system() {
         let sources = source_list(&desktop(), &[], OWN_PID);

@@ -732,6 +732,7 @@ mod tests {
         assert_eq!(store.entry().run, None);
     }
 
+    // covers: S215 (a login launch opens no window, every other launch does)
     #[test]
     fn the_background_flag_opens_no_window_only_with_a_tray() {
         assert!(started_in_background(["audiosync.exe", "--background"]));

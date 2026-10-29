@@ -2347,6 +2347,7 @@ mod tests {
         );
     }
 
+    // covers: S155 (the stored value; aqua and darkAqua are the Mac's)
     #[test]
     fn an_appearance_this_build_does_not_know_follows_windows() {
         let read = |json: &str| Settings::from_json(json).expect("read").0;

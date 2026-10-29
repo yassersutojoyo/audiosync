@@ -392,6 +392,7 @@ mod tests {
         (outcome, first, tries.get(), now.get())
     }
 
+    // covers: S215
     #[test]
     fn a_shown_window_ends_the_launch_without_retrying() {
         let (outcome, first, tries, _) = run_second_launch(
@@ -403,6 +404,7 @@ mod tests {
         assert_eq!((first, tries), (None, 0));
     }
 
+    // covers: S215
     #[test]
     fn a_launch_during_the_old_copys_teardown_starts_once_it_is_gone() {
         // The quitting copy no longer answers (2 s) and is gone at 3.5 s.
@@ -438,6 +440,7 @@ mod tests {
         assert_eq!(RELAUNCH_POLL, Duration::from_millis(250));
     }
 
+    // covers: S215
     #[test]
     fn an_answered_request_means_the_window_was_shown() {
         let waited = Cell::new(None);

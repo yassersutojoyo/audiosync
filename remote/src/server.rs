@@ -1526,6 +1526,7 @@ mod tests {
             .collect()
     }
 
+    // covers: S338
     #[test]
     fn a_refused_address_is_reported_once_a_minute() {
         let mut reported = HashMap::new();
@@ -1547,6 +1548,7 @@ mod tests {
         assert_eq!(reported.len(), MAX_REFUSALS_LOGGED);
     }
 
+    // covers: S338
     #[test]
     fn only_home_network_peers_get_an_answer_and_a_refusal_is_logged_once() {
         let config = Config {

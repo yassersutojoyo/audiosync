@@ -5704,6 +5704,7 @@ mod tests {
         );
     }
 
+    // covers: S211 (the order: whole system, apps, inputs)
     #[test]
     fn input_devices_are_listed_after_the_apps_and_can_be_streamed() {
         let mut adapter = adapter();
