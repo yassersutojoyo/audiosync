@@ -9445,6 +9445,12 @@ do {
     castStore.save(cast: endedAlone, was: m)
     check(endedAlone.enabled == nil && castStore.load().enabledCast == nil,
           "cast: a speaker that stops on its own is saved as off (C112)")
+    var rekeyed = CastModel()
+    rekeyed.savedOn = CastModel.manualPrefix + "192.0.2.7"
+    rekeyed.apply(.appeared(CastDevice(id: kitchen, name: "Kitchen"), offsetMs: nil,
+                            former: CastModel.manualPrefix + "192.0.2.7"))
+    check(rekeyed.enabled == kitchen && rekeyed.savedOn == nil,
+          "cast: a speaker saved as on by its address turns on when a browse finds its ID (C112)")
 
     // C108: the sender hears the selection at its start and at every change, played or not.
     var naming = CastModel()
