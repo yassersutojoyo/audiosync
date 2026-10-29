@@ -9416,6 +9416,27 @@ do {
     check(CastEnd.failed(CastError(ASC_CAST_ERROR_INTERNAL)).problem == .connectionLost,
           "cast: a fault inside the sender reads as a lost connection, as on Windows (C107)")
 
+    final class SavedCast { var values: [String: Any] = [:] }
+    let castDisk = SavedCast()
+    let castStore = SettingsStore(read: { castDisk.values[$0] }, write: { value, key in castDisk.values[key] = value })
+    castStore.save(cast: kitchen)
+    check(castStore.load().enabledCast == kitchen && castStore.load().atLaunch(holdingSpeakersOff: true).enabledCast == nil,
+          "cast: the speaker that is on is saved for the next launch, unless auto-connect is skipped (C112)")
+    var relaunched = CastModel()
+    relaunched.savedOn = kitchen
+    check(relaunched.enabled == nil && relaunched.plan(streaming: true) == .none,
+          "cast: the speaker saved as on streams nothing before it is found (C112)")
+    relaunched.apply(.appeared(CastDevice(id: kitchen, name: "Kitchen"), offsetMs: nil))
+    check(relaunched.enabled == kitchen && relaunched.plan(streaming: true) == .start(kitchen),
+          "cast: the speaker saved as on turns on once it is found (C112)")
+    var choseOther = CastModel()
+    choseOther.savedOn = kitchen
+    choseOther.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
+    _ = choseOther.turnOn(den)
+    _ = choseOther.turnOff(den)
+    choseOther.apply(.appeared(CastDevice(id: kitchen, name: "Kitchen"), offsetMs: nil))
+    check(choseOther.enabled == nil, "cast: a speaker the user switched first wins over the one saved as on (C112)")
+
     // C108: the sender hears the selection at its start and at every change, played or not.
     var naming = CastModel()
     naming.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
