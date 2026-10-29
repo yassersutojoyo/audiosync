@@ -386,6 +386,8 @@ pub enum CastProblem {
     TakenOver,
     /// The connection was lost and couldn't be brought back.
     ConnectionLost,
+    /// It left the list after discovery stopped, with no session to keep it.
+    SearchStopped,
 }
 
 /// Whether Google Cast discovery runs.
@@ -423,6 +425,8 @@ pub struct CastInfo {
     pub enabled: bool,
     /// The device's volume as it last reported it, 0 to 100.
     pub volume: f64,
+    /// A status reported a level or the user set one; else `volume` is 100.
+    pub volume_known: bool,
     pub muted: bool,
     /// The device's volume is locked (`controlType` `fixed`, spec C68).
     pub volume_fixed: bool,
