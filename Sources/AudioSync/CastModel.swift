@@ -467,6 +467,8 @@ struct CastModel {
     /// address ended, by the saved `id`: its changes are left out, and
     /// Remove still takes it back.
     private var stranded: [String: String] = [:]
+    /// The name each device had when it left the list in this run.
+    private(set) var goneNames: [String: String] = [:]
     /// Devices another app took over, until the user turns one on again.
     private(set) var takenOver: Set<String> = []
     /// A browsed device turned off by leaving the list with no session, and
@@ -503,9 +505,11 @@ struct CastModel {
             if let offset, !offsetsWritten.contains(device.id) { offsets[device.id] = offset > 0 ? offset : nil }
             let changed = devices[device.id] != device
             devices[device.id] = device
+            goneNames[device.id] = nil
             return changed ? .changed : nil
         case .gone(let id):
             let removed = devices.removeValue(forKey: id)
+            if let name = removed?.name, !name.isEmpty { goneNames[id] = name }
             // One added by address leaves only when a browse finds it, which moves it to its ID (C18).
             if enabled == id, !isLive(id), removed?.manual != true {
                 enabled = nil
@@ -693,6 +697,7 @@ struct CastModel {
         guard !(unfound && enabled == id), let address = manualAddresses.removeValue(forKey: id) else { return nil }
         foundIDs[address.text] = nil
         stranded[id] = nil
+        goneNames[id] = nil
         if unfound {
             // The sender's own ID: the saved `id` stays free for a browse to list.
             removedManual.insert(senderID(of: id))
@@ -800,7 +805,9 @@ struct CastModel {
         case .discoveryStopped:
             discovery = .failed
             // The sender keeps the device in a session, a start included, and those added by address.
-            devices = devices.filter { $0.key == attempt?.device || $0.key == starting || $0.value.manual }
+            let kept = devices.filter { $0.key == attempt?.device || $0.key == starting || $0.value.manual }
+            rememberNames(devices.filter { kept[$0.key] == nil })
+            devices = kept
             // A browsed device that is on but unlisted can't come back until AudioSync starts again.
             // The sender reports its browsed devices gone first, so one turned off that way gets this notice too.
             let burst = leftOn.flatMap { now.timeIntervalSince($0.at) < Self.goneBurstLasts ? $0.device.id : nil }
@@ -814,6 +821,7 @@ struct CastModel {
             let wasOn = enabled
             leftOn = nil
             discovery = .failed
+            rememberNames(devices)
             devices = [:]
             attempt = nil
             starting = nil
@@ -1011,6 +1019,17 @@ struct CastModel {
     func listedName(_ id: String) -> String {
         let announced = devices[id]?.name ?? ""
         return announced.isEmpty ? manualAddresses[id]?.text ?? "" : announced
+    }
+
+    private mutating func rememberNames(_ dropped: [String: CastDevice]) {
+        for (id, device) in dropped where !device.name.isEmpty { goneNames[id] = device.name }
+    }
+
+    /// The name `id` is listed under, else the one it had when it left the
+    /// list in this run, so a recall notice can still name it (S265).
+    func lastListedName(_ id: String) -> String {
+        let listed = listedName(id)
+        return listed.isEmpty ? goneNames[id] ?? "" : listed
     }
 
     /// The device that is on and its listed name, read before an event that

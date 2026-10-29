@@ -5829,6 +5829,33 @@ do {
     check(heldOutside == ["lc:den"],
           "presets: a recall leaves on the stereo pair or home theater that holds a stored member", "\(heldOutside)")
 
+    // covers: S265
+    var goneCast = CastModel()
+    goneCast.apply(.appeared(CastDevice(id: "K1", name: "Kitchen"), offsetMs: nil))
+    goneCast.apply(.gone(id: "K1"))
+    check(goneCast.lastListedName("K1") == "Kitchen",
+          "presets: the notice names a Cast member gone from the network by its last listed name",
+          goneCast.lastListedName("K1"))
+    // covers: S265
+    var stoppedCast = CastModel(), failedCast = CastModel()
+    stoppedCast.apply(.appeared(CastDevice(id: "K1", name: "Kitchen"), offsetMs: nil))
+    failedCast.apply(.appeared(CastDevice(id: "K1", name: "Kitchen"), offsetMs: nil))
+    _ = stoppedCast.apply(.discoveryStopped)
+    _ = failedCast.apply(.failed(detail: ""))
+    check(stoppedCast.lastListedName("K1") == "Kitchen" && failedCast.lastListedName("K1") == "Kitchen",
+          "presets: a Cast member dropped by a stopped search or sender keeps its last listed name",
+          "\(stoppedCast.lastListedName("K1")) \(failedCast.lastListedName("K1"))")
+    // covers: S265
+    let goneManualID = "manual:192.0.2.9:8009"
+    var goneManual = CastModel()
+    goneManual.addedManually(goneManualID, address: CastManualAddress("192.0.2.9")!)
+    goneManual.apply(.appeared(CastDevice(id: goneManualID, name: "Den", manual: true), offsetMs: nil))
+    goneManual.apply(.gone(id: goneManualID))
+    _ = goneManual.removeManual(goneManualID)
+    check(goneManual.lastListedName(goneManualID).isEmpty,
+          "presets: Remove forgets the name a gone Cast speaker added by address was listed under",
+          goneManual.lastListedName(goneManualID))
+
     let noneHere = PresetRecall.plan([.init(kind: .local, found: false), .init(kind: .cast, found: true, busy: true)],
                                      others: [true], streaming: true)
     let nothingText = "Nothing changed: no speaker in “Evening” can play now. Kitchen (\(presetText.zoneMemberNotFound))."

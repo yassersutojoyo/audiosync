@@ -749,6 +749,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | presets: the left-off notice names each member with its reason | S265 |
 | presets: a full recall clears the notice | S265 |
 | presets: a recall leaves on the stereo pair or home theater that holds a stored member | S252 |
+| presets: the notice names a Cast member gone from the network by its last listed name | S265 |
 | presets: the notice goes once its preset is current or every member it names is on | S265 |
 | presets: with no member present nothing changes and only the notice posts | S252, S265 |
 | presets: a recall from the app or the phone shows no alert | S120, S266 |

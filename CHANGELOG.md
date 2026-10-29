@@ -158,7 +158,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a stretch of captured audio that Windows marks with a timing error no longer adds a gap of silence.
 - In the Linux preview, the tray icon appears when the desktop's tray starts after AudioSync.
 - On Windows, after AirPlay sending stops and you click Retry, an AirPlay speaker set to ask for a code every time goes off with the notice that it needs a PIN, and your next click on it asks for a new code. Before, it could show as ready with a code that no longer worked, or stay on with no sound.
-- On Windows, the notice from recalling a preset names a speaker that's gone by the name it last had.
+- The notice from recalling a preset names a speaker that's gone by the name it last had. On the Mac and on Windows.
 - Recalling a preset leaves on the stereo pair or home theater that plays one of the preset's speakers. On the Mac and on Windows.
 - On Windows, when the only Google Cast speaker that's on ends its session on its own without a problem, streaming stops. Before, AudioSync went on capturing with nothing to play to.
 - On Windows, when the PC goes to sleep, an AirPlay speaker set to ask for a code every time that you turned on yourself goes off with the notice that it needs a PIN, as when streaming stops. Before, it stayed on through the sleep.
