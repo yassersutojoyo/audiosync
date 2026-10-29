@@ -28,10 +28,12 @@ jobs:
         env:
           BEFORE: ${{ github.event.before }}
         run: |
+          base=$(git merge-base origin/main HEAD)
           if [ -z "$BEFORE" ] || [ "$BEFORE" = 0000000000000000000000000000000000000000 ]; then
-            BEFORE=$(git merge-base origin/main HEAD)
+            BEFORE=$base
           fi
-          files=$(git diff --name-only "$BEFORE" HEAD)
+          # Files main brought in through a merge are not the branch's own change.
+          files=$(comm -12 <(git diff --name-only "$BEFORE" HEAD | sort) <(git diff --name-only "$base" HEAD | sort))
           if printf '%s\n' "$files" | grep -qE '^(Sources/|Tests/|Package\.swift$|build\.sh$)'; then
             echo swift=true >> "$GITHUB_OUTPUT"
           else
