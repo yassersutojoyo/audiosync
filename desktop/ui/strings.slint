@@ -800,6 +800,9 @@ export global Strings {
             }
             return @tr("{} couldn't reach the stream on this PC, so it's off. Allow AudioSync in Windows Firewall on Private networks, or on Public networks if this network is set to Public, then turn it on again.", speaker);
         }
+        if problem == CastProblem.search-stopped {
+            return @tr("AudioSync stopped looking for Google Cast speakers, so {} is off. Restart AudioSync to try again.", speaker);
+        }
         return @tr("{} lost its connection, so it's off. Turn it on again to reconnect.", speaker);
     }
 

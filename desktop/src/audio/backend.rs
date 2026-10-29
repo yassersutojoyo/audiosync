@@ -386,6 +386,8 @@ pub enum CastProblem {
     TakenOver,
     /// The connection was lost and couldn't be brought back.
     ConnectionLost,
+    /// It left the list after discovery stopped, with no session to keep it.
+    SearchStopped,
 }
 
 /// Whether Google Cast discovery runs.
