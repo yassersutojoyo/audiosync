@@ -94,7 +94,66 @@ pub fn system_summary() -> String {
     )
 }
 
-#[cfg(not(windows))]
+/// The system the app runs on, for the debug log: the distribution named
+/// by `/etc/os-release`, the kernel release, the architecture and the
+/// local time.
+#[cfg(target_os = "linux")]
+pub fn system_summary() -> String {
+    let os_release = std::fs::read_to_string("/etc/os-release")
+        .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+        .ok();
+    let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease").ok();
+    linux_summary(
+        os_release.as_deref(),
+        kernel.as_deref(),
+        std::env::consts::ARCH,
+        &notice_time(),
+    )
+}
+
+/// Hours and minutes at `seconds` since the Unix epoch, on a clock
+/// `utc_offset` seconds ahead of UTC.
+#[cfg_attr(windows, allow(dead_code))]
+pub fn clock_at(seconds: i64, utc_offset: i64) -> String {
+    let minutes = (seconds + utc_offset).div_euclid(60).rem_euclid(24 * 60);
+    format!("{:02}.{:02}", minutes / 60, minutes % 60)
+}
+
+/// The Linux line of the debug log, from the text of `os-release`, the
+/// kernel release, the architecture and the local time.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn linux_summary(
+    os_release: Option<&str>,
+    kernel: Option<&str>,
+    arch: &str,
+    local_time: &str,
+) -> String {
+    let name = os_release
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("PRETTY_NAME="))
+        })
+        .map(|value| value.trim().trim_matches(['"', '\'']))
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Linux");
+    let kernel = kernel.map_or_else(
+        || "version unknown".to_owned(),
+        |kernel| format!("kernel {}", kernel.trim()),
+    );
+    format!("{name}, {kernel}, {arch}, local time {local_time}")
+}
+
+/// The host's name as the debug log's first line gives it, from Rust's
+/// name for the OS.
+pub fn host_name(os: &str) -> &str {
+    match os {
+        "windows" => "Windows",
+        "linux" => "Linux",
+        other => other,
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn system_summary() -> String {
     format!(
         "{} on {}, not Windows: example speakers only",
@@ -1001,6 +1060,47 @@ mod tests {
         assert_eq!(
             unpack_min_size(pack_min_size((0.0, 65_535.0))),
             (0.0, 65_535.0)
+        );
+    }
+
+    #[test]
+    fn the_clock_follows_the_local_offset_across_midnight() {
+        assert_eq!(clock_at(0, 0), "00.00");
+        assert_eq!(clock_at(86_399, 0), "23.59");
+        assert_eq!(clock_at(16 * 3600 + 40 * 60, 7 * 3600), "23.40");
+        assert_eq!(clock_at(20 * 3600, 7 * 3600), "03.00");
+        assert_eq!(clock_at(3600, -2 * 3600), "23.00");
+        assert_eq!(clock_at(0, 5 * 3600 + 30 * 60), "05.30");
+    }
+
+    // covers: S170
+    #[test]
+    fn the_log_names_the_host_it_runs_on() {
+        assert_eq!(host_name("linux"), "Linux");
+        assert_eq!(host_name("windows"), "Windows");
+    }
+
+    // covers: S170
+    #[test]
+    fn the_linux_summary_gives_the_os_version_and_local_time() {
+        let os_release =
+            "NAME=\"Ubuntu\"\nPRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nVERSION_ID=\"24.04\"\n";
+        assert_eq!(
+            linux_summary(
+                Some(os_release),
+                Some("6.8.0-45-generic\n"),
+                "x86_64",
+                "21.40"
+            ),
+            "Ubuntu 24.04.1 LTS, kernel 6.8.0-45-generic, x86_64, local time 21.40"
+        );
+        assert_eq!(
+            linux_summary(Some("PRETTY_NAME='Arch Linux'\n"), None, "x86_64", "08.00"),
+            "Arch Linux, version unknown, x86_64, local time 08.00"
+        );
+        assert_eq!(
+            linux_summary(None, None, "aarch64", "07.05"),
+            "Linux, version unknown, aarch64, local time 07.05"
         );
     }
 }

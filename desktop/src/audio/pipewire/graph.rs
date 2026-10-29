@@ -271,15 +271,17 @@ impl Graph {
     }
 
     /// The rate and channels to play to output `id` at: its own format,
-    /// else what its properties say, else 48 kHz stereo.
+    /// else what its properties say, else 48 kHz stereo; at most its first
+    /// [`MAX_CHANNELS`](super::format::MAX_CHANNELS) channels.
     pub fn sink_format(&self, id: u32) -> (u32, u16) {
         let Some(node) = self.nodes.get(&id) else {
             return (48_000, 2);
         };
-        node.format.unwrap_or_else(|| {
+        let (rate, channels) = node.format.unwrap_or_else(|| {
             let rate = node.prop("audio.rate").and_then(|rate| rate.parse().ok());
             (rate.unwrap_or(48_000), node.prop_channels().unwrap_or(2))
-        })
+        });
+        (rate, channels.min(super::format::MAX_CHANNELS))
     }
 
     /// The default input device, when one is set and present.
@@ -328,8 +330,7 @@ impl Graph {
         listing
     }
 
-    /// The input devices, hands-free ones left out. Only their first two
-    /// channels are offered.
+    /// The input devices, hands-free ones left out.
     pub fn inputs(&self) -> Vec<EndpointReading> {
         self.nodes
             .values()
@@ -344,7 +345,9 @@ impl Graph {
                     form_factor: None,
                     enumerator: node.prop("device.api").map(str::to_owned),
                     display_port: false,
-                    channels: node.prop_channels().map(|channels| channels.min(2)),
+                    channels: node
+                        .prop_channels()
+                        .map(|channels| channels.min(super::format::MAX_CHANNELS)),
                 }),
             })
             .collect()
@@ -822,6 +825,15 @@ mod tests {
     }
 
     #[test]
+    fn an_output_past_64_channels_plays_on_its_first_64() {
+        let mut graph = Graph::default();
+        sink(&mut graph, 1, &[("audio.channels", "128")]);
+        assert_eq!(graph.sink_format(1), (48_000, 64));
+        graph.nodes.get_mut(&1).unwrap().format = Some((96_000, 128));
+        assert_eq!(graph.sink_format(1), (96_000, 64));
+    }
+
+    #[test]
     fn the_default_input_is_found_by_name() {
         let mut graph = Graph::default();
         graph.add(
@@ -839,8 +851,9 @@ mod tests {
         assert!(graph.default_input_hands_free());
     }
 
+    // covers: S14
     #[test]
-    fn inputs_offer_two_channels_and_skip_hands_free() {
+    fn inputs_offer_every_channel_and_skip_hands_free() {
         let mut graph = Graph::default();
         graph.add(
             1,
@@ -863,6 +876,23 @@ mod tests {
         let inputs = graph.inputs();
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].id.as_deref(), Ok("mic"));
-        assert_eq!(inputs[0].properties.as_ref().unwrap().channels, Some(2));
+        assert_eq!(inputs[0].properties.as_ref().unwrap().channels, Some(4));
+    }
+
+    // covers: S14
+    #[test]
+    fn inputs_offer_at_most_64_channels() {
+        let mut graph = Graph::default();
+        graph.add(
+            1,
+            Kind::Node,
+            props(&[
+                ("media.class", "Audio/Source"),
+                ("node.name", "madi"),
+                ("audio.channels", "128"),
+            ]),
+        );
+        let inputs = graph.inputs();
+        assert_eq!(inputs[0].properties.as_ref().unwrap().channels, Some(64));
     }
 }

@@ -325,6 +325,8 @@ const TEXT = {
 };
 
 const RETRY_STEPS_MS = [1000, 2000, 5000, 10000];
+// Two missed pings: the server sends one after 15 s without a state.
+const STALE_MS = 35000;
 const SEND_EVERY_MS = 100;
 // The server answers once the change is queued, not applied; snapshots from that gap still carry the old value.
 const SETTLE_MS = 1000;
@@ -379,10 +381,14 @@ const ui = {
 
 let events = null;
 let retryTimer = null;
+let staleTimer = null;
+let lastMessage = 0;
 let failures = 0;
 let lost = false;
 let streamed = false;
 let streamReplaced = false;
+// A check still out would answer after a reconnect and start yet another one.
+let checking = false;
 let focusAfterPair = false;
 let snapshot = null;
 let calibrating = false;
@@ -450,7 +456,14 @@ ui.setupHide.addEventListener("click", () => {
 function stopStream() {
   window.clearTimeout(retryTimer);
   retryTimer = null;
+  window.clearInterval(staleTimer);
+  staleTimer = null;
   if (events) { events.close(); events = null; }
+}
+
+// After a sleep or a resume from the background the stream can be dead without an error event.
+function streamStale() {
+  return Date.now() - lastMessage > STALE_MS;
 }
 
 function showPairing(message) {
@@ -507,7 +520,16 @@ function connect() {
   streamReplaced = false;
   showRemote();
   events = new EventSource("/api/events");
+  lastMessage = Date.now();
+  staleTimer = window.setInterval(() => {
+    if (streamStale()) {
+      stopStream();
+      checkAccess();
+    }
+  }, 5000);
+  events.addEventListener("ping", () => { lastMessage = Date.now(); });
   events.addEventListener("state", (event) => {
+    lastMessage = Date.now();
     let next;
     try { next = JSON.parse(event.data); } catch (_) { return; }
     failures = 0;
@@ -537,13 +559,14 @@ function connect() {
 }
 
 function checkAccess() {
+  checking = true;
   fetch("/api/state", { cache: "no-store", credentials: "same-origin" }).then((response) => {
     if (response.status === 401) {
       unpairedByApp();
     } else if (response.ok) {
       retryLater(TEXT.noUpdates);
     } else {
-      response.json().then((answer) => answer, () => ({})).then((answer) => {
+      return response.json().then((answer) => answer, () => ({})).then((answer) => {
         if (response.status === 403) {
           setLost(true, answer.message || TEXT.unreachable);
         } else if (answer.error === "busy") {
@@ -555,7 +578,7 @@ function checkAccess() {
         }
       });
     }
-  }, () => retryLater(TEXT.lost));
+  }, () => retryLater(TEXT.lost)).finally(() => { checking = false; });
 }
 
 function unpairedByApp() {
@@ -1261,9 +1284,12 @@ ui.unpair.addEventListener("click", () => {
 });
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && ui.pair.hidden && events === null && !streamReplaced) {
+  if (document.visibilityState === "visible" && ui.pair.hidden && events === null && !streamReplaced && !checking) {
     failures = 0;
     connect();
+  } else if (document.visibilityState === "visible" && events !== null && streamStale()) {
+    stopStream();
+    checkAccess();
   }
 });
 
