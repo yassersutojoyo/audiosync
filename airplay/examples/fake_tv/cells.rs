@@ -422,6 +422,68 @@ pub fn d4(paused: Duration, pause: Pause) -> Cell {
     Cell::new("D4", status, value)
 }
 
+/// What the PTP-only television saw of one switch-on: each session SETUP's
+/// `timingProtocol` with its answer status, in order, and its SETPEERS;
+/// whether the speaker played, and whether it reported Unsupported.
+#[derive(Clone, Debug, Default)]
+pub struct PtpRun {
+    pub setups: Vec<(String, u16)>,
+    pub setpeers: usize,
+    pub playing: bool,
+    pub unsupported: bool,
+}
+
+fn ptp_cell(id: &'static str, run: &PtpRun, expected: &[(&str, u16)]) -> Cell {
+    let show = |(timing, status): &(&str, u16)| format!("{timing} {status}");
+    let setups: Vec<(&str, u16)> = run
+        .setups
+        .iter()
+        .map(|(timing, status)| (timing.as_str(), *status))
+        .collect();
+    let mut problems = Vec::new();
+    if setups != expected {
+        problems.push(format!("session SETUP {} expected", joined(expected, show)));
+    }
+    if run.setpeers == 0 {
+        problems.push("no SETPEERS".to_owned());
+    }
+    if !run.playing {
+        problems.push("never played".to_owned());
+    }
+    if run.unsupported {
+        problems.push("Unsupported reported".to_owned());
+    }
+    let value = format!(
+        "session SETUP {}, {} SETPEERS, {}",
+        joined(&setups, show),
+        run.setpeers,
+        if run.playing {
+            "playing"
+        } else {
+            "not playing"
+        }
+    );
+    Cell::judged(id, &problems, value)
+}
+
+/// PTP.first, a television that times with PTP only: its first switch-on
+/// asks for NTP, takes the 501 and plays on one PTP retry (P157, P165).
+pub fn ptp_first(run: &PtpRun) -> Cell {
+    ptp_cell("PTP.first", run, &[("NTP", 501), ("PTP", 200)])
+}
+
+/// PTP.gone: the television went away mid-stream and came back; the
+/// speaker was never Unsupported and its next session asked for PTP at once.
+pub fn ptp_gone(run: &PtpRun) -> Cell {
+    ptp_cell("PTP.gone", run, &[("PTP", 200)])
+}
+
+/// PTP.remember: a new sender handed the stored timing entry asks for PTP
+/// at once (P217).
+pub fn ptp_remember(run: &PtpRun) -> Cell {
+    ptp_cell("PTP.remember", run, &[("PTP", 200)])
+}
+
 /// The cells only a person with the app, a player or the real television
 /// can judge, each with its step.
 pub fn manual() -> Vec<Cell> {

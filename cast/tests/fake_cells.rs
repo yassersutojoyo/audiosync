@@ -19,7 +19,7 @@ use audiosync_cast::group::GroupRecords;
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::{DEFAULT_MEDIA_RECEIVER, NS_MEDIA, NS_RECEIVER, PLATFORM};
 use audiosync_cast::session::{CastSession, Diagnostics, SessionConfig, SessionEvent};
-use common::{Behavior, Command, FakeDevice, app, json_message};
+use common::{Behavior, Command, FakeDevice, OnLoad, app, json_message};
 use serde_json::{Value, json};
 
 const ID: &str = "3f2a8c41d27e4b8f9a06c1d5e7f80b12";
@@ -111,6 +111,7 @@ fn start_as(device: &FakeDevice, group: Option<GroupRecords>) -> (CastSession, F
         metadata: Metadata::default(),
         artwork: None,
         group,
+        records: None,
         fingerprints: None,
     };
     let selected = Arc::new(AtomicBool::new(true));
@@ -360,6 +361,75 @@ fn a_sender_suspended_past_the_devices_ping_timeout_reconnects_and_plays_on() {
     );
 }
 
+// covers: C37, C81
+#[test]
+fn the_level_set_stays_shown_after_a_reconnect_whose_first_status_has_no_level() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    wait_level(&mut session, 0.4);
+    session.set_volume(0.3).expect("sent");
+    wait_level(&mut session, 0.3);
+    let sent = levels_sent(&device);
+
+    device.send(Command::ForgetLevel);
+    device.send(Command::DropConnection);
+    let mut seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { .. })
+    });
+    seen.extend(run(&mut session, Duration::from_millis(500)));
+    assert_eq!(device.connection_count(), 2);
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Volume(_))),
+        "{seen:?}"
+    );
+    let shown = session.volume().expect("volume").level;
+    assert!(close(shown, 0.3), "{shown}");
+    assert_eq!(levels_sent(&device), sent, "nothing set again");
+    session.stop();
+    device.join();
+    cell(
+        "C13.level",
+        &format!(
+            "set 0.30, reconnect status without a level: shown {shown:.2}, 0 SET_VOLUME after"
+        ),
+    );
+}
+
+// covers: C69, C70, C104
+#[test]
+fn a_slider_level_the_device_rounds_onto_its_own_is_sent_once_and_not_chased() {
+    let device = FakeDevice::start(Behavior {
+        volume: json!({"level": 0.35, "muted": false, "controlType": "attenuation", "stepInterval": 0.05}),
+        volume_answer: Some(|level| (level / 0.05).round() * 0.05),
+        ..Behavior::default()
+    });
+    let (mut session, _feed) = start(&device);
+    wait_level(&mut session, 0.35);
+
+    session.set_volume(0.36).expect("sent");
+    run(&mut session, Duration::from_millis(500));
+    assert_eq!(levels_sent(&device), [0.36], "no second SET_VOLUME");
+    let shown = session.volume().expect("volume").level;
+    assert!(close(shown, 0.35), "{shown}");
+
+    let asked = session.step_volume(false).expect("step");
+    assert!(
+        close(asked, 0.3),
+        "a step builds on the 0.35 shown: {asked}"
+    );
+    wait_level(&mut session, 0.3);
+    session.stop();
+    device.join();
+    cell(
+        "C12.slider36",
+        &format!(
+            "device at 0.35 step 0.05, slider 0.36: 1 SET_VOLUME, shown {shown:.2}, next step 0.30"
+        ),
+    );
+}
+
 /// A `MEDIA_STATUS` for the first media session with `currentTime` as given.
 fn playing_at(current_time: Option<Value>) -> Command {
     let mut entry = json!({"mediaSessionId": 1, "playerState": "PLAYING"});
@@ -574,6 +644,59 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
         &format!(
             "read at {reading:.2} s/s: audio piles up +{growth:.2} s/s, queue full at {:.1} s, then +{overflow:.2} s/s with drops, resync offered at {offered_at:.1} s, drops counted, 1 LOAD",
             lines[filled].0
+        ),
+    );
+}
+
+/// A device that fetches the stream at once but reports `PLAYING` only 13 s
+/// after the start, longer than `FETCH_TIMEOUT`, as one whose startup latency
+/// is seconds (C74): nothing times out a `PLAYING` that is slow to come.
+// covers: C74
+#[test]
+fn a_device_that_reports_playing_after_13_s_is_waited_for() {
+    let hold = Duration::from_secs(13);
+    let device = FakeDevice::start(Behavior {
+        on_load: OnLoad::NeverPlay,
+        ..Behavior::default()
+    });
+    let commands = device.commands();
+    let started = Instant::now();
+    let release = thread::spawn(move || {
+        thread::sleep(hold);
+        let _ = commands.send(playing_at(None));
+    });
+    let (mut session, _feed) = start(&device);
+    let waited = started.elapsed();
+    release.join().expect("the release thread");
+    assert!(waited >= hold, "playing after {waited:?}");
+    let seen = run(&mut session, Duration::from_secs(3));
+    let lines = seen
+        .iter()
+        .filter(|event| matches!(event, SessionEvent::Diagnostics(_)))
+        .count();
+    assert!(lines >= 2, "{seen:?}");
+    assert!(
+        !seen.iter().any(|event| matches!(
+            event,
+            SessionEvent::Ended(_)
+                | SessionEvent::Recovering(_)
+                | SessionEvent::Recovered { .. }
+                | SessionEvent::Reloaded
+                | SessionEvent::FormatFallback { .. }
+        )),
+        "{seen:?}"
+    );
+    assert_eq!(device.payloads(NS_RECEIVER, "LAUNCH").len(), 1);
+    assert_eq!(device.payloads(NS_MEDIA, "LOAD").len(), 1);
+    assert_eq!(device.fetches().len(), 1);
+    assert_eq!(device.connection_count(), 1);
+    session.stop();
+    device.join();
+    cell(
+        "C74",
+        &format!(
+            "PLAYING after {:.1} s: 1 LAUNCH, 1 LOAD, 1 fetch, no restart",
+            waited.as_secs_f64()
         ),
     );
 }

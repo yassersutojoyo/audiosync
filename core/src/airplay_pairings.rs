@@ -22,7 +22,7 @@
 //! first copies the file aside, next to it as
 //! `airplay-pairings.ignored-<seconds since 1970>.dat`, owner-only, and no
 //! later copy replaces it, so nothing the file held is lost; a file that
-//! can't be read at all is replaced without a copy. Forgetting a receiver
+//! can't be read at all is left as it is, as a newer one is. Forgetting a receiver
 //! also deletes every copy that holds its ID, so its secret doesn't stay
 //! behind. A file of a
 //! newer format version is ignored too but left as it is, so a newer
@@ -58,7 +58,8 @@ pub enum Loaded {
     NoFile,
     /// The credentials of this many receivers.
     Receivers(usize),
-    /// The file was ignored, for this reason; the next pairing replaces it.
+    /// The file was ignored, for this reason: one in the wrong format is
+    /// replaced by the next pairing, an unreadable one is left as it is.
     Ignored(String),
     /// A newer AudioSync wrote the file (its format version): it is left as
     /// it is, and pairings made now last until the app quits.
@@ -143,7 +144,7 @@ impl PairingStore {
                 keep_aside = true;
                 (BTreeMap::new(), true, Loaded::Ignored(reason))
             }
-            Err(Unreadable::Ignored(reason)) => (BTreeMap::new(), true, Loaded::Ignored(reason)),
+            Err(Unreadable::Ignored(reason)) => (BTreeMap::new(), false, Loaded::Ignored(reason)),
         };
         let store = PairingStore {
             path: Some(path),
@@ -221,9 +222,7 @@ impl PairingStore {
             return Ok(());
         };
         if !self.writable {
-            return Err(io::Error::other(
-                "a newer AudioSync wrote the pairings file, which is left as it is",
-            ));
+            return Err(io::Error::other("the pairings file is left as it is"));
         }
         if let Some(bytes) = &self.unusable {
             keep_aside(path, bytes)?;
@@ -627,5 +626,31 @@ mod tests {
         assert_eq!(verdict(0o100602, 501, 501), Verdict::OpenToOthers);
         assert_eq!(verdict(0o100600, 502, 501), Verdict::Foreign);
         assert_eq!(verdict(0o100644, 0, 501), Verdict::Foreign);
+    }
+
+    // covers: S224
+    #[test]
+    fn a_folder_in_the_files_place_is_never_written_over() {
+        // A folder reads as an error other than NotFound on every host, as a
+        // permission or disk error would.
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-scratch")
+            .join("airplay-pairings-store")
+            .join("unreadable.dat");
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("a folder");
+        let (mut store, loaded) = PairingStore::open(path.clone());
+        assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+        assert!(!store.writable);
+        let credentials = Credentials::new(
+            "0123456789ABCDEF",
+            [3; audiosync_airplay::pairing::SECRET_BYTES],
+        )
+        .expect("valid");
+        assert!(store.insert("02005E005301", credentials).is_err());
+        assert!(store.contains("02005E005301"), "kept for this run");
+        assert!(path.is_dir());
+        let _ = fs::remove_dir_all(&path);
     }
 }

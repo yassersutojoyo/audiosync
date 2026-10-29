@@ -247,7 +247,7 @@ final class WebRemote {
 
     private func snapshot() -> RemoteSnapshot {
         let playing = model.nowPlaying.map {
-            RemoteSnapshot.Playing(title: $0.title, artist: $0.artist, source: $0.appName)
+            RemoteSnapshot.Playing(title: $0.title, artist: $0.artist, source: $0.appName, playing: $0.isPlaying)
         }
         let listed = rows()
         let (sources, current) = sourceList()
@@ -276,8 +276,9 @@ final class WebRemote {
                 cast: s.cast.map { (live: $0.live, volumeFixed: $0.volumeFixed) },
                 offsetMs: s.offsetMs, airPlayDelayMs: model.airPlayDelayMs,
                 needsCode: s.availability != .open, paired: s.paired,
+                memberAsksPassword: s.airPlayTarget?.asksPassword == true,
                 note: t.rowNote(cast: s.cast, waitingForAirPlay2: s.waitingForAirPlay2,
-                                waitingForPtp: s.waitingForPtp, unannounced: s.unannounced,
+                                waitingForPtp: s.waitingForPtp, reconnecting: s.reconnecting, unannounced: s.unannounced,
                                 target: s.airPlayTarget),
                 key: s.key, waiting: s.enabled && (s.waitingForAirPlay2 || s.waitingForPtp)), text: t)
         }
@@ -311,6 +312,8 @@ final class WebRemote {
                                         calibrating: now.calibrating, sources: now.sources, sourceID: now.sourceID)
         DebugTrace.log("[AudioSync] web remote: \(actions.count) change(s) from a phone")
         actions.forEach(apply)
+        // Sent even when unchanged: the core streams it so the phone drops a value the app refused.
+        lastPublished = ""
         schedulePublish()
     }
 
@@ -331,7 +334,7 @@ final class WebRemote {
         case .setZoneVolume(let id, let position): host.setZoneVolume(id, position)
         case .toggleZone(let id, let keepOff): host.toggleZone(id, keepOff, .remote)
         case .recallPreset(let id, let keepOff): host.recallPreset(id, keepOff, .remote)
-        case .selectSource(let pickerID): model.actions.selectSource(pickerID)
+        case .selectSource(let pickerID): model.actions.selectSource(pickerID, .remote)
         }
     }
 

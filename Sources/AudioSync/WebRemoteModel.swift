@@ -78,6 +78,9 @@ extension RemoteRow {
         /// Asks for a PIN or password.
         var needsCode = false
         var paired = false
+        /// A stereo pair or home theater whose member asks for a password
+        /// this run hasn't had: turning it on prompts for that member (P176).
+        var memberAsksPassword = false
         /// What the window writes under the name, if anything.
         var note: String?
         var key = ""
@@ -87,7 +90,7 @@ extension RemoteRow {
     /// A speaker that would ask for a code when turned on can't be turned on
     /// from the phone: the prompt would open on the Mac with nobody there.
     init(_ f: Facts, text: UIStrings) {
-        let codeBlocked = f.needsCode && !f.paired && !f.on
+        let codeBlocked = (f.needsCode && !f.paired || f.memberAsksPassword) && !f.on
         let delay: RemoteDelay
         if f.isAirPlay { delay = .airPlay(f.airPlayDelayMs) }
         else if f.cast != nil { delay = f.offsetMs.map(RemoteDelay.cast) ?? .fixed }
@@ -121,6 +124,8 @@ struct RemoteZoneRow: Equatable {
     var members: [String]
     var on = 0
     var waiting = 0
+    /// Every member of `zone`, listed or not, for "None of 3 found".
+    var all = 0
 
     init(id: String, name: String, volume: Double, members: [String], on: Int = 0, waiting: Int = 0) {
         self.id = id
@@ -135,11 +140,12 @@ struct RemoteZoneRow: Equatable {
         let present = zone.members.compactMap { key in listed.first { $0.key == key } }
         self.init(id: zone.id, name: zone.name, volume: zone.volume, members: present.map(\.id),
                   on: present.filter(\.on).count, waiting: present.filter { $0.on && $0.waiting }.count)
+        all = zone.members.count
     }
 
     var json: [String: Any] {
         ["id": id, "name": name, "volume": RemoteSnapshot.volume(volume), "members": members,
-         "counts": ["on": on, "total": members.count, "waiting": waiting]]
+         "counts": ["on": on, "total": members.count, "waiting": waiting, "all": all]]
     }
 }
 
@@ -205,6 +211,8 @@ struct RemoteSource: Equatable {
 struct RemoteSnapshot: Equatable {
     struct Playing: Equatable {
         var title, artist, source: String
+        /// False while the app is paused.
+        var playing = true
     }
 
     var computerName: String
@@ -222,7 +230,7 @@ struct RemoteSnapshot: Equatable {
 
     /// One line, keys sorted, so an unchanged snapshot gives the same text.
     var json: String {
-        let playing: Any = nowPlaying.map { ["title": $0.title, "artist": $0.artist, "source": $0.source] } ?? NSNull()
+        let playing: Any = nowPlaying.map { ["title": $0.title, "artist": $0.artist, "source": $0.source, "playing": $0.playing] } ?? NSNull()
         let root: [String: Any] = [
             "computer_name": computerName,
             "master": ["volume": Self.volume(master)],

@@ -9,12 +9,13 @@ struct CalibrateAllButton: View {
     var body: some View {
         let t = model.text
         let blocker = model.calibration.holdsOutputs ? CalibrateAllBlocker.busy : model.calibrateAll.blocker
+        let off = CalibrateAllFlow.rowBlocker(blocker)
         VStack(alignment: .leading, spacing: 6) {
             Button { model.actions.calibrateAll() } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "mic")
                         .font(.system(size: 15))
-                        .foregroundStyle(blocker == nil ? Brand.teal : Color.secondary)
+                        .foregroundStyle(off == nil ? Brand.teal : Color.secondary)
                         .frame(width: 20)
                         .accessibilityHidden(true)
                     Text(t.calibrateAll).font(.body)
@@ -27,14 +28,13 @@ struct CalibrateAllButton: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            // With only headphones or virtual outputs on, the sheet still opens to include one anyway.
-            .disabled(blocker != nil && blocker != .onlyLeftOut)
+            .disabled(off != nil)
             .help(blocker.map(t.calibrateAllUnavailable) ?? t.calibrateAllHint)
             .accessibilityLabel(t.calibrateAll)
             .accessibilityHint(blocker.map(t.calibrateAllUnavailable) ?? t.calibrateAllHint)
             // Outside the button, so a disabled button doesn't dim the reason.
-            if let blocker {
-                Text(t.calibrateAllUnavailable(blocker))
+            if let off {
+                Text(t.calibrateAllUnavailable(off))
                     .font(.caption)
                     .foregroundStyle(Brand.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)

@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import SwiftUI
 
 // Starting and stopping the engine, notices and alerts.
 
@@ -45,13 +46,13 @@ extension AppDelegate {
         // Input devices sit behind the microphone permission. Ask first; the
         // HAL would otherwise just deliver silence.
         if case .input = audioSource {
-            switch AVCaptureDevice.authorizationStatus(for: .audio) {
-            case .authorized:
+            switch MicrophoneStart.decide(AVCaptureDevice.authorizationStatus(for: .audio)) {
+            case .start:
                 break
-            case .notDetermined:
+            case .ask:
                 askMicrophone(origin: origin)
                 return
-            default:
+            case .fail:
                 failStart(text.microphoneDenied, origin: origin, settings: .microphone)
                 return
             }
@@ -67,6 +68,7 @@ extension AppDelegate {
         }
         var outcome = CaptureSwitch.Outcome.switched
         briefLoss.restart()   // a new session counts only the devices listed now (S328)
+        clearNotices(stallRetry.lost.map { SpeakerKey.make(id: $0, airplay: false) })   // every output opens anew
         stallRetry.reset()
         refusalRetry.reset()
         do {
@@ -96,6 +98,7 @@ extension AppDelegate {
         }
         clearNotices([Notice.start, Notice.source])   // streaming did start, from a working source
         midRebuild = false
+        everyTimeGuard.streamStarted()
         sessionHadSpeaker = hasSpeaker || (continuing && sessionHadSpeaker)
         session += 1
         nativeCaptureStarted()   // a new capture is an underrun to AudioSync's own sender, never a FLUSH (P143)
@@ -267,7 +270,9 @@ extension AppDelegate {
 
     func postNotice(_ message: String, subject: String, title: String? = nil, settings: PrivacyPane? = nil,
                     info: Bool = false) {
+        let repeated = appModel.notices.items.contains { $0.subject == subject && $0.text == message }
         appModel.notices.post(message, subject: subject, title: title, settings: settings, info: info)
+        if !repeated { AccessibilityNotification.Announcement(message).post() }
     }
 
     /// Drop the notices about `subjects`; their cause is gone (or the user
@@ -403,6 +408,7 @@ extension AppDelegate {
         // About this session's audio, which just ended; a notice about why it
         // ended is posted after this.
         clearNotices(wasRunning ? [Notice.capture, Notice.source] : [Notice.capture])
+        clearNotices(stallRetry.lost.map { SpeakerKey.make(id: $0, airplay: false) })   // nothing retries them now
         refreshStreamingViews()
     }
 
@@ -450,14 +456,7 @@ extension AppDelegate {
         // Only a live reading counts: the monitor polls while the window is
         // open or AirPlay receivers show the track, and a stopped monitor
         // keeps its last (possibly stale) track.
-        guard nowPlaying.isRunning, let track = nowPlaying.reading, track.isPlaying else { return nil }
-        switch audioSource {
-        case .system: return track
-        case .app(let bundleID): return track.bundleID == bundleID ? track : nil
-        case .mix(.only, let ids): return ids.contains(track.bundleID) ? track : nil
-        case .mix(.allExcept, let ids): return ids.contains(track.bundleID) ? nil : track
-        case .input: return nil
-        }
+        NowPlayingMonitor.sourcePlaying(nowPlaying.reading, running: nowPlaying.isRunning, source: audioSource)
     }
 
     private func sourceDisplayName() -> String? {

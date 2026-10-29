@@ -113,6 +113,8 @@ enum CastProblem: Equatable {
     case blocked
     case takenOver
     case connectionLost
+    /// It left the list when AudioSync's own search stopped, with no session to keep it.
+    case searchStopped
 }
 
 enum CastError: Equatable {
@@ -385,6 +387,13 @@ struct CastModel {
         case off
         case browsing(since: Date)
         case failed
+
+        /// The search's start once the Mac wakes: the sleep doesn't count
+        /// toward the 20 s, as for AirPlay (`AirPlaySearch.sinceAfterWake`).
+        func afterWake(now: Date) -> Discovery {
+            if case .browsing = self { return .browsing(since: now) }
+            return self
+        }
     }
 
     struct Attempt: Equatable {
@@ -401,6 +410,9 @@ struct CastModel {
     private(set) var devices: [String: CastDevice] = [:]
     /// The one device the user turned on.
     private(set) var enabled: String?
+    /// The device saved as on at the last quit: it turns on once listed,
+    /// unless the user switched a Cast speaker on first (C112).
+    var savedOn: String?
     /// The selection the sender was last told of; nil until it heard one.
     private var namedSelection: CastSelection?
     /// The current session; its events are the only ones that count.
@@ -421,6 +433,8 @@ struct CastModel {
     /// The levels sent in this session that no status has answered yet,
     /// oldest first; a drag sends one every 100 ms at most (C70).
     private var unanswered: [Double] = []
+    /// A level a re-key left to send once (S341).
+    private var levelDue: Double?
     private static let maxUnanswered = 16
     /// The offset the device memory holds, per device, in ms. 0 ms counts as
     /// none: the sender can't forget an offset, so Undo leaves 0 ms behind.
@@ -440,6 +454,9 @@ struct CastModel {
     private(set) var removedManual: Set<String> = []
     /// Devices another app took over, until the user turns one on again.
     private(set) var takenOver: Set<String> = []
+    /// A browsed device turned off by leaving the list with no session, until a
+    /// device appears or changes, the sender fails or one goes on.
+    private var leftOn: CastDevice?
 
     /// The devices listed, by name.
     var rows: [String] {
@@ -452,19 +469,32 @@ struct CastModel {
         }.map(\.id)
     }
 
-    /// Whether the change altered what the list shows.
+    /// `.changed` when the change altered what the list shows, `.turnedOff`
+    /// when the device that is on left it with no session; else nil.
     @discardableResult
-    mutating func apply(_ change: CastDeviceChange) -> Bool {
+    mutating func apply(_ change: CastDeviceChange) -> CastOutcome? {
         switch change {
         case .appeared(let device, let offset, _), .changed(let device, let offset):
-            if removedManual.contains(device.id) { return false }
-            if case .appeared(_, _, let former?) = change { identified(former, as: device.id) }
+            leftOn = nil
+            if removedManual.contains(device.id) { return nil }
+            if case .appeared(_, _, let former?) = change { levelDue = identified(former, as: device.id) }
+            if savedOn == device.id {
+                savedOn = nil
+                if enabled == nil { enabled = device.id }
+            }
             if let offset, !offsetsWritten.contains(device.id) { offsets[device.id] = offset > 0 ? offset : nil }
             let changed = devices[device.id] != device
             devices[device.id] = device
-            return changed
+            return changed ? .changed : nil
         case .gone(let id):
-            return devices.removeValue(forKey: id) != nil
+            let removed = devices.removeValue(forKey: id)
+            // One added by address leaves only when a browse finds it, which moves it to its ID (C18).
+            if enabled == id, !isLive(id), removed?.manual != true {
+                enabled = nil
+                leftOn = removed
+                return .turnedOff(id, problem: .notResponding)
+            }
+            return removed == nil ? nil : .changed
         }
     }
 
@@ -477,9 +507,11 @@ struct CastModel {
 
     /// The slider position, 0 to 100: the own level the user set until a
     /// status answers it, else the one kept, else the reported level.
-    func volume(of id: String) -> Double {
-        let level = ownLevel(of: id) ?? volumes[id]?.level ?? 1
-        return min(100, max(0, level * 100))
+    func volume(of id: String) -> Double { knownVolume(of: id) ?? 100 }
+
+    /// `volume(of:)`, nil while no status reported a level and the user set none.
+    func knownVolume(of id: String) -> Double? {
+        (ownLevel(of: id) ?? volumes[id]?.level).map { min(100, max(0, $0 * 100)) }
     }
 
     private func ownLevel(of id: String) -> Double? {
@@ -496,10 +528,11 @@ struct CastModel {
     /// (C18), and the sender moved its session there: what the app holds
     /// about it moves too, so it stays on and playing, and Remove still
     /// forgets its address.
-    private mutating func identified(_ old: String, as new: String) {
+    private mutating func identified(_ old: String, as new: String) -> Double? {
         if let address = manualAddresses.removeValue(forKey: old) { manualAddresses[new] = address }
         if takenOver.remove(old) != nil { takenOver.insert(new) }
         if enabled == old { enabled = new }
+        if savedOn == old { savedOn = new }
         if starting == old { starting = new }
         if let current = attempt, current.device == old {
             attempt = Attempt(number: current.number, device: new, status: current.status,
@@ -507,9 +540,31 @@ struct CastModel {
         }
         if let volume = volumes.removeValue(forKey: old) { volumes[new] = volume }
         if let level = levels.removeValue(forKey: old) { levels[new] = level }
+        let playedZone = zoneLevels.removeValue(forKey: old)
+        if let playedZone, zoneLevels[new] == nil { zoneLevels[new] = playedZone }
         if let wanted = requested, wanted.id == old { requested = (new, wanted.level) }
         // As the sender: it moves the offset over none or 0 ms (a cleared one), and keeps any other.
         if offsets[new] == nil, let offset = offsets.removeValue(forKey: old) { offsets[new] = offset }
+        return keptLoudness(new, playedZone: playedZone ?? 1)
+    }
+
+    /// The session's own level rescaled so master × zone × own still gives
+    /// what it played in `playedZone` (S341); the level to send when the
+    /// clamp to 0 to 1 keeps it from that.
+    private mutating func keptLoudness(_ id: String, playedZone: Double) -> Double? {
+        let zone = self.zone(of: id)
+        guard attempt?.device == id, zone != playedZone, let own = ownLevel(of: id) else { return nil }
+        let played = asc_cast_zone_level(master, playedZone, own)
+        let kept = asc_cast_zone_own_level(played, master, zone, own)
+        if requested?.id == id { requested = (id, kept) } else { levels[id] = kept }
+        if asc_cast_level_answers(asc_cast_zone_level(master, zone, kept), played) { return nil }
+        return levelToSend(id, own: kept)
+    }
+
+    /// The level a re-key left to send, once; nil when none is due.
+    mutating func takeLevelDue() -> Double? {
+        defer { levelDue = nil }
+        return levelDue
     }
 
     /// The sender listed `id` for an address the user added: it shows again
@@ -550,6 +605,8 @@ struct CastModel {
     mutating func turnOn(_ id: String) -> CastProblem? {
         if let other = enabled, other != id { return .busy }
         enabled = id
+        leftOn = nil
+        savedOn = nil
         takenOver.remove(id)
         return nil
     }
@@ -621,11 +678,19 @@ struct CastModel {
         case .groupLog: return nil
         case .discoveryStopped:
             discovery = .failed
-            // The sender keeps the playing device and those added by address.
-            devices = devices.filter { $0.key == attempt?.device || $0.value.manual }
+            // The sender keeps the device in a session, a start included, and those added by address.
+            devices = devices.filter { $0.key == attempt?.device || $0.key == starting || $0.value.manual }
+            // A browsed device that is on but unlisted can't come back until AudioSync starts again.
+            // The sender reports its browsed devices gone first, so one turned off that way gets this notice too.
+            if let id = enabled ?? leftOn?.id, devices[id] == nil, starting != id {
+                enabled = nil
+                leftOn = nil
+                return .turnedOff(id, problem: .searchStopped)
+            }
             return .changed
         case .failed:
             let wasOn = enabled
+            leftOn = nil
             discovery = .failed
             devices = [:]
             attempt = nil
@@ -678,10 +743,15 @@ struct CastModel {
 
     /// The user's own level for the device in a session, 0 to 100. Returns
     /// the level to send, master × zone × own, 0 to 1 (C104); nil when no session
-    /// runs for it, the position isn't a number or the volume is fixed.
+    /// runs for it, the position isn't a number or the volume is fixed. A
+    /// device that is on but waits for its session keeps the level for it (C105).
     mutating func setVolume(_ id: String, position: Double) -> Double? {
-        guard isLive(id), position.isFinite else { return nil }
+        guard position.isFinite else { return nil }
         let own = min(1, max(0, position / 100))
+        guard isLive(id) else {
+            if enabled == id { levels[id] = own }
+            return nil
+        }
         requested = (id, own)
         return levelToSend(id, own: own)
     }
@@ -805,6 +875,19 @@ struct CastModel {
     static func clampedOffset(_ ms: Double) -> Double? {
         guard ms.isFinite else { return nil }
         return min(maxOffsetMs, max(0, ms.rounded()))
+    }
+
+    /// The name `id` is listed under: the one it announces, else the
+    /// address it was added with; empty once it left the list.
+    func listedName(_ id: String) -> String {
+        let announced = devices[id]?.name ?? ""
+        return announced.isEmpty ? manualAddresses[id]?.text ?? "" : announced
+    }
+
+    /// The device that is on and its listed name, read before an event that
+    /// may empty the list (a stopped search or sender) so its notice can name it.
+    var listedOn: [String: String] {
+        enabled.map { [$0: listedName($0)] } ?? leftOn.map { [$0.id: $0.name] } ?? [:]
     }
 
     /// The device that is on counts for local outputs while it is in a

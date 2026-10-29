@@ -131,6 +131,9 @@ struct UiState {
     collapsed: HashSet<String>,
     /// Whether the source was a mix at the last refresh.
     source_was_mix: bool,
+    /// The equalizer curve last picked or saved, so the picker tells it from
+    /// a curve with the same gains (spec S270).
+    chosen_curve: Option<CurveMatch>,
 }
 
 /// The virtual outputs the speaker lists have shown this session. With Show
@@ -862,6 +865,25 @@ fn keep_main_min_size(window: &slint::Window) {
     crate::platform::hold_min_size(window, crate::settings::MIN_WINDOW);
 }
 
+/// Where the main window moves before it shows again: a place on a monitor
+/// that is gone since it hid gets the launch's place, centered in the
+/// `primary` monitor's work area and fitted to it. `None` when it stays
+/// where it is: while it shows, or while minimized, when Windows parks it off
+/// every monitor.
+fn place_to_show(
+    frame: WindowFrame,
+    on_a_monitor: bool,
+    minimized: bool,
+    visible: bool,
+    primary: Option<(crate::placement::Bounds, f64)>,
+) -> Option<WindowFrame> {
+    if on_a_monitor || minimized || visible {
+        return None;
+    }
+    let (work_area, scale) = primary?;
+    Some(fitted_main_frame(frame, work_area, scale, false))
+}
+
 /// The saved main window `frame` as it opens on the monitor with
 /// `work_area` (physical pixels) and `scale`: its inner size (logical
 /// pixels) and outer position (physical pixels), fitted inside the work
@@ -991,7 +1013,7 @@ impl App {
         app.connect_guide();
         app.connect_help();
         app.connect_remote();
-        app.restore_view();
+        app.restore_view(true);
         app.restore_remote();
         app.launch_update_check();
         if app.login.borrow().status() == launch_at_login::Status::Missing {
@@ -1178,6 +1200,22 @@ impl App {
     /// Lets the backend take in what happened on its own, and shows it.
     fn poll(&self) {
         let changed = self.backend.borrow_mut().poll();
+        if self.backend.borrow_mut().take_view_restored() {
+            let (remote, airplay2, airplay2_at_launch) = {
+                let ui = self.ui.borrow();
+                (ui.remote, ui.airplay2_experimental, ui.airplay2_at_launch)
+            };
+            // The window keeps its frame, and the sender its AirPlay 2 path.
+            self.restore_view(false);
+            self.ui.borrow_mut().airplay2_at_launch = airplay2_at_launch;
+            let read = self.ui.borrow().airplay2_experimental;
+            if read != airplay2 {
+                self.set_airplay2_experimental(read);
+            }
+            if self.ui.borrow().remote != remote {
+                self.restore_remote_again();
+            }
+        }
         if changed {
             self.refresh();
         } else if self.sync_now_playing() {
@@ -1245,6 +1283,38 @@ impl App {
 
     /// Shows the main window and brings it to the front.
     pub fn show_main(&self) {
+        let window = self.main.window();
+        let position = window.position();
+        let size = window.size().to_logical(window.scale_factor());
+        let frame = WindowFrame {
+            x: position.x,
+            y: position.y,
+            width: f64::from(size.width),
+            height: f64::from(size.height),
+            maximized: window.is_maximized(),
+        };
+        let on_a_monitor = crate::platform::is_on_a_monitor(frame.x, frame.y);
+        let primary = crate::platform::monitor_at(0.0, 0.0);
+        if let Some(fitted) = place_to_show(
+            frame,
+            on_a_monitor,
+            window.is_minimized(),
+            window.is_visible(),
+            primary,
+        ) {
+            // Sizing a maximized window restores it, and the size is lost.
+            if !fitted.maximized && (fitted.width, fitted.height) != (frame.width, frame.height) {
+                window.set_size(slint::LogicalSize::new(
+                    fitted.width as f32,
+                    fitted.height as f32,
+                ));
+            }
+            window.set_position(slint::PhysicalPosition::new(fitted.x, fitted.y));
+            // Moving a maximized window restores it.
+            if fitted.maximized {
+                window.set_maximized(true);
+            }
+        }
         if let Err(error) = self.main.show() {
             self.show_window_error(&error);
             return;
@@ -2201,7 +2271,7 @@ impl App {
                     .map(|c| c.name.as_str().into()),
             )
             .collect();
-        let shown = ui_model::shown_curve(state);
+        let shown = self.shown_curve(state);
         let preset_index = ui_model::picker_index(shown);
         let curve_name = usize::try_from(preset_index)
             .ok()
@@ -2691,6 +2761,7 @@ impl App {
         let w = weak.clone();
         eq_window.on_gain_changed(move |band, db| {
             with_app(&w, |app| {
+                app.ui.borrow_mut().chosen_curve = None;
                 app.change_equalizer(|s| {
                     if let Some(gain) = usize::try_from(band)
                         .ok()
@@ -2705,11 +2776,13 @@ impl App {
         eq_window.on_preset_selected(move |index| {
             with_app(&w, |app| {
                 let curves = app.snapshot().equalizer_curves;
-                let gains_db = match ui_model::picked_curve(index, curves.len()) {
+                let picked = ui_model::picked_curve(index, curves.len());
+                let gains_db = match picked {
                     Some(CurveMatch::Preset(i)) => eq::PRESETS[i].gains_db,
                     Some(CurveMatch::User(i)) => curves[i].gains_db,
                     None => return,
                 };
+                app.ui.borrow_mut().chosen_curve = picked;
                 // Like the Mac: picking a curve turns the equalizer on.
                 app.change_equalizer(|s| {
                     s.gains_db = gains_db;
@@ -2725,15 +2798,21 @@ impl App {
         eq_window.on_delete_curve(move || {
             with_app(&w, |app| {
                 let state = app.snapshot();
-                if let Some(CurveMatch::User(index)) = ui_model::shown_curve(&state) {
+                if let Some(CurveMatch::User(index)) = app.shown_curve(&state) {
                     let mut curves = state.equalizer_curves;
                     eq::delete_curve(&mut curves, index);
+                    app.ui.borrow_mut().chosen_curve = None;
                     app.update(|b| b.set_equalizer_curves(curves));
                 }
             })
         });
         let w = weak.clone();
-        eq_window.on_reset(move || with_app(&w, |app| app.change_equalizer(EqSettings::reset)));
+        eq_window.on_reset(move || {
+            with_app(&w, |app| {
+                app.ui.borrow_mut().chosen_curve = None;
+                app.change_equalizer(EqSettings::reset);
+            })
+        });
         let w = weak;
         eq_window.on_close_requested(move || {
             with_app(&w, |app| {
@@ -3143,6 +3222,14 @@ impl App {
         }
     }
 
+    /// When Windows ends the session, which may end the process before the
+    /// event loop does. Returns whether no change is left unsaved.
+    #[cfg(windows)]
+    pub fn at_session_end(&self) -> bool {
+        self.updater_at_exit();
+        self.save_settings()
+    }
+
     /// Takes the updater worker's news; a check that read the appcast
     /// stores its time.
     fn poll_updater(&self) {
@@ -3309,7 +3396,8 @@ impl App {
     /// Virtual Devices, View > Appearance, and the main window's size and
     /// place, fitted to the monitor it opens on (the one at its saved place,
     /// else the primary one, where it opens centered), maximized when it was.
-    fn restore_view(&self) {
+    /// Without `with_frame` the main window keeps its size and place.
+    fn restore_view(&self, with_frame: bool) {
         let saved = self.backend.borrow().view_settings();
         let airplay2_auto = self.backend.borrow().airplay2_auto();
         self.main.set_airplay2_auto(airplay2_auto);
@@ -3323,7 +3411,7 @@ impl App {
         self.ui.borrow_mut().last_update_check = saved.last_update_check;
         self.ui.borrow_mut().update_record = saved.update_record.clone();
         self.apply_appearance(saved.appearance);
-        let Some(saved_frame) = saved.window else {
+        let (true, Some(saved_frame)) = (with_frame, saved.window) else {
             return;
         };
         let on_a_monitor = crate::platform::is_on_a_monitor(saved_frame.x, saved_frame.y);
@@ -3372,8 +3460,8 @@ impl App {
     }
 
     /// Saves the settings now, with the main window's frame: the app is
-    /// about to quit.
-    pub fn save_settings(&self) {
+    /// about to quit. Returns whether no change is left unsaved.
+    pub fn save_settings(&self) -> bool {
         // Quit drops a typed delay or name that wasn't applied, so a focus
         // loss as the window goes applies nothing either.
         {
@@ -3383,7 +3471,7 @@ impl App {
             ui.rename = None;
         }
         self.remember_view();
-        self.backend.borrow_mut().save_settings();
+        self.backend.borrow_mut().save_settings()
     }
 
     fn step_delay(&self, id: &str, delta: i32) {
@@ -3635,6 +3723,10 @@ impl App {
         }
     }
 
+    fn shown_curve(&self, state: &AppState) -> Option<CurveMatch> {
+        ui_model::shown_curve(state, self.ui.borrow().chosen_curve)
+    }
+
     fn change_equalizer(&self, change: impl FnOnce(&mut EqSettings)) {
         let mut settings = self.snapshot().equalizer;
         change(&mut settings);
@@ -3698,7 +3790,7 @@ impl App {
         let state = self.snapshot();
         let strings = self.strings();
         let dialog = &self.zone_dialog;
-        let shown = match ui_model::shown_curve(&state) {
+        let shown = match self.shown_curve(&state) {
             Some(CurveMatch::User(index)) => Some(&state.equalizer_curves[index]),
             _ => None,
         };
@@ -3727,7 +3819,7 @@ impl App {
 
     fn ask_rename_curve(&self) {
         let state = self.snapshot();
-        let Some(CurveMatch::User(index)) = ui_model::shown_curve(&state) else {
+        let Some(CurveMatch::User(index)) = self.shown_curve(&state) else {
             return;
         };
         let name = state.equalizer_curves[index].name.as_str();
@@ -3816,6 +3908,7 @@ impl App {
     /// Recalls preset `id` (spec S265) from any path; it opens, raises and
     /// focuses nothing (S266).
     fn recall_preset(&self, id: &str) {
+        self.ui.borrow_mut().chosen_curve = None;
         self.update(|b| b.recall_preset(id));
     }
 
@@ -3971,7 +4064,8 @@ impl App {
                 if eq::curve_name(name).is_none() {
                     return;
                 }
-                if eq::save_curve(&mut curves, name, &state.equalizer.gains_db).is_some() {
+                if let Some(index) = eq::save_curve(&mut curves, name, &state.equalizer.gains_db) {
+                    self.ui.borrow_mut().chosen_curve = Some(CurveMatch::User(index));
                     self.update(|b| b.set_equalizer_curves(curves));
                 } else {
                     let strings = self.strings();
@@ -4338,6 +4432,7 @@ fn cast_problem(problem: ui_model::CastProblem) -> CastProblem {
         P::Blocked => CastProblem::Blocked,
         P::TakenOver => CastProblem::TakenOver,
         P::ConnectionLost => CastProblem::ConnectionLost,
+        P::SearchStopped => CastProblem::SearchStopped,
     }
 }
 
@@ -5568,12 +5663,12 @@ mod tests {
     }
 
     /// The App over `backend`, with headless windows.
-    pub(super) fn app_over(backend: MockBackend) -> Rc<App> {
+    pub(super) fn app_over(backend: impl Backend + 'static) -> Rc<App> {
         app_logging(backend, DebugLog::new(None))
     }
 
     /// [`app_over`] writing to `log`.
-    pub(super) fn app_logging(backend: MockBackend, log: DebugLog) -> Rc<App> {
+    pub(super) fn app_logging(backend: impl Backend + 'static, log: DebugLog) -> Rc<App> {
         // The platform is set per thread: a thread that already built an
         // App has it, which is fine.
         let _ = slint::platform::set_platform(Box::new(Headless));
@@ -5849,6 +5944,56 @@ mod tests {
             ui_model::Appearance::Dark,
             "the preview's appearance isn't saved with the next change"
         );
+    }
+
+    // covers: S212
+    #[test]
+    fn a_late_read_keeps_the_window_frame_and_logs_no_unchanged_airplay2_choice() {
+        use crate::debug_log;
+        let path = debug_log::test_dir("view-late-read").join(debug_log::FILE_NAME);
+        let backend = MockBackend::new();
+        let late_view = backend.late_view.clone();
+        let log = DebugLog::new(Some(path.clone()));
+        let app = app_logging(backend, log.clone());
+        let size = app.main.window().size();
+        *late_view.borrow_mut() = Some(ViewSettings {
+            window: Some(ui_model::WindowFrame {
+                x: 40,
+                y: 40,
+                width: 701.0,
+                height: 503.0,
+                maximized: true,
+            }),
+            ..ViewSettings::default()
+        });
+        app.poll();
+        assert_eq!(app.main.window().size(), size, "the frame stays");
+        assert!(log.flush(debug_log::TEST_FLUSH));
+        let written = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(!written.contains("applies at the next launch"), "{written}");
+    }
+
+    // covers: S212
+    #[test]
+    fn window_settings_read_after_launch_show_and_survive_a_quit() {
+        let backend = MockBackend::new();
+        let late_view = backend.late_view.clone();
+        let app = app_over(backend);
+        let file = ViewSettings {
+            appearance: ui_model::Appearance::Dark,
+            show_virtual_devices: true,
+            airplay2_experimental: true,
+            ..ViewSettings::default()
+        };
+        *late_view.borrow_mut() = Some(file.clone());
+        app.poll();
+        assert_eq!(app.main.get_appearance(), crate::Appearance::Dark);
+        assert!(
+            app.ui.borrow().airplay2_notice.is_some(),
+            "the sender keeps its path until the next launch"
+        );
+        app.save_settings();
+        assert_eq!(app.backend.borrow().view_settings(), file);
     }
 
     #[test]
@@ -7107,6 +7252,32 @@ mod tests {
         assert_eq!(state.airplay_delay_ms, Some(1750.0));
     }
 
+    // covers: S315
+    #[cfg(windows)]
+    #[test]
+    fn the_end_of_a_windows_session_gives_a_removed_exe_its_bak_back_and_keeps_the_record() {
+        let backend = MockBackend::new();
+        let saved_views = backend.saved_views.clone();
+        let app = app_over(backend);
+        let (updater, exe) = crate::updater::tests::swapped_exe_gone("session-end");
+        *app.updater.borrow_mut() = Some(updater);
+        app.at_session_end();
+        assert!(exe.exists(), "the .bak is audiosync.exe again");
+        let saved: Vec<_> = saved_views
+            .borrow()
+            .iter()
+            .map(|view| view.update_record.clone())
+            .collect();
+        assert_eq!(
+            saved,
+            [Some(ui_model::UpdateRecord {
+                version: "0.9.0".to_owned(),
+                reason: ui_model::UpdateRecordReason::Blocked,
+            })],
+            "the one save already holds the record"
+        );
+    }
+
     #[test]
     fn quitting_with_unreadable_typing_keeps_the_applied_delay() {
         let app = app_over(MockBackend::new());
@@ -7149,6 +7320,33 @@ mod tests {
             "Loft waits while AudioSync plays to AirPlay 2 speakers on another network. \
              Turn those speakers off and Loft starts."
         );
+    }
+
+    #[test]
+    fn the_code_notes_carry_the_macs_tooltips() {
+        let app = app_over(MockBackend::new());
+        let strings = app.main.global::<Strings>();
+        let help = |a, every_time, state| {
+            strings
+                .invoke_speaker_availability_help(a, every_time, state)
+                .to_string()
+        };
+        let every_time = "This speaker asks for a code each time it connects, so \
+                          auto-connect leaves it off. AudioSync asks you for the code \
+                          when you turn the speaker on.";
+        assert_eq!(
+            help(Availability::NeedsCode, true, RowState::Off),
+            every_time
+        );
+        assert_eq!(help(Availability::Open, true, RowState::Off), every_time);
+        assert_eq!(
+            help(Availability::NeedsCode, false, RowState::Off),
+            "This speaker asks for a PIN or password. AudioSync asks you for it when you \
+             turn the speaker on."
+        );
+        // No note, no tooltip.
+        assert_eq!(help(Availability::Open, true, RowState::Playing), "");
+        assert_eq!(help(Availability::Pairing, false, RowState::Off), "");
     }
 
     #[test]
@@ -7964,6 +8162,49 @@ mod tests {
             maximized: false,
         };
         assert_eq!(fitted_main_frame(small, laptop, 1.0, true), small);
+    }
+
+    #[test]
+    fn a_main_window_on_a_monitor_that_is_gone_shows_on_the_primary_one() {
+        let primary = crate::placement::Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1366.0,
+            height: 728.0,
+        };
+        let frame = WindowFrame {
+            x: 2200,
+            y: 100,
+            width: 800.0,
+            height: 500.0,
+            maximized: false,
+        };
+        let centered = fitted_main_frame(frame, primary, 1.0, false);
+        assert_eq!(
+            place_to_show(frame, false, false, false, Some((primary, 1.0))),
+            Some(centered)
+        );
+        assert_eq!(
+            place_to_show(frame, true, false, false, Some((primary, 1.0))),
+            None
+        );
+        assert_eq!(place_to_show(frame, false, false, false, None), None);
+        // Windows parks a minimized window at (-32000, -32000), on no monitor.
+        let minimized = WindowFrame {
+            x: -32000,
+            y: -32000,
+            ..frame
+        };
+        assert_eq!(
+            place_to_show(minimized, false, true, false, Some((primary, 1.0))),
+            None
+        );
+        // A window the user dragged partly off the screen stays where it is.
+        let dragged = WindowFrame { x: -250, ..frame };
+        assert_eq!(
+            place_to_show(dragged, false, false, true, Some((primary, 1.0))),
+            None
+        );
     }
 
     /// Windows makes the PIN dialog at the height its layout has before the
@@ -10058,6 +10299,74 @@ mod tests {
         let state = app.snapshot();
         assert_eq!(state.equalizer.preamp_db, 0.0);
         assert_eq!(eq_window.get_preset_index(), 0, "Reset reads Flat");
+    }
+
+    #[test]
+    fn a_saved_curve_with_a_presets_gains_can_be_picked_renamed_and_deleted() {
+        let app = app_over(MockBackend::new());
+        let eq_window = &app.equalizer;
+        let presets = eq::PRESETS.len() as i32;
+        let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
+        eq_window.invoke_preset_selected(rock);
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Mine".into());
+        assert_eq!(
+            eq_window.get_preset_index(),
+            presets,
+            "a save shows the curve"
+        );
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Twin".into());
+        assert_eq!(eq_window.get_preset_index(), presets + 1);
+
+        eq_window.invoke_preset_selected(rock);
+        assert_eq!(eq_window.get_preset_index(), rock);
+        assert!(!eq_window.get_saved_curve_shown());
+        eq_window.invoke_preset_selected(presets);
+        assert_eq!(eq_window.get_preset_index(), presets);
+        assert_eq!(app.main.get_equalizer_curve(), "Mine");
+        assert!(eq_window.get_saved_curve_shown());
+        eq_window.invoke_rename_curve();
+        assert_eq!(app.zone_dialog.get_name(), "Mine");
+        app.zone_dialog.invoke_confirmed("Ours".into());
+        assert_eq!(
+            app.main.get_equalizer_curve(),
+            "Ours",
+            "a rename keeps it shown"
+        );
+
+        eq_window.invoke_delete_curve();
+        let names: Vec<_> = app
+            .snapshot()
+            .equalizer_curves
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(names, ["Twin"]);
+        assert_eq!(eq_window.get_preset_index(), rock, "the gains stay");
+
+        eq_window.invoke_preset_selected(presets);
+        eq_window.invoke_reset();
+        assert_eq!(eq_window.get_preset_index(), 0, "Reset reads Flat");
+    }
+
+    #[test]
+    fn a_preset_recall_lets_go_of_the_picked_curve() {
+        let app = app_over(MockBackend::new());
+        app.update(|b| b.set_speaker_enabled("local:desk", true));
+        app.save_preset("Flat");
+        let eq_window = &app.equalizer;
+        let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
+        eq_window.invoke_preset_selected(rock);
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Mine".into());
+        app.save_preset("Rock");
+        let ids = preset_ids(&app);
+
+        app.recall_preset(&ids[0]);
+        app.recall_preset(&ids[1]);
+        assert_eq!(eq_window.get_preset_index(), rock);
+        assert!(!eq_window.get_saved_curve_shown());
     }
 
     #[test]

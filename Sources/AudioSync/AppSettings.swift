@@ -17,10 +17,14 @@ struct AppSettings: Equatable {
     enum Keys {
         /// `AudioSource.defaultsValue` (S12): "" or missing is the whole system.
         static let source = "audioSourceBundleID"
+        /// The chosen input device's name, kept to show while it is unplugged.
+        static let sourceInputName = "audioSourceInputName"
         /// App IDs (`NativeAirPlayID`) of the AirPlay speakers that are on, as an array.
         static let enabledAirPlay = "enabledAirPlayIds"
         /// Device UIDs of the local speakers that are on, as an array.
         static let enabledLocal = "enabledLocalUIDs"
+        /// The device ID (`CastDevice.id`) of the Cast speaker that is on (C112).
+        static let enabledCast = "enabledCastID"
         /// The master slider's position, 0…100.
         static let master = "masterVolume"
         /// Each local speaker's slider position (0…100), by device UID.
@@ -115,6 +119,9 @@ struct AppSettings: Equatable {
     var source = AudioSource.system
     var enabledAirPlay: Set<String> = []
     var enabledLocal: Set<String> = []
+    var enabledCast: String?
+    /// The Cast speaker to turn on once listed: the one saved as on, unless hidden (C112).
+    var castOnAtLaunch: String? { enabledCast.flatMap { hiddenSpeakers.contains(CastID.app($0)) ? nil : $0 } }
     var master = AppSettings.defaultMaster
     var localVolumes: [String: Double] = [:]
     /// The absolute delays from before the local delay model (S77), as the
@@ -160,6 +167,7 @@ struct AppSettings: Equatable {
         var held = self
         held.enabledAirPlay = []
         held.enabledLocal = []
+        held.enabledCast = nil
         return held
     }
 
@@ -170,6 +178,7 @@ struct AppSettings: Equatable {
         s.source = AudioSource(defaultsValue: read(Keys.source) as? String)
         s.enabledAirPlay = ids(read(Keys.enabledAirPlay))
         s.enabledLocal = ids(read(Keys.enabledLocal))
+        s.enabledCast = read(Keys.enabledCast) as? String
         s.autoConnect = ids(read(Keys.autoConnect))
         s.speakerNames = SpeakerNames(stored: read(Keys.speakerNames))
         s.hiddenSpeakers = HiddenSpeakers(stored: read(Keys.hiddenSpeakers))
@@ -401,6 +410,13 @@ struct SettingsStore {
     /// A set of IDs, sorted so the stored array doesn't churn.
     func save(ids: Set<String>, forKey key: String) { write(ids.sorted(), key) }
 
+    func save(cast id: String?) { write(id, Keys.enabledCast) }
+
+    /// Saves the Cast speaker that is on whenever it changes, by the user or on its own.
+    func save(cast model: CastModel, was old: CastModel) {
+        if model.enabled != old.enabled { save(cast: model.enabled) }
+    }
+
     func save(levels: [String: Double], forKey key: String) { write(levels, key) }
 
     func save(master: Double) { write(master, Keys.master) }
@@ -410,19 +426,17 @@ struct SettingsStore {
         write(inputPairs.isEmpty ? nil : inputPairs, Keys.inputChannelPairs)
     }
 
-    func save(groups: [SpeakerGroup]) {
-        guard let data = try? JSONEncoder().encode(groups) else { return }
-        write(data, Keys.groups)
-    }
+    func save(groups: [SpeakerGroup]) { writeJSON(groups, Keys.groups) }
 
-    func save(zones: [SpeakerZone]) {
-        guard let data = try? JSONEncoder().encode(zones) else { return }
-        write(data, Keys.zones)
-    }
+    // Saved as load keeps them: JSONEncoder throws on a volume that is NaN or infinite.
+    func save(zones: [SpeakerZone]) { writeJSON(SpeakerZone.normalized(zones), Keys.zones) }
 
-    func save(presets: [SpeakerPreset]) {
-        guard let data = try? JSONEncoder().encode(presets) else { return }
-        write(data, Keys.presets)
+    func save(presets: [SpeakerPreset]) { writeJSON(SpeakerPreset.normalized(presets), Keys.presets) }
+
+    private func writeJSON<T: Encodable>(_ value: T, _ key: String) {
+        do { write(try JSONEncoder().encode(value), key) } catch {
+            DebugTrace.log("[AudioSync] settings: \(key) not saved: \(error)")
+        }
     }
 
     /// Removed once no speaker has a name of the user's.

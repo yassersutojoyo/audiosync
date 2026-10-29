@@ -215,7 +215,7 @@ pub struct Speaker {
     /// any other row's own volume.
     pub volume: f64,
     /// An AirPlay row's own volume s behind `volume`, which a preset keeps
-    /// (spec S290).
+    /// (spec S290); a Cast row's `volume` once it is known (spec S251).
     pub own_volume: Option<f64>,
     /// The offset of a local output relative to the reference; the
     /// reference has none, and neither do AirPlay speakers (the AirPlay
@@ -379,6 +379,7 @@ pub enum CastProblem {
     /// Another app started casting to it.
     TakenOver,
     ConnectionLost,
+    SearchStopped,
 }
 
 /// Why a speaker that is on can't play right now. Its row says so instead
@@ -777,7 +778,8 @@ pub const MAX_PRESETS: usize = crate::settings::MAX_ENTRIES;
 
 /// The speakers on now as a preset sees them (spec S251, S253): list
 /// order, the reference output left out, no own volume for a fixed-volume
-/// Cast speaker. A hidden speaker is never listed, so never captured.
+/// Cast speaker or one with no known volume. A hidden speaker is never
+/// listed, so never captured.
 pub fn speakers_on_now(state: &AppState) -> Vec<SpeakerNow> {
     state
         .speakers
@@ -785,8 +787,11 @@ pub fn speakers_on_now(state: &AppState) -> Vec<SpeakerNow> {
         .filter(|speaker| speaker.enabled && !speaker.is_reference())
         .map(|speaker| SpeakerNow {
             key: speaker.id.clone(),
-            volume: (!speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed))
-                .then_some(speaker.own_volume.unwrap_or(speaker.volume)),
+            volume: match &speaker.cast {
+                Some(cast) if cast.volume_fixed => None,
+                Some(_) => speaker.own_volume,
+                None => Some(speaker.own_volume.unwrap_or(speaker.volume)),
+            },
         })
         .collect()
 }
@@ -840,12 +845,12 @@ pub fn show_presets(state: &mut AppState, presets: &[Preset]) {
         .collect();
 }
 
-/// An ID no preset in `presets` has.
-pub fn new_preset_id(presets: &[Preset]) -> String {
-    (presets.len() + 1..)
-        .map(|n| format!("preset:{n}"))
-        .find(|id| presets.iter().all(|preset| preset.id != *id))
-        .unwrap_or_default()
+/// The next N for a `<prefix>N` ID: above `last`, the highest given out, and
+/// above every ID in `ids`, so a deleted ID never comes back.
+pub fn next_id<'a>(prefix: &str, ids: impl Iterator<Item = &'a str>, last: u64) -> u64 {
+    ids.filter_map(|id| id.strip_prefix(prefix)?.parse::<u64>().ok())
+        .fold(last, u64::max)
+        .saturating_add(1)
 }
 
 /// The preset notice after a recall of `preset` (spec S265); `None` when
@@ -1419,6 +1424,11 @@ pub trait Backend {
     fn set_mix_all_except(&mut self, on: bool);
     fn set_master_volume(&mut self, volume: f64);
     fn set_speaker_enabled(&mut self, id: &str, on: bool);
+    /// A switch from the web remote: a speaker it turns on never pairs or
+    /// asks for a password (spec S257).
+    fn set_speaker_enabled_from_phone(&mut self, id: &str, on: bool) {
+        self.set_speaker_enabled(id, on);
+    }
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
     /// The speaker's volume slider is held (true) or let go (false).
     fn set_speaker_volume_editing(&mut self, _id: &str, _on: bool) {}
@@ -1613,6 +1623,13 @@ pub trait Backend {
         ViewSettings::default()
     }
 
+    /// Whether [`Backend::view_settings`] were replaced since the last call
+    /// by a settings file read after launch (S212): the UI shows them again,
+    /// as at launch, so its next save doesn't send the old ones back.
+    fn take_view_restored(&mut self) -> bool {
+        false
+    }
+
     /// Whether AirPlay 2 is automatic per receiver for this launch (spec
     /// S312); the AirPlay 2 item then reads Prefer AirPlay 2 (S313).
     fn airplay2_auto(&self) -> bool {
@@ -1623,8 +1640,10 @@ pub trait Backend {
     fn set_view_settings(&mut self, _settings: ViewSettings) {}
 
     /// Saves the settings now, without waiting for the next poll: the app
-    /// is about to quit.
-    fn save_settings(&mut self) {}
+    /// is about to quit. Returns whether no change is left unsaved.
+    fn save_settings(&mut self) -> bool {
+        true
+    }
 }
 
 /// Where the main window was and how big: the position of its outer frame
@@ -1777,6 +1796,7 @@ impl PresetsPreview {
 pub struct MockBackend {
     state: AppState,
     next_id: u64,
+    last_preset_id: u64,
     view: ViewSettings,
     /// The rows of the hidden speakers, to list them again as they were.
     hidden_rows: Vec<Speaker>,
@@ -1788,6 +1808,12 @@ pub struct MockBackend {
     pub play_pauses: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Each AirPlay delay applied, as asked.
     pub airplay_delays: std::rc::Rc<std::cell::RefCell<Vec<f64>>>,
+    /// Window settings the next poll takes in, as a settings file read
+    /// after launch brings them.
+    pub late_view: std::rc::Rc<std::cell::RefCell<Option<ViewSettings>>>,
+    /// The window settings each save found.
+    pub saved_views: std::rc::Rc<std::cell::RefCell<Vec<ViewSettings>>>,
+    view_restored: bool,
     /// The speaker that asks for its password once it is turned on.
     password_on: Option<String>,
 }
@@ -1954,12 +1980,16 @@ impl MockBackend {
         MockBackend {
             state,
             next_id: 1,
+            last_preset_id: 0,
             view: ViewSettings::default(),
             hidden_rows: Vec::new(),
             presets: Vec::new(),
             preset_notice: None,
             play_pauses: std::rc::Rc::default(),
             airplay_delays: std::rc::Rc::default(),
+            late_view: std::rc::Rc::default(),
+            saved_views: std::rc::Rc::default(),
+            view_restored: false,
             password_on: None,
         }
     }
@@ -2253,6 +2283,19 @@ fn add_zone(zones: &mut Zones, id: &str, name: &str, members: &[&str]) {
 
 #[cfg(any(test, feature = "mock-backend"))]
 impl Backend for MockBackend {
+    fn poll(&mut self) -> bool {
+        let Some(view) = self.late_view.borrow_mut().take() else {
+            return false;
+        };
+        self.view = view;
+        self.view_restored = true;
+        true
+    }
+
+    fn take_view_restored(&mut self) -> bool {
+        std::mem::take(&mut self.view_restored)
+    }
+
     fn play_pause_pressed(&mut self, app: &str, playing: bool) {
         self.play_pauses
             .borrow_mut()
@@ -2275,6 +2318,11 @@ impl Backend for MockBackend {
 
     fn set_view_settings(&mut self, settings: ViewSettings) {
         self.view = settings;
+    }
+
+    fn save_settings(&mut self) -> bool {
+        self.saved_views.borrow_mut().push(self.view.clone());
+        true
     }
 
     fn set_running(&mut self, on: bool) {
@@ -2592,8 +2640,10 @@ impl Backend for MockBackend {
         if self.presets.len() >= MAX_PRESETS {
             return Err(PresetError::Full);
         }
-        let id = new_preset_id(&self.presets);
-        let preset = self.capture_preset(&id, name)?;
+        let ids = self.presets.iter().map(|preset| preset.id.as_str());
+        let n = next_id("preset:", ids, self.last_preset_id);
+        let preset = self.capture_preset(&format!("preset:{n}"), name)?;
+        self.last_preset_id = n;
         self.presets.push(preset);
         Ok(())
     }
@@ -2734,10 +2784,17 @@ impl Backend for MockBackend {
     }
 }
 
-/// The curve the equalizer picker shows: the first preset, then the first
-/// saved curve, with the current gains (spec S270).
-pub fn shown_curve(state: &AppState) -> Option<CurveMatch> {
-    eq::matching_curve(&state.equalizer.gains_db, &state.equalizer_curves)
+/// The curve the equalizer picker shows: `chosen`, the curve last picked or
+/// saved, while it has the current gains; else the first preset, then the
+/// first saved curve, with them (spec S270).
+pub fn shown_curve(state: &AppState, chosen: Option<CurveMatch>) -> Option<CurveMatch> {
+    let gains_db = |curve| match curve {
+        CurveMatch::Preset(index) => eq::PRESETS.get(index).map(|p| p.gains_db),
+        CurveMatch::User(index) => state.equalizer_curves.get(index).map(|c| c.gains_db),
+    };
+    chosen
+        .filter(|&curve| gains_db(curve) == Some(state.equalizer.gains_db))
+        .or_else(|| eq::matching_curve(&state.equalizer.gains_db, &state.equalizer_curves))
 }
 
 /// `curve`'s entry in the picker, presets first; -1 for none ("Custom").
@@ -3342,14 +3399,14 @@ mod tests {
     fn the_equalizer_is_quantized_and_matches_presets() {
         let mut backend = MockBackend::new();
         assert_eq!(
-            shown_curve(&backend.snapshot()),
+            shown_curve(&backend.snapshot(), None),
             Some(CurveMatch::Preset(0))
         );
         let mut settings = EqSettings::default();
         settings.gains_db[0] = 3.3;
         backend.set_equalizer(settings);
         assert_eq!(backend.snapshot().equalizer.gains_db[0], 3.5);
-        assert_eq!(shown_curve(&backend.snapshot()), None);
+        assert_eq!(shown_curve(&backend.snapshot(), None), None);
         assert_eq!(picker_index(None), -1, "Custom is not an entry");
     }
 
@@ -3375,7 +3432,7 @@ mod tests {
             preamp_db: -4.0,
             gains_db: gains,
         });
-        let shown = shown_curve(&backend.snapshot());
+        let shown = shown_curve(&backend.snapshot(), None);
         assert_eq!(shown, Some(CurveMatch::User(0)), "the preamp never counts");
         let index = picker_index(shown);
         assert_eq!(index, i32::try_from(eq::PRESETS.len()).unwrap());
@@ -3383,6 +3440,46 @@ mod tests {
         assert_eq!(picked_curve(0, 1), Some(CurveMatch::Preset(0)));
         assert_eq!(picked_curve(index + 1, 1), None);
         assert_eq!(picked_curve(-1, 1), None);
+    }
+
+    #[test]
+    fn a_picked_saved_curve_shows_beside_a_curve_with_the_same_gains() {
+        let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
+        let gains_db = eq::PRESETS[rock].gains_db;
+        let mut backend = MockBackend::new();
+        backend.set_equalizer_curves(vec![
+            UserCurve {
+                name: "Mine".into(),
+                gains_db,
+            },
+            UserCurve {
+                name: "Twin".into(),
+                gains_db,
+            },
+        ]);
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: 0.0,
+            gains_db,
+        });
+        let state = backend.snapshot();
+        assert_eq!(shown_curve(&state, None), Some(CurveMatch::Preset(rock)));
+        for picked in [
+            CurveMatch::User(0),
+            CurveMatch::User(1),
+            CurveMatch::Preset(rock),
+        ] {
+            assert_eq!(shown_curve(&state, Some(picked)), Some(picked));
+        }
+        let mut moved = gains_db;
+        moved[0] += 1.0;
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: 0.0,
+            gains_db: moved,
+        });
+        let state = backend.snapshot();
+        assert_eq!(shown_curve(&state, Some(CurveMatch::User(0))), None);
     }
 
     #[test]

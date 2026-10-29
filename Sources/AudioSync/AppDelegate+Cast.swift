@@ -70,8 +70,16 @@ extension AppDelegate {
     private func castDevicesChanged(_ changes: [CastDeviceChange]) {
         for change in changes {
             DebugTrace.log("[AudioSync] Cast discovery: " + Self.castLogLine(change))
-            castModel.apply(change)
-            if case .appeared(let device, _, let former?) = change { moveCastNotices(from: former, to: device.id) }
+            let name = castName(change.id)   // read before the change takes the row away
+            if case .turnedOff(let id, let problem?)? = castModel.apply(change) {
+                DebugTrace.log("[AudioSync] Cast: \(id) left the list, so it is off")
+                postNotice(text.castProblem(problem, name: name), subject: Notice.cast(id))
+            }
+            if let level = castModel.takeLevelDue() { castSender?.setVolume(level) }
+            if case .appeared(let device, _, let former?) = change {
+                moveCastNotices(from: former, to: device.id)
+                moveCastSettings(from: former, to: device.id)
+            }
         }
         castFollow()
     }
@@ -79,8 +87,10 @@ extension AppDelegate {
     private func castEventsArrived(_ events: [CastEvent]) {
         for event in events {
             if let line = castLogLine(event) { DebugTrace.log("[AudioSync] Cast: " + line) }
+            // A speaker that leaves the list with this event is named as it was listed.
+            let listed = castModel.listedOn
             guard let outcome = castModel.apply(event) else { continue }
-            castOutcome(outcome)
+            castOutcome(outcome, listed: listed)
         }
         castFollow()
     }
@@ -96,6 +106,22 @@ extension AppDelegate {
         appModel.notices = list
     }
 
+    /// What the user kept under a device added by address (its zone,
+    /// presets, name, auto-connect and hidden entry) goes with it to the ID
+    /// a browse found it under (S341).
+    private func moveCastSettings(from old: String, to new: String) {
+        let saved = SpeakerIDMigration.Saved(enabledAirPlay: enabledAirPlay, airplayVolumes: airplayVolume,
+                                             groups: groups, autoConnect: autoConnect, zones: zones,
+                                             presets: presets, names: speakerNames, hidden: hiddenSpeakers)
+        let moved = SpeakerIDMigration.castIdentified(old, as: new, in: saved)
+        groups = moved.groups
+        zones = moved.zones
+        presets = moved.presets
+        autoConnect = moved.autoConnect
+        speakerNames = moved.names
+        hiddenSpeakers = moved.hidden
+    }
+
     /// The session follows the model, then local outputs and the views.
     private func castFollow() {
         syncCast()
@@ -104,7 +130,8 @@ extension AppDelegate {
         pushModel()
     }
 
-    private func castOutcome(_ outcome: CastOutcome) {
+    private func castOutcome(_ outcome: CastOutcome, listed: [String: String] = [:]) {
+        func named(_ id: String) -> String { listed[id].map { shownCastName(id, listedAs: $0) } ?? castName(id) }
         switch outcome {
         case .changed, .memoryChanged:
             break
@@ -114,10 +141,10 @@ extension AppDelegate {
             clearNotices([Notice.cast(id)])
         case .turnedOff(let id, let problem):
             DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) is off")
-            if let problem { postNotice(text.castProblem(problem, name: castName(id)), subject: Notice.cast(id)) }
+            if let problem { postNotice(text.castProblem(problem, name: named(id)), subject: Notice.cast(id)) }
         case .senderFailed(let wasOn):
             DebugTrace.log("[AudioSync] Cast: the sender stopped after an internal error")
-            let name = wasOn.map(castName)
+            let name = wasOn.map(named)
             castSender?.discard()
             castSender = nil
             // Its speakers left the list, so what was said about them no longer holds.
@@ -334,11 +361,10 @@ extension AppDelegate {
 
     /// A Cast speaker's name as the rows and notices show it: the user's,
     /// else the one it announces, else the address it was added with.
-    func castName(_ id: String) -> String {
-        let announced = castModel.devices[id]?.name ?? ""
-        let shown = announced.isEmpty ? castModel.manualAddresses[id]?.text ?? "" : announced
-        return speakerNames.shown(key: CastID.key(id),
-                                  system: text.deviceName(shown))
+    func castName(_ id: String) -> String { shownCastName(id, listedAs: castModel.listedName(id)) }
+
+    private func shownCastName(_ id: String, listedAs listed: String) -> String {
+        speakerNames.shown(key: CastID.key(id), system: text.deviceName(listed))
     }
 
     /// A group member as its row shows it: the listed device's name, the

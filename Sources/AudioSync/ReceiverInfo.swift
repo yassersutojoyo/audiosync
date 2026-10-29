@@ -232,6 +232,8 @@ struct TrackInfoFeed {
 /// conforms; the logic suite drives the wiring with a recorder.
 protocol TrackInfoHost: AnyObject {
     var trackInfoFeed: TrackInfoFeed { get set }
+    /// The Cast sender's feed; nil while no Cast sender runs.
+    var castTrackInfoFeed: TrackInfoFeed? { get set }
     /// An AirPlay speaker that shows track info plays.
     var sendsTrackInfo: Bool { get }
     /// When Now Playing started polling; nil while it doesn't.
@@ -261,6 +263,21 @@ extension TrackInfoHost {
     /// A new sender knows nothing of what plays: send everything again.
     func resendTrackInfo() {
         if trackInfoFeed.senderStarted(sending: sendsTrackInfo) { sendTrackInfo() }
+    }
+
+    /// A model update: AirPlay receivers or a Cast device that just started
+    /// showing track info get all of it.
+    func trackInfoModelUpdated(sending: Bool, casting: Bool) {
+        let airPlayStarts = trackInfoFeed.modelUpdated(sending: sending)
+        let castStarts = castTrackInfoFeed?.modelUpdated(sending: casting) ?? false
+        if airPlayStarts || castStarts { sendTrackInfo() }
+    }
+
+    /// A wait scheduled for `date` ended: both feeds look again.
+    func trackInfoRecheckFired(at date: Date) {
+        trackInfoFeed.recheckFired(at: date)
+        castTrackInfoFeed?.recheckFired(at: date)
+        sendTrackInfo()
     }
 
     /// Sends the senders what changed in what their receivers should show.

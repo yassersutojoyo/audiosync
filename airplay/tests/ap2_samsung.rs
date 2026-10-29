@@ -326,10 +326,10 @@ fn a_level_set_on_the_tv_shows_within_a_second_of_reads_and_none_go_once_stopped
 }
 
 // Part of P184 with S291 (docs/ENGINE_SPEC.md): the sender reports every
-// level read, and the host takes the first report within 0.5 dB of a level
-// it sent as that level's echo. Each set here goes out while a read is in
-// flight, so the answer to that read, the older level, must be dropped:
-// every report after the set lies within 0.5 dB of it and on its echo.
+// level read, and the host takes the first report after a set to a Samsung,
+// on the row sent or its 0.6 dB grid point, as that level's echo. Each set
+// goes out while a read is in flight, so the answer to that read, the older
+// level, must be dropped: every report after the set is its grid point.
 // covers: P184
 #[test]
 fn the_echo_of_a_level_sent_on_the_grid_is_never_a_change_made_on_the_tv() {
@@ -698,6 +698,14 @@ fn capture_switch_without_flush() {
             .count()
     };
 
+    // Events are stamped when drained, so the stream start's first-sound
+    // time must be drained before the switch for heard() to place it there.
+    let key = tv.key.clone();
+    tv.events
+        .wait_for(&tv.sender, LONG, |e| {
+            matches!(e, SenderEvent::Speaker { key: k, event: SpeakerEvent::Latency(_) } if *k == key)
+        })
+        .expect("the stream start's first-sound time");
     let switched = Instant::now();
     switch_capture(&mut tv);
     tv.run(Duration::from_secs(4), false);

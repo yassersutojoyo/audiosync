@@ -1994,3 +1994,29 @@ fn a_read_waits_behind_a_volume_held_by_the_rate_limit() {
         ]
     );
 }
+
+// covers: P122
+#[test]
+fn a_read_answered_after_a_later_volume_set_is_dropped() {
+    let mut link = playing();
+    link.advance(Duration::from_millis(200));
+    link.receiver.hold = Some("GET_PARAMETER".to_owned());
+    assert!(link.session.read_volume(link.now));
+    link.pump();
+    // The host sets a new level while a slow receiver still holds the read.
+    link.session.set_volume(Volume::Db(-12.0), link.now);
+    link.pump();
+    link.receiver.hold = None;
+    link.release();
+    let reported = |events: &[SessionEvent]| {
+        events
+            .iter()
+            .any(|event| matches!(event, SessionEvent::VolumeReported(_)))
+    };
+    assert!(!reported(&link.events), "{:?}", link.events);
+    assert_eq!(link.last("SET_PARAMETER").body, b"volume: -12.000000\r\n");
+    // A read asked after the set counts.
+    assert!(link.session.read_volume(link.now));
+    link.pump();
+    assert!(reported(&link.events), "{:?}", link.events);
+}

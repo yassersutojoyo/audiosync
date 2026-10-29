@@ -178,13 +178,13 @@ enum ZoneEdit {
         return out
     }
 
-    /// `zones` with a new zone of `members` after them, at volume 100; each
-    /// member leaves the zone that held it.
+    /// `zones` with a new zone of `members` after them, at volume 100, named
+    /// `name` cleaned as a speaker name is; each member leaves the zone that held it.
     static func adding(id: String, name: String, members: [String], to zones: [SpeakerZone]) -> [SpeakerZone] {
         var out = zones
         for key in members { out = removing(key, from: out) }
         var seen = Set<String>()
-        out.append(SpeakerZone(id: id, name: name, members: members.filter { seen.insert($0).inserted },
+        out.append(SpeakerZone(id: id, name: SpeakerNames.clean(name), members: members.filter { seen.insert($0).inserted },
                                volume: SpeakerZone.defaultVolume))
         return out
     }
@@ -290,6 +290,21 @@ enum ZoneLayout {
     /// compact rows follow the section's full rows.
     static func zoned<T>(_ speakers: [T], key: (T) -> String, zoned: Set<String>) -> [T] {
         speakers.filter { zoned.contains(key($0)) }
+    }
+
+    /// H11: the speaker whose switch takes the focus once `hidden`'s row in
+    /// `section` goes: the next row's, else the previous row's. `zone` lists
+    /// the shown members of `hidden`'s zone in zone order, empty for none.
+    static func focusAfterHiding<T>(_ hidden: String, in section: [T], zone: [T] = [], key: (T) -> String,
+                                    zoned: Set<String>) -> T? {
+        if let at = zone.firstIndex(where: { key($0) == hidden }), zone.count > 1 {
+            return at + 1 < zone.count ? zone[at + 1] : zone[at - 1]
+        }
+        // A zone member's full row sits under its zone, maybe collapsed, so
+        // the focus passes only among the speakers in no zone.
+        let rows = section.filter { !zoned.contains(key($0)) || key($0) == hidden }
+        guard let at = rows.firstIndex(where: { key($0) == hidden }) else { return nil }
+        return at + 1 < rows.count ? rows[at + 1] : (at > 0 ? rows[at - 1] : nil)
     }
 
     /// Whether the note and the Add by address button under a section's rows

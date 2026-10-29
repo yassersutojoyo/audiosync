@@ -61,6 +61,14 @@ fn embed_windows_resources() {
         cargo_var("CARGO_PKG_VERSION_MINOR"),
         cargo_var("CARGO_PKG_VERSION_PATCH"),
     );
+    // The same marker the updater reads (src/updater), readable in the exe for
+    // the release check in scripts/check_appcast.py.
+    println!("cargo::rerun-if-env-changed=AUDIOSYNC_RELEASE_BUILD");
+    let release = if env::var("AUDIOSYNC_RELEASE_BUILD").as_deref() == Ok("1") {
+        "\n            VALUE \"AudioSyncReleaseBuild\", \"1\""
+    } else {
+        ""
+    };
 
     // 24 is RT_MANIFEST, and resource 1 is the manifest Windows reads when it
     // starts the process. FILEOS 0x40004 is VOS_NT_WINDOWS32, FILETYPE 0x1 is
@@ -87,7 +95,7 @@ BEGIN
             VALUE "InternalName", "audiosync"
             VALUE "OriginalFilename", "audiosync.exe"
             VALUE "ProductName", "AudioSync"
-            VALUE "ProductVersion", "{version}"
+            VALUE "ProductVersion", "{version}"{release}
         END
     END
     BLOCK "VarFileInfo"

@@ -3,7 +3,7 @@
 use std::fmt;
 use std::io;
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::framing::FrameError;
 
@@ -142,5 +142,46 @@ impl Backoff {
 impl Default for Backoff {
     fn default() -> Backoff {
         Backoff::new()
+    }
+}
+
+/// The spacing of reconnects to one receiver across channel deaths (C81):
+/// the first at once, then 1, 2, 4 and 8 s, then every 10 s.
+#[derive(Clone, Debug, Default)]
+pub struct ReconnectPacer {
+    attempts: u32,
+    connected_at: Option<Instant>,
+}
+
+impl ReconnectPacer {
+    pub const MAX: Duration = Duration::from_secs(10);
+    /// How long a reconnected channel must live to start the spacing over.
+    pub const HEALTHY: Duration = Duration::from_secs(60);
+
+    /// The wait before a reconnect attempt that is due at `now`.
+    pub fn next_wait(&mut self, now: Instant) -> Duration {
+        if self
+            .connected_at
+            .take()
+            .is_some_and(|at| now.saturating_duration_since(at) >= Self::HEALTHY)
+        {
+            self.attempts = 0;
+        }
+        let wait = match self.attempts {
+            0 => Duration::ZERO,
+            n => Duration::from_secs(1 << (n - 1).min(4)).min(Self::MAX),
+        };
+        self.attempts = self.attempts.saturating_add(1);
+        wait
+    }
+
+    /// A reconnect at `now` got the session going again.
+    pub fn connected(&mut self, now: Instant) {
+        self.connected_at = Some(now);
+    }
+
+    /// The receiver announced itself again: the next attempt goes at once.
+    pub fn announced(&mut self) {
+        self.attempts = 0;
     }
 }

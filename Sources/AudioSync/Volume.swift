@@ -17,6 +17,19 @@ enum VolumeCurve {
     }
 }
 
+enum LocalOutputGain {
+    /// A local speaker's linear gain through its zone, on the core's volume
+    /// curve (S71, S249); 0 while a calibration plays its signal through
+    /// another output, `solo` (S232, S235).
+    static func gain(_ uid: String, solo: String?, volumes: [String: Double], zones: [SpeakerZone],
+                     master: Double) -> Double {
+        if let solo, solo != uid { return 0 }
+        let zone = SpeakerZone.volume(of: SpeakerKey.make(id: uid, kind: .local), in: zones)
+        return CoreGainCurve().outputGain(localPosition: volumes[uid] ?? AppSettings.defaultVolume,
+                                          zonePosition: zone, masterPosition: master)
+    }
+}
+
 /// An AirPlay speaker's device level, decided by the core from the stored
 /// own volume, the zone and the master (S290).
 enum AirPlayDeviceLevel {
@@ -53,5 +66,30 @@ enum AirPlayDeviceLevel {
         var level = 0.0
         guard asc_airplay_row_move(row, zone, master, &own, &level) else { return nil }
         return (own: own, level: level)
+    }
+}
+
+/// Whether a volume the core reported for an AirPlay speaker moves its row
+/// and own volume (S276): one from a speaker Calibrate All Speakers keeps
+/// silent does too, so the run gives it that level back; one polled before
+/// the host's latest set reached the core does not, as the core and the
+/// speaker already hold the newer level. Main thread.
+struct AirPlayVolumeEvents {
+    private var unreached: [String: Int] = [:]
+
+    /// The host queued a volume set for receiver `id`.
+    mutating func sending(_ id: String) {
+        unreached[id, default: 0] += 1
+    }
+
+    /// That set reached the core.
+    mutating func reached(_ id: String) {
+        guard let count = unreached[id] else { return }
+        unreached[id] = count > 1 ? count - 1 : nil
+    }
+
+    /// Whether a report for receiver `id`, applied now, moves its row.
+    func applies(_ id: String) -> Bool {
+        unreached[id] == nil
     }
 }

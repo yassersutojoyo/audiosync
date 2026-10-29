@@ -15,7 +15,7 @@ use crate::audio::{AudioReader, Codec, StreamFormat};
 use crate::channel::{Event, PlaybackEnd};
 use crate::client::{CastClient, Fingerprint, FingerprintBook, FingerprintChange, QUIT_BUDGET};
 use crate::discovery::DeviceId;
-use crate::error::{Backoff, ConnectError, EndReason, LaunchError};
+use crate::error::{Backoff, ConnectError, EndReason, LaunchError, ReconnectPacer};
 use crate::group::{GroupMember, GroupRecords, MemberList, MultizoneMessage};
 use crate::ids::RequestIds;
 use crate::media::{
@@ -200,6 +200,9 @@ pub struct SessionConfig {
     /// latest records instead of `addresses` (C90, C93), and the stream
     /// server answers its members too (C103).
     pub group: Option<GroupRecords>,
+    /// A single device's latest addresses: every reconnect takes them
+    /// instead of `addresses`, and the stream server answers them (C111).
+    pub records: Option<GroupRecords>,
     /// Where every connect records the device's certificate fingerprint
     /// (C21) once the start succeeded; `None`, or a group, records nothing.
     pub fingerprints: Option<Fingerprints>,
@@ -241,12 +244,12 @@ pub fn falls_back_to_flac(codec: Codec, error: &MediaError) -> bool {
 
 /// Connects, retrying while `selected` stays true: after 1 s, then doubling
 /// up to 30 s (C80). `on_failure` hears each failure with the wait before
-/// the next attempt. Errors no retry can fix return at once.
+/// the next attempt. None once it is deselected.
 pub fn connect_retrying(
     addresses: &[SocketAddr],
     selected: &AtomicBool,
     on_failure: impl FnMut(ConnectError, Duration),
-) -> Result<CastClient, Option<ConnectError>> {
+) -> Option<CastClient> {
     connect_retrying_with(|| addresses.to_vec(), selected, on_failure)
 }
 
@@ -256,25 +259,22 @@ pub fn connect_retrying_with(
     mut addresses: impl FnMut() -> Vec<SocketAddr>,
     selected: &AtomicBool,
     mut on_failure: impl FnMut(ConnectError, Duration),
-) -> Result<CastClient, Option<ConnectError>> {
+) -> Option<CastClient> {
     let mut backoff = Backoff::new();
     loop {
         if !selected.load(Ordering::SeqCst) {
-            return Err(None);
+            return None;
         }
-        match CastClient::connect_while(&addresses(), RequestIds::random(), selected) {
-            Ok(client) => return Ok(client),
-            Err(_) if !selected.load(Ordering::SeqCst) => return Err(None),
-            Err(error @ ConnectError::NoAddress) => {
-                return Err(Some(error));
-            }
+        match CastClient::connect_while(&addresses(), RequestIds::random(), selected, None) {
+            Ok(client) => return Some(client),
+            Err(_) if !selected.load(Ordering::SeqCst) => return None,
             Err(error) => {
                 let wait = backoff.next_wait();
                 on_failure(error, wait);
                 let until = Instant::now() + wait;
                 while Instant::now() < until {
                     if !selected.load(Ordering::SeqCst) {
-                        return Err(None);
+                        return None;
                     }
                     thread::sleep(SLICE.min(until.saturating_duration_since(Instant::now())));
                 }
@@ -317,9 +317,15 @@ pub struct CastSession {
     /// [`QUIT_BUDGET`] (C88).
     quitting: Arc<AtomicBool>,
     group: Option<GroupRecords>,
+    /// Where every reconnect goes: the group's records or a single
+    /// device's (C90, C111).
+    records: Option<GroupRecords>,
     members: MemberList,
     group_types_logged: LoggedTypes,
     fingerprints: Option<Fingerprints>,
+    pacer: ReconnectPacer,
+    /// Set by the host when the device announces itself (C81).
+    announced: Arc<AtomicBool>,
 }
 
 /// The most multizone types logged in one session, and the longest a
@@ -384,17 +390,13 @@ impl CastSession {
         on_failure: impl FnMut(ConnectError, Duration),
     ) -> Result<CastSession, SessionError> {
         let group = config.group.clone();
-        let connected = match &group {
+        let records = group.clone().or_else(|| config.records.clone());
+        let connected = match &records {
             Some(records) => connect_retrying_with(|| records.get().group, &selected, on_failure),
             None => connect_retrying(&config.addresses, &selected, on_failure),
         };
-        let mut client = match connected {
-            Ok(client) => client,
-            Err(error) => {
-                return Err(SessionError::Connect(
-                    error.unwrap_or(ConnectError::NoAddress),
-                ));
-            }
+        let Some(mut client) = connected else {
+            return Err(SessionError::Connect(ConnectError::NoAddress));
         };
         if group.is_some() {
             client.request_members();
@@ -430,8 +432,10 @@ impl CastSession {
                 return Err(error.into());
             }
         };
-        if let Some(records) = &group {
+        if let Some(records) = &records {
             server.follow_group(records.clone());
+        }
+        if group.is_some() {
             server.set_group_limit(1);
         }
         let mut addresses = vec![client.address()];
@@ -476,9 +480,12 @@ impl CastSession {
             clock: Arc::new(Instant::now),
             quitting,
             group,
+            records,
             members: MemberList::new(),
             group_types_logged: LoggedTypes::default(),
             fingerprints: None,
+            pacer: ReconnectPacer::default(),
+            announced: Arc::new(AtomicBool::new(false)),
         };
         if let Err(error) = session.load_with_fallback() {
             session.teardown(teardown_budget(&session.quitting));
@@ -643,6 +650,12 @@ impl CastSession {
         self.recovery_sink = Some(sink);
     }
 
+    /// The flag the host sets when the device announces itself: a
+    /// reconnect waiting for its turn goes at once (C81).
+    pub fn set_announcements(&mut self, announced: Arc<AtomicBool>) {
+        self.announced = announced;
+    }
+
     /// Drives the session for `duration`: the channel, recovery and the
     /// per-second diagnostics.
     pub fn run_for(&mut self, duration: Duration) {
@@ -695,6 +708,11 @@ impl CastSession {
     }
 
     fn report(&mut self, event: SessionEvent) {
+        // A level is reported once (C70): a newer one replaces it, a full queue never drops it.
+        if matches!(event, SessionEvent::Volume(_)) {
+            self.events
+                .retain(|queued| !matches!(queued, SessionEvent::Volume(_)));
+        }
         make_room(&mut self.events);
         self.events.push_back(event);
         if self.recovering {
@@ -819,7 +837,7 @@ impl CastSession {
     fn on_event(&mut self, event: Event) {
         match event {
             Event::Status(status) => {
-                if self.last_volume.as_ref() != Some(&status.volume) {
+                if status.volume.has_level && self.last_volume.as_ref() != Some(&status.volume) {
                     self.last_volume = Some(status.volume.clone());
                     self.report(SessionEvent::Volume(status.volume));
                 }
@@ -886,7 +904,7 @@ impl CastSession {
     }
 
     /// C81: one reconnect at once; the running app is picked back up, or
-    /// launched and loaded again. A failed reconnect retries as C80 while
+    /// launched and loaded again. Reconnects are spaced by the pacer while
     /// the device stays selected. `reload` loads the stream again even when
     /// the app still runs, after a playback error (C86).
     fn recover(&mut self, reason: EndReason, reload: bool) {
@@ -900,32 +918,20 @@ impl CastSession {
     fn recover_now(&mut self, reason: EndReason, reload: bool) {
         self.report(SessionEvent::Recovering(reason));
         self.playing = false;
-        // One connection per device at a time; the first attempt of the
-        // C80 loop is the reconnect at once.
+        // A level the dead channel never sent, or sent with no answer, goes on the new one.
+        let queued = self.client.take_unanswered_volume();
+        // One connection per device at a time.
         self.client.disconnect();
         while self.client.poll_event().is_some() {}
-        let addresses = self.addresses.clone();
-        let selected = Arc::clone(&self.selected);
-        let group = self.group.clone();
-        let on_failure = |error, retry_in| {
-            self.report(SessionEvent::ConnectFailed { error, retry_in });
-        };
-        // A group is resolved afresh: its leader may have handed over (C90,
-        // C97).
-        let result = match &group {
-            Some(records) => connect_retrying_with(|| records.get().group, &selected, on_failure),
-            None => connect_retrying(&addresses, &selected, on_failure),
-        };
-        self.client = match result {
-            Ok(mut client) => {
+        self.client = match self.reconnect() {
+            Some(mut client) => {
                 client.set_selected(Arc::clone(&self.selected));
-                if group.is_some() {
+                if self.group.is_some() {
                     client.request_members();
                 }
                 client
             }
-            Err(None) => return self.end(SessionEnd::Deselected),
-            Err(Some(error)) => return self.end(SessionEnd::Failed(error.into())),
+            None => return self.end(SessionEnd::Deselected),
         };
         if let Some(event) = self
             .fingerprints
@@ -934,6 +940,22 @@ impl CastSession {
         {
             self.report(event);
         }
+        // The stream URL names the local address of the channel (C55); one
+        // on the old address may be out of reach, so the stream loads again.
+        let local_ip = self.client.local_address().ip();
+        let rebound = local_ip != self.server.address().ip();
+        if rebound {
+            if let Err(error) = self.server.rebind(local_ip) {
+                return self.end(SessionEnd::Failed(error.into()));
+            }
+            self.load.url = self.server.url();
+            if !self.load.metadata.images.is_empty()
+                && let Some(url) = self.server.artwork_url()
+            {
+                self.load.metadata.images = vec![url];
+            }
+        }
+        let reload = reload || rebound;
         let resumed = if reload {
             self.client.resume(&self.app, None, &self.load.url)
         } else {
@@ -948,6 +970,8 @@ impl CastSession {
             self.load_until_playing()
                 .map(|()| false)
                 .map_err(SessionError::from)
+        } else if self.client.status().is_some_and(|status| !status.is_idle()) {
+            return self.end(SessionEnd::TakenOver);
         } else {
             match self.client.launch() {
                 Ok(app) => {
@@ -960,10 +984,67 @@ impl CastSession {
             }
         };
         match result {
-            Ok(relaunched) => self.report(SessionEvent::Recovered { relaunched }),
+            Ok(relaunched) => {
+                if let Some(level) = queued {
+                    let _ = self.client.set_volume(level);
+                }
+                self.pacer.connected(Instant::now());
+                self.report(SessionEvent::Recovered { relaunched });
+            }
             Err(_) if !self.selected.load(Ordering::SeqCst) => self.end(SessionEnd::Deselected),
             Err(error) => self.end(SessionEnd::Failed(error)),
         }
+    }
+}
+
+impl CastSession {
+    /// Connects again, spaced by [`ReconnectPacer`] while the device stays
+    /// selected (C81). The device is resolved afresh before every attempt: a
+    /// group's leader may have handed over (C90, C97), a single device may
+    /// have moved (C111).
+    fn reconnect(&mut self) -> Option<CastClient> {
+        if self.announced.swap(false, Ordering::SeqCst) {
+            self.pacer.announced();
+        }
+        let mut wait = self.pacer.next_wait(Instant::now());
+        loop {
+            if !self.pause(wait) {
+                return None;
+            }
+            let addresses = match &self.records {
+                Some(records) => records.get().group,
+                None => self.addresses.clone(),
+            };
+            let known = self.last_volume.as_ref();
+            match CastClient::connect_while(&addresses, RequestIds::random(), &self.selected, known)
+            {
+                Ok(client) => return Some(client),
+                Err(_) if !self.selected.load(Ordering::SeqCst) => return None,
+                Err(error) => {
+                    wait = self.pacer.next_wait(Instant::now());
+                    self.report(SessionEvent::ConnectFailed {
+                        error,
+                        retry_in: wait,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Waits `wait`, or less when the device announces itself; false once
+    /// it is deselected.
+    fn pause(&mut self, wait: Duration) -> bool {
+        let until = Instant::now() + wait;
+        while Instant::now() < until && self.selected.load(Ordering::SeqCst) {
+            if self.announced.swap(false, Ordering::SeqCst) {
+                self.pacer.announced();
+                // This attempt is the one at once.
+                self.pacer.next_wait(Instant::now());
+                break;
+            }
+            thread::sleep(SLICE.min(until.saturating_duration_since(Instant::now())));
+        }
+        self.selected.load(Ordering::SeqCst)
     }
 }
 
@@ -978,7 +1059,6 @@ fn make_room(events: &mut VecDeque<SessionEvent>) {
             event,
             SessionEvent::Diagnostics(_)
                 | SessionEvent::Stream(_)
-                | SessionEvent::Volume(_)
                 | SessionEvent::Rebuffering
                 | SessionEvent::GroupMessage(_)
         )
@@ -1051,6 +1131,21 @@ mod tests {
             events
                 .iter()
                 .all(|event| matches!(event, SessionEvent::ConnectFailed { .. }))
+        );
+    }
+
+    // covers: C70
+    #[test]
+    fn a_full_queue_never_drops_a_volume_report() {
+        let mut events: VecDeque<SessionEvent> =
+            (0..MAX_SESSION_EVENTS - 1).map(|_| failure()).collect();
+        events.insert(5, SessionEvent::Volume(DeviceVolume::default()));
+        make_room(&mut events);
+        assert_eq!(events.len(), MAX_SESSION_EVENTS - 1);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, SessionEvent::Volume(_)))
         );
     }
 

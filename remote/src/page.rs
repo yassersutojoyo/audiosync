@@ -149,6 +149,17 @@ mod tests {
         assert!(script.contains("Do step 2 before you enter the code"));
     }
 
+    // covers: S340
+    #[test]
+    fn a_paused_track_and_a_zone_with_no_member_here_read_as_on_the_mac() {
+        let script = only_element(PAGE, "script").unwrap();
+        assert!(script.contains("paused: \"Paused\","));
+        assert!(script.contains("const paused = playing && playing.playing === false;"));
+        assert!(script.contains("zoneNoneHere: (all) => `None of ${all} found`,"));
+        assert!(script.contains("zoneEmpty: \"No speakers\","));
+        assert!(script.contains("TEXT.zoneNoneHere(counts.all)"));
+    }
+
     #[test]
     fn a_fixed_delay_hides_its_row_and_an_unpair_error_shows_under_the_button() {
         let script = only_element(PAGE, "script").unwrap();
@@ -400,6 +411,27 @@ mod tests {
         );
         assert!(script.contains("showError(ui.sourceError, message);"));
         assert!(script.contains("post(\"/api/source\", { id })"));
+    }
+
+    #[test]
+    fn a_sent_value_stays_until_a_snapshot_reports_it_or_the_settle_time_ends() {
+        let script = only_element(PAGE, "script").unwrap();
+        assert!(script.contains("if (!inFlight && reported === sentValue) { release(); }"));
+        assert!(script.contains("if (pending === null) { onSettle(); }"));
+        assert!(script.contains("}, () => { power.checked = row.speaker.on; });"));
+        assert!(script.contains(
+            "}, () => { if (document.activeElement !== row.delay) { showDelay(row, row.speaker.delay_ms); } });"
+        ));
+        assert!(script.contains("if (!held) { control.show(read()); }"));
+        for check in [
+            "row.powerSender.busy(speaker.on)",
+            "row.volumeControl.held(speaker.volume)",
+            "row.delaySender.busy(speaker.delay_ms)",
+            "row.volumeControl.held(zone.volume)",
+            "masterControl.held(next.master.volume)",
+        ] {
+            assert!(script.contains(check), "{check}");
+        }
     }
 
     #[test]
