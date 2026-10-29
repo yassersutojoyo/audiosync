@@ -10244,6 +10244,7 @@ mod tests {
         adapter.poll();
         turn_on(&mut adapter, DAC_PORT_1);
         adapter.new_zone("Desk").unwrap();
+        adapter.poll();
         adapter.save_settings();
         let mut adapter = launch(audio, &path);
         adapter.poll();
