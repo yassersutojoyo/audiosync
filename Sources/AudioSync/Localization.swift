@@ -1341,6 +1341,10 @@ struct UIStrings {
     let castAddedByAddress = "Added by address"
     /// The volume slider's hint when the device's volume can't be changed.
     let castVolumeFixed = "This speaker's volume can't be changed from AudioSync."
+    /// Why a speaker's volume slider is dimmed, as its hint and tooltip; nil while it moves.
+    func volumeLocked(enabled: Bool, cast: CastRow?) -> String? {
+        cast?.volumeFixed == true ? castVolumeFixed : nil
+    }
     /// Under a Cast speaker's delay field, in place of the sync hint (CAST_SPEC C74-C77).
     let castSyncHint = "AudioSync can't sync Google Cast speakers automatically, so it keeps the others only "
         + "roughly in step with this one. Set this by ear: heard this speaker late? Raise the value, and the "
