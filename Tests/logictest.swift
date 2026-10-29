@@ -3996,6 +3996,20 @@ do {
             && auto.apply(.error(id: right, .passwordRequired, retryMs: nil, detail: ""))
                 == .turnOff(app(pair), .memberNeedsPassword(right)),
           "P176 native airplay: a pair auto-connect turned on goes off when a member asks for a password, naming the member")
+    var fromPhone = listedPair()
+    fromPhone.apply(.appeared(NativeReceiver(id: "D4", name: "Den", model: "", availability: .available, reason: nil,
+                                             hints: [])))
+    let phoneOutcomes = ["D4", pair].compactMap { id in
+        StartOrigin.remote.beginsAttempts ? fromPhone.turnedOnByUser(id) : nil
+    }
+    fromPhone.added("D4")
+    fromPhone.added(pair)
+    check(phoneOutcomes.isEmpty && StartOrigin.user.beginsAttempts
+            && fromPhone.apply(.error(id: "D4", .pairingRequired, retryMs: nil, detail: "")) == .turnOff(app("D4"), .needsCode)
+            && fromPhone.apply(.error(id: right, .passwordRequired, retryMs: nil, detail: ""))
+                == .turnOff(app(pair), .memberNeedsPassword(right))
+            && fromPhone.nextPrompt() == nil,
+          "web remote: a speaker or a zone's pair the phone turned on that asks for a code when it connects goes off with its notice, no prompt")
 
     var oneSide = listedPair()
     _ = oneSide.turnedOnByUser(pair)
