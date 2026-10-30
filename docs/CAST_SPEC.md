@@ -259,6 +259,7 @@ The sender's tests run against a fake receiver in the same process: a TLS server
 | a_device_that_reports_playing_after_13_s_is_waited_for | C74 | a fake device that fetches the stream at once but reports `PLAYING` only after 13 s, longer than the 10 s fetch timeout, which fires only when no fetch arrives: the session waits with one `LAUNCH`, one `LOAD` and one fetch and never restarts (`cast/tests/fake_cells.rs`) |
 | manual receiver check, no test function | C74 to C76 | *hardware*: G7, G8 and G9; for C74, the `PLAYING` delay of a real device stays untested |
 | manual receiver check, no test function | C89 to C103 | *hardware*: G1 |
+| a_cast_speaker_on_at_quit_turns_on_again_once_listed_after_a_relaunch, a_cast_speaker_saved_as_on_stays_off_when_hidden_and_stays_saved_without_a_cast_sender, a_speaker_added_by_address_on_at_quit_turns_on_when_a_browse_finds_it_first (`desktop/src/adapter.rs`) | C112 | the target that is on is saved by `id`; after a relaunch it turns on once listed and nothing streams before; a hidden one stays off and stays saved; one added by address turns on when a browse finds it; the Mac's logic suite checks the same in its "cast: … (C112)" checks |
 
 ## Sources
 

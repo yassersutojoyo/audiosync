@@ -13,8 +13,11 @@ note may run on to the next lines:
     // covers: S290, S291 (a level set on the speaker is kept)
 
 It also fails when a row of a spec's test map names a test function that no
-tracked Rust file defines (names in parentheses are notes, and a *hardware*
-row names a check run by hand).
+tracked Rust file defines, or one defined outside the row's backticked path or
+the host its tag or section names (names in parentheses are notes, and a
+*hardware* row names a check run by hand); when a row of a Check table names a
+check that no string in Tests/, or in a script run-tests.sh calls, prints (`…`,
+`<…>` and interpolations match anything); and when a section repeats a row.
 
 Usage:
     scripts/spec_markers.py              check every tracked file in scope
@@ -40,6 +43,7 @@ _FN = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 # Snake case with at least one underscore, not part of a path or a longer word.
 _TEST_NAME = re.compile(r"(?<![\w./-])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![\w./-])")
 _ONE_WORD = re.compile(r"[a-z][a-z0-9]*")
+_PATH = re.compile(r"`([\w./-]+(?:\.rs|/))`")
 
 
 def in_scope(path):
@@ -126,31 +130,195 @@ def _outside_parens(text):
     return "".join(kept)
 
 
-def test_map_problems(spec, text, fns):
-    """Test-map rows of one spec that name a function missing from `fns`."""
+def _pieces(text):
+    """The cell as (text outside parentheses, the parenthesized group after it) pairs."""
+    pieces = []
+    depth = 0
+    outside, group = [], []
+    for char in text:
+        if char == "(":
+            depth += 1
+            if depth == 1:
+                continue
+        elif char == ")" and depth:
+            depth -= 1
+            if depth == 0:
+                pieces.append(("".join(outside), "".join(group)))
+                outside, group = [], []
+                continue
+        (group if depth else outside).append(char)
+    pieces.append(("".join(outside), "".join(group)))
+    return pieces
+
+
+def _host_dirs(words):
+    dirs = ("desktop/",) if re.search(r"\bWindows\b", words) else ()
+    dirs += ("core/",) if re.search(r"\bcore\b", words) else ()
+    return dirs + tuple(f"{name.lower()}/" for name in re.findall(r"\b(remote|AirPlay|Cast) crate\b", words))
+
+
+def _defined_in(paths, scope):
+    """Whether one of `paths` lies in `scope`: backticked file paths or host directories."""
+    return any(p == s or p.endswith("/" + s) or (s.endswith("/") and p.startswith(s)) for p in paths for s in scope)
+
+
+def test_map_problems(spec, text, fns, labels=None):
+    """Test-map rows of one spec that name a function missing from `fns` or outside the
+    row's host, a check label missing from `labels`, or repeat an earlier row."""
     found = []
     in_map = False
+    scope = ()
+    checks = False
+    seen = {}
     for number, line in enumerate(text.splitlines(), 1):
         if line.startswith("## "):
             in_map = bool(_TEST_MAP.match(line))
+        if line.startswith(("## ", "### ")):
+            # The host comes after the topic: "Start steps and late Windows wakes: core (...)".
+            scope = _host_dirs(line.split("(")[0].rpartition(": ")[2]) if line.startswith("### ") else ()
+            checks = False
+            seen = {}
             continue
         cells = line.split("|")
         if not in_map or len(cells) < 3 or cells[0].strip():
             continue
+        label = cells[1].strip()
+        if label in ("Check", "Test", "Tests"):
+            checks = label == "Check"
+            continue
+        if set(label) <= set("-: "):
+            continue
         if len(cells) > 3 and cells[3].strip().startswith("*hardware*"):
             continue
+        if label in seen:
+            found.append(f"docs/{spec}:{number}: the test map repeats the row of line {seen[label]}")
+        seen.setdefault(label, number)
         names = _outside_parens(cells[1])
         # A one-word name has no underscore for _TEST_NAME, so it counts only in a cell
         # that is nothing but a list of names; prose cells say "once" or "max" too.
         items = [item.strip() for item in names.split(",")]
         listed = all(_ONE_WORD.fullmatch(item) or _TEST_NAME.fullmatch(item) for item in items)
-        words = [item for item in items if listed and _ONE_WORD.fullmatch(item)]
-        found += [
-            f"docs/{spec}:{number}: the test map names {name}, which no tracked Rust file defines"
-            for name in _TEST_NAME.findall(names) + words
-            if name not in fns
-        ]
+        named = []
+        for outside, group in _pieces(cells[1]):
+            pending = _TEST_NAME.findall(outside)
+            pending += [w for w in (i.strip() for i in outside.split(",")) if listed and _ONE_WORD.fullmatch(w)]
+            paths = tuple(_PATH.findall(group))
+            tag = _host_dirs(group) if group.strip() in ("core", "Windows") else ()
+            named += [(name, paths or tag) for name in pending]
+        for name, where in named:
+            if name not in fns:
+                found.append(f"docs/{spec}:{number}: the test map names {name}, which no tracked Rust file defines")
+            elif (where or scope) and not _defined_in(fns[name], where or scope):
+                found.append(
+                    f"docs/{spec}:{number}: the test map puts {name} in {', '.join(where or scope)},"
+                    f" but it is defined in {', '.join(sorted(fns[name]))}"
+                )
+        # A row that starts with a command names a script run, and a pending check prints nothing yet.
+        if checks and not named and labels is not None and not label.startswith("`") and "(pending" not in label:
+            if not any(_label_found(form, labels) for form in _label_forms(label)):
+                found.append(f'docs/{spec}:{number}: the test map names the check "{label}", which no test prints')
     return found
+
+
+def _label_forms(label):
+    """The label, then without its trailing notes: parenthesized ones and ", every check"."""
+    label = re.sub(r"\\([<>])", r"\1", label).removesuffix(", every check")
+    forms = [label]
+    while note := re.fullmatch(r"(.*\S)\s*\([^()]*\)", forms[-1]):
+        forms.append(note.group(1))
+    return forms + [" ".join(_outside_parens(label).split())]
+
+
+def _label_found(label, labels):
+    exact, patterns = labels
+    if label in exact:
+        return True
+    wild = "…" in label or "<" in label
+    if wild:
+        doc = re.compile(".*".join(re.escape(part) for part in re.split(r"…|<[^>]*>", label)), re.DOTALL)
+        if any(doc.fullmatch(text) for text in exact):
+            return True
+        label = re.sub(r"…|<[^>]*>", "\0", label)
+    # A printed string that is mostly interpolation would match any label, so it only
+    # meets a label with wildcards of its own: "\(name): delay \(ms) ms", "<device>: delay 150 ms".
+    usable = [code for code, letters, leading in patterns if letters >= 8 and not leading or wild and letters >= 4]
+    return any(code.fullmatch(label) for code in usable)
+
+
+def string_literals(text, shell):
+    """String literals of a Swift or shell file, interpolations as \\0, literals joined by + as one."""
+    found = []
+    i, n = 0, len(text)
+    while i < n:
+        char = text[i]
+        comment = text[i - 1 : i] in ("", " ", "\t", "\n") and char == "#" if shell else text.startswith("//", i)
+        if comment:
+            end = text.find("\n", i)
+            i = n if end < 0 else end
+        elif not shell and (text.startswith('"""', i) or text.startswith('#"', i)):
+            close = '"""' if text.startswith('"""', i) else ('"""#' if text.startswith('#"""', i) else '"#')
+            end = text.find(close, i + len(close))
+            i = n if end < 0 else end + len(close)
+        elif shell and char == "'":
+            end = text.find("'", i + 1)
+            end = n if end < 0 else end
+            found.append((i, end + 1, text[i + 1:end]))
+            i = end + 1
+        elif char == '"':
+            start = i
+            value, i = _read_literal(text, i + 1, shell)
+            found.append((start, i, value))
+        else:
+            i += 1
+    joined = []
+    for start, end, value in found:
+        if joined and re.fullmatch(r"\s*\+\s*", text[joined[-1][1]:start]):
+            joined[-1] = (joined[-1][0], end, joined[-1][2] + value)
+        else:
+            joined.append((start, end, value))
+    return [value for _, _, value in joined]
+
+
+def _read_literal(text, i, shell):
+    """The value of a double-quoted literal from after its quote, and the index after its end."""
+    out = []
+    n = len(text)
+    while i < n and text[i] not in '"\n':
+        char = text[i]
+        opens = (not shell and text.startswith("\\(", i)) or (shell and text.startswith(("$(", "${"), i))
+        if opens:
+            depth, i = 1, i + 2
+            while i < n and depth and text[i] != "\n":
+                if text[i] == '"':
+                    _, i = _read_literal(text, i + 1, shell)
+                    continue
+                depth += {"(": 1, "{": 1, ")": -1, "}": -1}.get(text[i], 0)
+                i += 1
+            out.append("\0")
+        elif shell and char == "$" and i + 1 < n and re.match(r"[\w@#?*!-]", text[i + 1]):
+            i += 1 + len(re.match(r"\w*|.", text[i + 1:]).group())
+            out.append("\0")
+        elif char == "\\" and i + 1 < n:
+            out.append({"n": "\n", "t": "\t"}.get(text[i + 1], text[i + 1]))
+            i += 2
+        else:
+            out.append(char)
+            i += 1
+    return "".join(out), i + 1
+
+
+def check_labels(texts):
+    """Every printed check name of the Swift and shell tests: exact texts and patterns."""
+    exact = set()
+    patterns = []
+    for path, text in texts:
+        for value in string_literals(text, path.endswith(".sh")):
+            value = value.removeprefix("▶ ").strip()
+            exact.add(value)
+            if "\0" in value:
+                code = re.compile(".*".join(re.escape(p) for p in value.split("\0")), re.DOTALL)
+                patterns.append((code, sum(c.isalpha() for c in value), value.startswith("\0")))
+    return exact, patterns
 
 
 def tracked_files(root):
@@ -233,16 +401,50 @@ def self_test():
         "| a_hand_check | P1 | *hardware*: by ear |\n| gone | S3 |\n| a_real_test, then once more | S4 |\n"
         "## 11. After\n| another_gone | S1 |\n"
     )
-    got = test_map_problems("X_SPEC.md", doc, {"a_real_test"})
+    got = test_map_problems("X_SPEC.md", doc, {"a_real_test": {"x/y_z.rs"}})
     want = [
         "docs/X_SPEC.md:6: the test map names a_gone_test, which no tracked Rust file defines",
         "docs/X_SPEC.md:9: the test map names gone, which no tracked Rust file defines",
     ]
     if got != want:
         failures.append(f"test_map_problems: expected {want}, got {got}")
+    swift = (
+        'check(ok, "a: one")\ncheck(ok, "b: two \\(f("x")) and "\n    + "more") // "c: not a label"\n'
+        'check(ok, "\\(name): delay \\(ms) ms")\n'
+    )
+    shell = "echo \"▶ e: the $thing runs\"  # 'not one'\necho 'f: as is'\n"
+    labels = check_labels([("Tests/t.swift", swift), ("Tests/t.sh", shell)])
+    if labels[0] != {"a: one", "b: two \0 and more", "\0: delay \0 ms", "e: the \0 runs", "f: as is"}:
+        failures.append(f"check_labels: got {sorted(labels[0])}")
+    fns = {"core_fn": {"core/src/a.rs"}, "win_fn": {"desktop/src/b.rs"}}
+    doc = (
+        "## 18. Test map\n### Things: Windows (`cargo test` in `desktop/`)\n| Test | Clauses |\n|---|---|\n"
+        "| win_fn | S1 |\n| core_fn | S1 |\n| core_fn (core) | S1 |\n| win_fn (`core/src/a.rs`) | S1 |\n"
+        "| Check | Clauses |\n|---|---|\n| a: one (a note) | S1 |\n| \\<device\\>: delay 150 ms | S1 |\n"
+        "| b: two … more, every check | S1 |\n| a: gone | S1 |\n| a: one (a note) | S2 |\n"
+        "| `x.py --self-test` | S1 |\n| g: later (pending, [MAC]) | S1 |\n"
+    )
+    got = test_map_problems("X_SPEC.md", doc, fns, labels)
+    want = [
+        "docs/X_SPEC.md:6: the test map puts core_fn in desktop/, but it is defined in core/src/a.rs",
+        "docs/X_SPEC.md:8: the test map puts win_fn in core/src/a.rs, but it is defined in desktop/src/b.rs",
+        'docs/X_SPEC.md:14: the test map names the check "a: gone", which no test prints',
+        "docs/X_SPEC.md:15: the test map repeats the row of line 11",
+    ]
+    if got != want:
+        failures.append(f"test_map_problems (hosts and checks): expected {want}, got {got}")
+    swift = 'check(ok, "\\(a), \\(b), \\(c), \\(d), \\(e)")\ncheck(ok, "airplay \\(x) \\(y)")\n'
+    labels = check_labels([("Tests/t.swift", swift), ("Tests/t.sh", 'echo "$x is missing"\n')])
+    doc = (
+        "## 18. Test map\n| Check | Clauses |\n|---|---|\n| gone: a, b, c, d, e | S1 |\n"
+        "| airplay gone stale row | S1 |\n| eq: a renamed thing is missing | S1 |\n"
+    )
+    got = [line.split(":")[1] for line in test_map_problems("X_SPEC.md", doc, {}, labels)]
+    if got != ["4", "5", "6"]:
+        failures.append(f"test_map_problems (catch-all strings): expected lines 4 to 6, got {got}")
     for failure in failures:
         print(f"self-test: {failure}", file=sys.stderr)
-    cases = len(ids) + 5 + len(titled) + len(scope)
+    cases = len(ids) + 8 + len(titled) + len(scope)
     print(f"self-test: {cases} cases, {len(failures)} failure(s)")
     return 1 if failures else 0
 
@@ -253,6 +455,8 @@ def main(argv):
     args = parser.parse_args(argv)
     if args.self_test:
         return self_test()
+    # Labels may hold characters a Windows console code page can't print.
+    sys.stdout.reconfigure(errors="backslashreplace")
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     known = set()
     for spec in SPECS.values():
@@ -260,22 +464,29 @@ def main(argv):
             known |= spec_ids(f.read())
     found = []
     markers = 0
-    fns = set()
+    fns = {}
+    tests = {}
     for path in tracked_files(root):
         if not (in_scope(path) or path.endswith(".rs")):
             continue
         with open(os.path.join(root, path), encoding="utf-8") as f:
             text = f.read()
         if path.endswith(".rs"):
-            fns.update(_FN.findall(text))
+            for name in _FN.findall(text):
+                fns.setdefault(name, set()).add(path)
+        if re.fullmatch(r"(Tests/[^/]+\.swift|(Tests|scripts)/[^/]+\.sh)", path):
+            tests[path] = text
         if not in_scope(path):
             continue
         marker = marker_for(path)
         markers += sum(1 for line in text.splitlines() if line.strip().startswith(marker))
         found += problems_in(path, text, known)
+    # A check run-tests.sh prints may come from a script it calls, such as the shellcheck run.
+    called = set(re.findall(r"scripts/[\w-]+\.sh", tests.get("Tests/run-tests.sh", "")))
+    labels = check_labels([(p, t) for p, t in tests.items() if p.startswith("Tests/") or p in called])
     for spec in SPECS.values():
         with open(os.path.join(root, "docs", spec), encoding="utf-8") as f:
-            found += test_map_problems(spec, f.read(), fns)
+            found += test_map_problems(spec, f.read(), fns, labels)
     for problem in found:
         print(problem)
     print(f"{markers} host markers, {len(found)} problem(s)")

@@ -468,7 +468,7 @@ Retired with the bundled engine on 2026-10-20, all but S111 and part of S101 and
 
 ## 12. Non-finite values
 
-- **S123** *Observed* ("eq: recovers from a NaN sample (silence stays silent)", "fifo: NaN/±inf samples do not crash"). NaN and ±infinity can arrive from capture. No stage may trap, crash or abort on them: the enabled equalizer zeroes them (S29); a disabled equalizer passes them into the ring unchanged; the renderer zeroes them at its output (S65); the FIFO conversion maps them (S86).
+- **S123** *Observed* ("eq: recovers from a NaN sample (silence stays silent)"; core tests `non_finite_samples_are_zeroed_at_the_output_stage` in `core/src/convert.rs`, `non_finite_input_becomes_silence_only_when_the_rates_differ` and `the_gain_stage_zeroes_silence_and_non_finite_values` in `core/src/ffi/render.rs`). NaN and ±infinity can arrive from capture. No stage may trap, crash or abort on them: the enabled equalizer zeroes them (S29); a disabled equalizer passes them into the ring unchanged; the renderer zeroes them at its output (S65); the FIFO conversion maps them (S86).
 - **S124** *Superseded in part by S175 and S178*: a local output's offset ranges from −2000 to +20 000 ms, the bundled engine's AirPlay delay from 0 to 20 000 ms and the native sender's adjustment from −2000 to +20 000 ms. *Observed* (`AppDelegate+Outputs.swift:51-106`). Host-side numeric inputs are sanitized before reaching the engine: non-finite delays are ignored, delays are clamped to 0…20 000 ms, volumes to 0…100.
 - **S125** *Required.* A non-finite value never persists in any stateful stage: once finite input resumes, every output is finite within one block (the resampler of S85 resets its history if it sees a non-finite sample).
 
@@ -748,7 +748,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | presets: a migration cut short before its mark runs again to the same presets | S254 |
 | presets: migrating presets twice changes nothing: once marked, a launch writes nothing | S254 |
 | presets: presets round-trip through the user defaults, a fixed Cast volume included | S251 |
-| presets: stored presets keep one Cast key, one preset per ID, levels within range | S251 |
+| presets: stored presets keep one Cast key, one preset per ID, levels within range (an AirPlay own volume may pass 100) | S251 |
 | presets: Control-Command-1 to 9 go to the first nine in list order | S261, S267 |
 | presets: a save with no speaker on saves nothing | S262 |
 | presets: a save appends, so the other shortcuts keep their keys | S261, S262 |
@@ -916,7 +916,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | native pairing: a stored pairing refused without the user's click goes off with a notice | S223 |
 | native pairing: a PIN request nobody waits for cancels its pairing | S223 |
 | native pairing: a paired Apple TV just joins | S223 |
-| native pairing: within the user's attempt, a refused stored pairing pairs again | S223 |
+| native pairing: within the user's attempt, a refused stored pairing pairs again without being forgotten first, though still listed as paired | S223 |
 | native pairing: paired again | S223 |
 | native pairing: once it plays, the user's attempt is over | S223 |
 | native pairing: refused later on, it goes off with a notice instead of prompting uninvited | S223 |
@@ -1108,7 +1108,6 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | native airplay: switched off, it is no longer on by hand | S223 |
 | native airplay: nothing joins while not streaming | S222 |
 | native airplay: while streaming, the able join, the PIN and password ones not turned on by a click go off (auto-connect and restored switches never pair or prompt), the rest wait | S222, S223 |
-| native airplay: while streaming, the able join, the PIN and password ones not turned on by a click go off (auto-connect and restored switches never pair or prompt), the rest wait | S222 |
 | native airplay: an added speaker stays | S222 |
 | EC13 native airplay: a speaker leaves when switched off or when streaming stops | S118, S222 |
 | native airplay: playing is reported once | S222 |
@@ -1253,7 +1252,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | EC5 source: a denied microphone says where to allow it | S141 |
 | EC5 source: a switch that works, or a stop with its own start notice, adds no switch notice | S141 |
 | EC5 source: a failed switch logs that the speakers stayed | S141 |
-| EC5 source: the failed switch notice names both sources plainly | S141 |
+| EC5 source: the failed switch notice names both sources plainly and the next step | S141 |
 | EC5 source: the log names a source change and a pair change apart | S141 |
 | EC5 source: a switch rebuilds only the capture and keeps the session | S141 |
 | EC5 source: a switch the start rule refuses (no speaker on any more) stops the session | S141 |
@@ -1404,7 +1403,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | settings: a master that isn't a finite number starts at 100 | S212 |
 | settings: volumes are clamped to 0…100, anything else is dropped (S76) | S76, S212 |
 | settings: delays are clamped to 0…20 000 ms, anything else is dropped (S179) | S179, S212 |
-| settings: unreadable groups, IDs or appearance fall back to the defaults | S212 |
+| settings: unreadable groups, IDs or appearance fall back to the defaults; an AirPlay own volume above 100 stays (S290) | S212 |
 | settings: a master above 100 is clamped | S76, S212 |
 | settings: older linear gains become slider positions (3.49 % → 32.68, 150 % → 100, S75) | S75 |
 | settings: the converted volumes are saved under the current key and the old key is removed | S75 |
@@ -2503,7 +2502,7 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | an_outputs_gain_is_its_own_times_the_masters (`core/src/ffi.rs`) | S71 |
 | the_airplay_level_is_own_times_zone_times_master | S249 |
 | bad_zone_volumes_change_nothing (`core/src/ffi/airplay.rs`) | S249 |
-| the_cast_level_is_master_times_zone_times_own | S249, C104 |
+| the_cast_level_is_master_times_zone_times_own (`cast/tests/master_volume.rs`) | S249, C104 |
 | a_read_back_at_zone_50_restores_the_own_volume | S250 |
 | a_read_back_with_zone_0_leaves_the_own_volume | S250, S290 |
 | a_device_volume_near_the_sent_level_is_ignored_for_3_s_only (core) | S276, S271 |
@@ -2545,7 +2544,7 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | each_new_reading_reaches_the_host_unrounded (core) | S290, S291 |
 | a_row_move_on_a_0_6_db_grid_keeps_the_row_until_the_speaker_moves (core) | S290, S291 |
 | an_echo_on_a_0_6_db_grid_never_moves_the_row (Windows) | S290, S291 |
-| a_cast_report_moves_own_to_level_over_master_times_zone | S250, C104 |
+| a_cast_report_moves_own_to_level_over_master_times_zone (`cast/tests/master_volume.rs`) | S250, C104 |
 | a_zone_volume_change_reaches_the_playing_members_as_a_master_change_does | S72, S249 |
 | a_v2_settings_file_is_read_as_v3_with_its_groups_as_zones | S245, S248 |
 | zones_keep_cast_keys_and_empty_zones_and_each_speaker_once | S245 |
@@ -2763,7 +2762,7 @@ The checks for S256 to S258, S287, S288, S337, S338 and S343 to S345 and S348 in
 | web remote: a speaker that can't be driven or isn't listed is left alone; a paired one and a Cast group turn on | S257 |
 | web remote: a speaker turned off keeps the phone's volume; the master volume is clamped | S76, S348 |
 | the_pairing_code_switch_reads_from_json_and_is_off_by_default | S287 |
-| debug_mode_puts_each_pairing_code_in_the_log_lines | S287 |
+| debug_mode_puts_each_pairing_code_in_the_log_lines (`core/src/ffi/remote.rs`) | S287 |
 | the_debug_log_gets_each_pairing_code_and_a_normal_run_none | S287 |
 | web remote: only the debug log asks the core for the pairing codes | S287 |
 | the_debug_switch_starts_the_remote_only_with_the_debug_log | S288 |
