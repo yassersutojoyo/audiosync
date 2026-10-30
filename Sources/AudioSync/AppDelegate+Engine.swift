@@ -489,12 +489,16 @@ extension AppDelegate {
     func showAlert(_ message: String, style: NSAlert.Style, settings: PrivacyPane? = nil) {
         menuBar?.close()   // the panel floats above alerts and would cover this one
         NSApp.activate(ignoringOtherApps: true)
-        let modal = NSAlert()
-        modal.messageText = text.appName
-        modal.informativeText = message
-        modal.alertStyle = style
-        modal.addButton(withTitle: text.alertOK)
-        if settings != nil { modal.addButton(withTitle: text.openSettings) }
-        if modal.runModal() == .alertSecondButtonReturn, let settings { NSWorkspace.shared.open(settings.url) }
+        // A start after the microphone answer gets here inside a main-queue block,
+        // and an alert run there would hold every later block back until it closes.
+        PromptStart.later { [self] in
+            let modal = NSAlert()
+            modal.messageText = text.appName
+            modal.informativeText = message
+            modal.alertStyle = style
+            modal.addButton(withTitle: text.alertOK)
+            if settings != nil { modal.addButton(withTitle: text.openSettings) }
+            if modal.runModal() == .alertSecondButtonReturn, let settings { NSWorkspace.shared.open(settings.url) }
+        }
     }
 }

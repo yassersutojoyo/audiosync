@@ -37,6 +37,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - On the Mac, recalling a preset where no speaker can play now shows only "Nothing changed: …" with the list, no longer under the "Some speakers stayed off" title, and VoiceOver reads it that way too.
 - On the Mac, an AirPlay speaker whose pairing ends while its PIN prompt is open now goes off with a notice and the prompt closes. Before, AudioSync handled no speaker or network change while the prompt was open, and the PIN typed into it went nowhere.
+- On the Mac, AudioSync now keeps handling speaker and network changes while an error alert is open. Before, they waited until the alert closed.
 - On the Mac, the first launch after an update could find no AirPlay or Google Cast speakers until you quit and reopened AudioSync. It now looks again on its own when nothing turns up a few seconds after Local Network access is allowed, and Refresh Devices looks again too.
 - On Windows, holding a menu open for 10 seconds or more is no longer taken for the PC waking from sleep.
 - On Windows, an update check now gives up after 30 s even when the server answers slowly or sends the update list a few bytes at a time. Before, a slow server could hold it for about a minute.

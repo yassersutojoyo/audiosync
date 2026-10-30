@@ -641,7 +641,7 @@ struct PromptWithdrawal {
     }
 }
 
-/// Where a PIN or password prompt starts its modal loop from. A loop
+/// Where a modal prompt or alert starts its modal loop from. A loop
 /// started inside a main-queue block holds back every later main-queue
 /// block (the sender's events among them) until it ends.
 enum PromptStart {
