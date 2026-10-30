@@ -31,6 +31,7 @@
 //! the capture's clock.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use audiosync_core::fade::FadeState;
 use audiosync_core::reader::{Reader, ReaderCounters};
@@ -287,6 +288,22 @@ fn every_start(device_rate: u32, callback: usize, block: usize, delay: i64) {
     }
 }
 
+/// Runs `check` on every case, spread over the machine's threads: each case
+/// is a simulation of its own, and the long ones take minutes one by one.
+fn check_all(cases: &[Clocks], check: impl Fn(Clocks) + Sync) {
+    let next = AtomicUsize::new(0);
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                while let Some(&clocks) = cases.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    check(clocks);
+                }
+            });
+        }
+    });
+}
+
 // covers: S206
 #[test]
 fn a_44_1_khz_output_at_hold_back_0_never_runs_dry_after_its_start() {
@@ -490,6 +507,7 @@ fn callbacks_with_few_phases_on_a_clock_off_never_run_dry() {
     // slow, at hold-back 0 and held back by 25 ms (inside the dead band, so
     // no step back keeps it off W either), for every phase, a fresh session
     // and a running one, no read runs dry and no drift correction is made.
+    let mut cases = Vec::new();
     for (device_rate, callback, block) in
         [(44_100, 441, 480), (96_000, 512, 512), (32_000, 256, 512)]
     {
@@ -497,7 +515,7 @@ fn callbacks_with_few_phases_on_a_clock_off_never_run_dry() {
             for running in [false, true] {
                 for phase in PHASES {
                     for drift_ppm in FEW_PHASES_DRIFTS_PPM {
-                        let clocks = Clocks {
+                        cases.push(Clocks {
                             device_rate,
                             callback,
                             block,
@@ -506,13 +524,15 @@ fn callbacks_with_few_phases_on_a_clock_off_never_run_dry() {
                             phase,
                             drift_ppm,
                             tail: 0,
-                        };
-                        assert_follows_the_capture(clocks, FEW_PHASES_SECONDS, 0, 0);
+                        });
                     }
                 }
             }
         }
     }
+    check_all(&cases, |clocks| {
+        assert_follows_the_capture(clocks, FEW_PHASES_SECONDS, 0, 0)
+    });
 }
 
 // covers: S53, S206, S207
@@ -524,12 +544,13 @@ fn an_earliest_converted_output_on_a_clock_off_follows_the_capture_with_stamps()
     // a fresh session and a running one, no read runs dry, no drift
     // correction is made, and the converter is trimmed one way only, by
     // what the clock gains or loses.
+    let mut cases = Vec::new();
     for (device_rate, callback, block) in STAMPED_SETUPS {
         for delay in [0, 1_200] {
             for running in [false, true] {
                 for phase in PHASES {
                     for drift_ppm in FEW_PHASES_DRIFTS_PPM {
-                        let clocks = Clocks {
+                        cases.push(Clocks {
                             device_rate,
                             callback,
                             block,
@@ -538,13 +559,15 @@ fn an_earliest_converted_output_on_a_clock_off_follows_the_capture_with_stamps()
                             phase,
                             drift_ppm,
                             tail: 0,
-                        };
-                        assert_follows_the_capture(clocks, LONG_SECONDS, 0, 0);
+                        });
                     }
                 }
             }
         }
     }
+    check_all(&cases, |clocks| {
+        assert_follows_the_capture(clocks, LONG_SECONDS, 0, 0)
+    });
 }
 
 /// Runs every stamped setup at hold-back 0 on a clock in step and on one
@@ -553,11 +576,12 @@ fn an_earliest_converted_output_on_a_clock_off_follows_the_capture_with_stamps()
 /// way, and asserts that it follows the capture with at most `other_way`
 /// frames trimmed the other way.
 fn every_jittered_run(jitter_ns: u64, other_way: u64) {
+    let mut cases = Vec::new();
     for (device_rate, callback, block) in STAMPED_SETUPS {
         for running in [false, true] {
             for phase in PHASES {
                 for drift_ppm in [-300, -100, 0, 100, 300] {
-                    let clocks = Clocks {
+                    cases.push(Clocks {
                         device_rate,
                         callback,
                         block,
@@ -566,12 +590,14 @@ fn every_jittered_run(jitter_ns: u64, other_way: u64) {
                         phase,
                         drift_ppm,
                         tail: 0,
-                    };
-                    assert_follows_the_capture(clocks, FEW_PHASES_SECONDS, jitter_ns, other_way);
+                    });
                 }
             }
         }
     }
+    check_all(&cases, |clocks| {
+        assert_follows_the_capture(clocks, FEW_PHASES_SECONDS, jitter_ns, other_way)
+    });
 }
 
 // covers: S207
