@@ -675,7 +675,7 @@ impl AllRun {
         let run = if off {
             sheet.measure_again_off(row, now.offset_ms, now.latency_ms)
         } else if now.offset_ms != measured.offset_ms {
-            return refuse(Failure::Interrupted);
+            return refuse(Failure::DelayChanged);
         } else {
             sheet.measure_again(row)
         };
@@ -2129,6 +2129,29 @@ pub(crate) mod tests {
             DebugLog::default(),
         );
         assert_eq!(again.err(), Some(Failure::NotPlaying(Missing::SPEAKER)));
+        given_back(&rig);
+    }
+
+    #[test]
+    fn measure_again_of_a_row_whose_delay_changed_since_says_so() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let members = run.members().to_vec();
+        let sheet = run_to_end(&mut rig, &mut run, |_, _| {})
+            .sheet
+            .expect("a sheet");
+        rig.lineup.members[1].offset_ms = Some(400.0);
+        let now = rig.now.get();
+        let again = AllRun::again(
+            &mut rig,
+            &sheet,
+            &members,
+            MIC_RATE,
+            1,
+            now,
+            DebugLog::default(),
+        );
+        assert_eq!(again.err(), Some(Failure::DelayChanged));
         given_back(&rig);
     }
 

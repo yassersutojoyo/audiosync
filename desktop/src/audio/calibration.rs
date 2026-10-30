@@ -322,6 +322,9 @@ pub enum Failure {
     /// Streaming stopped, the source changed, or the speakers or their
     /// delays changed during the measurement.
     Interrupted,
+    /// Measure Again: the row's stored delay changed after the sheet was
+    /// made.
+    DelayChanged,
     /// The default input device or its rate changed between the two runs.
     MicrophoneChanged,
     /// The microphone lost audio during a recording, so its timing can't
@@ -1114,9 +1117,9 @@ impl CalibrationRun {
                 return self.fail(rig, Failure::Unfinished, now_ns);
             }
         };
-        // The offset moved while the estimate ran: the result is for the
-        // old one.
-        if rig.offset_ms(&self.chosen) != Some(self.old_offset_ms) {
+        // The offset or what plays moved while the estimate ran: the result
+        // is for the old one.
+        if self.changed(&rig.engine()) || rig.offset_ms(&self.chosen) != Some(self.old_offset_ms) {
             return self.fail(rig, Failure::Interrupted, now_ns);
         }
         match &result {
@@ -1565,6 +1568,19 @@ mod tests {
         });
         assert_eq!(run.phase(), Phase::Failed(Failure::Interrupted));
         assert_eq!(rig.offsets["usb"], 150.0);
+        assert!(rig.set_offsets.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_speaker_turned_off_during_the_estimate_ends_the_run_unchanged() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        run_to_end(&mut rig, &mut run, |rig, run| {
+            if run.phase() == Phase::Running(Step::Estimating) {
+                rig.engine.playing.retain(|id| id != "usb");
+            }
+        });
+        assert_eq!(run.phase(), Phase::Failed(Failure::Interrupted));
         assert!(rig.set_offsets.borrow().is_empty());
     }
 

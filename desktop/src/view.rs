@@ -5304,7 +5304,7 @@ fn calibration_failure(strings: &Strings<'_>, reference: &str, failure: Failure)
         Failure::NoMicrophone => strings.get_calibration_no_microphone(),
         Failure::UnsupportedRate => strings.get_calibration_unsupported_rate(),
         Failure::SourceSilent => strings.get_calibration_source_silent(),
-        Failure::Interrupted => strings.get_calibration_interrupted(),
+        Failure::Interrupted | Failure::DelayChanged => strings.get_calibration_interrupted(),
         Failure::MicrophoneChanged => strings.get_calibration_microphone_changed(),
         Failure::MicrophoneSkipped => strings.get_calibration_microphone_skipped(),
         Failure::HandsFreeMicrophone => strings.get_calibration_hands_free(),
