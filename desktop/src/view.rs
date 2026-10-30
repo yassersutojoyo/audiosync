@@ -4293,7 +4293,8 @@ impl App {
         let text = self
             .strings()
             .invoke_window_failed(error.to_string().into());
-        crate::platform::show_error(&text);
+        // The box is modal: on the UI thread it would stop the poll timer until closed.
+        std::thread::spawn(move || crate::platform::show_error(&text));
     }
 
     /// While a note says no speaker was found, watches the networks'

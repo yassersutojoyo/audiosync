@@ -271,14 +271,21 @@ fn registry_string(key: windows::core::PCWSTR, name: windows::core::PCWSTR) -> O
 /// elsewhere.
 #[cfg(windows)]
 pub fn show_error(text: &str) {
-    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MB_TOPMOST, MessageBoxW,
+    };
     use windows::core::{HSTRING, w};
 
     let text = HSTRING::from(text);
     // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call,
     // and the message box has no owner window.
     unsafe {
-        MessageBoxW(None, &text, w!("AudioSync"), MB_OK | MB_ICONERROR);
+        MessageBoxW(
+            None,
+            &text,
+            w!("AudioSync"),
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST,
+        );
     }
 }
 
