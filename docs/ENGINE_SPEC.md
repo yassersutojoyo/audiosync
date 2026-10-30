@@ -2417,6 +2417,7 @@ The checks for S235 to S241 in the Rust core (`core/tests/calibrate_all.rs`, syn
 | deleting_the_measured_zone_ends_the_run (`desktop/src/adapter.rs`) | S240, S255 |
 | the_cards_button_after_a_zone_run_runs_that_zone_again (`desktop/src/adapter.rs`) | S255 |
 | calibrate_zone_is_offered_while_a_member_is_here_and_no_calibration_holds_the_outputs (`desktop/src/ui_model.rs`) | S255 |
+| calibrate_zone_is_not_offered_when_every_member_plays_through_a_pair (`desktop/src/ui_model.rs`) | S255 |
 | calibrate_zone_is_offered_for_a_zone_with_a_member_here (`desktop/src/view.rs`) | S255 |
 | the_calibrate_all_card_of_a_zone_run_names_the_zone (`desktop/src/view.rs`) | S255 |
 | a_zone_run_is_ticked_once_it_starts (`desktop/src/view.rs`) | S255 |

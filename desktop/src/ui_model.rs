@@ -1204,10 +1204,13 @@ impl AppState {
     }
 
     /// Whether zone `zone`'s Calibrate Zone… can be chosen: a member is
-    /// here and no calibration holds the outputs, since a start then does
-    /// nothing (spec S255).
+    /// here, not playing as part of a target, and no calibration holds the
+    /// outputs, since a start then does nothing (spec S255).
     pub fn offers_zone_run(&self, zone: &Zone) -> bool {
-        self.zone_counts(zone).present > 0 && !self.calibration.busy
+        self.zone_rows(zone)
+            .iter()
+            .any(|row| matches!(row, ZoneRow::Listed(s) if s.in_target.is_none()))
+            && !self.calibration.busy
     }
 
     /// The note on `row` under `zone`, if it has one. The Cast note needs
@@ -3266,6 +3269,27 @@ mod tests {
         assert!(
             !state.offers_zone_run(&living),
             "a start would do nothing while a calibration holds the outputs"
+        );
+    }
+
+    // covers: S255
+    #[test]
+    fn calibrate_zone_is_not_offered_when_every_member_plays_through_a_pair() {
+        let mut state = MockBackend::zones_preview().snapshot();
+        let upstairs = state.zones[1].clone();
+        let target = state
+            .speaker("airplay:left")
+            .and_then(|s| s.in_target.clone());
+        assert!(state.offers_zone_run(&upstairs));
+        let bedroom = state
+            .speakers
+            .iter_mut()
+            .find(|s| s.id == "airplay:bedroom")
+            .expect("the preview lists Bedroom");
+        bedroom.in_target = target;
+        assert!(
+            !state.offers_zone_run(&upstairs),
+            "a member that plays as part of a pair is left out of the run"
         );
     }
 
