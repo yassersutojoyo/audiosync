@@ -4143,7 +4143,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// The sources as the UI lists them: what is listed, and the chosen app
-    /// after them while it isn't running, so the choice still shows.
+    /// among them while it isn't running, so the choice still shows.
     fn source_rows(&self) -> Vec<Source> {
         let mut rows: Vec<Source> = self
             .sources
@@ -4175,12 +4175,19 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 Chosen::Mix { apps, .. } => mix_names(apps).join(", "),
                 chosen => chosen.shown_name(),
             };
-            // Apps come before input devices, as in the listing.
+            // Apps come before input devices, as in the listing; a chosen app
+            // goes among the apps by name, as the listing sorts them.
+            let by_name = matches!(self.chosen, Chosen::App { .. }).then(|| name.to_lowercase());
             let at = match kind {
                 SourceKind::Input => rows.len(),
                 _ => rows
                     .iter()
-                    .position(|row| row.kind == SourceKind::Input)
+                    .position(|row| {
+                        row.kind == SourceKind::Input
+                            || by_name.as_ref().is_some_and(|name| {
+                                row.kind == SourceKind::App && row.name.to_lowercase() > *name
+                            })
+                    })
                     .unwrap_or(rows.len()),
             };
             rows.insert(
@@ -5942,6 +5949,33 @@ mod tests {
         assert!(adapter.snapshot().running);
         assert_eq!(input_captures(&adapter), [MIC]);
         assert_eq!(playing(&adapter), [SPEAKERS]);
+    }
+
+    // covers: S211 (a chosen app that isn't running keeps its place by name)
+    #[test]
+    fn a_chosen_app_that_quits_is_listed_by_name_among_the_apps() {
+        let mut adapter = adapter();
+        adapter.audio_mut().add_app(3000, "alpha.exe");
+        adapter.audio_mut().add_app(4000, "zebra.exe");
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        adapter.refresh_sources();
+        adapter.select_source(&player());
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.refresh_sources();
+        let state = adapter.snapshot();
+        let names: Vec<&str> = state.sources.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "All System Audio",
+                "Alpha",
+                "Player",
+                "Zebra",
+                "Microphone (USB Audio)"
+            ]
+        );
     }
 
     #[test]
