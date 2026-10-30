@@ -400,6 +400,12 @@ enum PresetNotice {
         return nothingChanged ? text.presetNothingChanged(preset, list) : text.presetLeftOff(preset, list)
     }
 
+    /// The notice's title above its body; none when nothing changed, whose
+    /// body leads with its own headline.
+    static func title(nothingChanged: Bool, text: UIStrings) -> String? {
+        nothingChanged ? nil : text.presetLeftOffTitle
+    }
+
     static func reason(_ member: LeftOff, text: UIStrings) -> String {
         switch member.reason {
         case .notFound: return text.zoneMemberNotFound

@@ -137,7 +137,8 @@ extension AppDelegate {
             clearPresetNotice()
             return
         }
-        postNotice(message, subject: Notice.presets, title: text.presetLeftOffTitle)
+        postNotice(message, subject: Notice.presets,
+                   title: PresetNotice.title(nothingChanged: nothingChanged, text: text))
         presetNotice = PresetNotice.Cause(presetID: preset.id, leftOff: leftOff, nothingChanged: nothingChanged)
     }
 
@@ -188,7 +189,8 @@ extension AppDelegate {
         if let cause = presetNotice, cause.presetID == id, let preset = presets.first(where: { $0.id == id }),
            let message = PresetNotice.message(preset: preset.name, leftOff: cause.leftOff,
                                               nothingChanged: cause.nothingChanged, text: text) {
-            postNotice(message, subject: Notice.presets, title: text.presetLeftOffTitle)
+            postNotice(message, subject: Notice.presets,
+                       title: PresetNotice.title(nothingChanged: cause.nothingChanged, text: text))
         }
         pushModel()
     }

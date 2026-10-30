@@ -35,6 +35,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On the Mac, recalling a preset where no speaker can play now shows only "Nothing changed: …" with the list, no longer under the "Some speakers stayed off" title, and VoiceOver reads it that way too.
 - On Windows, calibrating one speaker now goes on when you switch another speaker on or off, or one reconnects, during the measurement, as on the Mac, unless that change moves the timing of the measured speaker or the PC's own speakers. Before, any change to the speakers that play cancelled it.
 - On Windows, the web remote keeps the controls of a speaker that is on while it pairs, waits to pair or can't be used, so the phone can switch it off or set its volume and delay, as on the Mac. Before, the phone showed it without a switch and couldn't turn it off.
 - A TV you turned up with its own remote while the master or its zone volume was at 0 keeps that volume after Calibrate All. Before, the TV ended muted and its row showed 0. On the Mac and on Windows.

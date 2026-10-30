@@ -6564,6 +6564,10 @@ do {
             && PresetNotice.message(preset: "Evening", leftOff: [leftOff[0]], nothingChanged: true, text: presetText)
                 == nothingText,
           "presets: with no member present nothing changes and only the notice posts", "\(noneHere)")
+    check(PresetNotice.title(nothingChanged: true, text: presetText) == nil
+            && PresetNotice.title(nothingChanged: false, text: presetText) == "Some speakers stayed off",
+          "presets: a recall that changed nothing shows only the Nothing changed headline",
+          "\(String(describing: PresetNotice.title(nothingChanged: true, text: presetText)))")
 
     let cause = PresetNotice.Cause(presetID: "p1", leftOff: [
         PresetNotice.LeftOff(name: "Kitchen", reason: .notFound, key: "lc:kitchen"),
