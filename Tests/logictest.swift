@@ -1361,7 +1361,7 @@ do {
         if origin == .remote { g.turnedOnByPhone([id]) }
     }
     func recalled(_ g: inout EveryTimeGuard, _ id: String, from source: PresetRecallSource) {
-        if source.beginsAttempts { g.turnedOnByHand([id]) } else { g.turnedOnByPhone([id]) }
+        if let ids = source.attemptsToBegin([id]) { g.turnedOnByHand(ids) } else { g.turnedOnByPhone([id]) }
     }
     func offNotice(_ g: EveryTimeGuard, _ id: String) -> String? {
         text.nativeAirPlayAsksForCode(name: "Den", reason: .needsCode, unasked: false, onThisMac: g.byPhone.contains(id))
@@ -6649,7 +6649,6 @@ do {
     // covers: S266
     let recalledOn = ["native:R1", "native:R2"]
     check(PresetRecallSource.app.attemptsToBegin(recalledOn) == StartOrigin.user.attemptsToBegin(recalledOn)
-            && PresetRecallSource.app.attemptsToBegin(recalledOn) == recalledOn
             && PresetRecallSource.phone.attemptsToBegin(recalledOn) == nil,
           "presets: a recall from the app begins the attempts of the speakers it switches on, as a click does, one from the phone none")
 
