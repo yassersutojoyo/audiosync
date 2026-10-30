@@ -160,6 +160,7 @@ extension AppDelegate {
             let index = new ? to : from
             inputPairs[uid] = index == 0 ? nil : index
         case .sourceAppQuit:
+            lastMix = LastMix.kept(lastMix, leaving: audioSource, for: .system)
             audioSource = .system   // the app is gone either way
             updateNowPlayingTarget()
         }
@@ -299,6 +300,7 @@ extension AppDelegate {
             stopEngine(.sourceAppQuit, detail: bundleID)
             postNotice(text.sourceTerminated(name: name), subject: Notice.source)
         case .switchToSystem:
+            lastMix = LastMix.kept(lastMix, leaving: audioSource, for: .system)
             audioSource = .system
             updateNowPlayingTarget()
             clearNotices([Notice.source, Notice.capture])   // about the app

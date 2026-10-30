@@ -19,6 +19,8 @@ struct AppSettings: Equatable {
         static let source = "audioSourceBundleID"
         /// The chosen input device's name, kept to show while it is unplugged.
         static let sourceInputName = "audioSourceInputName"
+        /// The last source of several apps in use (S354), as `source` stores a mix.
+        static let lastMix = "lastMixSource"
         /// App IDs (`NativeAirPlayID`) of the AirPlay speakers that are on, as an array.
         static let enabledAirPlay = "enabledAirPlayIds"
         /// Device UIDs of the local speakers that are on, as an array.
@@ -120,6 +122,7 @@ struct AppSettings: Equatable {
     static let maxDelayMs: Double = 20_000
 
     var source = AudioSource.system
+    var lastMix: AudioSource?
     var enabledAirPlay: Set<String> = []
     var enabledLocal: Set<String> = []
     var enabledCast: String?
@@ -179,6 +182,7 @@ struct AppSettings: Equatable {
     static func load(_ read: (String) -> Any?) -> AppSettings {
         var s = AppSettings()
         s.source = AudioSource(defaultsValue: read(Keys.source) as? String)
+        s.lastMix = LastMix.restored(read(Keys.lastMix) as? String)
         s.enabledAirPlay = ids(read(Keys.enabledAirPlay))
         s.enabledLocal = ids(read(Keys.enabledLocal))
         s.enabledCast = read(Keys.enabledCast) as? String
@@ -409,6 +413,8 @@ struct SettingsStore {
     }
 
     func save(source: AudioSource) { write(source.defaultsValue, Keys.source) }
+
+    func save(lastMix: AudioSource) { write(lastMix.defaultsValue, Keys.lastMix) }
 
     /// A set of IDs, sorted so the stored array doesn't churn.
     func save(ids: Set<String>, forKey key: String) { write(ids.sorted(), key) }

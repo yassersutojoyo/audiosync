@@ -304,6 +304,7 @@ extension AppDelegate {
         }
         microphoneRequest.supersedeSwitch()   // a switch still waiting on the prompt is out of date
         let old = audioSource
+        lastMix = LastMix.kept(lastMix, leaving: old, for: source)
         audioSource = source
         updateNowPlayingTarget()
         // The tap is built for one source; switching rebuilds only it, under

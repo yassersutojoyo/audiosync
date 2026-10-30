@@ -525,18 +525,22 @@ enum SourceList {
     /// unplugged, listed last as `unpluggedInputName`, not connected.
     /// Devices without a UID can't be chosen and are skipped, and a Bluetooth
     /// headset's hands-free input (`AudioDevices.isHandsFreeInput`) is left
-    /// out, chosen or not.
+    /// out, chosen or not. While no mix is chosen, `lastMix` (S354) is listed
+    /// where a chosen mix would be.
     static func entries(systemName: String,
                         apps: [(bundleID: String, name: String)],
                         inputs: [Input],
                         chosen: AudioSource,
                         chosenAppName: (String) -> String,
                         mixName: (AppMixMode, [String]) -> String = { $1.joined(separator: ", ") },
-                        unpluggedInputName: String = "") -> [Entry] {
+                        unpluggedInputName: String = "",
+                        lastMix: AudioSource? = nil) -> [Entry] {
         var mixEntry: [Entry] = []
-        if case .mix(let mode, let ids) = chosen {
+        var listedMix = lastMix
+        if case .mix = chosen { listedMix = chosen }
+        if let listedMix, case .mix(let mode, let ids) = listedMix {
             let names = ids.map { id in apps.first { $0.bundleID == id }?.name ?? chosenAppName(id) }
-            mixEntry = [Entry(id: chosen.defaultsValue, name: mixName(mode, names), isInput: false)]
+            mixEntry = [Entry(id: listedMix.defaultsValue, name: mixName(mode, names), isInput: false)]
         }
         var appEntries = apps.map { Entry(id: $0.bundleID, name: $0.name, isInput: false) }
         if case .app(let bundleID) = chosen, !appEntries.contains(where: { $0.id == bundleID }) {
