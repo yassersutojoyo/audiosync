@@ -2316,6 +2316,12 @@ The checks for S206 and S207 (`core/tests/render_start.rs`). The capture writes 
 | each_packet_and_gap_fill_is_stamped_as_its_block_closes (`desktop/src/audio/capture.rs`) | S207 |
 | a_period_in_frames_is_rounded_up (`desktop/src/audio/outputs.rs`) | S206 |
 
+### render start: Mac (the logic suite)
+
+| Check | Clauses |
+|---|---|
+| clock trim: a capture 0.1% faster than the device speeds the converter, at 48 and 44.1 kHz | S226, S207 |
+
 ### device volume: core (`cargo test` in `core/`)
 
 The checks for S196, S197 and S201 in the Rust core, test functions with `// covers:` markers (`core/tests/policy_device_volume.rs`). The first row reproduces the quiet MacBook speakers at 13 %.
@@ -2813,6 +2819,7 @@ The Mac (logic suite):
 | airplay remote: an unknown remote code sends nothing | S274 |
 | airplay remote: a remote handed over before the sender stops reaches the now-playing control | S273, S274 |
 | airplay remote: a remote drained after the sender stopped reaches nothing | S273 |
+| airplay remote: a remote's VOLUME event moves only that speaker's row and restores it | S275, S277 |
 
 ### Speaker presets: core and Windows (`cargo test` in `core/` and `desktop/`)
 
@@ -3053,6 +3060,13 @@ The hosts (Windows in `desktop/`, test names as below; the Mac in the logic suit
 | one_airplay2_speaker_failing_leaves_the_others_playing (a password prompt, a PIN pairing and an unreachable speaker; the Windows test adds a wrong password) | S285 |
 | every_airplay_2_speaker_switched_on_plays_and_only_a_17th_or_one_needing_ptp_on_another_network_waits (`desktop/src/adapter.rs`) | S285 |
 | one_airplay_2_speaker_failing_leaves_the_others_playing (`desktop/src/adapter.rs`) | S285 |
+
+The Mac (logic suite):
+
+| Check | Clauses |
+|---|---|
+| airplay latency: a new L re-times the local outputs, keeps the adjustment | S281, S178, S177 |
+| airplay latency: beside a Cast speaker the local outputs wait for the longer of L and its wait | S281 |
 
 The Mac logic suite has these four as "airplay latency: …" checks. The sender reports both wait reasons of S285 (AirPlay spec P204 and P205), and both hosts check them: a 17th speaker waits as too many AirPlay 2 speakers, and a receiver on another PTP network waits with that reason.
 

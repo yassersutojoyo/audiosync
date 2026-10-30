@@ -4182,6 +4182,38 @@ do {
             == "[AudioSync] native AirPlay: Z9 warning: JackDisconnected",
           "native airplay: volume and warning log lines")
 
+    // covers: S275, S277
+    // The core decides a remote's step and its mute memory and reports the result as a VOLUME event
+    // (core/src/ffi/airplay.rs); the Mac stores what that event carries, as AppDelegate+NativeAirPlay does.
+    do {
+        var remotes = NativeAirPlayModel()
+        for (id, name) in [("A1", "Kitchen"), ("B2", "Loft")] {
+            remotes.apply(.appeared(receiver(id, name, .available)))
+            remotes.added(id)
+        }
+        let master = 80.0
+        var own = ["native:A1": 40.0, "native:B2": 60.0]
+        var held: [String: Double] = [:]
+        func take(_ event: NativeSpeakerEvent) {
+            guard case .volumeChanged(let id, let position, let level)? = remotes.apply(event) else { return }
+            own[id] = position
+            held[id] = AirPlayDeviceLevel.held(level: level, zone: 100, master: master)
+        }
+        func row(_ id: String) -> Double {
+            AirPlayDeviceLevel.row(own: own[id] ?? .nan, zone: 100, master: master, held: held[id])
+        }
+        // Own 40 at master 80 shows row 32; VolumeUp sends row 37 and stores own 37 / 0.8.
+        let before = (row("native:A1"), row("native:B2"))
+        take(.volume(id: "A1", position: 46.25, level: 37))
+        let up = (row("native:A1"), row("native:B2"))
+        take(.volume(id: "A1", position: 0, level: 0))
+        let muted = row("native:A1")
+        take(.volume(id: "A1", position: 46.25, level: 37))
+        check(before == (32, 48) && up == (37, 48) && muted == 0 && row("native:A1") == 37 && row("native:B2") == 48,
+              "airplay remote: a remote's VOLUME event moves only that speaker's row and restores it",
+              "\(before), up \(up), muted \(muted), back \(row("native:A1"))")
+    }
+
     check(!PtpPortNotice.shown(portsTaken: false, played: false, timingRows: 2)
             && PtpPortNotice.shown(portsTaken: true, played: false, timingRows: 0)
             && !PtpPortNotice.shown(portsTaken: true, played: true, timingRows: 0)
@@ -7328,6 +7360,30 @@ do {
               "local delay: the Mac's AirPlay wait takes no source input",
               "\(String(describing: wait))")
     }
+    // covers: S281, S178, S177
+    // What the host runs on the sender's new L_s (latencyChanged): retimeLocalOutputs builds the hold-backs from
+    // nativeSenderLatencyMs and networkWaitMs, and the field shows airPlayLatencyMs; both need a running engine,
+    // so their parts are composed here.
+    do {
+        var sender = NativeAirPlayModel()
+        let delay = AirPlayDelay(adjustmentMs: 250)
+        func latency() -> Double { delay.latencyMs(senderMs: sender.latencyMs + sender.receiverLatency.estimateMs) }
+        let first = sender.apply(.timeline(latencyMs: 1750, restarted: false))
+        let applied = holds([r, usb, bt], airPlay: true, l: latency())
+        let raised = sender.apply(.timeline(latencyMs: 2250, restarted: false))
+        let l = latency()
+        let calls = LocalDelay.retimes(applied: applied, holdBacks: holds([r, usb, bt], airPlay: true, l: l))
+        check(first == .latencyChanged && raised == .latencyChanged && l == 2500 && delay.adjustmentMs == 250
+                && calls == [r: 2500, usb: 2650, bt: 2250],
+              "airplay latency: a new L re-times the local outputs, keeps the adjustment",
+              "L \(l), \(calls)")
+        let beside = CastModel.networkWaitMs(airPlay: l, cast: 3000)
+        let below = CastModel.networkWaitMs(airPlay: l, cast: 2200)
+        check(beside == 3000 && below == 2500
+                && holds([r, usb, bt], airPlay: true, l: beside ?? 0) == [r: 3000, usb: 3150, bt: 2750],
+              "airplay latency: beside a Cast speaker the local outputs wait for the longer of L and its wait",
+              "\(String(describing: beside)), \(String(describing: below))")
+    }
 
     // S177: the running renderers whose hold-back changed get it, the others no call.
     let at2000 = holds([r, usb, bt], airPlay: true, l: 2000)
@@ -8789,6 +8845,38 @@ do {
         } else {
             check(false, name, "the core's renderer could not be made")
         }
+    }
+
+    // covers: S226, S207
+    // The Windows twin is each_callback_reads_on_the_stamps_clock_so_the_trim_follows_the_capture.
+    // The ring stamps each write on the core's clock and the timed render reads on it; the output
+    // time is the host clock plus a lead, as the render callback's fallback gives it.
+    do {
+        let name = "clock trim: a capture 0.1% faster than the device speeds the converter, at 48 and 44.1 kHz"
+        var sped: [Int64] = []
+        for deviceRate in [48_000, 44_100] {
+            guard let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
+                  let renderer = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: Double(deviceRate),
+                                              channels: 2, gain: 1) else { continue }
+            renderer.setDelay(ms: 100)
+            let history = [Float](repeating: 0.5, count: 4_800 * 2)
+            history.withUnsafeBufferPointer { ring.write(interleaved: $0.baseAddress!, frames: 4_800) }
+            let period = deviceRate / 100
+            var out = [Float](repeating: 0, count: period * 2)
+            var owed = 0.0
+            for _ in 0..<500 {
+                owed += Double(period) * 48_000 / Double(deviceRate) * 1.001
+                let frames = Int(owed.rounded(.down))
+                owed -= Double(frames)
+                let block = [Float](repeating: 0.5, count: frames * 2)
+                block.withUnsafeBufferPointer { ring.write(interleaved: $0.baseAddress!, frames: frames) }
+                out.withUnsafeMutableBufferPointer {
+                    renderer.render(into: $0.baseAddress!, frames: period, outputTimeNs: HostClock.now() + 5_000_000)
+                }
+            }
+            sped.append(renderer.spedFrames)
+        }
+        check(sped.count == 2 && sped.allSatisfy { $0 > 0 }, name, "sped frames \(sped)")
     }
 
     // S186: a source change rebuilds only the capture under the
