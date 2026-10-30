@@ -315,6 +315,19 @@ extension CastDeviceChange {
         default: return nil
         }
     }
+
+    var logLine: String {
+        func describe(_ d: CastDevice, _ offset: Double?) -> String {
+            "\(d.name) (\(d.id))" + (d.model.isEmpty ? "" : ", \(d.model)") + (d.group ? ", a group" : "")
+                + (d.offline ? ", offline" : "") + (offset.map { ", offset \(Int($0)) ms" } ?? "")
+        }
+        switch self {
+        case .appeared(let d, let offset, let former):
+            return "appeared: " + describe(d, offset) + (former.map { ", was \($0)" } ?? "")
+        case .changed(let d, let offset): return "changed: " + describe(d, offset)
+        case .gone(let id): return "gone: \(id)"
+        }
+    }
 }
 
 /// The device the user selected, or none, as the sender is told of it (C108).

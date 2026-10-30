@@ -9183,7 +9183,7 @@ do {
         guard let answer = AppLifecycle.sourceQuit(report, source: source ?? music, setting: setting) else { return "keep" }
         return "\(answer.action) \(answer.bundleID)"
     }
-    // covers: S164 (only the source app's own quit ends an app source)
+    // covers: S164 (only the source app's own quit ends an app source), S142 (the stop; AppDelegate posts the notice)
     let musicQuit = Report.terminated(bundleID: "com.apple.Music", streaming: true)
     check(quit(musicQuit) == "stop com.apple.Music",
           "EC6 app quit: the source app quitting while streaming stops the session", quit(musicQuit))
@@ -10956,6 +10956,7 @@ do {
               "cast diagnostics: the first line shows the underrun silence counted so far", first)
         let quiet = diagnostics(7, 960)
         let more = diagnostics(7, 2_880)
+        // covers: C78
         check(quiet.hasSuffix("silence 0 frames since the previous line")
                 && more.hasSuffix("silence 1920 frames since the previous line"),
               "cast diagnostics: later lines show only the new underrun silence", quiet + " | " + more)
@@ -11056,6 +11057,16 @@ do {
             && CastRow(status: .playing, muted: false, volumeFixed: false, group: nil).offersMute
             && !CastRow(status: .idle, muted: false, volumeFixed: false, group: nil).offersMute,
           "cast: a fixed-volume row offers no Mute")
+}
+
+// covers: C13 (the model name in the Mac's discovery line, left out when missing)
+do {
+    let audio = CastDeviceChange.changed(CastDevice(id: "K1", name: "Kitchen", model: "Chromecast Audio"), offsetMs: nil)
+    let unnamed = CastDeviceChange.changed(CastDevice(id: "K1", name: "Kitchen"), offsetMs: nil)
+    check(audio.logLine == "changed: Kitchen (K1), Chromecast Audio",
+          "cast discovery: the debug line names the device's model", audio.logLine)
+    check(unnamed.logLine == "changed: Kitchen (K1)",
+          "cast discovery: a device without a model gets no model in its debug line", unnamed.logLine)
 }
 
 // MARK: Google Cast groups: one speaker row, its members from the session (C89 to C102)

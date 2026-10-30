@@ -72,7 +72,7 @@ extension AppDelegate {
         for sent in changes {
             let change = castModel.listed(sent)
             if let id = castModel.takeCopiedOffset() { castSender?.setOffset(id, ms: 0) }
-            DebugTrace.log("[AudioSync] Cast discovery: " + Self.castLogLine(change))
+            DebugTrace.log("[AudioSync] Cast discovery: " + change.logLine)
             let name = castName(change.id)   // read before the change takes the row away
             if case .turnedOff(let id, let problem?)? = castModel.apply(change) {
                 DebugTrace.log("[AudioSync] Cast: \(id) left the list, so it is off")
@@ -386,19 +386,6 @@ extension AppDelegate {
 
     private func castLabel(_ id: String) -> String {
         castModel.devices[id].map { "\($0.name) (\(id))" } ?? id
-    }
-
-    private static func castLogLine(_ change: CastDeviceChange) -> String {
-        func describe(_ d: CastDevice, _ offset: Double?) -> String {
-            "\(d.name) (\(d.id))" + (d.model.isEmpty ? "" : ", \(d.model)") + (d.group ? ", a group" : "")
-                + (d.offline ? ", offline" : "") + (offset.map { ", offset \(Int($0)) ms" } ?? "")
-        }
-        switch change {
-        case .appeared(let d, let offset, let former):
-            return "appeared: " + describe(d, offset) + (former.map { ", was \($0)" } ?? "")
-        case .changed(let d, let offset): return "changed: " + describe(d, offset)
-        case .gone(let id): return "gone: \(id)"
-        }
     }
 
     private func castLogLine(_ event: CastEvent) -> String? {
