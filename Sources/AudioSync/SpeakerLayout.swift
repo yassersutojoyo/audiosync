@@ -32,6 +32,17 @@ enum SpeakerTag: Equatable {
     /// under "This Mac" without a tag; everything else is a connected speaker.
     var isThisMac: Bool { self == .builtIn }
 
+    /// While an AirPlay speaker's slider is dragged, levels read back from it
+    /// are ignored; a local output's volume is settled when its drag ends.
+    func volumeDragging(_ id: String, _ dragging: Bool, airPlay: (String, Bool) -> Void,
+                        localSettled: (String) -> Void) {
+        switch self {
+        case .airplay: airPlay(id, dragging)
+        case .cast: break
+        default: if !dragging { localSettled(id) }
+        }
+    }
+
     /// The small SF Symbol after a connected speaker's name. Bluetooth has no
     /// SF Symbol: `SpeakerTypeIcon` draws the Bluetooth rune instead
     /// (`BluetoothRune` in MenuBar.swift); this fallback is never shown for it.

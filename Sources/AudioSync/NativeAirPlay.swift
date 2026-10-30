@@ -646,9 +646,15 @@ final class NativeAirPlay {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.apply(changes, events, sounding: sounding)
-            guard self.active else { return }
-            for command in remotes { self.onRemote?(command) }
+            self.handOver(remotes)
         }
+    }
+
+    /// Gives `onRemote` the controls a speaker's remote asked for, none once
+    /// the sender stopped (main queue).
+    func handOver(_ remotes: [NowPlayingMonitor.Command]) {
+        guard active else { return }
+        for command in remotes { onRemote?(command) }
     }
 
     /// The now-playing control a remote event asks for.

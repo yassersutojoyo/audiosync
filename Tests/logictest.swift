@@ -1036,6 +1036,23 @@ do {
     check(none.thisMac.isEmpty && none.connected.isEmpty, "layout: no speakers, empty lists")
 }
 
+// MARK: Volume slider drags: an AirPlay row ignores its read-back levels while dragged (SpeakerTag.volumeDragging)
+// covers: S271 (a level read back is ignored while the user drags that speaker's own slider)
+do {
+    func drag(_ tag: SpeakerTag, _ id: String) -> [String] {
+        var calls: [String] = []
+        for dragging in [true, false] {
+            tag.volumeDragging(id, dragging, airPlay: { calls.append("airplay \($0) \($1)") },
+                               localSettled: { calls.append("settled \($0)") })
+        }
+        return calls
+    }
+    let den = drag(.airplay, "native:den")
+    check(den == ["airplay native:den true", "airplay native:den false"],
+          "volume drag: an AirPlay row's slider drag reaches the dragging hook with its id at the first move and at release",
+          "\(den)")
+}
+
 // MARK: Equalizer presets (the core runs the filters; core/tests/eq.rs)
 check(Equalizer.presets.allSatisfy { $0.gains.count == Equalizer.frequencies.count }, "eq: every preset has 10 bands")
 check(Equalizer.presets.map(\.id) == Equalizer.PresetID.allCases, "eq: one preset per id, in menu order")
@@ -3492,11 +3509,11 @@ do {
         // covers: S223
         check(c.apply(.pairingFailed(id: "B2", wrongPin: false, .airPlay2Only, detail: "")) == .turnOff("native:B2", .needsAirPlay2),
               "native pairing: a pairing failed as AirPlay 2 only turns the speaker off as needing AirPlay 2")
-        // NativeAirPlay.swift needs the core to build, so the suite reads how it decodes the event.
-        let decoding = ((try? String(contentsOfFile: "Sources/AudioSync/NativeAirPlay.swift", encoding: .utf8)) ?? "")
-            .components(separatedBy: "case ASC_AIRPLAY_EVENT_PAIRING_FAILED:").dropFirst().first?
-            .components(separatedBy: "case ASC_AIRPLAY_EVENT_PAIRED:").first ?? ""
-        check(decoding.contains("reason: raw.unsupported"),
+        var rawFailure = AscAirPlayEvent()
+        rawFailure.kind = ASC_AIRPLAY_EVENT_PAIRING_FAILED
+        rawFailure.error = ASC_AIRPLAY_ERROR_UNSUPPORTED
+        rawFailure.unsupported = ASC_AIRPLAY_REASON_AIRPLAY2_ONLY
+        check(NativeAirPlay.event(rawFailure) == .pairingFailed(id: "", wrongPin: false, .airPlay2Only, detail: ""),
               "native airplay: a pairing failure keeps its unsupported reason")
 
         // An Apple TV that also has a password.
@@ -5021,6 +5038,27 @@ do {
           "now playing: a second play-pause shows playing again and restarts the settle time")
 }
 
+// MARK: Remote commands from AirPlay speakers reach the now-playing control (NativeAirPlay.remote, handOver)
+// covers: S273, S274 (a speaker's play-pause, next and previous, only while the sender runs)
+do {
+    check(NativeAirPlay.remote(ASC_AIRPLAY_REMOTE_PLAY_PAUSE) == .playPause
+            && NativeAirPlay.remote(ASC_AIRPLAY_REMOTE_NEXT) == .next
+            && NativeAirPlay.remote(ASC_AIRPLAY_REMOTE_PREVIOUS) == .previous,
+          "airplay remote: play-pause, next and previous go to the now-playing control as they are")
+    check(NativeAirPlay.remote(0) == nil && NativeAirPlay.remote(99) == nil,
+          "airplay remote: an unknown remote code sends nothing")
+    let sender = NativeAirPlay(onChange: { _ in }, onEvent: { _, _ in })
+    var sent: [NowPlayingMonitor.Command] = []
+    sender.onRemote = { sent.append($0) }
+    sender.handOver([.next, .playPause])
+    check(sent == [.next, .playPause],
+          "airplay remote: a remote handed over before the sender stops reaches the now-playing control", "\(sent)")
+    sender.shutdown()
+    sender.handOver([.previous])
+    check(sent == [.next, .playPause],
+          "airplay remote: a remote drained after the sender stopped reaches nothing", "\(sent)")
+}
+
 // MARK: Explicit pause of the AirPlay speakers (P213, ExplicitPause in NowPlaying.swift)
 // covers: S292 (the Mac host)
 do {
@@ -5929,6 +5967,20 @@ do {
     let unplugged = zonePlan([local(true), local(true, listed: false)], streaming: true)
     check(unplugged.action == .turnOff && unplugged.steps == [.off, .off],
           "zones: a zone switched off turns its unplugged members off too, so they stay off when plugged back")
+
+    // covers: S247 (a member its pair holds: off the rows, as memberState gives it, so the core plans it absent)
+    func held(_ on: Bool) -> ZoneMemberFacts { ZoneMemberFacts(kind: .airplay2, listed: false, on: on, inTarget: true) }
+    let heldOn = zonePlan([held(true), local(false)], streaming: true)
+    check(heldOn.action == .turnOn && heldOn.steps == [.absent, .on],
+          "zones: a click switches on only the plain speaker beside a member its pair holds", "\(heldOn)")
+    let heldOff = zonePlan([held(false), local(true)], streaming: true)
+    check(heldOff.action == .turnOff && heldOff.steps == [.absent, .off]
+            && zonePlan([held(true), local(true)], streaming: true).steps == [.absent, .off],
+          "zones: a member its pair holds counts toward neither on nor off and the click leaves it alone", "\(heldOff)")
+    let zoneRows = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Zones.swift", encoding: .utf8)) ?? ""
+    check(UIStrings().zoneMemberInTarget("Den Pair") == "Plays as part of Den Pair"
+            && zoneRows.contains("note = text.zoneMemberInTarget(targetName)"),
+          "zones: a member its pair holds says it plays as part of the pair")
 
     // covers: S259, S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel)
     let presetText = UIStrings()

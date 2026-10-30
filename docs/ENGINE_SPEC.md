@@ -734,6 +734,9 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | zones: an absent member shows its last listed name after a reload, and zones stored before it load unchanged | S286 |
 | zones: an absent member reads its kept name, a listed one its name now, and a name alone re-applies no volume | S286 |
 | zones: an address-added Cast member keeps its announced name once it leaves the list | S286 |
+| zones: a click switches on only the plain speaker beside a member its pair holds | S247 |
+| zones: a member its pair holds counts toward neither on nor off and the click leaves it alone | S247 |
+| zones: a member its pair holds says it plays as part of the pair | S247 |
 | speaker IDs: a bundled-engine ID kept only in a preset moves too | S204, S254 |
 | speaker IDs: speaker ID migration renames preset members, and a preset already holding the new key keeps it | S204, S254 |
 | presets: an overlapping group becomes a preset with its full members | S248, S254 |
@@ -818,6 +821,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | layout: connected speakers sort by name, ignoring case, numbers in order, ties stable | S152, S147 |
 | layout: AirPlay and local speakers share one list | S152 |
 | layout: no speakers, empty lists | S152 |
+| volume drag: an AirPlay row's slider drag reaches the dragging hook with its id at the first move and at release | S271 |
 | eq: every preset has 10 bands | S33 |
 | eq: one preset per id, in menu order | S33 |
 | eq: the app names every preset the core has | S33 |
@@ -2578,6 +2582,15 @@ The checks for S273 to S279 run against the core's decision with a fake now-play
 | every_remote_command_gives_one_log_line | S279 |
 | a_remote_transport_goes_to_the_now_playing_control (`desktop/src/audio/airplay.rs`) | S274 |
 | a_remote_control_goes_to_the_session_track_info_follows (`desktop/src/audio/now_playing.rs`) | S274 |
+
+The Mac (logic suite):
+
+| Check | Clauses |
+|---|---|
+| airplay remote: play-pause, next and previous go to the now-playing control as they are | S274 |
+| airplay remote: an unknown remote code sends nothing | S274 |
+| airplay remote: a remote handed over before the sender stops reaches the now-playing control | S273, S274 |
+| airplay remote: a remote drained after the sender stopped reaches nothing | S273 |
 
 ### Speaker presets: core and Windows (`cargo test` in `core/` and `desktop/`)
 

@@ -466,13 +466,9 @@ final class AppModel: ObservableObject {
         AccessibilityNotification.Announcement(text.zoneDeleted(zone.name)).post()
     }
 
-    /// While an AirPlay speaker's slider is dragged, levels read back from it are ignored.
     func setVolumeDragging(_ speaker: Speaker, _ dragging: Bool) {
-        switch speaker.tag {
-        case .airplay: actions.setAirPlayVolumeDragging(speaker.id, dragging)
-        case .cast: break
-        default: if !dragging { actions.localVolumeSettled(speaker.id) }
-        }
+        speaker.tag.volumeDragging(speaker.id, dragging, airPlay: actions.setAirPlayVolumeDragging,
+                                   localSettled: actions.localVolumeSettled)
     }
 
     func setVolume(_ speaker: Speaker, _ position: Double) {
