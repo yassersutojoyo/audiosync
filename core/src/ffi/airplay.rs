@@ -8140,20 +8140,21 @@ mod tests {
         eprintln!("CELL {id} {measured}");
     }
 
-    /// Waits for the television to get `db` as its latest volume set.
+    /// Waits for the television to get `db` as its latest volume set and its level.
     fn lands(receiver: &Loopback, db: f64) {
         let landed = || {
             receiver
                 .volume_sets()
                 .last()
                 .is_some_and(|&got| same_db(got, db))
+                && receiver.level().is_some_and(|got| same_db(got, db))
         };
         assert!(
             wait_for(landed),
-            "{db} dB never landed: {:?}",
-            receiver.volume_sets()
+            "{db} dB never landed: {:?}, level {:?}",
+            receiver.volume_sets(),
+            receiver.level()
         );
-        assert!(receiver.level().is_some_and(|got| same_db(got, db)));
     }
 
     /// Waits for a volume set after the first `before` to bring `db`. A set
@@ -8166,6 +8167,25 @@ mod tests {
             receiver.volume_sets()
         );
         lands(receiver, db);
+    }
+
+    #[test]
+    fn lands_waits_for_the_level_not_only_the_request() {
+        let receiver = Loopback::television();
+        receiver.press(-30.0);
+        receiver
+            .requests
+            .lock()
+            .unwrap()
+            .push((Method::SetParameter, "volume: -24.000000\r\n".into()));
+        // `serve` keeps the request before it writes the level; this is that late write.
+        let level = receiver.level.clone();
+        let late = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            *level.lock().unwrap() = Some(-24.0);
+        });
+        lands(&receiver, -24.0);
+        late.join().unwrap();
     }
 
     // covers: S290, S291
