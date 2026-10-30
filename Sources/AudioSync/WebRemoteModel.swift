@@ -324,7 +324,8 @@ enum RemoteAction: Equatable {
     case selectSource(pickerID: String)
 
     /// The switch first, then the volume,
-    /// then the delay; a value already in place changes nothing. A source
+    /// then the delay; a switch or delay already in place changes nothing, and
+    /// a volume moves the row even when it equals the shown number (S348). A source
     /// pick needs a listed source other than the current one. Nothing while
     /// calibrating: the page's snapshot can lag behind a run (S258).
     static func plan(_ command: RemoteCommand, rows: [RemoteRow], zones: [RemoteZoneRow] = [],
@@ -357,7 +358,7 @@ enum RemoteAction: Equatable {
             if let on, on != row.on {
                 actions.append(.setEnabled(id: id, on: on))
             }
-            if let volume, row.volumeAdjustable, RemoteSnapshot.volume(volume) != row.volume {
+            if let volume, row.volumeAdjustable {
                 actions.append(.setVolume(id: id, position: RemoteSnapshot.volume(volume)))
             }
             if let delayMs, let clamp = row.delay.clamp, let ms = clamp(delayMs.rounded()), ms != row.delay.ms {

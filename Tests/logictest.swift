@@ -11644,6 +11644,13 @@ do {
     let masterClamped = plan("{\"type\":\"master\",\"volume\":150}") == [.setMaster(position: 100)]
     // covers: S76 (the master volume), S348
     check(offFirst && masterClamped, "web remote: a speaker turned off keeps the phone's volume; the master volume is clamped")
+    // covers: S348
+    check(plan("{\"type\":\"speaker\",\"id\":\"hp\",\"volume\":30}") == [.setVolume(id: "hp", position: 30)],
+          "web remote: an AirPlay volume equal to the shown row still moves the row")
+    // covers: S348
+    check(plan("{\"type\":\"speaker\",\"id\":\"usb\",\"volume\":40}") == [.setVolume(id: "usb", position: 40)]
+            && plan("{\"type\":\"speaker\",\"id\":\"cast\",\"volume\":50}") == [.setVolume(id: "cast", position: 50)],
+          "web remote: a local or Cast volume equal to the shown row still moves it, as on Windows")
     var volumeLog = RemoteVolumeLog()
     let steps = (0..<5).map { _ in volumeLog.step("usb") }
     let logged = steps.filter { volumeLog.isLast("usb", $0) }.count
