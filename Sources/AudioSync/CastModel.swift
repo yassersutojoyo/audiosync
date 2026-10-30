@@ -348,6 +348,8 @@ struct CastRow: Equatable {
     var volumeStep = 0.0
     /// A session runs or starts: the volume, Mute and Resync reach the device.
     var live: Bool { status != .idle }
+    /// The row menu and the button under the volume offer Mute; a fixed volume has none (C68).
+    var offersMute: Bool { live && !volumeFixed }
 }
 
 /// What the speaker list says about Google Cast while it lists none.

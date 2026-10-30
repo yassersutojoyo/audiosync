@@ -1220,8 +1220,10 @@ struct SpeakerRow: View {
         Button(t.renameSpeaker) { model.startRename(speaker) }
         if let cast = speaker.cast {
             // A Cast speaker never turns itself on: the menu has its session's actions.
-            if cast.live {
+            if cast.offersMute {
                 Button(cast.muted ? t.castUnmute : t.castMute) { model.actions.setCastMuted(speaker.id, !cast.muted) }
+            }
+            if cast.live {
                 Button(t.castResync) { model.actions.resyncCast(speaker.id) }
             }
             if cast.removable { Button(t.castRemove) { model.actions.removeCastAddress(speaker.id) } }
@@ -1278,11 +1280,13 @@ struct SpeakerRow: View {
         model.text.volumeLocked(enabled: speaker.enabled, cast: speaker.cast)
     }
 
-    /// Mute and Resync under a Cast speaker's volume while it connects or plays.
+    /// Resync, and Mute unless the volume is fixed, under a Cast speaker's volume while it connects or plays.
     private func castButtons(_ cast: CastRow, _ t: UIStrings) -> some View {
         HStack(spacing: 14) {
-            castButton(cast.muted ? t.castUnmute : t.castMute, help: cast.muted ? t.castUnmuteHelp : t.castMuteHelp, t) {
-                model.actions.setCastMuted(speaker.id, !cast.muted)
+            if cast.offersMute {
+                castButton(cast.muted ? t.castUnmute : t.castMute, help: cast.muted ? t.castUnmuteHelp : t.castMuteHelp, t) {
+                    model.actions.setCastMuted(speaker.id, !cast.muted)
+                }
             }
             castButton(t.castResync, help: t.castResyncHelp, t) { model.actions.resyncCast(speaker.id) }
         }

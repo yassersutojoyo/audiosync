@@ -10808,6 +10808,11 @@ do {
             && t.castNote(CastRow(status: .playing, muted: true, volumeFixed: false, group: nil)) == "Muted on the speaker"
             && t.castNote(CastRow(status: .playing, muted: false, volumeFixed: false, group: nil)) == nil,
           "cast: the note under a speaker's name")
+    // covers: C68
+    check(!CastRow(status: .playing, muted: false, volumeFixed: true, group: nil).offersMute
+            && CastRow(status: .playing, muted: false, volumeFixed: false, group: nil).offersMute
+            && !CastRow(status: .idle, muted: false, volumeFixed: false, group: nil).offersMute,
+          "cast: a fixed-volume row offers no Mute")
 }
 
 // MARK: Google Cast groups: one speaker row, its members from the session (C89 to C102)
