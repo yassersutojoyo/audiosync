@@ -706,7 +706,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 
-    /// Quit (S110, S186): stop the session, letting the outputs and the
+    /// Quit (S186, S351): stop the session, letting the outputs and the
     /// AirPlay inputs fade out (at most 0.5 s), then tear AudioSync's own
     /// AirPlay sender down, which ends every speaker's session, while the
     /// Cast sender's teardown runs beside them. An exit

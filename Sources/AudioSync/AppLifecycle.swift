@@ -320,7 +320,7 @@ enum AppLifecycle {
 
 /// The way out on one of `AppLifecycle.exitSignals` (S111). The first
 /// signal runs the steps a Quit runs (every output and the AirPlay inputs
-/// fade out, then AudioSync's own AirPlay sender tears down; S110, S186) and
+/// fade out, then AudioSync's own AirPlay sender tears down; S186) and
 /// exits with its status once they are done, or once `limit` has passed,
 /// whichever comes first, so steps that never get to run or never end (a main
 /// queue held by something else, a teardown that hangs) can't keep AudioSync
@@ -392,7 +392,7 @@ final class SignalQuit: @unchecked Sendable {
     }
 }
 
-/// Quit's steps (S110), run once, whichever of Quit, an exit signal (S111)
+/// Quit's steps, run once, whichever of Quit, an exit signal (S111)
 /// and the end of the user session (S351) asks first. Quit and a logout,
 /// shutdown or restart end in AppKit's termination, which posts
 /// `willTerminateNotification` where a delegate's `applicationWillTerminate`

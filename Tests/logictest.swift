@@ -8987,7 +8987,7 @@ do {
               "fade: a lost device is stopped at once, without a fade", "\(bench.events)")
     }
 
-    // S110, S186: quitting waits for the fades, well inside the 5 s a quit may take.
+    // S186: quitting waits for the fades, well inside the 5 s a quit may take.
     check(OutputRetirement.capSeconds == 0.5 && OutputRetirement.capSeconds <= 5,
           "fade: the fade cap is 500 ms and fits in the 5 s quit budget",
           "\(OutputRetirement.capSeconds) s")
