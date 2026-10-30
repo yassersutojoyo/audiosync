@@ -1343,6 +1343,7 @@ check(SpeakerAvailability(.code(password: false), everyTime: true, on: true) == 
         && SpeakerAvailability(.code(password: false), everyTime: false, on: false) == .needsCode
         && SpeakerAvailability(.open, everyTime: false, on: false) == .open,
       "availability: asks for a code every time while it asks or is off; paired for this run and on, it is open")
+// covers: S356
 do {
     let pinOff = UIStrings().airPlayTurnedOff(name: "Den", reason: .needsPin)
     let passwordOff = UIStrings().airPlayTurnedOff(name: "Den", reason: .needsPassword)
@@ -2542,6 +2543,7 @@ do {
 }
 
 // MARK: Calibration fill: a quiet tap still carries the test signal (CalibrationTap.swift)
+// covers: S335
 do {
     // Calibrate All on All System Audio with nothing playing failed every time: the
     // signal rides on captured blocks, and a tap whose source is silent delivers none.
@@ -2720,6 +2722,7 @@ do {
           "capture channels: NaN and infinity pass through untouched (the stages after capture handle them)")
     let long = (0..<10_000).flatMap { [Float($0), -Float($0)] }
     let blocked = stereo([(2, long)])
+    // covers: S16
     check(blocked.blocks == [4096, 4096, 1808] && blocked.samples == long,
           "capture channels: a long callback is delivered in order, in blocks of at most 4096 frames",
           "\(blocked.blocks)")
@@ -2733,6 +2736,7 @@ do {
                                   offset: blocked.blocks[..<index].reduce(0, +))
     }
     let step = stampGate.ticks(frames: 4096)
+    // covers: S16
     check(step > 0 && starts.count == 3 && starts[1] &- starts[0] == step && starts[2] &- starts[1] == step
             && starts[2] &+ stampGate.ticks(frames: 1808) == callbackNow
             && starts[0] == callbackNow &- stampGate.ticks(frames: 10_000),
@@ -4211,6 +4215,7 @@ do {
     volumes.added("A1")
     check(volumes.apply(.volume(id: "A1", position: 80, level: 50.4)) == .volumeChanged("native:A1", 80, 50.4),
           "native airplay: a volume changed on the speaker moves its slider")
+    // covers: S358
     check(volumes.apply(.warning(id: "A1", ptpPortsTaken: true, detail: "PtpUnavailable")) == .ptpPortsTaken
             && volumes.apply(.warning(id: "A1", ptpPortsTaken: false, detail: "JackDisconnected")) == nil,
           "native airplay: of the warnings, only a PTP port clash becomes a notice")
@@ -4252,6 +4257,7 @@ do {
               "\(before), up \(up), muted \(muted), back \(row("native:A1"))")
     }
 
+    // covers: S358
     check(!PtpPortNotice.shown(portsTaken: false, played: false, timingRows: 2)
             && PtpPortNotice.shown(portsTaken: true, played: false, timingRows: 0)
             && !PtpPortNotice.shown(portsTaken: true, played: true, timingRows: 0)
@@ -4259,45 +4265,61 @@ do {
           "ptp notice: shows once the ports are reported taken, until a speaker plays while no row needs PTP timing")
     var ptp = PtpPortNotice()
     ptp.turnedOff("native:H1", timing: true)
+    // covers: S358
     check(!ptp.shown, "ptp notice: a speaker off for PTP timing with no port clash reported says nothing about ports")
     ptp.reported()
     ptp.playing("native:N1")
+    // covers: S358
     check(ptp.shown, "ptp notice: an NTP speaker that plays leaves it while a PTP speaker is off for timing")
     ptp.turnedOff("native:H1", timing: false)
+    // covers: S358
     check(!ptp.shown, "ptp notice: it clears once no row is off for PTP timing")
     ptp.turnedOff("native:H2", timing: true)
+    // covers: S358
     check(ptp.shown, "ptp notice: it comes back when another speaker goes off for PTP timing, though reported once")
     ptp.playing("native:H2")
+    // covers: S358
     check(!ptp.shown, "ptp notice: the PTP speaker playing clears it")
     ptp.turnedOff("native:H1", timing: true)
     ptp.listed(["native:N1"])
+    // covers: S358
     check(!ptp.shown && ptp.timingOff.isEmpty, "ptp notice: a row that leaves the list takes its timing reason along")
 
+    // covers: S358
     check(volumes.apply(.ptpFree(id: "A1")) == .ptpPortsFree
             && NativeSpeakerEvent.ptpFree(id: "A1").logLine(name: names)
             == "[AudioSync] native AirPlay: Kitchen (A1) bound the PTP ports, which are free again",
           "native airplay: a PTP bind after the clash says the ports are free")
     var episode = PtpPortNotice()
     episode.reported()
+    // covers: S358
     check(episode.shown && episode.raises == 1, "ptp notice: the report raises it")
     episode.playing("native:N1")
+    // covers: S358
     check(!episode.shown, "ptp notice: an NTP speaker that plays clears it while no row is off for PTP timing")
     episode.turnedOff("native:H1", timing: true)
+    // covers: S358
     check(episode.shown && episode.raises == 2,
           "ptp notice: a PTP speaker refused while the ports are taken brings it back")
     episode.playing("native:N2")
+    // covers: S358
     check(episode.shown && episode.raises == 2,
           "ptp notice: a non-PTP speaker that starts playing while the ports stay taken leaves it shown")
     episode.turnedOff("native:H1", timing: true)
+    // covers: S358
     check(episode.raises == 2, "ptp notice: the same speaker refused again in one episode raises nothing")
     episode.turnedOff("native:H2", timing: true)
+    // covers: S358
     check(episode.raises == 3, "ptp notice: another speaker refused in the episode raises it again")
     episode.portsFree()
+    // covers: S358
     check(!episode.shown, "ptp notice: a PTP bind ends the episode and clears it")
     episode.turnedOff("native:H1", timing: true)
+    // covers: S358
     check(!episode.shown && episode.raises == 3, "ptp notice: a refusal with no clash reported raises nothing")
     episode.reported()
     episode.turnedOff("native:H1", timing: true)
+    // covers: S358
     check(episode.shown && episode.raises == 5,
           "ptp notice: a new report starts a new episode, in which the same speaker raises it again")
 }
@@ -5492,6 +5514,7 @@ do {
 }
 
 // MARK: Track info — a player with no track is not an error
+// covers: S336
 check(NowPlayingMonitor.meansNoTrack(-1728) && NowPlayingMonitor.meansNoTrack(-1712),
       "AppleScript: no current track (-1728) and a timeout (-1712) read as no track, not logged")
 check(!NowPlayingMonitor.meansNoTrack(-1743) && !NowPlayingMonitor.meansNoTrack(nil)
@@ -5985,6 +6008,7 @@ do {
 }
 
 // MARK: Track progress for receivers that show it: a jump is news, running on isn't (P126)
+// covers: S361
 do {
     typealias Position = NowPlayingMonitor.Position
     let start = Date(timeIntervalSinceReferenceDate: 0), uptime: TimeInterval = 1000   // readings use systemUptime
@@ -6033,6 +6057,7 @@ do {
 }
 
 // MARK: When track info goes to the app's own sender (TrackInfoFeed, the AppDelegate wiring)
+// covers: S361 (all but the artwork wait at the end, which S219 covers)
 do {
     let cover = NSImage(size: NSSize(width: 1, height: 1)), icon = NSImage(size: NSSize(width: 1, height: 1))
     let song = TrackMetadata.Fields(title: "Song", artist: "Band", album: "Record")
@@ -6104,17 +6129,21 @@ do {
     var spotify = TrackInfoFeed()
     let artworkEnds = start + 10 + ReceiverInfo.artworkWait
     step = look(&spotify, song, at: start + 10, artwork: .wait)
+    // covers: S219
     check(step.fields == song && step.picture == nil && step.recheckAt == artworkEnds,
           "track info feed: artwork on its way: the track goes alone and a look is scheduled at the wait's end")
+    // covers: S219
     check(nothing(look(&spotify, song, at: start + 11, artwork: .wait)),
           "track info feed: a look during the artwork wait schedules nothing new")
     spotify.recheckFired(at: artworkEnds)
     step = look(&spotify, song, at: artworkEnds, artwork: .wait)
+    // covers: S219
     check(step.fields == nil && step.picture === icon && step.recheckAt == nil,
           "track info feed: the scheduled look at the wait's end sends AudioSync's icon")
 }
 
 // MARK: Track info wiring (TrackInfoHost): a Now Playing change and a sender start
+// covers: S361
 do {
     final class Host: TrackInfoHost {
         var trackInfoFeed = TrackInfoFeed()
@@ -6854,14 +6883,19 @@ do {
           "scroll fades: no fade height gives no fade")
 
     let tap = StatusItemClick.action
+    // covers: S357
     check(tap(true, nil, 100) == .close, "menu bar icon: a click while the panel is open closes it")
+    // covers: S357
     check(tap(false, nil, 100) == .open, "menu bar icon: a click while the panel is closed opens it")
     // The press on the icon closes the popover before its click arrives; the
     // closing press and the latest press are the same press, read twice.
+    // covers: S357
     check(tap(false, 98.8, 98.805) == .stayClosed,
           "menu bar icon: the click whose press closed the panel leaves it closed, however long it was held")
+    // covers: S357
     check(tap(false, 100, 100.12) == .open,
           "menu bar icon: a quick second click after a press closed the panel opens it")
+    // covers: S357
     check(tap(false, 98, 100) == .open,
           "menu bar icon: a click long after the panel closed under the icon opens it")
     // Clicks 1 to 5 on the icon, 400 ms apart, open and close the panel in
@@ -6882,6 +6916,7 @@ do {
             states.append(shown)
         }
         let how = actionDropped ? "dropped" : "delivered"
+        // covers: S357
         check(states == [true, false, true, false, true],
               "menu bar icon: five clicks open, close, open, close, open (closing click's action \(how))",
               "\(states)")
@@ -6889,12 +6924,18 @@ do {
     // The status item's window in AppKit coordinates, at the top of a 900-point screen.
     let icon = CGRect(x: 1142, y: 876, width: 24, height: 24)
     let pressed = StatusItemClick.pressClosed
+    // covers: S357
     check(pressed(CGPoint(x: 1154, y: 888), icon, 0.05), "menu bar icon: a press on the icon closes the panel")
+    // covers: S357
     check(pressed(CGPoint(x: 1154, y: 900), icon, 0.05),
           "menu bar icon: a press with the pointer pushed against the top of the screen counts")
+    // covers: S357
     check(!pressed(CGPoint(x: 1154, y: 876), icon, 0.05), "menu bar icon: the line below the icon is not on it")
+    // covers: S357
     check(!pressed(CGPoint(x: 700, y: 500), icon, 0.05), "menu bar icon: a press elsewhere is not a press on the icon")
+    // covers: S357
     check(!pressed(CGPoint(x: 1154, y: 888), icon, 3), "menu bar icon: Escape with the pointer resting on the icon is no press")
+    // covers: S357
     check(UIStrings().statusItemValue(running: false, notices: 0) == "Streaming off"
             && UIStrings().statusItemValue(running: true, notices: 2) == "Streaming on, 2 notices",
           "menu bar icon: VoiceOver hears streaming on/off, then the notice count",
@@ -6906,10 +6947,12 @@ do {
             && addRow(false, .noneFound) == .none,
           "menu bar panel: no Add by Address row once speakers are listed or when adding isn't possible")
     let duringClose = StatusItemClick.pressDuringClose
+    // covers: S357
     check(duringClose(30.1, 30.25) && !duringClose(30.25, 30.25) && !duringClose(31, 30.25) && !duringClose(30.1, nil),
           "menu bar icon: only a press while the panel still fades out is ignored, as Outlook does")
     func near(_ a: TimeInterval, _ b: TimeInterval) -> Bool { abs(a - b) < 1e-9 }
     let shrink = PanelQuiet.duration(.close, system: false)
+    // covers: S357
     check(duringClose(30 + shrink / 2, 30 + shrink) && !duringClose(30 + shrink + 0.01, 30 + shrink),
           "menu bar icon: a press is ignored only while the panel shrinks away; right after, it opens it")
 
@@ -6930,6 +6973,7 @@ do {
     check(tops.allSatisfy { $0 == window.maxY },
           "menu bar panel: no run of folds and unfolds moves the top edge under the icon")
     let fold = PanelFold(reduceMotion: false), stillFold = PanelFold(reduceMotion: true)
+    // covers: S357
     check(fold.moves && fold.duration == 0.2 && !stillFold.moves && stillFold.duration == 0,
           "menu bar panel: a zone folds in one 0.2 s motion; with Reduce Motion the panel changes at once")
 
@@ -7059,6 +7103,7 @@ do {
           "menu bar panel: the growth never bounces by half a point, even on a tall panel")
     check(shrinkBack.scale > grow.scale && shrinkBack.scale < 1 && shrinkBack.duration >= 0.12 && shrinkBack.duration <= 0.15,
           "menu bar panel: the close is a quick, small shrink")
+    // covers: S357
     check(!PanelMotion.open(reduceMotion: true).grows && !PanelMotion.close(reduceMotion: true).grows
             && PanelMotion.open(reduceMotion: true).duration > 0,
           "menu bar panel: with Reduce Motion it only fades")
@@ -8132,6 +8177,7 @@ MainActor.assumeIsolated {
 }
 
 // MARK: Delay value — a row's delay value follows every applied delay while its panel stays open (DelayBadge)
+// covers: S221
 do {
     let t = UIStrings()
     let offset = LocalDelay.sanitizedOffset
@@ -8255,6 +8301,7 @@ do {
 }
 
 // MARK: Bluetooth IO buffer switch: AUDIOSYNC_BT_IO_FRAMES, Bluetooth outputs only (BluetoothIOBuffer)
+// covers: S366
 do {
     typealias B = BluetoothIOBuffer
     let bt = kAudioDeviceTransportTypeBluetooth, le = kAudioDeviceTransportTypeBluetoothLE
@@ -10907,6 +10954,7 @@ do {
           "\(reasons)")
     let rows = [CalibrateAllFlow.rowBlocker(nil), CalibrateAllFlow.rowBlocker(.onlyLeftOut),
                 CalibrateAllFlow.rowBlocker(.busy), CalibrateAllFlow.rowBlocker(.notPlaying(.reference))]
+    // covers: S362
     check(rows == [nil, nil, .busy, .notPlaying(.reference)],
           "calibrate all row: only a blocker that keeps the sheet shut dims the row and shows a reason", "\(rows)")
 }
@@ -10925,6 +10973,7 @@ do {
 }
 
 // MARK: A calibration that can't start names only what is off, in the order streaming, the speaker, the reference
+// covers: S362
 do {
     let t = UIStrings()
     func press(streaming: Bool, playing: [String]) -> String {
@@ -11952,6 +12001,7 @@ do {
     _ = m.started(tv, attempt: 9, refusal: ASC_CAST_REFUSED_NONE)
     _ = m.apply(.started(attempt: 9, format: ASC_CAST_FORMAT_WAV))
     _ = m.apply(.volume(attempt: 9, CastVolume(level: 0.4, muted: false, fixed: false)))
+    // covers: C69
     check(m.stepVolume(tv, up: true) == .level(0.4 + CastModel.fallbackVolumeStep)
             && approx(m.volume(of: tv), 45, 1e-9),
           "cast step: a device that reports no step moves by the fallback step, shown at once")
@@ -11961,13 +12011,16 @@ do {
     // covers: C69
     check(downLevel.map { approx($0, 0.4, 1e-9) } == true, "cast step: the fallback step goes down too")
     _ = m.apply(.volume(attempt: 9, CastVolume(level: 0.4, muted: false, fixed: false, step: 0.02)))
+    // covers: C69
     check(m.stepVolume(tv, up: true) == .device(up: true) && approx(m.volume(of: tv), 42, 1e-9),
           "cast step: once the device reports its step, the key sends a step and the slider shows the level it should reach")
+    // covers: C69
     check(m.stepVolume(tv, up: true) == .device(up: true) && approx(m.volume(of: tv), 44, 1e-9),
           "cast step: a second step before the device answers goes on from the level shown")
     _ = m.apply(.volume(attempt: 9, CastVolume(level: 0.43, muted: false, fixed: false, step: 0.02)))
     // covers: C69
     check(approx(m.volume(of: tv), 43, 1e-9), "cast step: the device's volume event replaces the level the step should reach")
+    // covers: C69
     check(m.stepVolume(tv, up: false) == .device(up: false) && approx(m.volume(of: tv), 41, 1e-9),
           "cast step: down by the device's step")
     _ = m.apply(.volume(attempt: 9, CastVolume(level: 1, muted: false, fixed: true, step: 0.02)))
@@ -12131,6 +12184,7 @@ do {
 }
 
 // MARK: Google Cast device memory: saved atomically, read back by a new sender
+// covers: S367
 do {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-cast-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -12153,6 +12207,7 @@ do {
 }
 
 // MARK: Google Cast device memory: a file that doesn't read is kept aside before the first save
+// covers: S367
 do {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-cast-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -13261,6 +13316,7 @@ do {
 }
 
 // MARK: Menu bar panel colors: contrast with the material counted as clear
+// covers: S357
 do {
     typealias RGBA = (r: Double, g: Double, b: Double, a: Double)
     func resolved(_ color: NSColor, dark: Bool) -> RGBA {
@@ -13316,6 +13372,7 @@ do {
 }
 
 // MARK: Hidden speakers — out of every list by key, settings kept, back off when shown
+// covers: S360
 do {
     let t = UIStrings()
     check(HiddenSpeakers.key(id: "BuiltInSpeakerDevice", tag: .builtIn) == "lc:BuiltInSpeakerDevice"
@@ -13457,12 +13514,16 @@ do {
     var gate = MicrophoneRequestGate()
     let first = gate.begin(origin: .user)
     let second = gate.begin(origin: .automatic)
+    // covers: S15
     check(first && !second, "microphone: a start behind an open prompt sends no second request")
+    // covers: S15
     check(gate.answer() == .automatic && gate.answer() == nil,
           "microphone: the one answer runs exactly one start, with the latest origin")
+    // covers: S15
     check(gate.begin(origin: .user) && gate.answer() == .user,
           "microphone: after the answer, a new start may ask again")
     var unasked = MicrophoneRequestGate()
+    // covers: S15
     check(unasked.answer() == nil, "microphone: an answer with no request out starts nothing")
     var switches = MicrophoneRequestGate()
     let toInput = CaptureSwitch.Change.source(from: .system, to: .input(uid: "a"))
@@ -13507,6 +13568,7 @@ do {
 }
 
 // MARK: Late output callbacks in the debug log (LateCallbackLog, LogRateLimiter in OutputRenderer.swift)
+// covers: S364
 do {
     let ms: UInt64 = 1_000_000
     var limiter = LogRateLimiter()
@@ -13583,6 +13645,7 @@ do {
 }
 
 // MARK: Updates run only in release builds that carry the EdDSA public key (UpdateGate.swift)
+// covers: S365
 do {
     let key = "a-test-key-not-a-real-one"
     check(UpdateGate.isEnabled(publicEDKey: key, releaseBuild: true),
@@ -13607,6 +13670,7 @@ do {
 }
 
 // MARK: Every session stop names its reason in the debug log (SessionStop in AppLifecycle.swift)
+// covers: S364
 do {
     let all = SessionStop.allCases
     let lines = all.map { $0.logLine() }
@@ -13630,6 +13694,7 @@ do {
 }
 
 // MARK: First-run permission explanations (PermissionFlow.swift)
+// covers: S363 (all but the check that the test defaults suite opens)
 do {
     let fresh = PermissionAsks(explained: [], usedBefore: false)
     check(fresh.step(.microphone, state: .notAsked, userAction: true) == .explain,
@@ -13785,18 +13850,23 @@ do {
     }
     let usb = device("usb", kAudioDeviceTransportTypeUSB)
     let mac = device("builtin", kAudioDeviceTransportTypeBuiltIn)
+    // covers: S363
     check(disk.speakerOnAtInstall(listed: [], firstInstall: true) == nil
             && saved.values[AppSettings.Keys.speakerOnAtInstall] == nil,
           "first install: an empty device list waits for the next one")
+    // covers: S363
     check(disk.speakerOnAtInstall(listed: [usb, mac], firstInstall: true) == "builtin",
           "first install: This Mac starts on")
+    // covers: S363
     check(disk.speakerOnAtInstall(listed: [usb, mac], firstInstall: true) == nil,
           "first install: This Mac is switched on once, so a later off stays off")
     let updated = SettingsStore(read: { _ in nil }, write: { _, _ in })
+    // covers: S363
     check(updated.speakerOnAtInstall(listed: [mac], firstInstall: false) == nil,
           "first install: an update never switches a speaker on")
     let other = Saved()
     let noMac = SettingsStore(read: { other.values[$0] }, write: { value, key in other.values[key] = value })
+    // covers: S363
     check(noMac.speakerOnAtInstall(listed: [usb], firstInstall: true) == nil
             && noMac.speakerOnAtInstall(listed: [usb, mac], firstInstall: true) == nil,
           "first install: without a built-in output nothing is switched on, and the chance passes")
@@ -13826,6 +13896,7 @@ do {
 }
 
 // MARK: Permission setup window (PermissionFlow.swift, PermissionSetup)
+// covers: S363 (all but the four wording and VoiceOver checks at the end)
 do {
     let fresh = PermissionAsks(explained: [], usedBefore: false)
     check(PermissionSetup.showsAtLaunch(fresh, seen: false),
@@ -13895,6 +13966,7 @@ do {
 }
 
 // MARK: Zone header routing table in the main window and the menu bar panel (ZoneHeaderHit)
+// covers: S359
 do {
     let expected: [(ZoneHeaderHit.Area, ZoneHeaderHit.Action, String)] = [
         (.name, .fold, "a click on the zone name folds or unfolds the members"),
@@ -13948,6 +14020,7 @@ do {
 }
 
 // MARK: Menu bar panel rows for zones, folded and unfolded (ZoneLayout.panelRows, shownMembers)
+// covers: S359
 do {
     let zones: [(id: String, members: [String])] = [("living", ["tv", "sonos"]), ("kitchen", ["pod"]), ("empty", [])]
     func rows(_ collapsed: Set<String>) -> Int {
@@ -13973,14 +14046,17 @@ do {
     let menuBar = read("Sources/AudioSync/MenuBar.swift")
     let render = read("scripts/screenshots/render.swift")
     let ownFold = "@StateObject private var zoneDisclosure = ZoneDisclosure()"
+    // covers: S359
     check(!window.isEmpty && !menuBar.isEmpty && count(window, ownFold) == 1 && count(menuBar, ownFold) == 1,
           "zone folding: the main window and the menu bar panel each keep their own fold state")
+    // covers: S359
     check(count(menuBar, "let zoneDisclosure") == 0 && count(window, "model.zoneDisclosure") == 0
             && count(menuBar, "model.zoneDisclosure") == 0 && count(render, "zoneDisclosure") == 0,
           "zone folding: nothing hands one view's fold state to the other")
 
     let card = window.components(separatedBy: "private struct ZoneCard").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
+    // covers: S359
     check(count(card, "TapGesture(count: 2).onEnded { model.startRename(zone) }") == 1
             && count(card, ".exclusively(before: TapGesture().onEnded { hit(.name) })") == 1,
           "main window zone header: a double-click on the name renames the zone, a single click still folds it")
@@ -14166,6 +14242,7 @@ do {
 }
 
 // MARK: Panel status counts only the AirPlay speakers it shows (StreamingPolicy.activeSpeakers)
+// covers: S360
 do {
     let running = StreamingPolicy.activeSpeakers(airPlay: [true, true, false], senderFailed: false, others: [true, false])
     check(running == 3, "status count: AirPlay and local speakers that are on", "\(running)")

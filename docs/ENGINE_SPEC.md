@@ -650,7 +650,7 @@ These run in the host application, not the audio engine core, but the logic suit
 - **S356** *Notices for an AirPlay speaker off for want of a code, busy or declining (Mac).* *Observed* (Mac host; S223; `Localization.swift`, `UIStrings.airPlayTurnedOff`, `nativeAirPlayAsksForCode`, `nativeAirPlayNotAccepted`, `nativeAirPlayBusy`, `nativeAirPlayRefused`; `NativeAirPlayModel.swift`, `EveryTimeGuard`; tests "airplay off: …", "native off: …", "web remote: a speaker the phone turned on that needs a PIN or password says to turn it on again on this Mac"). A speaker that goes off because it needs a code gets a notice that names the code it needs: a PIN for a speaker that pairs with one, a password for one that asks for a password, never the other word. A PIN speaker that turned the session down without being asked for a code gets the notice that it did not accept the session instead; a password speaker keeps the password notice either way. A speaker busy with another device says so, and one that refused says it declined, with the notice a refusing Cast device gets; neither notice sends the user to the network, and both differ from an unreachable speaker's notice. Every other reason for going off keeps its own notice. When the speaker was switched on from the phone (the web remote, by itself or through a preset recalled there), its code notice also says to switch it on again on this Mac, where the code can be entered; a speaker the Mac switched on (a click, a preset recalled in the app, auto-connect) gets the notice without it, and a click at the Mac or a switch-off ends the phone's mark.
 - **S357** *The menu bar icon, and the panel's motion and contrast (Mac).* *Observed* (Mac host; S268; `WindowRules.swift`, `StatusItemClick`, `PopoverCloseRequest`, `PanelMotion`, `PanelFold`; `Localization.swift`, `statusItemValue`; tests "menu bar icon: …", "menu bar panel: a zone folds in one 0.2 s motion; with Reduce Motion the panel changes at once", "menu bar panel: with Reduce Motion it only fades", "panel colors: …"). A click on the menu bar icon closes an open panel and opens a closed one. The press on the icon closes the panel before its click arrives, and that click leaves the panel closed however long it was held, however the system delivers the click: two press times less than 0.02 s apart are one press read twice, so a quick second click opens the panel again and five clicks in a row open, close, open, close and open it. A press closed the panel only when it came less than 0.5 s before, with the pointer inside the icon's frame or on its top edge (a pointer pushed against the top of the screen), not on the line below it; a press elsewhere, and Escape with the pointer resting on the icon, are not presses on it. A press while the panel still shrinks away is ignored, and one right after that opens it. VoiceOver reads the icon's value as whether streaming is on, then how many notices wait. With Reduce Motion on, the panel opens and closes with a fade alone, never growing or shrinking, and a zone folds or unfolds at once; without it a fold is one 0.2 s motion. Over any window behind the translucent panel, black or white, in both themes and under a row's hover fill, the panel's secondary text keeps at least 4.5:1 contrast, and the wordmark's accent and the speaker type icons at least 3:1, the accent darker in the light theme than in the dark.
 - **S358** *The notice that the PTP ports are taken (Mac).* *Observed* (Mac host; S285, S346, AirPlay spec P158; `NativeAirPlayModel.swift`, `PtpPortNotice`, `NativeSpeakerEvent.warning`, `NativeSpeakerEvent.ptpFree`; tests "ptp notice: …", "native airplay: of the warnings, only a PTP port clash becomes a notice", "native airplay: a PTP bind after the clash says the ports are free"). Of the warnings the sender reports, only a clash on the PTP ports becomes a notice; the others reach the debug log alone. The sender reports a clash once, and again only after the ports were bound in between, so the notice follows the rows: it shows from the report until a speaker plays, and after that while some row is off because it needs PTP timing. A speaker playing on NTP timing binds no PTP port, so it clears the notice only while no row is off for PTP timing; a PTP speaker that plays takes its row out, and a row that leaves the list takes its reason along. A session that binds the PTP ports ends the episode and clears the notice, and the debug log says the ports are free again. Within an episode, from a report to a bind, each speaker refused for PTP timing raises the notice once, so a notice cleared or dismissed meanwhile comes back: the same speaker refused again raises nothing, another speaker raises it again, and a new report starts a new episode, in which the same speaker raises it again. A row off for PTP timing with no clash reported shows its row reason (S346) and nothing about ports.
-- **S359** *Zone headers and folding (Mac).* *Observed* (Mac host; S246; `Zones.swift`, `ZoneHeaderHit`, `ZoneLayout.panelRows`, `ZoneLayout.shownMembers`; `PanelZoneHeader.swift`; `MainWindow.swift`, `ZoneCard`; `MenuBar.swift`; tests "zone header routing table: …", "panel zone header: …", "main window zone header: …", "zone header: …", "Go to Zone: …", "panel zone rows: …", "panel zone members: …", "zone folding: …"). In the main window and the menu bar panel alike, a click on a zone's name, its speaker count, its chevron or the blank space before its slider and menu folds or unfolds the zone, and only a click on the round zone icon switches it (S246), so folding never switches a zone; every part routes through that one table, and nothing in the header is disabled. While none of the zone's speakers is present the icon is greyed and a click on it folds the zone instead, so no click switches it; the keyboard and VoiceOver both skip the greyed icon, and the fold control carries the zone's count for VoiceOver. Go to Zone puts the focus on the zone icon, or on the chevron while none of the zone's speakers is present. A folded zone shows its header without its members; an unfolded one shows its header and its members in order. The main window and the panel each keep their own fold state and never hand it to the other, and a fold state for a zone that no longer exists changes nothing.
+- **S359** *Zone headers and folding (Mac).* *Observed* (Mac host; S246; `Zones.swift`, `ZoneHeaderHit`, `ZoneLayout.panelRows`, `ZoneLayout.shownMembers`; `PanelZoneHeader.swift`; `MainWindow.swift`, `ZoneCard`; `MenuBar.swift`; tests "zone header routing table: …", "panel zone header: …", "main window zone header: …", "zone header: …", "Go to Zone: …", "panel zone rows: …", "panel zone members: …", "zone folding: …"). In the main window and the menu bar panel alike, a click on a zone's name, its speaker count, its chevron or the blank space before its slider and menu folds or unfolds the zone, and only a click on the round zone icon switches it (S246), so folding never switches a zone; every part routes through that one table, and nothing in the header is disabled. While none of the zone's speakers is present the icon is greyed and a click on it folds the zone instead, so no click switches it; the keyboard and VoiceOver both skip the greyed icon, and the fold control carries the zone's count for VoiceOver. Go to Zone puts the focus on the zone icon, or on the chevron while none of the zone's speakers is present. A folded zone shows its header without its members; an unfolded one shows its header and its members in order. The main window and the panel each keep their own fold state and never hand it to the other, and a fold state for a zone that no longer exists changes nothing. In the main window a double-click on a zone's name starts renaming the zone in place, and a single click on the name still folds or unfolds it once it can't be part of a double-click.
 - **S360** *Hidden speakers (Mac).* *Observed* (Mac host; S149, S243; `HiddenSpeakers.swift`, `HiddenSpeakers`; `AppDelegate+HiddenSpeakers.swift`, `hideSpeaker`, `unhideSpeaker`; `SpeakerState.swift`, `StreamingPolicy.activeSpeakers`; tests "hidden speakers: …", "status count: …"). The user may hide any speaker but the reference output. A hidden speaker is kept by its speaker key (S149; a Cast speaker by its app ID, S243), so a Cast or AirPlay speaker that announces itself again, under a new name too, stays hidden, and a hidden AirPlay speaker moves to its native ID with its other settings (S204). Hiding a speaker that is on turns it off first, as its own switch does, and clears its notices; its volume, delay, name, zones and auto-connect mark stay saved. While hidden it is left out of every speaker list (the others keep their order), out of a zone's count, out of the web remote's snapshot, where a command naming it changes nothing, and out of auto-connect even when marked for it. The list of hidden speakers is sorted by shown name, uses a present speaker's current name and kind and says when one is not found; hiding a speaker twice keeps one entry with its first name. The hidden set survives a relaunch, its setting goes once nothing is hidden, and a malformed stored entry is skipped alone. Showing a speaker again brings its row back, off, with its saved values, and auto-connect waits for its next appearance. Apart from hiding, the panel's count of speakers on leaves out the AirPlay rows the panel doesn't show while the sender has failed, and no AirPlay note about a live input shows for them.
 - **S361** *When track info and progress go to the AirPlay sender and Cast (Mac).* *Observed* (Mac host; S218, S219, AirPlay spec P126; `NowPlaying.swift`, `NowPlayingMonitor.Position`, `publish`; `ReceiverInfo.swift`, `TrackInfoFeed`, `SentTrackInfo`, `ReceiverInfo.readingWait`; `AppDelegate+AirPlay.swift`, `sendsTrackInfo`, `syncTrackInfo`; tests "progress: …", "track info feed: …", "track info wiring: …"). *Gate.* Track info goes to AudioSync's own AirPlay sender only while streaming runs with an AirPlay speaker on. Without one, a Now Playing change reaches the window alone, a sender start sends nothing, and nothing is read for the sender. The change that starts sending sends everything at once; later changes while sending send nothing again; when sending stops, what was given is forgotten, so sending again sends it all again. A Now Playing change puts the track in the window and sends the current track to the sender once, the next track once with its own fields, and the sender a copy of the artwork; each look also tells the web remote's player and gives Cast its look. A sender start sends the current track and artwork again, unchanged and once (S219). Before Now Playing's first reading since it started polling nothing goes out: one look is scheduled at the end of a 3 s wait, at which the track goes out without a reading, and a reading ends the wait at once; the AirPlay and Cast feeds wait for the same date, a date is scheduled once, a stale look leaves it alone, and a look that runs frees it, so a later wait schedules again. A Cast device switched on gets one look, and a later change gives a Cast device already on no second one; with no Cast sender running, nothing is looked at for Cast. *Progress.* A playing track runs on from its reading up to its length, and a paused one stays where it was read. A reading is news when the track, its play state or its artwork's presence changed, or when its position jumped: more than 2 s off where the last reading ran on to (a seek forward or back), a length more than 2 s different, or a position coming or going; a reading where the track ran on to is no news. Only a track that shows on the receivers (S218) takes its position along. The host gives the sender a position when it differs from the one it gave: with a new track, a pause or a seek, never for the same reading again. A new track drops the position in the sender, so a new track without a length sends none, and going back to a track whose position went out before sends it again.
 - **S363** *Permission explanations, the setup window and the first install (Mac).* *Observed* (Mac host; S154, S336; `PermissionFlow.swift`, `Permission`, `PermissionAsks`, `PermissionSetup`; `AppSettings.swift`, `SettingsStore.speakerOnAtInstall`; tests "permissions: …", "setup: …", "first install: …"). The app knows four permissions, in this order: Local Network, audio capture (which every tap source needs), the microphone (which an input device source needs) and Automation; each links to its own pane of Privacy & Security, and each explanation has its own title and reason. A use of a permission macOS reports as allowed goes on, and one it reports as denied shows the denied state and is never explained again. A permission not asked yet, or one macOS can't report, is explained before its first use: a click that needs it explains it first, while an automatic use never raises a modal, it waits and the window offers the explanation, one at a time in the order above, and nothing is offered before a feature needs it. Continue is stored across launches and shows the next explanation; Not Now hides the explanation for this run only: an automatic use still waits but offers nothing, a click explains it again, and a relaunch forgets it. A stored name the app doesn't know, or an entry that isn't a name, is dropped alone. A run of an earlier version without explanations (one that saved a source, switched speakers on or set the master volume) is recognized once, at the first launch with explanations, and remembered, since that launch saves settings itself and a fresh install's next launch must not take them for an earlier version's. After such an update a permission macOS can't report goes on unexplained, one macOS reports as unasked is still explained, and Now Playing reads the players an earlier version read; on a fresh install Now Playing leaves a player macOS would still ask about until Continue on the Automation explanation. The permission setup window opens by itself once, on a first install, whether skipped or done, never after such an update and never for a user who already accepted both the Local Network and audio capture explanations. Its Allow asks for those two, Local Network first, skipping one already allowed, and afterwards neither is explained again; the microphone and Automation wait for their feature. Its Local Network row follows the probe's answer (S154); its audio capture row reads allowed only once a tap heard sound, and asked otherwise, since macOS doesn't report it; its microphone row follows what macOS reports; a refused row, or one macOS can't report after asking, offers its Settings link. On a first install the built-in output is switched on once, at the first device list that isn't empty, so a later off stays off; an update never switches a speaker on, and with no built-in output in that list nothing is switched on and the chance passes.
@@ -1846,6 +1846,10 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | cast step: the device's volume event replaces the level the step should reach | C69 |
 | cast step: a fixed volume takes no step | C68 |
 | cast step: the fallback step stops at full volume | C67, C69 |
+| cast step: a device that reports no step moves by the fallback step, shown at once | C69 |
+| cast step: once the device reports its step, the key sends a step and the slider shows the level it should reach | C69 |
+| cast step: a second step before the device answers goes on from the level shown | C69 |
+| cast step: down by the device's step | C69 |
 | cast track info: a track change goes to the sender, kept for the next load | C54 |
 | cast: of 266 browse changes one poll takes 256 and the next poll the rest (C106) | C106 |
 | cast track info: with no track known, the fields are blank, not AudioSync's labels | C53 |
@@ -1853,6 +1857,279 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | cast track info: a large cover is scaled to fit 1280 by 720 and the byte cap | C53 |
 | cast model: a manual device a browse finds keeps its address under the new id, and Remove there forgets only the address | C18 |
 | cast model: a speaker added by address that a browse finds keeps its offset under its id, as the sender does: over none or a cleared one, never over one the id already had | C18 |
+| airplay off: a speaker that needs a PIN says PIN, not password | S356 |
+| airplay off: a speaker that asks for a password says password, not PIN | S356 |
+| native off: a speaker that needs a PIN gets the PIN notice | S356 |
+| native off: a speaker that asks for a password gets the password notice | S356 |
+| native off: a speaker that turned the session down unasked says it didn't accept | S356 |
+| web remote: a speaker the phone turned on that needs a PIN or password says to turn it on again on this Mac | S356 |
+| web remote: a speaker the phone switched on, by itself or by a recall, that needs a PIN says to turn it on again on this Mac | S356 |
+| web remote: a speaker the Mac switched on, a recall in the app or auto-connect included, gets the PIN notice without this Mac | S356 |
+| web remote: a click at the Mac or a switch-off ends the phone's mark | S356 |
+| native off: other reasons keep their own notice | S356 |
+| native off: a busy speaker names the other device and a refusing one says it declined, neither sends the user to the network | S356 |
+| microphone: a start behind an open prompt sends no second request | S15 |
+| microphone: the one answer runs exactly one start, with the latest origin | S15 |
+| microphone: after the answer, a new start may ask again | S15 |
+| microphone: an answer with no request out starts nothing | S15 |
+| capture channels: each block of a long callback is stamped at its own place in the callback | S16 |
+| auto-connect: skipped with AUDIOSYNC_NO_AUTO_CONNECT=1 in a debug launch | S170 |
+| auto-connect: ignored without the debug log, and unless it is exactly 1 | S170 |
+| auto-connect skipped: the speakers saved as on start off, the marks stay | S170 |
+| auto-connect skipped: the run reads its own changes | S170 |
+| auto-connect skipped: an accepted permission explanation holds for the run | S170 |
+| auto-connect skipped: nothing the run changes is saved | S170 |
+| auto-connect skipped: the next launch starts from the speakers saved before | S170 |
+| calibration fill: a capture that never delivered gets silence, from 40 ms back, for the signal to ride on | S335 |
+| calibration fill: each step goes on where the last one ended, in real time | S335 |
+| calibration fill: nothing while the capture delivers | S335 |
+| calibration fill: a capture gone quiet again starts a new stretch where its last block ended | S335 |
+| calibration fill: a fill held up for seconds writes the last second only | S335 |
+| calibration fill: a capture with long buffers counts as quiet only after two of its periods | S335 |
+| AppleScript: no current track (-1728) and a timeout (-1712) read as no track, not logged | S336 |
+| AppleScript: Automation refused (-1743) and other errors are still logged | S336 |
+| AppleScript: Automation refused (-1743) logs one line naming the player, not the error dictionary | S336 |
+| AppleScript: another error (-2753) still logs the error dictionary | S336 |
+| native airplay: of the warnings, only a PTP port clash becomes a notice | S358 |
+| ptp notice: shows once the ports are reported taken, until a speaker plays while no row needs PTP timing | S358 |
+| ptp notice: a speaker off for PTP timing with no port clash reported says nothing about ports | S358 |
+| ptp notice: an NTP speaker that plays leaves it while a PTP speaker is off for timing | S358 |
+| ptp notice: it clears once no row is off for PTP timing | S358 |
+| ptp notice: it comes back when another speaker goes off for PTP timing, though reported once | S358 |
+| ptp notice: the PTP speaker playing clears it | S358 |
+| ptp notice: a row that leaves the list takes its timing reason along | S358 |
+| native airplay: a PTP bind after the clash says the ports are free | S358 |
+| ptp notice: the report raises it | S358 |
+| ptp notice: an NTP speaker that plays clears it while no row is off for PTP timing | S358 |
+| ptp notice: a PTP speaker refused while the ports are taken brings it back | S358 |
+| ptp notice: a non-PTP speaker that starts playing while the ports stay taken leaves it shown | S358 |
+| ptp notice: the same speaker refused again in one episode raises nothing | S358 |
+| ptp notice: another speaker refused in the episode raises it again | S358 |
+| ptp notice: a PTP bind ends the episode and clears it | S358 |
+| ptp notice: a refusal with no clash reported raises nothing | S358 |
+| ptp notice: a new report starts a new episode, in which the same speaker raises it again | S358 |
+| progress: a playing track runs on from its reading, up to its length | S361 |
+| progress: a paused track stays where it was read | S361 |
+| progress: a reading where the track ran on to is no news | S361 |
+| progress: a seek forward or back is news | S361 |
+| progress: another length, or a position coming or going, is news | S361 |
+| progress: only a track that shows takes its position to the receivers | S361 |
+| progress: a new track's position goes out with it | S361 |
+| progress: the same reading again gives the sender nothing | S361 |
+| progress: a pause or a seek goes out | S361 |
+| progress: a new track without a length sends none: the new track dropped it in the core | S361 |
+| progress: back to a track whose reading went out before: the new track dropped it, so it goes again | S361 |
+| track info feed: a model update without an AirPlay speaker sends nothing | S361 |
+| track info feed: a track change without an AirPlay speaker sends nothing and reads nothing | S361 |
+| track info feed: a sender that starts without an AirPlay speaker gets nothing | S361 |
+| track info feed: the model update that starts sending sends everything | S361 |
+| track info feed: the first look sends the track and its artwork | S361 |
+| track info feed: another model update while sending sends nothing | S361 |
+| track info feed: the same track again gives the sender nothing | S361 |
+| track info feed: a track change sends the new track | S361 |
+| track info feed: a new sender asks for a send | S361 |
+| track info feed: a new sender gets the unchanged track and its artwork again | S361 |
+| track info feed: sending stops: what was given is forgotten | S361 |
+| track info feed: sending again sends everything again | S361 |
+| track info feed: the track goes out again after a stop | S361 |
+| track info feed: before the first reading, nothing goes out and a look is scheduled at the wait's end | S361 |
+| track info feed: the wait's end is scheduled once per date | S361 |
+| track info feed: a stale look leaves the scheduled one alone | S361 |
+| track info feed: the scheduled look clears its date as it runs | S361 |
+| track info feed: at the wait's end the track goes out without a reading | S361 |
+| track info feed: a reading ends the wait at once | S361 |
+| track info feed: artwork on its way: the track goes alone and a look is scheduled at the wait's end | S219 |
+| track info feed: a look during the artwork wait schedules nothing new | S219 |
+| track info feed: the scheduled look at the wait's end sends AudioSync's icon | S219 |
+| track info wiring: a Now Playing change puts the track in the window's model | S361 |
+| track info wiring: a Now Playing change sends the current track to the sender, once | S361 |
+| track info wiring: the sender gets a copy of the artwork, since it encodes it on its own queue | S361 |
+| track info wiring: each look also tells the remote's player and gives Cast its look | S361 |
+| track info wiring: the same track again sends nothing new to the sender | S361 |
+| track info wiring: the next track goes to the sender once, with its own fields | S361 |
+| track info wiring: a sender start sends the current track and artwork again, unchanged and once | S361 |
+| track info wiring: after the resend the same track sends nothing more | S361 |
+| track info wiring: with no AirPlay speaker showing track info, a change reaches the window only | S361 |
+| track info wiring: a sender start with no AirPlay speaker showing track info sends nothing | S361 |
+| track info wiring: a sender start before Now Playing's first reading schedules one look, sends nothing | S361 |
+| track info wiring: AirPlay receivers that start showing track info get all of it at once | S361 |
+| track info wiring: a model update while already sending sends nothing again | S361 |
+| track info wiring: a Cast device switched on alone gets its look, the AirPlay sender nothing | S361 |
+| track info wiring: a Cast device already on gets no second look from a model update | S361 |
+| track info wiring: with no Cast sender running, a model update looks at nothing | S361 |
+| track info wiring: before Now Playing's first reading both feeds wait for the same date | S361 |
+| track info wiring: a wait that ends frees its date in both feeds, so a later wait schedules again | S361 |
+| track info wiring: a wait that ends looks again and sends what plays | S361 |
+| menu bar icon: a click while the panel is open closes it | S357 |
+| menu bar icon: a click while the panel is closed opens it | S357 |
+| menu bar icon: the click whose press closed the panel leaves it closed, however long it was held | S357 |
+| menu bar icon: a quick second click after a press closed the panel opens it | S357 |
+| menu bar icon: a click long after the panel closed under the icon opens it | S357 |
+| menu bar icon: five clicks open, close, open, close, open (closing click's action dropped) | S357 |
+| menu bar icon: five clicks open, close, open, close, open (closing click's action delivered) | S357 |
+| menu bar icon: a press on the icon closes the panel | S357 |
+| menu bar icon: a press with the pointer pushed against the top of the screen counts | S357 |
+| menu bar icon: the line below the icon is not on it | S357 |
+| menu bar icon: a press elsewhere is not a press on the icon | S357 |
+| menu bar icon: Escape with the pointer resting on the icon is no press | S357 |
+| menu bar icon: VoiceOver hears streaming on/off, then the notice count | S357 |
+| menu bar icon: only a press while the panel still fades out is ignored, as Outlook does | S357 |
+| menu bar icon: a press is ignored only while the panel shrinks away; right after, it opens it | S357 |
+| menu bar panel: a zone folds in one 0.2 s motion; with Reduce Motion the panel changes at once | S357 |
+| menu bar panel: with Reduce Motion it only fades | S357 |
+| panel colors: secondary text keeps 4.5:1 over any window | S357 |
+| panel colors: the wordmark's sync and the type icons keep 3:1 over any window | S357 |
+| panel colors: sync is the darker teal on light and the mint on dark | S357 |
+| delay value: a row shows its saved offset | S221 |
+| delay value: Return, Command-S and a click on another row each show the applied offset while its panel stays open | S221 |
+| delay value: a click outside the rows shows the applied offset | S221 |
+| delay value: the AirPlay delay row shows L; the reference and an unlisted row show none | S221 |
+| delay value: the debug log names a row that shows no value instead of leaving it blank | S221 |
+| BT IO buffer: unset, empty or not a whole number asks for nothing | S366 |
+| BT IO buffer: a value outside 256 to 4096 asks for nothing | S366 |
+| BT IO buffer: a whole number from 256 to 4096 is the request | S366 |
+| BT IO buffer: no request leaves a Bluetooth device untouched | S366 |
+| BT IO buffer: a device that isn't Bluetooth is never touched | S366 |
+| BT IO buffer: Bluetooth Classic and LE devices get the request inside their range | S366 |
+| BT IO buffer: the request is clamped to the device's range | S366 |
+| BT IO buffer: an unknown or unusable range leaves the request as it is | S366 |
+| calibrate all row: only a blocker that keeps the sheet shut dims the row and shows a reason | S362 |
+| calibration refusal: the press names only streaming, the speaker or the built-in speakers that are off | S362 |
+| calibration refusal: the tooltip names only streaming or the speaker that is off | S362 |
+| calibration refusal: while another calibration holds the outputs, the tooltip and hint say so | S362 |
+| calibrate all refusal: names only streaming or the built-in speakers, whichever is off | S362 |
+| calibrate all refusal: with streaming off, names the built-in speakers too when their switch is off | S362 |
+| measure again refusal: names only what is off, the row's speaker by its name | S362 |
+| measure again refusal: while streaming is off, the switches say which speaker is off | S362 |
+| cast memory: in AudioSync's folder, nothing before a save | S367 |
+| cast memory: an offset is stored, a negative one refused | S367 |
+| cast memory: the JSON is written and read back whole | S367 |
+| cast memory: a new sender starts with the stored offset | S367 |
+| cast memory: with no file at launch, the first save keeps nothing aside | S367 |
+| cast memory: reading a file that doesn't read keeps nothing aside yet | S367 |
+| cast memory: a file that doesn't read is kept aside, whole and owner-only, before it is saved over | S367 |
+| cast memory: only the first save of a run keeps a copy | S367 |
+| cast memory: a taken name gets -2 after the time and the copy holding it is left alone | S367 |
+| cast memory: one damaged entry costs only itself | S367 |
+| cast memory: a JSON object with a damaged entry reads, so nothing is kept aside | S367 |
+| cast memory: only UTF-8 text holding a JSON object, without a byte order mark, reads | S367 |
+| cast memory: a file that can't be read at all is not replaced | S367 |
+| hidden speakers: the key is the speaker key, and a Cast speaker's app ID | S360 |
+| hidden speakers: hiding twice keeps one entry with its first name | S360 |
+| hidden speakers: a hidden speaker leaves the rows, the others keep their order | S360 |
+| hidden speakers: the remote snapshot loses a hidden speaker, and a command naming it changes nothing | S360 |
+| hidden speakers: a Cast or AirPlay speaker that re-announces, even under a new name, stays hidden | S360 |
+| hidden speakers: a zone's count leaves a hidden member out of its total | S360 |
+| hidden speakers: auto-connect skips a hidden speaker marked for it | S360 |
+| hidden speakers: the menu is sorted by shown name, uses the current name when present, says not found otherwise | S360 |
+| hidden speakers: the hidden set survives a settings round trip, with the offset kept | S360 |
+| hidden speakers: showing a speaker brings its row back | S360 |
+| hidden speakers: the setting goes once nothing is hidden | S360 |
+| hidden speakers: a malformed stored entry is skipped | S360 |
+| hidden speakers: a hidden AirPlay speaker moves to its native ID with its other settings (S204) | S360 |
+| status count: AirPlay and local speakers that are on | S360 |
+| status count: AirPlay rows hidden while the sender has failed don't count | S360 |
+| status count: no live input AirPlay note for a hidden AirPlay speaker | S360 |
+| late callbacks: 25 in one second log 10 lines | S364 |
+| late callbacks: then one line counts the 15 suppressed | S364 |
+| late callbacks: the suppressed count comes once | S364 |
+| late callbacks: a new second opens a new window of 10 | S364 |
+| late callbacks: callbacks whose details were overwritten count as suppressed | S364 |
+| late callbacks: a slot keeps start ms and lateness µs | S364 |
+| late callbacks: a huge lateness saturates instead of spilling | S364 |
+| late callbacks: the line names the buffer's wall-clock start, the output and the lateness | S364 |
+| late callbacks: a buffer starting 30 ms after now is stamped ahead | S364 |
+| late callbacks: a start far ahead of now does not trap | S364 |
+| late callbacks: the last output's stop flushes the pending suppressed count once | S364 |
+| late callbacks: suppressed-count line | S364 |
+| session stop: every reason has its own log line | S364 |
+| session stop: each line says whether the session stops or restarts | S364 |
+| session stop: only a source switch, a channel pair change, a format change and a rebuild restart | S20, S364 |
+| session stop: the power switch line names the input event, so a key press tells from a click | S364 |
+| session stop: a quit source app is named | S364 |
+| session stop: a stop after a capture interruption is logged although the engine already stopped | S364 |
+| session stop: a stop with no session running and no interruption writes no line | S364 |
+| updates: a key in a release build turns the updater on | S365 |
+| updates: a key without the release flag (a plain ./build.sh or CI) keeps the updater off | S365 |
+| updates: a false release flag keeps the updater off | S365 |
+| updates: a release flag that isn't a boolean keeps the updater off | S365 |
+| updates: the release flag without a key keeps the updater off | S365 |
+| updates: the release flag with an empty key keeps the updater off | S365 |
+| updates: the release flag with a whitespace-only key keeps the updater off | S365 |
+| updates: a key that isn't a string keeps the updater off | S365 |
+| updates: neither key nor flag keeps the updater off | S365 |
+| updates: Info.plist points SUFeedURL at the latest release's appcast.xml | S365 |
+| updates: the source Info.plist never carries the release flag (only ./build.sh --release adds it to the bundle) | S365 |
+| permissions: a click that needs an unasked permission explains it first | S363 |
+| permissions: an automatic use never raises a modal, it offers the explanation in the window | S363 |
+| permissions: an allowed permission goes on without any explanation | S363 |
+| permissions: a denied permission is never explained again, it shows the denied state | S363 |
+| permissions: a permission macOS can't report is explained on a fresh install | S363 |
+| permissions: after an update, a permission macOS can't report is not explained again | S363 |
+| permissions: after an update, a permission macOS reports as unasked is still explained | S363 |
+| permissions: after an update, Now Playing reads the players an earlier version read, with no explanation first | S363 |
+| permissions: on a fresh install Now Playing waits for Continue on the Automation explanation | S363 |
+| permissions: nothing is offered before a feature needs it | S363 |
+| permissions: one explanation at a time, in a fixed order | S363 |
+| permissions: Continue remembers the explanation and shows the next one | S363 |
+| permissions: Not Now hides the explanation for this run | S363 |
+| permissions: after Not Now an automatic use still waits but offers nothing | S363 |
+| permissions: after Not Now a click explains it again | S363 |
+| permissions: only Continue is stored | S363 |
+| permissions: a relaunch keeps Continue and forgets Not Now | S363 |
+| permissions: an unknown stored name is dropped | S363 |
+| permissions: settings a fresh install saved don't skip the explanation on the next launch | S363 |
+| permissions: an update from a version without explanations is recognized once and remembered | S363 |
+| permissions: a stored entry that isn't a name is dropped alone | S363 |
+| permissions: taps need audio capture, input devices the microphone | S363 |
+| permissions: saved speakers mean AudioSync ran before | S363 |
+| permissions: every permission links to its Privacy & Security pane | S363 |
+| permissions: each permission opens its own pane | S363 |
+| permissions: every explanation has its own title and reason, without em dashes | S363 |
+| first install: an empty device list waits for the next one | S363 |
+| first install: This Mac starts on | S363 |
+| first install: This Mac is switched on once, so a later off stays off | S363 |
+| first install: an update never switches a speaker on | S363 |
+| first install: without a built-in output nothing is switched on, and the chance passes | S363 |
+| setup: a first install opens the permission setup by itself | S363 |
+| setup: it opens by itself only once, skipped or done | S363 |
+| setup: an update from a version without explanations doesn't open it | S363 |
+| setup: a user who already went through both explanations doesn't get it | S363 |
+| setup: Local Network and audio capture are asked together; microphone and Automation wait for their feature | S363 |
+| setup: the Local Network row follows the probe's answer | S363 |
+| setup: audio capture shows allowed only once a tap heard sound; asked otherwise, since macOS doesn't say | S363 |
+| setup: the microphone row follows what macOS reports | S363 |
+| setup: Allow asks for Local Network first | S363 |
+| setup: then audio capture | S363 |
+| setup: nothing left to ask once both were asked | S363 |
+| setup: a permission already allowed is skipped | S363 |
+| setup: a refused row, or one macOS can't report after asking, offers its Settings link | S363 |
+| setup: after Allow, nothing it asked for is explained again; the microphone still is | S363 |
+| zone header routing table: a click on the zone name folds or unfolds the members | S359 |
+| zone header routing table: a click on the speaker count folds or unfolds the members | S359 |
+| zone header routing table: a click on the chevron folds or unfolds the members | S359 |
+| zone header routing table: a click on the blank space before the slider and the three dots folds or unfolds the members | S359 |
+| zone header routing table: a click on the round zone icon switches the zone on or off | S359 |
+| zone header routing table: only the round zone icon switches the zone, so folding leaves it on | S359 |
+| zone header routing table: with none of its speakers present, the greyed icon folds the zone | S359 |
+| zone header routing table: with none of its speakers present, no click switches the zone | S359 |
+| panel zone header: the arrow, the icon and the name each route through ZoneHeaderHit | S359 |
+| panel zone header: nothing switches or folds the zone outside the table, and no part is disabled | S359 |
+| main window zone header: the greyed icon folds through ZoneHeaderHit instead of being disabled | S359 |
+| main window zone header: VoiceOver skips the greyed icon and the fold button carries the count | S359 |
+| zone header: the keyboard skips the greyed icon VoiceOver skips, in the main window as in the panel | S359 |
+| Go to Zone: with a speaker of the zone present, the focus lands on the zone's round icon | S359 |
+| Go to Zone: with none of the zone's speakers present, the focus lands on the arrow, not the hidden icon | S359 |
+| main window zone header: Go to Zone focuses the part ZoneHeaderHit.goToZoneFocus names | S359 |
+| panel zone rows: unfolded, each zone shows its header and every member | S359 |
+| panel zone rows: a folded zone keeps its header and drops its members | S359 |
+| panel zone rows: all folded, only the headers stay | S359 |
+| panel zone rows: a folded zone that no longer exists changes nothing | S359 |
+| panel zone members: an unfolded zone lists its members in order | S359 |
+| panel zone members: a folded zone lists none | S359 |
+| zone folding: the main window and the menu bar panel each keep their own fold state | S359 |
+| zone folding: nothing hands one view's fold state to the other | S359 |
+| main window zone header: a double-click on the name renames the zone, a single click still folds it | S359 |
 
 ### core (`Tests/coretest.swift`)
 
