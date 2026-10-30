@@ -1840,12 +1840,13 @@ impl App {
                         built
                     })
                     .collect();
-                let targets = state
-                    .zone_members(zone)
-                    .filter_map(|s| {
+                let targets = zone
+                    .members
+                    .iter()
+                    .filter_map(|id| {
                         Some(ZoneTarget {
-                            member_id: s.id.as_str().into(),
-                            target: s.in_target.as_ref()?.name.as_str().into(),
+                            member_id: id.as_str().into(),
+                            target: state.member_target(id)?.name.as_str().into(),
                         })
                     })
                     .collect();
@@ -9995,7 +9996,7 @@ mod tests {
         app.main
             .invoke_zone_use_target_requested("airplay:left".into());
         let upstairs = app.models.zones.row_data(1).unwrap();
-        assert_eq!(upstairs.members.row_count(), 1);
+        assert_eq!(upstairs.members.row_count(), 2);
         assert_eq!(upstairs.targets.row_count(), 0);
     }
 

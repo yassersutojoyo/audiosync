@@ -2130,7 +2130,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// Adds a zone named `typed` (S150) holding `members`, each leaving the
     /// zone that held it; returns its name.
     fn add_zone(&mut self, typed: &str, members: &[String]) -> String {
-        // An older build left deleted zones' IDs in the presets.
+        // Presets keep deleted zones, whose IDs are never reused (S245).
         let in_presets = self.presets.iter().flat_map(|preset| &preset.zones);
         let ids = self.zones.list().iter().map(|zone| zone.id.as_str());
         let ids = ids.chain(in_presets.map(|zone| zone.id.as_str()));
@@ -2401,18 +2401,36 @@ impl<A: AudioBackend> AudioAdapter<A> {
             })
             .map(|target| airplay_key(&target.id))
             .collect();
-        let others: Vec<&Speaker> = state
+        // An unplugged output or a gone speaker that is on goes off too.
+        let mut on_now: Vec<String> = self
+            .audio
+            .enabled_outputs()
+            .iter()
+            .map(|id| speaker_key(id))
+            .collect();
+        on_now.extend(
+            self.audio
+                .enabled_airplay()
+                .iter()
+                .map(|id| airplay_key(id)),
+        );
+        on_now.extend(self.audio.cast_enabled().map(|id| cast_key(&id)));
+        let others: Vec<(&str, bool, bool)> = state
             .speakers
             .iter()
-            .filter(|speaker| !preset.members.iter().any(|member| member.key == speaker.id))
-            .filter(|speaker| !holding.contains(&speaker.id))
+            .map(|speaker| (speaker.id.as_str(), speaker.enabled, speaker.is_reference()))
+            .chain(
+                on_now
+                    .iter()
+                    .filter(|key| state.speaker(key).is_none())
+                    .map(|key| (key.as_str(), true, false)),
+            )
+            .filter(|(key, ..)| !preset.members.iter().any(|member| member.key == *key))
+            .filter(|(key, ..)| !holding.iter().any(|held| held == key))
             .collect();
         let other_facts: Vec<RecallOther> = others
             .iter()
-            .map(|speaker| RecallOther {
-                on: speaker.enabled,
-                reference: speaker.is_reference(),
-            })
+            .map(|&(_, on, reference)| RecallOther { on, reference })
             .collect();
         let facts: Vec<RecallMember> = members.iter().map(|(.., facts)| *facts).collect();
         let plan = presets::recall_plan(&facts, &other_facts, state.running);
@@ -2484,8 +2502,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.zones.set_volume(zone, volume);
         }
         self.push_zone_volumes();
-        for (speaker, off) in others.iter().zip(&plan.switch_off) {
-            if let (true, Some(key)) = (*off, SpeakerKey::parse(&speaker.id)) {
+        for ((id, ..), off) in others.iter().zip(&plan.switch_off) {
+            if let (true, Some(key)) = (*off, SpeakerKey::parse(id)) {
                 self.switch_zone_member(&key, false);
             }
         }
@@ -3183,6 +3201,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     kind,
                     needs_airplay2: SpeakerKey::parse(key)
                         .is_some_and(|key| self.needs_airplay2(&key)),
+                    in_target: match SpeakerKey::parse(key) {
+                        Some(SpeakerKey::AirPlay(id)) => self
+                            .audio
+                            .airplay_holding_target(&id)
+                            .map(|target| InTarget {
+                                id: airplay_key(&target.id),
+                                name: target.name,
+                            }),
+                        _ => None,
+                    },
                 }
             })
             .collect()
@@ -4988,9 +5016,6 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
 
     fn delete_zone(&mut self, id: &str) {
         if self.zones.delete(id) {
-            for preset in &mut self.presets {
-                preset.zones.retain(|zone| zone.id != id);
-            }
             self.log.log(|| format!("zone {id} deleted"));
             self.push_zone_volumes();
         }
@@ -5018,16 +5043,18 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn use_target_instead(&mut self, speaker_id: &str) {
-        let Some(target) = self
-            .snapshot()
-            .speaker(speaker_id)
-            .and_then(|speaker| speaker.in_target.clone())
-        else {
+        let state = self.snapshot();
+        let Some(target) = state.member_target(speaker_id) else {
             return;
         };
         self.log
             .log(|| format!("zone: {} takes the place of {speaker_id}", target.id));
-        self.zones.rename_key(speaker_id, &target.id);
+        // Asks the sender, not the snapshot, so a hidden member leaves too.
+        ui_model::use_target_instead(&mut self.zones, speaker_id, &target.id, |key| {
+            matches!(SpeakerKey::parse(key), Some(SpeakerKey::AirPlay(id))
+                if self.audio.airplay_holding_target(&id)
+                    .is_some_and(|held| airplay_key(&held.id) == target.id))
+        });
         self.push_zone_volumes();
     }
 
@@ -15424,8 +15451,8 @@ mod tests {
             adapter.presets[0]
                 .zones
                 .iter()
-                .all(|zone| zone.id != "zone:2"),
-            "{:?}",
+                .any(|zone| zone.id == "zone:2"),
+            "a preset keeps a deleted zone, as on the Mac: {:?}",
             adapter.presets[0].zones
         );
     }
@@ -15721,6 +15748,20 @@ mod tests {
         );
     }
 
+    // covers: S252
+    #[test]
+    fn a_recall_switches_off_an_unplugged_output_that_is_on() {
+        let mut adapter = preset_adapter(vec![saved_preset(&[(key(SPEAKERS), None)])]);
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.audio_mut().disconnect_output(HEADPHONES);
+        adapter.poll();
+        adapter.recall_preset("preset:1");
+        adapter.audio_mut().connect_output(HEADPHONES, "Headphones");
+        adapter.poll();
+        assert!(!enabled(&adapter, HEADPHONES), "it comes back off");
+        assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+    }
+
     /// The switch applies at the next launch (as on the Mac), so a stereo
     /// pair still needs AirPlay 2 after it is saved on.
     // covers: S265
@@ -15824,6 +15865,82 @@ mod tests {
                 "Evening",
                 &[("pair:5f0c", PresetLeftOff::NotFound)]
             )]
+        );
+    }
+
+    /// A member its pair holds has no row of its own, yet it is there.
+    // covers: S247
+    #[test]
+    fn a_zone_member_its_pair_holds_plays_as_part_of_it_and_can_be_swapped() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let (pair, left, right) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        adapter.poll();
+        adapter.add_zone("Lounge", &[ap(&left), key(HEADPHONES)]);
+        let state = adapter.snapshot();
+        let zone = &state.zones[0];
+        let pair_name = speaker_of(&adapter, "ap:pair:5f0c").name;
+        assert_eq!(
+            state.zone_note(zone, ui_model::ZoneRow::NotFound(&ap(&left))),
+            Some(ui_model::ZoneNote::InTarget(&pair_name))
+        );
+
+        adapter.use_target_instead(&ap(&left));
+        assert_eq!(
+            adapter.snapshot().zones[0].members,
+            ["ap:pair:5f0c".to_owned(), key(HEADPHONES)]
+        );
+    }
+
+    /// As on the Mac, the pair takes the place of its first member here and
+    /// leaves the zone it was in.
+    // covers: S247
+    #[test]
+    fn use_target_instead_moves_the_pair_here_and_drops_its_other_members() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let (pair, left, right) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        adapter.poll();
+        adapter.add_zone("Porch", &["ap:pair:5f0c".to_owned()]);
+        adapter.add_zone("Lounge", &[key(HEADPHONES), ap(&left), ap(&right)]);
+        adapter.use_target_instead(&ap(&right));
+        let zones = adapter.snapshot().zones;
+        assert!(zones[0].members.is_empty(), "{:?}", zones[0].members);
+        assert_eq!(
+            zones[1].members,
+            [key(HEADPHONES), "ap:pair:5f0c".to_owned()]
+        );
+    }
+
+    /// A hidden member of the pair leaves the zone too, so showing it again
+    /// does not put it beside its pair.
+    // covers: S247
+    #[test]
+    fn use_target_instead_drops_a_hidden_member_of_the_pair() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let (pair, left, right) = stereo_pair();
+        fake.appear(&right);
+        adapter.poll();
+        adapter.add_zone("Lounge", &[ap(&left), ap(&right)]);
+        adapter.hide_speaker(&ap(&right), "AirPlay");
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        adapter.poll();
+        adapter.use_target_instead(&ap(&left));
+        assert_eq!(
+            adapter.snapshot().zones[0].members,
+            ["ap:pair:5f0c".to_owned()]
         );
     }
 

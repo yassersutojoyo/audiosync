@@ -112,7 +112,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, an AirPlay speaker turned off because it's playing from another device or declined the stream now says so, instead of reading as unreachable.
 - On the Mac, two copies of AudioSync opened at the same moment no longer both quit. One stays open.
 - On Windows, a settings save that fails is tried again about every 30 seconds and at quit, so a change made just before you sign out isn't lost. Before, a failed save counted as saved.
-- On Windows, a new zone or preset never takes the number of a deleted one, so an old preset or a web remote page still open can't reach it. Deleting a zone also takes it out of every preset.
+- On Windows, a new zone or preset never takes the number of a deleted one, so an old preset or a web remote page still open can't reach it.
 - On Windows, the main window opens on the main screen when the screen it was on is gone, and opening it from the tray leaves it where you put it.
 - Quitting while you rename a speaker or zone in place keeps the name you typed. On the Mac and on Windows.
 - A Google Cast speaker you added by address keeps its name, zone, presets and Hide Speaker mark once AudioSync finds it on the network. On the Mac it also keeps its auto-connect setting, and one that's playing keeps its loudness. On Windows it also keeps its fixed-volume mark and volume step, and the volume you set for it while it isn't playing. On the Mac and on Windows.
@@ -186,6 +186,9 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, an AirPlay 2 speaker that has left the network still shows "AirPlay 2" as its kind, and VoiceOver reads that it isn't on the network after its on or off state.
 - On the Mac, a calibration whose microphone drops audio while it records now stops and changes nothing, as on Windows. Before, it could set a delay that was off by the audio it lost, without saying so. A microphone that's unplugged during a calibration now stops it at once instead of after a wait.
 - On the Mac, Measure Again no longer starts on a speaker whose delay changed after Calibrate All measured it, or after the reference speaker changed, and says why, as on Windows. A calibration whose microphone changed while it ran now says so, instead of saying the speakers changed.
+- On Windows, recalling a preset also switches off a speaker that's on but unplugged or gone from the network, so it stays off when it's back and the preset still shows as current, as on the Mac. Before, it came back playing.
+- On Windows, a zone speaker that plays as part of its stereo pair or home theater now reads "Plays as part of" with the pair's name, and its zone's menu offers to use the pair instead, as on the Mac. Before, it read Not found.
+- On Windows, using a stereo pair or home theater instead of its speaker in a zone moves the pair into that zone, out of any other zone it was in, and takes its other speakers out of the zone, as on the Mac. Before, a pair already in another zone stayed there and the speaker just left.
 
 ## [0.7.1] - 2026-10-27
 

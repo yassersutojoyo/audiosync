@@ -293,6 +293,8 @@ pub struct AbsentMember {
     /// A stereo pair or home theater this launch can't play, since AirPlay 2
     /// is off.
     pub needs_airplay2: bool,
+    /// The stereo pair or home theater it plays as part of (spec S247).
+    pub in_target: Option<InTarget>,
 }
 
 /// A row under a zone's header (spec S245): every member but the hidden ones,
@@ -817,6 +819,32 @@ pub fn speakers_on_now(state: &AppState) -> Vec<SpeakerNow> {
         .collect()
 }
 
+/// Use <target> Instead (spec S247), as on the Mac: in the zone that holds
+/// `member`, `target` takes the place of the first member that is `member`
+/// or that `holds`, the others leave that zone, and `target` leaves any other.
+pub fn use_target_instead(
+    zones: &mut Zones,
+    member: &str,
+    target: &str,
+    holds: impl Fn(&str) -> bool,
+) {
+    let Some(here) = zones.zone_of(member).map(|zone| zone.id.clone()) else {
+        return;
+    };
+    let held = |key: &String| key == member || holds(key);
+    let mut list = std::mem::take(zones).into_list();
+    for zone in &mut list {
+        zone.members.retain(|key| key != target);
+        if zone.id == here {
+            if let Some(first) = zone.members.iter().position(held) {
+                zone.members[first] = target.to_owned();
+            }
+            zone.members.retain(|key| !held(key));
+        }
+    }
+    *zones = Zones::from_stored(list);
+}
+
 /// The preset that `state` plays exactly, the first in list order (spec
 /// S253).
 pub fn current_preset(presets: &[Preset], state: &AppState) -> Option<String> {
@@ -1180,19 +1208,17 @@ impl AppState {
     /// The note on `row` under `zone`, if it has one. The Cast note needs
     /// another member on and a Cast speaker on, as on the Mac: the click
     /// plan switches on one Cast member at most.
-    pub fn zone_note<'a>(&self, zone: &Zone, row: ZoneRow<'a>) -> Option<ZoneNote<'a>> {
+    pub fn zone_note<'a>(&'a self, zone: &Zone, row: ZoneRow<'a>) -> Option<ZoneNote<'a>> {
         let speaker = match row {
             ZoneRow::NotFound(id) => {
-                return Some(
-                    if self
-                        .absent_member(id)
-                        .is_some_and(|member| member.needs_airplay2)
-                    {
-                        ZoneNote::NeedsAirPlay2
-                    } else {
-                        ZoneNote::NotFound
-                    },
-                );
+                let absent = self.absent_member(id);
+                return Some(if absent.is_some_and(|member| member.needs_airplay2) {
+                    ZoneNote::NeedsAirPlay2
+                } else if let Some(target) = absent.and_then(|member| member.in_target.as_ref()) {
+                    ZoneNote::InTarget(&target.name)
+                } else {
+                    ZoneNote::NotFound
+                });
             }
             ZoneRow::Listed(speaker) => speaker,
         };
@@ -1217,6 +1243,15 @@ impl AppState {
     /// The name and kind of zone member `id` while it isn't listed.
     pub fn absent_member(&self, id: &str) -> Option<&AbsentMember> {
         self.absent.iter().find(|member| member.id == id)
+    }
+
+    /// The stereo pair or home theater speaker `id` plays as part of,
+    /// whether or not it has a row of its own (spec S247).
+    pub fn member_target(&self, id: &str) -> Option<&InTarget> {
+        match self.speaker(id) {
+            Some(speaker) => speaker.in_target.as_ref(),
+            None => self.absent_member(id)?.in_target.as_ref(),
+        }
     }
 
     /// Whether another app took Cast speaker `id` over: only its notice
@@ -2242,6 +2277,7 @@ impl MockBackend {
             name: "Home Theater".into(),
             kind: SpeakerKind::AirPlay2,
             needs_airplay2: false,
+            in_target: None,
         });
         state.notices.push(Notice {
             id: 1,
@@ -2315,6 +2351,7 @@ impl MockBackend {
                 name: "Patio".into(),
                 kind: SpeakerKind::AirPlay,
                 needs_airplay2: false,
+                in_target: None,
             });
             mock.zones_mut(|zones| {
                 add_zone(zones, "zone:outdoors", "Outdoors", &["airplay:patio"])
@@ -2630,14 +2667,15 @@ impl Backend for MockBackend {
     }
 
     fn use_target_instead(&mut self, speaker_id: &str) {
-        let Some(target) = self
-            .state
-            .speaker(speaker_id)
-            .and_then(|s| s.in_target.clone())
-        else {
+        let state = self.state.clone();
+        let Some(target) = state.member_target(speaker_id) else {
             return;
         };
-        self.zones_mut(|zones| zones.rename_key(speaker_id, &target.id));
+        self.zones_mut(|zones| {
+            use_target_instead(zones, speaker_id, &target.id, |key| {
+                state.member_target(key) == Some(target)
+            });
+        });
     }
 
     fn check_cast_address(&mut self, text: &str) -> Result<CastAddressCheck, CastAddressError> {
@@ -3463,16 +3501,17 @@ mod tests {
         );
     }
 
+    // covers: S247
     #[test]
     fn use_target_instead_puts_the_pair_in_its_members_place() {
         let mut backend = MockBackend::zones_preview();
         backend.use_target_instead("airplay:left");
         let state = backend.snapshot();
-        assert_eq!(state.zones[1].members, ["airplay:bedroom"]);
+        assert_eq!(state.zones[1].members, ["airplay:bedroom", "airplay:pair"]);
         assert_eq!(
             state.zone_of("airplay:pair").map(|zone| zone.id.as_str()),
-            Some("zone:living"),
-            "the pair stays where it was"
+            Some("zone:upstairs"),
+            "the pair leaves the zone it was in"
         );
     }
 
