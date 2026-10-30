@@ -2861,7 +2861,6 @@ impl App {
         let w = weak.clone();
         eq_window.on_gain_changed(move |band, db| {
             with_app(&w, |app| {
-                app.ui.borrow_mut().chosen_curve = None;
                 app.change_equalizer(|s| {
                     if let Some(gain) = usize::try_from(band)
                         .ok()
@@ -2869,7 +2868,8 @@ impl App {
                     {
                         *gain = db.into();
                     }
-                })
+                });
+                app.forget_curve_left();
             })
         });
         let w = weak.clone();
@@ -3855,6 +3855,16 @@ impl App {
         ui_model::shown_curve(state, self.ui.borrow().chosen_curve)
     }
 
+    /// Forgets the picked curve once the stored (quantized) gains have left
+    /// it, so it stays forgotten when they come back (S270).
+    fn forget_curve_left(&self) {
+        let state = self.snapshot();
+        let chosen = self.ui.borrow().chosen_curve;
+        if self.shown_curve(&state) != chosen {
+            self.ui.borrow_mut().chosen_curve = None;
+        }
+    }
+
     fn change_equalizer(&self, change: impl FnOnce(&mut EqSettings)) {
         let mut settings = self.snapshot().equalizer;
         change(&mut settings);
@@ -4064,8 +4074,8 @@ impl App {
     /// Recalls preset `id` (spec S265) from any path; it opens, raises and
     /// focuses nothing (S266).
     fn recall_preset(&self, id: &str) {
-        self.ui.borrow_mut().chosen_curve = None;
         self.update(|b| b.recall_preset(id));
+        self.forget_curve_left();
     }
 
     /// Ctrl+`n`: the `n`th preset in list order; nothing without one.
@@ -10968,6 +10978,26 @@ mod tests {
             eq::PRESETS.len() as i32,
             "the first saved curve with the gains, not the picked Twin"
         );
+    }
+
+    // covers: S270
+    #[test]
+    fn a_recall_or_band_move_with_the_same_gains_keeps_rock_picked() {
+        let app = app_over(MockBackend::new());
+        app.update(|b| b.set_speaker_enabled("local:desk", true));
+        let eq_window = &app.equalizer;
+        let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
+        eq_window.invoke_preset_selected(rock as i32);
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Mine".into());
+        app.save_preset("Rock");
+        eq_window.invoke_preset_selected(rock as i32);
+
+        app.recall_preset(&preset_ids(&app)[0]);
+        assert_eq!(eq_window.get_preset_index(), rock as i32, "recall");
+        eq_window.invoke_gain_changed(0, eq::PRESETS[rock].gains_db[0] as f32);
+        assert_eq!(eq_window.get_preset_index(), rock as i32, "band");
+        assert!(!eq_window.get_saved_curve_shown());
     }
 
     #[test]

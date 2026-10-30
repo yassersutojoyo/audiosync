@@ -2909,6 +2909,7 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | a_saved_flat_curve_shows_by_the_name_the_user_gave_it (`desktop/src/ui_model.rs`) | S270 |
 | a_saved_curve_with_a_presets_gains_can_be_picked_renamed_and_deleted (`desktop/src/view.rs`) | S270 |
 | a_preset_recall_lets_go_of_the_picked_curve (`desktop/src/view.rs`) | S270 |
+| a_recall_or_band_move_with_the_same_gains_keeps_rock_picked (`desktop/src/view.rs`) | S270 |
 | the_log_is_on_only_when_audiosync_debug_is_exactly_1 (`desktop/src/debug_log.rs`) | S170 |
 | a_log_that_is_off_creates_no_file_and_builds_no_message (`desktop/src/debug_log.rs`) | S170 |
 | each_launch_empties_the_last_log (`desktop/src/debug_log.rs`) | S170 |
