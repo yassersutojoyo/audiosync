@@ -1656,10 +1656,191 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | airplay level: … (a level set on the speaker kept or held, own volume above 100, DeviceVolume at master 0) | S276, S290, S291 |
 | airplay volume event: a report made before the row's latest set reached the core is dropped, that speaker only | S276 |
 | airplay level vectors: … (`core/tests/vectors/s290_volume.json` through the Mac's calls) | S290, S289 |
-| auto-connect skipped: … (a run that skips auto-connect saves nothing) | S170 |
 | device anchor: … (the device anchor in the status line) | S334 |
 | observer: the line names every value with its unit | S229 |
 | followed rate: one line after 10 s past 1000 ppm, one more when the rate changes | S207 |
+| volume: a local speaker's gain is its own volume times its zone's times the master's | S71 |
+| airplay volume event: once every set reached the core, a report moves the row again | S276 |
+| availability: a speaker that asks for a code every time says so under its name | S106 |
+| availability: asks for a code every time while it asks or is off; paired for this run and on, it is open | S106 |
+| capture notice: a new session posts its waiting notice again, without an app name when none was found | S350 |
+| capture notice: the waiting text names the app when one was found, and reads generic otherwise | S350 |
+| capture notice: the first check comes 3 s after the start, then one every 2 s | S350 |
+| input busy: another process's hog mode, or '!hog' from the IOProc, is busy; 'nope' with another PID is busy; our own PID, -1 or an unreadable owner with another status is not | S333 |
+| native airplay: the status line has the Windows log's fields, a target's summed members, and a speaker the sender dropped | S222 |
+| AirPlay 2 switch: its note is a row of its own under it, not a subtitle the menus don't show | S313 |
+| AirPlay 2 switch: its note wraps onto more than one line instead of widening the menu | S313 |
+| AirPlay 2 switch: turned off from a launch that runs it, the note under it says AirPlay 2 stops | S313 |
+| P56 native airplay: a receiver that fails its signature check goes off with its own notice, as on Windows | P56 |
+| native airplay: the PIN prompt of a receiver that asks every time promises no lasting pairing | S346 |
+| airplay latency: follows a report and a speaker leaving | S280 |
+| airplay latency: covers every member of a target | S280 |
+| airplay latency: a reported latency is the speaker's starting estimate (one at 220 ms: offset 0, L = L_s + 220 + A; 220 and 50 ms: the second gets 170 ms more) | S283 |
+| airplay latency: a receiver reporting nothing starts at zero without a warning | S283 |
+| airplay latency: the estimate waits while an airplay speaker sounds (a joiner at 300 ms with E = 220 plays 80 ms late until the stream is empty) | S283 |
+| airplay latency: several AirPlay 2 receivers share Lf and E, and a target uses its largest member (members at 220 and 50 ms: the target's e_s is 220 and both members get the same d′_s) | S284 |
+| airplay latency: an AirPlay 2 receiver leaving while others sound changes no delay (E and every d′_s held until the stream is empty; the sender holds Lf) | S284 |
+| airplay latency: every AirPlay 2 speaker switched on goes to the sender, and only one it refuses waits, switched on and on its own row | S285 |
+| airplay latency: one AirPlay 2 speaker failing leaves the others playing | S285 |
+| P229 native airplay: an Apple TV or its home theater group stays off while the other side is on, streaming or not | P229 |
+| EC2 Bluetooth fresh link: the second restart runs once its time after the return has come | S325 |
+| EC2 Bluetooth fresh link: the second restart runs only once | S325 |
+| EC2 Bluetooth fresh link: the end of the session cancels the second restart | S325 |
+| EC2 Bluetooth fresh link: a sleep cancels the second restart | S325 |
+| EC2 Bluetooth fresh link: leaving the list again cancels the second restart | S325 |
+| EC2 Bluetooth fresh link: a return while nothing plays arms no second restart | S325 |
+| settings: AirPlay 2 is off when nothing is stored (P2) | P2 |
+| local delay: a session restart, a lost reference or a speaker already off holds nothing | S328 |
+| local delay: a lost output switched off and on again within 10 s while still missing isn't held again | S328 |
+| local delay: a lost output's start lead counts until its new renderer publishes one, 10 s at most | S328 |
+| local delay: a restarted output's held start lead is checked until it publishes, 10 s at most | S328 |
+| speaker names: a system name over 60 scalars typed again stores no name | S228 |
+| observer: before the core's warm-up the least slack reads n/a | S229 |
+| observer: a latency report the window rejected shows with the value used instead | S229 |
+| observer: the Wi-Fi line gives band, channel and RSSI | S229 |
+| observer: an RSSI of 0 is one macOS didn't give | S229 |
+| observer: a band or channel macOS withholds reads n/a | S229 |
+| observer: Wi-Fi switched off says so | S229 |
+| status line: an output with timed callbacks carries its device anchor | S334 |
+| output stall: a start failing for good after a stall ends the stall and is switched off with its notice; a refusal retries | S331 |
+| bluetooth lead: a Bluetooth output's start lead counts a capture block more | S230 |
+| bluetooth latency: a report outside the window gives way, any other output's stays | S231 |
+| source quit: a switch to the whole system whose every attempt fails ends the stream: the by-hand mark is gone (S223) | S223 |
+| source quit: when the whole system couldn't start, the notice says to turn streaming on again | S227 |
+| calibration preflight: a microphone at a rate the signal isn't made at is an unsupported rate, not no microphone | S232 |
+| calibration microphone: a skipped or changed microphone has its own reason | S232 |
+| airplay latency: calibrate all measures relative to the reported latency (the window adds R_s on top of L_s + E; the AirPlay delay moves only by the measured excess) | S235, S283 |
+| cast: a fixed volume can't be muted, so a mute never shows (C68) | C68 |
+| cast: a mute the device refuses is undone | C70 |
+| cast: a level the device refuses after a mute leaves the mute shown | C70 |
+| cast: a mute's answer that repeats the known level leaves a level still awaited on the slider | C70 |
+| cast: a lost channel reconnects and plays again | C81 |
+| cast: local outputs wait the longer of the AirPlay delay and the Cast offset | S281 |
+| cast: a speaker that never answers goes off at its third connect failure while connecting (C80) | C80 |
+| cast: a group keeps trying while connecting, as one with no address yet must (C80, C81) | C80, C81 |
+| cast: the speaker that is on is saved for the next launch, unless auto-connect is skipped (C112) | C112 |
+| cast: the speaker saved as on streams nothing before it is found (C112) | C112 |
+| cast: the speaker saved as on turns on once it is found (C112) | C112 |
+| cast: a speaker the user switched first wins over the one saved as on (C112) | C112 |
+| cast: a hidden speaker saved as on stays off after a launch (C112) | C112 |
+| cast: a speaker that stops on its own is saved as off (C112) | C112 |
+| cast: a speaker saved as on by its address turns on when a browse finds its ID (C112) | C112 |
+| cast: a speaker saved as on stays off while listed offline, and one the user switches on meanwhile wins (C112) | C112 |
+| cast: a speaker saved as on turns on once it comes online (C112) | C112 |
+| cast diagnostics: later lines show only the new underrun silence | C78 |
+| cast diagnostics: each attempt keeps its own count | C78 |
+| cast diagnostics: a new LOAD (playing again) counts from 0 | C78 |
+| cast diagnostics: a count that went down was restarted, so all of it is new | C78 |
+| cast diagnostics: an ended attempt's count is dropped | C78 |
+| cast: a fixed-volume row offers no Mute | C68 |
+| cast discovery: the debug line names the device's model | C13 |
+| cast discovery: a device without a model gets no model in its debug line | C13 |
+| cast master: a device that rounds to its step answers within half a step | C70, C104 |
+| cast master: 0.36 rounds to the 0.35 it has, so 0.35 after 0.4 is a change from elsewhere | C70, C104 |
+| cast master: at master 60 the device's 0.30 answers the 0.318 sent and the slider stays at 53 | C70, C104 |
+| cast master: the answer to the first level of a 60-level drag is not read as a change | C70, C104 |
+| web remote: a Cast speaker's arrow keys on the phone move by its own step, else by the Mac's fallback step | C69 |
+| web remote: a local volume dragged on the phone is logged once, after its last step | S348 |
+| web remote: one speaker's calibration and Calibrate All, also while a cut-off sweep plays out, count as calibrating | S258 |
+| cast: the id a browse found for an address is saved, lists the address under it after a relaunch before any browse, gives way to another speaker a browse finds there, which is listed as a new one while the saved one stays off until listed, and goes with the address | C18 |
+| cast: removing an address listed under a saved id forgets the id, and a change the sender queued before the removal doesn't bring the row back | C18 |
+| cast: another speaker a browse finds at a saved id's address starts with no offset, not the saved one's, and the sender's copy is cleared once | S341 |
+| cast: another speaker at a saved id's address keeps an offset the user gave it, even one equal to the saved one's | S341 |
+| cast: an offset for a speaker listed under a saved id goes to the sender's own id too, and Remove takes back the sender's manual entry behind the row | S341 |
+| cast: a browse that lists the saved id at another address ends the listing under it: the old address's changes are left out, the sender is told the selection again, and Remove still takes the entry back | S341 |
+| cast: a saved address added after a browse listed its saved id at another address leaves the browsed row alone, and Remove still takes the address's entry back | S341 |
+| cast: two saved addresses a browse found for one device list it after a relaunch through the later one; the earlier stays saved but stranded, and Remove takes both back | S341 |
+| cast model: a browse that finds an address of a device playing under its id keeps the volume its session reported | S341 |
+| cast model: a speaker on with no session that leaves the list when discovery stops goes off with a notice | S339 |
+| followed rate: back at 1000 ppm or less, the 10 s start over and the same rate logs again | S207 |
+| P169 native airplay: a waiting speaker that then can't get PTP timing goes off and no longer waits | P169 |
+| P169 native airplay: switched off or streaming stopped, it no longer waits | P169 |
+| native pairing: a click on a receiver that asks for nothing just joins | S223 |
+| native pairing: within the user's attempt, the same refusal from a receiver that asks for nothing pairs with a PIN | S223 |
+| native pairing: while it pairs again, the speaker waits instead of going off | S223 |
+| P215 native airplay: an unannounced state's log line, as on Windows | P215 |
+| P176 native airplay: the pair's row knows a member asks for a password | P176 |
+| P176 native airplay: switched on, a pair asks for its member's password by the member's name and waits for it | P176 |
+| P176 native airplay: once the member's password is in, the pair starts | P176 |
+| P176 native airplay: once the member's password is in, the pair's row asks for nothing | P176 |
+| P176 native airplay: a member that turns the password down is asked again by name, not the pair | P176 |
+| P176 native airplay: cancelling the member's password turns the pair off and drops the prompt | P176 |
+| P176 native airplay: a pair auto-connect turned on goes off when a member asks for a password, naming the member | P176 |
+| P176 native airplay: target member PairingRequired within the attempt turns the pair off as needing pairing, not unreachable, and starts no pairing, which the sender holds only for listed receivers | P176 |
+| P176 native airplay: a pair whose member asks for pairing gets a notice that promises no pairing, listed or not | P176 |
+| P176 native airplay: a member over AirPlay 2 that asks only for a password and answers PairingRequired is asked for its password by name, or names itself in the notice outside the attempt | P176 |
+| P176 native airplay: a member asked again for a password typed this run says it was turned down | P176 |
+| P176 native airplay: a member's first password prompt, with none typed this run, does not say it was turned down | P176 |
+| P176 native airplay: Left plays, then Right refuses its password: the pair goes off, naming Right, and asks again when turned on | P176 |
+| P176 native airplay: turned on again, the pair asks for the member's password | P176 |
+| P176 native airplay: the notice names the member and its pair | P176 |
+| P170 native airplay: with the AirPlay 2 switch off no target or member link is listed, and nothing changes | P170 |
+| equalizer storage: an out-of-range preamp or gain is clamped to ±12 dB (S23) | S23 |
+| settings: the AirPlay 2 switch is stored as a Bool | P2 |
+| settings: AirPlay 2 switched off again reads back off | P2 |
+| settings: an AirPlay 2 value that isn't a Bool reads as off | P2 |
+| settings: AirPlay 2 stays off with the switch off and no AUDIOSYNC_AIRPLAY2=1 (P170) | P170 |
+| settings: the switch or AUDIOSYNC_AIRPLAY2=1 turns AirPlay 2 on | P2 |
+| settings: a preset with levels that aren't finite is still saved: an own volume becomes none (S251), the master and zone volumes finite, an AirPlay own volume above 100 stays (S290) | S251, S290 |
+| speaker rename: quit applies an open rename before the session stops | S228 |
+| speaker rename: quit applies the open rename's typing, and nothing after Escape | S228 |
+| cast: one another app took over can't start from a zone click or Only This Speaker (S246) | S246 |
+| cast: a fault inside the sender reads as a lost connection, as on Windows (C107) | C107 |
+| cast: the selection is named to the sender once at start and again only when it changes (C108) | C108 |
+| cast: a second speaker stays off while one is on | C2 |
+| cast: a format fallback changes the format Calibrate All waits for (S241) | S241 |
+| cast: the device's volume and mute follow its status | C70 |
+| cast: another app casting turns the speaker off with a notice | C43 |
+| cast: a device's first announcement seeds the offset its memory holds | C77 |
+| cast group: listed as one row with its own stored offset, members not reported while off | C89, C101 |
+| cast group: turns on and starts like a device | C93 |
+| cast group: a member stays its own row and waits while the group plays | C2 |
+| cast group: playing without a member list says the members are unknown | C94 |
+| cast group: members by their row's name, an unlisted one by the group's name for it | C95 |
+| cast group: a group log line changes nothing shown | C96 |
+| cast group: one volume for the group, none sent to a member | C100 |
+| cast group: the offset is stored under the group's id, never a member's, and local outputs wait for it | C101 |
+| cast group: another sender casting to a member ends it as taken over and forgets the members | C99 |
+| cast group: once it is off, a member can play | C99 |
+| cast group: a members event copies the list the sender reads | C94 |
+| cast group: a group log event carries its line for the debug log | C96 |
+| cast: a changed certificate becomes a debug log line of its attempt | C21 |
+| cast: a connect failure keeps the core's detail for the debug log | C80 |
+| cast group: the playing group is the Cast speaker a calibration run measures | C101 |
+| cast group: Calibrate All lists the playing group as one Cast row with its own offset | C101 |
+| cast group: the measured offset is stored under the group's id, the members' stay as they were | C101, C102 |
+| cast master: nothing is sent while no session runs | C104 |
+| cast master: master 50 with the speaker at 80 sends level 0.4 and the slider shows 80 | C104 |
+| cast master: master 0 sends level 0, the speaker keeps 80 | C104 |
+| cast master: the device answering level 0 leaves the speaker at 80 | C104 |
+| cast master: a master change resends master × speaker | C104 |
+| cast master: level 0.2 set elsewhere at master 50 moves the speaker to 40, nothing sent back | C104 |
+| cast master: at master 0 a level set elsewhere leaves the speaker's level and isn't fought | C104 |
+| cast master: a step at master 0 sends level 0 | C104 |
+| cast master: a speaker turned on at master 0 is sent level 0 at its first status | C105 |
+| cast master: only the first status of a session is answered | C105 |
+| cast master: a device louder than the master allows comes down once at the start | C105 |
+| cast master: a fixed volume gets nothing (C68) | C68, C104 |
+| cast master: a level the device already has is not waited for, so its buttons' 0 is read back and a muted speaker stays silent | C70, C104 |
+| cast master: two levels set while the speaker starts are both sent, so their echoes leave it at the second | C70, C105 |
+| cast master: a status answers the oldest level it matches, so 30, 50, 30 sent never jumps the slider to 50 (C70) | C70 |
+| cast master: the level set while starting goes again at the first status | C105 |
+| cast master: a level re-sent at the first status is answered once, so a later change to it from elsewhere moves the speaker | C70, C105 |
+| cast master: a session starts at master × own level when the device is quieter, not read back (C105) | C105 |
+| cast master: a fixed volume is not set at the start (C68) | C68, C105 |
+| cast master: a group follows the master like a device | C104 |
+| cast master: the core's arithmetic | C70, C104, C105 |
+| cast step: the fallback step goes down too | C69 |
+| cast step: the device's volume event replaces the level the step should reach | C69 |
+| cast step: a fixed volume takes no step | C68 |
+| cast step: the fallback step stops at full volume | C67, C69 |
+| cast track info: a track change goes to the sender, kept for the next load | C54 |
+| cast: of 266 browse changes one poll takes 256 and the next poll the rest (C106) | C106 |
+| cast track info: with no track known, the fields are blank, not AudioSync's labels | C53 |
+| cast track info: with no track known, the device gets blank fields and no cover | C53 |
+| cast track info: a large cover is scaled to fit 1280 by 720 and the byte cap | C53 |
+| cast model: a manual device a browse finds keeps its address under the new id, and Remove there forgets only the address | C18 |
+| cast model: a speaker added by address that a browse finds keeps its offset under its id, as the sender does: over none or a cleared one, never over one the id already had | C18 |
 
 ### core (`Tests/coretest.swift`)
 
