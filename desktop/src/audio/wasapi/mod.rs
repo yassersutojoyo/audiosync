@@ -100,6 +100,10 @@ impl Driver for WasapiDriver {
         self.power.take()
     }
 
+    fn awake_clock(&self) -> Duration {
+        power::awake_clock()
+    }
+
     fn output_format(&mut self, id: &str) -> Result<RenderFormat, BackendError> {
         self.formats.current(id)
     }

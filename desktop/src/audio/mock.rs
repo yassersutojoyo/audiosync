@@ -358,6 +358,8 @@ pub struct MockDriver {
     /// The system clock: it stands still between polls unless a test moves
     /// it, as across a sleep.
     wall_clock: SystemTime,
+    /// The clock that stands still while the PC sleeps.
+    awake_clock: Duration,
     /// How far the system clock moves while an output start that doesn't
     /// answer holds the caller.
     hang_cost: Duration,
@@ -424,6 +426,7 @@ impl MockDriver {
             renderer_attempts: Vec::new(),
             power_notices: Vec::new(),
             wall_clock: SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000),
+            awake_clock: Duration::ZERO,
             hang_cost: Duration::ZERO,
         }
     }
@@ -641,6 +644,10 @@ impl Driver for MockDriver {
 
     fn wall_clock(&self) -> SystemTime {
         self.wall_clock
+    }
+
+    fn awake_clock(&self) -> Duration {
+        self.awake_clock
     }
 
     fn output_format(&mut self, id: &str) -> Result<RenderFormat, BackendError> {
@@ -1223,6 +1230,13 @@ impl Controller<MockDriver> {
     /// PC sleeps that long.
     pub fn pass_wall_time(&mut self, span: Duration) {
         self.driver_mut().wall_clock += span;
+    }
+
+    /// The UI loop is held `span` before the next poll while the PC stays
+    /// awake, as a native menu held open does.
+    pub fn hold_ui_loop(&mut self, span: Duration) {
+        self.driver_mut().wall_clock += span;
+        self.driver_mut().awake_clock += span;
     }
 
     /// Makes each output start that doesn't answer hold the caller for

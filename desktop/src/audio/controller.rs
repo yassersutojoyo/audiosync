@@ -170,9 +170,9 @@ const RUNAWAY_PERCENT: u32 = 50;
 /// See [`RUNAWAY_PERCENT`].
 const OTHERS_BELOW_PERCENT: u32 = 10;
 
-/// A poll this long in wall time after the one before counts as a resume
-/// when no notice said so (S332): above the 5 s a start that doesn't answer
-/// may hold a poll.
+/// A poll this long in wall time after the one before, less the time the PC
+/// was awake meanwhile, counts as a resume when no notice said so (S332):
+/// above the 5 s a start that doesn't answer may hold a poll.
 const RESUME_GAP: Duration = Duration::from_secs(10);
 
 /// A held start lead (S328) of an output whose device is still listed, so
@@ -341,6 +341,12 @@ pub trait Driver {
     /// The system clock, which counts the time the PC sleeps (S332).
     fn wall_clock(&self) -> SystemTime {
         SystemTime::now()
+    }
+
+    /// A clock that stands still while the PC sleeps (S332). Where there is
+    /// none it never moves, so a whole wall gap counts as asleep.
+    fn awake_clock(&self) -> Duration {
+        Duration::ZERO
     }
 
     /// The format an output on the endpoint `id` would open in now, from its
@@ -532,10 +538,10 @@ struct PowerState {
     /// The wall time of the poll that took a suspend notice, until the
     /// resume.
     suspended: Option<SystemTime>,
-    /// The wall time at which the last poll, or the last pass over the
-    /// outputs, ended: starts that don't answer hold those for seconds,
-    /// which mustn't look like a sleep.
-    awake: Option<SystemTime>,
+    /// The wall time and the awake clock at which the last poll, or the last
+    /// pass over the outputs, ended: starts that don't answer hold those for
+    /// seconds, which mustn't look like a sleep.
+    awake: Option<(SystemTime, Duration)>,
     /// Polls left in the resume window; 0 outside one.
     window: u32,
 }
@@ -1883,7 +1889,7 @@ impl<D: Driver> Controller<D> {
                 failures.push((endpoint.id, error));
             }
         }
-        self.power.awake = Some(self.driver.wall_clock());
+        self.power.awake = Some((self.driver.wall_clock(), self.driver.awake_clock()));
         failures
     }
 
@@ -2633,10 +2639,11 @@ impl<D: Driver> Controller<D> {
     /// window's end is logged with the capture's state.
     fn follow_power(&mut self) {
         let now = self.driver.wall_clock();
-        let gap = self
-            .power
-            .awake
-            .and_then(|last| now.duration_since(last).ok());
+        let ran = self.driver.awake_clock();
+        let gap = self.power.awake.and_then(|(last, ran_then)| {
+            let wall = now.duration_since(last).ok()?;
+            Some(wall.saturating_sub(ran.saturating_sub(ran_then)))
+        });
         let mut found = None;
         for notice in self.driver.power_notices() {
             match notice {
@@ -4514,7 +4521,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.check_routing_if_due(now);
         self.follow_mix_apps(now);
         self.log_status_if_due(now);
-        self.power.awake = Some(self.driver.wall_clock());
+        self.power.awake = Some((self.driver.wall_clock(), self.driver.awake_clock()));
         let events = std::mem::take(&mut self.pending);
         // A device volume that changed is logged when its decision changes
         // (S201), so its event isn't.
@@ -7728,6 +7735,21 @@ mod tests {
             }),
             "{events:?}"
         );
+        let lines = logged(&log, &dir);
+        assert!(
+            !lines.iter().any(|line| line.contains("the PC woke")),
+            "{lines:?}"
+        );
+    }
+
+    // covers: S332
+    #[test]
+    fn a_ui_loop_held_24_s_while_the_pc_stays_awake_is_no_resume() {
+        let (mut backend, log, dir) = logged_backend("controller-resume-held-loop");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut backend, 1);
+        backend.hold_ui_loop(Duration::from_secs(24));
+        backend.poll();
         let lines = logged(&log, &dir);
         assert!(
             !lines.iter().any(|line| line.contains("the PC woke")),

@@ -11,6 +11,7 @@ use windows::Win32::Foundation::{ERROR_SUCCESS, HANDLE};
 use windows::Win32::System::Power::{
     DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS, PowerRegisterSuspendResumeNotification,
 };
+use windows::Win32::System::WindowsProgramming::QueryUnbiasedInterruptTime;
 use windows::Win32::UI::WindowsAndMessaging::{
     DEVICE_NOTIFY_CALLBACK, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSUSPEND,
 };
@@ -101,4 +102,14 @@ impl PowerWatch {
         self.resumes = resumes;
         notices
     }
+}
+
+/// Time since boot less the time the PC slept or hibernated
+/// (`QueryUnbiasedInterruptTime`, in 100 ns units), so a UI loop held while
+/// the PC stays awake isn't taken for a sleep (S332).
+pub fn awake_clock() -> Duration {
+    let mut ticks = 0u64;
+    // SAFETY: the call only writes the count through the pointer it gets.
+    let _ = unsafe { QueryUnbiasedInterruptTime(&raw mut ticks) };
+    Duration::from_nanos(ticks.saturating_mul(100))
 }
