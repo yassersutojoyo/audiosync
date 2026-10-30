@@ -2797,18 +2797,14 @@ impl AirPlaySpeakers {
 
     /// Asks every playing row that may answer for its own volume, every
     /// [`VOLUME_READ_INTERVAL`]: a level changed on the speaker moves its
-    /// slider (P122), a target's through its leader (P180). Not while
-    /// Calibrate All mutes all but one, nor a speaker that scales the
-    /// samples itself (`sv`), whose level isn't the one the slider sets
-    /// (P121).
+    /// slider (P122), a target's through its leader (P180). Not a speaker
+    /// that scales the samples itself (`sv`), whose level isn't the one the
+    /// slider sets (P121).
     fn read_volumes(&mut self, now: Instant) {
         if now.saturating_duration_since(self.volume_read_at) < VOLUME_READ_INTERVAL {
             return;
         }
         self.volume_read_at = now;
-        if self.calibration_solo.is_some() {
-            return;
-        }
         for (id, added) in &mut self.added {
             let software = self
                 .listed
@@ -3046,7 +3042,10 @@ impl AirPlaySpeakers {
         let Some(row) = self.row_of(id) else {
             return false;
         };
-        let solo = self.calibration_solo.is_some();
+        let silenced = self
+            .calibration_solo
+            .as_deref()
+            .is_some_and(|solo| solo != row);
         let (zone, master) = (self.zone(&row), self.master);
         let own = self.settings(&row).volume;
         let shown = self.device_level_of(&row);
@@ -3054,7 +3053,7 @@ impl AirPlaySpeakers {
         let Some(added) = self.added.get_mut(&row) else {
             return false;
         };
-        if !added.read.answered() || added.read.held(Instant::now()) || solo {
+        if !added.read.answered() || added.read.held(Instant::now()) {
             return false;
         }
         if !added.read.echo.set_on_speaker(db, grid) {
@@ -3069,7 +3068,9 @@ impl AirPlaySpeakers {
         } else {
             Volume::from_db(db).unwrap_or(Volume::Muted)
         };
-        added.keep_volume(self.link.as_mut(), level);
+        // A silenced speaker that reconnects during the solo starts muted; the solo end sends the new level.
+        let kept = if silenced { Volume::Muted } else { level };
+        added.keep_volume(self.link.as_mut(), kept);
         let entry = self.entry(&row);
         entry.volume = moved.own_position;
         entry.held_level = held_level(moved.device_level, zone, master);
@@ -9505,14 +9506,39 @@ pub mod tests {
         assert!(fake.take_reads().is_empty(), "it turned a read down");
     }
 
+    // covers: S291
     #[test]
-    fn nothing_is_read_while_a_calibration_mutes_the_others() {
+    fn a_reading_during_a_calibration_moves_the_row_and_the_speaker_stays_silent() {
         let fake = FakeAirPlay::new();
-        let (mut airplay, _, id) = kitchen_playing(&fake, OPEN_TXT);
-        airplay.set_calibration_solo(Some(&id));
-        settle(&mut airplay, &id);
+        let (mut airplay, _, k) = kitchen_playing(&fake, OPEN_TXT);
+        let study = device(2, "Study", OPEN_TXT);
+        let s = id_of(&study);
+        fake.appear(&study);
+        airplay.poll();
+        airplay.set_enabled(&s, true).unwrap();
+        airplay.set_volume(&s, 50.0);
+        fake.state(&study, SpeakerState::Playing);
+        airplay.poll();
+        airplay.set_calibration_solo(Some(&k));
+        settle(&mut airplay, &s);
+        fake.take_calls();
         read_now(&mut airplay);
-        assert!(fake.take_reads().is_empty());
+        assert!(fake.take_reads().contains(&s));
+        // Turned up on Study's remote while only Kitchen is heard.
+        report_volume(&fake, &study, -6.0);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(row_of(&airplay, &s), 80.0);
+        assert_eq!(
+            fake.take_calls(),
+            [Call::KeepVolume(s.clone(), Volume::Muted)]
+        );
+        airplay.set_calibration_solo(None);
+        let sent = sent_levels(&fake);
+        assert!(sent.contains(&(s.clone(), Some(-6.0))));
+        assert!(
+            !sent.contains(&(s.clone(), Some(-15.0))),
+            "not the old level"
+        );
     }
 
     // covers: S291
