@@ -8606,6 +8606,47 @@ pub mod tests {
         assert_eq!(airplay.speakers()[0].volume, 55.0);
     }
 
+    // covers: S273
+    #[test]
+    fn a_remote_command_for_a_speaker_no_longer_played_does_nothing() {
+        type End = fn(&mut AirPlaySpeakers, &FakeAirPlay, &Device, &str);
+        let ends: [(&str, End); 3] = [
+            ("switched off", |airplay, _, _, id| {
+                airplay.set_enabled(id, false).unwrap()
+            }),
+            ("removed", |airplay, fake, kitchen, id| {
+                airplay.set_enabled(id, false).unwrap();
+                fake.gone(kitchen);
+            }),
+            ("session ended", |airplay, _, _, _| {
+                airplay.set_streaming(false)
+            }),
+        ];
+        for (why, end) in ends {
+            let fake = FakeAirPlay::new();
+            let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+            read(&mut airplay, spotify(true), Instant::now());
+            end(&mut airplay, &fake, &kitchen, &id);
+            airplay.poll();
+            airplay.take_remote_controls();
+            fake.take_calls();
+            let before = airplay.speakers();
+            for command in [
+                RemoteCommand::Pause,
+                RemoteCommand::Next,
+                RemoteCommand::VolumeUp,
+                RemoteCommand::MuteToggle,
+                RemoteCommand::DeviceVolume(Volume::Db(-6.0)),
+            ] {
+                remote(&fake, &kitchen, command);
+                assert!(airplay.poll().is_empty(), "{why}: {command:?}");
+                assert!(airplay.take_remote_controls().is_empty(), "{why}");
+                assert!(fake.take_calls().is_empty(), "{why}: {command:?}");
+                assert_eq!(airplay.speakers(), before, "{why}: {command:?}");
+            }
+        }
+    }
+
     // covers: S276, S277
     #[test]
     fn a_device_volume_or_mute_from_the_remote_moves_the_own_volume_and_is_sent() {

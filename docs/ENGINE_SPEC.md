@@ -2600,6 +2600,7 @@ The checks for S273 to S279 run against the core's decision with a fake now-play
 | a_command_for_a_speaker_that_stopped_does_nothing | S273 |
 | every_remote_command_gives_one_log_line | S279 |
 | a_remote_transport_goes_to_the_now_playing_control (`desktop/src/audio/airplay.rs`) | S274 |
+| a_remote_command_for_a_speaker_no_longer_played_does_nothing (`desktop/src/audio/airplay.rs`) | S273 |
 | a_remote_control_goes_to_the_session_track_info_follows (`desktop/src/audio/now_playing.rs`) | S274 |
 
 The Mac (logic suite):
@@ -2731,6 +2732,7 @@ The checks for S256 to S258, S287, S288, S337, S338 and S343 to S345 and S348 in
 | web remote: the core accepts the snapshots | S343 |
 | the_snapshot_lists_what_the_window_lists_in_its_order (`desktop/src/remote.rs`) | S343 |
 | each_speaker_carries_its_switch_kind_delay_range_and_note (`desktop/src/remote.rs`) | S343 |
+| the_remote_page_gets_the_cast_step_rounded_and_1_without_a_usable_one (`desktop/src/remote.rs`) | C69 |
 | web remote: the page lists the picker's entries in its order, each with an ID the core takes | S344 |
 | web remote: a page ID maps back to the picker's ID; one that names no source maps to nothing | S344 |
 | web remote: the snapshot carries the sources and the one in use | S344 |
