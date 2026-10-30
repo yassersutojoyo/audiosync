@@ -2381,9 +2381,20 @@ impl<A: AudioBackend> AudioAdapter<A> {
                         self.custom_names
                             .shown(&member.key, system.as_deref().unwrap_or(id))
                     }
-                    SpeakerKey::AirPlay(id) => self.airplay_name(id),
-                    SpeakerKey::Local(id) => self.output_name(id),
-                    SpeakerKey::Cast(id) => self.cast_name(id),
+                    // As absent_members names it; empty reads "Unknown device".
+                    _ => {
+                        let last = match &key {
+                            SpeakerKey::AirPlay(id) => self.airplay_names.get(id),
+                            SpeakerKey::Local(id) => self.names.get(id),
+                            SpeakerKey::Cast(id) => self.cast_names.get(id),
+                        };
+                        let last = last
+                            .map(String::as_str)
+                            .filter(|name| !name.is_empty())
+                            .or_else(|| self.zones.member_name(&member.key))
+                            .unwrap_or("");
+                        self.custom_names.shown(&member.key, last)
+                    }
                 });
             if keep_off.contains(&member.key) {
                 self.post_pair_first(&key, &name);
@@ -15494,7 +15505,7 @@ mod tests {
         let left = adapter
             .recall_preset("preset:1")
             .expect("the preset exists");
-        assert_eq!(left, [("gone".to_owned(), LeftOff::NotFound)]);
+        assert_eq!(left, [(String::new(), LeftOff::NotFound)]);
         assert!(enabled(&adapter, HEADPHONES) && !enabled(&adapter, SPEAKERS));
         assert!(
             enabled(&adapter, "builtin"),
@@ -15508,6 +15519,32 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &key(HEADPHONES)).volume, 40.0);
         assert_eq!(adapter.snapshot().master_volume, 70.0);
         assert_eq!(adapter.recall_preset("preset:9"), None);
+    }
+
+    // covers: S252, S286
+    #[test]
+    fn a_recall_after_a_relaunch_names_a_missing_member_by_its_zone_name() {
+        const DAC: &str = "{0.0.0.00000000}.{kitchen-dac}";
+        let mut adapter = AudioAdapter::new(
+            MockBackend::empty(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        let mut kitchen = zone(vec![key(DAC)]);
+        kitchen
+            .member_names
+            .insert(key(DAC), "Kitchen DAC".to_owned());
+        adapter.restore(Settings {
+            speaker_zones: vec![kitchen],
+            speaker_presets: vec![saved_preset(&[(key(DAC), Some(40.0))])],
+            ..Settings::default()
+        });
+        adapter.poll();
+
+        let left = adapter
+            .recall_preset("preset:1")
+            .expect("the preset exists");
+        assert_eq!(left, [("Kitchen DAC".to_owned(), LeftOff::NotFound)]);
     }
 
     // covers: S252
@@ -15662,10 +15699,7 @@ mod tests {
         Backend::recall_preset_from_phone(&mut adapter, "preset:1", &[key(HEADPHONES)]);
         assert_eq!(
             preset_notices(&adapter),
-            [left_off_notice(
-                "Evening",
-                &[("late", PresetLeftOff::NotFound)]
-            )],
+            [left_off_notice("Evening", &[("", PresetLeftOff::NotFound)])],
             "the member that asks for a code has its own notice instead"
         );
         assert!(enabled(&adapter, SPEAKERS));
@@ -15725,19 +15759,13 @@ mod tests {
         adapter.recall_preset("preset:1");
         assert_eq!(
             preset_notices(&adapter),
-            [left_off_notice(
-                "Evening",
-                &[("late", PresetLeftOff::NotFound)]
-            )]
+            [left_off_notice("Evening", &[("", PresetLeftOff::NotFound)])]
         );
 
         Backend::rename_preset(&mut adapter, "preset:1", "Night");
         assert_eq!(
             preset_notices(&adapter),
-            [left_off_notice(
-                "Night",
-                &[("late", PresetLeftOff::NotFound)]
-            )],
+            [left_off_notice("Night", &[("", PresetLeftOff::NotFound)])],
             "the notice follows the new name in place"
         );
 
@@ -16232,10 +16260,7 @@ mod tests {
         adapter.recall_preset("preset:1");
         assert_eq!(
             preset_notices(&adapter),
-            [left_off_notice(
-                "Evening",
-                &[("pair:5f0c", PresetLeftOff::NotFound)]
-            )]
+            [left_off_notice("Evening", &[("", PresetLeftOff::NotFound)])]
         );
     }
 

@@ -5500,7 +5500,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             strings.invoke_notice_speaker_struggling(speaker.as_str().into())
         }
         NoticeMessage::PairFirst { speaker } => {
-            strings.invoke_notice_pair_first(speaker.as_str().into())
+            strings.invoke_notice_pair_first(name_or_unknown(strings, speaker))
         }
         NoticeMessage::AirPlayCantPlay {
             speaker,
@@ -5557,7 +5557,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
                 .map(|(name, reason)| {
                     strings
                         .invoke_preset_member_left_off(
-                            name.as_str().into(),
+                            name_or_unknown(strings, name),
                             preset_left_off(strings, reason),
                         )
                         .to_string()
@@ -5588,6 +5588,14 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
                 None => strings.invoke_notice_heard_twice_system(mute, shared),
             }
         }
+    }
+}
+
+/// A recalled member AudioSync never learned a name for reads "Unknown device".
+fn name_or_unknown(strings: &Strings<'_>, name: &str) -> SharedString {
+    match name {
+        "" => strings.get_unknown_device(),
+        name => name.into(),
     }
 }
 
@@ -11844,6 +11852,28 @@ mod tests {
         app.update(|b| b.unhide_speaker("local:desk"));
         app.recall_preset(&id);
         assert!(app.snapshot().notices.is_empty(), "a full recall clears it");
+    }
+
+    // covers: S252
+    #[test]
+    fn a_preset_notice_calls_a_member_with_no_known_name_unknown_device() {
+        let app = app_over(MockBackend::new());
+        let message = NoticeMessage::PresetLeftOff {
+            preset: "Evening".to_owned(),
+            left_off: vec![(String::new(), PresetLeftOff::NotFound)],
+            nothing_changed: false,
+        };
+        assert_eq!(
+            notice_text(&app.strings(), &message),
+            "“Evening” is on. Stayed off: Unknown device (Not found)."
+        );
+        let pair_first = NoticeMessage::PairFirst {
+            speaker: String::new(),
+        };
+        assert_eq!(
+            notice_text(&app.strings(), &pair_first),
+            "Unknown device stayed off. Pair it on this PC first."
+        );
     }
 
     // covers: S265
