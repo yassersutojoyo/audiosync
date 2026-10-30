@@ -93,6 +93,9 @@ pub fn member_key(class: Class, id: &str) -> String {
 pub struct Lineup {
     /// The running session's number; `None` while streaming is off.
     pub session: Option<u64>,
+    /// No session runs because a source switch waits to start, not
+    /// because streaming stopped.
+    pub switching: bool,
     /// The reference output, by endpoint ID.
     pub reference: Option<String>,
     /// Every speaker that plays: the reference first, the other local
@@ -369,6 +372,7 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
         .collect();
     Lineup {
         session: engine.session,
+        switching: engine.session.is_none() && audio.running_source().is_some(),
         reference: engine.reference,
         members: locals.into_iter().chain(airplay).chain(casts).collect(),
         hold_backs_ms: engine.hold_backs_ms,
@@ -471,8 +475,6 @@ pub struct AllRun {
     silenced: Vec<Member>,
     /// The row a Measure Again measures.
     again: Option<usize>,
-    /// The outputs measured whatever their kind.
-    included: BTreeSet<String>,
     rate: u32,
     /// The reference, by endpoint ID.
     reference: String,
@@ -578,11 +580,10 @@ impl AllRun {
         let members: Vec<Member> = rows.into_iter().map(|(m, _)| m).collect();
         let taking_part: Vec<usize> = (0..members.len()).filter(|row| !off[*row]).collect();
         let silenced = everyone
-            .plan(included)
-            .0
             .members
-            .into_iter()
+            .iter()
             .filter(|m| !measured.iter().any(|n| n.same(m)))
+            .cloned()
             .collect();
         log.log(|| {
             let keys: Vec<String> = members.iter().map(Member::key).collect();
@@ -596,7 +597,6 @@ impl AllRun {
             taking_part,
             silenced,
             None,
-            included.clone(),
             rate,
             reference,
             session,
@@ -688,12 +688,6 @@ impl AllRun {
             Err(failure) => return refuse(failure),
         }
         log.log(|| format!("Measure Again of {} started", measured.key()));
-        // The sheet's rows were all measured, whatever their kind.
-        let included = members
-            .iter()
-            .filter(|m| m.class == Class::Local)
-            .map(|m| m.id.clone())
-            .collect();
         let silenced = lineup
             .members
             .iter()
@@ -710,7 +704,6 @@ impl AllRun {
             vec![reference_row, row],
             silenced,
             Some(row),
-            included,
             rate,
             reference.id.clone(),
             session,
@@ -728,7 +721,6 @@ impl AllRun {
         taking_part: Vec<usize>,
         silenced: Vec<Member>,
         again: Option<usize>,
-        included: BTreeSet<String>,
         rate: u32,
         reference: String,
         session: u64,
@@ -761,7 +753,6 @@ impl AllRun {
             taking_part,
             silenced,
             again,
-            included,
             rate,
             reference,
             stage: Stage::Quiet {
@@ -851,7 +842,7 @@ impl AllRun {
             }
             _ => {}
         }
-        if let Some(reason) = self.change(&rig.lineup().plan(&self.included).0) {
+        if let Some(reason) = self.change(&rig.lineup()) {
             if !matches!(self.stage, Stage::Estimating { .. }) {
                 self.log
                     .log(|| format!("Calibrate All stopped by a change: {reason:?}"));
@@ -988,7 +979,12 @@ impl AllRun {
     /// Why the run can't go on, from what plays now (S240).
     fn change(&self, lineup: &Lineup) -> Option<EndReason> {
         if lineup.session != Some(self.session) {
-            return Some(EndReason::SourceChanged);
+            let stopped = lineup.session.is_none() && !lineup.switching;
+            return Some(if stopped {
+                EndReason::SpeakerTurnedOff
+            } else {
+                EndReason::SourceChanged
+            });
         }
         if lineup.reference.as_deref() != Some(self.reference.as_str()) {
             return Some(EndReason::SpeakersChanged);
@@ -1012,9 +1008,7 @@ impl AllRun {
                 .any(|m| m.same(now))
         };
         let listed = |m: &Member| lineup.members.iter().any(|now| now.same(m));
-        if self.again.is_none()
-            && (!lineup.members.iter().all(known) || !self.silenced.iter().all(listed))
-        {
+        if !lineup.members.iter().all(known) || !self.silenced.iter().all(listed) {
             return Some(EndReason::SpeakersChanged);
         }
         let moved = self
@@ -1381,6 +1375,7 @@ pub(crate) mod tests {
                 now: Rc::new(Cell::new(1_000_000_000)),
                 lineup: Lineup {
                     session: Some(1),
+                    switching: false,
                     reference: Some("builtin".to_owned()),
                     members: vec![
                         member(Class::Local, "builtin", Some(0.0), 2500.0),
@@ -1624,6 +1619,11 @@ pub(crate) mod tests {
         start_zone(&mut FakeRig::new(), &kitchen_zone()).expect("it starts")
     }
 
+    /// A whole run that has just started, for the adapter's tests.
+    pub(crate) fn whole_run() -> AllRun {
+        start(&mut FakeRig::new())
+    }
+
     /// The results of a Calibrate Zone run whose off AirPlay speaker comes
     /// first, read with L_s 0 as no sender gives one, and whose measured
     /// AirPlay speaker was read with L_s `sender_ms`.
@@ -1785,6 +1785,10 @@ pub(crate) mod tests {
     #[test]
     fn a_source_switch_a_new_speaker_or_a_delay_edit_ends_the_run_with_its_reason() {
         let switch: fn(&mut FakeRig) = |rig| rig.lineup.session = Some(2);
+        let waiting_switch: fn(&mut FakeRig) = |rig| {
+            rig.lineup.session = None;
+            rig.lineup.switching = true;
+        };
         let turn_on: fn(&mut FakeRig) = |rig| {
             rig.lineup
                 .members
@@ -1793,6 +1797,7 @@ pub(crate) mod tests {
         let edit: fn(&mut FakeRig) = |rig| rig.lineup.members[1].offset_ms = Some(400.0);
         for (meddle, reason) in [
             (switch, EndReason::SourceChanged),
+            (waiting_switch, EndReason::SourceChanged),
             (turn_on, EndReason::SpeakersChanged),
             (edit, EndReason::SpeakersChanged),
         ] {
@@ -1806,6 +1811,68 @@ pub(crate) mod tests {
             assert_eq!(finished.sheet.unwrap().ended(), Some(reason));
             given_back(&rig);
         }
+    }
+
+    // covers: S240
+    #[test]
+    fn streaming_stopping_mid_run_ends_it_as_a_speaker_turned_off() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let finished = run_to_end(&mut rig, &mut run, |rig, run| {
+            if let Progress::Measuring { row: 1, .. } = run.progress() {
+                rig.lineup.session = None;
+            }
+        });
+        assert_eq!(
+            finished.sheet.unwrap().ended(),
+            Some(EndReason::SpeakerTurnedOff)
+        );
+        given_back(&rig);
+    }
+
+    // covers: S239, S240
+    #[test]
+    fn a_speaker_turned_on_in_measure_again_or_headphones_in_a_run_end_it_as_a_change() {
+        let turn_on = |rig: &mut FakeRig, run: &mut AllRun| {
+            let measuring = matches!(run.progress(), Progress::Measuring { row: 1, .. });
+            if measuring && rig.lineup.members.iter().all(|m| m.id != "phones") {
+                add_device(rig, "phones", 3, "HDAUDIO");
+            }
+        };
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let finished = run_to_end(&mut rig, &mut run, turn_on);
+        assert_eq!(
+            finished.sheet.unwrap().ended(),
+            Some(EndReason::SpeakersChanged),
+            "headphones turned on mid-run"
+        );
+        given_back(&rig);
+
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let members = run.members().to_vec();
+        let sheet = run_to_end(&mut rig, &mut run, |_, _| {})
+            .sheet
+            .expect("a sheet");
+        let now = rig.now.get();
+        let mut again = AllRun::again(
+            &mut rig,
+            &sheet,
+            &members,
+            MIC_RATE,
+            1,
+            now,
+            DebugLog::default(),
+        )
+        .expect("it starts");
+        let finished = run_to_end(&mut rig, &mut again, turn_on);
+        assert_eq!(
+            finished.sheet.unwrap().ended(),
+            Some(EndReason::SpeakersChanged),
+            "a speaker turned on during Measure Again"
+        );
+        given_back(&rig);
     }
 
     #[test]

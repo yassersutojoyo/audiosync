@@ -2425,6 +2425,9 @@ The checks for S235 to S241 in the Rust core (`core/tests/calibrate_all.rs`, syn
 | without_a_certain_airplay_row_only_the_other_speakers_change (`core/tests/calibrate_all.rs`) | S237, S238 |
 | an_ended_sheet_takes_no_row_from_another_sheet (`core/tests/calibrate_all.rs`) | S239, S240 |
 | a_silenced_speaker_going_or_an_off_member_turning_on_ends_a_zone_run (`desktop/src/audio/calibrate_all.rs`) | S240, S255 |
+| streaming_stopping_mid_run_ends_it_as_a_speaker_turned_off (`desktop/src/audio/calibrate_all.rs`) | S240 |
+| a_speaker_turned_on_in_measure_again_or_headphones_in_a_run_end_it_as_a_change (`desktop/src/audio/calibrate_all.rs`) | S239, S240 |
+| a_whole_run_cancelled_before_any_row_drops_the_table_and_says_why (`desktop/src/adapter.rs`) | S240 |
 | apply_writes_nothing_once_the_reference_is_gone (`desktop/src/adapter.rs`) | S238 |
 | a_sender_latency_that_moves_before_apply_keeps_the_results_and_applies_the_runs_l (`desktop/src/adapter.rs`) | S238 |
 | an_airplay_delay_clamped_at_0_applies_against_the_runs_sender_latency (`desktop/src/adapter.rs`) | S238 |

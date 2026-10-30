@@ -5077,6 +5077,9 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             strings.invoke_calibrate_all_stopped(calibration_failure(strings, reference, *failure))
         }
         AllPhase::Stale => strings.get_calibrate_all_stale(),
+        AllPhase::Ended(reason) => {
+            strings.invoke_calibrate_all_stopped(ended_text(strings, *reason))
+        }
         AllPhase::CannotMeasureAgain(name, missing) => strings.invoke_calibrate_all_cannot_again(
             calibration_needs(strings, reference, *missing, name.as_str().into()),
         ),

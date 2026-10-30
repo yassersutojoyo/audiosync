@@ -1078,6 +1078,8 @@ pub enum AllPhase {
     CannotMeasureAgain(String, Missing),
     /// A delay changed after the run, so its results went.
     Stale,
+    /// A whole run stopped before it measured any speaker but the reference.
+    Ended(EndReason),
 }
 
 #[derive(Clone, Debug, PartialEq)]

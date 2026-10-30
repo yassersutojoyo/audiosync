@@ -1335,6 +1335,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
             all.phase = AllPhase::Failed(failure.unwrap_or(Failure::Unfinished));
             return;
         };
+        if again.is_none()
+            && failure.is_none()
+            && let Some(reason) = sheet.ended()
+            && sheet
+                .rows()
+                .iter()
+                .all(|row| matches!(row.state, RowState::Reference | RowState::NotMeasured))
+        {
+            all.phase = AllPhase::Ended(reason);
+            return;
+        }
         if again.is_none() {
             all.phase = AllPhase::Idle;
             all.sheet = Some(KeptSheet {
@@ -15177,9 +15188,8 @@ mod tests {
         let _ = adapter.tick_calibrate_all();
         let all = &adapter.calibrate_all;
         assert!(all.run.is_none(), "the outputs are given back");
-        let kept = all.sheet.as_ref().expect("the results so far");
-        assert_eq!(kept.sheet.ended(), Some(EndReason::SpeakersChanged));
-        assert_eq!(kept.applied, None);
+        assert!(all.sheet.is_none(), "nothing measured, nothing to apply");
+        assert_eq!(all.phase, AllPhase::Ended(EndReason::SpeakersChanged));
     }
 
     // covers: S240, S255
@@ -15203,6 +15213,18 @@ mod tests {
         zone_running(&mut adapter);
         assert!(adapter.zones.remove_speaker(&key("tv")));
         ended_as_a_change(&mut adapter);
+    }
+
+    // covers: S240
+    #[test]
+    fn a_whole_run_cancelled_before_any_row_drops_the_table_and_says_why() {
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        adapter.calibrate_all.run = Some(crate::audio::calibrate_all::tests::whole_run());
+        adapter.cancel_calibrate_all();
+        let all = &adapter.calibrate_all;
+        assert!(all.run.is_none(), "the outputs are given back");
+        assert!(all.sheet.is_none(), "no empty table");
+        assert_ne!(all.phase, AllPhase::Idle, "the card says why it stopped");
     }
 
     // covers: S71, S249
