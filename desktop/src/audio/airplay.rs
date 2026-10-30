@@ -3641,12 +3641,14 @@ impl AirPlaySpeakers {
                 }
                 true
             }
-            PairingEvent::Failed { .. } => {
+            PairingEvent::Failed { error, .. } => {
                 let Some(run) = self.pairings.remove(id) else {
                     return false;
                 };
                 self.off_after_pairing(id);
-                let problem = if run.outlived_stream {
+                let problem = if let ErrorKind::Unsupported(_) = error.kind {
+                    problem(error.kind.user_reason())
+                } else if run.outlived_stream {
                     AirPlayProblem::NeedsPin
                 } else {
                     AirPlayProblem::PairingFailed

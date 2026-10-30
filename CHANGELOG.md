@@ -172,7 +172,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, after you forget an AirPlay speaker's pairing, turning it on from the web remote no longer starts a PIN pairing.
 - A Google Cast speaker that's listed as online but doesn't answer when you turn it on, for example a TV that was just switched off, turns off after a few tries and tells you it isn't responding. Before, its row said Connecting forever. On the Mac and on Windows.
 - On Windows, picking other input channels while the input device is unplugged no longer turns streaming off; the new channels play once the device is back.
-- On the Mac, an AirPlay speaker that plays only AirPlay 2 and that you turn on while AirPlay 2 is off now says so, and that AirPlay 2 needs to be on. Before, it said it couldn't play.
+- An AirPlay speaker that plays only AirPlay 2 and that you turn on while AirPlay 2 is off now says so, and that AirPlay 2 needs to be on. Before, it said it couldn't play, or on Windows that pairing didn't finish. On the Mac and on Windows.
 - On the Mac, an AirPlay speaker that briefly drops off the network while it plays keeps the latency it reported, so its timing against the other speakers stays as it was. Before, AudioSync forgot that latency until the speaker started again.
 - A Google Cast speaker's Mute button changes to Unmute, and back, as soon as you click it. Before, it waited for the speaker to answer. On the Mac and on Windows.
 - On the Mac, VoiceOver says whether streaming is on or off when it reaches the menu bar icon, before the number of notices waiting.

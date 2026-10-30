@@ -9888,6 +9888,55 @@ mod tests {
         );
     }
 
+    /// The notices after a pairing on Den TV fails as unsupported for `reason`.
+    fn unsupported_pairing_notices(
+        reason: audiosync_airplay::error::UnsupportedReason,
+    ) -> Vec<NoticeMessage> {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        fake.pairing(
+            &tv,
+            PairingEvent::Failed {
+                error: SessionError::new(ErrorKind::Unsupported(reason)),
+                wrong_pin: false,
+            },
+        );
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert_eq!(state.pin_prompt, None);
+        assert!(!state.speaker(&id).unwrap().enabled);
+        messages(&adapter)
+    }
+
+    // covers: S223
+    #[test]
+    fn a_pairing_that_needs_airplay2_says_so() {
+        use audiosync_airplay::error::UnsupportedReason;
+        assert_eq!(
+            unsupported_pairing_notices(UnsupportedReason::AirPlay2Only),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Den TV".to_owned(),
+                problem: ui_model::AirPlayProblem::AirPlay2NotYet,
+            }]
+        );
+    }
+
+    // covers: S223
+    #[test]
+    fn a_pairing_failed_as_unsupported_for_another_reason_keeps_that_reason() {
+        use audiosync_airplay::error::UnsupportedReason;
+        assert_eq!(
+            unsupported_pairing_notices(UnsupportedReason::Methods),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Den TV".to_owned(),
+                problem: ui_model::AirPlayProblem::Unsupported,
+            }]
+        );
+    }
+
     #[test]
     fn auto_connect_never_starts_a_pairing() {
         let (mut adapter, fake, tv) = apple_tv_adapter();
