@@ -507,7 +507,7 @@ struct CastModel {
             leftOn = nil
             if removedManual.contains(device.id) { return nil }
             if case .appeared(_, _, let former?) = change { levelDue = identified(former, as: device.id) }
-            if savedOn == device.id {
+            if savedOn == device.id && !device.offline {
                 savedOn = nil
                 if enabled == nil { enabled = device.id }
             }

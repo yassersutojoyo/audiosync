@@ -10566,6 +10566,26 @@ do {
                             former: CastModel.manualPrefix + "192.0.2.7"))
     check(rekeyed.enabled == kitchen && rekeyed.savedOn == nil,
           "cast: a speaker saved as on by its address turns on when a browse finds its ID (C112)")
+    // covers: C112
+    var standby = CastModel()
+    standby.savedOn = kitchen
+    standby.apply(.appeared(CastDevice(id: kitchen, name: "Kitchen", offline: true), offsetMs: nil))
+    standby.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
+    let offOffline = standby.enabled == nil
+    let denOn = standby.turnOn(den) == nil
+    standby.apply(.changed(CastDevice(id: kitchen, name: "Kitchen"), offsetMs: nil))
+    let denKept = standby.enabled == den
+    _ = standby.turnOff(den)
+    standby.apply(.changed(CastDevice(id: kitchen, name: "Kitchen"), offsetMs: nil))
+    check(offOffline && denOn && denKept && standby.enabled == nil,
+          "cast: a speaker saved as on stays off while listed offline, and one the user switches on meanwhile wins (C112)")
+    var wakes = CastModel()
+    wakes.savedOn = kitchen
+    wakes.apply(.appeared(CastDevice(id: kitchen, name: "Kitchen", offline: true), offsetMs: nil))
+    let waitedOffline = wakes.enabled == nil
+    wakes.apply(.changed(CastDevice(id: kitchen, name: "Kitchen"), offsetMs: nil))
+    check(waitedOffline && wakes.enabled == kitchen,
+          "cast: a speaker saved as on turns on once it comes online (C112)")
 
     // C108: the sender hears the selection at its start and at every change, played or not.
     var naming = CastModel()
