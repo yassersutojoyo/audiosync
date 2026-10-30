@@ -2420,8 +2420,7 @@ pub(crate) fn create_with(open_browser: OpenBrowser) -> *mut AscAirPlay {
 }
 
 /// Whether AirPlay 2 is automatic per receiver (S312): the build's flag, or
-/// `AUDIOSYNC_AIRPLAY2_AUTO` for this launch. The host labels its AirPlay 2
-/// switch "Prefer AirPlay 2" while it is on (S313).
+/// `AUDIOSYNC_AIRPLAY2_AUTO` for this launch.
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_airplay2_auto() -> bool {
     airplay2_auto(std::env::var(AIRPLAY2_AUTO_ENV).ok().as_deref())
@@ -4421,6 +4420,8 @@ mod tests {
     fn discovered_receivers_cross_the_boundary_with_their_verdicts() {
         let mut handle = asc_airplay_create();
         assert!(!handle.is_null());
+        // The AirPlay 2 flag off (S312).
+        inside(handle).airplay2 = false;
         start_with(
             handle,
             vec![
@@ -6941,6 +6942,8 @@ mod tests {
     #[test]
     fn a_receiver_reached_over_airplay2_is_listed_on_that_path_only_with_the_switch_on() {
         let mut handle = create_with(quiet);
+        // The AirPlay 2 flag off (S312).
+        inside(handle).airplay2 = false;
         let mut record = airplay2_only();
         record.txt.push(b"flags=0x200".to_vec());
         let device =
@@ -10226,6 +10229,8 @@ mod tests {
     #[test]
     fn a_stereo_pair_is_listed_and_added_as_one_target_only_with_the_switch_on() {
         let mut handle = create_with(quiet);
+        // The AirPlay 2 flag off (S312).
+        inside(handle).airplay2 = false;
         let (left, right) = (pair_member(0x11, "0x2004"), pair_member(0x12, "0x4"));
         let found = audiosync_airplay::targets::find_targets([&left, &right]);
         let pair = found.first().cloned().expect("a pair");

@@ -3437,6 +3437,10 @@ do {
             && preferring.helpText.contains("unless 'Prefer AirPlay 2'")
             && !preferring.helpText.contains("(Experimental)"),
           "S313 AirPlay 2 switch: under the AirPlay 2 flag it reads Prefer AirPlay 2, in its note and the Guide too")
+    // covers: S312, S313 (on by default, the switch keeps its label)
+    check(asc_airplay2_auto() == (ProcessInfo.processInfo.environment["AUDIOSYNC_AIRPLAY2_AUTO"] != "0")
+            && UIStrings().airPlay2Toggle == "AirPlay 2 (Experimental)",
+          "S312 AirPlay 2 switch: AirPlay 2 is on by default and the switch keeps its label")
     // The menu classes are main-actor bound; top-level code runs on the main thread.
     MainActor.assumeIsolated {
         let noteMenu = NSMenu()

@@ -5631,10 +5631,6 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         std::mem::take(&mut self.view_restored)
     }
 
-    fn airplay2_auto(&self) -> bool {
-        self.airplay2_auto
-    }
-
     fn set_view_settings(&mut self, settings: ViewSettings) {
         self.view = settings;
     }
@@ -8837,8 +8833,8 @@ mod tests {
         assert!(messages(&adapter).is_empty(), "no notice for a cancel");
     }
 
-    /// An adapter whose sender has the AirPlay 2 switch `on`, with the
-    /// AirPlay 2 receiver Loft listed.
+    /// An adapter whose sender has the AirPlay 2 switch `on` with the AirPlay
+    /// 2 flag off (spec S312), with the AirPlay 2 receiver Loft listed.
     fn airplay2_adapter(on: bool) -> (AudioAdapter<MockBackend>, FakeAirPlay, Device) {
         let mut audio = MockBackend::empty();
         audio.connect_output(SPEAKERS, "Speakers");
@@ -8848,6 +8844,7 @@ mod tests {
         let loft = airplay2_tv(9, "Loft");
         fake.appear(&loft);
         let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.airplay2_auto = false;
         adapter.poll();
         fake.take_calls();
         (adapter, fake, loft)
@@ -9954,7 +9951,7 @@ mod tests {
             let row = state.speaker(&ap(&den)).unwrap();
             assert_eq!(row.kind, dual_kind, "preferred {preferred}");
             assert_eq!(row.availability, Availability::Open);
-            assert!(adapter.airplay2_auto(), "the item reads Prefer AirPlay 2");
+            assert!(!adapter.airplay2_auto(), "the item keeps its label");
         }
     }
 

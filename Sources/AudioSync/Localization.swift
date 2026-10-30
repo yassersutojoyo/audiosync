@@ -18,8 +18,9 @@ struct UIStrings {
     /// How numbers such as percentages are written: the user's locale (the
     /// logic suite fixes one).
     var locale = Locale.autoupdatingCurrent
-    /// The build's AirPlay 2 flag (S312), which renames the AirPlay 2 switch.
-    var airPlay2Auto = asc_airplay2_auto()
+    /// Whether the AirPlay 2 switch reads as the preference the build's flag
+    /// makes it (S312): not until a relabel is decided (S313).
+    var airPlay2Auto = false
 
     // MARK: Main window
 

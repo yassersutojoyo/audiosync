@@ -152,9 +152,9 @@ pub fn airplay2_switch(value: Option<&str>) -> bool {
 /// launch (S312).
 pub const AIRPLAY2_AUTO_ENV: &str = "AUDIOSYNC_AIRPLAY2_AUTO";
 
-/// The build's flag for AirPlay 2 per receiver (S312), off until the checks
-/// on real receivers pass.
-pub const AIRPLAY2_AUTO: bool = false;
+/// The build's flag for AirPlay 2 per receiver (S312): on, so a receiver
+/// only AirPlay 2 can serve plays with nothing switched.
+pub const AIRPLAY2_AUTO: bool = true;
 
 /// The flag from [`AIRPLAY2_AUTO_ENV`]'s value: `1` on, `0` off, anything
 /// else the build's [`AIRPLAY2_AUTO`].

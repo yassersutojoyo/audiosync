@@ -7827,6 +7827,17 @@ pub mod tests {
         }
     }
 
+    // covers: S312
+    #[test]
+    fn with_nothing_switched_the_path_is_on_and_airplay1_comes_first() {
+        let config = airplay2_config(false, None, airplay2_auto(None));
+        assert!(config.airplay2, "AirPlay 2 only receivers play");
+        assert!(
+            !config.airplay2_preferred,
+            "receivers that speak both take AirPlay 1"
+        );
+    }
+
     #[test]
     fn the_pcm_variable_names_speakers_by_id() {
         assert!(pcm_debug_devices(None).is_empty());

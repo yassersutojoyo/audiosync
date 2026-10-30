@@ -1719,8 +1719,8 @@ pub trait Backend {
         false
     }
 
-    /// Whether AirPlay 2 is automatic per receiver for this launch (spec
-    /// S312); the AirPlay 2 item then reads Prefer AirPlay 2 (S313).
+    /// Whether the AirPlay 2 item reads Prefer AirPlay 2 (spec S313): not
+    /// until a relabel is decided, though AirPlay 2 is automatic (S312).
     fn airplay2_auto(&self) -> bool {
         false
     }

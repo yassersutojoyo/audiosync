@@ -150,8 +150,7 @@ fn play_dual(config: SenderConfig, id: u8) -> (Vec<String>, Vec<String>) {
 
 #[test]
 fn the_flag_turns_the_path_on_and_the_switch_into_a_preference() {
-    // The commit that flips AIRPLAY2_AUTO updates this line.
-    assert!(!airplay2_auto(None), "off until the flag flips");
+    assert!(airplay2_auto(None), "on by default");
     assert_eq!(AIRPLAY2_AUTO_ENV, "AUDIOSYNC_AIRPLAY2_AUTO");
     assert!(airplay2_auto(Some("1")));
     assert!(!airplay2_auto(Some("0")));
@@ -186,6 +185,37 @@ fn with_the_flag_on_an_airplay2_only_device_plays_over_airplay2_with_the_switch_
 fn with_the_flag_on_a_dual_device_stays_on_airplay1_with_the_switch_off() {
     let _serial = serial();
     let (ap1, ap2) = play_dual(switch(true, false), 62);
+    assert!(ap1.contains(&"RECORD".to_owned()), "{ap1:?}");
+    assert!(ap2.is_empty(), "nothing over AirPlay 2: {ap2:?}");
+}
+
+/// The sender as the apps build it with no setting touched and no
+/// environment variable set.
+fn untouched() -> SenderConfig {
+    switch(airplay2_auto(None), false)
+}
+
+// covers: P2
+#[test]
+fn with_nothing_switched_an_airplay2_only_device_plays_over_airplay2() {
+    let _serial = serial();
+    let server = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start(untouched());
+    let (events, key) = play(&sender, airplay2_only(&server, 66));
+    assert_eq!(errors(&events, &key), [], "{:?}", events.of(&key));
+    assert!(
+        wait_until(LONG, || server.fake().keys().contains(&"RECORD".to_owned())),
+        "{:?}",
+        server.fake().keys()
+    );
+    sender.shutdown();
+}
+
+// covers: P2
+#[test]
+fn with_nothing_switched_a_dual_device_plays_over_airplay1() {
+    let _serial = serial();
+    let (ap1, ap2) = play_dual(untouched(), 67);
     assert!(ap1.contains(&"RECORD".to_owned()), "{ap1:?}");
     assert!(ap2.is_empty(), "nothing over AirPlay 2: {ap2:?}");
 }
