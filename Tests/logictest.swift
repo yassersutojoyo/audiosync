@@ -3071,6 +3071,13 @@ do {
             && appearedAsking(pairedByUser) == ["C3"],
           "native airplay: auto-connect leaves alone a new row asking every time, one the user's attempt waits on, one with this run's password or one paired in the attempt",
           "\(appearedAsking(attempting)) \(appearedAsking(passwordGiven)) \(appearedAsking(pairedByUser))")
+    var returned = passwordGiven
+    returned.apply(.gone(id: "C3", name: nil))
+    returned.apply(.appeared(receiver("C3", "Office", .needsPassword)))
+    // covers: S349
+    check(returned.joinable(returned.rows(enabled: []), after: ["native:A1"], stopped: false) == ["native:C3"],
+          "native airplay: a new auto-connect row asking for a password given this run is joinable",
+          "\(returned.joinable(returned.rows(enabled: []), after: ["native:A1"], stopped: false))")
     // covers: S79
     check(passwordGiven.soundingIDs == ["native:A1", "native:C3"],
           "native airplay: a password receiver given its password this run holds local outputs back, as on Windows",
