@@ -10677,6 +10677,38 @@ mod tests {
         assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
     }
 
+    // covers: P224
+    #[test]
+    fn a_speaker_waiting_its_turn_shows_connecting() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let den = device(3, "Den", OPEN_TXT);
+        let porch = device(4, "Porch", OPEN_TXT);
+        fake.appear(&den);
+        fake.appear(&porch);
+        adapter.poll();
+        // One burst: Kitchen's connect starts, Den and Porch wait their turn,
+        // and the crate reports all three Connecting.
+        for speaker in [&kitchen, &den, &porch] {
+            adapter.set_speaker_enabled(&ap(speaker), true);
+            fake.state(speaker, AirPlayState::Connecting);
+        }
+        adapter.poll();
+        let row = |adapter: &AudioAdapter<MockBackend>, speaker: &Device| {
+            let row = adapter.snapshot().speaker(&ap(speaker)).unwrap().clone();
+            (state_of(adapter, &ap(speaker)), row.waiting, row.enabled)
+        };
+        let connecting = (SpeakerState::Playing, None, true);
+        assert_eq!(row(&adapter, &kitchen), connecting);
+        assert_eq!(row(&adapter, &den), connecting);
+        assert_eq!(row(&adapter, &porch), connecting);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(row(&adapter, &den), connecting);
+        assert_eq!(row(&adapter, &porch), connecting);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
     // covers: P215, S222
     #[test]
     fn an_unannounced_airplay_speaker_stays_on_without_a_notice_until_it_plays() {
