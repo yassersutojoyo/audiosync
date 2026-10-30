@@ -4104,6 +4104,26 @@ do {
     check(playing.askingEveryTime(playing.rows(enabled: ["native:T2"])).isEmpty,
           "every time: a speaker that plays when it starts asking for a code every time keeps playing")
 
+    // The core clears T3's every-time flag (a_receiver_asking_every_time_with_credentials_no_answer_turned_down_reads_as_paired);
+    // this pins that such a row stays on. T4's credentials were turned down, T5 has none.
+    var turnedDown = tv("T4", .needsPin, everyTime: true)
+    turnedDown.credentialsKept = true
+    var stored = NativeAirPlayModel()
+    for r in [tv("T3", .available, everyTime: false), turnedDown, tv("T5", .needsPin, everyTime: true)] { stored.apply(.appeared(r)) }
+    var fromLastRun = EveryTimeGuard()
+    let restoredOn = stored.adopt(enabled: ["native:T3", "native:T4", "native:T5"], known: [], stopped: false,
+                                  everyTime: &fromLastRun)
+    // covers: S223, P182
+    check(restoredOn.turnOff == ["native:T4", "native:T5"]
+            && stored.plan(streaming: true, enabled: ["native:T3"]).add == ["T3"],
+          "every time: a speaker with stored credentials no answer turned down stays on from the last run",
+          "\(restoredOn.turnOff)")
+    let appeared = stored.adopt(enabled: [], known: [], stopped: false, everyTime: &fromLastRun)
+    // covers: S223, P182
+    check(appeared.joinable == ["native:T3"],
+          "every time: auto-connect turns on a speaker with stored credentials no answer turned down",
+          "\(appeared.joinable)")
+
     // Switched on by hand: it pairs and its PIN prompt opens.
     var pin = NativeAirPlayModel()
     pin.apply(.appeared(tv("P1", .needsPin, everyTime: true)))
