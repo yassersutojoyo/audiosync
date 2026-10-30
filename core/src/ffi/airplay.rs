@@ -2830,7 +2830,12 @@ pub unsafe extern "C" fn asc_airplay_remove_speaker(
                 airplay.relist(id);
             }
             airplay.target_states.remove(id);
-            airplay.target_missing.remove(id);
+            if airplay.target_missing.remove(id).is_some()
+                && let Some(target) = airplay.targets.get(id)
+            {
+                let event = TargetChange::Updated(Box::new(target.clone()));
+                airplay.queue_receiver(ReceiverEvent::Target(event));
+            }
             for member in &added.members {
                 airplay.member_states.remove(member);
             }
@@ -10298,6 +10303,40 @@ mod tests {
         assert_eq!(report.event, AIRPLAY_GONE);
         assert_eq!(text(report.id), pair_id);
         // SAFETY: the handle is live and used by no other call.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn removing_a_stereo_pair_reports_it_again_without_its_missing_side() {
+        let mut handle = create_with(quiet);
+        let (left, right) = (pair_member(0x18, "0x2004"), pair_member(0x19, "0x4"));
+        let found = audiosync_airplay::targets::find_targets([&left, &right]);
+        let pair = found.first().cloned().expect("a pair");
+        let pair_id = pair.id.to_string();
+        inside(handle).airplay2 = true;
+        inside(handle).take_in(SenderEvent::Receiver(ReceiverEvent::Target(
+            TargetChange::Updated(Box::new(pair.clone())),
+        )));
+        let c_id = c_string(&pair_id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 40.0)) };
+        inside(handle).take_in(SenderEvent::TargetMissing {
+            id: pair.id.clone(),
+            missing: vec![right.key.clone()],
+        });
+        while let Some(queued) = inside(handle).receivers.pop_front() {
+            inside(handle).report(queued);
+        }
+
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_remove_speaker(handle, c_id.as_ptr())) };
+        let queued = inside(handle).receivers.pop_back().expect("queued");
+        let report = inside(handle).report(queued);
+        assert_eq!(report.event, AIRPLAY_CHANGED);
+        assert_eq!(text(report.id), pair_id);
+        assert_eq!(report.flags & AIRPLAY_FLAG_INCOMPLETE, 0);
+        assert_eq!(text(report.missing), "");
+        // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
