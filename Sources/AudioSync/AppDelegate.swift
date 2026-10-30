@@ -247,6 +247,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Refreshes the window when the headphone jack changes a built-in
     /// output's data source, which calibration leaves out.
     let dataSourceWatch = DataSourceWatch()
+    /// Lists the outputs again when macOS renames one.
+    let nameWatch = NameWatch()
     /// The hold-back each running local output was last given, by UID (S177).
     var localHoldBacks: [String: Double] = [:]
     /// The device ID each local output was last started on, by UID, so a
@@ -641,6 +643,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             self.observeDeviceList()
             self.deviceVolumes.restarted()
             self.dataSourceWatch.stop()
+            self.nameWatch.stop()
             self.engine.serviceRestarted()
             self.devicesChanged()
         }
@@ -662,7 +665,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     /// Devices change in bursts (a dock, the capture's own aggregate device):
     /// one reconcile once the burst has passed.
-    private func devicesChanged() {
+    func devicesChanged() {
         guard !deviceRescanPending else { return }
         deviceRescanPending = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
@@ -713,6 +716,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         appModel.commitOpenRename()
         Self.exiting.store(true, ordering: .relaxed)
         dataSourceWatch.stop()
+        nameWatch.stop()
         DebugTrace.log("[AudioSync] quitting")
         // Its destroy waits up to about 3.5 s for a session's teardown, so it
         // runs beside the fades and the AirPlay sender's teardown.

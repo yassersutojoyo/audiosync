@@ -275,6 +275,8 @@ extension AppDelegate {
         }
         dataSourceWatch.onChange = { [weak self] in self?.pushModel() }
         dataSourceWatch.follow(devices)
+        nameWatch.onChange = { [weak self] in self?.devicesChanged() }
+        nameWatch.follow(devices)
     }
 
     /// Whole-system source: follow whichever player is playing. App source: that
