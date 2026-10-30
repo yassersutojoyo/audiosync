@@ -10829,6 +10829,28 @@ do {
     }
     check(changed == .note(attempt: 6, "the device's certificate changed from AB to CD"),
           "cast: a changed certificate becomes a debug log line of its attempt")
+    raw = AscCastEvent()
+    raw.kind = ASC_CAST_EVENT_CONNECT_FAILED
+    raw.attempt = 6
+    raw.error = ASC_CAST_ERROR_CONNECT
+    // The debug log line is built from the event, so the event has to keep the core's text (C20, C80).
+    let refused: CastEvent? = "tls alert X".withCString { line in
+        raw.detail = line
+        return CastEvent(raw)
+    }
+    check(refused.map { String(describing: $0) }?.contains("tls alert X") == true,
+          "cast: a connect failure keeps the core's detail for the debug log")
+    raw.reason = ASC_CAST_END_FAILED
+    for (kind, name) in [(ASC_CAST_EVENT_RECOVERING, "a reconnect"), (ASC_CAST_EVENT_FORMAT_FALLBACK, "a format fallback"),
+                         (ASC_CAST_EVENT_ENDED, "a failed end")] {
+        raw.kind = kind
+        let kept: CastEvent? = "tls alert X".withCString { line in
+            raw.detail = line
+            return CastEvent(raw)
+        }
+        check(kept.map { String(describing: $0) }?.contains("tls alert X") == true,
+              "cast: \(name) keeps the core's detail for the debug log")
+    }
     check(CastRefusal.problem(ASC_CAST_REFUSED_GROUP) == .notResponding
             && CastEnd.failed(CastError(ASC_CAST_ERROR_GROUP)).problem == .notResponding,
           "cast group: the retired group refusal and error map to nothing group-specific")

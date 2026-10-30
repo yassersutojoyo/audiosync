@@ -404,17 +404,19 @@ extension AppDelegate {
     private func castLogLine(_ event: CastEvent) -> String? {
         switch event {
         case .started(let a, let format): return "attempt \(a) plays, format \(format)"
-        case .formatFallback(let a, let format): return "attempt \(a): the device refused WAV; format \(format) instead"
+        case .formatFallback(let a, let format, let detail):
+            return "attempt \(a): WAV refused (\(detail)), format \(format) instead"
         case .playing(let a): return "attempt \(a): the device reports playing"
-        case .connectFailed(let a, let error, let retry):
-            return "attempt \(a): connecting failed (\(String(describing: error))), again in \(retry) ms"
-        case .recovering(let a): return "attempt \(a): the channel failed, reconnecting"
+        case .connectFailed(let a, _, let retry, let detail):
+            return "attempt \(a): connecting failed (\(detail)), again in \(retry) ms"
+        case .recovering(let a, let detail): return "attempt \(a): reconnecting (\(detail))"
         case .recovered(let a): return "attempt \(a): recovered"
         case .reloaded(let a): return "attempt \(a): the stream was loaded again"
         case .volume(let a, let v):
             return "attempt \(a): volume \(Int((v.level * 100).rounded()))" + (v.muted ? ", muted" : "")
                 + (v.fixed ? ", fixed" : "")
         case .commandFailed(let a, let error): return "attempt \(a): a request failed (\(String(describing: error)))"
+        case .ended(let a, .failed(_, let detail)): return "attempt \(a) ended: failed: \(detail)"
         case .ended(let a, let end): return "attempt \(a) ended: \(end)"
         case .note(let a, let line): return "attempt \(a): \(line)"
         case .members(let a, let list):

@@ -147,17 +147,18 @@ enum CastEnd: Equatable {
     case takenOver
     /// Stopped before it started.
     case deselected
-    case failed(CastError?)
+    /// `detail` is the core's text for the debug log.
+    case failed(CastError?, detail: String = "")
 
     /// What the user is told; nil for a stop the user or AudioSync asked for.
     var problem: CastProblem? {
         switch self {
         case .stopped, .deselected: return nil
         case .takenOver: return .takenOver
-        case .failed(.connect): return .notResponding
-        case .failed(.launch), .failed(.media): return .refused
-        case .failed(.noFetch): return .blocked
-        case .failed(.stream), .failed(.internal): return .connectionLost
+        case .failed(.connect, _): return .notResponding
+        case .failed(.launch, _), .failed(.media, _): return .refused
+        case .failed(.noFetch, _): return .blocked
+        case .failed(.stream, _), .failed(.internal, _): return .connectionLost
         case .failed: return .notResponding
         }
     }
@@ -186,15 +187,16 @@ enum CastEvent: Equatable {
     /// The device plays the stream in `format`, an `ASC_CAST_FORMAT_` code.
     case started(attempt: UInt64, format: Int32)
     case playing(attempt: UInt64)
-    case connectFailed(attempt: UInt64, error: CastError?, retryMs: Int64)
-    case recovering(attempt: UInt64)
+    /// `detail` here, in `recovering` and in `formatFallback` is the core's text for the debug log (C20).
+    case connectFailed(attempt: UInt64, error: CastError?, retryMs: Int64, detail: String = "")
+    case recovering(attempt: UInt64, detail: String = "")
     case recovered(attempt: UInt64)
     case reloaded(attempt: UInt64)
     case volume(attempt: UInt64, CastVolume)
     case commandFailed(attempt: UInt64, error: CastError?)
     case ended(attempt: UInt64, CastEnd)
     /// The device refused WAV; `format` is loaded instead (C84).
-    case formatFallback(attempt: UInt64, format: Int32)
+    case formatFallback(attempt: UInt64, format: Int32, detail: String = "")
     /// Diagnostics, rebuffering and the stream's own log: for the debug log only.
     case note(attempt: UInt64, String)
     /// The playing group's member list changed; empty while none is known.
@@ -208,8 +210,8 @@ enum CastEvent: Equatable {
 
     var attempt: UInt64? {
         switch self {
-        case .started(let a, _), .formatFallback(let a, _), .playing(let a), .connectFailed(let a, _, _),
-             .recovering(let a), .recovered(let a), .reloaded(let a), .volume(let a, _), .commandFailed(let a, _),
+        case .started(let a, _), .formatFallback(let a, _, _), .playing(let a), .connectFailed(let a, _, _, _),
+             .recovering(let a, _), .recovered(let a), .reloaded(let a), .volume(let a, _), .commandFailed(let a, _),
              .ended(let a, _), .note(let a, _), .members(let a, _):
             return a
         case .groupLog, .memoryChanged, .discoveryStopped, .failed:
@@ -236,8 +238,9 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_PLAYING:
             underruns.forget(a)
             self = .playing(attempt: a)
-        case ASC_CAST_EVENT_CONNECT_FAILED: self = .connectFailed(attempt: a, error: error, retryMs: raw.retry_ms)
-        case ASC_CAST_EVENT_RECOVERING: self = .recovering(attempt: a)
+        case ASC_CAST_EVENT_CONNECT_FAILED:
+            self = .connectFailed(attempt: a, error: error, retryMs: raw.retry_ms, detail: detail)
+        case ASC_CAST_EVENT_RECOVERING: self = .recovering(attempt: a, detail: detail)
         case ASC_CAST_EVENT_RECOVERED: self = .recovered(attempt: a)
         case ASC_CAST_EVENT_RELOADED: self = .reloaded(attempt: a)
         case ASC_CAST_EVENT_VOLUME:
@@ -250,12 +253,12 @@ enum CastEvent: Equatable {
             case ASC_CAST_END_STOPPED: end = .stopped
             case ASC_CAST_END_TAKEN_OVER: end = .takenOver
             case ASC_CAST_END_DESELECTED: end = .deselected
-            default: end = .failed(error)
+            default: end = .failed(error, detail: detail)
             }
             underruns.forget(a)
             self = .ended(attempt: a, end)
         case ASC_CAST_EVENT_REBUFFERING: self = .note(attempt: a, "the device ran dry")
-        case ASC_CAST_EVENT_FORMAT_FALLBACK: self = .formatFallback(attempt: a, format: raw.format)
+        case ASC_CAST_EVENT_FORMAT_FALLBACK: self = .formatFallback(attempt: a, format: raw.format, detail: detail)
         case ASC_CAST_EVENT_DIAGNOSTICS:
             let silence = underruns.since(attempt: a, total: raw.underrun_frames)
             self = .note(attempt: a, String(format: "drift %.0f ms, queued %.0f ms", raw.drift_ms, raw.queued_ms)
@@ -843,7 +846,7 @@ struct CastModel {
         case .started(_, let format):
             attempt?.format = format
             return setStatus(.playing)
-        case .formatFallback(_, let format):
+        case .formatFallback(_, let format, _):
             attempt?.format = format
             return nil
         case .playing, .recovered, .reloaded:
