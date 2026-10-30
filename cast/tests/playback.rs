@@ -479,6 +479,59 @@ fn a_dead_channel_reconnects_and_reuses_or_relaunches_the_app() {
 
 // covers: C81
 #[test]
+fn a_channel_that_dies_during_the_load_after_a_relaunch_reconnects_again() {
+    let device = FakeDevice::start(Behavior {
+        load_script: vec![OnLoad::Play, OnLoad::Drop],
+        ..Behavior::default()
+    });
+    let (mut session, _feed) = start(&device);
+    device.send(Command::ClearApps);
+    device.send(Command::DropConnection);
+    let seen = run_until(&mut session, Duration::from_secs(20), |event| {
+        matches!(
+            event,
+            SessionEvent::Ended(_) | SessionEvent::Recovered { .. }
+        )
+    });
+    let recoveries = seen
+        .iter()
+        .filter(|event| matches!(event, SessionEvent::Recovering(_)))
+        .count();
+    assert_eq!(recoveries, 2, "{seen:?}");
+    assert!(!session.is_ended(), "{seen:?}");
+    assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 2);
+    session.stop();
+    device.join();
+}
+
+// covers: C43, C81
+#[test]
+fn a_takeover_during_a_reload_ends_as_taken_over() {
+    let device = FakeDevice::start(Behavior {
+        load_script: vec![OnLoad::Play, OnLoad::TakeOver],
+        ..Behavior::default()
+    });
+    let (mut session, _feed) = start(&device);
+    device.send(Command::Send(media_status(
+        "transport-1",
+        0,
+        1,
+        "IDLE",
+        Some("FINISHED"),
+    )));
+    let seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Ended(_))
+    });
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Ended(SessionEnd::TakenOver))),
+        "{seen:?}"
+    );
+    device.join();
+}
+
+// covers: C81
+#[test]
 fn after_a_drop_only_an_idle_device_is_relaunched_on() {
     let other_app = json!({"appId": "233637DE", "sessionId": "other-1", "transportId": "other-1"});
     let device = FakeDevice::start(Behavior::default());
@@ -1095,6 +1148,25 @@ fn a_reconnect_whose_first_status_has_no_level_keeps_the_known_level() {
         "{seen:?}"
     );
     assert_eq!(session.volume().expect("volume").level, known);
+    session.stop();
+    device.join();
+}
+
+// covers: C70
+#[test]
+fn a_mute_answered_by_an_unchanged_status_still_reports_the_volume() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    session.run_for(Duration::from_millis(200));
+    while session.poll_event().is_some() {}
+    // The device is unmuted already, so it answers with the status it had,
+    // as one that ignores a mute does.
+    session.set_muted(false).expect("sent");
+    run_until(
+        &mut session,
+        Duration::from_secs(3),
+        |event| matches!(event, SessionEvent::Volume(volume) if !volume.muted),
+    );
     session.stop();
     device.join();
 }

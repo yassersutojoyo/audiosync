@@ -299,6 +299,8 @@ pub struct CastSession {
     recovering: bool,
     ended: bool,
     last_volume: Option<DeviceVolume>,
+    /// A mute was sent and no status has come since (C70).
+    mute_asked: bool,
     last_media: Option<MediaStatus>,
     playing: bool,
     load_sent_frames: u64,
@@ -465,6 +467,7 @@ impl CastSession {
             recovering: false,
             ended: false,
             last_volume: None,
+            mute_asked: false,
             last_media: None,
             playing: false,
             load_sent_frames: 0,
@@ -548,7 +551,9 @@ impl CastSession {
     }
 
     pub fn set_muted(&mut self, muted: bool) -> Result<(), VolumeError> {
-        self.client.set_muted(muted)
+        self.client.set_muted(muted)?;
+        self.mute_asked = true;
+        Ok(())
     }
 
     pub fn step_volume(&mut self, up: bool) -> Result<f64, VolumeError> {
@@ -837,7 +842,11 @@ impl CastSession {
     fn on_event(&mut self, event: Event) {
         match event {
             Event::Status(status) => {
-                if status.volume.has_level && self.last_volume.as_ref() != Some(&status.volume) {
+                // The host shows a mute at once, so the device's next status wins even
+                // when it changed nothing, as when the device ignored the mute (C70).
+                let changed = self.last_volume.as_ref() != Some(&status.volume);
+                if status.volume.has_level && (changed || self.mute_asked) {
+                    self.mute_asked = false;
                     self.last_volume = Some(status.volume.clone());
                     self.report(SessionEvent::Volume(status.volume));
                 }
@@ -894,11 +903,13 @@ impl CastSession {
     }
 
     /// One more `LOAD` on the running app; if it fails, the session ends
-    /// with its reason.
+    /// with its reason, and a channel that ends meanwhile counts as on a
+    /// live channel.
     fn reload(&mut self) {
         match self.load_until_playing() {
             Ok(()) => self.report(SessionEvent::Reloaded),
             Err(_) if !self.selected.load(Ordering::SeqCst) => self.end(SessionEnd::Deselected),
+            Err(MediaError::Ended(reason)) => self.on_event(Event::Ended(reason)),
             Err(error) => self.end(SessionEnd::Failed(error.into())),
         }
     }
@@ -915,84 +926,100 @@ impl CastSession {
         self.recovering = was;
     }
 
-    fn recover_now(&mut self, reason: EndReason, reload: bool) {
-        self.report(SessionEvent::Recovering(reason));
-        self.playing = false;
+    fn recover_now(&mut self, mut reason: EndReason, reload: bool) {
         // A level the dead channel never sent, or sent with no answer, goes on the new one.
         let queued = self.client.take_unanswered_volume();
-        // One connection per device at a time.
-        self.client.disconnect();
-        while self.client.poll_event().is_some() {}
-        self.client = match self.reconnect() {
-            Some(mut client) => {
-                client.set_selected(Arc::clone(&self.selected));
-                if self.group.is_some() {
-                    client.request_members();
+        loop {
+            if self.ended {
+                return;
+            }
+            self.report(SessionEvent::Recovering(reason));
+            self.playing = false;
+            // One connection per device at a time.
+            self.client.disconnect();
+            while self.client.poll_event().is_some() {}
+            self.client = match self.reconnect() {
+                Some(mut client) => {
+                    client.set_selected(Arc::clone(&self.selected));
+                    if self.group.is_some() {
+                        client.request_members();
+                    }
+                    client
                 }
-                client
-            }
-            None => return self.end(SessionEnd::Deselected),
-        };
-        if let Some(event) = self
-            .fingerprints
-            .as_ref()
-            .and_then(|fingerprints| fingerprints.record(&self.client))
-        {
-            self.report(event);
-        }
-        // The stream URL names the local address of the channel (C55); one
-        // on the old address may be out of reach, so the stream loads again.
-        let local_ip = self.client.local_address().ip();
-        let rebound = local_ip != self.server.address().ip();
-        if rebound {
-            if let Err(error) = self.server.rebind(local_ip) {
-                return self.end(SessionEnd::Failed(error.into()));
-            }
-            self.load.url = self.server.url();
-            if !self.load.metadata.images.is_empty()
-                && let Some(url) = self.server.artwork_url()
+                None => return self.end(SessionEnd::Deselected),
+            };
+            if let Some(event) = self
+                .fingerprints
+                .as_ref()
+                .and_then(|fingerprints| fingerprints.record(&self.client))
             {
-                self.load.metadata.images = vec![url];
+                self.report(event);
             }
-        }
-        let reload = reload || rebound;
-        let resumed = if reload {
-            self.client.resume(&self.app, None, &self.load.url)
-        } else {
-            self.client
-                .resume(&self.app, self.media_session_id, &self.load.url)
-        };
-        let result = if resumed && !reload {
-            self.playing = true;
-            self.next_diagnostics = Instant::now() + DIAGNOSTICS_INTERVAL;
-            Ok(false)
-        } else if resumed {
-            self.load_until_playing()
-                .map(|()| false)
-                .map_err(SessionError::from)
-        } else if self.client.status().is_some_and(|status| !status.is_idle()) {
-            return self.end(SessionEnd::TakenOver);
-        } else {
-            match self.client.launch() {
-                Ok(app) => {
-                    self.app = app;
-                    self.load_until_playing()
-                        .map(|()| true)
-                        .map_err(SessionError::from)
+            // The stream URL names the local address of the channel (C55); one
+            // on the old address may be out of reach, so the stream loads again.
+            let local_ip = self.client.local_address().ip();
+            let rebound = local_ip != self.server.address().ip();
+            if rebound {
+                if let Err(error) = self.server.rebind(local_ip) {
+                    return self.end(SessionEnd::Failed(error.into()));
                 }
-                Err(error) => Err(error.into()),
-            }
-        };
-        match result {
-            Ok(relaunched) => {
-                if let Some(level) = queued {
-                    let _ = self.client.set_volume(level);
+                self.load.url = self.server.url();
+                if !self.load.metadata.images.is_empty()
+                    && let Some(url) = self.server.artwork_url()
+                {
+                    self.load.metadata.images = vec![url];
                 }
-                self.pacer.connected(Instant::now());
-                self.report(SessionEvent::Recovered { relaunched });
             }
-            Err(_) if !self.selected.load(Ordering::SeqCst) => self.end(SessionEnd::Deselected),
-            Err(error) => self.end(SessionEnd::Failed(error)),
+            let reload = reload || rebound;
+            let resumed = if reload {
+                self.client.resume(&self.app, None, &self.load.url)
+            } else {
+                self.client
+                    .resume(&self.app, self.media_session_id, &self.load.url)
+            };
+            let result = if resumed && !reload {
+                self.playing = true;
+                self.next_diagnostics = Instant::now() + DIAGNOSTICS_INTERVAL;
+                Ok(false)
+            } else if resumed {
+                self.load_until_playing()
+                    .map(|()| false)
+                    .map_err(SessionError::from)
+            } else if self.client.status().is_some_and(|status| !status.is_idle()) {
+                return self.end(SessionEnd::TakenOver);
+            } else {
+                match self.client.launch() {
+                    Ok(app) => {
+                        self.app = app;
+                        self.load_until_playing()
+                            .map(|()| true)
+                            .map_err(SessionError::from)
+                    }
+                    Err(error) => Err(error.into()),
+                }
+            };
+            match result {
+                Ok(relaunched) => {
+                    if let Some(level) = queued {
+                        let _ = self.client.set_volume(level);
+                    }
+                    self.pacer.connected(Instant::now());
+                    return self.report(SessionEvent::Recovered { relaunched });
+                }
+                Err(_) if !self.selected.load(Ordering::SeqCst) => {
+                    return self.end(SessionEnd::Deselected);
+                }
+                Err(
+                    SessionError::Media(MediaError::Ended(EndReason::TakenOver))
+                    | SessionError::Launch(LaunchError::Ended(EndReason::TakenOver)),
+                ) => return self.end(SessionEnd::TakenOver),
+                // The channel died again during the launch or load: the sender never gives up on its own (C81).
+                Err(
+                    SessionError::Media(MediaError::Ended(next))
+                    | SessionError::Launch(LaunchError::Ended(next)),
+                ) if !matches!(next, EndReason::AppClosed | EndReason::Stopped) => reason = next,
+                Err(error) => return self.end(SessionEnd::Failed(error)),
+            }
         }
     }
 }

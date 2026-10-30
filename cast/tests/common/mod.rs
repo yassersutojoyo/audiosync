@@ -58,6 +58,12 @@ pub enum OnLoad {
     /// An error reply of this type with these extra fields.
     Error(&'static str, Value),
     Ignore,
+    /// No reply; the connection drops, as on a device whose network went
+    /// away during the `LOAD`.
+    Drop,
+    /// No reply; another sender takes the device over, as
+    /// [`Command::TakeOver`].
+    TakeOver,
 }
 
 /// How the fake device answers a media `GET_STATUS`.
@@ -645,6 +651,14 @@ impl Device {
         };
         if on_load == OnLoad::Ignore {
             return Vec::new();
+        }
+        if on_load == OnLoad::Drop {
+            let _ = self.commands.send(Command::DropConnection);
+            return Vec::new();
+        }
+        if on_load == OnLoad::TakeOver {
+            self.apps.clear();
+            return vec![self.status(0)];
         }
         if let OnLoad::Error(kind, extra) = &on_load {
             let mut reply = json!({"type": kind, "requestId": id});
