@@ -72,7 +72,7 @@ extension AppDelegate {
         default:
             return calibrateAllFailed(.microphoneDenied)
         }
-        if let refusal = CalibrationMicrophone.defaultInputRefusal() {
+        if let refusal = CalibrationMicrophone.defaultInputPreflight() {
             return calibrateAllFailed(refusal)
         }
         guard let rate = CalibrationMicrophone.defaultInputRate() else { return calibrateAllFailed(.noMicrophone) }
@@ -118,6 +118,15 @@ extension AppDelegate {
         speaker = now
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             appModel.calibrateAll.line = .againEnded(name: speaker.name, .failed(.microphoneDenied))
+            return
+        }
+        if let heard = CalibrationMicrophone.defaultInputID(),
+           let changed = CalibrateAllFlow.microphoneCheck(rate: sheet.rate, first: sheet.microphone, now: heard) {
+            appModel.calibrateAll.line = .againEnded(name: speaker.name, .failed(changed))
+            return
+        }
+        if let refusal = CalibrationMicrophone.defaultInputPreflight() {
+            appModel.calibrateAll.line = .againEnded(name: speaker.name, .failed(refusal))
             return
         }
         let off = sheet.isOff(index)

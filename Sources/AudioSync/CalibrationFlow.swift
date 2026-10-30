@@ -173,6 +173,26 @@ enum CalibrationFlow {
         return .handsFreeMicrophone
     }
 
+    /// Why calibration can't record from the default input, asked before the
+    /// music fades (S232): `nominalRate` is nil without one, and a rate the
+    /// signal isn't made at (S233) is unsupported rather than no microphone.
+    static func microphonePreflight(nominalRate: Double?, transport: UInt32?,
+                                    subTransports: [UInt32] = []) -> CalibrationFailure? {
+        guard let nominal = nominalRate else { return .noMicrophone }
+        if let refusal = microphoneRefusal(defaultInputTransport: transport, inputSubTransports: subTransports) {
+            return refusal
+        }
+        return microphoneRate(nominal: nominal) == nil ? .unsupportedRate : nil
+    }
+
+    /// An input's nominal rate in whole Hz, nil for one the test signal isn't made at (S233).
+    static func microphoneRate(nominal: Double) -> UInt32? {
+        guard nominal.isFinite, nominal.rounded() == nominal, nominal >= 1, nominal <= Double(UInt32.max),
+              asc_calibration_signal_frames(UInt32(nominal)) > 0
+        else { return nil }
+        return UInt32(nominal)
+    }
+
     /// Why an output sits out of calibration, nil when it takes part.
     /// `terminal` is its first output stream's `kAudioStreamPropertyTerminalType`,
     /// `dataSource` its output `kAudioDevicePropertyDataSource`, `name` the

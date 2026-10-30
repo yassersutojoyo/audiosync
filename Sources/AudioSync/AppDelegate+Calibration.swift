@@ -42,8 +42,8 @@ extension AppDelegate {
             showCalibration(uid, .failed(.microphoneDenied))
             return
         }
-        if let refusal = CalibrationMicrophone.defaultInputRefusal() {
-            DebugTrace.log("[AudioSync] calibration of \(uid) refused: the default input is a Bluetooth hands-free input")
+        if let refusal = CalibrationMicrophone.defaultInputPreflight() {
+            DebugTrace.log("[AudioSync] calibration of \(uid) refused before the fade: \(refusal)")
             showCalibration(uid, .failed(refusal))
             return
         }

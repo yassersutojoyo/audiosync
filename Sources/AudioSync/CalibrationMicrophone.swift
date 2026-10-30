@@ -12,16 +12,23 @@ final class CalibrationMicrophone {
     enum StartError: Error, Equatable {
         /// No default input device, or none with an input channel.
         case noDevice
-        /// Its streams aren't native 32-bit float (S14), or its rate is
-        /// outside the test signal's range (S233).
+        /// Its streams aren't native 32-bit float (S14).
         case unusable
+        /// Its rate is outside the test signal's range (S233).
+        case unsupportedRate
         /// Core Audio wouldn't start the IOProc.
         case notStarted(OSStatus)
         /// A Bluetooth headset's hands-free input (`CalibrationFlow.microphoneRefusal`).
         case handsFree
 
         /// What the calibration says about it.
-        var failure: CalibrationFailure { self == .handsFree ? .handsFreeMicrophone : .noMicrophone }
+        var failure: CalibrationFailure {
+            switch self {
+            case .handsFree: return .handsFreeMicrophone
+            case .unsupportedRate: return .unsupportedRate
+            default: return .noMicrophone
+            }
+        }
     }
 
     /// The device's nominal rate, whole Hz.
@@ -41,10 +48,8 @@ final class CalibrationMicrophone {
         case .noChannels: throw StartError.noDevice
         case .unsupported: throw StartError.unusable
         }
-        let nominal = MicrophoneHAL.nominalRate(of: device)
-        guard nominal.isFinite, nominal.rounded() == nominal, nominal >= 1, nominal <= Double(UInt32.max),
-              asc_calibration_signal_frames(UInt32(nominal)) > 0
-        else { throw StartError.unusable }
+        guard let nominal = MicrophoneHAL.nominalRate(of: device) else { throw StartError.noDevice }
+        guard let rate = CalibrationFlow.microphoneRate(nominal: nominal) else { throw StartError.unsupportedRate }
         let sink = MicrophoneSink(capacity: Int((seconds * nominal).rounded(.up)), layout: layout)
         var created: AudioDeviceIOProcID?
         let status = AudioDeviceCreateIOProcIDWithBlock(&created, device, nil) { _, input, inputTime, _, _ in
@@ -59,7 +64,7 @@ final class CalibrationMicrophone {
         self.device = device
         self.proc = created
         self.sink = sink
-        self.rate = UInt32(nominal)
+        self.rate = rate
     }
 
     deinit { stop() }
@@ -67,18 +72,26 @@ final class CalibrationMicrophone {
     /// The default input's nominal rate in whole Hz; nil without a default
     /// input or for a rate the test signal isn't made at (S233).
     static func defaultInputRate() -> UInt32? {
-        guard let device = MicrophoneHAL.defaultInput() else { return nil }
-        let nominal = MicrophoneHAL.nominalRate(of: device)
-        guard nominal.isFinite, nominal.rounded() == nominal, nominal >= 1, nominal <= Double(UInt32.max),
-              asc_calibration_signal_frames(UInt32(nominal)) > 0
+        guard let device = MicrophoneHAL.defaultInput(), let nominal = MicrophoneHAL.nominalRate(of: device)
         else { return nil }
-        return UInt32(nominal)
+        return CalibrationFlow.microphoneRate(nominal: nominal)
     }
 
-    /// Why calibration won't record from the default input
-    /// (`CalibrationFlow.microphoneRefusal`); nil without a default input.
-    static func defaultInputRefusal() -> CalibrationFailure? {
-        MicrophoneHAL.defaultInput().flatMap(refusal(of:))
+    /// The default input as a run would record with it; a rate the signal
+    /// isn't made at reads as 0, which matches no run's.
+    static func defaultInputID() -> CalibrationMicrophoneID? {
+        guard let device = MicrophoneHAL.defaultInput(), let nominal = MicrophoneHAL.nominalRate(of: device)
+        else { return nil }
+        return CalibrationMicrophoneID(device: device, rate: CalibrationFlow.microphoneRate(nominal: nominal) ?? 0)
+    }
+
+    /// Why calibration can't record from the default input now
+    /// (`CalibrationFlow.microphonePreflight`).
+    static func defaultInputPreflight() -> CalibrationFailure? {
+        let device = MicrophoneHAL.defaultInput()
+        let read = device.flatMap { AudioDevices.inputTransports(of: $0) }
+        return CalibrationFlow.microphonePreflight(nominalRate: device.flatMap { MicrophoneHAL.nominalRate(of: $0) },
+                                                   transport: read?.transport, subTransports: read?.subDevices ?? [])
     }
 
     private static func refusal(of device: AudioObjectID) -> CalibrationFailure? {
@@ -199,13 +212,13 @@ private enum MicrophoneHAL {
         return status == noErr && device != kAudioObjectUnknown ? device : nil
     }
 
-    static func nominalRate(of device: AudioObjectID) -> Double {
+    static func nominalRate(of device: AudioObjectID) -> Double? {
         var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
                                                  mScope: kAudioObjectPropertyScopeGlobal,
                                                  mElement: kAudioObjectPropertyElementMain)
         var rate: Float64 = 0
         var size = UInt32(MemoryLayout<Float64>.size)
-        return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &rate) == noErr ? rate : 0
+        return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &rate) == noErr ? rate : nil
     }
 
     static func isAlive(_ device: AudioObjectID) -> Bool {

@@ -9474,6 +9474,27 @@ do {
           "calibration: a hands-free microphone has its own reason, for one speaker and for Calibrate All",
           "\(handsFreeText) | \(handsFreeAll)")
 
+    // covers: S232
+    let builtInTransport = kAudioDeviceTransportTypeBuiltIn
+    check(CalibrationFlow.microphonePreflight(nominalRate: nil, transport: nil) == .noMicrophone
+            && CalibrationFlow.microphonePreflight(nominalRate: 48_000,
+                                                   transport: kAudioDeviceTransportTypeBluetooth) == .handsFreeMicrophone
+            && CalibrationFlow.microphonePreflight(nominalRate: 48_000, transport: kAudioDeviceTransportTypeAggregate,
+                                                   subTransports: [kAudioDeviceTransportTypeBluetooth]) == .handsFreeMicrophone
+            && CalibrationFlow.microphonePreflight(nominalRate: 48_000, transport: builtInTransport) == nil
+            && CalibrationFlow.microphonePreflight(nominalRate: 22_050, transport: builtInTransport) == nil
+            && CalibrationFlow.microphonePreflight(nominalRate: 384_000, transport: builtInTransport) == nil
+            && CalibrationFlow.microphonePreflight(nominalRate: 48_000, transport: nil) == nil,
+          "calibration preflight: no default input or a hands-free one is refused before the music fades")
+    check(CalibrationFlow.microphonePreflight(nominalRate: 16_000, transport: builtInTransport) == .unsupportedRate
+            && CalibrationFlow.microphonePreflight(nominalRate: 768_000, transport: builtInTransport) == .unsupportedRate
+            && CalibrationFlow.microphonePreflight(nominalRate: 48_000.5, transport: builtInTransport) == .unsupportedRate
+            && CalibrationFlow.microphonePreflight(nominalRate: 0, transport: builtInTransport) == .unsupportedRate
+            && CalibrationFlow.microphonePreflight(nominalRate: .nan, transport: builtInTransport) == .unsupportedRate
+            && CalibrationFlow.microphoneRate(nominal: 44_100) == 44_100
+            && CalibrationFlow.microphoneRate(nominal: 16_000) == nil,
+          "calibration preflight: a microphone at a rate the signal isn't made at is an unsupported rate, not no microphone")
+
     // Both runs record with one input: a switch to another device, even at
     // the same rate, would change the input latency between them (S232).
     let builtIn = CalibrationMicrophoneID(device: 51, rate: 48_000)
