@@ -547,6 +547,30 @@ enum CalibrateAllFlow {
         return nil
     }
 
+    /// Whether a step ends the run as no microphone: no frame within 2 s of opening it (S240).
+    static func endsWithoutMicrophone(sinceNs: UInt64, nowNs: UInt64) -> Bool {
+        nowNs >= sinceNs + limitNs(2)
+    }
+
+    /// Whether a step ends the run as a silent source: the sweep not in the delay ring
+    /// 1.5 s after it was asked for (S240).
+    static func endsAsSilentSource(askedNs: UInt64, nowNs: UInt64) -> Bool {
+        nowNs >= askedNs + limitNs(1.5)
+    }
+
+    /// When a recording of `frames` begun at `fromNs` is judged even if the microphone stalled:
+    /// its length plus 2 s (S240).
+    static func recordingDeadlineNs(fromNs: UInt64, frames: Int, rate: UInt32) -> UInt64 {
+        fromNs + limitNs(Double(frames) / Double(rate) + 2)
+    }
+
+    /// Whether a recording is judged now: every frame came in, or its deadline passed (S240).
+    static func recordingEnds(recorded: Int, wanted: Int, nowNs: UInt64, deadlineNs: UInt64) -> Bool {
+        recorded >= wanted || nowNs >= deadlineNs
+    }
+
+    private static func limitNs(_ s: Double) -> UInt64 { UInt64(max(0, s) * 1e9) }
+
     /// The progress line for a step of the core's run.
     static func progress(_ step: AscCalibrationStep, speakers: [CalibrateAllSpeaker]) -> CalibrateAllProgress {
         let name = step.row < speakers.count ? speakers[step.row].name : ""

@@ -10426,6 +10426,31 @@ do {
                 == "The source was switched during the measurement. No delay was changed.",
           "calibrate all: a stopped run tells the core why and says that nothing changed")
 
+    do {
+        let limitStartNs: UInt64 = 5_000_000_000
+        let limitDeadlineNs = CalibrateAllFlow.recordingDeadlineNs(fromNs: limitStartNs, frames: 96_000, rate: 48_000)
+        // covers: S240
+        check(CalibrateAllFlow.endsWithoutMicrophone(sinceNs: limitStartNs, nowNs: limitStartNs + 2_000_000_000),
+              "calibrate all: no microphone frame 2 s after the microphone opened ends the run as no microphone")
+        // covers: S240
+        check(CalibrateAllFlow.endsAsSilentSource(askedNs: limitStartNs, nowNs: limitStartNs + 1_500_000_000),
+              "calibrate all: the sweep not in the delay ring 1.5 s after it was asked for ends the run as a silent source")
+        // covers: S240
+        check(limitDeadlineNs == limitStartNs + 4_000_000_000
+                && CalibrateAllFlow.recordingEnds(recorded: 40_000, wanted: 96_000, nowNs: limitDeadlineNs,
+                                                  deadlineNs: limitDeadlineNs)
+                && CalibrateAllFlow.recordingEnds(recorded: 96_000, wanted: 96_000, nowNs: limitStartNs,
+                                                  deadlineNs: limitDeadlineNs),
+              "calibrate all: a stalled microphone is judged with what came in at the recording's length plus 2 s",
+              "\(limitDeadlineNs)")
+        // covers: S240
+        check(!CalibrateAllFlow.endsWithoutMicrophone(sinceNs: limitStartNs, nowNs: limitStartNs + 1_999_999_999)
+                && !CalibrateAllFlow.endsAsSilentSource(askedNs: limitStartNs, nowNs: limitStartNs + 1_499_999_999)
+                && !CalibrateAllFlow.recordingEnds(recorded: 95_999, wanted: 96_000, nowNs: limitDeadlineNs - 1,
+                                                   deadlineNs: limitDeadlineNs),
+              "calibrate all: a nanosecond before each limit the run goes on waiting")
+    }
+
     // A whole run through the core on synthetic recordings at 48 kHz.
     if let signal = CalibrationFlow.signal(rate: 48_000) {
         func room(_ arrival: Int?, frames: Int, seed: UInt32) -> [Float] {

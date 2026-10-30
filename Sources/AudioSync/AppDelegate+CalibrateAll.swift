@@ -647,7 +647,7 @@ final class CalibrateAllRun {
             if mic.firstFrameTicks != nil, now >= since + seconds(0.2) {
                 CalibrationTap.play()
                 stage = .playing(step, mic, askedNs: now)
-            } else if now >= since + seconds(2) {
+            } else if CalibrateAllFlow.endsWithoutMicrophone(sinceNs: since, nowNs: now) {
                 end(.failed(.noMicrophone))
             }
         case .playing(let step, let mic, let asked):
@@ -662,13 +662,14 @@ final class CalibrateAllRun {
                     + "delays now: \(app.calibrateAllContext(taking: [speakers[0].id, speakers[step.row].id], zone: zone).delays); "
                     + "\(app.engine.driftNote(uid: speakers[0].id)); \(app.engine.driftNote(uid: speakers[step.row].id))")
                 stage = .recording(step, mic, start: start, frames: frames,
-                                   deadlineNs: now + seconds(Double(frames) / Double(mic.rate) + 2))
-            } else if now >= asked + seconds(1.5) {
+                                   deadlineNs: CalibrateAllFlow.recordingDeadlineNs(fromNs: now, frames: frames, rate: mic.rate))
+            } else if CalibrateAllFlow.endsAsSilentSource(askedNs: asked, nowNs: now) {
                 end(.failed(.sourceSilent))
             }
         case .recording(let step, let mic, let start, let frames, let deadline):
             // Past the deadline the microphone stalled: the core judges what came in.
-            guard mic.framesRecorded >= start + frames || now >= deadline else { return }
+            guard CalibrateAllFlow.recordingEnds(recorded: mic.framesRecorded, wanted: start + frames, nowNs: now,
+                                                 deadlineNs: deadline) else { return }
             mic.stop()
             let samples = mic.recording(from: start, count: frames)
             CalibrationFlow.logArrival("calibrate all: row \(step.row) sweep \(step.sweep)", recording: samples,

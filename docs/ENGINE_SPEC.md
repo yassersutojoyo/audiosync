@@ -1631,7 +1631,17 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | calibration microphone: a buffer that doesn't start where the last one ended marks the first gap | S232 |
 | calibration microphone: audio lost before the recording's end refuses it as skipped | S232 |
 | calibration microphone: a microphone that is gone ends the run at once unless its recording is whole | S232 |
-| calibrate all: … (the order and windows, who sits out, what stops a run, the sheet, Apply, Undo, Measure Again, the progress line) | S233, S235, S236, S237, S238, S239, S240, S241 |
+| calibrate all: … (the order and windows, who sits out, what stops a run, the sheet, Apply, Undo, Measure Again, the progress line) | S233, S235, S236, S237, S238, S239, S241 |
+| calibrate all: no microphone frame 2 s after the microphone opened ends the run as no microphone | S240 |
+| calibrate all: the sweep not in the delay ring 1.5 s after it was asked for ends the run as a silent source | S240 |
+| calibrate all: a stalled microphone is judged with what came in at the recording's length plus 2 s | S240 |
+| calibrate all: a nanosecond before each limit the run goes on waiting | S240 |
+| calibrate all: a switched source, a speaker turned off, a changed list or a moved delay stops the run (S240) | S240 |
+| calibrate all: a speaker still connecting at the start that begins playing stops the run, unmuted (S240) | S240 |
+| calibrate all: a new local reference stops the run as a change of the speakers (S240) | S240 |
+| calibrate all: a stopped run tells the core why and says that nothing changed | S240 |
+| calibrate all: a Measure Again stopped by a change is dropped (S239, S240) | S239, S240 |
+| calibrate all: a run stopped by a switched source applies nothing | S240 |
 | calibrate zone: … (the zone's members in order, members that are off, the AirPlay line, the menu item, the sheet) | S237, S240, S255 |
 | source app quit: … (a paused app still runs, a process that ended, the capture's report and macOS's notice, the 5 s look) | S164, S227 |
 | mix quit: … (a mix ends only with its last app, the wait after a capture loss, macOS's quit notice in any letter case) | S164 |
