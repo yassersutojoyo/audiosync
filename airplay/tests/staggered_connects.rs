@@ -8,7 +8,7 @@ mod common;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::audio::read_pcm_payload;
@@ -44,6 +44,9 @@ const MAX_GAP: Duration = Duration::from_millis(100);
 /// spacing is judged on the starts.
 const ACCEPT_LAG: Duration = Duration::from_secs(5);
 const FRAME: f64 = 1.0 / 44_100.0;
+/// A probe wake later than this means the process went unscheduled; a
+/// coarse timer oversleeps 1 ms by up to 15.6 ms (Windows).
+const STALL: Duration = Duration::from_millis(20);
 
 const PCM_TXT: &[&str] = &[
     "txtvers=1",
@@ -197,6 +200,29 @@ fn from_shared_syncs(receiver: &NetReceiver) -> Log {
     log
 }
 
+/// Wakes every millisecond until stopped and returns when it woke, so a gap
+/// the whole process spent unscheduled on a loaded runner can be told from
+/// a stall the connects caused, which leaves the probe on time.
+fn scheduling_probe(stop: Arc<AtomicBool>) -> JoinHandle<Vec<Instant>> {
+    thread::spawn(move || {
+        let mut wakes = vec![Instant::now()];
+        while !stop.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(1));
+            wakes.push(Instant::now());
+        }
+        wakes
+    })
+}
+
+/// How much of `from..to` fell in probe waits longer than `STALL`.
+fn unscheduled(wakes: &[Instant], from: Instant, to: Instant) -> Duration {
+    wakes
+        .windows(2)
+        .filter(|wait| wait[1].duration_since(wait[0]) > STALL)
+        .map(|wait| wait[1].min(to).saturating_duration_since(wait[0].max(from)))
+        .sum()
+}
+
 fn session_requests(receiver: &NetReceiver) -> usize {
     let log = receiver.log();
     ["FLUSH", "SETUP", "TEARDOWN"]
@@ -232,6 +258,8 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
         .collect();
     devices.push(airplay2_only(&airplay2, 36));
     let keys: Vec<DeviceKey> = devices.iter().map(|device| device.key.clone()).collect();
+    let stop_probe = Arc::new(AtomicBool::new(false));
+    let probe = scheduling_probe(Arc::clone(&stop_probe));
     let asked = Instant::now();
     let counters: Vec<Arc<SpeakerCounters>> = devices
         .into_iter()
@@ -270,9 +298,12 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
     }
     let all_playing = Instant::now();
     thread::sleep(Duration::from_millis(500));
+    stop_probe.store(true, Ordering::SeqCst);
+    let wakes = probe.join().expect("the probe");
 
-    // The playing receiver: no gap over M's cap, no new FLUSH, SETUP or
-    // TEARDOWN, and stated times in step with a joiner (P102, P223).
+    // The playing receiver: no gap over M's cap beyond the time the process
+    // went unscheduled, no new FLUSH, SETUP or TEARDOWN, and stated times in
+    // step with a joiner (P102, P223).
     {
         let log = playing.log();
         let burst: Vec<Instant> = log
@@ -282,16 +313,30 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
             .filter(|at| *at >= asked && *at <= all_playing)
             .collect();
         assert!(burst.len() > 100, "{}", burst.len());
+        let span = burst[burst.len() - 1].duration_since(burst[0]);
+        let starved = unscheduled(&wakes, burst[0], burst[burst.len() - 1]);
+        // Starved for most of the burst, the run shows nothing either way.
+        assert!(
+            starved * 2 <= span,
+            "the process went unscheduled for {starved:?} of the {span:?} burst"
+        );
+        let mut excused = Duration::ZERO;
         for pair in burst.windows(2) {
+            let gap = pair[1].duration_since(pair[0]);
+            // A stall reaches the receiver up to one gap after it begins.
+            let idle = unscheduled(&wakes, pair[0] - MAX_GAP, pair[1]);
             assert!(
-                pair[1].duration_since(pair[0]) <= MAX_GAP,
-                "a gap of {:?} from {} ms after the call; connects at {:?} ms; {} packets sent late",
-                pair[1].duration_since(pair[0]),
+                gap.saturating_sub(idle) <= MAX_GAP,
+                "a gap of {gap:?}, {idle:?} of it unscheduled, from {} ms after the call; connects at {:?} ms; {} packets sent late; {starved:?} of the {span:?} burst unscheduled",
                 ms(asked, pair[0]),
                 starts.iter().map(|at| ms(asked, *at)).collect::<Vec<_>>(),
                 p_counters.late_packets()
             );
+            excused = excused.max(gap.saturating_sub(MAX_GAP).min(idle));
         }
+        eprintln!(
+            "unscheduled {starved:?} of the {span:?} burst; largest gap excused by it {excused:?}"
+        );
     }
     assert_eq!(session_requests(&playing), requests_before);
     let deadline = Instant::now() + LONG;
