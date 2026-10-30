@@ -981,7 +981,7 @@ struct NativeAirPlayModel {
     /// otherwise (auto-connect, or after another member played) the target
     /// goes off naming it, and asks for it when turned on again (P176).
     private mutating func memberError(_ id: String, _ problem: NativeSpeakerEvent.Problem) -> NativeAirPlayOutcome? {
-        guard problem == .passwordRequired || problem == .wrongPassword,
+        guard problem == .passwordRequired || problem == .wrongPassword || problem == .pairingRequired && asksPasswordOnly(id),
               let target = memberOf[id], states[target] != nil else { return nil }
         passwords.remove(id)
         guard attempts.contains(target) else {
@@ -989,6 +989,12 @@ struct NativeAirPlayModel {
         }
         promptTargets[id] = target
         return ask(id, .askingPassword(wrong: problem == .wrongPassword))
+    }
+
+    /// Whether the member `id`, reached over AirPlay 2, asks for a password
+    /// and no pairing: its PairingRequired asks for the password (P176).
+    private func asksPasswordOnly(_ id: String) -> Bool {
+        reachedOverAirPlay2(id) && receivers[id]?.availability == .needsPassword
     }
 
     /// Takes a pairing event in.
@@ -1134,7 +1140,8 @@ struct NativeAirPlayModel {
         case .error(let id, let problem, let retryMs, _):
             guard states[id] != nil else { return memberError(id, problem) }
             // The member's own error follows and names it (`memberError`).
-            if NativeTarget.kind(id) != nil, problem == .passwordRequired || problem == .wrongPassword {
+            if NativeTarget.kind(id) != nil, problem == .passwordRequired || problem == .wrongPassword
+                || problem == .pairingRequired && !members(of: id).isEmpty && members(of: id).allSatisfy({ asksPasswordOnly($0) }) {
                 return nil
             }
             if problem.waits {

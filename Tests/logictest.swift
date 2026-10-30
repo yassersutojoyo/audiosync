@@ -4761,6 +4761,30 @@ do {
           },
           "P176 native airplay: a pair whose member asks for pairing gets a notice that promises no pairing, listed or not")
 
+    func passwordOnly(_ id: String, _ name: String) -> NativeReceiver {
+        var receiver = member(id, name, of: pair, .needsPassword)
+        receiver.overAirPlay2 = true
+        return receiver
+    }
+    var pwAuto = NativeAirPlayModel()
+    pwAuto.apply(.appeared(passwordOnly(left, "Left")))
+    pwAuto.apply(.appeared(passwordOnly(right, "Right")))
+    pwAuto.apply(.appeared(target(pair, "Living Room")))
+    var pwAsked = pwAuto
+    pwAuto.added(pair)
+    _ = pwAsked.turnedOnByUser(pair)
+    while let prompt = pwAsked.nextPrompt() { _ = pwAsked.answered(prompt, code: "secret") }
+    pwAsked.added(pair)
+    check(pwAuto.apply(.error(id: pair, .pairingRequired, retryMs: nil, detail: "")) == nil
+            && pwAuto.apply(.error(id: right, .pairingRequired, retryMs: nil, detail: ""))
+                == .turnOff(app(pair), .memberNeedsPassword(right))
+            && pwAsked.apply(.error(id: pair, .pairingRequired, retryMs: nil, detail: "")) == nil
+            && pwAsked.apply(.error(id: right, .pairingRequired, retryMs: nil, detail: "")) == .prompt
+            && pwAsked.nextPrompt() == NativePrompt(id: right, password: true, wrong: false)
+            && pwAsked.promptTargets[right] == pair,
+          "P176 native airplay: a member over AirPlay 2 that asks only for a password and answers PairingRequired "
+            + "is asked for its password by name, or names itself in the notice outside the attempt")
+
     var oneSide = listedPair()
     _ = oneSide.turnedOnByUser(pair)
     oneSide.added(pair)
