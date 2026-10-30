@@ -341,6 +341,8 @@ struct CastRow: Equatable {
     var manual = false
     /// Added by address, so Remove can forget the address.
     var removable = false
+    /// The device's own volume step, 0 to 1; 0 while it reports none (C69).
+    var volumeStep = 0.0
     /// A session runs or starts: the volume, Mute and Resync reach the device.
     var live: Bool { status != .idle }
 }

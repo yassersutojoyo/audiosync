@@ -2705,7 +2705,7 @@ The checks for S256 to S258, S287, S288, S337, S338 and S343 to S345 and S348 in
 | web remote: a zone lists its listed members in zone order with on, total and waiting; one not listed counts only in all | S256 |
 | web remote: a zone command sets the zone's volume, then flips it; a preset command recalls it | S257 |
 | web remote: a zone or preset from the phone keeps a member that asks for a code off; with no other member it doesn't flip | S257 |
-| web remote: a stereo pair whose member asks for a password can't be turned on from the phone | S257 |
+| web remote: a stereo pair whose member asks for a password can't be turned on from the phone, and says so | S257 |
 | web remote: a password speaker whose password this run holds can be turned on from the phone | S257 |
 | web remote: a zone or preset from the phone keeps a pair whose member asks for a password off | S257 |
 | web remote: a speaker or a zone's pair the phone turned on that asks for a code when it connects goes off with its notice, no prompt | S257 |

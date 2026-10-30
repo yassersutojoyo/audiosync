@@ -60,6 +60,8 @@ struct RemoteRow: Equatable {
     var waiting = false
     /// Switched on, it would ask for a code on the Mac with nobody there.
     var asksForCode = false
+    /// How far the page's arrow keys move the volume slider (C69).
+    var volumeStep = 1.0
 }
 
 extension RemoteRow {
@@ -71,6 +73,8 @@ extension RemoteRow {
         var isAirPlay = false
         /// A Google Cast speaker: whether its volume is fixed.
         var castVolumeFixed: Bool? = nil
+        /// A Google Cast speaker's own volume step, 0 to 1; 0 while it reports none.
+        var castVolumeStep = 0.0
         /// The row's delay field value; nil where the window has none.
         var offsetMs: Double?
         var airPlayDelayMs: Double = 0
@@ -92,22 +96,24 @@ extension RemoteRow {
     /// from the phone: the prompt would open on the Mac with nobody there.
     init(_ f: Facts, text: UIStrings) {
         let codeBlocked = (f.needsCode && !f.paired && !f.holdsPassword || f.memberAsksPassword) && !f.on
+        let castStep = f.castVolumeStep > 0 && f.castVolumeStep <= 1 ? f.castVolumeStep : CastModel.fallbackVolumeStep
         let delay: RemoteDelay
         if f.isAirPlay { delay = .airPlay(f.airPlayDelayMs) }
         else if f.castVolumeFixed != nil { delay = f.offsetMs.map(RemoteDelay.cast) ?? .fixed }
         else { delay = f.offsetMs.map(RemoteDelay.offset) ?? .fixed }
         self.init(id: f.id, name: f.name, kind: f.kind, on: f.on, volume: f.volume, delay: delay,
                   available: !codeBlocked,
-                  notice: f.note ?? (codeBlocked ? text.remoteTurnOnInApp : nil),
+                  notice: codeBlocked ? text.remoteTurnOnInApp : f.note,
                   volumeAdjustable: f.castVolumeFixed != true,
-                  key: f.key, waiting: f.waiting, asksForCode: codeBlocked)
+                  key: f.key, waiting: f.waiting, asksForCode: codeBlocked,
+                  volumeStep: f.castVolumeFixed == nil ? 1 : max(1, (100 * castStep).rounded()))
     }
 
     var json: [String: Any] {
         let range = delay.range
         return [
             "id": id, "name": name, "kind": kind, "on": on,
-            "volume": RemoteSnapshot.volume(volume),
+            "volume": RemoteSnapshot.volume(volume), "volume_step": volumeStep,
             "delay_ms": min(range.max, max(range.min, Int(delay.ms.rounded()))),
             "delay_min_ms": range.min, "delay_max_ms": range.max,
             "available": available,

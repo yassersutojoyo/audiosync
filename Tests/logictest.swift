@@ -11288,6 +11288,14 @@ do {
                                        isAirPlay: true, needsCode: true, paired: false, holdsPassword: true), text: t)
     check(heldPassword.available && heldPassword.notice == nil && !heldPassword.asksForCode,
           "web remote: a password speaker whose password this run holds can be turned on from the phone")
+    let castStepped = RemoteRow(Facts(id: "cast2", name: "Den", kind: "Google Cast", on: true, volume: 50,
+                                      castVolumeFixed: false, castVolumeStep: 0.07, offsetMs: 0), text: t)
+    let castOddStep = RemoteRow(Facts(id: "cast3", name: "Hall", kind: "Google Cast", on: true, volume: 50,
+                                      castVolumeFixed: false, castVolumeStep: 1.5, offsetMs: 0), text: t)
+    // covers: C69
+    check(castStepped.json["volume_step"] as? Double == 7 && castIdle.json["volume_step"] as? Double == 5
+            && castOddStep.json["volume_step"] as? Double == 5 && usb.json["volume_step"] as? Double == 1,
+          "web remote: a Cast speaker's arrow keys on the phone move by its own step, else by the Mac's fallback step")
 
     let snapshot = RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows)
     let object = (try? JSONSerialization.jsonObject(with: Data(snapshot.json.utf8))) as? [String: Any]
@@ -11526,7 +11534,8 @@ do {
             && codePlan(.zone(id: "z4", toggle: true, volume: nil)).isEmpty,
           "web remote: a zone or preset from the phone keeps a member that asks for a code off; with no other member it doesn't flip")
     let loungeRow = RemoteRow(Facts(id: "lounge", name: "Lounge", kind: "AirPlay 2", on: false, volume: 50,
-                                    isAirPlay: true, paired: true, memberAsksPassword: true, key: "ap:lounge"), text: t)
+                                    isAirPlay: true, paired: true, memberAsksPassword: true, note: "Stereo pair",
+                                    key: "ap:lounge"), text: t)
     let loungeRows = zoneRows + [loungeRow]
     let loungeZones = [SpeakerZone(id: "z5", name: "Lounge", members: ["ap:lounge", "lc:bt"], volume: 100)].map {
         RemoteZoneRow($0, listed: loungeRows)
@@ -11535,9 +11544,9 @@ do {
     func loungePlan(_ command: RemoteCommand) -> [RemoteAction] {
         RemoteAction.plan(command, rows: loungeRows, zones: loungeZones, presets: loungePresets)
     }
-    check(loungeRow.asksForCode && !loungeRow.available
+    check(loungeRow.asksForCode && !loungeRow.available && loungeRow.notice == t.remoteTurnOnInApp
             && loungePlan(.speaker(id: "lounge", on: true, volume: nil, delayMs: nil)).isEmpty,
-          "web remote: a stereo pair whose member asks for a password can't be turned on from the phone")
+          "web remote: a stereo pair whose member asks for a password can't be turned on from the phone, and says so")
     check(loungePlan(.zone(id: "z5", toggle: true, volume: nil)) == [.toggleZone(id: "z5", keepOff: ["ap:lounge"])]
             && loungePlan(.preset(id: "p5")) == [.recallPreset(id: "p5", keepOff: ["ap:lounge"])],
           "web remote: a zone or preset from the phone keeps a pair whose member asks for a password off")

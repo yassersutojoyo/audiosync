@@ -364,7 +364,8 @@ extension AppDelegate {
                                                   volumeFixed: volume?.fixed ?? false,
                                                   group: castModel.groupMembers(of: id, name: castMemberName),
                                                   manual: device.manual,
-                                                  removable: castModel.manualAddresses[id] != nil))
+                                                  removable: castModel.manualAddresses[id] != nil,
+                                                  volumeStep: volume?.step ?? 0))
         }
     }
 
