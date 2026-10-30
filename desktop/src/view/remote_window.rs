@@ -172,6 +172,10 @@ impl RowText for StringsText<'_> {
         self.0.get_list_separator().into()
     }
 
+    fn source_not_connected(&self) -> String {
+        self.0.get_remote_source_not_connected().into()
+    }
+
     fn kind(&self, speaker: &Speaker) -> String {
         self.0
             .invoke_speaker_kind(speaker_kind(speaker.kind))

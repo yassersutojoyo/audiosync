@@ -120,6 +120,8 @@ pub trait RowText {
     fn source_all_except(&self, names: &str) -> String;
     /// What goes between the names of a list.
     fn list_separator(&self) -> String;
+    /// The note of an unplugged input, which the page shows after its name.
+    fn source_not_connected(&self) -> String;
 }
 
 /// A speaker that would ask for a PIN or password when turned on: the prompt
@@ -237,9 +239,8 @@ pub fn snapshot(
                 SourceKind::App | SourceKind::AppsExcept => RemoteSourceKind::App,
                 SourceKind::Input => RemoteSourceKind::Input,
             },
-            // The window's picker refuses none of its entries.
-            available: true,
-            notice: None,
+            available: !source.unplugged,
+            notice: source.unplugged.then(|| text.source_not_connected()),
         })
         .collect();
     State {
@@ -593,7 +594,7 @@ pub fn qr_pixels(text: &str, scale: usize) -> Option<(usize, Vec<[u8; 3]>)> {
 pub use crate::os::computer_name;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::ui_model::PresetItem;
     use crate::ui_model::{CastRow, CastState};
@@ -630,7 +631,7 @@ mod tests {
         assert_eq!(debug_switch_port(true, port("true"), None, saved), None);
     }
 
-    struct Text;
+    pub(crate) struct Text;
 
     impl RowText for Text {
         fn kind(&self, speaker: &Speaker) -> String {
@@ -655,6 +656,9 @@ mod tests {
         fn list_separator(&self) -> String {
             "; ".to_owned()
         }
+        fn source_not_connected(&self) -> String {
+            "not connected".to_owned()
+        }
     }
 
     fn with_sources() -> AppState {
@@ -664,6 +668,7 @@ mod tests {
             kind,
             channels: 0,
             apps: Vec::new(),
+            unplugged: false,
         };
         AppState {
             sources: vec![
@@ -712,6 +717,7 @@ mod tests {
             kind: SourceKind::AppsExcept,
             channels: 0,
             apps: vec!["Spotify".to_owned(), "Chrome".to_owned()],
+            unplugged: false,
         });
         state.source_id = MIX.to_owned();
         let snapshot = snapshot(&state, not_virtual, None, "Studio PC", &Text);

@@ -4291,6 +4291,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 },
                 channels: source.channels,
                 apps: Vec::new(),
+                unplugged: false,
             })
             .collect();
         let chosen = self.chosen.key();
@@ -4331,6 +4332,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     kind,
                     channels: 0,
                     apps,
+                    unplugged: kind == SourceKind::Input,
                 },
             );
         }
@@ -11757,6 +11759,34 @@ mod tests {
         assert!(messages(&adapter).is_empty());
         assert!(adapter.snapshot().running, "streaming goes on");
         assert_eq!(captures(&adapter).len(), started, "with no capture restart");
+    }
+
+    // covers: S344, S355
+    #[test]
+    fn the_phone_gets_an_unplugged_chosen_input_greyed_under_its_plain_name() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        adapter.refresh_sources();
+        adapter.select_source(&mic());
+        adapter.audio.disconnect_input(MIC);
+        adapter.refresh_sources();
+        let page = crate::remote::snapshot(
+            &adapter.snapshot(),
+            |_| true,
+            None,
+            "Studio PC",
+            &crate::remote::tests::Text,
+        );
+        let (input, rest) = page.sources.split_last().expect("listed");
+        assert_eq!(input.name, "Microphone (USB Audio)");
+        assert!(!input.available, "the page can't pick it");
+        assert_eq!(input.notice.as_deref(), Some("not connected"));
+        assert!(
+            rest.iter()
+                .all(|source| source.available && source.notice.is_none())
+        );
     }
 
     // covers: S163

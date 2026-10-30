@@ -85,6 +85,8 @@ pub struct Source {
     /// The apps a chosen mix plays or leaves out, for the UI to list in its
     /// own words; empty for anything else.
     pub apps: Vec<String>,
+    /// The chosen input device, listed under its saved name while unplugged.
+    pub unplugged: bool,
 }
 
 impl Source {
@@ -1962,6 +1964,7 @@ impl MockBackend {
             kind,
             channels: 0,
             apps: Vec::new(),
+            unplugged: false,
         };
         let speaker = |id: &str, name: &str, kind, enabled, delay_ms| Speaker {
             id: id.into(),
