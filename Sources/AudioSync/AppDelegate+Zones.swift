@@ -115,7 +115,7 @@ extension AppDelegate {
             case .on, .waiting:
                 // While streaming is off every member starts a new attempt;
                 // one already on while streaming may be mid-pairing.
-                if !running || !member.facts.on { switchZoneMember(member, on: true, attempts: &attempts) }
+                if !running || !member.facts.on { switchZoneMember(member, on: true, attempts: &attempts, origin: origin) }
             case .off:
                 if member.facts.on { switchZoneMember(member, on: false, attempts: &attempts) }
             case .castAnotherPlays, .castOneAtATime, .castBusy:
@@ -151,7 +151,7 @@ extension AppDelegate {
 
     /// Switches one member as its own switch would, without starting or
     /// stopping streaming; switched on, it is a new attempt.
-    func switchZoneMember(_ member: ZoneMemberState, on: Bool, attempts: inout [String]) {
+    func switchZoneMember(_ member: ZoneMemberState, on: Bool, attempts: inout [String], origin: StartOrigin = .user) {
         switch member.kind {
         case .local:
             if on {
@@ -162,6 +162,7 @@ extension AppDelegate {
             }
         case .airplay:
             if on {
+                if refusedByHomeTheater(member.appID, origin: origin) { return }
                 clearNotices([member.key])
                 enabledAirPlay.insert(member.appID)
                 attempts.append(member.appID)
@@ -396,6 +397,7 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] auto-connect \(hits)")
         for key in hits where !isEnabled(key) {
             guard let (id, airplay) = SpeakerKey.parse(key) else { continue }
+            if airplay, refusedByHomeTheater(id, origin: .automatic) { continue }
             // Switched on automatically: an AirPlay speaker's code request becomes a notice.
             if airplay { enabledAirPlay.insert(id) } else { enabledLocal.insert(id) }
         }

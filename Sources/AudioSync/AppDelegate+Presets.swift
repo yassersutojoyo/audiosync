@@ -96,7 +96,7 @@ extension AppDelegate {
         }
         for (state, step) in zip(states, plan.steps) {
             guard let state, step == .on || step == .waiting else { continue }
-            if !running || !state.facts.on { switchZoneMember(state, on: true, attempts: &attempts) }
+            if !running || !state.facts.on { switchZoneMember(state, on: true, attempts: &attempts, origin: source.origin) }
         }
         if source.beginsAttempts { beginNativeAttempts(attempts) } else { everyTimeGuard.turnedOnByPhone(attempts) }
         if plan.action == .start {

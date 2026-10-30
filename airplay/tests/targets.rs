@@ -333,7 +333,7 @@ fn theater_speaker(n: u8, flags: &str) -> Device {
     )
 }
 
-// covers: P174, P176
+// covers: P174, P176, P229
 #[test]
 fn an_apple_tv_with_homepods_is_one_home_theater_target() {
     // Bit 17 is set on both speakers and holds nothing back.

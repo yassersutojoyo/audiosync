@@ -9694,6 +9694,7 @@ pub mod tests {
         assert!(airplay.speakers()[0].enabled, "AudioSync keeps trying");
     }
 
+    // covers: P177, P229
     #[test]
     fn an_apple_tv_and_its_home_theater_group_never_play_at_once() {
         let fake = FakeAirPlay::new();

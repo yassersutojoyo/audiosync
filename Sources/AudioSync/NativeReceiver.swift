@@ -46,6 +46,10 @@ struct NativeReceiver: Equatable {
     /// Credentials are stored for it, also ones an answer turned down (P154),
     /// which Forget Pairing drops.
     var credentialsKept = false
+    /// A home theater group's Apple TV, by its receiver ID, or "" (P229).
+    var control = ""
+    /// A target's members out of view or playing nothing, by name (P181).
+    var missing: [String] = []
 
     /// How the speaker list shows it, if at all: one that can play is open;
     /// one that asks for a PIN or a password needs a code, which AudioSync

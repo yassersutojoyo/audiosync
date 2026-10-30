@@ -431,6 +431,12 @@ pub struct AscAirPlayReceiver {
     /// The ID of the target a receiver is a member of; "" for none, for a
     /// target, and with the AirPlay 2 switch off (P176).
     pub target: *const c_char,
+    /// A home theater group's Apple TV, by its receiver ID; "" for anything
+    /// else. The host keeps one off while the other is on (P229).
+    pub control: *const c_char,
+    /// The names of a target's members out of view or playing nothing, one
+    /// per line; "" for none and for anything else (P181).
+    pub missing: *const c_char,
 }
 
 /// One thing that happened to a speaker, or to the stream. The strings are
@@ -640,8 +646,8 @@ pub struct AscAirPlay {
     receivers_queued: u64,
     receivers_taken: u64,
     /// The strings of the last receiver handed out: ID, name, model,
-    /// target.
-    receiver_strings: [CString; 4],
+    /// target, control and missing.
+    receiver_strings: [CString; 6],
     /// Speaker and timeline events not taken yet, each with the number of
     /// receiver changes queued before it.
     events: VecDeque<(u64, Pending)>,
@@ -1830,6 +1836,8 @@ impl AscAirPlay {
     /// pointers to them.
     fn report(&mut self, event: ReceiverEvent) -> AscAirPlayReceiver {
         let mut target = String::new();
+        let mut control = String::new();
+        let mut missing = String::new();
         let (code, id, name, model, (availability, unsupported), flags) = match &event {
             ReceiverEvent::Appeared(info) | ReceiverEvent::Changed(info) => {
                 let id = receiver_id(&info.device.key);
@@ -1892,13 +1900,20 @@ impl AscAirPlay {
             ReceiverEvent::Target(TargetChange::Updated(found)) => {
                 let id = found.id.to_string();
                 let mut flags = AIRPLAY_FLAG_TARGET;
-                let missing = self
-                    .target_missing
-                    .get(&id)
-                    .is_some_and(|missing| !missing.is_empty());
-                if !found.complete() || missing {
+                let silent = self.target_missing.get(&id).map_or(&[][..], Vec::as_slice);
+                if !found.complete() || !silent.is_empty() {
                     flags |= AIRPLAY_FLAG_INCOMPLETE;
                 }
+                missing = found
+                    .members
+                    .iter()
+                    .filter(|member| {
+                        !member.in_view() || silent.contains(&receiver_id(&member.key))
+                    })
+                    // The host splits the list at newlines.
+                    .map(|member| member.name.replace('\n', " "))
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 let airplay2 = found.members.iter().any(|member| {
                     member
                         .device
@@ -1907,6 +1922,9 @@ impl AscAirPlay {
                 });
                 if airplay2 {
                     flags |= AIRPLAY_FLAG_AIRPLAY2;
+                }
+                if let Some(key) = &found.control {
+                    control = receiver_id(key);
                 }
                 let code = if self.targets_reported.insert(id.clone()) {
                     AIRPLAY_APPEARED
@@ -1940,6 +1958,8 @@ impl AscAirPlay {
             c_string(&name),
             c_string(&model),
             c_string(&target),
+            c_string(&control),
+            c_string(&missing),
         ];
         AscAirPlayReceiver {
             event: code,
@@ -1950,6 +1970,8 @@ impl AscAirPlay {
             unsupported,
             flags,
             target: self.receiver_strings[3].as_ptr(),
+            control: self.receiver_strings[4].as_ptr(),
+            missing: self.receiver_strings[5].as_ptr(),
         }
     }
 
@@ -4296,6 +4318,8 @@ mod tests {
             unsupported: -1,
             flags: 0,
             target: ptr::null(),
+            control: ptr::null(),
+            missing: ptr::null(),
         }
     }
 
@@ -10258,6 +10282,8 @@ mod tests {
         let queued = inside(handle).receivers.pop_back().expect("queued");
         let report = inside(handle).report(queued);
         assert_ne!(report.flags & AIRPLAY_FLAG_INCOMPLETE, 0);
+        let silent = pair.members.iter().find(|member| member.key == left.key);
+        assert_eq!(text(report.missing), silent.expect("a member").name);
         // SAFETY: a live handle and a NUL-terminated ID.
         unsafe {
             assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 60.0));
@@ -10271,6 +10297,29 @@ mod tests {
         let report = inside(handle).report(queued);
         assert_eq!(report.event, AIRPLAY_GONE);
         assert_eq!(text(report.id), pair_id);
+        // SAFETY: the handle is live and used by no other call.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn a_home_theater_group_names_its_apple_tv_and_a_pair_none() {
+        let mut handle = create_with(quiet);
+        let (left, right) = (pair_member(0x15, "0x2004"), pair_member(0x16, "0x4"));
+        let apple_tv = pair_member(0x17, "0x4");
+        let pair = audiosync_airplay::targets::find_targets([&left, &right])
+            .first()
+            .cloned()
+            .expect("a pair");
+        let mut group = pair.clone();
+        group.control = Some(apple_tv.key.clone());
+        inside(handle).airplay2 = true;
+        let report = inside(handle).report(ReceiverEvent::Target(TargetChange::Updated(Box::new(
+            group,
+        ))));
+        assert_eq!(text(report.control), receiver_id(&apple_tv.key));
+        let report =
+            inside(handle).report(ReceiverEvent::Target(TargetChange::Updated(Box::new(pair))));
+        assert_eq!(text(report.control), "");
         // SAFETY: the handle is live and used by no other call.
         unsafe { asc_airplay_destroy(&mut handle) };
     }

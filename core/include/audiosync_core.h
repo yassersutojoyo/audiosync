@@ -1588,6 +1588,8 @@ typedef struct AscAirPlayReceiver {
     int32_t unsupported;  /* ASC_AIRPLAY_REASON_*: why it can't play */
     uint32_t flags;       /* ASC_AIRPLAY_FLAG_* bits */
     const char *target;   /* the "pair:<tsid>" or "theater:<group>" ID of the target it is a member of, or "" */
+    const char *control;  /* a home theater group's Apple TV, by its id, or "" (P229) */
+    const char *missing;  /* a target's members out of view or playing nothing, by name, one per line, or "" (P181) */
 } AscAirPlayReceiver;
 
 /*

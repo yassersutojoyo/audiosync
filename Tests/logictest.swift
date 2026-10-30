@@ -4452,11 +4452,17 @@ do {
 
     var missing = listedPair()
     missing.apply(.gone(id: right, name: "Right"))
-    missing.apply(.changed(target(pair, "Living Room", incomplete: true)))
+    var short = target(pair, "Living Room", incomplete: true)
+    short.missing = ["Right"]
+    missing.apply(.changed(short))
     check(missing.targetRow(pair)
             == AirPlayTargetRow(kind: .stereoPair, members: ["Left", "Right"], missing: ["Right"], incomplete: true)
             && t.airPlayTargetNote(missing.targetRow(pair)!) == "Stereo pair, missing Right",
           "P181 native airplay: a member out of view is named missing")
+    short.missing = ["Right Speaker"]
+    missing.apply(.changed(short))
+    check(missing.targetRow(pair)?.missing == ["Right Speaker"],
+          "P181 native airplay: a member out of view is named once, by the sender's name for it")
     var partner = listedPair()
     partner.apply(.changed(target(pair, "Living Room", incomplete: true)))
     check(partner.targetRow(pair)?.incomplete == true
@@ -4465,6 +4471,13 @@ do {
                                                     missing: ["Left", "Right"], incomplete: true))
                 == "Home theater group, missing Left and Right",
           "P181 native airplay: an incomplete target with no member out of view says a speaker is missing")
+    var silent = listedPair()
+    var silentPair = target(pair, "Living Room", incomplete: true)
+    silentPair.missing = ["Right"]
+    silent.apply(.changed(silentPair))
+    check(silent.targetRow(pair)?.missing == ["Right"]
+            && t.airPlayTargetNote(silent.targetRow(pair)!) == "Stereo pair, missing Right",
+          "P181 native airplay: a member in view that plays nothing is named missing, as on Windows")
 
     var reached = NativeAirPlayModel()
     var over = member(left, "Left", of: pair)
@@ -4488,6 +4501,20 @@ do {
                     "Right plays as part of Living Room, so it stays off by itself."]
             && !texts.joined().contains("\u{2014}"),
           "P177 native airplay: the Apple TV, its group and a held member each say why they are off")
+    // covers: P229 (the Mac refuses the second side whether or not it streams)
+    let tv = "02005E005352", den = "theater:9F00"
+    var homeTheater = NativeAirPlayModel()
+    homeTheater.apply(.appeared(NativeReceiver(id: tv, name: "Den TV", model: "AppleTV11,1", availability: .available,
+                                               reason: nil, hints: ["airplay", "apple-tv"])))
+    homeTheater.apply(.appeared(member(left, "Left", of: den)))
+    var denGroup = target(den, "Den")
+    denGroup.control = tv
+    homeTheater.apply(.appeared(denGroup))
+    check(homeTheater.homeTheaterConflict(den, enabled: [app(tv)])
+            && homeTheater.homeTheaterConflict(tv, enabled: [app(den)])
+            && !homeTheater.homeTheaterConflict(den, enabled: [])
+            && !homeTheater.homeTheaterConflict(left, enabled: [app(tv), app(den)]),
+          "P229 native airplay: an Apple TV or its home theater group stays off while the other side is on, streaming or not")
 
     var pw = NativeAirPlayModel()
     pw.apply(.appeared(member(left, "Left", of: pair)))

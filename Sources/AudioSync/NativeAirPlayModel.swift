@@ -194,7 +194,7 @@ struct AirPlayTargetRow: Equatable {
     let kind: Kind
     /// Every member's name, in view or not, by name.
     let members: [String]
-    /// The members out of view, by name.
+    /// The members out of view or playing nothing, by name.
     let missing: [String]
     /// A member is out of view, plays nothing, or reports its partner
     /// unreachable, even when no name is known for it.
@@ -614,6 +614,23 @@ struct NativeAirPlayModel {
         return !on && (receivers[target] != nil || receivers[id]?.target == target) ? target : nil
     }
 
+    /// Whether the receiver `id` stays off because the other side of its
+    /// home theater group, the Apple TV or the group, is on and can play or
+    /// plays: the two never play at once (P229). `enabled`: the switched-on
+    /// app IDs.
+    func homeTheaterConflict(_ id: String, enabled: Set<String>) -> Bool {
+        let control = receivers[id]?.control ?? ""
+        let others = (control.isEmpty ? [] : [control]) + receivers.values.filter { $0.control == id }.map(\.id)
+        return others.contains { other in
+            guard enabled.contains(NativeAirPlayID.app(other)) else { return false }
+            switch receivers[other]?.availability {
+            case .available?: return true
+            case .needsPassword?: return passwords.contains(other) || isPlaying(other)
+            default: return isPlaying(other)
+            }
+        }
+    }
+
     /// What the row of the target `id` says about its members; nil for a
     /// speaker's row.
     func targetRow(_ id: String) -> AirPlayTargetRow? {
@@ -622,7 +639,7 @@ struct NativeAirPlayModel {
         func named(_ ids: [String]) -> [String] {
             ids.map { names[$0] ?? $0 }.sorted { $0.lowercased() < $1.lowercased() }
         }
-        let missing = named(ids.filter { receivers[$0] == nil })
+        let missing = (receivers[id]?.missing ?? []).sorted { $0.lowercased() < $1.lowercased() }
         return AirPlayTargetRow(kind: kind, members: named(ids), missing: missing,
                                 incomplete: receivers[id]?.incomplete == true || !missing.isEmpty,
                                 asksPassword: ids.contains {
