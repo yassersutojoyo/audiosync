@@ -5244,6 +5244,22 @@ pub mod tests {
         assert_eq!(airplay.speakers().len(), 1);
     }
 
+    // covers: S166, S147
+    #[test]
+    fn long_names_that_differ_only_at_the_end_sort_whole_and_stay_unchanged() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let long = "Living Room Speaker With A Very Long Name ".repeat(6) + "End";
+        let (a, b) = (format!("{long} A"), format!("{long} B"));
+        assert_eq!(a.chars().count(), 257);
+        fake.appear(&device(1, &b, OPEN_TXT));
+        fake.appear(&device(2, &a, OPEN_TXT));
+        fake.appear(&device(3, "Den", OPEN_TXT));
+        airplay.poll();
+        let names: Vec<String> = airplay.speakers().into_iter().map(|s| s.name).collect();
+        assert_eq!(names, ["Den".to_owned(), a, b]);
+    }
+
     #[test]
     fn a_gone_speaker_keeps_its_name_only_while_something_refers_to_it() {
         let fake = FakeAirPlay::new();

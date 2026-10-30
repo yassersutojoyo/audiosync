@@ -1993,6 +1993,7 @@ The decisions the hosts take from the core: sources and capture, session start a
 | names_sort_ignoring_case_with_numbers_in_order_and_ties_stable (`core/tests/policy_speakers.rs`) | S152, S147 |
 | a_built_in_output_and_sixteen_connected_speakers_are_all_listed (`core/tests/policy_speakers.rs`) | S165, S146, S152 |
 | long_names_that_differ_only_at_the_end_sort_whole_and_stay_unchanged (`core/tests/policy_speakers.rs`) | S166, S152, S147 |
+| long_names_that_differ_only_at_the_end_sort_whole_and_stay_unchanged (`desktop/src/audio/airplay.rs`) | S166, S147 |
 | delays_ring_indices_and_lag_count_capture_rate_frames (`core/tests/session_model.rs`) | S4, S62, S45 |
 | every_session_has_its_own_history_reader_positions_and_frame_count (`core/tests/session_model.rs`) | S5, S17, S39, S45 |
 
@@ -3162,6 +3163,7 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | each_launch_empties_the_last_log (`desktop/src/debug_log.rs`) | S170 |
 | a_relaunch_after_a_rejected_long_line_adds_nothing (`desktop/src/debug_log.rs`) | S170 |
 | the_log_never_passes_its_limit_with_the_stop_line_included (`desktop/src/debug_log.rs`) | S170 |
+| logging_never_waits_for_a_stuck_writer_and_the_lines_land_once_it_drains (`desktop/src/debug_log.rs`) | S131, S170 |
 | a_track_reaches_the_sender_with_its_artwork_once_read | S219 |
 | an_unchanged_track_is_not_sent_again | S219 |
 | a_new_track_is_sent_as_it_changes | S219 |

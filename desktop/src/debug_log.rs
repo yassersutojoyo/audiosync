@@ -41,6 +41,9 @@ enum Request {
     Line(SystemTime, String),
     /// Flush the file, then answer.
     Flush(Sender<()>),
+    /// Say so, then stall until released: a writer stuck on the file.
+    #[cfg(test)]
+    Hold(Sender<()>, Receiver<()>),
 }
 
 /// The debug log, or a log that writes nothing (the default). Clones write
@@ -300,6 +303,11 @@ fn write_requests(requests: &Receiver<Request>, file: File, written: u64, max_by
                     let _ = out.flush();
                     let _ = done.send(());
                 }
+                #[cfg(test)]
+                Request::Hold(held, release) => {
+                    let _ = held.send(());
+                    let _ = release.recv();
+                }
             }
             next = requests.try_recv().ok();
         }
@@ -532,6 +540,37 @@ mod tests {
             lines[6], r"    | 2026-01-01T00:00:00.000Z forged\t\x1b[2J\x85",
             "a forged entry stays marked as a continuation"
         );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    // covers: S131, S170
+    #[test]
+    fn logging_never_waits_for_a_stuck_writer_and_the_lines_land_once_it_drains() {
+        let dir = test_dir("log-stuck-writer");
+        let log = DebugLog::new(log_path(Some(OsStr::new("1")), &dir));
+        log.log(|| "before".to_owned());
+        let (held, holding) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let writer = log.writer.as_ref().expect("the log is on");
+        assert!(writer.send(Request::Hold(held, released)).is_ok());
+        assert!(holding.recv_timeout(Duration::from_secs(2)).is_ok());
+        let (done, finished) = mpsc::channel();
+        let logger = log.clone();
+        thread::spawn(move || {
+            for n in 0..100 {
+                logger.log(|| format!("held {n}"));
+            }
+            let _ = done.send(());
+        });
+        assert!(
+            finished.recv_timeout(Duration::from_secs(2)).is_ok(),
+            "logging returns while the writer is stuck"
+        );
+        drop(release);
+        assert!(log.flush(TEST_FLUSH));
+        let messages = read_messages(&dir.join(FILE_NAME));
+        assert_eq!(messages.len(), 101);
+        assert_in_order(&messages, &["before", "held 0", "held 99"]);
         let _ = fs::remove_dir_all(dir);
     }
 
