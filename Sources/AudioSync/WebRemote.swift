@@ -80,6 +80,7 @@ final class WebRemote {
     /// The port the debug switch started this run's remote on; never saved,
     /// and dropped once the user changes the setting.
     private var debugPort: Int?
+    private var volumeLog = RemoteVolumeLog()
 
     var isRunning: Bool { handle != nil }
     /// A remote nobody paired with costs no Now Playing polling and raises no Automation prompt.
@@ -273,7 +274,7 @@ final class WebRemote {
             RemoteRow(RemoteRow.Facts(
                 id: s.id, name: s.name, kind: t.speakerTag(s.tag, airPlay2: s.airPlay2), on: s.enabled,
                 volume: s.volume, isAirPlay: s.isAirPlay,
-                cast: s.cast.map { (live: $0.live, volumeFixed: $0.volumeFixed) },
+                castVolumeFixed: s.cast?.volumeFixed,
                 offsetMs: s.offsetMs, airPlayDelayMs: model.airPlayDelayMs,
                 needsCode: s.availability != .open, paired: s.paired, holdsPassword: s.holdsPassword,
                 memberAsksPassword: s.airPlayTarget?.asksPassword == true,
@@ -325,7 +326,13 @@ final class WebRemote {
         case .setVolume(let id, let position):
             if let s = speaker(id) {
                 model.setVolume(s, position)
-                if s.tag != .airplay && s.tag != .cast { model.actions.localVolumeSettled(id) }
+                if s.tag != .airplay && s.tag != .cast {
+                    let n = volumeLog.step(id)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                        guard let self, self.handle != nil, self.volumeLog.isLast(id, n) else { return }
+                        self.model.actions.localVolumeSettled(id)
+                    }
+                }
             }
         case .setLocalOffset(let id, let ms): model.actions.setLocalOffset(id, ms)
         case .setCastOffset(let id, let ms): model.actions.setCastOffset(id, ms)

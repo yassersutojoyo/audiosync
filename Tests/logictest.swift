@@ -11145,9 +11145,9 @@ do {
     let homePod = RemoteRow(Facts(id: "hp", name: "Kitchen", kind: "AirPlay 2", on: true, volume: 30, isAirPlay: true,
                                   airPlayDelayMs: 1750), text: t)
     let castIdle = RemoteRow(Facts(id: "cast", name: "Nest", kind: "Google Cast", on: false, volume: 50,
-                                   cast: (live: false, volumeFixed: false), offsetMs: 300), text: t)
+                                   castVolumeFixed: false, offsetMs: 300), text: t)
     let castGroup = RemoteRow(Facts(id: "group", name: "Home group", kind: "Google Cast", on: false, volume: 50,
-                                    cast: (live: false, volumeFixed: false), offsetMs: 0,
+                                    castVolumeFixed: false, offsetMs: 0,
                                     note: t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false,
                                                              group: .notReported))),
                               text: t)
@@ -11290,12 +11290,14 @@ do {
     check(plan("{\"type\":\"speaker\",\"id\":\"usb\",\"on\":true,\"volume\":70}")
             == [.setEnabled(id: "usb", on: true), .setVolume(id: "usb", position: 70)],
           "web remote: turning a speaker on with a volume flips the switch, then moves the slider")
-    // covers: S345
-    check(plan("{\"type\":\"speaker\",\"id\":\"usb\",\"volume\":70}").isEmpty,
-          "web remote: the volume of a speaker that is off changes nothing, as its slider is disabled in the window")
-    // covers: S345
-    check(plan("{\"type\":\"speaker\",\"id\":\"cast\",\"on\":true,\"volume\":70}") == [.setEnabled(id: "cast", on: true)],
-          "web remote: a Cast speaker's volume waits for its session")
+    // covers: S348
+    check(plan("{\"type\":\"speaker\",\"id\":\"usb\",\"volume\":70}") == [.setVolume(id: "usb", position: 70)]
+            && plan("{\"type\":\"speaker\",\"id\":\"cast\",\"volume\":70}") == [.setVolume(id: "cast", position: 70)],
+          "web remote: the volume of a speaker that is off is kept for when it plays, a Cast speaker's too")
+    // covers: S348
+    check(plan("{\"type\":\"speaker\",\"id\":\"cast\",\"on\":true,\"volume\":70}")
+            == [.setEnabled(id: "cast", on: true), .setVolume(id: "cast", position: 70)],
+          "web remote: a Cast speaker turned on with a volume keeps it for its session")
     let toLocal = plan("{\"type\":\"speaker\",\"id\":\"usb\",\"delay_ms\":-5000}") == [.setLocalOffset(id: "usb", ms: -2000)]
     let toCast = plan("{\"type\":\"speaker\",\"id\":\"cast\",\"delay_ms\":450}") == [.setCastOffset(id: "cast", ms: 450)]
     let toAirPlay = plan("{\"type\":\"speaker\",\"id\":\"hp\",\"delay_ms\":1800}") == [.setAirPlayDelay(ms: 1800)]
@@ -11310,10 +11312,17 @@ do {
     // covers: S257 (a speaker that would ask for a code stays off)
     check(leftAlone && pairedOn && groupOn,
           "web remote: a speaker that can't be driven or isn't listed is left alone; a paired one and a Cast group turn on")
-    let offFirst = plan("{\"type\":\"speaker\",\"id\":\"hp\",\"on\":false,\"volume\":10}") == [.setEnabled(id: "hp", on: false)]
+    let offFirst = plan("{\"type\":\"speaker\",\"id\":\"hp\",\"on\":false,\"volume\":10}")
+        == [.setEnabled(id: "hp", on: false), .setVolume(id: "hp", position: 10)]
     let masterClamped = plan("{\"type\":\"master\",\"volume\":150}") == [.setMaster(position: 100)]
-    // covers: S76 (the master volume)
-    check(offFirst && masterClamped, "web remote: a speaker turned off takes no volume; the master volume is clamped")
+    // covers: S76 (the master volume), S348
+    check(offFirst && masterClamped, "web remote: a speaker turned off keeps the phone's volume; the master volume is clamped")
+    var volumeLog = RemoteVolumeLog()
+    let steps = (0..<5).map { _ in volumeLog.step("usb") }
+    let logged = steps.filter { volumeLog.isLast("usb", $0) }.count
+    let nextDrag = volumeLog.step("usb")
+    check(logged == 1 && volumeLog.isLast("usb", nextDrag),
+          "web remote: a local volume dragged on the phone is logged once, after its last step", "\(logged) for 5 steps")
     // covers: S76 (a phone's volume, before it reaches a speaker, a zone or the master)
     check(RemoteSnapshot.volume(-20) == 0 && RemoteSnapshot.volume(150) == 100 && RemoteSnapshot.volume(.nan) == 0
             && RemoteSnapshot.volume(37) == 37,
@@ -11989,6 +11998,19 @@ do {
             && approx(swap.volume(of: castY), 30, 1e-9),
           "presets: a recall that swaps the Cast speaker while streaming gives the new one the preset's volume",
           "\(String(describing: swapSent)) \(swap.volume(of: castY))")
+    var offLevel = CastModel()
+    offLevel.apply(.appeared(CastDevice(id: castY, name: "Den"), offsetMs: nil))
+    let offKept = offLevel.setVolume(castY, position: 30) == nil && approx(offLevel.volume(of: castY), 30, 1e-9)
+    _ = offLevel.turnOn(castY)
+    offLevel.startSent(castY)
+    _ = offLevel.started(castY, attempt: 1, refusal: 0)
+    var offSent: Double?
+    if case .setVolume(let level)? = offLevel.apply(.volume(attempt: 1, CastVolume(level: 0.8, muted: false, fixed: false))) {
+        offSent = level
+    }
+    // covers: S348, C105
+    check(offKept && offSent.map { approx($0, 0.3, 1e-9) } == true,
+          "cast: a level set while the speaker is off goes at its first status", "\(String(describing: offSent))")
 
     // covers: C2
     var expired = CastModel()

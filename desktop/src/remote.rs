@@ -978,6 +978,36 @@ mod tests {
         );
     }
 
+    // covers: S348
+    #[test]
+    fn a_phone_volume_for_a_speaker_that_is_off_or_an_idle_cast_one_is_kept() {
+        let mut state = state();
+        state.speakers[0].enabled = false;
+        let change = || SpeakerChange {
+            volume: Some(35.0),
+            ..Default::default()
+        };
+        let volume = |id: &str| {
+            Ok(vec![Action::Volume {
+                id: id.to_owned(),
+                volume: 35.0,
+            }])
+        };
+        for id in ["desk", "kitchen"] {
+            assert_eq!(
+                actions(&speaker_command(id, change()), &state, not_virtual),
+                volume(id),
+                "{id}"
+            );
+        }
+        state.speakers[2].cast.as_mut().unwrap().volume_fixed = true;
+        assert_eq!(
+            actions(&speaker_command("kitchen", change()), &state, not_virtual),
+            Err(Refusal::Unavailable),
+            "a Cast speaker whose volume is fixed"
+        );
+    }
+
     #[test]
     fn a_delay_must_stay_in_the_speakers_range() {
         let state = state();

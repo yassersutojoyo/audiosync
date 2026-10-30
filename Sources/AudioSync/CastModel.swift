@@ -880,12 +880,12 @@ struct CastModel {
     /// The user's own level for the device in a session, 0 to 100. Returns
     /// the level to send, master × zone × own, 0 to 1 (C104); nil when no session
     /// runs for it, the position isn't a number or the volume is fixed. A
-    /// device that is on but waits for its session keeps the level for it (C105).
+    /// device without a session, off or waiting for one, keeps the level for it (C105, S348).
     mutating func setVolume(_ id: String, position: Double) -> Double? {
         guard position.isFinite else { return nil }
         let own = min(1, max(0, position / 100))
         guard isLive(id) else {
-            if enabled == id { levels[id] = own }
+            levels[id] = own
             return nil
         }
         requested = (id, own)

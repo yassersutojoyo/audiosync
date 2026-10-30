@@ -217,8 +217,8 @@ extension AppDelegate {
     /// The device's own level (slider position 0 to 100); the device gets it
     /// times the master (C104).
     func setCastVolume(_ appID: String, _ position: Double) {
-        guard let id = CastID.device(appID), let level = castModel.setVolume(id, position: position) else { return }
-        castSender?.setVolume(level)
+        guard let id = CastID.device(appID) else { return }
+        if let level = castModel.setVolume(id, position: position) { castSender?.setVolume(level) }
         pushModel()
     }
 

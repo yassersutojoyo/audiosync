@@ -51,10 +51,9 @@ struct RemoteRow: Equatable {
     var delay: RemoteDelay
     var available: Bool
     var notice: String?
-    /// The window's slider takes a change now.
+    /// A phone's volume applies, at once or, for a speaker that is off or a Cast
+    /// speaker without a session, when it plays; a fixed Cast volume takes none (S348).
     var volumeAdjustable: Bool
-    /// Turning a Cast speaker on doesn't enable its slider until its session runs.
-    var isCast = false
     /// The `SpeakerKey` value zones list it by.
     var key = ""
     /// Switched on, it waits for an AirPlay 2 speaker to free a slot.
@@ -70,8 +69,8 @@ extension RemoteRow {
         var on: Bool
         var volume: Double
         var isAirPlay = false
-        /// A Google Cast speaker: its session state.
-        var cast: (live: Bool, volumeFixed: Bool)? = nil
+        /// A Google Cast speaker: whether its volume is fixed.
+        var castVolumeFixed: Bool? = nil
         /// The row's delay field value; nil where the window has none.
         var offsetMs: Double?
         var airPlayDelayMs: Double = 0
@@ -95,14 +94,13 @@ extension RemoteRow {
         let codeBlocked = (f.needsCode && !f.paired && !f.holdsPassword || f.memberAsksPassword) && !f.on
         let delay: RemoteDelay
         if f.isAirPlay { delay = .airPlay(f.airPlayDelayMs) }
-        else if f.cast != nil { delay = f.offsetMs.map(RemoteDelay.cast) ?? .fixed }
+        else if f.castVolumeFixed != nil { delay = f.offsetMs.map(RemoteDelay.cast) ?? .fixed }
         else { delay = f.offsetMs.map(RemoteDelay.offset) ?? .fixed }
-        let castVolume = f.cast.map { $0.live && !$0.volumeFixed } ?? true
         self.init(id: f.id, name: f.name, kind: f.kind, on: f.on, volume: f.volume, delay: delay,
                   available: !codeBlocked,
                   notice: f.note ?? (codeBlocked ? text.remoteTurnOnInApp : nil),
-                  volumeAdjustable: f.on && castVolume,
-                  isCast: f.cast != nil, key: f.key, waiting: f.waiting, asksForCode: codeBlocked)
+                  volumeAdjustable: f.castVolumeFixed != true,
+                  key: f.key, waiting: f.waiting, asksForCode: codeBlocked)
     }
 
     var json: [String: Any] {
@@ -319,7 +317,7 @@ enum RemoteAction: Equatable {
     /// A pick in the source picker, by its ID there.
     case selectSource(pickerID: String)
 
-    /// The switch first, then the slider (enabled or not by that switch),
+    /// The switch first, then the volume,
     /// then the delay; a value already in place changes nothing. A source
     /// pick needs a listed source other than the current one. Nothing while
     /// calibrating: the page's snapshot can lag behind a run (S258).
@@ -350,13 +348,10 @@ enum RemoteAction: Equatable {
         case .speaker(let id, let on, let volume, let delayMs):
             guard let row = rows.first(where: { $0.id == id }), row.available else { return [] }
             var actions: [RemoteAction] = []
-            var nowOn = row.on
             if let on, on != row.on {
                 actions.append(.setEnabled(id: id, on: on))
-                nowOn = on
             }
-            let adjustable = nowOn == row.on ? row.volumeAdjustable : (nowOn && !row.isCast)
-            if let volume, adjustable, RemoteSnapshot.volume(volume) != row.volume {
+            if let volume, row.volumeAdjustable, RemoteSnapshot.volume(volume) != row.volume {
                 actions.append(.setVolume(id: id, position: RemoteSnapshot.volume(volume)))
             }
             if let delayMs, let clamp = row.delay.clamp, let ms = clamp(delayMs.rounded()), ms != row.delay.ms {
@@ -370,6 +365,21 @@ enum RemoteAction: Equatable {
             return actions
         }
     }
+}
+
+/// The page sends a step every 100 ms while a slider moves and never says when
+/// it stops, so a local volume is logged once no later step for it came.
+struct RemoteVolumeLog {
+    private var steps: [String: Int] = [:]
+
+    /// The step's number, for `isLast` once the pause has passed.
+    mutating func step(_ id: String) -> Int {
+        let n = (steps[id] ?? 0) + 1
+        steps[id] = n
+        return n
+    }
+
+    func isLast(_ id: String, _ n: Int) -> Bool { steps[id] == n }
 }
 
 /// The port the user types in the setting.

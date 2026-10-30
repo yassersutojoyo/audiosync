@@ -120,3 +120,4 @@ S343 Web remote and hosts only: the snapshot's name, master, track and rows with
 S344 Web remote and hosts only: the source picker's entries and the source in use on the page, and a pick from it; the Windows host's tests and the Mac logic suite check it.
 S345 Hosts only: the Mac host reading the phone's speaker and master commands and applying them as the window's controls would; the Mac logic suite checks it.
 S346 Hosts only: the Mac's native AirPlay texts (PTP timing, PIN prompt, the AirPlay 2 kind, its tooltip and VoiceOver label); the Mac logic suite checks them.
+S348 Hosts only: both hosts keeping the phone's volume for a speaker that is off, a Cast speaker's following its slider; the Windows host's tests and the Mac logic suite check it.
