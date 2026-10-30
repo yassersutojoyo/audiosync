@@ -100,6 +100,14 @@ final class CalibrationMicrophone {
     /// Frames recorded so far.
     var framesRecorded: Int { sink.written.load(ordering: .acquiring) }
 
+    /// Why the run must stop for this microphone now (`CalibrationFlow.microphoneLoss`);
+    /// `needed` is the frames its recording must reach, nil before it records.
+    func loss(needed: Int?) -> CalibrationFailure? {
+        let gap = sink.gapAt.load(ordering: .acquiring)
+        return CalibrationFlow.microphoneLoss(gapAt: gap == 0 ? nil : gap, alive: MicrophoneHAL.isAlive(device),
+                                              recorded: framesRecorded, needed: needed)
+    }
+
     /// Stops the IOProc; Core Audio returns once a callback in progress has
     /// finished. Idempotent.
     func stop() {
@@ -127,6 +135,10 @@ private final class MicrophoneSink {
     let written = Atomic<Int>(0)
     let firstTicks = Atomic<UInt64>(0)
     let firstStamped = Atomic<Bool>(false)
+    /// 0 until the first gap: a gap can't come before the first frame.
+    let gapAt = Atomic<Int>(0)
+    /// Behind a pointer: a class's stored var would get a runtime exclusivity check on every callback.
+    private let continuity: UnsafeMutablePointer<MicrophoneContinuity>
     private let layout: CaptureChannels.Layout
 
     init(capacity: Int, layout: CaptureChannels.Layout) {
@@ -136,11 +148,15 @@ private final class MicrophoneSink {
         samples.initialize(repeating: 0, count: self.capacity)
         stereo = .allocate(capacity: CaptureChannels.blockFrames * 2)
         stereo.initialize(repeating: 0, count: CaptureChannels.blockFrames * 2)
+        continuity = .allocate(capacity: 1)
+        continuity.initialize(to: MicrophoneContinuity())
     }
 
     deinit {
         samples.deallocate()
         stereo.deallocate()
+        continuity.deinitialize(count: 1)
+        continuity.deallocate()
     }
 
     /// IO thread: one input buffer list, its first two channels averaged to
@@ -154,6 +170,10 @@ private final class MicrophoneSink {
             firstStamped.store(stamped, ordering: .relaxed)
             firstTicks.store(stamped ? time.pointee.mHostTime : mach_absolute_time(), ordering: .releasing)
         }
+        let stamp = time.pointee
+        continuity.pointee.buffer(sampleTime: stamp.mFlags.contains(.sampleTimeValid) ? stamp.mSampleTime : nil,
+                                  frames: channels.frames, framesBefore: count)
+        if let gap = continuity.pointee.gapAt, gapAt.load(ordering: .relaxed) == 0 { gapAt.store(gap, ordering: .releasing) }
         let room = capacity
         let dst = samples
         channels.forEachBlock(in: stereo) { block, frames in
@@ -186,6 +206,15 @@ private enum MicrophoneHAL {
         var rate: Float64 = 0
         var size = UInt32(MemoryLayout<Float64>.size)
         return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &rate) == noErr ? rate : 0
+    }
+
+    static func isAlive(_ device: AudioObjectID) -> Bool {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceIsAlive,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var alive: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &alive) == noErr && alive != 0
     }
 
     /// The virtual formats of the device's input streams; empty when they

@@ -9215,7 +9215,8 @@ do {
 
     // Refusals the host makes before the estimate say why and that nothing changed.
     let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .handsFreeMicrophone, .sourceSilent,
-                                              .interrupted, .notPlaying(.streaming), .noReference, .unsupportedRate]
+                                              .interrupted, .notPlaying(.streaming), .noReference, .unsupportedRate,
+                                              .microphoneChanged, .microphoneSkipped]
     for failure in hostRefusals {
         let message = t.calibrationMessage(.failed(failure)) ?? ""
         check(message.hasSuffix(" The delay wasn't changed.") && message.count > " The delay wasn't changed.".count + 10,
@@ -9249,12 +9250,64 @@ do {
     check(CalibrationFlow.microphoneCheck(first: nil, now: builtIn, largestHoldBackMs: 2000) == nil
             && CalibrationFlow.microphoneCheck(first: builtIn, now: builtIn, largestHoldBackMs: 2000) == nil
             && CalibrationFlow.microphoneCheck(first: builtIn, now: CalibrationMicrophoneID(device: 77, rate: 48_000),
-                                               largestHoldBackMs: 2000) == .interrupted
+                                               largestHoldBackMs: 2000) == .microphoneChanged
             && CalibrationFlow.microphoneCheck(first: builtIn, now: CalibrationMicrophoneID(device: 51, rate: 44_100),
-                                               largestHoldBackMs: 2000) == .interrupted
+                                               largestHoldBackMs: 2000) == .microphoneChanged
             && CalibrationFlow.microphoneCheck(first: nil, now: CalibrationMicrophoneID(device: 51, rate: 192_000),
                                                largestHoldBackMs: 20_000) == .tooLong(nil),
           "calibration: the chosen speaker's run must record with the reference's microphone")
+
+    // covers: S232
+    check(CalibrateAllFlow.microphoneCheck(rate: 48_000, first: nil, now: builtIn) == nil
+            && CalibrateAllFlow.microphoneCheck(rate: 48_000, first: builtIn, now: builtIn) == nil
+            && CalibrateAllFlow.microphoneCheck(rate: 48_000, first: builtIn,
+                                                now: CalibrationMicrophoneID(device: 77, rate: 48_000)) == .microphoneChanged
+            && CalibrateAllFlow.microphoneCheck(rate: 48_000, first: nil,
+                                                now: CalibrationMicrophoneID(device: 51, rate: 44_100)) == .microphoneChanged,
+          "calibrate all: another microphone mid-run ends it as the microphone changing, not as an interruption")
+
+    // A dropped buffer moves every later frame by its length: 512 frames at
+    // 48 kHz shift the sweep 10.7 ms, which the estimate would take as delay.
+    var steady = MicrophoneContinuity()
+    var dropped = MicrophoneContinuity()
+    var unstamped = MicrophoneContinuity()
+    for (index, time) in [0.0, 512, 1024, 1536].enumerated() {
+        steady.buffer(sampleTime: time + 9000, frames: 512, framesBefore: index * 512)
+        unstamped.buffer(sampleTime: index == 2 ? nil : time, frames: 512, framesBefore: index * 512)
+    }
+    for (index, time) in [0.0, 512, 1536, 2560, 2048].enumerated() {
+        dropped.buffer(sampleTime: time, frames: 512, framesBefore: index * 512)
+    }
+    // covers: S232
+    check(steady.gapAt == nil && unstamped.gapAt == nil && dropped.gapAt == 1024,
+          "calibration microphone: a buffer that doesn't start where the last one ended marks the first gap",
+          "\(String(describing: steady.gapAt)) \(String(describing: unstamped.gapAt)) \(String(describing: dropped.gapAt))")
+    // covers: S232
+    check(CalibrationFlow.microphoneLoss(gapAt: nil, alive: true, recorded: 100, needed: 4800) == nil
+            && CalibrationFlow.microphoneLoss(gapAt: 1024, alive: true, recorded: 2000, needed: 4800) == .microphoneSkipped
+            && CalibrationFlow.microphoneLoss(gapAt: 1024, alive: true, recorded: 100, needed: nil) == nil
+            && CalibrationFlow.microphoneLoss(gapAt: 4800, alive: true, recorded: 5000, needed: 4800) == nil,
+          "calibration microphone: audio lost before the recording's end refuses it as skipped")
+    // covers: S232
+    check(CalibrationFlow.microphoneLoss(gapAt: nil, alive: false, recorded: 100, needed: nil) == .noMicrophone
+            && CalibrationFlow.microphoneLoss(gapAt: nil, alive: false, recorded: 100, needed: 4800) == .noMicrophone
+            && CalibrationFlow.microphoneLoss(gapAt: nil, alive: false, recorded: 4800, needed: 4800) == nil,
+          "calibration microphone: a microphone that is gone ends the run at once unless its recording is whole")
+    let skippedText = t.calibrationMessage(.failed(.microphoneSkipped)) ?? ""
+    let changedText = t.calibrateAllLine(.ended(.failed(.microphoneChanged)))
+    check(skippedText.contains("dropped audio") && skippedText.hasSuffix(" The delay wasn't changed.")
+            && changedText.contains("microphone changed") && changedText.hasSuffix(" No delay was changed."),
+          "calibration microphone: a skipped or changed microphone has its own reason", "\(skippedText) | \(changedText)")
+
+    // covers: S232
+    check(CalibrationFlow.mayCommit(offsetMs: 150, oldOffsetMs: 150, chosenPlays: true, reference: "mac", runReference: "mac")
+            && !CalibrationFlow.mayCommit(offsetMs: 120, oldOffsetMs: 150, chosenPlays: true, reference: "mac",
+                                          runReference: "mac")
+            && !CalibrationFlow.mayCommit(offsetMs: 150, oldOffsetMs: 150, chosenPlays: false, reference: "mac",
+                                          runReference: "mac")
+            && !CalibrationFlow.mayCommit(offsetMs: 150, oldOffsetMs: 150, chosenPlays: true, reference: "usb",
+                                          runReference: "mac"),
+          "calibration: an estimate is committed only while the offset, the speaker and the reference are as measured")
 
     let accepted = CalibrationFlow.finish(answer(ASC_CALIBRATION_ACCEPTED, offset: -37), commit: commit)
     let acceptedText = t.calibrationMessage(accepted) ?? ""
@@ -9406,6 +9459,30 @@ do {
     check(CalibrateAllFlow.quietSeconds(planned) == 3 && CalibrateAllFlow.settleSeconds(planned[3]) == 3,
           "calibrate all: the music on its way plays out before the first sweep, a Cast speaker's unknown latency included",
           "\(CalibrateAllFlow.quietSeconds(planned))")
+
+    // A Measure Again of usb fades the music on every speaker, the Cast speaker
+    // and its 3 s included, and keeps all but the two it measures silent.
+    let againSilent = CalibrateAllFlow.againSilenced(planned, taking: ["mac", "usb"])
+    // covers: S239
+    check(againSilent.map(\.id) == ["cast:tv", "native:a", "native:b"]
+            && CalibrateAllFlow.quietSeconds([planned[0], planned[1]] + againSilent) == 3,
+          "calibrate all: Measure Again waits until every playing speaker's music has played out (S239)",
+          "\(againSilent.map(\.id))")
+    let adjustment = planned[3].adjustmentMs ?? 0
+    func refusal(_ row: Int, off: Bool = false, adjustmentMs: Double? = nil,
+                 _ current: (CalibrateAllSpeaker) -> Double?) -> CalibrationFailure? {
+        CalibrateAllFlow.againRefusal(planned, row: row, off: off, reference: "mac",
+                                      airPlayAdjustmentMs: adjustmentMs ?? adjustment, current: current)
+    }
+    // covers: S239
+    check(refusal(1) { $0.offsetMs } == nil
+            && refusal(1) { $0.id == "usb" ? 120 : $0.offsetMs } == .interrupted
+            && refusal(1, off: true) { $0.id == "usb" ? 120 : $0.offsetMs } == nil
+            && refusal(3) { $0.kind == .airPlay ? 1900 : $0.offsetMs } == nil
+            && refusal(3, adjustmentMs: adjustment + 50) { $0.offsetMs } == .interrupted
+            && CalibrateAllFlow.againRefusal(planned, row: 1, off: true, reference: "usb",
+                                             airPlayAdjustmentMs: adjustment) { $0.offsetMs } == .noReference,
+          "calibrate all: Measure Again refuses a row whose stored delay changed since the sheet was made (S239)")
 
     // A sitting: a Samsung TV at L_s 1750 ms was missed with the AirPlay delay field at 0.
     var fieldAtZero = inputs

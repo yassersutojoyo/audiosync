@@ -121,14 +121,19 @@ extension AppDelegate {
             return
         }
         let off = sheet.isOff(index)
+        if let refusal = CalibrateAllFlow.againRefusal(sheet.speakers, row: index, off: off, reference: localReference,
+                                                       airPlayAdjustmentMs: airPlayDelay.adjustmentMs,
+                                                       current: calibrateStoredValue) {
+            appModel.calibrateAll.line = .againEnded(name: speaker.name, .failed(refusal))
+            return
+        }
         guard let handle = off ? sheet.measureAgainOff(index, now: speaker) : sheet.measureAgain(index) else { return }
         appModel.calibrateAll.line = nil
         appModel.calibrateAll.againRow = index
         var speakers = sheet.speakers
         speakers[index] = speaker
-        // On a zone sheet every other speaker that plays is silenced, and its play-out is waited for (S255).
-        let outside: [CalibrateAllSpeaker] = appModel.calibrateAll.zone == nil
-            ? [] : ((try? calibrateAllPlan().get()) ?? []).filter { !taking.contains($0.id) }
+        // Every other speaker that plays is silenced, and its play-out is waited for (S239, S255).
+        let outside = CalibrateAllFlow.againSilenced((try? calibrateAllPlan().get()) ?? [], taking: taking)
         let run = CalibrateAllRun(app: self, mode: .again(row: index), speakers: speakers, handle: handle,
                                   rate: sheet.rate, microphone: sheet.microphone, taking: taking,
                                   zone: appModel.calibrateAll.zone?.id, silenced: outside)
@@ -523,8 +528,9 @@ final class CalibrateAllRun {
     private let handle: CalibrateAllRunHandle
     /// The IDs of the speakers that must keep playing.
     private let taking: [String]
-    /// For Calibrate Zone, the measured zone's ID and the speakers outside it that play silenced (S255).
+    /// For Calibrate Zone, the measured zone's ID (S255).
     private let zone: String?
+    /// The speakers outside the run that play silenced: outside the zone, or for Measure Again every other one.
     private let outside: [CalibrateAllSpeaker]
     private let context: CalibrateAllContext
     private let captureRate: Double
@@ -538,6 +544,15 @@ final class CalibrateAllRun {
         /// The core judges the recording off the main thread.
         case analyzing
         case ended
+
+        /// Why the microphone stops the run now, if it does.
+        var microphoneLoss: CalibrationFailure? {
+            switch self {
+            case .warming(_, let mic, _), .playing(_, let mic, _): mic.loss(needed: nil)
+            case .recording(_, let mic, let start, let frames, _): mic.loss(needed: start + frames)
+            default: nil
+            }
+        }
     }
 
     private var stage = Stage.quiet(untilNs: 0)
@@ -618,6 +633,7 @@ final class CalibrateAllRun {
             return end(change)
         }
         guard app.engine.captureRate == captureRate else { return end(.rateChanged) }
+        if let loss = stage.microphoneLoss { return end(.failed(loss)) }
         let now = clock.nowNs()
         switch stage {
         case .quiet(let until):
@@ -688,9 +704,9 @@ final class CalibrateAllRun {
             // Room for the warm-up, the wait for the signal's block and a stalled device.
             let mic = try CalibrationMicrophone(seconds: window + 6)
             let heard = CalibrationMicrophoneID(device: mic.device, rate: mic.rate)
-            if heard.rate != rate || (microphone.map { $0 != heard } ?? false) {
+            if let changed = CalibrateAllFlow.microphoneCheck(rate: rate, first: microphone, now: heard) {
                 mic.stop()
-                return end(.failed(.interrupted))
+                return end(.failed(changed))
             }
             microphone = microphone ?? heard
             stage = .warming(step, mic, sinceNs: clock.nowNs())

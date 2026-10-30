@@ -291,6 +291,11 @@ struct UIStrings {
                 + "Turn streaming off and on, and try again."
         case .interrupted:
             return "Streaming, the speakers or their delays changed during the measurement."
+        case .microphoneChanged:
+            return "The microphone changed during the calibration. Keep one microphone as the default input, "
+                + "and try again."
+        case .microphoneSkipped:
+            return "The microphone dropped audio during the measurement, so its timing can't be trusted. Try again."
         case .tooShort:
             return "The recording was too short. Try again."
         case .tooLong:

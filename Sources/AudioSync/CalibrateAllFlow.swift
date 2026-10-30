@@ -379,6 +379,31 @@ enum CalibrateAllFlow {
         speakers.map(playOutSeconds).max() ?? 0
     }
 
+    /// The speakers of `plan` a Measure Again run keeps silent, every one but
+    /// the two it measures, so it waits until their music has played out too.
+    static func againSilenced(_ plan: [CalibrateAllSpeaker], taking: [String]) -> [CalibrateAllSpeaker] {
+        plan.filter { !taking.contains($0.id) }
+    }
+
+    /// Why Measure Again won't start row `row`: the reference is no longer the
+    /// sheet's, or the row's stored delay changed since the sheet was made, so
+    /// its result would build on a value no longer stored. An off row starts
+    /// from its values now (S255).
+    static func againRefusal(_ speakers: [CalibrateAllSpeaker], row: Int, off: Bool, reference: String?,
+                             airPlayAdjustmentMs: Double,
+                             current: (CalibrateAllSpeaker) -> Double?) -> CalibrationFailure? {
+        guard speakers.first?.id == reference else { return .noReference }
+        return off || unchanged([speakers[0], speakers[row]], reference: reference, airPlayAdjustmentMs: airPlayAdjustmentMs,
+                         current: current) ? nil : .interrupted
+    }
+
+    /// Whether the input opened for a step may record it: at the run's rate,
+    /// and the device and rate of the run's first recording (S232).
+    static func microphoneCheck(rate: UInt32, first: CalibrationMicrophoneID?,
+                                now: CalibrationMicrophoneID) -> CalibrationFailure? {
+        now.rate != rate || (first.map { $0 != now } ?? false) ? .microphoneChanged : nil
+    }
+
     /// How long a run cut off during `speaker`'s sweep keeps the outputs as
     /// they are, so the sweep plays out on that speaker alone, faded.
     static func settleSeconds(_ speaker: CalibrateAllSpeaker) -> Double {

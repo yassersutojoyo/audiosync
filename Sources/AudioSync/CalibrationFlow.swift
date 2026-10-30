@@ -58,6 +58,11 @@ enum CalibrationFailure: Equatable {
     /// Streaming stopped, or the speakers or their delays changed, during
     /// the measurement.
     case interrupted
+    /// The default input device or its rate changed between the runs.
+    case microphoneChanged
+    /// The microphone lost audio before the recording's end, so its timing
+    /// can't be trusted.
+    case microphoneSkipped
     case tooShort(CalibrationRecording?)
     case tooLong(CalibrationRecording?)
     case clipped(CalibrationRecording?)
@@ -246,8 +251,25 @@ enum CalibrationFlow {
     /// (S232), and the recording fits the estimate's limit at that rate.
     static func microphoneCheck(first: CalibrationMicrophoneID?, now: CalibrationMicrophoneID,
                                 largestHoldBackMs: Double) -> CalibrationFailure? {
-        if let first, first != now { return .interrupted }
+        if let first, first != now { return .microphoneChanged }
         return fits(largestHoldBackMs: largestHoldBackMs, rate: now.rate) ? nil : .tooLong(nil)
+    }
+
+    /// Why a run stops at once because of the microphone itself: it went
+    /// away before its recording was whole, or it lost audio before the
+    /// recording's end, which shifts every frame after the gap. `needed` is
+    /// the frame count the recording must reach; nil before it records.
+    static func microphoneLoss(gapAt: Int?, alive: Bool, recorded: Int, needed: Int?) -> CalibrationFailure? {
+        if !alive && needed.map({ recorded < $0 }) ?? true { return .noMicrophone }
+        if let gapAt, let needed, gapAt < needed { return .microphoneSkipped }
+        return nil
+    }
+
+    /// Whether the estimate may be committed: the output's offset is still the
+    /// one it was made from, the output still plays and the reference is the same.
+    static func mayCommit(offsetMs: Double, oldOffsetMs: Double, chosenPlays: Bool, reference: String?,
+                          runReference: String) -> Bool {
+        offsetMs == oldOffsetMs && chosenPlays && reference == runReference
     }
 
     /// How long a run that ends keeps the outputs as they are (only one
@@ -363,5 +385,23 @@ enum CalibrationFlow {
         case .refuse(let failure):
             return .failed(failure)
         }
+    }
+}
+
+/// Where a recording first lost audio, from the device's sample time on each
+/// buffer: one that doesn't start where the last one ended had frames dropped
+/// before it. Plain values only, since the microphone's IOProc keeps one.
+struct MicrophoneContinuity {
+    /// The recorded frame the first gap fell before; nil while there was none.
+    private(set) var gapAt: Int?
+    private var nextSampleTime: Double?
+
+    /// A buffer of `frames` frames at `sampleTime` (nil when the device gave
+    /// none) that follows `framesBefore` recorded frames.
+    mutating func buffer(sampleTime: Double?, frames: Int, framesBefore: Int) {
+        if gapAt == nil, let expected = nextSampleTime, let sampleTime, abs(sampleTime - expected) >= 1 {
+            gapAt = framesBefore
+        }
+        nextSampleTime = sampleTime.map { $0 + Double(frames) }
     }
 }

@@ -177,6 +177,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A Google Cast speaker's Mute button changes to Unmute, and back, as soon as you click it. Before, it waited for the speaker to answer. On the Mac and on Windows.
 - On the Mac, VoiceOver says whether streaming is on or off when it reaches the menu bar icon, before the number of notices waiting.
 - On the Mac, an AirPlay 2 speaker that has left the network still shows "AirPlay 2" as its kind, and VoiceOver reads that it isn't on the network after its on or off state.
+- On the Mac, a calibration whose microphone drops audio while it records now stops and changes nothing, as on Windows. Before, it could set a delay that was off by the audio it lost, without saying so. A microphone that's unplugged during a calibration now stops it at once instead of after a wait.
+- On the Mac, Measure Again no longer starts on a speaker whose delay changed after Calibrate All measured it, or after the reference speaker changed, and says why, as on Windows. A calibration whose microphone changed while it ran now says so, instead of saying the speakers changed.
 
 ## [0.7.1] - 2026-10-27
 
