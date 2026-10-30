@@ -11724,6 +11724,33 @@ mod tests {
         assert_eq!(captures(&adapter).len(), 2, "with no capture restart");
     }
 
+    // covers: S344
+    #[test]
+    fn a_phone_pick_of_the_source_still_playing_clears_the_failed_switch_notice() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio.refuse_next_capture(BackendError::DeviceGone);
+        adapter.select_source(&player());
+        assert_eq!(
+            messages(&adapter),
+            [switch_failed(player_name(), SwitchName::System)]
+        );
+        let started = captures(&adapter).len();
+
+        let again = audiosync_remote::Command::Source {
+            id: "system".to_owned(),
+        };
+        let actions = crate::remote::actions(&again, &adapter.snapshot(), |_| true);
+        for action in actions.expect("listed") {
+            if let crate::remote::Action::Source { id } = action {
+                adapter.select_source(&id);
+            }
+        }
+        assert!(messages(&adapter).is_empty());
+        assert!(adapter.snapshot().running, "streaming goes on");
+        assert_eq!(captures(&adapter).len(), started, "with no capture restart");
+    }
+
     // covers: S163
     #[test]
     fn another_channel_pair_while_stopped_clears_the_notice_of_why_the_input_stopped() {

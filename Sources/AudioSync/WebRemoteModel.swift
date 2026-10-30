@@ -326,11 +326,12 @@ enum RemoteAction: Equatable {
     /// The switch first, then the volume,
     /// then the delay; a switch or delay already in place changes nothing, and
     /// a volume moves the row even when it equals the shown number (S348). A source
-    /// pick needs a listed source other than the current one. Nothing while
-    /// calibrating: the page's snapshot can lag behind a run (S258).
+    /// pick needs a listed source; one of the source in use clears a failed
+    /// switch's notice, as in the picker (S163). Nothing while calibrating:
+    /// the page's snapshot can lag behind a run (S258).
     static func plan(_ command: RemoteCommand, rows: [RemoteRow], zones: [RemoteZoneRow] = [],
                      presets: [RemotePresetRow] = [], calibrating: Bool = false,
-                     sources: [RemoteSource] = [], sourceID: String? = nil) -> [RemoteAction] {
+                     sources: [RemoteSource] = []) -> [RemoteAction] {
         guard !calibrating else { return [] }
         switch command {
         case .zone(let id, let toggle, let volume):
@@ -349,7 +350,7 @@ enum RemoteAction: Equatable {
         case .master(let volume):
             return [.setMaster(position: RemoteSnapshot.volume(volume))]
         case .source(let id):
-            guard id != sourceID, sources.contains(where: { $0.id == id }),
+            guard sources.contains(where: { $0.id == id }),
                   let pickerID = RemoteSource.pickerID(id) else { return [] }
             return [.selectSource(pickerID: pickerID)]
         case .speaker(let id, let on, let volume, let delayMs):

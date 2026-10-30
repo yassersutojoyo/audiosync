@@ -12020,15 +12020,18 @@ do {
           "web remote: the snapshot carries the sources and the one in use", sourced.json)
     func pick(_ id: String) -> [RemoteAction] {
         RemoteCommand(json: "{\"type\":\"source\",\"id\":\"\(id)\"}").map {
-            RemoteAction.plan($0, rows: rows, sources: remoteSources, sourceID: "app:com.apple.Music")
+            RemoteAction.plan($0, rows: rows, sources: remoteSources)
         } ?? []
     }
     // covers: S344
     check(pick("input:BuiltInMic") == [.selectSource(pickerID: "input:BuiltInMic")]
             && pick("system") == [.selectSource(pickerID: "")]
-            && pick("app:com.apple.Music").isEmpty && pick("app:gone").isEmpty
+            && pick("app:gone").isEmpty
             && RemoteCommand(json: "{\"type\":\"source\",\"id\":3}") == nil,
-          "web remote: a source pick is the picker's own; the one in use or one it doesn't list changes nothing")
+          "web remote: a source pick is the picker's own; one it doesn't list changes nothing")
+    // covers: S344
+    check(pick("app:com.apple.Music") == [.selectSource(pickerID: "com.apple.Music")],
+          "web remote: a pick of the source in use is the picker's own, so it clears a failed switch's notice")
     let except = AudioSource.mixed(.allExcept, bundleIDs: ["com.spotify.client", "com.google.Chrome"])
     let mixEntries = SourceList.entries(systemName: "All System Audio",
                                         apps: [(bundleID: "com.spotify.client", name: "Spotify")], inputs: [],
@@ -12045,13 +12048,10 @@ do {
           "web remote: a several-apps source in use is listed under apps with the picker's name and maps back",
           mixSources.map(\.id).joined(separator: " "))
     let mixPick = RemoteCommand(json: "{\"type\":\"source\",\"id\":\"\(except.defaultsValue)\"}")
-    func planMix(from sourceID: String) -> [RemoteAction]? {
-        mixPick.map { RemoteAction.plan($0, rows: rows, sources: mixSources, sourceID: sourceID) }
-    }
     // covers: S344
-    check(planMix(from: except.defaultsValue) == [RemoteAction]()
-            && planMix(from: "system") == [RemoteAction.selectSource(pickerID: except.defaultsValue)],
-          "web remote: a pick of the several-apps source in use changes nothing; from another source it selects it")
+    check(mixPick.map { RemoteAction.plan($0, rows: rows, sources: mixSources) }
+            == [RemoteAction.selectSource(pickerID: except.defaultsValue)],
+          "web remote: a pick of the several-apps source selects it")
 
     // The core's own parser takes the snapshot.
     let noCommand: AscRemoteCommand = { _, _ in }

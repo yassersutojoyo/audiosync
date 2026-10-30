@@ -446,11 +446,8 @@ pub fn actions(
             if !state.sources.iter().any(|source| &source.id == id) {
                 return Err(Refusal::UnknownSource);
             }
-            Ok(if *id == state.source_id {
-                Vec::new()
-            } else {
-                vec![Action::Source { id: id.clone() }]
-            })
+            // Even the source in use: the picker's re-pick clears a failed switch's notice (S163).
+            Ok(vec![Action::Source { id: id.clone() }])
         }
         Command::Speaker { id, change } => {
             let speaker = state
@@ -723,7 +720,10 @@ mod tests {
         assert_eq!(mix.name, "All apps except Spotify; Chrome");
         assert_eq!(snapshot.source_id.as_deref(), Some(MIX));
         let pick = Command::Source { id: MIX.to_owned() };
-        assert_eq!(actions(&pick, &state, not_virtual), Ok(Vec::new()));
+        assert_eq!(
+            actions(&pick, &state, not_virtual),
+            Ok(vec![Action::Source { id: MIX.to_owned() }])
+        );
     }
 
     // covers: S344
@@ -740,7 +740,7 @@ mod tests {
 
     // covers: S344
     #[test]
-    fn a_source_pick_is_the_pickers_and_a_repeat_or_an_unknown_one_does_nothing() {
+    fn a_source_pick_is_the_pickers_a_repeat_included_and_an_unknown_one_does_nothing() {
         let state = with_sources();
         let pick = |id: &str| Command::Source { id: id.to_owned() };
         assert_eq!(
@@ -751,7 +751,9 @@ mod tests {
         );
         assert_eq!(
             actions(&pick("app:42:Spotify.exe"), &state, not_virtual),
-            Ok(Vec::new())
+            Ok(vec![Action::Source {
+                id: "app:42:Spotify.exe".to_owned()
+            }])
         );
         assert_eq!(
             actions(&pick("app:7:Gone.exe"), &state, not_virtual),

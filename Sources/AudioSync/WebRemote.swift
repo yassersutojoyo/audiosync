@@ -310,7 +310,7 @@ final class WebRemote {
             DebugTrace.log("[AudioSync] web remote: ignored a pick of a source the picker no longer lists")
         }
         let actions = RemoteAction.plan(command, rows: now.rows, zones: now.zones, presets: now.presets,
-                                        calibrating: now.calibrating, sources: now.sources, sourceID: now.sourceID)
+                                        calibrating: now.calibrating, sources: now.sources)
         DebugTrace.log("[AudioSync] web remote: \(actions.count) change(s) from a phone")
         actions.forEach(apply)
         // Sent even when unchanged: the core streams it so the phone drops a value the app refused.
