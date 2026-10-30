@@ -815,7 +815,9 @@ final class OutputRenderer: FadingOutput {
 
     /// While the debug log is on: a line for each late callback of this
     /// start, within `LateCallbackLog`'s limit for the whole process, and for
-    /// each re-anchor after a stall or a lasting lateness (S207). Polls the render callback's slot
+    /// each re-anchor after a stall or a lasting lateness, and for a clock
+    /// rate followed above 1000 ppm for 10 s and each change of it after
+    /// (S207). Polls the render callback's slot
     /// on that log's queue and reads only atomics.
     private func startLateCallbackReport(device: AudioObjectID) {
         guard DebugTrace.enabled, let target else { return }
@@ -823,6 +825,8 @@ final class OutputRenderer: FadingOutput {
         var seen = target.lateCount.load(ordering: .acquiring)
         var reanchors = target.renderer.stallReanchors
         var lateReanchors = target.renderer.lateReanchors
+        var followedSince: UInt64?
+        var followedLogged: Int64 = 0
         let timer = DispatchSource.makeTimerSource(queue: LateCallbackLog.queue)
         timer.schedule(deadline: .now() + .milliseconds(20), repeating: .milliseconds(20),
                        leeway: .milliseconds(10))
@@ -844,6 +848,19 @@ final class OutputRenderer: FadingOutput {
             if late != lateReanchors {
                 lateReanchors = late
                 DebugTrace.log("[AudioSync] \"\(name)\" re-anchored at its delay after a lasting lateness")
+            }
+            let ppm = target.renderer.followedPpm
+            if abs(ppm) <= 1000 {
+                followedSince = nil
+                followedLogged = 0
+            } else {
+                let now = HostClock.now()
+                let since = followedSince ?? now
+                followedSince = since
+                if now &- since >= 10_000_000_000, ppm != followedLogged {
+                    followedLogged = ppm
+                    DebugTrace.log("[AudioSync] \"\(name)\" follows its clock at \(ppm) ppm")
+                }
             }
         }
         timer.setCancelHandler {

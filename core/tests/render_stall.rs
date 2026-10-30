@@ -61,16 +61,29 @@ fn run(
 /// as late; with the times in s of the callbacks that made a resync.
 fn run_stalls(
     stalls: &[(u128, u128, u128)],
-    slow_ppm: u128,
+    slow_ppm: i128,
+    stray_ms: Option<u128>,
+    stopping: bool,
+) -> (Vec<(f64, f64)>, RendererControl, Vec<f64>) {
+    run_device(stalls, slow_ppm, stray_ms, stopping, false)
+}
+
+/// [`run_stalls`], and with `pull_endpoint` the output is a pull endpoint, as WASAPI
+/// renders: each wake gives only the time it reads at.
+fn run_device(
+    stalls: &[(u128, u128, u128)],
+    slow_ppm: i128,
     mut stray_ms: Option<u128>,
     stopping: bool,
+    pull_endpoint: bool,
 ) -> (Vec<(f64, f64)>, RendererControl, Vec<f64>) {
     let ring = Ring::for_rate(RATE).unwrap();
     let mut writer = ring.writer().unwrap();
     let gain = Arc::new(SharedGain::new(1.0));
     let write_period = BLOCK as u128 * SECOND / u128::from(RATE);
-    let callback_period =
-        CALLBACK as u128 * SECOND * (1_000_000 + slow_ppm) / u128::from(DEVICE_RATE) / 1_000_000;
+    let callback_period = CALLBACK as u128 * SECOND * (1_000_000 + slow_ppm) as u128
+        / u128::from(DEVICE_RATE)
+        / 1_000_000;
     let stall_at = STALL_AT_S * SECOND;
     let within = |at: u128, gap: fn(&(u128, u128, u128)) -> u128| {
         stalls.iter().any(|stall| {
@@ -129,7 +142,11 @@ fn run_stalls(
             }
             _ => 0,
         };
-        renderer.render_timed_at(&mut out, ns(output_at + stray), ns(pull_at + stray));
+        if pull_endpoint {
+            renderer.render_at(&mut out, ns(pull_at + stray));
+        } else {
+            renderer.render_timed_at(&mut out, ns(output_at + stray), ns(pull_at + stray));
+        }
         if control.counters().resyncs != before {
             resyncs.push(pull_at as f64 / SECOND as f64);
         }
@@ -253,6 +270,49 @@ fn a_device_clock_5000_ppm_slow_never_re_anchors_as_a_lasting_lateness() {
     // about 5 ms a second, a rate for the trim rather than a step.
     let (_, control, resyncs) = run_stalls(&[], 5000, None, false);
     assert_eq!(control.late_reanchors(), 0, "resyncs at {resyncs:?} s");
+}
+
+// covers: S207
+#[test]
+fn a_device_clock_5000_ppm_slow_is_followed_within_10_s_with_no_re_anchor() {
+    // The trim's 256th carried at most 3906 ppm, so the rest
+    // climbed until a 50 ms resync, heard as a speaker falling behind. The
+    // same holds for a pull endpoint (Windows) and for a clock as fast.
+    for (ppm, pull) in [(5000, false), (5000, true), (-5000, false)] {
+        let (delays, control, resyncs) = run_device(&[], ppm, None, false, pull);
+        let case = format!("{ppm} ppm, pull {pull}");
+        let early: Vec<f64> = delays
+            .iter()
+            .filter(|&&(at, _)| at < 2.5)
+            .map(|&(_, d)| d)
+            .collect();
+        let baseline = early.iter().sum::<f64>() / early.len() as f64;
+        let worst = delays
+            .iter()
+            .map(|&(_, d)| d - baseline)
+            .fold(0.0f64, |w, off| if off.abs() > w.abs() { off } else { w });
+        assert!(worst.abs() < 20.0, "{case}: {worst:.2} ms off at worst");
+        let settled = delays
+            .iter()
+            .filter(|&&(at, _)| at >= 10.0)
+            .map(|&(_, d)| d);
+        let (low, high) = settled.fold((f64::MAX, f64::MIN), |(l, h), d| (l.min(d), h.max(d)));
+        assert!(
+            high - low < 2.0,
+            "{case}: from 10 s on between {low:.2} and {high:.2} ms"
+        );
+        assert_eq!(
+            (control.late_reanchors(), control.stall_reanchors()),
+            (0, 0),
+            "{case}"
+        );
+        assert!(resyncs.is_empty(), "{case}: resyncs at {resyncs:?} s");
+        let followed = i128::from(control.followed_ppm());
+        assert!(
+            (followed - ppm).abs() <= 500,
+            "{case}: follows {followed} ppm"
+        );
+    }
 }
 
 // covers: S207

@@ -918,6 +918,19 @@ pub unsafe extern "C" fn asc_renderer_late_reanchors(renderer: *const AscRendere
     unsafe { control_side(renderer) }.map_or(0, RendererControl::late_reanchors)
 }
 
+/// The clock rate the renderer follows beside its trim, in ppm (S207):
+/// positive when the device's clock runs slow; 0 when it follows none or
+/// for a null handle.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_followed_ppm(renderer: *const AscRenderer) -> i64 {
+    // SAFETY: by the caller's contract the handle is null or live.
+    unsafe { control_side(renderer) }.map_or(0, RendererControl::followed_ppm)
+}
+
 /// Any thread: the start lead `renderer` published for the session lead
 /// (S208), in capture-rate frames, into `frames`; false, leaving `frames`
 /// alone, before it published one or for a null handle.
@@ -1423,6 +1436,7 @@ mod tests {
             assert_eq!(asc_renderer_time_steps(c), control.time_steps());
             assert_eq!(asc_renderer_stall_reanchors(c), control.stall_reanchors());
             assert_eq!(asc_renderer_late_reanchors(c), control.late_reanchors());
+            assert_eq!(asc_renderer_followed_ppm(c), control.followed_ppm());
             assert!(asc_renderer_fade_rendered(c));
             assert!(
                 c_out.iter().all(|&s| s == 0.0),
@@ -1589,6 +1603,7 @@ mod tests {
             assert_eq!(asc_renderer_time_steps(null), 0);
             assert_eq!(asc_renderer_stall_reanchors(null), 0);
             assert_eq!(asc_renderer_late_reanchors(null), 0);
+            assert_eq!(asc_renderer_followed_ppm(null), 0);
             asc_renderer_destroy(null);
             let renderer = asc_renderer_create(ring, 48_000, 48_000, 2, 1.0);
             asc_renderer_render(renderer, ptr::null_mut(), 4);

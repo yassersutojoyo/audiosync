@@ -91,6 +91,9 @@ struct Outcome {
     most_slowed: u64,
     /// Capture frames the converter was sped up by, in all (S207).
     sped: u64,
+    /// The largest clock rate the renderer followed, in ppm either way
+    /// (S207).
+    followed_ppm: u64,
 }
 
 fn write_blocks(writer: &mut RingWriter, block: usize, count: usize) {
@@ -190,6 +193,7 @@ fn simulate_jittered(clocks: Clocks, seconds: u64, stamped: bool, jitter_ns: u64
         slowed: 0,
         most_slowed: 0,
         sped: 0,
+        followed_ppm: 0,
     };
     loop {
         let write_at = k * write_period;
@@ -205,6 +209,8 @@ fn simulate_jittered(clocks: Clocks, seconds: u64, stamped: bool, jitter_ns: u64
                 renderer.render(&mut out);
             }
             outcome.most_slowed = outcome.most_slowed.max(renderer.slowed_frames() - slowed);
+            let followed = control.followed_ppm().unsigned_abs();
+            outcome.followed_ppm = outcome.followed_ppm.max(followed);
             outcome
                 .played
                 .extend(out.chunks_exact(2).map(|frame| frame[0]));
@@ -438,6 +444,8 @@ fn assert_follows_the_capture(clocks: Clocks, seconds: u64, jitter_ns: u64, othe
         "one prime and no correction: {clocks:?}"
     );
     assert_eq!(outcome.shortfall, 0, "{clocks:?}");
+    // Under 1 ms a second, and jitter in the stamps is no rate (S207).
+    assert_eq!(outcome.followed_ppm, 0, "{clocks:?}");
     let reads = reader_frames_bound(clocks.callback, RATE, clocks.device_rate) as u64;
     assert!(
         outcome.most_slowed * SLOW_DOWN_SHARE as u64 <= reads,

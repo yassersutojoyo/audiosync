@@ -398,6 +398,9 @@ final class CoreRenderer {
     var stallReanchors: UInt64 { asc_renderer_stall_reanchors(handle) }
     /// Any thread: the re-anchors at its delay after a lasting lateness (S207).
     var lateReanchors: UInt64 { asc_renderer_late_reanchors(handle) }
+    /// Any thread: the clock rate it follows, in ppm, positive when the
+    /// device's clock runs slow (S207).
+    var followedPpm: Int64 { asc_renderer_followed_ppm(handle) }
 }
 
 /// A lost speaker's start lead, still counted in the session lead until this

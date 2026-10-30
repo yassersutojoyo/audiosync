@@ -36,6 +36,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- A Bluetooth speaker whose clock runs slow, by up to 1%, no longer drifts later and later until it skips back with a short dropout: AudioSync measures its clock and keeps pace with it. On the Mac and on Windows.
 - On Windows, a Google Cast speaker you added by address keeps the volume you set for it when AudioSync finds it on the network while it isn't playing.
 - A Google Cast speaker you added by address keeps the name and settings AudioSync found for it after a relaunch, its zone, presets and on state included, before the network search finds it again. If the search finds it at another address, it shows as one row you can remove. On the Mac and on Windows.
 - On the Mac, adding an address whose speaker AudioSync already found at another address leaves that speaker's row as it is.

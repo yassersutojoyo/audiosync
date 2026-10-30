@@ -959,6 +959,11 @@ uint64_t asc_renderer_stall_reanchors(const AscRenderer *renderer);
    lateness (S207); 0 for a NULL handle. */
 uint64_t asc_renderer_late_reanchors(const AscRenderer *renderer);
 
+/* Any thread: the clock rate the renderer follows beside its trim, in ppm
+   (S207): positive when the device's clock runs slow; 0 when it follows none
+   or for a NULL handle. */
+int64_t asc_renderer_followed_ppm(const AscRenderer *renderer);
+
 /* ---- Delay helpers ------------------------------------------------------- */
 
 /*

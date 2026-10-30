@@ -196,6 +196,27 @@ pub const LATE_RISE_MS_PER_S: f64 = 1.0;
 /// hold's eighths (Theil-Sen), so one stray callback tilts few of them.
 const LATE_SLOTS: usize = 8;
 
+/// The fastest clock rate the renderer follows, as a share of its reads
+/// (S207): 1%, 10 ms a second.
+const RATE_FOLLOW_MAX: f64 = 0.01;
+
+/// A followed rate goes back to none once [`RATE_WINDOWS`] seconds in a row
+/// measure less than this, in ms per s (S207).
+const RATE_RELEASE_MS_PER_S: f64 = 0.5;
+
+/// The most the followed rate moves per callback, as a share of its reads
+/// (S207).
+const RATE_SLEW: f64 = 1e-4;
+
+/// The seconds in a row that must agree before a rate is followed or let go
+/// (S207), so a step, which lies in one of them, never is.
+const RATE_WINDOWS: usize = 3;
+
+/// The fewest callbacks a measured second spans (S207): with large
+/// callbacks a second holds only a few, and a millisecond of jitter in the
+/// stamps tilted its slope past [`LATE_RISE_MS_PER_S`] three times in a row.
+const RATE_WINDOW_CALLBACKS: u64 = 64;
+
 /// The most a callback's lateness moves its reader's delay, in ms (S209).
 pub const LATE_CAP_MS: u64 = 50;
 
@@ -424,6 +445,9 @@ struct Shared {
     stall_reanchors: AtomicU64,
     /// Re-anchors after a lasting lateness (S207).
     late_reanchors: AtomicU64,
+    /// The clock rate the renderer follows, in ppm: positive when the
+    /// device's clock runs slow (S207).
+    followed_ppm: AtomicI64,
     /// Start steps made, and the capture frames they moved the output
     /// later by (S318).
     start_steps: AtomicU64,
@@ -516,6 +540,7 @@ impl RendererControl {
                 time_steps: AtomicU64::new(0),
                 stall_reanchors: AtomicU64::new(0),
                 late_reanchors: AtomicU64::new(0),
+                followed_ppm: AtomicI64::new(0),
                 start_steps: AtomicU64::new(0),
                 start_step_frames: AtomicU64::new(0),
                 bluetooth: AtomicBool::new(false),
@@ -697,6 +722,13 @@ impl RendererControl {
     /// (S207).
     pub fn late_reanchors(&self) -> u64 {
         self.shared.late_reanchors.load(Ordering::Relaxed)
+    }
+
+    /// The clock rate the renderer follows beside its trim, in ppm (S207):
+    /// positive when the device's clock runs slow, so the converter is sped
+    /// up, negative when it runs fast; 0 when it follows none.
+    pub fn followed_ppm(&self) -> i64 {
+        self.shared.followed_ppm.load(Ordering::Relaxed)
     }
 
     /// The start steps the renderer made inside its start window (S318).
@@ -932,6 +964,29 @@ pub struct Renderer {
     late_slot: u64,
     /// Device frames left before a lasting lateness may re-anchor again.
     late_wait: u64,
+    /// The fill less `net_trim` summed and counted per [`LATE_SLOTS`]th of
+    /// the second being measured, and that second's device frames so far
+    /// (S207).
+    rate_slots: [(f64, u32); LATE_SLOTS],
+    rate_held: u64,
+    /// The device frames of each of those slots, set at the second's first
+    /// callback.
+    rate_width: u64,
+    /// The frames trimmed since the rate's slots were cleared, positive
+    /// slowed, so the fill less it moves with the device's clock alone.
+    net_trim: f64,
+    /// The latest seconds' rates, in ms per s, the newest last, and how
+    /// many of them in a row were measured.
+    rate_seen: [f64; RATE_WINDOWS],
+    rate_seen_count: usize,
+    /// How far the anchor floor fell since the rate's slots were cleared,
+    /// in ns.
+    anchor_fall_ns: i64,
+    /// The rate the converter is sped up by, as a share of its reads, the
+    /// rate it moves toward, and the part of a frame not trimmed yet (S207).
+    rate_follow: f64,
+    rate_target: f64,
+    rate_carry: f64,
     /// A held correction waits for the fade-out; closed until the first
     /// read after it (S188).
     correction_due: bool,
@@ -1018,10 +1073,12 @@ impl Renderer {
         // At the capture rate too, so every output can be trimmed (S206, S207).
         let resampler = Resampler::new_at_ratio_one(capture_rate, device_rate)
             .map_err(|_| RenderError::UnsupportedRate)?;
-        // A speed-up (S207) reads at most a 256th more, spread over the
-        // callback, so a piece may ask for a frame or two above the bound.
+        // A speed-up (S207) reads at most a 256th more plus the followed
+        // rate, spread over the callback, so a piece may ask for a frame or
+        // two above the bound.
         let bound = reader_frames_bound(RENDER_CHUNK, capture_rate, device_rate);
-        let read_frames = bound + bound / TRIM_SHARE + 2;
+        let followed = (bound as f64 * RATE_FOLLOW_MAX).ceil() as usize;
+        let read_frames = bound + bound / TRIM_SHARE + followed + 2;
         let latency = resampler.latency_frames() as i64;
         Ok(Renderer {
             reader,
@@ -1065,6 +1122,16 @@ impl Renderer {
             late_slots: [(0.0, 0); LATE_SLOTS],
             late_slot: 0,
             late_wait: 0,
+            rate_slots: [(0.0, 0); LATE_SLOTS],
+            rate_held: 0,
+            rate_width: 1,
+            net_trim: 0.0,
+            rate_seen: [0.0; RATE_WINDOWS],
+            rate_seen_count: 0,
+            anchor_fall_ns: 0,
+            rate_follow: 0.0,
+            rate_target: 0.0,
+            rate_carry: 0.0,
             correction_due: false,
             frames_after_fade: None,
             tracking: RESTART,
@@ -1439,7 +1506,9 @@ impl Renderer {
             return;
         };
         let need = self.resampler.input_frames_for(frames);
-        let trim = now.map_or(0, |now| self.follow(now, frames, need, &next));
+        let trim = now.map_or(0, |now| {
+            self.follow(now, frames, need, &next) - self.rate_trim(need)
+        });
         let short = need.saturating_sub(usize::try_from(next.readable).unwrap_or(0));
         if short > 0 && short <= need / SLOW_DOWN_SHARE {
             // S206's slow-down wins over a trim the other way; a larger
@@ -1548,6 +1617,7 @@ impl Renderer {
                     .anchor_floor
                     .map_or(0.0, |anchor| -(anchor as f64) * rate as f64 / 1e9);
                 self.reset_late();
+                self.reset_rate();
                 let shift = if count == 0 { minus_anchor } else { shift };
                 let fill = fill + minus_anchor - shift;
                 let (sum, count, span) = (sum + fill, count + 1, span + frames as u64);
@@ -1572,6 +1642,13 @@ impl Renderer {
                 let device_rate = u64::from(self.device_rate);
                 let width =
                     (device_rate * u64::from(LATE_HOLD_MS) / 1000 / LATE_SLOTS as u64).max(1);
+                // A falling anchor floor moves the fill as a rate would; one
+                // that creeps toward steady callbacks by ns does not.
+                if self.anchor_fall_ns as f64 >= RATE_RELEASE_MS_PER_S * 1e6 {
+                    self.reset_rate();
+                    self.rate_seen_count = 0;
+                }
+                self.measure_rate(fill, frames, rate);
                 if off >= f64::from(LATE_SHIFT_MS) * rate as f64 / 1e3 {
                     let slot = self.late_held / width;
                     let fresh =
@@ -1591,7 +1668,7 @@ impl Renderer {
                     && self.late_wait == 0
                     && self.stop == Stop::None
                 {
-                    let slope = self.late_rise(width, rate);
+                    let slope = self.theil_sen(&self.late_slots, self.late_slot, width, rate);
                     self.reset_late();
                     if slope <= LATE_RISE_MS_PER_S {
                         self.late_wait = device_rate * u64::from(LATE_REANCHOR_EVERY_MS) / 1000;
@@ -1621,17 +1698,82 @@ impl Renderer {
         self.late_slots = [(0.0, 0); LATE_SLOTS];
     }
 
-    /// How fast the fill's excess rose over the latest [`LATE_SLOTS`] slots
-    /// of `width` device frames, in ms per s at capture rate `rate`: the
-    /// median of the slopes between every two slots' means (S207).
-    fn late_rise(&self, width: u64, rate: u64) -> f64 {
+    /// Starts the second the rate is measured over anew (S207).
+    fn reset_rate(&mut self) {
+        self.rate_slots = [(0.0, 0); LATE_SLOTS];
+        self.rate_held = 0;
+        self.net_trim = 0.0;
+        self.anchor_fall_ns = 0;
+    }
+
+    /// Adds a callback of `frames` device frames and its `fill` less the
+    /// frames trimmed to the second being measured, which spans at least
+    /// [`RATE_WINDOW_CALLBACKS`] callbacks, after judging the second it
+    /// completes (S207): once [`RATE_WINDOWS`] in a row rise more than
+    /// [`LATE_RISE_MS_PER_S`] the same way, their least rise becomes the
+    /// rate to follow, at most [`RATE_FOLLOW_MAX`]; once they all lie under
+    /// [`RATE_RELEASE_MS_PER_S`], none is.
+    fn measure_rate(&mut self, fill: f64, frames: usize, rate: u64) {
+        let (slots, width) = (LATE_SLOTS as u64, self.rate_width);
+        if self.rate_held >= width * slots {
+            let rise = self.theil_sen(&self.rate_slots, slots - 1, width, rate);
+            self.reset_rate();
+            self.rate_seen.rotate_left(1);
+            self.rate_seen[RATE_WINDOWS - 1] = rise;
+            self.rate_seen_count = (self.rate_seen_count + 1).min(RATE_WINDOWS);
+            let seen = self.rate_seen;
+            let least = seen.iter().fold(f64::MAX, |least, r| least.min(r.abs()));
+            let one_way = seen.iter().all(|&r| r > 0.0) || seen.iter().all(|&r| r < 0.0);
+            let target = if self.rate_seen_count < RATE_WINDOWS {
+                self.rate_target
+            } else if least > LATE_RISE_MS_PER_S && one_way {
+                (least / 1e3).min(RATE_FOLLOW_MAX).copysign(rise)
+            } else if seen.iter().all(|r| r.abs() < RATE_RELEASE_MS_PER_S) {
+                0.0
+            } else {
+                self.rate_target
+            };
+            if target != self.rate_target {
+                self.rate_target = target;
+                let ppm = (target * 1e6).round() as i64;
+                self.shared.followed_ppm.store(ppm, Ordering::Relaxed);
+            }
+        }
+        if self.rate_held == 0 {
+            let second = u64::from(self.device_rate) * u64::from(LATE_HOLD_MS) / 1000;
+            let width = second.max(RATE_WINDOW_CALLBACKS * frames as u64) / slots;
+            self.rate_width = width.max(1);
+        }
+        let slot = (self.rate_held / self.rate_width).min(slots - 1) as usize;
+        let (sum, count) = &mut self.rate_slots[slot];
+        *sum += fill - self.net_trim;
+        *count += 1;
+        self.rate_held += frames as u64;
+    }
+
+    /// The capture frames the followed rate speeds the converter up by over
+    /// a callback that needs `need`, once that rate moved toward its target
+    /// by at most [`RATE_SLEW`] (S207); the fraction left is carried over.
+    fn rate_trim(&mut self, need: usize) -> i64 {
+        self.rate_follow += (self.rate_target - self.rate_follow).clamp(-RATE_SLEW, RATE_SLEW);
+        let frames = self.rate_follow * need as f64 + self.rate_carry;
+        let whole = frames.trunc();
+        self.rate_carry = frames - whole;
+        whole as i64
+    }
+
+    /// How fast the means in `slots` rose over the [`LATE_SLOTS`] slots of
+    /// `width` device frames up to slot number `last`, in ms per s at
+    /// capture rate `rate`: the median of the slopes between every two
+    /// slots' means (S207).
+    fn theil_sen(&self, slots: &[(f64, u32); LATE_SLOTS], last: u64, width: u64, rate: u64) -> f64 {
         let mut slopes = [0.0f64; LATE_SLOTS * (LATE_SLOTS - 1) / 2];
         let mut n = 0;
-        let first = self.late_slot.saturating_sub(LATE_SLOTS as u64 - 1);
-        for a in first..=self.late_slot {
-            for b in a + 1..=self.late_slot {
-                let (sa, ca) = self.late_slots[a as usize % LATE_SLOTS];
-                let (sb, cb) = self.late_slots[b as usize % LATE_SLOTS];
+        let first = last.saturating_sub(LATE_SLOTS as u64 - 1);
+        for a in first..=last {
+            for b in a + 1..=last {
+                let (sa, ca) = slots[a as usize % LATE_SLOTS];
+                let (sb, cb) = slots[b as usize % LATE_SLOTS];
                 if ca > 0 && cb > 0 {
                     slopes[n] = (sb / f64::from(cb) - sa / f64::from(ca)) / (b - a) as f64;
                     n += 1;
@@ -1650,6 +1792,7 @@ impl Renderer {
     /// the running average; `kept`, the part of a slow-down S206 made for a
     /// shortage, moves the reference too, so the output keeps that slack.
     fn count_trim(&mut self, by: f64, kept: f64) {
+        self.net_trim += by;
         self.tracking = match self.tracking {
             Tracking::Measuring {
                 sum,
@@ -1699,7 +1842,9 @@ impl Renderer {
         if below < 0 {
             let span = frames as f64 / f64::from(self.device_rate.max(1));
             let share = 1.0 - (-span * 1000.0 / f64::from(ANCHOR_FALL_MS)).exp();
-            *anchor = anchor.saturating_add((below as f64 * share) as i64);
+            let fall = (below as f64 * share) as i64;
+            *anchor = anchor.saturating_add(fall);
+            self.anchor_fall_ns = self.anchor_fall_ns.saturating_sub(fall);
         }
         let anchor = *anchor;
         (floor.saturating_sub(anchor), anchored.saturating_sub(floor))
