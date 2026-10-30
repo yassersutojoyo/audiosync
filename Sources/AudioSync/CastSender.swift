@@ -248,7 +248,7 @@ final class CastSender {
                 return
             }
             // What waited goes out first, so the add's own change leads what follows.
-            self.poll()
+            while self.poll() {}
             // Before the add, so its change carries the offset the session plays with.
             if let from = offsetFrom, let ms = self.offset(handle, from),
                asc_cast_set_offset(handle, CastModel.manualPrefix + target, ms) {
@@ -258,7 +258,7 @@ final class CastSender {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
-            let changes = self.takeChanges(handle)
+            let changes = self.takeChanges(handle).items
             let id = changes.first?.id
             DispatchQueue.main.async { [weak self] in
                 completion(id)
@@ -396,20 +396,33 @@ final class CastSender {
         }
     }
 
-    private func takeChanges(_ handle: OpaquePointer) -> [CastDeviceChange] {
-        var changes: [CastDeviceChange] = []
-        var rawDevice = AscCastDevice()
-        while asc_cast_next_device(handle, &rawDevice) {
-            if let change = CastDeviceChange(rawDevice, offsetMs: { self.offset(handle, $0) }) {
-                changes.append(change)
-            }
+    /// Browse changes per poll, so an mDNS flood can't stall the main thread (C106).
+    static let maxBrowsePerPoll = 256
+
+    /// Takes what `next` gives until it gives nil or `maxBrowsePerPoll` were
+    /// taken; an inner nil is taken but skipped. `full` tells whether more may still wait.
+    static func drain<T>(_ next: () -> T??) -> (items: [T], full: Bool) {
+        var items: [T] = []
+        for _ in 0..<maxBrowsePerPoll {
+            guard let taken = next() else { return (items, false) }
+            if let taken { items.append(taken) }
         }
-        return changes
+        return (items, true)
     }
 
-    private func poll() {
-        guard let handle else { return }
-        let changes = takeChanges(handle)
+    private func takeChanges(_ handle: OpaquePointer) -> (items: [CastDeviceChange], full: Bool) {
+        var rawDevice = AscCastDevice()
+        return Self.drain { () -> CastDeviceChange?? in
+            guard asc_cast_next_device(handle, &rawDevice) else { return nil }
+            return .some(CastDeviceChange(rawDevice, offsetMs: { self.offset(handle, $0) }))
+        }
+    }
+
+    /// True when the browse changes reached the cap, so more may wait.
+    @discardableResult
+    private func poll() -> Bool {
+        guard let handle else { return false }
+        let (changes, full) = takeChanges(handle)
         var events: [CastEvent] = []
         var rawEvent = AscCastEvent()
         while asc_cast_next_event(handle, &rawEvent) {
@@ -417,11 +430,12 @@ final class CastSender {
             if event == .memoryChanged { saveMemory() }
             events.append(event)
         }
-        guard !changes.isEmpty || !events.isEmpty else { return }
+        guard !changes.isEmpty || !events.isEmpty else { return full }
         DispatchQueue.main.async { [weak self] in
             guard let self, self.active else { return }
             if !changes.isEmpty { self.onChanges(changes) }
             if !events.isEmpty { self.onEvents(events) }
         }
+        return full
     }
 }

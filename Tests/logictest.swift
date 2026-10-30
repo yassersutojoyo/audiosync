@@ -11366,6 +11366,13 @@ do {
           "cast track info: a track change goes to the sender, kept for the next load")
     sender.discard()
 
+    var browsed = Array(0..<266)
+    func nextBrowsed() -> Int?? { browsed.isEmpty ? nil : .some(browsed.removeFirst()) }
+    let firstTick = CastSender.drain(nextBrowsed), secondTick = CastSender.drain(nextBrowsed)
+    check(firstTick.items == Array(0..<256) && firstTick.full && secondTick.items == Array(256..<266) && !secondTick.full,
+          "cast: of 266 browse changes one poll takes 256 and the next poll the rest (C106)",
+          "first \(firstTick.items.count), second \(secondTick.items.count)")
+
     // With no track known, Cast gets none of AudioSync's labels or its icon:
     // blank fields, which the sender leaves out (C53), and no cover.
     let blank = ReceiverInfo.decideForCast(track: nil, source: .system)
