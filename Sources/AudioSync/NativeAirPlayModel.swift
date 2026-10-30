@@ -952,7 +952,7 @@ struct NativeAirPlayModel {
     /// with why, and one refused pairing stays off (`refusedOff`).
     private mutating func accessNeeded(_ id: String, _ problem: NativeSpeakerEvent.Problem) -> NativeAirPlayOutcome? {
         let app = NativeAirPlayID.app(id)
-        if problem == .wrongPassword || problem == .passwordRequired { passwords.remove(id) }
+        let typed = problem == .wrongPassword || problem == .passwordRequired ? passwords.remove(id) != nil : false
         if problem == .pairingRequired && (!attempts.contains(id) || pairedInAttempt.contains(id)) {
             refusedOff.insert(id)
         }
@@ -962,7 +962,7 @@ struct NativeAirPlayModel {
         if problem == .pairingRequired && stages[id]?.pairingRuns == true { return nil }
         switch problem {
         case .passwordRequired, .wrongPassword:
-            return ask(id, .askingPassword(wrong: problem == .wrongPassword))
+            return ask(id, .askingPassword(wrong: typed || problem == .wrongPassword))
         case .pairingRequired where pairedInAttempt.contains(id):
             return .turnOff(app, .stillNeedsCode)
         case .pairingRequired where NativeTarget.kind(id) != nil:

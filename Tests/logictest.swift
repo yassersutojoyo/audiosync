@@ -3692,6 +3692,14 @@ do {
         check(m.plan(streaming: true, enabled: ["native:C3"]).turnOff.isEmpty
                 && m.plan(streaming: true, enabled: []).remove == ["C3"],
               "native pairing: switched off, the speaker leaves the sender")
+
+        var typed = listed([("C3", .needsPassword)])
+        _ = typed.turnedOnByUser("C3")
+        _ = typed.answered(typed.nextPrompt()!, code: "secret")
+        typed.added("C3")
+        check(typed.apply(.error(id: "C3", .passwordRequired, retryMs: nil, detail: "")) == .prompt
+                && typed.nextPrompt() == NativePrompt(id: "C3", password: true, wrong: true),
+              "native pairing: asked again for the password typed this run, the prompt says it was turned down")
     }
     do {
         // A receiver that asks for nothing and answers 403 to everything: its
