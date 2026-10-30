@@ -110,7 +110,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 
 ## Windows
 
-A Windows 11 version (x64 and ARM64) is out as a preview since 0.7.1, with the same Rust engine and its own AirPlay sender. The zips are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. CI builds it too, and [desktop/README.md](desktop/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on the Mac, there in the File menu), it asks for AirPlay PINs and passwords, and it hasn't been tried on a real speaker yet.
+A Windows 11 version (x64 and ARM64) is out as a preview since 0.7.1, with the same Rust engine and its own AirPlay sender. The zips are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. CI builds it too, and [desktop/README.md](desktop/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay and Google Cast speakers (AirPlay 2 out of the box, with AirPlay 1 first for a speaker that does both, as on the Mac), it asks for AirPlay PINs and passwords, and it hasn't been tried on a real speaker yet.
 
 Versions after 0.7.1 update themselves. 0.7.1 doesn't, so get the next one from Releases by hand. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, does it at launch, at most once a day. Nothing downloads until you click Download and Install.
 
@@ -118,7 +118,7 @@ The exe isn't signed, so the first time you open it Windows SmartScreen may say 
 
 ## Linux
 
-There's a Linux preview too, built from the same code as the Windows app. Not released yet. CI builds an x86_64 AppImage (glibc 2.39 or newer, PipeWire from your system), and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#the-linux-build-and-its-appimage) has the details. It captures the whole system or one app through PipeWire and plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on Windows) and to your local PipeWire outputs. Like the Windows build, it hasn't been tried on a real speaker yet. It sits in the tray when your desktop has a StatusNotifier host, and runs as a plain window when it doesn't. Its data lives in `$XDG_DATA_HOME/audiosync`, launch at login is an XDG autostart entry, and now playing comes from MPRIS players.
+There's a Linux preview too, built from the same code as the Windows app. Not released yet. CI builds an x86_64 AppImage (glibc 2.39 or newer, PipeWire from your system), and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#the-linux-build-and-its-appimage) has the details. It captures the whole system or one app through PipeWire and plays to AirPlay and Google Cast speakers (AirPlay 2 as on Windows) and to your local PipeWire outputs. Like the Windows build, it hasn't been tried on a real speaker yet. It sits in the tray when your desktop has a StatusNotifier host, and runs as a plain window when it doesn't. Its data lives in `$XDG_DATA_HOME/audiosync`, launch at login is an XDG autostart entry, and now playing comes from MPRIS players.
 
 If you hear the source twice and have no output to spare, a PipeWire null sink gives you one that plays nothing out loud. For this session only (it's gone after a restart, or with `pactl unload-module` and the number it printed):
 
