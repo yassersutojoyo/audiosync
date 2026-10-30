@@ -1,10 +1,10 @@
 #!/bin/bash
 # Runs every weekend cell a loopback fake television can prove, and prints
 # one line per cell: <cell> PASS|FAIL|MANUAL <measured value>. The volume,
-# stale row and fake Samsung cells come from the core and AirPlay 2 tests
-# that hold them (each prints a CELL line once it passed), the Google Cast
-# cells from the fake Cast device in cast/tests/fake_cells.rs; the rest from
-# the airplay example fake_tv_cells.
+# stale row and fake Samsung cells come from the core, Windows host and
+# AirPlay 2 tests that hold them (each prints a CELL line once it passed),
+# the Google Cast cells from the fake Cast device in cast/tests/fake_cells.rs;
+# the rest from the airplay example fake_tv_cells.
 # A cell that needs the real television prints MANUAL with what to measure.
 # Exits 1 when a cell fails.
 #
@@ -70,6 +70,11 @@ cells_from_tests --lib \
     "$core::k1_keep_a_row_at_40_comes_back_at_40_after_a_restart=K1.keep.m63" \
     "$core::the_s290_vector_cases_land_on_the_television=S290.row100,S290.tv80.m64,S290.row100.m50,S290.tv80.cap,DV.100.m63,DV.80-99.m63,DV.40.m0" \
     "$core::a_withdrawn_receiver_loses_only_its_row_and_comes_back_when_announced=Stale.row"
+
+# Calibrate All and zones live in the Windows host's speaker list, so this cell runs there.
+cd "$root/desktop"
+cells_from_tests "--bin audiosync" \
+    "audio::airplay::tests::the_tv_keeps_a_level_held_at_master_0_through_calibrate_all_and_a_zone_at_100=S290.held.m0"
 
 cd "$root/airplay"
 cells_from_tests "--test ap2_volume" \

@@ -4587,6 +4587,7 @@ pub mod tests {
     use audiosync_airplay::rtsp::{Message, Method, Parser, Request, Response};
     use audiosync_airplay::stream::{SpeakerLatency, Stream, StreamConfig};
     use audiosync_airplay::targets::Member;
+    use audiosync_airplay::volume::parse_reported;
 
     use super::*;
     use crate::audio::backend::{AudioBackend, SourceId};
@@ -10435,9 +10436,12 @@ pub mod tests {
     /// A receiver on 127.0.0.1 that answers every RTSP request with
     /// success, as an open AirPlay 1 speaker does, and notes the methods it
     /// got. Its audio, control and timing sockets are bound and never read.
+    /// Like the measured television, it holds the last volume set and
+    /// answers a volume read with it (S289, S291).
     struct LoopbackReceiver {
         port: u16,
         methods: Arc<Mutex<Vec<String>>>,
+        level: Arc<Mutex<Option<f64>>>,
         stop: Arc<AtomicBool>,
         thread: Option<JoinHandle<()>>,
     }
@@ -10458,14 +10462,16 @@ pub mod tests {
                 udp[2].local_addr().unwrap().port(),
             );
             let methods = Arc::new(Mutex::new(Vec::new()));
+            let level = Arc::new(Mutex::new(None));
             let stop = Arc::new(AtomicBool::new(false));
             let thread = {
-                let (methods, stop) = (Arc::clone(&methods), Arc::clone(&stop));
+                let (methods, level, stop) =
+                    (Arc::clone(&methods), Arc::clone(&level), Arc::clone(&stop));
                 thread::spawn(move || {
                     let _udp = udp;
                     while !stop.load(Ordering::SeqCst) {
                         match listener.accept() {
-                            Ok((stream, _)) => serve(stream, &transport, &methods, &stop),
+                            Ok((stream, _)) => serve(stream, &transport, &methods, &level, &stop),
                             Err(_) => thread::sleep(Duration::from_millis(10)),
                         }
                     }
@@ -10474,6 +10480,7 @@ pub mod tests {
             LoopbackReceiver {
                 port,
                 methods,
+                level,
                 stop,
                 thread: Some(thread),
             }
@@ -10497,6 +10504,28 @@ pub mod tests {
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone()
         }
+
+        /// The level it holds, in dB, once it has one.
+        fn level(&self) -> Option<f64> {
+            *self.level.lock().unwrap_or_else(PoisonError::into_inner)
+        }
+
+        /// Its own remote sets its level to `db`.
+        fn press(&self, db: f64) {
+            *self.level.lock().unwrap_or_else(PoisonError::into_inner) = Some(db);
+        }
+
+        /// Whether it holds `db`, to six decimals, within 5 s.
+        fn reaches(&self, db: f64) -> bool {
+            let until = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < until {
+                if self.level().is_some_and(|got| (got - db).abs() < 5e-6) {
+                    return true;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            false
+        }
     }
 
     impl Drop for LoopbackReceiver {
@@ -10513,6 +10542,7 @@ pub mod tests {
         mut stream: TcpStream,
         transport: &str,
         methods: &Mutex<Vec<String>>,
+        level: &Mutex<Option<f64>>,
         stop: &AtomicBool,
     ) {
         let _ = stream.set_nonblocking(false);
@@ -10538,8 +10568,12 @@ pub mod tests {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .push(request.method.as_str().to_owned());
+                let mut level = level.lock().unwrap_or_else(PoisonError::into_inner);
+                if matches!(request.method, Method::SetParameter) {
+                    *level = parse_reported(&request.body).or(*level);
+                }
                 if stream
-                    .write_all(&answer(&request, transport).encode())
+                    .write_all(&answer(&request, transport, *level).encode())
                     .is_err()
                 {
                     return;
@@ -10548,8 +10582,9 @@ pub mod tests {
         }
     }
 
-    /// Success, with what each method's answer carries.
-    fn answer(request: &Request, transport: &str) -> Response {
+    /// Success, with what each method's answer carries; `level` answers a
+    /// volume read.
+    fn answer(request: &Request, transport: &str, level: Option<f64>) -> Response {
         let mut response = Response::new(200, "OK");
         let cseq = request.headers.get("CSeq").unwrap_or("0").to_owned();
         response.headers.push("CSeq", cseq);
@@ -10563,6 +10598,12 @@ pub mod tests {
                 response.headers.push("Session", "1");
             }
             Method::Flush => response.headers.push("RTP-Info", "rtptime=1"),
+            Method::GetParameter => {
+                if let Some(db) = level {
+                    response.headers.push("Content-Type", "text/parameters");
+                    response.body = format!("volume: {db:.6}\r\n").into_bytes();
+                }
+            }
             _ => {}
         }
         response
@@ -10657,6 +10698,94 @@ pub mod tests {
         }
         assert!(receiver.methods().iter().any(|m| m == "TEARDOWN"));
         backend.stop();
+    }
+
+    /// A passed dry-run cell for `scripts/fake_tv_cells.sh`, which runs
+    /// this test with `--nocapture`; a plain `cargo test` swallows it.
+    fn cell(id: &str, measured: &str) {
+        eprintln!("CELL {id} {measured}");
+    }
+
+    /// Polls `airplay` until `done` holds, at most 15 s.
+    fn poll_speakers_until(
+        airplay: &mut AirPlaySpeakers,
+        mut done: impl FnMut(&AirPlaySpeakers) -> bool,
+    ) -> bool {
+        let until = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < until {
+            airplay.poll();
+            if done(airplay) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    // covers: S290
+    #[test]
+    fn the_tv_keeps_a_level_held_at_master_0_through_calibrate_all_and_a_zone_at_100() {
+        let receiver = LoopbackReceiver::start();
+        let (link, _input) = SenderLink::start(false).expect("the sender starts");
+        link.sender
+            .start_discovery_with(Box::new(OneService(Some(BrowseEvent::Resolved(
+                receiver.record(),
+            )))));
+        let mut airplay = AirPlaySpeakers::new(
+            Box::new(link),
+            0.0,
+            DebugLog::default(),
+            PairingStore::in_memory(),
+        );
+        assert!(
+            poll_speakers_until(&mut airplay, |airplay| !airplay.speakers().is_empty()),
+            "the television is listed"
+        );
+        let id = airplay.speakers()[0].id.clone();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        assert!(
+            poll_speakers_until(&mut airplay, |airplay| airplay.speakers()[0].playing),
+            "it plays: {:?}",
+            receiver.methods()
+        );
+        assert!(receiver.reaches(MUTED_DB), "{:?}", receiver.level());
+
+        // Its own remote to 30 (-21 dB), read while k is 0.
+        receiver.press(-21.0);
+        settle(&mut airplay, &id);
+        read_now(&mut airplay);
+        assert!(
+            poll_speakers_until(&mut airplay, |airplay| row_of(airplay, &id) == 30.0),
+            "the row shows {}",
+            row_of(&airplay, &id)
+        );
+
+        airplay.set_calibration_solo(Some("another speaker"));
+        assert!(receiver.reaches(MUTED_DB), "{:?}", receiver.level());
+        airplay.set_calibration_solo(None);
+        assert!(
+            receiver.reaches(-21.0),
+            "after the calibration: {:?}",
+            receiver.level()
+        );
+        assert_eq!(row_of(&airplay, &id), 30.0);
+
+        for zones in [BTreeMap::from([(id.clone(), 100.0)]), BTreeMap::new()] {
+            airplay.set_zones(zones);
+            let until = Instant::now() + Duration::from_millis(500);
+            while Instant::now() < until {
+                airplay.poll();
+                thread::sleep(Duration::from_millis(20));
+            }
+            assert_eq!(receiver.level(), Some(-21.0), "in or out of the zone");
+            assert_eq!(row_of(&airplay, &id), 30.0);
+        }
+        cell(
+            "S290.held.m0",
+            "TV -21.00 dB at master 0 shows row 30; muted for another speaker's calibration, \
+             back at -21.00 dB row 30 after it; zone 100 join and leave keep -21.00 dB row 30",
+        );
     }
 
     /// A duration in whole ms.
