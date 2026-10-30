@@ -576,6 +576,12 @@ impl FeedSlot {
         self.closing.store(true, Ordering::Release);
     }
 
+    /// Whether a stop asked the feed to fade out since its last lease.
+    #[cfg(test)]
+    pub fn fading_out(&self) -> bool {
+        self.closing.load(Ordering::Acquire)
+    }
+
     /// Seconds of sound the captures pushed so far, a running total (P213).
     pub fn sound_seconds(&self) -> f64 {
         self.sound.load(Ordering::Relaxed) as f64 / f64::from(SESSION_RATE)

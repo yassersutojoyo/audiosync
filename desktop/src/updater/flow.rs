@@ -799,6 +799,62 @@ pub mod tests {
         );
     }
 
+    // covers: S294
+    #[test]
+    fn a_loopback_fetch_sends_no_cookie_and_fails_on_any_status_but_200() {
+        use std::io::{BufRead, BufReader};
+        if std::env::var_os("CI").is_none() {
+            eprintln!("skipped: serves on 127.0.0.1, which runs in CI only");
+            return;
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let port = listener.local_addr().unwrap().port();
+        let headers = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&headers);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                if reader.read_line(&mut request).is_err() {
+                    continue;
+                }
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    seen.lock().unwrap().push(line.trim_end().to_owned());
+                    line.clear();
+                }
+                let head = match request.split(' ').nth(1).unwrap_or("/") {
+                    "/cookie" => "302 Found\r\nSet-Cookie: session=1; Path=/\r\nLocation: /feed",
+                    "/feed" => "200 OK",
+                    "/moved" => "302 Found\r\nLocation: /created",
+                    _ => "201 Created",
+                };
+                let reply =
+                    format!("HTTP/1.1 {head}\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx");
+                let _ = stream.write_all(reply.as_bytes());
+            }
+        });
+        let url = |path: &str| format!("http://127.0.0.1:{port}{path}");
+        let winhttp = fetch::WinHttp {
+            user_agent: fetch::user_agent("0.8.0", "x64"),
+            plain_loopback: true,
+        };
+
+        assert_eq!(fetch::appcast(&winhttp, &url("/cookie")), Ok(b"x".to_vec()));
+        let sent = headers.lock().unwrap().clone();
+        assert!(
+            !sent
+                .iter()
+                .any(|header| header.to_ascii_lowercase().starts_with("cookie:")),
+            "the redirect's cookie isn't sent back: {sent:?}"
+        );
+        assert_eq!(
+            fetch::appcast(&winhttp, &url("/moved")),
+            Err(FetchError::Status(201))
+        );
+    }
+
     // covers: S299
     #[test]
     fn a_bad_signature_deletes_the_download_and_changes_nothing() {

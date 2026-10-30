@@ -1131,6 +1131,51 @@ pub mod tests {
         assert!(std::fs::read(&exe).unwrap().ends_with(b"new exe"));
     }
 
+    // covers: S297
+    #[test]
+    fn not_now_comes_back_at_a_manual_check_and_a_newer_update_replaces_the_notice() {
+        use crate::updater::flow::tests::FEED;
+        let (mut updater, fetch) = updater("not-now");
+        let available = |new: &str| {
+            Some(UpdaterNotice::Available {
+                new: new.to_owned(),
+                running: "0.8.0".to_owned(),
+                last: None,
+            })
+        };
+        updater.check(Trigger::Launch);
+        updater.wait();
+        assert_eq!(updater.notice().cloned(), available("0.9.0"));
+        updater.press(UpdaterButton::NotNow);
+        assert_eq!(updater.notice(), None);
+        updater.check(Trigger::Manual);
+        updater.wait();
+        assert_eq!(
+            updater.notice().cloned(),
+            available("0.9.0"),
+            "a manual check offers it at once"
+        );
+
+        let feed = String::from_utf8(fetch.files[FEED].clone()).unwrap();
+        let mut newer = MemoryFetch::default();
+        newer
+            .files
+            .insert(FEED.to_owned(), feed.replace("0.9.0", "0.9.1").into_bytes());
+        // The check worker drops its `env` just after its last event.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while Arc::strong_count(&updater.env) > 1 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the check worker still holds its env"
+            );
+            std::thread::yield_now();
+        }
+        Arc::get_mut(&mut updater.env).unwrap().fetch = Arc::new(newer);
+        updater.check(Trigger::Launch);
+        updater.wait();
+        assert_eq!(updater.notice().cloned(), available("0.9.1"));
+    }
+
     // covers: S305
     #[test]
     fn turning_the_switch_off_stops_the_launch_check_not_the_manual_one() {

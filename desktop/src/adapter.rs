@@ -14834,7 +14834,70 @@ mod tests {
         );
     }
 
-    // covers: C105
+    // covers: S348
+    #[test]
+    fn a_phone_volume_for_an_off_airplay_speaker_or_at_its_rows_number_is_sent() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let id = ap(&kitchen);
+        let from_phone = |adapter: &mut AudioAdapter<MockBackend>, volume: f64| {
+            let command = audiosync_remote::Command::Speaker {
+                id: id.clone(),
+                change: audiosync_remote::SpeakerChange {
+                    volume: Some(volume),
+                    ..Default::default()
+                },
+            };
+            let actions = crate::remote::actions(&command, &adapter.snapshot(), |_| true);
+            assert_eq!(
+                actions,
+                Ok(vec![crate::remote::Action::Volume {
+                    id: id.clone(),
+                    volume
+                }])
+            );
+            adapter.set_speaker_volume(&id, volume);
+        };
+        let sent_db = |calls: Vec<Call>| -> Vec<f64> {
+            use audiosync_airplay::volume::Volume;
+            calls
+                .into_iter()
+                .filter_map(|call| match call {
+                    Call::Add {
+                        volume: Volume::Db(db),
+                        ..
+                    }
+                    | Call::Volume(_, Volume::Db(db)) => Some(db),
+                    _ => None,
+                })
+                .collect()
+        };
+        adapter.set_master_volume(70.0);
+        from_phone(&mut adapter, 40.0);
+        assert_eq!(speaker_of(&adapter, &id).volume, 40.0, "kept while off");
+        fake.take_calls();
+        adapter.set_speaker_enabled(&id, true);
+        let sent = sent_db(fake.take_calls());
+        assert!(
+            matches!(sent[..], [db] if (db + 18.0).abs() < 1e-9),
+            "level 40 at switch-on: {sent:?}"
+        );
+
+        adapter.set_master_volume(66.0);
+        assert_eq!(
+            speaker_of(&adapter, &id).volume,
+            37.0,
+            "40 x 66/70 = 37.71, rounded down"
+        );
+        fake.take_calls();
+        from_phone(&mut adapter, 37.0);
+        let sent = sent_db(fake.take_calls());
+        assert!(
+            matches!(sent[..], [db] if (db + 18.9).abs() < 1e-9),
+            "level 37 exactly: {sent:?}"
+        );
+    }
+
+    // covers: C105, S348
     #[test]
     fn a_web_remote_volume_for_an_idle_cast_speaker_is_set_at_its_first_status() {
         let (mut adapter, fake) = cast_adapter();

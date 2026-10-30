@@ -2108,6 +2108,8 @@ The checks for S187's large increases and for S47 and S48 at the largest hold-ba
 | a_clock_far_behind_the_padding_holds_a_stop_at_most_the_tail_cap | S185 |
 | a_stop_waits_for_every_output_to_fade_and_never_more_than_500_ms | S186 |
 | removing_several_outputs_asks_all_to_fade_then_waits_once | S186 |
+| a_source_change_fades_the_airplay_input_out_on_the_old_capture_and_in_on_the_new | S186 |
+| a_shut_down_fades_every_output_and_the_airplay_input_once_within_the_fade_cap | S351, S186 |
 | a_delay_change_fades_out_first_and_in_after | S187 |
 | the_fade_cap_and_the_quit_waits_fit_in_5_s | S110, S186 |
 
@@ -2761,6 +2763,7 @@ The checks for S256 to S258, S287, S288, S337, S338 and S343 to S345 and S348 in
 | web remote: turning a speaker on with a volume flips the switch, then moves the slider | S345 |
 | web remote: the volume of a speaker that is off is kept for when it plays, a Cast speaker's too | S348 |
 | a_phone_volume_for_a_speaker_that_is_off_or_an_idle_cast_one_is_kept (`desktop/src/remote.rs`) | S348 |
+| a_phone_volume_for_an_off_airplay_speaker_or_at_its_rows_number_is_sent (`desktop/src/adapter.rs`) | S348 |
 | web remote: a Cast speaker turned on with a volume keeps it for its session | S348 |
 | web remote: each delay carries the range its field in the window takes | S175 |
 | web remote: a Cast group plays from the phone; a speaker that would ask for a code on the Mac can't | S257 |
@@ -2918,6 +2921,7 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | a_settings_file_held_at_launch_is_applied_once_it_can_be_read, a_change_while_the_settings_file_is_held_never_saves_the_defaults_over_it, a_session_running_when_held_settings_are_read_moves_to_their_source (`desktop/src/adapter.rs`) | S212 |
 | window_settings_read_after_launch_show_and_survive_a_quit (`desktop/src/view.rs`) | S212 |
 | a_change_whose_save_failed_is_logged_once_and_saved_at_quit, a_change_whose_save_failed_is_saved_later_without_another_change, going_back_to_the_saved_settings_ends_a_failed_save, the_last_save_tells_whether_a_change_is_still_unsaved, the_last_save_of_a_run_that_saves_nothing_never_tells_saved (`desktop/src/adapter.rs`), the_end_of_a_windows_session_runs_its_handler_once_and_never_holds_it_up (`desktop/src/platform.rs`) | S212 |
+| the_end_of_a_windows_session_applies_an_open_rename (`desktop/src/view.rs`) | S351 |
 | held_settings_read_later_start_nothing_for_a_speaker_on_without_auto_connect (`desktop/src/adapter.rs`), a_remote_setting_read_after_launch_starts_or_stops_the_remote (`desktop/src/view/remote_window.rs`) | S212 |
 | a_late_restore_keeps_pairs_and_cast_addresses_added_meanwhile_and_the_file_wins_per_key, a_session_already_capturing_the_files_app_keeps_its_capture_after_a_late_read, a_running_session_keeps_its_capture_when_held_settings_name_an_app_that_isnt_running (`desktop/src/adapter.rs`), a_late_read_keeps_the_window_frame_and_logs_no_unchanged_airplay2_choice (`desktop/src/view.rs`), a_late_read_with_the_same_remote_setting_keeps_the_server_and_its_code (`desktop/src/view/remote_window.rs`) | S212 |
 | equalizer_curves_are_read_leniently_and_left_out_while_none_is (`desktop/src/settings.rs`) | S270 |
@@ -2927,6 +2931,7 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | a_saved_curve_with_a_presets_gains_can_be_picked_renamed_and_deleted (`desktop/src/view.rs`) | S270 |
 | a_preset_recall_lets_go_of_the_picked_curve (`desktop/src/view.rs`) | S270 |
 | a_recall_or_band_move_with_the_same_gains_keeps_rock_picked (`desktop/src/view.rs`) | S270 |
+| a_band_moved_off_the_picked_curve_and_back_shows_the_first_match (`desktop/src/view.rs`) | S270 |
 | a_phone_recall_that_leaves_rock_lets_go_of_it_for_good (`desktop/src/view/remote_window.rs`) | S270 |
 | the_log_is_on_only_when_audiosync_debug_is_exactly_1 (`desktop/src/debug_log.rs`) | S170 |
 | a_log_that_is_off_creates_no_file_and_builds_no_message (`desktop/src/debug_log.rs`) | S170 |
@@ -2973,11 +2978,12 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 
 ### Windows updater: Windows (`cargo test` in `desktop/`)
 
-The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host-only, stay listed in `core/tests/spec_exempt.txt`. The fake appcast is a fixture `appcast.xml` next to zips signed with a throwaway test key made for the test; the release key's private half never reaches a test. Only `the_fake_appcast_on_loopback` serves it on 127.0.0.1, and only in CI (it skips without the `CI` variable, so a local run opens no listening socket); every other test feeds the appcast and the zip through an in-memory fetch.
+The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host-only, stay listed in `core/tests/spec_exempt.txt`. The fake appcast is a fixture `appcast.xml` next to zips signed with a throwaway test key made for the test; the release key's private half never reaches a test. Only `the_fake_appcast_on_loopback` and `a_loopback_fetch_sends_no_cookie_and_fails_on_any_status_but_200` serve on 127.0.0.1, and only in CI (it skips without the `CI` variable, so a local run opens no listening socket); every other test feeds the appcast and the zip through an in-memory fetch.
 
 | Test | Clauses |
 |---|---|
 | the_fake_appcast_on_loopback (CI only: WinHTTP against a plain-HTTP server on 127.0.0.1 with a redirect; the happy path downloads, verifies, unzips and swaps a stand-in exe that carries no `Zone.Identifier` stream and keeps the old one as `.bak`; a bad signature deletes the download and changes nothing; an enclosure for the other arch only offers nothing; the same version offers nothing; plain HTTP is refused outside the test) | S294, S296, S298, S299, S300, S301, S302, S307 |
+| a_loopback_fetch_sends_no_cookie_and_fails_on_any_status_but_200 (CI only: a cookie set on a redirect is not sent to its target; a 201 after a redirect is a failed fetch) | S294 |
 | only_a_release_build_on_windows_checks | S293 |
 | the_feed_is_https_only_with_its_size_and_time_limits | S294 |
 | an_appcast_with_a_doctype_is_refused_and_a_broken_item_is_skipped | S295 |
@@ -2999,6 +3005,7 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 | relaunch_waits_for_the_old_process_before_claiming_the_instance | S303 |
 | an_old_process_that_outlives_the_wait_gets_the_claim_retried_and_logged | S303 |
 | a_check_after_a_swap_without_a_restart_shows_restart_now_and_touches_no_file (manual and launch check) | S297, S303, S305, S306 |
+| not_now_comes_back_at_a_manual_check_and_a_newer_update_replaces_the_notice | S297 |
 | a_leftover_new_is_deleted_before_the_exclusive_create | S301, S302 |
 | a_failed_relaunch_restores_the_bak (the exe and the notices pair) | S303 |
 | a_failed_restore_lists_every_bak_with_its_name_the_exe_first (a refused move back leaves the new exe in place) | S302 |

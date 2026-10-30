@@ -5650,6 +5650,47 @@ mod tests {
         assert!(backend.driver().capture_running());
     }
 
+    // covers: S351, S186
+    #[test]
+    fn a_shut_down_fades_every_output_and_the_airplay_input_once_within_the_fade_cap() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        let feed = FeedSlot::new(input);
+        backend.set_airplay(fake.link(), Some(feed.clone()));
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        backend.poll();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(!feed.fading_out());
+        backend.driver().hold_fades(true);
+
+        let asked = Instant::now();
+        backend.shut_down();
+        let took = asked.elapsed();
+        assert_eq!(backend.driver().renderers_faded(), 2, "every output");
+        assert!(feed.fading_out(), "the AirPlay input");
+        assert!(
+            (STOP_FADE_CAP..STOP_FADE_CAP * 2).contains(&took),
+            "held fades are waited for up to the cap, not long past it: {took:?}"
+        );
+        assert!(!backend.driver().capture_running());
+        assert_eq!(backend.driver().renderers_running(), 0);
+
+        backend.driver().hold_fades(false);
+        backend.shut_down();
+        assert_eq!(backend.driver().renderers_faded(), 2);
+        drop(backend);
+        assert_eq!(cast.state().shutdowns, 1, "the steps ran once");
+    }
+
     // covers: S114
     #[test]
     fn a_start_that_fails_before_its_capture_never_tries_one_and_holds_no_feed() {
@@ -5803,6 +5844,43 @@ mod tests {
             "only the new outputs"
         );
         backend.driver().hold_fades(false);
+    }
+
+    // covers: S186
+    #[test]
+    fn a_source_change_fades_the_airplay_input_out_on_the_old_capture_and_in_on_the_new() {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        let feed = FeedSlot::new(input);
+        backend.set_airplay(fake.link(), Some(feed.clone()));
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        backend.poll();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(!feed.fading_out());
+
+        backend.driver().hold_fades(true);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert!(feed.fading_out(), "the old source fades out");
+        assert!(
+            backend.driver().capture_feeds_airplay() && !feed.is_free(),
+            "on the old capture, which still feeds it"
+        );
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_feeds_airplay());
+        assert!(
+            !feed.fading_out(),
+            "the new capture's lease starts its fade-in from silence"
+        );
     }
 
     #[test]

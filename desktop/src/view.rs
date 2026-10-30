@@ -7725,6 +7725,20 @@ mod tests {
         assert_eq!(cast.state().shutdowns, 1, "the Cast host shut down");
     }
 
+    // covers: S351
+    #[cfg(windows)]
+    #[test]
+    fn the_end_of_a_windows_session_applies_an_open_rename() {
+        let app = app_over(MockBackend::new());
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        app.main
+            .invoke_speaker_rename_edited("local:desk".into(), "Desk left".into());
+        app.at_session_end();
+        assert_eq!(name_of(&app, "local:desk"), "Desk left");
+        assert!(app.ui.borrow().rename.is_none());
+    }
+
     #[test]
     fn quitting_with_unreadable_typing_keeps_the_applied_delay() {
         let app = app_over(MockBackend::new());
@@ -11001,6 +11015,35 @@ mod tests {
         eq_window.invoke_gain_changed(0, eq::PRESETS[rock].gains_db[0] as f32);
         assert_eq!(eq_window.get_preset_index(), rock as i32, "band");
         assert!(!eq_window.get_saved_curve_shown());
+    }
+
+    // covers: S270
+    #[test]
+    fn a_band_moved_off_the_picked_curve_and_back_shows_the_first_match() {
+        let app = app_over(MockBackend::new());
+        let eq_window = &app.equalizer;
+        let presets = eq::PRESETS.len() as i32;
+        let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
+        let first_gain = eq::PRESETS[rock].gains_db[0] as f32;
+        eq_window.invoke_preset_selected(rock as i32);
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Mine".into());
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Twin".into());
+
+        for (picked, name) in [(rock as i32, "Rock"), (presets + 1, "Twin")] {
+            eq_window.invoke_preset_selected(picked);
+            assert_eq!(eq_window.get_preset_index(), picked, "{name} picked");
+            eq_window.invoke_gain_changed(0, first_gain + 3.0);
+            assert_eq!(eq_window.get_preset_index(), -1, "{name} left: Custom");
+            eq_window.invoke_gain_changed(0, first_gain);
+            assert_eq!(
+                eq_window.get_preset_index(),
+                presets,
+                "{name} forgotten: the first saved curve with the gains"
+            );
+            assert_eq!(app.main.get_equalizer_curve(), "Mine");
+        }
     }
 
     #[test]
