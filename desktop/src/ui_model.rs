@@ -82,6 +82,20 @@ pub struct Source {
     /// An input device's channels, which offer pairs above two; 0 for
     /// anything else and for a device that doesn't say.
     pub channels: u16,
+    /// The apps a chosen mix plays or leaves out, for the UI to list in its
+    /// own words; empty for anything else.
+    pub apps: Vec<String>,
+}
+
+impl Source {
+    /// The row's name: a mix's apps joined with `separator`, else `name`.
+    pub fn shown(&self, separator: &str) -> String {
+        if self.apps.is_empty() {
+            self.name.clone()
+        } else {
+            self.apps.join(separator)
+        }
+    }
 }
 
 /// The kind of output a speaker is, shown as a small icon and read by Narrator.
@@ -1896,6 +1910,7 @@ impl MockBackend {
             name: name.into(),
             kind,
             channels: 0,
+            apps: Vec::new(),
         };
         let speaker = |id: &str, name: &str, kind, enabled, delay_ms| Speaker {
             id: id.into(),

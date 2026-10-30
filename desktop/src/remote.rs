@@ -118,6 +118,8 @@ pub trait RowText {
     fn source_system(&self) -> String;
     /// The name of a source that takes every app except `names`.
     fn source_all_except(&self, names: &str) -> String;
+    /// What goes between the names of a list.
+    fn list_separator(&self) -> String;
 }
 
 /// A speaker that would ask for a PIN or password when turned on: the prompt
@@ -226,8 +228,10 @@ pub fn snapshot(
             id: source.id.clone(),
             name: match source.kind {
                 SourceKind::System => text.source_system(),
-                SourceKind::AppsExcept => text.source_all_except(&source.name),
-                SourceKind::App | SourceKind::Input => source.name.clone(),
+                SourceKind::AppsExcept => {
+                    text.source_all_except(&source.shown(&text.list_separator()))
+                }
+                SourceKind::App | SourceKind::Input => source.shown(&text.list_separator()),
             },
             kind: match source.kind {
                 SourceKind::System => RemoteSourceKind::System,
@@ -652,6 +656,9 @@ mod tests {
         fn source_all_except(&self, names: &str) -> String {
             format!("All apps except {names}")
         }
+        fn list_separator(&self) -> String {
+            "; ".to_owned()
+        }
     }
 
     fn with_sources() -> AppState {
@@ -660,6 +667,7 @@ mod tests {
             name: name.to_owned(),
             kind,
             channels: 0,
+            apps: Vec::new(),
         };
         AppState {
             sources: vec![
@@ -704,15 +712,16 @@ mod tests {
         let mut state = with_sources();
         state.sources.push(crate::ui_model::Source {
             id: MIX.to_owned(),
-            name: "Spotify, Chrome".to_owned(),
+            name: String::new(),
             kind: SourceKind::AppsExcept,
             channels: 0,
+            apps: vec!["Spotify".to_owned(), "Chrome".to_owned()],
         });
         state.source_id = MIX.to_owned();
         let snapshot = snapshot(&state, not_virtual, None, "Studio PC", &Text);
         let mix = snapshot.sources.last().unwrap();
         assert_eq!(mix.kind, RemoteSourceKind::App);
-        assert_eq!(mix.name, "All apps except Spotify, Chrome");
+        assert_eq!(mix.name, "All apps except Spotify; Chrome");
         assert_eq!(snapshot.source_id.as_deref(), Some(MIX));
         let pick = Command::Source { id: MIX.to_owned() };
         assert_eq!(actions(&pick, &state, not_virtual), Ok(Vec::new()));

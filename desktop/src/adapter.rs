@@ -105,10 +105,11 @@ use crate::settings::{
 use crate::speaker_names::SpeakerNames;
 use crate::ui_model::{
     self, AbsentMember, AllPhase, AllProgress, AppState, Availability, Backend, CalibrateAllState,
-    CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastRow, CastState,
-    HiddenSpeaker, InTarget, LeftOutRow, MixApp, Notice, NoticeMessage, PasswordPrompt, PinPhase,
-    PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState, Source, SourceKind, SourceName,
-    Speaker, SpeakerKind, SwitchName, ViewSettings, Waiting, ZoneError, ZoneSheet, clamp_delay_ms,
+    CalibrationState, CastAddressCheck, CastAddressError, CastGroup, CastList, CastMembers,
+    CastRow, CastState, HiddenSpeaker, InTarget, LeftOutRow, MixApp, Notice, NoticeMessage,
+    PasswordPrompt, PinPhase, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState, Source,
+    SourceKind, SourceName, Speaker, SpeakerKind, SwitchName, ViewSettings, Waiting, ZoneError,
+    ZoneSheet, clamp_delay_ms,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -2709,7 +2710,21 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 volume_fixed: speaker.volume_fixed,
                 volume_step: speaker.volume_step,
                 group: speaker.group.map(|group| CastGroup {
-                    members: group.members,
+                    members: match group.members {
+                        CastMembers::NotReported => CastMembers::NotReported,
+                        CastMembers::Unknown => CastMembers::Unknown,
+                        CastMembers::Known(members) => CastMembers::Known(
+                            members
+                                .into_iter()
+                                .map(|member| match member.id {
+                                    Some(id) => {
+                                        self.custom_names.shown(&cast_key(&id), &member.name)
+                                    }
+                                    None => member.name,
+                                })
+                                .collect(),
+                        ),
+                    },
                 }),
                 added_by_address: speaker.address.is_some(),
                 offline: speaker.offline,
@@ -2790,9 +2805,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         if let Some(cast) = cast {
             self.post(
-                NoticeSubject::Cast(cast.id),
+                NoticeSubject::Cast(cast.id.clone()),
                 NoticeMessage::AirPlayAheadOfCast {
-                    speaker: cast.name,
+                    speaker: self.custom_names.shown(&cast_key(&cast.id), &cast.name),
                     tenths,
                 },
             );
@@ -3649,7 +3664,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         {
             let message = NoticeMessage::AirPlayPlaysInGroup {
                 speaker: self.airplay_name(id),
-                target: target.name,
+                target: self
+                    .custom_names
+                    .shown(&airplay_key(&target.id), &target.name),
             };
             self.airplay_off(id, problem, message);
             return;
@@ -4158,6 +4175,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     SourceId::Input { .. } => SourceKind::Input,
                 },
                 channels: source.channels,
+                apps: Vec::new(),
             })
             .collect();
         let chosen = self.chosen.key();
@@ -4170,10 +4188,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 } => SourceKind::AppsExcept,
                 _ => SourceKind::App,
             };
-            // The UI puts its own words around the apps "all except" leaves out.
-            let name = match &self.chosen {
-                Chosen::Mix { apps, .. } => mix_names(apps).join(", "),
-                chosen => chosen.shown_name(),
+            // The UI lists a mix's apps in its own words.
+            let (name, apps) = match &self.chosen {
+                Chosen::Mix { apps, .. } => (String::new(), mix_names(apps)),
+                chosen => (chosen.shown_name(), Vec::new()),
             };
             // Apps come before input devices, as in the listing; a chosen app
             // goes among the apps by name, as the listing sorts them.
@@ -4197,6 +4215,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     name,
                     kind,
                     channels: 0,
+                    apps,
                 },
             );
         }
@@ -4213,7 +4232,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .airplay_holding_target(&speaker.id)
             .map(|target| InTarget {
                 id: airplay_key(&target.id),
-                name: target.name,
+                name: self
+                    .custom_names
+                    .shown(&airplay_key(&target.id), &target.name),
             });
         Speaker {
             auto_connect: self.auto_connect.contains(&id),
@@ -15548,6 +15569,128 @@ mod tests {
                 "Evening",
                 &[("Left", PresetLeftOff::InTarget("Living Room".to_owned()))]
             )]
+        );
+    }
+
+    // covers: S228
+    #[test]
+    fn a_member_its_renamed_stereo_pair_holds_names_the_pair_by_its_new_name() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let (pair, left, right) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        adapter.poll();
+        // Held by its listed pair it has no row, so its row is built here.
+        let listed = adapter
+            .audio
+            .airplay_speakers()
+            .into_iter()
+            .find(|speaker| airplay_key(&speaker.id) == ap(&left))
+            .expect("Left is listed until its pair is");
+        let left_id = listed.id.clone();
+        fake.target(&pair);
+        adapter.poll();
+        adapter.rename_speaker("ap:pair:5f0c", "Lounge");
+        let row = adapter.airplay_speaker(listed, None);
+        assert_eq!(
+            row.in_target.map(|target| target.name),
+            Some("Lounge".to_owned())
+        );
+
+        adapter.switch_zone_member(&SpeakerKey::AirPlay(left_id), true);
+        let notices = messages(&adapter);
+        assert!(
+            matches!(&notices[..], [NoticeMessage::AirPlayPlaysInGroup { target, .. }] if target == "Lounge"),
+            "{notices:?}"
+        );
+    }
+
+    // covers: S228
+    #[test]
+    fn a_member_names_a_stereo_pair_the_adapter_has_not_listed_yet_by_its_own_name() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let (pair, left, right) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        adapter.poll();
+        let listed = adapter
+            .audio
+            .airplay_speakers()
+            .into_iter()
+            .find(|speaker| airplay_key(&speaker.id) == ap(&left))
+            .expect("Left is listed until its pair is");
+        fake.target(&pair);
+        adapter.audio.poll();
+        let row = adapter.airplay_speaker(listed, None);
+        assert_eq!(
+            row.in_target.map(|target| target.name),
+            Some("Living Room".to_owned())
+        );
+    }
+
+    // covers: S228
+    #[test]
+    fn the_airplay_ahead_notice_names_a_renamed_cast_speaker_by_its_new_name() {
+        let (mut adapter, _airplay, kitchen, _) = airplay_adapter();
+        let cast = FakeCast::default();
+        cast.announce(CAST_LIVING, "Living Room", DEVICE_PORT);
+        adapter.audio.set_cast(cast.link());
+        adapter.poll();
+        adapter.rename_speaker(&cc(CAST_LIVING), "Lounge");
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
+        adapter.set_speaker_delay(&ap(&kitchen), 3250.0);
+        adapter.set_speaker_delay(&cc(CAST_LIVING), 20_000.0);
+        adapter.poll();
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayAheadOfCast {
+                speaker: "Lounge".to_owned(),
+                tenths: 15,
+            }]
+        );
+    }
+
+    // covers: S228
+    #[test]
+    fn a_cast_groups_renamed_member_shows_its_new_name() {
+        let (mut adapter, fake) = cast_adapter();
+        fake.announce(CAST_ATTIC, "Attic", 32_123);
+        adapter.poll();
+        adapter.rename_speaker(&cc(CAST_KITCHEN), "Pantry");
+        adapter.set_speaker_enabled(&cc(CAST_ATTIC), true);
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: cast_device(CAST_ATTIC),
+            event: SessionEvent::Members(vec![
+                GroupMember {
+                    device_id: CAST_KITCHEN.to_owned(),
+                    id: Some(cast_device(CAST_KITCHEN)),
+                    name: None,
+                },
+                GroupMember {
+                    device_id: "garage".to_owned(),
+                    id: None,
+                    name: Some("Garage".to_owned()),
+                },
+            ]),
+        });
+        adapter.poll();
+        let state = adapter.snapshot();
+        let row = state.speaker(&cc(CAST_ATTIC)).expect("Attic is listed");
+        assert_eq!(
+            row.cast
+                .as_ref()
+                .and_then(|cast| cast.group.as_ref())
+                .map(|group| &group.members),
+            Some(&CastMembers::Known(vec![
+                "Pantry".to_owned(),
+                "Garage".to_owned()
+            ]))
         );
     }
 

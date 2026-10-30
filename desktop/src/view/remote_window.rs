@@ -168,6 +168,10 @@ impl RowText for StringsText<'_> {
         self.0.invoke_source_all_except(names.into()).into()
     }
 
+    fn list_separator(&self) -> String {
+        self.0.get_list_separator().into()
+    }
+
     fn kind(&self, speaker: &Speaker) -> String {
         self.0
             .invoke_speaker_kind(speaker_kind(speaker.kind))

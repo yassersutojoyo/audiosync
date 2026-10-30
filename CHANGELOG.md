@@ -36,6 +36,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Fixed
 
 - On the Mac, the web remote keeps a volume you set for a speaker that is off, a Google Cast speaker included, and uses it once the speaker plays, as on Windows. Before, the slider jumped back a second later.
+- A renamed stereo pair, home theater or Google Cast speaker shows by its new name in the notice that AirPlay plays ahead of Cast, in the note and notice of a pair member, and in the member list of a Cast group. On Windows.
+- After Remove from Zone on an In zones row, the keyboard focus moves to the next row there, or the one before it, or to the speaker list once none is left, instead of getting lost. On Windows.
 - A speaker whose device takes sound faster than AudioSync can send it, so it plays in bursts while the other speakers play fine, is now restarted once on its own. If that happens again within 30 seconds, it keeps playing and a notice says its link is struggling and to turn the speaker off and on again. On the Mac and on Windows.
 - A Bluetooth speaker whose clock runs slow, by up to 1%, no longer drifts later and later until it skips back with a short dropout: AudioSync measures its clock and keeps pace with it. On the Mac and on Windows.
 - On Windows, the equalizer picker shows a saved curve by the name you gave it when a preset has the same gains, as on the Mac. Before, a saved all-0 dB curve showed as Flat.

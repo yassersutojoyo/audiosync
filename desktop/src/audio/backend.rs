@@ -447,7 +447,7 @@ pub struct CastInfo {
 /// A Cast group as its row shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CastGroup {
-    pub members: CastMembers,
+    pub members: CastMembers<CastMember>,
 }
 
 /// A stereo pair or home theater group that holds an AirPlay speaker: its
@@ -460,14 +460,22 @@ pub struct InTarget {
 
 /// What a Cast group's row knows of its members (spec C94).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum CastMembers {
+pub enum CastMembers<T = String> {
     /// It is off, or its session hasn't played yet.
     #[default]
     NotReported,
     /// Its session plays and named none of them.
     Unknown,
     /// The ones its session named, by name.
-    Known(Vec<String>),
+    Known(Vec<T>),
+}
+
+/// A member a Cast group's session named: the listed speaker it is, when
+/// one is, so a name the user gave it can show.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CastMember {
+    pub id: Option<String>,
+    pub name: String,
 }
 
 /// Something the UI should know about, from [`AudioBackend::poll`].

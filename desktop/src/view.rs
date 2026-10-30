@@ -530,6 +530,8 @@ enum MainFocusTarget {
     /// back to a harmless part when it hasn't that one).
     Speaker(SharedString, RowPart),
     Zone(SharedString, RowPart),
+    /// An In zones row, by speaker id, on this part.
+    InZones(SharedString, RowPart),
     StreamingSwitch,
 }
 
@@ -654,6 +656,26 @@ impl MainFocus {
                 )
             });
         }
+        if let Some((id, part)) = &self.in_zones {
+            for (old_rows, new_rows) in [
+                (&old.this_pc_zoned, &new.this_pc_zoned),
+                (&old.connected_zoned, &new.connected_zoned),
+            ] {
+                let Some(at) = old_rows.iter().position(|s| s.id == *id) else {
+                    continue;
+                };
+                if old_rows.len() == new_rows.len() {
+                    break;
+                }
+                if new_rows.iter().any(|s| s.id == *id) {
+                    return Some(MainFocusTarget::InZones(id.clone(), *part));
+                }
+                return Some(neighbour(old_rows, new_rows, at, |s| &s.id).map_or_else(
+                    || first_row(new),
+                    |next| MainFocusTarget::InZones(next, RowPart::Options),
+                ));
+            }
+        }
         None
     }
 }
@@ -673,6 +695,9 @@ struct MainLists {
     this_pc: Vec<SpeakerItem>,
     connected: Vec<SpeakerItem>,
     zones: Vec<ZoneRows>,
+    /// The In zones rows under This PC and under Connected Speakers.
+    this_pc_zoned: Vec<SpeakerItem>,
+    connected_zoned: Vec<SpeakerItem>,
 }
 
 impl MainLists {
@@ -1961,11 +1986,14 @@ impl App {
         let sources: Vec<SharedString> = state
             .sources
             .iter()
-            .map(|s| match s.kind {
-                // The backend's name for it is English; the UI's is translated.
-                SourceKind::System => strings.get_source_system(),
-                SourceKind::App | SourceKind::Input => s.name.as_str().into(),
-                SourceKind::AppsExcept => strings.invoke_source_all_except(s.name.as_str().into()),
+            .map(|s| {
+                let name = s.shown(&strings.get_list_separator());
+                match s.kind {
+                    // The backend's name for it is English; the UI's is translated.
+                    SourceKind::System => strings.get_source_system(),
+                    SourceKind::App | SourceKind::Input => name.into(),
+                    SourceKind::AppsExcept => strings.invoke_source_all_except(name.into()),
+                }
             })
             .collect();
         let source_index = state
@@ -2015,12 +2043,16 @@ impl App {
                     },
                 })
                 .collect(),
+            this_pc_zoned,
+            connected_zoned,
         };
         let main_focus = self.main_focus_target(&main_lists);
         let MainLists {
             notices: main_notices,
             this_pc,
             connected,
+            this_pc_zoned,
+            connected_zoned,
             ..
         } = main_lists;
         sync_model(&m.sources, sources);
@@ -2267,6 +2299,8 @@ impl App {
                     id: zone.id,
                 })
                 .collect(),
+            this_pc_zoned: m.this_pc_zoned.iter().collect(),
+            connected_zoned: m.connected_zoned.iter().collect(),
         };
         let mut focus = self.main_focus.borrow_mut();
         let target = focus.target(&old, new)?;
@@ -2290,12 +2324,17 @@ impl App {
                 zone: Some((id.clone(), *part)),
                 ..MainFocus::default()
             },
+            MainFocusTarget::InZones(id, part) => MainFocus {
+                in_zones: Some((id.clone(), *part)),
+                ..MainFocus::default()
+            },
             MainFocusTarget::StreamingSwitch => MainFocus::default(),
         };
         drop(focus);
         main.set_focus_notice_index(-1);
         main.set_focus_speaker_id(SharedString::new());
         main.set_focus_zone_id(SharedString::new());
+        main.set_focus_in_zones_id(SharedString::new());
         match &target {
             MainFocusTarget::Notice(index) => main.set_focus_notice_index(count(*index)),
             MainFocusTarget::Speaker(id, part) => {
@@ -2305,6 +2344,10 @@ impl App {
             MainFocusTarget::Zone(id, part) => {
                 main.set_focus_zone_part(*part);
                 main.set_focus_zone_id(id.clone());
+            }
+            MainFocusTarget::InZones(id, part) => {
+                main.set_focus_in_zones_part(*part);
+                main.set_focus_in_zones_id(id.clone());
             }
             MainFocusTarget::StreamingSwitch => {}
         }
@@ -5231,7 +5274,11 @@ fn airplay_line(strings: &Strings<'_>, shared: &AirPlayShared) -> SharedString {
 /// Under a zone run's AirPlay line: the other zones the shared delay moves,
 /// and the speakers in no zone (spec S255); `None` when it moves no other.
 fn airplay_moves_line(strings: &Strings<'_>, moves: &AirPlayMoves) -> Option<SharedString> {
-    let quoted: Vec<String> = moves.zones.iter().map(|name| format!("“{name}”")).collect();
+    let quoted: Vec<String> = moves
+        .zones
+        .iter()
+        .map(|name| strings.invoke_zone_quoted(name.as_str().into()).into())
+        .collect();
     let named = (!quoted.is_empty()).then(|| joined(strings, &quoted));
     match (named, moves.no_zone) {
         (None, false) => None,
@@ -5287,13 +5334,13 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
     }
 }
 
-/// Names as one list, "A, B and C": commas between all but the last two,
-/// then `and` (the UI's words for "head and last").
-fn join_names(names: &[String], and: impl FnOnce(&str, &str) -> String) -> String {
+/// Names as one list, "A, B and C": `separator` between all but the last
+/// two, then `and` (the UI's words for "head and last").
+fn join_names(names: &[String], separator: &str, and: impl FnOnce(&str, &str) -> String) -> String {
     match names {
         [] => String::new(),
         [only] => only.clone(),
-        [head @ .., last] => and(&head.join(", "), last),
+        [head @ .., last] => and(&head.join(separator), last),
     }
 }
 
@@ -5323,7 +5370,7 @@ fn switch_name(strings: &Strings<'_>, name: &SwitchName) -> SharedString {
 /// Output names as one list in the UI's words: what every notice and the
 /// guide name outputs with.
 fn joined(strings: &Strings<'_>, names: &[String]) -> SharedString {
-    join_names(names, |head, last| {
+    join_names(names, &strings.get_list_separator(), |head, last| {
         strings
             .invoke_list_and(head.into(), last.into())
             .to_string()
@@ -5496,8 +5543,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
                 })
                 .collect();
             // Commas only, as on the Mac: each item already ends in its reason.
-            let list: SharedString =
-                join_names(&members, |head, last| format!("{head}, {last}")).into();
+            let list: SharedString = members.join(&strings.get_list_separator()).into();
             if *nothing_changed {
                 strings.invoke_preset_nothing_changed(preset.as_str().into(), list)
             } else {
@@ -10096,20 +10142,28 @@ mod tests {
         let and = |head: &str, last: &str| format!("{head} and {last}");
         let names =
             |list: &[&str]| -> Vec<String> { list.iter().map(|name| (*name).to_owned()).collect() };
-        assert_eq!(join_names(&names(&[]), and), "");
-        assert_eq!(join_names(&names(&["TV"]), and), "TV");
+        assert_eq!(join_names(&names(&[]), ", ", and), "");
+        assert_eq!(join_names(&names(&["TV"]), ", ", and), "TV");
         assert_eq!(
-            join_names(&names(&["TV", "Speakers"]), and),
+            join_names(&names(&["TV", "Speakers"]), ", ", and),
             "TV and Speakers"
         );
         assert_eq!(
-            join_names(&names(&["TV", "Speakers", "Monitor"]), and),
+            join_names(&names(&["TV", "Speakers", "Monitor"]), ", ", and),
             "TV, Speakers and Monitor"
         );
-        // Every notice and the guide join names through it.
+    }
+
+    #[test]
+    fn list_commas_and_zone_quotes_come_from_the_strings() {
         let view = include_str!("view.rs");
-        let comma_joins = view.matches(concat!(".join(", "\", \"", ")")).count();
-        assert_eq!(comma_joins, 1, "only join_names joins names by commas");
+        let code: String = view[..view.find("#[cfg(test)]").expect("the tests")]
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect();
+        for written in [concat!("\"", ", ", "\""), "}, {", "\u{201c}", "\u{201d}"] {
+            assert!(!code.contains(written), "{written:?} is written in view.rs");
+        }
     }
 
     #[test]
@@ -11958,6 +12012,49 @@ mod tests {
             MainFocus::default().target(&lists(&[1], &["a"]), &lists(&[], &[])),
             None,
             "nothing in the lists had the focus"
+        );
+    }
+
+    #[test]
+    fn an_in_zones_row_removed_from_its_zone_hands_the_focus_to_a_neighbour() {
+        let speakers = |ids: &[&str]| -> Vec<SpeakerItem> {
+            ids.iter()
+                .map(|&id| SpeakerItem {
+                    id: id.into(),
+                    ..SpeakerItem::default()
+                })
+                .collect()
+        };
+        let lists = |connected: &[&str], zoned: &[&str]| MainLists {
+            connected: speakers(connected),
+            connected_zoned: speakers(zoned),
+            ..MainLists::default()
+        };
+        let on = |id: &str, part| MainFocus {
+            in_zones: Some((id.into(), part)),
+            ..MainFocus::default()
+        };
+        let options = |id: &str| Some(MainFocusTarget::InZones(id.into(), RowPart::Options));
+        let before = lists(&["a"], &["x", "y", "z"]);
+        assert_eq!(
+            on("y", RowPart::Options).target(&before, &lists(&["a", "y"], &["x", "z"])),
+            options("z"),
+            "the next row"
+        );
+        assert_eq!(
+            on("z", RowPart::Options).target(&before, &lists(&["a", "z"], &["x", "y"])),
+            options("y"),
+            "the last row went: the one before it"
+        );
+        assert_eq!(
+            on("x", RowPart::Options).target(&lists(&["a"], &["x"]), &lists(&["a", "x"], &[])),
+            Some(MainFocusTarget::Speaker("a".into(), RowPart::Options)),
+            "no In zones row left: the list's first row"
+        );
+        assert_eq!(
+            on("x", RowPart::Toggle).target(&before, &lists(&["a"], &["w", "x", "y", "z"])),
+            Some(MainFocusTarget::InZones("x".into(), RowPart::Toggle)),
+            "a rebuilt row keeps the focus on its part"
         );
     }
 
