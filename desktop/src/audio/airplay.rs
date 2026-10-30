@@ -2322,13 +2322,17 @@ impl AirPlaySpeakers {
                 .log(|| format!("AirPlay {}: password forgotten", self.label(id)));
         }
         self.credentials_turned_down.remove(id);
-        let homekit_or_password = self.forget_homekit(id) || password;
-        match self.store.remove(id) {
+        let homekit = self.forget_homekit(id);
+        let homekit_or_password = homekit.is_some() || password;
+        let (saved, pruned) = self.store.remove(id);
+        match saved {
             Ok(true) => {
-                self.store_written(true);
+                // An AirPlay 2 write that failed stays reported.
+                self.store_written(pruned.is_ok() && homekit != Some(false));
                 self.log
                     .log(|| format!("AirPlay pairing {}: credentials forgotten", self.label(id)));
             }
+            Ok(false) if pruned.is_err() => self.store_written(false),
             Ok(false) if !homekit_or_password => return,
             Ok(false) => {}
             Err(error) => {
@@ -2341,6 +2345,14 @@ impl AirPlaySpeakers {
                 });
             }
         }
+        if let Err(error) = pruned {
+            self.log.log(|| {
+                format!(
+                    "AirPlay pairing {}: a copy kept aside that holds its credentials couldn't be deleted: {error}",
+                    self.label(id)
+                )
+            });
+        }
         self.password_attempts.remove(id);
         if self.settings(id).enabled {
             self.entry(id).enabled = false;
@@ -2349,16 +2361,16 @@ impl AirPlaySpeakers {
     }
 
     /// Forgets the speaker's AirPlay 2 credentials and timing entry (P217),
-    /// here and in the sender, if AudioSync keeps any. Returns whether it
-    /// had credentials.
-    fn forget_homekit(&mut self, id: &str) -> bool {
+    /// here and in the sender, if AudioSync keeps any. Returns whether their
+    /// file was written, `None` when it had no credentials.
+    fn forget_homekit(&mut self, id: &str) -> Option<bool> {
         let (on_disk, saved) = self.store.forget_airplay2_closed(id);
         if on_disk {
-            return self.homekit_forgotten(id, saved);
+            return Some(self.homekit_forgotten(id, saved));
         }
         let homekit = self.store.homekit(id).is_some();
         if !homekit && self.store.timing(id).is_none() {
-            return false;
+            return None;
         }
         let key = self
             .listed
@@ -2374,14 +2386,14 @@ impl AirPlaySpeakers {
             let _ = self.store.forget_timing(id);
             self.log
                 .log(|| format!("AirPlay speaker {}: timing entry forgotten", self.label(id)));
-            return false;
+            return None;
         }
         let saved = self.store.remove_homekit(id);
-        self.homekit_forgotten(id, saved)
+        Some(self.homekit_forgotten(id, saved))
     }
 
     /// Reports the speaker's forgotten AirPlay 2 credentials and how their
-    /// file's write went. Returns true.
+    /// file's write went. Returns whether it was written.
     fn homekit_forgotten(&mut self, id: &str, saved: io::Result<()>) -> bool {
         self.store_written(saved.is_ok());
         self.log.log(|| {
@@ -2394,7 +2406,7 @@ impl AirPlaySpeakers {
                 self.label(id)
             )
         });
-        true
+        saved.is_ok()
     }
 
     /// The PIN prompt to show: the first pairing whose Apple TV showed a PIN.
@@ -5968,6 +5980,36 @@ pub mod tests {
 
     // covers: S224
     #[test]
+    fn an_airplay2_file_forget_couldnt_write_is_reported_after_the_airplay1_one_was() {
+        use crate::audio::pairings::tests::{credentials, homekit, sealer};
+        use crate::audio::pairings::{AIRPLAY2_FILE_NAME, FILE_NAME};
+
+        let folder = crate::debug_log::test_dir("airplay2-forget-unsaved-both");
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        let (mut store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+        store.open_airplay2();
+        store.insert_homekit(&id, homekit(0x44)).expect("saved");
+        store
+            .insert(&id, credentials("0123456789ABCDEF", 2))
+            .expect("saved");
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        // A folder where the AirPlay 2 file goes: nothing can be written there.
+        let file = folder.join(AIRPLAY2_FILE_NAME);
+        std::fs::remove_file(&file).expect("the file is removed");
+        std::fs::create_dir(&file).expect("the folder is made");
+        airplay.forget_pairing(&id);
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::PairingStore { saved: false }),
+            "{events:?}"
+        );
+    }
+
+    // covers: S224
+    #[test]
     fn a_forgotten_speakers_identity_copy_that_cant_be_deleted_is_reported() {
         use crate::audio::pairings::tests::{failing_copy_deletes, homekit, sealer};
         use crate::audio::pairings::{AIRPLAY2_FILE_NAME, FILE_NAME};
@@ -5987,6 +6029,40 @@ pub mod tests {
         fake.set_airplay2(true);
         let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
         airplay.forget_pairing(&id);
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::PairingStore { saved: false }),
+            "{events:?}"
+        );
+    }
+
+    // covers: S224
+    #[test]
+    fn a_pairings_copy_forget_cant_delete_is_logged_apart_from_the_written_file() {
+        use crate::audio::pairings::tests::{credentials, failing_copy_deletes, sealer};
+        use crate::audio::pairings::{FILE_NAME, IGNORED_FILE_NAME};
+
+        let folder = crate::debug_log::test_dir("airplay-forget-copy-held");
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        let file = folder.join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(file.clone(), sealer());
+        store
+            .insert(&id, credentials("0123456789ABCDEF", 2))
+            .expect("saved");
+        let bytes = std::fs::read(&file).expect("written");
+        crate::data_folder::keep_bytes_aside(&file, IGNORED_FILE_NAME, &bytes).expect("kept");
+        failing_copy_deletes(&mut store);
+        let path = folder.join("debug.log");
+        let log = DebugLog::new(Some(path.clone()));
+        let fake = FakeAirPlay::new();
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, log.clone(), store);
+        airplay.forget_pairing(&id);
+        assert!(log.flush(Duration::from_secs(5)));
+        let text = crate::debug_log::read_messages(&path).join("\n");
+        assert!(text.contains("credentials forgotten"), "{text}");
+        assert!(text.contains("couldn't be deleted"), "{text}");
+        assert!(!text.contains("couldn't be written"), "{text}");
         let events = airplay.poll();
         assert!(
             events.contains(&BackendEvent::PairingStore { saved: false }),

@@ -335,17 +335,50 @@ impl PairingStore {
         self.save()
     }
 
-    /// Forgets the speaker's credentials and writes the file, then deletes
-    /// the copies of this file and of the AirPlay 2 identity file kept aside
-    /// that hold the speaker's ID. Returns whether it was paired.
-    pub fn remove(&mut self, id: &str) -> io::Result<bool> {
+    /// Forgets the speaker's credentials and writes the file, also when only
+    /// the file ignored at launch and not kept aside yet holds the speaker's
+    /// ID (its other pairings are kept when it reads now), then deletes the copies of this file and of the AirPlay 2
+    /// identity file kept aside that hold the speaker's ID. Returns whether
+    /// it was paired, or why the file couldn't be written, and how deleting
+    /// those copies went.
+    pub fn remove(&mut self, id: &str) -> (io::Result<bool>, io::Result<()>) {
+        self.load_ignored();
         let removed = self.entries.remove(id).is_some();
-        let saved = if removed { self.save() } else { Ok(()) };
+        let unread = self.keep_aside
+            && self
+                .path
+                .as_deref()
+                .is_some_and(|path| holds(path, id, self.sealer));
+        let saved = if removed || unread {
+            self.save()
+        } else {
+            Ok(())
+        };
         let pruned = self.path.as_deref().map_or(Ok(()), |path| {
             let copies = |name| prune_copies(path, name, id, self.sealer, self.remove_copy);
             copies(IGNORED_FILE_NAME).and(copies(AIRPLAY2_IGNORED_FILE_NAME))
         });
-        saved.and(pruned).map(|()| removed)
+        (saved.map(|()| removed), pruned)
+    }
+
+    /// Loads the file ignored at launch when it reads now, so a write keeps
+    /// its pairings; only one with entries that didn't read is kept aside,
+    /// with no notice, as at a launch that read part of it.
+    fn load_ignored(&mut self) {
+        // `tell_kept_aside` is on only for a file ignored whole at launch.
+        let Some(path) = self.path.as_deref() else {
+            return;
+        };
+        if !(self.keep_aside && self.tell_kept_aside) {
+            return;
+        }
+        if let Ok(Some((entries, skipped))) = read(path, self.sealer) {
+            for (id, credentials) in entries {
+                self.entries.entry(id).or_insert(credentials);
+            }
+            self.keep_aside = skipped > 0;
+            self.tell_kept_aside = false;
+        }
     }
 
     /// Reads the AirPlay 2 identity next to the file, once, when the hidden
@@ -591,10 +624,6 @@ fn prune_copies(
     sealer: Sealer,
     remove: fn(&Path) -> io::Result<()>,
 ) -> io::Result<()> {
-    let Ok(id_len) = u16::try_from(id.len()) else {
-        return Ok(());
-    };
-    let framed = [&id_len.to_le_bytes()[..], id.as_bytes()].concat();
     let prefix = format!("{}-", name.trim_end_matches(".dat"));
     let Some(folder) = path.parent() else {
         return Ok(());
@@ -613,14 +642,23 @@ fn prune_copies(
         if !named {
             continue;
         }
-        let Ok(plain) = fs::read(&copy).and_then(|sealed| sealer.open(&sealed)) else {
-            continue;
-        };
-        if plain.windows(framed.len()).any(|window| window == framed) {
+        if holds(&copy, id, sealer) {
             result = result.and(remove(&copy));
         }
     }
     result
+}
+
+/// Whether the sealed file at `path` reads, decrypts and holds the speaker
+/// ID `id` as both files frame it (16-bit little-endian length first).
+fn holds(path: &Path, id: &str, sealer: Sealer) -> bool {
+    let Ok(id_len) = u16::try_from(id.len()) else {
+        return false;
+    };
+    let framed = [&id_len.to_le_bytes()[..], id.as_bytes()].concat();
+    fs::read(path)
+        .and_then(|sealed| sealer.open(&sealed))
+        .is_ok_and(|plain| plain.windows(framed.len()).any(|window| window == framed))
 }
 
 /// What the log says when [`make_private`] tightened a file or its folder.
@@ -797,6 +835,14 @@ pub mod tests {
         store.remove_copy = |_| Err(io::Error::other("held by another program"));
     }
 
+    /// Forgets the speaker, asserting the file was written and the copies
+    /// deleted; returns whether it was paired.
+    fn removed(store: &mut PairingStore, id: &str) -> bool {
+        let (saved, pruned) = store.remove(id);
+        pruned.expect("deleted");
+        saved.expect("saved")
+    }
+
     /// The sealer the tests use: DPAPI on Windows, the stand-in elsewhere.
     pub fn sealer() -> Sealer {
         if cfg!(windows) {
@@ -942,7 +988,7 @@ pub mod tests {
         let (mut store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
         let (held, written) = store.forget_airplay2_closed("02005E005302");
         assert!(held && written.is_ok());
-        assert!(!store.remove("02005E005302").expect("deleted"));
+        assert!(!removed(&mut store, "02005E005302"));
         let mut kept = copies_kept_aside(&folder, "airplay2-identity.ignored");
         kept.sort();
         let mut expected = vec![other.clone(), b"not sealed".to_vec()];
@@ -954,7 +1000,7 @@ pub mod tests {
         data_folder::keep_bytes_aside(&path, AIRPLAY2_IGNORED_FILE_NAME, &both).expect("kept");
         store.open_airplay2();
         assert!(!store.forget_airplay2_closed("02005E005302").0);
-        assert!(!store.remove("02005E005302").expect("deleted"));
+        assert!(!removed(&mut store, "02005E005302"));
         assert_eq!(
             copies_kept_aside(&folder, "airplay2-identity.ignored").len(),
             2
@@ -979,7 +1025,7 @@ pub mod tests {
             data_folder::keep_bytes_aside(&path, IGNORED_FILE_NAME, bytes).expect("kept");
         }
         fs::write(folder.join("airplay-pairings.ignored-1.bak"), &both).expect("written");
-        assert!(store.remove("02005E005302").expect("saved"));
+        assert!(removed(&mut store, "02005E005302"));
         let mut kept = copies_kept_aside(&folder, "airplay-pairings.ignored");
         kept.sort();
         let mut expected = vec![other.clone(), b"not sealed".to_vec(), both.clone()];
@@ -991,11 +1037,43 @@ pub mod tests {
 
         // Also once the file no longer holds it.
         data_folder::keep_bytes_aside(&path, IGNORED_FILE_NAME, &both).expect("kept");
-        assert!(!store.remove("02005E005302").expect("saved"));
+        assert!(!removed(&mut store, "02005E005302"));
         assert_eq!(
             copies_kept_aside(&folder, "airplay-pairings.ignored").len(),
             3
         );
+    }
+
+    // covers: S224
+    #[test]
+    fn forgetting_a_speaker_only_the_unread_file_holds_leaves_no_copy_of_it() {
+        let dir = test_dir("pairings-forget-unread");
+        let path = dir.join(FILE_NAME);
+        // A folder where the file should be: it can't be read at launch.
+        fs::create_dir(&path).unwrap();
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        let mut plain = MAGIC.to_vec();
+        plain.extend(entry(
+            b"02005E005301",
+            &credentials("0123456789ABCDEF", 1).to_bytes(),
+        ));
+        plain.extend(entry(b"02005E005309", b"\xEEa blob a later build wrote"));
+        fs::remove_dir(&path).unwrap();
+        fs::write(&path, sealer().seal(&plain).unwrap()).unwrap();
+
+        assert!(!removed(&mut store, "02005E005309"));
+        assert!(store.contains("02005E005301"));
+        assert_eq!(store.take_kept_aside(), None);
+        store
+            .insert("02005E005302", credentials("0123456789ABCDEE", 2))
+            .expect("saved");
+        let framed = &entry(b"02005E005309", b"")[..14];
+        let mut files = copies_kept_aside(&dir, "airplay-pairings.ignored");
+        files.push(fs::read(&path).expect("written"));
+        for sealed in files {
+            let plain = sealer().open(&sealed).expect("opened");
+            assert!(!plain.windows(framed.len()).any(|window| window == framed));
+        }
     }
 
     #[test]
@@ -1008,12 +1086,12 @@ pub mod tests {
         store
             .insert("02005E005302", credentials("0123456789ABCDEE", 2))
             .unwrap();
-        assert!(store.remove("02005E005301").unwrap());
-        assert!(!store.remove("02005E005301").unwrap());
+        assert!(removed(&mut store, "02005E005301"));
+        assert!(!removed(&mut store, "02005E005301"));
         let (reopened, loaded) = PairingStore::open(path.clone(), sealer());
         assert_eq!(loaded, Loaded::Speakers(1));
         assert!(reopened.contains("02005E005302"));
-        assert!(store.remove("02005E005302").unwrap());
+        assert!(removed(&mut store, "02005E005302"));
         assert!(!path.exists(), "nothing paired, no file");
     }
 
@@ -1138,7 +1216,7 @@ pub mod tests {
             Loaded::Speakers(2)
         );
         // Once replaced, the next write leaves the copy alone.
-        store.remove("02005E005303").expect("saved");
+        removed(&mut store, "02005E005303");
         assert_eq!(kept(), [good]);
     }
 
