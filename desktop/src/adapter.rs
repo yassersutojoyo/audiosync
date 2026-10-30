@@ -10142,6 +10142,7 @@ mod tests {
         );
     }
 
+    // covers: S349
     #[test]
     fn auto_connect_never_starts_a_pairing() {
         let (mut adapter, fake, tv) = apple_tv_adapter();
@@ -10325,6 +10326,7 @@ mod tests {
         assert!(messages(&adapter).is_empty());
     }
 
+    // covers: S349
     #[test]
     fn auto_connect_never_asks_for_a_password() {
         let (mut adapter, fake, _, study) = airplay_adapter();
@@ -10345,7 +10347,7 @@ mod tests {
         );
     }
 
-    // covers: S222, S223
+    // covers: S222, S223, S349
     #[test]
     fn a_speaker_saved_on_that_now_asks_for_a_pin_goes_off_with_a_notice_at_a_launch() {
         let dir = test_dir("adapter-saved-on-asks-pin");
@@ -10394,7 +10396,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    // covers: S222
+    // covers: S222, S349
     #[test]
     fn a_speaker_saved_on_that_now_asks_for_a_password_goes_off_with_a_notice_at_a_launch() {
         let dir = test_dir("adapter-saved-on-asks-password");
