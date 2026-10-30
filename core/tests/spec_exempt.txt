@@ -126,3 +126,4 @@ S350 Hosts only: the Waiting for audio notice when a capture session starts and 
 S351 Hosts only: the end of the user session runs the quit steps; the Windows host's tests check it, and the Mac runs its quit steps from applicationWillTerminate.
 S353 Web remote and hosts only: the apps the phone may mix, the mix route and the host building the mix from it; to be checked by the remote crate's and the Windows host's tests and the Mac logic suite.
 S354 Hosts only: each host keeping the last source of several apps and listing it in the picker and on the phone; to be checked by the Windows host's tests and the Mac logic suite.
+S355 Hosts only: the Windows host's input device source (listing, format, privacy, the unplugged input in the picker); the Windows tests named in the test map check it, three rows pending.
