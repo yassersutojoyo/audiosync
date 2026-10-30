@@ -1873,6 +1873,7 @@ mod tests {
         assert_eq!(first.format.channels, 2);
     }
 
+    // covers: S16 (every attempt is stereo at a rate in the supported range)
     #[test]
     fn every_capture_attempt_is_stereo_at_a_supported_rate() {
         for attempt in CAPTURE_ATTEMPTS {
@@ -2065,6 +2066,7 @@ mod tests {
         assert!(bytes.iter().all(|b| *b == 0), "Cast gets only silence");
     }
 
+    // covers: S16 (stereo float at the session rate reaches the ring unchanged)
     #[test]
     fn float_stereo_at_the_session_rate_is_written_unchanged() {
         let (ring, writer) = session_ring_after_lead_in();

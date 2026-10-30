@@ -6071,6 +6071,7 @@ mod tests {
         assert_eq!(backend.master_volume(), 50.0);
     }
 
+    // covers: S137, S138 (a lost output is handled as an unplug)
     #[test]
     fn a_device_removed_and_added_again_plays_again_with_its_settings() {
         let mut backend = backend();
@@ -7419,7 +7420,7 @@ mod tests {
         assert_eq!(backend.enabled_airplay(), [id]);
     }
 
-    // covers: S329
+    // covers: S329, S157 (the same format keeps the session)
     #[test]
     fn a_capture_reopen_waits_while_the_lost_capture_still_holds_the_ring() {
         let mut backend = backend();
@@ -7440,7 +7441,7 @@ mod tests {
         assert!(backend.driver().capture_running());
     }
 
-    // covers: S329
+    // covers: S329, S20, S140, S157 (another rate restarts the session on a new ring)
     #[test]
     fn a_capture_back_in_another_format_restarts_the_session() {
         let mut backend = backend();
@@ -7669,7 +7670,7 @@ mod tests {
         assert!(suspended.driver().capture_running());
     }
 
-    // covers: S332
+    // covers: S332, S139 (an output lost across a sleep takes the usual path)
     #[test]
     fn an_output_lost_after_a_suspend_notice_is_tried_at_the_resume() {
         let mut backend = backend();
@@ -7690,7 +7691,7 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
-    // covers: S332, S329
+    // covers: S332, S329, S139 (a capture lost after the resume window gets the usual tries)
     #[test]
     fn a_capture_lost_as_the_resume_window_ends_gets_the_usual_tries() {
         let mut backend = backend();
@@ -7843,7 +7844,7 @@ mod tests {
         ..crate::audio::mock::MOCK_STREAM.format
     };
 
-    // covers: S330
+    // covers: S330, S138, S140 (an output at another rate reopens alone in it)
     #[test]
     fn a_format_notice_for_a_playing_output_reopens_it_in_the_new_format_in_the_same_poll() {
         let (mut backend, log, dir) = logged_backend("controller-format-notice");
@@ -8995,6 +8996,7 @@ mod tests {
         assert_eq!(backend.feed_capture_level(4, 0.25), [0.25; 8], "off");
     }
 
+    // covers: S146, S161, S165 (the local half: eight outputs attached by one sync)
     /// EC10: eight local outputs switched on together, while streaming
     /// runs and before it starts.
     #[test]
@@ -9782,7 +9784,7 @@ mod tests {
         assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
     }
 
-    // covers: S328
+    // covers: S328, S138
     #[test]
     fn a_bluetooth_output_unlisted_for_one_poll_leaves_the_built_in_delay_unchanged() {
         let mut backend = local_delay_backend();
@@ -9802,7 +9804,7 @@ mod tests {
         assert_eq!(held(&backend), [Some(250), Some(400), None]);
     }
 
-    // covers: S328
+    // covers: S328, S138
     #[test]
     fn a_bluetooth_output_still_unlisted_after_10_s_retimes_the_others_once() {
         let mut backend = local_delay_backend();

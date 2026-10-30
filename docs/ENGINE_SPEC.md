@@ -1653,7 +1653,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | session stop: … (which reasons restart, one log line each) | S20 |
 | airplay level: … (a level set on the speaker kept or held, own volume above 100, DeviceVolume at master 0) | S276, S290, S291 |
 | airplay volume event: a report made before the row's latest set reached the core is dropped, that speaker only | S276 |
-| airplay level vectors: … (`core/tests/vectors/s290_volume.json` through the Mac's calls) | S290 |
+| airplay level vectors: … (`core/tests/vectors/s290_volume.json` through the Mac's calls) | S290, S289 |
 | auto-connect skipped: … (a run that skips auto-connect saves nothing) | S170 |
 | device anchor: … (the device anchor in the status line) | S334 |
 | observer: the line names every value with its unit | S229 |
@@ -2041,7 +2041,7 @@ The decisions the hosts take from the core: sources and capture, session start a
 | capture_that_cant_start_leaves_streaming_off_with_a_notice (`desktop/src/adapter.rs`) | S121 |
 | start_problems_name_the_chosen_app (`desktop/src/adapter.rs`) | S121 |
 | switching_streaming_off_keeps_the_speakers_on (`desktop/src/adapter.rs`) | S122 |
-| a_device_removed_and_added_again_plays_again_with_its_settings (`desktop/src/audio/controller.rs`) | S137 |
+| a_device_removed_and_added_again_plays_again_with_its_settings (`desktop/src/audio/controller.rs`) | S137, S138 |
 | an_unplugged_output_is_reported_until_it_is_back (`desktop/src/adapter.rs`) | S137 |
 | the_session_ends_when_the_captured_app_quits (`desktop/src/audio/controller.rs`) | S142 |
 | an_app_that_quits_ends_the_session_without_a_restart (`desktop/src/audio/controller.rs`) | S142 |
@@ -2051,7 +2051,7 @@ The decisions the hosts take from the core: sources and capture, session start a
 | enabled_connected_outputs_play_sorted_by_id (`desktop/src/audio/outputs.rs`) | S161 |
 | an_output_turned_off_is_removed (`desktop/src/audio/outputs.rs`) | S161 |
 | a_renderer_whose_device_disappeared_is_kept_until_the_output_is_turned_off (`desktop/src/audio/outputs.rs`) | S161 |
-| ec10_eight_local_outputs_switched_on_together_all_play_on_their_own_renderers (`desktop/src/audio/controller.rs`) | S146, S161 |
+| ec10_eight_local_outputs_switched_on_together_all_play_on_their_own_renderers (`desktop/src/audio/controller.rs`) | S146, S161, S165 |
 | an_app_that_quits_gives_way_to_the_whole_system_when_set_and_airplay_plays_on (`desktop/src/audio/controller.rs`) | S164, S227 |
 | an_app_that_quit_while_its_capture_waits_to_start_again_gives_way_when_set (`desktop/src/audio/controller.rs`) | S164, S227 |
 | an_app_picked_while_the_last_session_fades_that_quits_before_its_start_gives_way_when_set (`desktop/src/audio/controller.rs`) | S164, S227 |
@@ -2148,8 +2148,8 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | the_sync_hint_names_the_reference_and_says_which_way_to_move_a_value (`desktop/src/view.rs`) | S181 |
 | a_delay_that_is_not_a_signed_whole_number_applies_nothing_and_shows_the_stored_value (`desktop/src/view.rs`) | S181 |
 | a_paste_holding_anything_but_a_signed_whole_number_is_blocked_whole (`desktop/src/view.rs`) | S181 |
-| a_bluetooth_output_unlisted_for_one_poll_leaves_the_built_in_delay_unchanged (`desktop/src/audio/controller.rs`) | S328 |
-| a_bluetooth_output_still_unlisted_after_10_s_retimes_the_others_once (`desktop/src/audio/controller.rs`) | S328 |
+| a_bluetooth_output_unlisted_for_one_poll_leaves_the_built_in_delay_unchanged (`desktop/src/audio/controller.rs`) | S328, S138 |
+| a_bluetooth_output_still_unlisted_after_10_s_retimes_the_others_once (`desktop/src/audio/controller.rs`) | S328, S138 |
 | a_lost_bluetooth_output_switched_off_retimes_the_others_at_once (`desktop/src/audio/controller.rs`) | S328 |
 | a_session_restart_counts_only_the_outputs_listed_then (`desktop/src/audio/controller.rs`) | S328 |
 | a_held_lead_ends_once_its_hold_runs_out_while_the_device_stays_listed (`desktop/src/audio/controller.rs`) | S328 |
@@ -3401,8 +3401,8 @@ The release side:
 | a_second_stall_in_a_row_posts_the_lost_notice_and_keeps_the_output_on (`desktop/src/audio/controller.rs`) | S326 |
 | a_stream_that_stalls_twice_in_a_row_is_reported_until_one_plays_five_seconds (`desktop/src/adapter.rs`) | S326 |
 | a_capture_device_gone_reopens_only_the_capture_and_keeps_every_output_running (`desktop/src/audio/controller.rs`) | S329 |
-| a_capture_reopen_waits_while_the_lost_capture_still_holds_the_ring (`desktop/src/audio/controller.rs`) | S329 |
-| a_capture_back_in_another_format_restarts_the_session (`desktop/src/audio/controller.rs`) | S329 |
+| a_capture_reopen_waits_while_the_lost_capture_still_holds_the_ring (`desktop/src/audio/controller.rs`) | S329, S157 |
+| a_capture_back_in_another_format_restarts_the_session (`desktop/src/audio/controller.rs`) | S329, S20, S140, S157 |
 | a_capture_that_fails_its_last_try_stops_as_before (`desktop/src/audio/controller.rs`) | S21, S329 |
 | an_input_device_unplugged_while_streaming_waits_for_it_without_timed_tries (`desktop/src/audio/controller.rs`) | S329 |
 | an_input_still_listed_whose_capture_fails_gets_the_five_tries (`desktop/src/audio/controller.rs`) | S329 |
@@ -3428,7 +3428,7 @@ The release side:
 | a_mix_that_quit_while_its_capture_waits_gives_way_though_the_session_list_fails (`desktop/src/audio/controller.rs`) | S327 |
 | a_capture_lost_after_a_resume_keeps_trying_until_60_s_after_it (`desktop/src/audio/controller.rs`) | S332 |
 | a_capture_still_failing_60_s_after_a_resume_stops_as_before (`desktop/src/audio/controller.rs`) | S21, S329, S332 |
-| a_capture_lost_as_the_resume_window_ends_gets_the_usual_tries (`desktop/src/audio/controller.rs`) | S329, S332 |
+| a_capture_lost_as_the_resume_window_ends_gets_the_usual_tries (`desktop/src/audio/controller.rs`) | S329, S332, S139 |
 | a_poll_10_s_of_wall_time_after_the_last_counts_as_a_resume (`desktop/src/audio/controller.rs`) | S332 |
 | polls_held_by_starts_that_dont_answer_are_no_resume (`desktop/src/audio/controller.rs`) | S329, S332 |
 | a_ui_loop_held_24_s_while_the_pc_stays_awake_is_no_resume (`desktop/src/audio/controller.rs`) | S332 |
@@ -3437,7 +3437,7 @@ The release side:
 | a_refusal_or_an_app_check_never_counts_the_time_asleep (`desktop/src/audio/controller.rs`) | S327, S331, S332 |
 | a_sleep_cancels_a_fresh_link_restart_and_the_output_plays_on (`desktop/src/audio/controller.rs`) | S325, S332 |
 | a_bluetooth_links_3_s_start_over_at_the_resume (`desktop/src/audio/controller.rs`) | S325, S332 |
-| an_output_lost_after_a_suspend_notice_is_tried_at_the_resume (`desktop/src/audio/controller.rs`) | S332 |
+| an_output_lost_after_a_suspend_notice_is_tried_at_the_resume (`desktop/src/audio/controller.rs`) | S332, S139 |
 | a_bluetooth_output_that_starts_within_3_s_of_being_listed_restarts_once_2_s_later (`desktop/src/audio/controller.rs`) | S325 |
 | a_bluetooth_output_listed_at_launch_or_after_4_s_starts_as_is (`desktop/src/audio/controller.rs`) | S325 |
 | a_wired_output_that_just_appeared_starts_as_is (`desktop/src/audio/controller.rs`) | S325 |
@@ -3447,7 +3447,7 @@ The release side:
 | an_idle_wake_two_hours_on_writes_21_s_and_keeps_pace_from_now (`desktop/src/audio/capture.rs`) | S332 |
 | a_jump_or_a_discontinuity_gets_silence_for_the_time_between (`desktop/src/audio/capture.rs`) | S332 |
 | a_packet_whose_position_windows_flags_follows_the_last_one (`desktop/src/audio/capture.rs`) | S332 |
-| a_format_notice_for_a_playing_output_reopens_it_in_the_new_format_in_the_same_poll (`desktop/src/audio/controller.rs`) | S330 |
+| a_format_notice_for_a_playing_output_reopens_it_in_the_new_format_in_the_same_poll (`desktop/src/audio/controller.rs`) | S330, S138, S140 |
 | a_format_notice_that_changes_nothing_leaves_the_output_playing (`desktop/src/audio/controller.rs`) | S330 |
 | a_format_read_that_hangs_answers_in_time_and_starts_no_second_read (`desktop/src/audio/wasapi/endpoint.rs`) | S330 |
 | a_format_read_that_hangs_answers_every_other_output_at_once (`desktop/src/audio/wasapi/endpoint.rs`) | S330 |
@@ -3504,6 +3504,8 @@ The release side:
 |---|---|
 | picking_the_pair_a_saved_pair_fell_back_to_keeps_the_pick_and_restarts_nothing (`desktop/src/adapter.rs`) | S14 |
 | pair_attempts_capture_every_channel_and_leave_one_two_to_the_stereo_mix (`desktop/src/audio/capture.rs`) | S14 |
+| every_capture_attempt_is_stereo_at_a_supported_rate (`desktop/src/audio/capture.rs`) | S16 |
+| float_stereo_at_the_session_rate_is_written_unchanged (`desktop/src/audio/capture.rs`) | S16 |
 | a_pair_past_1_2_takes_every_channel_unmixed (`desktop/src/audio/pipewire/format.rs`) | S14 |
 | pair_1_2_and_a_pair_the_device_lost_keep_the_stereo_mix (`desktop/src/audio/pipewire/format.rs`) | S14 |
 | a_device_past_64_channels_is_captured_on_its_first_64 (`desktop/src/audio/pipewire/format.rs`) | S14 |

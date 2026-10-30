@@ -98,7 +98,7 @@ do {
           "\(changed.sorted())")
 }
 
-// covers: S290 (core/tests/vectors/s290_volume.json, the vectors the core and Windows run, through the calls the Mac makes)
+// covers: S290 (core/tests/vectors/s290_volume.json, the vectors the core and Windows run, through the calls the Mac makes), S289 (the row shows the device level)
 do {
     let file = URL(fileURLWithPath: "core/tests/vectors/s290_volume.json")
     let root = (try? Data(contentsOf: file)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
