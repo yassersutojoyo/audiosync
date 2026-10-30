@@ -79,6 +79,12 @@ do {
     check(dacpHeld == 40 && dacpRow == 40 && AirPlayDeviceLevel.sent(own: 50, zone: 100, master: 0) == 0,
           "airplay level: a DeviceVolume at master 0 keeps own 50, the row shows the TV's 40 and 0 is what a send gives",
           "\(String(describing: dacpHeld)) row \(dacpRow)")
+
+    let joined = AirPlayDeviceLevel.restored(own: 50, zone: 100, master: 0, held: 40, afterCalibration: false)
+    let calibrated = AirPlayDeviceLevel.restored(own: 50, zone: 0, master: 63, held: 40, afterCalibration: true)
+    check(joined.level == 0 && joined.held == nil && calibrated.level == 40 && calibrated.held == 40,
+          "airplay level: a join sends the level k gives and drops a held 40, the end of a calibration sends 40 back and keeps it",
+          "joined \(joined), calibrated \(calibrated)")
 }
 
 // covers: S290 (a zone move that leaves the zone volume at 100 keeps a held level)

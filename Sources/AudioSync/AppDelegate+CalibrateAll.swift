@@ -506,7 +506,7 @@ extension AppDelegate {
     /// included (S276).
     func calibrateSilence(airPlay id: String, _ silent: Bool) {
         if let receiver = NativeAirPlayID.receiver(id) { nativeAirPlay?.setSilenced(receiver, silent) }
-        if !silent { sendNativeRowLevel(id) }
+        if !silent { sendNativeRowLevel(id, afterCalibration: true) }
     }
 }
 

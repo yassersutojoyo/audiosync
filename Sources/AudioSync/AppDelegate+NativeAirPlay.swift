@@ -555,10 +555,11 @@ extension AppDelegate {
     /// Sends AirPlay speaker `id` (app ID) the device level its row shows, as
     /// it joins or gets its volume back after Calibrate All Speakers; returns it.
     @discardableResult
-    func sendNativeRowLevel(_ id: String) -> Double {
+    func sendNativeRowLevel(_ id: String, afterCalibration: Bool = false) -> Double {
         let own = airplayVolume[id] ?? defaultVolume
-        let level = AirPlayDeviceLevel.sent(own: own, zone: airPlayZoneVolume(id), master: masterVolume)
-        airplayHeldLevel[id] = nil   // the row shows what was sent again, as on Windows (S290)
+        let (level, held) = AirPlayDeviceLevel.restored(own: own, zone: airPlayZoneVolume(id), master: masterVolume,
+                                                        held: airplayHeldLevel[id], afterCalibration: afterCalibration)
+        airplayHeldLevel[id] = held
         if let receiver = NativeAirPlayID.receiver(id) {
             nativeAirPlay?.setDeviceLevel(receiver, own: own, level: level)
         }

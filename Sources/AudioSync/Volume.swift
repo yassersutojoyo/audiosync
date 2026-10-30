@@ -46,10 +46,18 @@ enum AirPlayDeviceLevel {
         return level
     }
 
-    /// The device level an AirPlay speaker gets, as it joins or when
-    /// Calibrate All Speakers gives its volume back too: min(100, own × k) (S290, S291).
+    /// The device level an AirPlay speaker gets, as it joins: min(100, own × k) (S290, S291).
     static func sent(own: Double, zone: Double, master: Double) -> Double {
         asc_airplay_device_level(own, zone, master)
+    }
+
+    /// The device level an AirPlay speaker gets back and the level it holds
+    /// after: a join gets `sent` and holds nothing, the end of a calibration
+    /// gives a level held at k = 0 back and keeps it held (S290).
+    static func restored(own: Double, zone: Double, master: Double, held: Double?,
+                         afterCalibration: Bool) -> (level: Double, held: Double?) {
+        guard afterCalibration else { return (level: sent(own: own, zone: zone, master: master), held: nil) }
+        return (level: level(own: own, zone: zone, master: master, held: held), held: held)
     }
 
     /// The level a change on the speaker leaves held: `level` while k is 0,
