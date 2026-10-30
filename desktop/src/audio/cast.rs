@@ -2987,7 +2987,7 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 80.0);
     }
 
-    // covers: C70, C104 (a device that rounds to its 0.05 step)
+    // covers: C69, C70, C104 (a device that rounds to its 0.05 step)
     #[test]
     fn a_device_that_rounds_to_its_step_answers_within_half_a_step() {
         let (fake, mut cast) = listed();
