@@ -4775,15 +4775,27 @@ do {
     _ = pwAsked.turnedOnByUser(pair)
     while let prompt = pwAsked.nextPrompt() { _ = pwAsked.answered(prompt, code: "secret") }
     pwAsked.added(pair)
+    var pwTyped = pwAsked
     check(pwAuto.apply(.error(id: pair, .pairingRequired, retryMs: nil, detail: "")) == nil
             && pwAuto.apply(.error(id: right, .pairingRequired, retryMs: nil, detail: ""))
                 == .turnOff(app(pair), .memberNeedsPassword(right))
             && pwAsked.apply(.error(id: pair, .pairingRequired, retryMs: nil, detail: "")) == nil
             && pwAsked.apply(.error(id: right, .pairingRequired, retryMs: nil, detail: "")) == .prompt
-            && pwAsked.nextPrompt() == NativePrompt(id: right, password: true, wrong: false)
+            && pwAsked.nextPrompt() == NativePrompt(id: right, password: true, wrong: true)
             && pwAsked.promptTargets[right] == pair,
           "P176 native airplay: a member over AirPlay 2 that asks only for a password and answers PairingRequired "
             + "is asked for its password by name, or names itself in the notice outside the attempt")
+    check(pwTyped.apply(.error(id: pair, .passwordRequired, retryMs: nil, detail: "")) == nil
+            && pwTyped.apply(.error(id: right, .passwordRequired, retryMs: nil, detail: "")) == .prompt
+            && pwTyped.nextPrompt() == NativePrompt(id: right, password: true, wrong: true),
+          "P176 native airplay: a member asked again for a password typed this run says it was turned down")
+    var firstAsk = listedPair()
+    _ = firstAsk.turnedOnByUser(pair)
+    firstAsk.added(pair)
+    check(firstAsk.apply(.error(id: pair, .passwordRequired, retryMs: nil, detail: "")) == nil
+            && firstAsk.apply(.error(id: right, .passwordRequired, retryMs: nil, detail: "")) == .prompt
+            && firstAsk.nextPrompt() == NativePrompt(id: right, password: true, wrong: false),
+          "P176 native airplay: a member's first password prompt, with none typed this run, does not say it was turned down")
 
     var oneSide = listedPair()
     _ = oneSide.turnedOnByUser(pair)

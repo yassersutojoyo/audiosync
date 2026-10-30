@@ -983,12 +983,12 @@ struct NativeAirPlayModel {
     private mutating func memberError(_ id: String, _ problem: NativeSpeakerEvent.Problem) -> NativeAirPlayOutcome? {
         guard problem == .passwordRequired || problem == .wrongPassword || problem == .pairingRequired && asksPasswordOnly(id),
               let target = memberOf[id], states[target] != nil else { return nil }
-        passwords.remove(id)
+        let typed = passwords.remove(id) != nil
         guard attempts.contains(target) else {
             return .turnOff(NativeAirPlayID.app(target), .memberNeedsPassword(id))
         }
         promptTargets[id] = target
-        return ask(id, .askingPassword(wrong: problem == .wrongPassword))
+        return ask(id, .askingPassword(wrong: typed || problem == .wrongPassword))
     }
 
     /// Whether the member `id`, reached over AirPlay 2, asks for a password
