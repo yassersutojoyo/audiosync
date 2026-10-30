@@ -124,6 +124,12 @@ pub struct SenderConfig {
     /// How long the connection of a PIN pairing that paired waits for the
     /// host to start its speaker, 30 s (P153); a test picks a shorter one.
     pub pairing_hold: Duration,
+    /// What one second of a speaker's retry schedule lasts, 1 s (P142); a
+    /// test picks a shorter one.
+    pub retry_unit: Duration,
+    /// How long the remote-control server outlives the last session, 10 s
+    /// (P189); a test picks a shorter one.
+    pub dacp_linger: Duration,
     /// AirPlay 2 sessions at once, [`AIRPLAY2_SESSIONS`] (P204); a test
     /// picks fewer so it needs fewer receivers.
     pub airplay2_sessions: usize,
@@ -247,6 +253,8 @@ impl Default for SenderConfig {
             ptp_ports: PtpPorts::default(),
             ptp_receiver_ports: PtpPorts::default(),
             pairing_hold: PAIRING_HOLD,
+            retry_unit: Duration::from_secs(1),
+            dacp_linger: crate::dacp::LINGER,
             airplay2_sessions: AIRPLAY2_SESSIONS,
             on_driver_thread: None,
         }
@@ -704,6 +712,8 @@ impl Sender {
         )
         .with_ptp_ports(config.ptp_ports, config.ptp_receiver_ports)
         .with_pairing_hold(config.pairing_hold)
+        .with_retry_unit(config.retry_unit)
+        .with_dacp_linger(config.dacp_linger)
         .with_airplay2_sessions(config.airplay2_sessions)
         .with_sounding(sounding.clone());
         let dacp_counters = driver.dacp_counters();

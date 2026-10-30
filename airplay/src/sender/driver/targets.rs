@@ -138,7 +138,7 @@ impl Driver {
         }
         self.speakers.insert(
             key,
-            Speaker::new(device, options, counters, Some(id.clone())),
+            Speaker::new(device, options, counters, Some(id.clone()), self.retry_unit),
         );
         true
     }

@@ -27,6 +27,10 @@ use common::hap::Answer;
 use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
 
 const LONG: Duration = Duration::from_secs(15);
+/// What a second of the retry schedule (P142) lasts here, and how long a
+/// test watches for a session nothing should start.
+const RETRY_UNIT: Duration = Duration::from_millis(100);
+const QUIET: Duration = RETRY_UNIT.saturating_mul(10);
 
 const PCM_TXT: &[&str] = &[
     "txtvers=1",
@@ -76,6 +80,7 @@ fn start_with(config: SenderConfig) -> (Sender, HostAudio) {
     let config = SenderConfig {
         airplay2: true,
         airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
+        retry_unit: RETRY_UNIT,
         ..config
     };
     let (sender, writer) = Sender::start(config).expect("the sender starts");
@@ -313,7 +318,7 @@ fn an_airplay1_refusal_moves_an_every_time_receiver_to_airplay2_without_pairing(
         events.of(&key),
         server.fake().keys()
     );
-    std::thread::sleep(Duration::from_secs(3));
+    std::thread::sleep(QUIET);
     events.drain(&sender);
     // AirPlay 1 refuses, the AirPlay 2 attempt asks for pairing once, and
     // nothing starts a PIN pairing or a retry by itself.
@@ -1238,7 +1243,7 @@ fn a_refused_verify_ends_the_attempt_once() {
         matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(_) } if *k == key)
     });
     assert!(refused.is_some(), "{:?}", events.of(&key));
-    std::thread::sleep(Duration::from_secs(3));
+    std::thread::sleep(QUIET);
     events.drain(&sender);
     assert_eq!(errors(&events, &key), [ErrorKind::PairingRequired]);
     assert!(credential_events(&events, &key).is_empty());
@@ -1282,7 +1287,7 @@ fn stored_credentials_stay_and_verify_once_after_a_receiver_asks_every_time() {
         matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(_) } if *k == key)
     });
     assert!(refused.is_some(), "{:?}", events.of(&key));
-    std::thread::sleep(Duration::from_secs(2));
+    std::thread::sleep(QUIET);
     events.drain(&sender);
     assert_eq!(errors(&events, &key), [ErrorKind::PairingRequired]);
     assert!(credential_events(&events, &key).is_empty());

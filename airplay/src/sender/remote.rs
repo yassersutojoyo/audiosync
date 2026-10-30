@@ -239,6 +239,8 @@ pub(crate) struct Server {
     running: bool,
     listeners: Vec<Listener>,
     stop_at: Option<Instant>,
+    /// How long the server outlives the last session, [`LINGER`] (P189).
+    linger: Duration,
     advertiser: Option<Box<dyn DacpAdvertiser + Send>>,
     advertised: bool,
     /// The Active-Remote values of the sessions in the table.
@@ -263,11 +265,16 @@ impl Server {
             running: false,
             listeners: Vec::new(),
             stop_at: None,
+            linger: LINGER,
             advertiser: None,
             advertised: false,
             live: BTreeSet::new(),
             next_roll: None,
         }
+    }
+
+    pub(crate) fn set_linger(&mut self, linger: Duration) {
+        self.linger = linger;
     }
 
     pub(crate) fn counters(&self) -> Arc<DacpCounters> {
@@ -409,7 +416,8 @@ impl Server {
 
     /// Only the sessions in `running` are left in the table: a listener no
     /// session uses closes, unless every listener is unused, and the server
-    /// stops [`LINGER`] after the last session ended (P189, P190).
+    /// stops once its linger, [`LINGER`] by default, has passed since the last
+    /// session ended (P189, P190).
     pub(crate) fn retain(&mut self, running: &BTreeSet<u32>, now: Instant) -> Vec<JoinHandle<()>> {
         let gone: Vec<u32> = self.live.difference(running).copied().collect();
         if !gone.is_empty() {
@@ -438,7 +446,7 @@ impl Server {
             closed.extend(unused.into_iter().filter_map(Listener::close));
         }
         if self.running && self.live.is_empty() && self.stop_at.is_none() {
-            self.stop_at = Some(now + LINGER);
+            self.stop_at = Some(now + self.linger);
         }
         closed
     }

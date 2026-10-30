@@ -86,7 +86,7 @@ fn play(server: &Ap2Server) -> Playing {
 }
 
 fn play_listed(server: &Ap2Server, device: Device) -> Playing {
-    let (sender, host) = start_sender();
+    let (sender, host) = start_sender(Duration::from_secs(1));
     let mut events = Events::default();
     let key = device.key.clone();
     sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
@@ -116,10 +116,11 @@ fn play_listed(server: &Ap2Server, device: Device) -> Playing {
     }
 }
 
-fn start_sender() -> (Sender, HostAudio) {
+fn start_sender(retry_unit: Duration) -> (Sender, HostAudio) {
     let (sender, writer) = Sender::start(SenderConfig {
         airplay2: true,
         airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
+        retry_unit,
         ..SenderConfig::default()
     })
     .expect("the sender starts");
@@ -1103,9 +1104,11 @@ fn progress_stays_on_the_track_time_across_a_pause_and_a_seek() {
     );
 }
 
-/// The window the retry count is taken in, and the most sessions a
-/// speaker may start in it: at 0, 1, 3 and 7 s (P142).
-const RETRY_WINDOW: Duration = Duration::from_secs(8);
+/// What a second of the retry schedule lasts here, the window the retry
+/// count is taken in, and the most sessions a speaker may start in it: at
+/// 0, 1, 3 and 7 of those seconds (P142).
+const RETRY_UNIT: Duration = Duration::from_millis(250);
+const RETRY_WINDOW: Duration = Duration::from_secs(2);
 const MOST_SESSIONS: usize = 4;
 
 /// Adds the television answering `refusals` and watches it for
@@ -1116,7 +1119,7 @@ fn refused_for_a_while(refusals: &[(&str, u16)]) -> (Vec<UserReason>, usize) {
         fake.status.insert((*key).to_owned(), *status);
     }
     let server = Ap2Server::start(fake);
-    let (sender, _host) = start_sender();
+    let (sender, _host) = start_sender(RETRY_UNIT);
     let mut events = Events::default();
     let device = samsung_tv(&server);
     let key = device.key.clone();
@@ -1152,7 +1155,7 @@ fn l341_a_busy_or_refusing_samsung_reports_an_error_and_retries_on_the_back_off(
         "{busy:?}"
     );
     assert!(
-        (2..=MOST_SESSIONS).contains(&busy_sessions),
+        (3..=MOST_SESSIONS).contains(&busy_sessions),
         "{busy_sessions} sessions in {RETRY_WINDOW:?}"
     );
 
@@ -1169,7 +1172,7 @@ fn l341_a_busy_or_refusing_samsung_reports_an_error_and_retries_on_the_back_off(
     cell(
         "L341",
         &format!(
-            "fake Samsung busy (453): Busy, {busy_sessions} sessions in 8 s (limit {MOST_SESSIONS}); refusing (403): PairingRequired, 1 session in 8 s",
+            "fake Samsung busy (453): Busy, {busy_sessions} sessions in 8 retry seconds (limit {MOST_SESSIONS}); refusing (403): PairingRequired, 1 session in 8 retry seconds",
         ),
     );
 }

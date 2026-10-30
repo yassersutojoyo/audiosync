@@ -38,15 +38,33 @@ pub fn retry_delay(attempt: u32) -> Duration {
 }
 
 /// One speaker's retry schedule.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Backoff {
     /// Failed sessions since the speaker last played.
     failures: u32,
+    /// What one second of [`RETRY_DELAYS`] and [`RETRY_INTERVAL`] lasts.
+    unit: Duration,
+}
+
+impl Default for Backoff {
+    fn default() -> Backoff {
+        Backoff::new()
+    }
 }
 
 impl Backoff {
     pub fn new() -> Backoff {
-        Backoff::default()
+        Backoff::with_unit(Duration::from_secs(1))
+    }
+
+    /// The schedule with each of its seconds lasting `unit`; a test picks a
+    /// short one to see several retries quickly.
+    pub fn with_unit(unit: Duration) -> Backoff {
+        Backoff { failures: 0, unit }
+    }
+
+    fn delay(&self) -> Duration {
+        retry_delay(self.failures).mul_f64(self.unit.as_secs_f64())
     }
 
     /// A session ended with `kind` at `now`: the time the next session
@@ -56,7 +74,7 @@ impl Backoff {
         if kind.needs_user() {
             return None;
         }
-        let wait = retry_delay(self.failures);
+        let wait = self.delay();
         self.failures = self.failures.saturating_add(1);
         Some(now + wait)
     }
@@ -65,7 +83,7 @@ impl Backoff {
     /// next session starts on the usual schedule, but no sooner than
     /// `wait`, which is capped at [`MAX_BACK_OFF`].
     pub fn on_receiver_state(&mut self, wait: Duration, now: Instant) -> Instant {
-        let at = now + retry_delay(self.failures).max(wait.min(MAX_BACK_OFF));
+        let at = now + self.delay().max(wait.min(MAX_BACK_OFF));
         self.failures = self.failures.saturating_add(1);
         at
     }

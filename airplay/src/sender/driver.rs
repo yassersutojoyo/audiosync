@@ -315,12 +315,13 @@ impl Speaker {
         options: SpeakerOptions,
         counters: Arc<SpeakerCounters>,
         target: Option<TargetId>,
+        retry_unit: Duration,
     ) -> Speaker {
         Speaker {
             device,
             options,
             counters,
-            backoff: Backoff::new(),
+            backoff: Backoff::with_unit(retry_unit),
             phase: Phase::Idle,
             removing: false,
             airplay1_outcome: None,
@@ -416,6 +417,8 @@ pub(crate) struct Driver {
     held: BTreeMap<DeviceKey, ap2::Held>,
     /// How long a held pairing connection waits to be claimed (P153).
     held_for: Duration,
+    /// What one second of a speaker's retry schedule lasts (P142).
+    retry_unit: Duration,
     /// AirPlay 2 sessions at once (P204).
     ap2_sessions: usize,
     stream_ids: HashMap<stream::SpeakerId, DeviceKey>,
@@ -520,6 +523,7 @@ impl Driver {
             pairing_sessions: HashMap::new(),
             held: BTreeMap::new(),
             held_for: super::PAIRING_HOLD,
+            retry_unit: Duration::from_secs(1),
             ap2_sessions: super::AIRPLAY2_SESSIONS,
             stream_ids: HashMap::new(),
             next_session: 0,
@@ -582,6 +586,16 @@ impl Driver {
 
     pub(crate) fn dacp_counters(&self) -> Arc<super::DacpCounters> {
         self.dacp.counters()
+    }
+
+    pub(crate) fn with_retry_unit(mut self, unit: Duration) -> Driver {
+        self.retry_unit = unit;
+        self
+    }
+
+    pub(crate) fn with_dacp_linger(mut self, linger: Duration) -> Driver {
+        self.dacp.set_linger(linger);
+        self
     }
 
     pub(crate) fn with_pairing_hold(mut self, hold: Duration) -> Driver {
@@ -1866,8 +1880,10 @@ impl Driver {
         }
         let key = device.key.clone();
         let Some(speaker) = self.speakers.get_mut(&key) else {
-            self.speakers
-                .insert(key.clone(), Speaker::new(device, options, counters, None));
+            self.speakers.insert(
+                key.clone(),
+                Speaker::new(device, options, counters, None, self.retry_unit),
+            );
             if self.controls_driven_target(&key) {
                 let reason = crate::error::UnsupportedReason::PlaysThroughSpeakers;
                 return self.refuse(&key, SessionError::new(ErrorKind::Unsupported(reason)), now);
@@ -1895,12 +1911,12 @@ impl Driver {
             }
             // Asked again while waiting for its turn: a host start now.
             Phase::Queued { .. } => {
-                speaker.backoff = Backoff::new();
+                speaker.backoff = Backoff::with_unit(self.retry_unit);
                 self.connects.push(Turn::Session(key), StartKind::Host, now);
                 self.take_turns(now);
             }
             Phase::Waiting(_) | Phase::Unannounced | Phase::Failed | Phase::Idle => {
-                speaker.backoff = Backoff::new();
+                speaker.backoff = Backoff::with_unit(self.retry_unit);
                 speaker.airplay1_outcome = None;
                 self.start_session(&key, StartKind::Host, now);
             }
@@ -2397,7 +2413,7 @@ impl Driver {
         if !(retry || matches!(speaker.phase, Phase::Unannounced)) || self.stopping.is_some() {
             return;
         }
-        speaker.backoff = Backoff::new();
+        speaker.backoff = Backoff::with_unit(self.retry_unit);
         // Its paused retry schedule resumes: a retry for the queue (P142, P222).
         self.start_session(key, StartKind::Retry, now);
     }

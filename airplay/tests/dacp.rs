@@ -31,6 +31,16 @@ use common::net::{Behavior, Events, HostAudio, LOOPBACK, NetReceiver, serial, wa
 
 const LONG: Duration = Duration::from_secs(15);
 const ANSWER_WITHIN: Duration = Duration::from_millis(100);
+/// How long the server outlives the last session in the tests that wait
+/// for it to stop: 10 s in the app (P189).
+const LINGER: Duration = Duration::from_secs(1);
+
+fn start_lingering() -> (Sender, HostAudio) {
+    start_with(SenderConfig {
+        dacp_linger: LINGER,
+        ..SenderConfig::default()
+    })
+}
 
 const PCM_TXT: &[&str] = &[
     "txtvers=1",
@@ -530,7 +540,7 @@ fn dacp_service_record() {
     let _serial = serial();
     let receiver = NetReceiver::start(Behavior::default());
     let advertiser = FakeAdvertiser::default();
-    let (sender, _host) = start();
+    let (sender, _host) = start_lingering();
     sender.set_dacp_advertiser(Box::new(advertiser.clone()));
     let mut events = Events::default();
     let (key, _) = play(&sender, &mut events, &receiver, 1);
@@ -597,7 +607,7 @@ fn dacp_service_record() {
 fn dacp_server_lifecycle() {
     let _serial = serial();
     let receiver = NetReceiver::start(Behavior::default());
-    let (sender, _host) = start();
+    let (sender, _host) = start_lingering();
     let counters = sender.dacp_counters();
     assert_eq!(counters.port(), 0, "no server before the first session");
     let mut events = Events::default();
@@ -645,18 +655,19 @@ fn dacp_server_lifecycle() {
     assert_eq!(client.reply().map(|reply| reply.status), Some(204));
     assert!(client.closed_within(Duration::from_secs(1)).is_some());
 
-    // The server outlives the last session by 10 s, then lets the port go.
+    // The server outlives the last session by its linger, then lets the
+    // port go.
     sender.remove_speaker(&key);
     let removed = Instant::now();
-    thread::sleep(Duration::from_secs(8));
-    assert_eq!(counters.port(), port, "still running 8 s after");
+    thread::sleep(LINGER.mul_f64(0.8));
+    assert_eq!(counters.port(), port, "still running 80 % into the linger");
     assert!(
         Client::try_connect(LOOPBACK, port).is_ok(),
         "still listening"
     );
     assert!(wait_until(LONG, || counters.port() == 0));
     let stopped = removed.elapsed();
-    assert!(stopped >= Duration::from_millis(9_500), "{stopped:?}");
+    assert!(stopped >= LINGER.mul_f64(0.95), "{stopped:?}");
     assert!(wait_until(Duration::from_secs(2), || Client::try_connect(
         LOOPBACK, port
     )
