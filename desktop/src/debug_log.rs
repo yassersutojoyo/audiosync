@@ -19,7 +19,7 @@
 
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -150,7 +150,12 @@ fn open_file(path: &Path, empty: bool) -> Option<File> {
     if empty {
         File::create(path).ok()?;
     }
-    OpenOptions::new().append(true).create(true).open(path).ok()
+    OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .open(path)
+        .ok()
 }
 
 /// Opens the log for appending, readable by this user only: it can hold a
@@ -163,6 +168,7 @@ fn open_file(path: &Path, empty: bool) -> Option<File> {
 
     // O_NONBLOCK keeps a FIFO at the path from blocking the open.
     let file = OpenOptions::new()
+        .read(true)
         .append(true)
         .create(true)
         .mode(0o600)
@@ -257,9 +263,16 @@ impl<W: Write> Write for Counted<W> {
 
 /// The writer thread: appends each line and flushes whenever no request
 /// waits, until every clone of the log is gone. A line that can't be
-/// written is dropped. Once the file holds `max_bytes`, `written` of them
-/// before the first line, one last line says so and later lines are dropped.
+/// written is dropped. The file never passes `max_bytes`, `written` of them
+/// before the first line: a line that would leave no room for the line saying
+/// the log is full is replaced by it, and later lines are dropped. A file
+/// that already ends with that line takes no more.
 fn write_requests(requests: &Receiver<Request>, file: File, written: u64, max_bytes: u64) {
+    let full = format!("the debug log is full ({max_bytes} bytes); later lines are dropped");
+    let mut stopped = ends_with(&file, format!("{full}\n").as_bytes());
+    let mut stop = Vec::new();
+    let _ = write_line(&mut stop, UNIX_EPOCH, &full);
+    let stop_len = stop.len() as u64;
     let mut out = Counted {
         inner: BufWriter::new(file),
         written,
@@ -268,13 +281,18 @@ fn write_requests(requests: &Receiver<Request>, file: File, written: u64, max_by
         let mut next = Some(request);
         while let Some(request) = next {
             match request {
-                Request::Line(time, text) if out.written < max_bytes => {
-                    let _ = write_line(&mut out, time, &text);
-                    if out.written >= max_bytes {
-                        let full = format!(
-                            "the debug log is full ({max_bytes} bytes); later lines are dropped"
-                        );
-                        let _ = write_line(&mut out, time, &full);
+                Request::Line(time, text) if !stopped => {
+                    let mut line = Vec::new();
+                    let _ = write_line(&mut line, time, &text);
+                    if out.written + line.len() as u64 + stop_len <= max_bytes {
+                        let _ = out.write_all(&line);
+                    } else {
+                        stopped = true;
+                        if out.written + stop_len <= max_bytes {
+                            line.clear();
+                            let _ = write_line(&mut line, time, &full);
+                            let _ = out.write_all(&line);
+                        }
                     }
                 }
                 Request::Line(..) => {}
@@ -287,6 +305,13 @@ fn write_requests(requests: &Receiver<Request>, file: File, written: u64, max_by
         }
         let _ = out.flush();
     }
+}
+
+/// Whether `file` ends with `tail`; false when it can't be read.
+fn ends_with(mut file: &File, tail: &[u8]) -> bool {
+    let mut end = vec![0; tail.len()];
+    let back = -i64::try_from(tail.len()).unwrap_or(i64::MAX);
+    file.seek(SeekFrom::End(back)).is_ok() && file.read_exact(&mut end).is_ok() && end == tail
 }
 
 /// What starts each line of a message after its first, in place of a stamp.
@@ -576,8 +601,26 @@ mod tests {
         }
         assert!(full.flush(TEST_FLUSH));
         let before = fs::read_to_string(&path).unwrap();
-        assert!(before.len() >= 200, "{} bytes", before.len());
+        assert!(before.ends_with("later lines are dropped\n"), "{before}");
         let appended = DebugLog::open(Some(path.clone()), 200, false);
+        appended.log(|| "the relaunched copy".to_owned());
+        assert!(appended.flush(TEST_FLUSH));
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    // covers: S170
+    #[test]
+    fn a_relaunch_after_a_rejected_long_line_adds_nothing() {
+        let dir = test_dir("log-limit-relaunch");
+        let path = dir.join(FILE_NAME);
+        let full = DebugLog::with_limit(Some(path.clone()), 300);
+        full.log(|| "a".to_owned());
+        full.log(|| "x".repeat(200));
+        assert!(full.flush(TEST_FLUSH));
+        let before = fs::read_to_string(&path).unwrap();
+        assert!(before.ends_with("later lines are dropped\n"), "{before}");
+        let appended = DebugLog::open(Some(path.clone()), 300, false);
         appended.log(|| "the relaunched copy".to_owned());
         assert!(appended.flush(TEST_FLUSH));
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
@@ -601,6 +644,23 @@ mod tests {
         assert_eq!(messages.iter().filter(|m| m.as_str() == full).count(), 1);
         let size = fs::metadata(&path).unwrap().len();
         assert!(size < 200 + 2 * 128, "{size} bytes");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    // covers: S170
+    #[test]
+    fn the_log_never_passes_its_limit_with_the_stop_line_included() {
+        let dir = test_dir("log-limit-exact");
+        let path = dir.join(FILE_NAME);
+        let log = DebugLog::with_limit(Some(path.clone()), 200);
+        for n in 0..20 {
+            log.log(|| format!("line {n:02} of a long run"));
+        }
+        assert!(log.flush(TEST_FLUSH));
+        let size = fs::metadata(&path).unwrap().len();
+        assert!(size <= 200, "{size} bytes");
+        let full = "the debug log is full (200 bytes); later lines are dropped";
+        assert_eq!(read_messages(&path).last().map(String::as_str), Some(full));
         let _ = fs::remove_dir_all(dir);
     }
 
