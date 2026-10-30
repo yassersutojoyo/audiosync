@@ -171,6 +171,9 @@ struct NativeRowsAdoption: Equatable {
     /// The rows that go off, as they ask for a code every time
     /// (`EveryTimeGuard.turnsOff`).
     let turnOff: [String]
+    /// The new rows asking for a PIN or a password, by receiver ID
+    /// (`NativeAirPlayModel.appearedAsking`).
+    let asking: [NativeAirPlayPlan.TurnOff]
 }
 
 extension NativeAirPlayModel {
@@ -181,7 +184,8 @@ extension NativeAirPlayModel {
         let rows = self.rows(enabled: enabled)
         return NativeRowsAdoption(rows: rows,
                                   joinable: joinable(rows, after: Set(known), stopped: stopped),
-                                  turnOff: everyTime.turnsOff(askingEveryTime(rows), enabled: enabled))
+                                  turnOff: everyTime.turnsOff(askingEveryTime(rows), enabled: enabled),
+                                  asking: appearedAsking(rows, after: Set(known), stopped: stopped))
     }
 }
 
@@ -690,6 +694,26 @@ struct NativeAirPlayModel {
             guard !known.contains(id), let receiver = NativeAirPlayID.receiver(id),
                   !refusedOff.contains(receiver), !asksEveryTime(receiver) else { return false }
             return receivers[receiver]?.availability == .available
+        }
+    }
+
+    /// The rows missing from `known` whose receiver asks for a PIN, or a
+    /// password this run hasn't had, with no attempt of the user's under
+    /// way: marked auto-connect, they go off with why (S349). None
+    /// for rows a stop rebuilt, as for `joinable`, nor one asking every time.
+    func appearedAsking(_ rows: [String], after known: Set<String>, stopped: Bool) -> [NativeAirPlayPlan.TurnOff] {
+        guard !stopped else { return [] }
+        return rows.compactMap { id -> NativeAirPlayPlan.TurnOff? in
+            guard !known.contains(id), let receiver = NativeAirPlayID.receiver(id),
+                  !asksEveryTime(receiver), stages[receiver] == nil else { return nil }
+            switch receivers[receiver]?.availability {
+            case .needsPin? where !pairedInAttempt.contains(receiver):
+                return .init(id: receiver, reason: .needsCode)
+            case .needsPassword? where !passwords.contains(receiver):
+                return .init(id: receiver, reason: .needsPassword)
+            default:
+                return nil
+            }
         }
     }
 

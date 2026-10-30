@@ -373,19 +373,20 @@ extension AppDelegate {
     func refreshNativeRows() {
         guard let native = nativeAirPlay else { return }
         let wasOn = enabledAirPlay
-        let joinable = adoptNativeRows(native.model, stopped: false)
+        let adoption = adoptNativeRows(native.model, stopped: false)
         retimeLocalOutputs()   // also when only a speaker's playing state changed
+        turnOffAppearedAsking(adoption.asking)
         syncNativeSpeakers()
-        autoConnect(joinable.map { SpeakerKey.make(id: $0, airplay: true) })
+        autoConnect(adoption.joinable.map { SpeakerKey.make(id: $0, airplay: true) })
         // One that asks for a code every time went off, maybe the last one on.
         if !wasOn.isSubset(of: enabledAirPlay) { stopIfIdle() }
         pushModel()
     }
 
     /// Sets the AirPlay rows, names and access from `model`; returns the
-    /// rows that appeared and can play, for auto-connect (none if `stopped`).
+    /// adoption, whose new rows are for auto-connect (none if `stopped`).
     /// One that asks for a code every time goes off unless switched on by hand.
-    private func adoptNativeRows(_ model: NativeAirPlayModel, stopped: Bool) -> [String] {
+    private func adoptNativeRows(_ model: NativeAirPlayModel, stopped: Bool) -> NativeRowsAdoption {
         let adoption = model.adopt(enabled: enabledAirPlay, known: airplayOrder, stopped: stopped,
                                    everyTime: &everyTimeGuard)
         let rows = adoption.rows
@@ -402,7 +403,20 @@ extension AppDelegate {
         airplayOrder = rows
         updatePtpPortNotice { $0.listed(rows) }
         airplayEmptySince = rows.isEmpty ? (airplayEmptySince ?? Date()) : nil
-        return adoption.joinable
+        return adoption
+    }
+
+    /// Auto-connect switches on a speaker that appeared asking for a PIN or
+    /// a password, and it goes off at once with why, as on Windows (S349).
+    private func turnOffAppearedAsking(_ asking: [NativeAirPlayPlan.TurnOff]) {
+        guard !LaunchAutoConnect.skipped else { return }
+        for off in asking {
+            let id = NativeAirPlayID.app(off.id)
+            guard !hiddenSpeakers.autoConnecting([SpeakerKey.make(id: id, airplay: true)], marked: autoConnect).isEmpty
+            else { continue }
+            enabledAirPlay.insert(id)
+            turnOffNativeSpeaker(id, reason: off.reason, origin: .automatic)
+        }
     }
 
     /// Makes the sender's speakers match the switches while streaming, and
@@ -425,7 +439,7 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] native AirPlay: removed \(nativeLabel(id))")
         }
         // The plan's own streaming input: stopEngine stops the engine before it syncs.
-        let appeared = plan.changesRows ? adoptNativeRows(native.model, stopped: !engine.isRunning) : []
+        let appeared = plan.changesRows ? adoptNativeRows(native.model, stopped: !engine.isRunning) : nil
         for id in plan.add {
             let volume = airplayVolume[NativeAirPlayID.app(id)] ?? defaultVolume
             // It starts at the level its row shows, one its remote set included, as on Windows.
@@ -437,7 +451,8 @@ extension AppDelegate {
         for off in plan.turnOff {
             turnOffNativeSpeaker(NativeAirPlayID.app(off.id), reason: off.reason, origin: .automatic)
         }
-        autoConnect(appeared.map { SpeakerKey.make(id: $0, airplay: true) })
+        turnOffAppearedAsking(appeared?.asking ?? [])
+        autoConnect((appeared?.joinable ?? []).map { SpeakerKey.make(id: $0, airplay: true) })
     }
 
     /// The user's click on a native speaker: it is switched, and the

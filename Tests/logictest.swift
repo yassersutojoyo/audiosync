@@ -2985,6 +2985,36 @@ do {
     // covers: S120 (a stop suppresses auto-connect's starts)
     check(model.joinable(model.rows(enabled: []), after: [], stopped: true).isEmpty,
           "native airplay: rows rebuilt by a stop are not auto-connected, so the stop doesn't restart streaming")
+    // covers: S349
+    var appearing = EveryTimeGuard()
+    let firstListing = model.adopt(enabled: ["native:B2"], known: [], stopped: false, everyTime: &appearing)
+    let listedAgain = model.adopt(enabled: [], known: firstListing.rows, stopped: false, everyTime: &appearing)
+    check(firstListing.asking == [.init(id: "B2", reason: .needsCode), .init(id: "C3", reason: .needsPassword)]
+            && listedAgain.asking.isEmpty
+            && model.adopt(enabled: [], known: [], stopped: true, everyTime: &appearing).asking.isEmpty,
+          "native airplay: a new row asking for a PIN or password is one auto-connect turns off with why",
+          "\(firstListing.asking)")
+    var everyTimeModel = NativeAirPlayModel()
+    var hall = receiver("H9", "Hall", .needsPin)
+    hall.codeEveryTime = true
+    everyTimeModel.apply(.appeared(hall))
+    var attempting = model
+    _ = attempting.turnedOnByUser("B2")
+    var passwordGiven = model
+    _ = passwordGiven.turnedOnByUser("C3")
+    let passwordPrompt = passwordGiven.nextPrompt()
+    _ = passwordGiven.answered(passwordPrompt!, code: "secret")
+    var pairedByUser = model
+    _ = pairedByUser.turnedOnByUser("B2")
+    _ = pairedByUser.apply(NativeSpeakerEvent.paired(id: "B2", storeNote: ""))
+    func appearedAsking(_ m: NativeAirPlayModel) -> [String] {
+        m.appearedAsking(m.rows(enabled: []), after: [], stopped: false).map(\.id)
+    }
+    check(everyTimeModel.rows(enabled: []) == ["native:H9"] && appearedAsking(everyTimeModel).isEmpty
+            && appearedAsking(attempting) == ["C3"] && appearedAsking(passwordGiven) == ["B2"]
+            && appearedAsking(pairedByUser) == ["C3"],
+          "native airplay: auto-connect leaves alone a new row asking every time, one the user's attempt waits on, one with this run's password or one paired in the attempt",
+          "\(appearedAsking(attempting)) \(appearedAsking(passwordGiven)) \(appearedAsking(pairedByUser))")
 
     // Lounge was paired by hand this run, so it can play until its session ends.
     var lounge = receiver("G7", "Lounge", .available)
