@@ -2224,6 +2224,78 @@ do {
           "capture watch: an input device that stops delivering is opened again and kept once it calls back; one that stays silent gets 5 tries, one unplugged none",
           "\(back) \(off)")
 }
+// covers: S333 (the Mac: the hog owner read decides whether an input is busy)
+do {
+    typealias CE = SourceCapture.CaptureError
+    let nope = kAudioHardwareIllegalOperationError, hog = kAudioDevicePermissionsError
+    let other = CE.holder(hogOwner: 812, ownPID: 100)
+    let notOthers = [CE.holder(hogOwner: 100, ownPID: 100), CE.holder(hogOwner: -1, ownPID: 100),
+                     CE.holder(hogOwner: nil, ownPID: 100)]
+    let busy = [CE.inputIOProcFailed(kAudioHardwareUnspecifiedError, hogOwner: 812, ownPID: 100),
+                CE.inputIOProcFailed(hog, hogOwner: nil, ownPID: 100),
+                CE.inputIOProcFailed(hog, hogOwner: 100, ownPID: 100),
+                CE.inputIOProcFailed(nope, hogOwner: 812, ownPID: 100)]
+    let notBusy = [CE.inputIOProcFailed(nope, hogOwner: 100, ownPID: 100),
+                   CE.inputIOProcFailed(nope, hogOwner: -1, ownPID: 100),
+                   CE.inputIOProcFailed(nope, hogOwner: nil, ownPID: 100)]
+    check(other == 812 && notOthers.allSatisfy { $0 == nil }
+            && busy == [.inputBusy(holder: 812), .inputBusy(holder: nil), .inputBusy(holder: nil), .inputBusy(holder: 812)]
+            && notBusy.allSatisfy { $0 == .ioProcNotStarted(nope) },
+          "input busy: another process's hog mode, or '!hog' from the IOProc, is busy; 'nope' with another PID is busy; "
+            + "our own PID, -1 or an unreadable owner with another status is not",
+          "\(String(describing: other)) \(notOthers) \(busy) \(notBusy)")
+}
+// covers: S333 (the Mac: a busy input's tries come every 3 s outside S335's 5; they rest while asleep)
+do {
+    // The first 10 tries meet a busy input; every try after that fails another way.
+    var watch = CaptureFlowWatch()
+    _ = watch.tick(callbacks: 1, reading: true, source: .callbacksOnly, at: 0)
+    var seen: [(at: Double, step: CaptureFlowWatch.Step)] = [(0, watch.report(.serviceRestarted, at: 0))]
+    var busyAnswers = 0
+    var now = 0.0
+    while now < 60, seen.last?.step != .giveUp {
+        now += 0.5
+        let step = watch.tick(callbacks: nil, reading: false, source: .callbacksOnly, at: now)
+        guard step != .none else { continue }
+        seen.append((now, step))
+        guard case .tryOpen = step else { continue }
+        if busyAnswers < 10 {
+            busyAnswers += 1
+            watch.busy(at: now)
+        } else {
+            let after = watch.failed(at: now)
+            if after != .none { seen.append((now, after)) }
+        }
+    }
+    let tries = seen.filter { if case .tryOpen = $0.step { return true } else { return false } }
+    let times = (0..<11).map { 1 + 3 * Double($0) } + [32.0, 33, 34, 35]
+    typealias Step = CaptureFlowWatch.Step
+    let numbers = [Step](repeating: .tryOpen(1), count: 11) + (2...5).map { Step.tryOpen($0) }
+    check(tries.map { $0.at } == times && tries.map { $0.step } == numbers
+            && seen.last?.at == 35 && seen.last?.step == .giveUp && seen.filter({ $0.step == .giveUp }).count == 1,
+          "capture watch: a busy try comes again every 3 s outside the 5 tries; another answer counts as one of them",
+          "\(seen)")
+
+    // Busy at 1 s, asleep from 2 s, awake at 10 s: the next try comes at 13 s.
+    var slept = CaptureFlowWatch()
+    _ = slept.tick(callbacks: 1, reading: true, source: .callbacksOnly, at: 0)
+    _ = slept.report(.serviceRestarted, at: 0)
+    let first = slept.tick(callbacks: nil, reading: false, source: .callbacksOnly, at: 1)
+    slept.busy(at: 1)
+    _ = slept.tick(callbacks: nil, reading: false, source: .callbacksOnly, at: 1.5)
+    slept.pause()
+    let asleep = (4...20).map { slept.tick(callbacks: nil, reading: false, source: .callbacksOnly, at: 0.5 * Double($0)) }
+    slept.resume(at: 10)
+    var woke: [(at: Double, step: CaptureFlowWatch.Step)] = []
+    for n in 21...26 {
+        let step = slept.tick(callbacks: nil, reading: false, source: .callbacksOnly, at: 0.5 * Double(n))
+        if step != .none { woke.append((0.5 * Double(n), step)) }
+    }
+    check(first == .tryOpen(1) && asleep.allSatisfy { $0 == .none }
+            && woke.count == 1 && woke.first?.at == 13 && woke.first?.step == .tryOpen(1),
+          "capture watch: busy tries rest while the Mac sleeps; after a wake the first comes 3 s after it",
+          "\(first) \(asleep.filter { $0 != .none }) \(woke)")
+}
 // covers: S335, S18 (the 6 s grace: read as playing with the position moving)
 do {
     // Spotify reads playing from 0 s, its position moving between the readings at 0 and 2 s; the tap calls back until 1 s.

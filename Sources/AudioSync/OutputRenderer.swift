@@ -652,7 +652,7 @@ final class OutputRenderer: FadingOutput {
     }
 
     /// The process holding `device` in hog mode; nil for none or unreadable.
-    private static func hogOwner(_ device: AudioObjectID) -> pid_t? {
+    static func hogOwner(_ device: AudioObjectID) -> pid_t? {
         var hogAddress = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyHogMode,
                                                     mScope: kAudioObjectPropertyScopeGlobal,
                                                     mElement: kAudioObjectPropertyElementMain)

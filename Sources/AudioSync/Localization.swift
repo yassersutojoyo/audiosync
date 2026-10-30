@@ -841,7 +841,7 @@ struct UIStrings {
             return inputHandsFree
         case .appNotRunning(let bundleID):
             return sourceTerminated(name: SourceApps.name(for: bundleID))
-        case .ownProcessUnknown, .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted:
+        case .ownProcessUnknown, .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted, .inputBusy:
             return "AudioSync lost the audio from the selected source, so streaming has stopped. "
                 + "Turn streaming on again, or pick another source."
         }
@@ -932,7 +932,7 @@ struct UIStrings {
             return "\(SourceApps.name(for: bundleID)) is not running. Open it first, or pick another source."
         case .ownProcessUnknown:
             return "AudioSync couldn't capture its own sound to leave it out. Quit AudioSync and open it again."
-        case .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted:
+        case .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted, .inputBusy:
             return captureFailed
         case .inputNotFound, .inputDisconnected:
             return "The selected input device is not connected. Plug it in, or pick another source."

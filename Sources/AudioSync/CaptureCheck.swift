@@ -87,6 +87,8 @@ struct CaptureFlowWatch {
     /// Seconds without a callback that make a stopped capture, the span S326 and S334 give an output.
     static let stallSpan: TimeInterval = 2
     static let trySpacing: TimeInterval = 1
+    /// Seconds between the tries that meet an input another process holds (S333).
+    static let busySpacing: TimeInterval = 3
     /// Seconds a reopened capture delivers before its try is kept.
     static let trialSpan: TimeInterval = 5
     static let tries = 5
@@ -160,6 +162,8 @@ struct CaptureFlowWatch {
     /// The read time of the first reading in the current stretch whose position moved on from the one before.
     private var movingSince: TimeInterval?
     private var paused = false
+    /// The waiting try is one after a busy answer, so a wake spaces it `busySpacing`.
+    private var busyWait = false
 
     /// `callbacks` is nil while the capture has no IOProc; `reading` is false
     /// while an app tap waits for an audio process, which is no stop. A tap of
@@ -263,7 +267,7 @@ struct CaptureFlowWatch {
         movingSince = nil
         switch phase {
         case .watching: break
-        case .waiting(let next, _): phase = .waiting(next: next, at: uptime + Self.trySpacing)
+        case .waiting(let next, _): phase = .waiting(next: next, at: uptime + (busyWait ? Self.busySpacing : Self.trySpacing))
         case .trial(let number, _): phase = .trial(number, since: uptime)
         }
     }
@@ -274,12 +278,22 @@ struct CaptureFlowWatch {
         return stop(.noCallback(0), at: uptime) == .giveUp ? .giveUp : .none
     }
 
+    /// The try `tick` asked for met an input another process holds (S333):
+    /// it comes again `busySpacing` later, outside the `tries`.
+    mutating func busy(at uptime: TimeInterval) {
+        guard case .trial(let number, _) = phase else { return }
+        forgetCount()
+        phase = .waiting(next: number, at: uptime + Self.busySpacing)
+        busyWait = true
+    }
+
     /// Whether a try that threw `error` leaves room for the next one: an app
     /// that quit (S142, S164) and an input device that left keep their own handling.
     static func retries(after error: SourceCapture.CaptureError) -> Bool {
         switch error {
         case .appNotRunning, .inputNotFound, .inputHandsFree, .inputDisconnected: return false
-        case .ownProcessUnknown, .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted: return true
+        case .ownProcessUnknown, .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted, .inputBusy:
+            return true
         }
     }
 
@@ -292,6 +306,7 @@ struct CaptureFlowWatch {
             return .giveUp
         }
         phase = .waiting(next: next, at: uptime + Self.trySpacing)
+        busyWait = false
         return .stopped(sign)
     }
 

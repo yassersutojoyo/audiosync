@@ -56,6 +56,9 @@ final class StreamEngine {
     /// per attach. The host decides whether `dropRunaway` ends it.
     var onOutputRunaway: ((String, Int) -> Void)?
     private var runawayReports = OutputRunawayReports()
+    /// A reopen try met an input another process holds (S333), with its
+    /// error, the first time it does; nil once a try opens it again.
+    var onInputBusy: ((SourceCapture.CaptureError?) -> Void)?
 
     /// Now Playing's latest reading, nil while the monitor doesn't run (S335 D3).
     var nowPlayingReading: (() -> NowPlayingMonitor.Track?)?
@@ -99,6 +102,8 @@ final class StreamEngine {
     private var flowTimer: DispatchSourceTimer?
     private var opened: (source: AudioSource, inputPair: Int)?
     private var reopenError: SourceCapture.CaptureError?
+    /// The uptime of the first try that met a busy input; nil when none did.
+    private var busySince: TimeInterval?
     /// The 0.5 s check for outputs whose render callback stopped (S334).
     private var stallTimer: DispatchSourceTimer?
     private var stallWatch = OutputStallWatch()
@@ -470,6 +475,7 @@ final class StreamEngine {
         flowTimer?.cancel()
         flowTimer = nil
         opened = nil
+        busySince = nil
     }
 
     private func follow(_ step: CaptureFlowWatch.Step) {
@@ -477,8 +483,9 @@ final class StreamEngine {
         case .none:
             return
         case .stopped(let sign):
+            let held = capture.inputHolder.map { ", process \($0) holds the input in hog mode" } ?? ""
             capture.halt()
-            DebugTrace.log("[AudioSync] capture stopped delivering (\(sign.description)); "
+            DebugTrace.log("[AudioSync] capture stopped delivering (\(sign.description)\(held)); "
                            + "opening the capture again while the outputs and speakers play on")
         case .tryOpen(let number):
             reopenCapture(try: number)
@@ -499,6 +506,17 @@ final class StreamEngine {
             try capture.reopen(source: opened.source, parts: parts, inputPair: opened.inputPair)
         } catch {
             let failure = error as? SourceCapture.CaptureError ?? .tapNotCreated(kAudioHardwareUnspecifiedError)
+            if case .inputBusy = failure {
+                let now = ProcessInfo.processInfo.systemUptime
+                DebugTrace.log("[AudioSync] capture reopen try \(number): \(failure); again in "
+                               + "\(Int(CaptureFlowWatch.busySpacing)) s, outside the \(CaptureFlowWatch.tries) tries")
+                if busySince == nil {
+                    busySince = now
+                    onInputBusy?(failure)
+                }
+                flowWatch.busy(at: now)
+                return
+            }
             DebugTrace.log("[AudioSync] capture reopen try \(number) of \(CaptureFlowWatch.tries) failed: \(failure)")
             reopenError = failure
             guard CaptureFlowWatch.retries(after: failure) else {
@@ -510,6 +528,12 @@ final class StreamEngine {
         }
         DebugTrace.log("[AudioSync] capture reopen try \(number) of \(CaptureFlowWatch.tries): "
                        + "open at \(capture.sampleRate) Hz")
+        if let since = busySince {
+            busySince = nil
+            let held = (ProcessInfo.processInfo.systemUptime - since).rounded()
+            DebugTrace.log("[AudioSync] capture: the input was held by another process for about \(Int(held)) s")
+            onInputBusy?(nil)
+        }
         if CaptureRate.needsRestart(current: rate, reported: capture.sampleRate) {
             DebugTrace.log("[AudioSync] capture rate changed: \(rate) → \(capture.sampleRate) Hz")
             stop()

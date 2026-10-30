@@ -460,6 +460,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             guard let monitor = self?.nowPlaying, monitor.isRunning else { return nil }
             return monitor.reading
         }
+        engine.onInputBusy = { [weak self] busy in
+            guard let self else { return }
+            if let busy {
+                postNotice(text.streamingStartMessage(for: busy), subject: Notice.source)
+            } else {
+                clearNotices([Notice.source])
+            }
+        }
         engine.onAppQuit = { [weak self] bundleID, pids in
             self?.appQuit(bundleID: bundleID, pids: pids, seenByCapture: true)
         }

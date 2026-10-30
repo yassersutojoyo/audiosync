@@ -45,6 +45,9 @@ final class SourceCapture {
         case inputHandsFree(String)
         /// The input device went away while it was captured.
         case inputDisconnected
+        /// Another process holds the input device in hog mode (S333); the
+        /// holder is nil when only the IOProc's '!hog' said so.
+        case inputBusy(holder: pid_t?)
 
         /// For the debug log; users see `UIStrings`'s wording instead.
         var description: String {
@@ -58,7 +61,21 @@ final class SourceCapture {
             case .inputNotFound(let uid): return "input device not found (\(uid))"
             case .inputHandsFree(let uid): return "input device is a Bluetooth hands-free input (\(uid))"
             case .inputDisconnected: return "input device disconnected"
+            case .inputBusy(let holder):
+                return "input device held in hog mode by " + (holder.map { "process \($0)" } ?? "another process")
             }
+        }
+
+        /// The process other than `ownPID` that a hog-mode reading names; -1 or an unreadable one is none.
+        static func holder(hogOwner: pid_t?, ownPID: pid_t) -> pid_t? {
+            guard let hogOwner, hogOwner > 0, hogOwner != ownPID else { return nil }
+            return hogOwner
+        }
+
+        /// An input's failed IOProc create or start, read with the device's hog owner after it (S333).
+        static func inputIOProcFailed(_ status: OSStatus, hogOwner: pid_t?, ownPID: pid_t) -> CaptureError {
+            if let held = holder(hogOwner: hogOwner, ownPID: ownPID) { return .inputBusy(holder: held) }
+            return status == kAudioDevicePermissionsError ? .inputBusy(holder: nil) : .ioProcNotStarted(status)
         }
 
         /// The status as a number, plus its four-character code when it is one.
@@ -112,6 +129,13 @@ final class SourceCapture {
     /// An IOProc reads the source; false while stopped and while an app tap
     /// waits for an audio process.
     var isReading: Bool { io != nil }
+
+    /// The process other than AudioSync holding the captured input device in
+    /// hog mode (S333); nil for a tap source or while nothing reads.
+    var inputHolder: pid_t? {
+        guard case .input? = source, let device = io?.device else { return nil }
+        return CaptureError.holder(hogOwner: OutputRenderer.hogOwner(device), ownPID: getpid())
+    }
 
     private var source: AudioSource?
     /// The stored channel pair (`InputChannelPair.index`) an input source reads.
@@ -282,6 +306,10 @@ final class SourceCapture {
         guard let parts else { return }
         guard let device = HAL.device(uid: uid) else { throw CaptureError.inputNotFound(uid) }
         if AudioDevices.isHandsFreeInput(device) { throw CaptureError.inputHandsFree(uid) }
+        // A start on a hogged output held the main thread 7.5 s before refusing, so a held input isn't started.
+        if let held = CaptureError.holder(hogOwner: OutputRenderer.hogOwner(device), ownPID: getpid()) {
+            throw CaptureError.inputBusy(holder: held)
+        }
         let streams = try HAL.inputStreamFormats(of: device)
         let channels = CaptureInputFormat.channelCount(streams)
         let (pair, fellBack) = InputChannelPair.resolve(saved: inputPair, channels: channels)
@@ -303,13 +331,20 @@ final class SourceCapture {
         let sink = CaptureSink(parts: parts, provesPermission: CaptureCheck.provesPermission(.input(uid: uid)),
                                layout: layout)
         self.sink = sink
-        let link = try IOLink(device: device, sink: sink)
+        let link: IOLink
+        do { link = try IOLink(device: device, sink: sink) } catch { throw Self.busyChecked(error, on: device) }
         parts.prepare(captureRate: sampleRate)
-        do { try link.begin() } catch { link.close(); throw error }
+        do { try link.begin() } catch { link.close(); throw Self.busyChecked(error, on: device) }
         io = link
         watchInput(device, uid: uid, formats: streams)
         DebugTrace.log("[AudioSync] capture: input device \(uid) at \(sampleRate) Hz, "
                        + "\(CaptureChannels.describe(layout, of: channels))")
+    }
+
+    /// A failed IOProc create or start on input `device`, read again with its hog owner (S333).
+    private static func busyChecked(_ error: Error, on device: AudioObjectID) -> Error {
+        guard case .ioProcNotStarted(let status)? = error as? CaptureError else { return error }
+        return CaptureError.inputIOProcFailed(status, hogOwner: OutputRenderer.hogOwner(device), ownPID: getpid())
     }
 
     // MARK: - The tap
