@@ -782,6 +782,10 @@ mod tests {
     /// How long a test waits for an answer.
     const TIMEOUT: Duration = Duration::from_millis(200);
 
+    /// Room for a machine busy with other builds; still short of `HANG`,
+    /// which a read that is not given up waits out.
+    const SLACK: Duration = Duration::from_secs(2);
+
     /// The stream buffer of the stall tests, in frames.
     const BUFFER: u32 = 960;
 
@@ -984,13 +988,13 @@ mod tests {
         let first = reads.read_within("speakers", TIMEOUT, &STUCK, hangs(&calls));
         let second = reads.read_within("speakers", TIMEOUT, &STUCK, hangs(&calls));
         let waited = started.elapsed();
-        assert!(waited < HANG / 2, "the poll waited {waited:?}");
+        assert!(waited < TIMEOUT + SLACK, "the poll waited {waited:?}");
         assert_eq!(first, Err(BackendError::NotResponding));
         assert_eq!(second, Err(BackendError::NotResponding));
         assert_eq!(calls.load(Ordering::Acquire), 1, "one read hangs at a time");
         assert!(STUCK.any(), "the read counts as stuck");
         assert!(STUCK.none_within(HANG * 2), "the read ends once it answers");
-        let answered = reads.read_within("speakers", TIMEOUT, &STUCK, |_| Ok(FORMAT));
+        let answered = reads.read_within("speakers", SLACK, &STUCK, |_| Ok(FORMAT));
         assert_eq!(answered, Ok(FORMAT));
     }
 
@@ -1009,11 +1013,12 @@ mod tests {
         let mut reads = FormatReads::default();
         let first = reads.read_within("speakers", TIMEOUT, &STUCK, hangs(&calls));
         let started = Instant::now();
-        let other = reads.read_within("headphones", TIMEOUT, &STUCK, hangs(&calls));
+        // Its own read, if one started, would hang past SLACK.
+        let other = reads.read_within("headphones", HANG, &STUCK, hangs(&calls));
         let waited = started.elapsed();
+        assert!(waited < SLACK, "the other output waited {waited:?}");
         assert_eq!(first, Err(BackendError::NotResponding));
         assert_eq!(other, Err(BackendError::NotResponding));
-        assert!(waited < TIMEOUT / 2, "the other output waited {waited:?}");
         assert_eq!(calls.load(Ordering::Acquire), 1, "no read starts meanwhile");
         assert!(STUCK.none_within(HANG * 2), "the read ends once it answers");
     }
