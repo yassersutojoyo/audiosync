@@ -461,6 +461,11 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// asks for a code every time stays on while listed. The marks go when
     /// a stream that ran stops (S223).
     airplay_on_by_hand: BTreeSet<String>,
+    /// The AirPlay speakers listed as open that refused a session for want
+    /// of a pairing, or went off asking for a PIN outside the user's
+    /// attempt: auto-connect leaves them off until the user turns one on,
+    /// so a refusal never loops (S349).
+    airplay_refused: BTreeSet<String>,
     /// Set while a web remote command runs: the AirPlay speakers it switches
     /// on start no attempt, so they never pair or prompt (S257).
     from_phone: bool,
@@ -684,6 +689,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             left_behind: BTreeSet::new(),
             airplay_listed: BTreeSet::new(),
             airplay_on_by_hand: BTreeSet::new(),
+            airplay_refused: BTreeSet::new(),
             from_phone: false,
             streamed: false,
             airplay_quiet_polls: 0,
@@ -3177,7 +3183,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .into_iter()
             .filter(|id| {
                 let key = airplay_key(id);
-                self.auto_connect.contains(&key) && !self.is_hidden(&key)
+                self.auto_connect.contains(&key)
+                    && !self.is_hidden(&key)
+                    && !self.airplay_refused.contains(id)
             })
             .collect();
         if hits.is_empty() || self.auto_connect_skipped {
@@ -3680,6 +3688,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn switch_airplay_by_user(&mut self, id: &str, on: bool) -> Result<(), AirPlayProblem> {
         if on {
             self.airplay_on_by_hand.insert(id.to_owned());
+            self.airplay_refused.remove(id);
         } else {
             self.airplay_on_by_hand.remove(id);
         }
@@ -4058,7 +4067,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::AirPlayFailed { id, problem } => {
                 self.reconnecting.remove(&id);
                 // It is off, so the click that turned it on is spent (S223).
-                self.airplay_on_by_hand.remove(&id);
+                let by_hand = self.airplay_on_by_hand.remove(&id);
+                if matches!(
+                    problem,
+                    AirPlayProblem::NotAccepted | AirPlayProblem::PairingNotYet
+                ) || (problem == AirPlayProblem::NeedsPin && !by_hand)
+                {
+                    self.airplay_refused.insert(id.clone());
+                }
                 let raises = problem == AirPlayProblem::TimingUnavailable
                     && self
                         .ptp_taken
@@ -10126,6 +10142,69 @@ mod tests {
                 problem: ui_model::AirPlayProblem::NeedsPin,
             }]
         );
+    }
+
+    // covers: S349
+    #[test]
+    fn an_open_speaker_that_refused_auto_connect_stays_off_when_it_comes_back() {
+        // The last one turns its stored credentials down.
+        for (speaker, airplay2, stored) in [
+            (airplay2_device(9, "Loft", false), true, false),
+            (device(1, "Kitchen", OPEN_TXT), false, false),
+            (airplay2_device(10, "Den", false), true, true),
+        ] {
+            let mut audio = MockBackend::empty();
+            audio.connect_output(SPEAKERS, "Speakers");
+            let fake = if stored {
+                with_stored_credentials(&mut audio, &speaker)
+            } else {
+                let fake = FakeAirPlay::new();
+                fake.set_airplay2(airplay2);
+                audio.set_airplay(fake.link(), None);
+                fake.appear(&speaker);
+                fake
+            };
+            let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+            adapter.poll();
+            let id = ap(&speaker);
+            adapter.set_auto_connect(&id, true);
+            fake.gone(&speaker);
+            adapter.poll();
+            fake.appear(&speaker);
+            adapter.poll();
+            assert!(
+                speaker_of(&adapter, &id).enabled,
+                "auto-connect turns it on"
+            );
+            fake.fail(&speaker, ErrorKind::PairingRequired);
+            adapter.poll();
+            assert!(!speaker_of(&adapter, &id).enabled);
+            assert_eq!(messages(&adapter).len(), 1, "{:?}", messages(&adapter));
+            adapter.dismiss_all_notices();
+            fake.take_calls();
+
+            fake.gone(&speaker);
+            adapter.poll();
+            fake.appear(&speaker);
+            adapter.poll();
+            assert!(!speaker_of(&adapter, &id).enabled, "{id}");
+            assert!(
+                !fake
+                    .take_calls()
+                    .iter()
+                    .any(|call| matches!(call, Call::Add { .. })),
+                "{id}"
+            );
+            assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+
+            // The user's switch-on tries it again.
+            adapter.set_speaker_enabled(&id, true);
+            if stored {
+                assert!(starts_a_pairing(&fake.take_calls()), "{id}");
+            } else {
+                assert!(speaker_of(&adapter, &id).enabled, "{id}");
+            }
+        }
     }
 
     /// Study switched on by the user, with its password prompt open.

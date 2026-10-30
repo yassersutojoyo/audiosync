@@ -221,6 +221,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Forget Pairing on an AirPlay speaker now also removes its AirPlay 2 pairing while AirPlay 2 is turned off. Before, turning AirPlay 2 back on let the speaker play again without asking for its PIN. On the Mac and on Windows.
 - On Windows, a calibration of one speaker changes nothing when that speaker is turned off or the reference changes while it works out the delay, as on the Mac. Before, it could still set the delay. A microphone that changes during a calibration is now reported as such, instead of as a change between two measurements.
 - On Windows, the main window keeps its size and place within half a second of a move or resize, so it opens where it was even after AudioSync crashes or is ended from Task Manager. Before, they were saved only when the window closed, the app quit or a View setting changed.
+- On Windows, an AirPlay speaker set to connect automatically that turns AudioSync down because it wants a pairing stays off until you turn it on, as on the Mac. Before, it was turned on again, turned down again and showed the same notice each time it dropped off the network and came back.
 
 ## [0.7.1] - 2026-10-27
 
