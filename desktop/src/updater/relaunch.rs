@@ -237,6 +237,7 @@ pub mod tests {
 
     use super::*;
 
+    // covers: S303
     #[test]
     fn relaunch_waits_for_the_old_process_before_claiming_the_instance() {
         let args = ["audiosync.exe", MARKER, "4242"].map(OsString::from);
@@ -260,6 +261,7 @@ pub mod tests {
         let _ = child.wait();
     }
 
+    // covers: S303
     #[test]
     fn an_old_process_that_outlives_the_wait_gets_the_claim_retried_and_logged() {
         let slept = std::cell::Cell::new(0);

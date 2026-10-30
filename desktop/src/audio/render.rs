@@ -387,6 +387,7 @@ mod tests {
         s
     }
 
+    // covers: S184
     #[test]
     fn the_first_audio_of_a_session_fades_in_over_20_ms() {
         let mut s = primed(SESSION_RATE);
@@ -420,6 +421,7 @@ mod tests {
         );
     }
 
+    // covers: S182, S185
     #[test]
     fn a_stop_fades_out_over_20_ms_whatever_the_callback_holds() {
         let len = fade_len(SESSION_RATE);
@@ -442,6 +444,7 @@ mod tests {
         }
     }
 
+    // covers: S187
     #[test]
     fn a_delay_change_fades_out_first_and_in_after() {
         let len = fade_len(SESSION_RATE);
@@ -563,6 +566,7 @@ mod tests {
         }
     }
 
+    // covers: S185
     #[test]
     fn a_fade_has_played_only_once_the_endpoint_clock_has_passed_its_end() {
         let mut s = primed(SESSION_RATE);
@@ -583,6 +587,7 @@ mod tests {
         assert!(s.pipeline.has_played_its_fade(queue(480, Some(behind), 0)));
     }
 
+    // covers: S185
     #[test]
     fn a_clock_far_behind_the_padding_holds_a_stop_at_most_the_tail_cap() {
         let mut s = primed(SESSION_RATE);
@@ -600,6 +605,7 @@ mod tests {
         assert!(!s.pipeline.has_played_its_fade(queue(9_999, Some(0), 0)));
     }
 
+    // covers: S185
     #[test]
     fn an_output_is_faded_only_when_the_endpoint_holds_nothing_but_zeros() {
         let mut s = primed(SESSION_RATE);
@@ -924,6 +930,7 @@ mod tests {
         play_tone_at(22_050, 97);
     }
 
+    // covers: S206
     /// The capture has run for a second, writing a 10 ms block on its own
     /// clock, when an endpoint whose clock runs 100 ppm fast starts asking
     /// for one 10 ms period per event, at hold-back 0: the output never runs
@@ -975,6 +982,7 @@ mod tests {
         }
     }
 
+    // covers: S206
     /// An endpoint whose period the pipeline knows: a late wake's fill of
     /// two periods gets a lead for two periods, and the next on-time wake is
     /// back at one (S206).

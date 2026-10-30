@@ -2501,6 +2501,7 @@ mod tests {
         assert!(read(&on.to_json()).airplay2_experimental);
     }
 
+    // covers: S305, S316
     #[test]
     fn update_checks_are_on_by_default_and_keep_their_time() {
         let read = |json: &str| Settings::from_json(json).expect("read").0;
@@ -2679,6 +2680,7 @@ mod tests {
         assert_eq!(empty.source_mix, None);
     }
 
+    // covers: S355
     #[test]
     fn an_input_device_choice_survives_a_round_trip_and_older_builds_read_the_whole_system() {
         let path = test_dir("settings-input").join(FILE_NAME);
@@ -2887,6 +2889,7 @@ mod tests {
         }
     }
 
+    // covers: S175, S178
     #[test]
     fn offsets_and_the_airplay_adjustment_are_kept_in_their_ranges() {
         let text = r#"{

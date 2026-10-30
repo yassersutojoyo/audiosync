@@ -7031,6 +7031,7 @@ mod tests {
         assert!(!speaker_item(&state, &bt, false, true, None).calibration_privacy);
     }
 
+    // covers: S355
     #[test]
     fn open_privacy_settings_shows_only_where_something_opens_that_page() {
         let privacy = SettingsPage::MicrophonePrivacy.uri();
@@ -7754,6 +7755,7 @@ mod tests {
         assert_eq!(state.airplay_delay_ms, Some(1750.0));
     }
 
+    // covers: S228
     #[test]
     fn quitting_applies_an_open_rename() {
         let app = app_over(MockBackend::new());
@@ -7766,6 +7768,7 @@ mod tests {
         assert!(app.ui.borrow().rename.is_none());
     }
 
+    // covers: S228
     #[test]
     fn quitting_applies_an_open_zone_rename_to_the_zone() {
         let app = app_over(MockBackend::zones_preview());
@@ -9237,6 +9240,7 @@ mod tests {
         );
     }
 
+    // covers: S181
     #[test]
     fn the_reference_row_has_no_delay_and_the_others_show_a_signed_offset() {
         let state = MockBackend::new().snapshot();
@@ -10974,6 +10978,7 @@ mod tests {
         );
     }
 
+    // covers: S270
     #[test]
     fn a_preset_recall_lets_go_of_the_picked_curve() {
         let app = app_over(MockBackend::new());

@@ -5803,6 +5803,7 @@ pub mod tests {
         );
     }
 
+    // covers: S223
     #[test]
     fn a_tv_that_asks_every_time_needs_its_pin_again_on_a_new_sender() {
         let tv = airplay2_every_time_tv(9, "Den");
@@ -7455,6 +7456,7 @@ pub mod tests {
         );
     }
 
+    // covers: S79
     #[test]
     fn a_speaker_joins_the_stream_while_on_and_streaming() {
         let fake = FakeAirPlay::new();
@@ -7763,6 +7765,7 @@ pub mod tests {
         assert_eq!(airplay.enabled_ids(), std::slice::from_ref(&id));
     }
 
+    // covers: S222
     // The sender restarts a session on its own (an ALAC retry, a path
     // switch) with a state change and no error.
     #[test]

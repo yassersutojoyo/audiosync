@@ -1563,6 +1563,7 @@ pub(crate) mod tests {
         assert!(!rig.tap.is_active(), "the music is back");
     }
 
+    // covers: S235
     #[test]
     fn each_speaker_is_heard_alone_on_its_own_path_and_the_sheet_has_every_class() {
         let mut rig = FakeRig::new();
@@ -1735,6 +1736,7 @@ pub(crate) mod tests {
         }
     }
 
+    // covers: S235
     #[test]
     fn a_cast_speaker_without_an_offset_is_searched_for_first() {
         let mut rig = FakeRig::new();
@@ -1759,6 +1761,7 @@ pub(crate) mod tests {
         assert!((measured(&sheet, 1) - 1090.0).abs() <= 2.0);
     }
 
+    // covers: S240
     #[test]
     fn a_speaker_turned_off_mid_run_ends_the_sheet_and_nothing_can_be_applied() {
         let mut rig = FakeRig::new();
@@ -1782,6 +1785,7 @@ pub(crate) mod tests {
         given_back(&rig);
     }
 
+    // covers: S240
     #[test]
     fn a_source_switch_a_new_speaker_or_a_delay_edit_ends_the_run_with_its_reason() {
         let switch: fn(&mut FakeRig) = |rig| rig.lineup.session = Some(2);
@@ -1875,6 +1879,7 @@ pub(crate) mod tests {
         given_back(&rig);
     }
 
+    // covers: S240
     #[test]
     fn cancel_fades_the_sweep_out_and_gives_every_speaker_back() {
         let mut rig = FakeRig::new();
@@ -1960,6 +1965,7 @@ pub(crate) mod tests {
         }
     }
 
+    // covers: S235
     #[test]
     fn an_airplay_speaker_later_than_another_stays_muted_until_their_sweeps_played_out() {
         let mut rig = two_airplay_rig();
@@ -1991,6 +1997,7 @@ pub(crate) mod tests {
         given_back(&rig);
     }
 
+    // covers: S232
     #[test]
     fn a_microphone_that_changes_between_sweeps_stops_the_run() {
         let mut rig = FakeRig::new();
@@ -2008,6 +2015,7 @@ pub(crate) mod tests {
         given_back(&rig);
     }
 
+    // covers: S235
     #[test]
     fn a_run_that_cant_start_says_why_and_leaves_the_music_alone() {
         let now = 1_000_000_000;
@@ -2040,6 +2048,7 @@ pub(crate) mod tests {
         assert!(!rig.tap.is_active());
     }
 
+    // covers: S232
     #[test]
     fn an_unplugged_microphone_ends_the_run_at_once() {
         let mut rig = FakeRig::new();
@@ -2122,6 +2131,7 @@ pub(crate) mod tests {
         assert_eq!(rig.solo, None);
     }
 
+    // covers: S240
     #[test]
     fn cancel_while_estimating_ends_the_run_once_the_estimate_is_back() {
         let mut rig = FakeRig::new();
@@ -2148,6 +2158,7 @@ pub(crate) mod tests {
         given_back(&rig);
     }
 
+    // covers: S239
     #[test]
     fn measure_again_replaces_its_row_alone() {
         let mut rig = FakeRig::new();
@@ -2203,6 +2214,7 @@ pub(crate) mod tests {
         given_back(&rig);
     }
 
+    // covers: S239
     #[test]
     fn measure_again_of_a_row_whose_delay_changed_since_says_so() {
         let mut rig = FakeRig::new();
@@ -2258,6 +2270,7 @@ pub(crate) mod tests {
         given_back(&rig);
     }
 
+    // covers: S235
     #[test]
     fn the_lineup_measures_a_playing_cast_group_under_its_id_and_leaves_one_off_out() {
         use audiosync_cast::discovery::DeviceId;
@@ -2396,6 +2409,7 @@ pub(crate) mod tests {
             .insert(member_key(Class::Local, id), vec![2100.0]);
     }
 
+    // covers: S235
     #[test]
     fn headphones_and_virtual_outputs_are_listed_left_out_and_never_swept() {
         let mut rig = FakeRig::new();
@@ -2450,6 +2464,7 @@ pub(crate) mod tests {
         assert!(rig.solos.iter().any(|key| key == "local:bt-speaker"));
     }
 
+    // covers: S235
     #[test]
     fn an_output_included_anyway_is_measured_as_a_speaker() {
         let mut rig = FakeRig::new();
@@ -2477,6 +2492,7 @@ pub(crate) mod tests {
         assert!(rig.solos.iter().any(|key| key == "local:phones"));
     }
 
+    // covers: S235
     #[test]
     fn only_left_out_outputs_besides_the_reference_block_with_their_own_reason() {
         let mut rig = FakeRig::new();

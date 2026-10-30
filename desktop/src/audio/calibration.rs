@@ -1600,6 +1600,7 @@ mod tests {
         assert!(rig.set_offsets.borrow().is_empty());
     }
 
+    // covers: S232
     #[test]
     fn a_speaker_turned_off_during_the_estimate_ends_the_run_unchanged() {
         let mut rig = FakeRig::new();
@@ -1666,6 +1667,7 @@ mod tests {
         assert!(!rig.tap.engaged.load(Ordering::Relaxed));
     }
 
+    // covers: S232
     #[test]
     fn an_unplugged_microphone_ends_the_run_at_once() {
         let mut rig = FakeRig::new();
@@ -1741,6 +1743,7 @@ mod tests {
         assert_eq!(rig.solo, None);
     }
 
+    // covers: S232
     #[test]
     fn a_microphone_that_loses_audio_while_recording_changes_nothing() {
         let mut rig = FakeRig::new();
@@ -1752,6 +1755,7 @@ mod tests {
         assert_eq!(rig.solo, None);
     }
 
+    // covers: S232
     #[test]
     fn another_microphone_for_the_second_run_changes_nothing() {
         let mut rig = FakeRig::new();

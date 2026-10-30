@@ -378,6 +378,7 @@ mod tests {
         assert!(build.lines().any(|l| l == id_line));
     }
 
+    // covers: S186
     /// A quit first waits for the outputs' fade-outs, at most the cap of
     /// S186, and then for the AirPlay sender's teardown, while the Google
     /// Cast host shuts down on a thread of its own; then the debug log

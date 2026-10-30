@@ -483,6 +483,7 @@ mod tests {
         assert!(!dir.join("audiosync.exe.bak").exists());
     }
 
+    // covers: S302
     #[test]
     fn a_disk_full_copy_deletes_every_partial_file() {
         struct Full;
@@ -580,6 +581,7 @@ mod tests {
         }
     }
 
+    // covers: S302
     #[test]
     fn a_failed_restore_lists_every_bak_with_its_name_the_exe_first() {
         // The double sees a rename's target. The exe's first rename into
@@ -627,6 +629,7 @@ mod tests {
         assert_eq!(read(dir.join(EXE_NAME)), "old exe");
     }
 
+    // covers: S303
     #[test]
     fn a_failed_relaunch_restores_the_bak() {
         let (dir, exe, notices) = install("relaunch-failed");

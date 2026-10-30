@@ -5494,6 +5494,7 @@ mod tests {
         assert_eq!(ring.frames_written(), before + 4);
     }
 
+    // covers: S121
     #[test]
     fn a_capture_that_cant_start_starts_nothing() {
         let mut backend = backend();
@@ -5764,6 +5765,7 @@ mod tests {
     /// waits out the cap still fails.
     const NO_WAIT: Duration = Duration::from_millis(STOP_FADE_CAP.as_millis() as u64 / 2);
 
+    // covers: S185
     #[test]
     fn a_speaker_switched_off_fades_out_before_its_stream_stops() {
         let mut backend = backend();
@@ -5964,6 +5966,7 @@ mod tests {
         assert_eq!(backend.driver().renderers_running(), 0);
     }
 
+    // covers: S186
     #[test]
     fn removing_several_outputs_asks_all_to_fade_then_waits_once() {
         let mut backend = backend();
@@ -7059,6 +7062,7 @@ mod tests {
         );
     }
 
+    // covers: S142
     #[test]
     fn the_session_ends_when_the_captured_app_quits() {
         let mut backend = backend();
@@ -8382,6 +8386,7 @@ mod tests {
         assert_eq!(backend.running_source(), None);
     }
 
+    // covers: S355
     #[test]
     fn the_level_meter_reads_the_peak_only_while_an_input_device_is_captured() {
         let mut backend = backend();
@@ -8499,6 +8504,7 @@ mod tests {
         }
     }
 
+    // covers: S355
     #[test]
     fn a_failed_input_listing_leaves_the_inputs_out_and_keeps_the_apps() {
         let mut backend = backend();
@@ -8527,6 +8533,7 @@ mod tests {
         assert_eq!(ids(&mut backend).len(), 3, "the input is back");
     }
 
+    // covers: S355
     #[test]
     fn a_microphone_blocked_by_windows_privacy_settings_isnt_tried_again() {
         assert!(!may_start_later(&BackendError::MicrophoneBlocked));
@@ -8706,6 +8713,7 @@ mod tests {
         assert_eq!(backend.running_source(), None);
     }
 
+    // covers: S142
     #[test]
     fn an_app_that_quits_ends_the_session_without_a_restart() {
         let mut backend = backend();
@@ -9755,6 +9763,7 @@ mod tests {
         })
     }
 
+    // covers: S176
     #[test]
     fn only_local_outputs_a_speakers_offset_is_applied() {
         let mut backend = local_delay_backend();
@@ -9762,6 +9771,7 @@ mod tests {
         assert_eq!(held(&backend), [Some(250), Some(400), Some(0)]);
     }
 
+    // covers: S177
     #[test]
     fn a_late_speaker_switched_on_or_off_retimes_the_running_others() {
         let mut backend = local_delay_backend();
@@ -9844,6 +9854,7 @@ mod tests {
         assert_eq!(held(&backend), [Some(0), Some(150), None]);
     }
 
+    // covers: S177
     #[test]
     fn editing_the_lowest_offset_retimes_the_others() {
         let mut backend = local_delay_backend();
@@ -9854,6 +9865,7 @@ mod tests {
         assert_eq!(held(&backend), [Some(300), Some(500), Some(0)]);
     }
 
+    // covers: S177
     #[test]
     fn a_late_speaker_that_cant_start_doesnt_hold_the_others_back() {
         let mut backend = local_delay_backend();
@@ -9888,6 +9900,7 @@ mod tests {
         (backend, fake, kitchen)
     }
 
+    // covers: S176, S178
     #[test]
     fn an_airplay_speaker_chosen_adds_the_sender_latency_on_top() {
         let (mut backend, _fake, kitchen) = local_delay_with_airplay();
@@ -10061,6 +10074,7 @@ mod tests {
         assert_eq!(wait(&backend), Some(1750.0 + 6000.0), "FLAC");
     }
 
+    // covers: S178
     #[test]
     fn the_airplay_delay_is_an_adjustment_on_top_of_the_sender_latency() {
         let (mut backend, fake, kitchen) = local_delay_with_airplay();

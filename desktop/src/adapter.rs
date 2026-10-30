@@ -6114,6 +6114,7 @@ mod tests {
         );
     }
 
+    // covers: S355
     #[test]
     fn an_input_device_choice_is_saved_and_restored_while_it_is_unplugged() {
         let mut adapter = adapter();
@@ -6267,6 +6268,7 @@ mod tests {
         );
     }
 
+    // covers: S355
     #[test]
     fn a_microphone_blocked_by_windows_privacy_settings_gets_its_own_notice() {
         let mut adapter = adapter();
@@ -6605,6 +6607,7 @@ mod tests {
         assert_eq!(captures(&adapter).len(), 1, "one session");
     }
 
+    // covers: S118
     #[test]
     fn turning_the_last_speaker_off_stops_streaming() {
         let mut adapter = adapter();
@@ -6679,6 +6682,7 @@ mod tests {
         assert!(messages(&adapter).is_empty());
     }
 
+    // covers: S116, S136
     #[test]
     fn an_automatic_start_with_no_speaker_on_asks_for_one_first() {
         let mut adapter = adapter();
@@ -7112,6 +7116,7 @@ mod tests {
         assert_eq!(adapter.snapshot().zones.len(), 1);
     }
 
+    // covers: S150, S228
     #[test]
     fn a_zone_name_is_cut_to_sixty_characters_like_a_speakers() {
         let mut adapter = adapter();
@@ -7425,6 +7430,7 @@ mod tests {
         assert_eq!(messages(&adapter), [NoticeMessage::CaptureFailed]);
     }
 
+    // covers: S121
     #[test]
     fn start_problems_name_the_chosen_app() {
         let mut adapter = adapter();
@@ -7485,6 +7491,7 @@ mod tests {
         assert_eq!(messages(&adapter), [failed]);
     }
 
+    // covers: S137
     #[test]
     fn an_unplugged_output_is_reported_until_it_is_back() {
         let mut adapter = adapter();
@@ -8134,6 +8141,7 @@ mod tests {
         );
     }
 
+    // covers: S153
     #[test]
     fn notices_can_be_dismissed_one_by_one_or_all_at_once() {
         let mut adapter = adapter();
@@ -13262,6 +13270,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S178, S181
     #[test]
     fn the_airplay_delay_field_shows_l_plus_a_and_follows_a_new_l() {
         let (mut with_sender, fake, _, _) = airplay_adapter();

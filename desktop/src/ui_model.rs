@@ -3605,6 +3605,7 @@ mod tests {
         assert_eq!(state.speaker("airplay:kitchen").unwrap().delay_ms, None);
     }
 
+    // covers: S175, S181
     #[test]
     fn an_offset_takes_a_leading_plus_or_minus_and_other_text_is_ignored() {
         assert_eq!(parse_delay_ms("+150"), Some(150.0));
@@ -3642,6 +3643,7 @@ mod tests {
         assert_eq!(backend.snapshot().notices.len(), NOTICE_CAPACITY);
     }
 
+    // covers: S33
     #[test]
     fn the_equalizer_is_quantized_and_matches_presets() {
         let mut backend = MockBackend::new();

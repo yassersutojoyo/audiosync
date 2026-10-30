@@ -618,6 +618,7 @@ pub mod tests {
         )
     }
 
+    // covers: S296, S298, S299, S300, S301
     #[test]
     fn the_fake_appcast_end_to_end_through_a_memory_fetch() {
         let f = fixture(

@@ -1295,6 +1295,7 @@ mod tests {
         }
     }
 
+    // covers: S355
     #[test]
     fn input_devices_are_offered_by_name_without_hands_free_or_unreadable_ones() {
         let readings = vec![
@@ -1346,6 +1347,7 @@ mod tests {
         );
     }
 
+    // covers: S355
     #[test]
     fn an_input_device_is_captured_from_its_endpoint_not_by_process_loopback() {
         let source = SourceId::Input {
@@ -2171,6 +2173,7 @@ mod tests {
         assert!(out.iter().all(|s| s.is_finite()));
     }
 
+    // covers: S206
     /// The outputs' lead covers the capture's blocks (S206): a packet the
     /// converter writes in pieces, in conversion chunks or as the resampler
     /// hands them out, is one block, and a short packet after it (what a gap

@@ -675,6 +675,7 @@ mod tests {
     use super::*;
     use crate::audio::capture::CAPTURE_ATTEMPTS;
 
+    // covers: S355
     #[test]
     fn an_input_device_denied_by_privacy_settings_is_a_blocked_microphone() {
         assert_eq!(

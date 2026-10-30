@@ -589,6 +589,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    // covers: S170, S309
     #[test]
     fn a_relaunched_start_keeps_the_log_and_a_plain_start_empties_it() {
         let dir = test_dir("log-relaunch");
@@ -630,6 +631,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    // covers: S170, S309
     #[test]
     fn an_append_to_a_full_log_adds_nothing() {
         let dir = test_dir("log-limit-append");

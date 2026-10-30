@@ -2228,7 +2228,7 @@ The checks for S187's large increases and for S47 and S48 at the largest hold-ba
 | a_source_change_fades_the_airplay_input_out_on_the_old_capture_and_in_on_the_new | S186, S189 |
 | a_shut_down_fades_every_output_and_the_airplay_input_once_within_the_fade_cap | S351, S186 |
 | a_delay_change_fades_out_first_and_in_after | S187 |
-| the_fade_cap_and_the_quit_waits_fit_in_5_s | S110, S186 |
+| the_fade_cap_and_the_quit_waits_fit_in_5_s | S186 |
 | with_a_clock_reading_a_stop_waits_on_the_padding_not_the_stream_latency (`desktop/src/audio/render.rs`) | S185 |
 | the_end_of_a_windows_session_tears_the_airplay_and_cast_senders_down (`desktop/src/view.rs`) | S351 |
 

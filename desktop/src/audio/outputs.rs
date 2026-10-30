@@ -1239,6 +1239,7 @@ mod tests {
         policy.params(id).delay_frames / 48
     }
 
+    // covers: S174, S176
     #[test]
     fn hold_backs_follow_the_offsets_of_the_outputs_taking_part() {
         let all = ["builtin", "usb", "bluetooth"];
@@ -1259,6 +1260,7 @@ mod tests {
         );
     }
 
+    // covers: S178
     #[test]
     fn the_airplay_adjustment_moves_l() {
         let all = ["builtin", "usb", "bluetooth"];
@@ -1313,6 +1315,7 @@ mod tests {
         assert_eq!(ids(&plan.attach), ["b"]);
     }
 
+    // covers: S117
     #[test]
     fn nothing_plays_while_stopped() {
         let policy = policy_with(&["a"]);
@@ -1463,6 +1466,7 @@ mod tests {
         );
     }
 
+    // covers: S70, S71
     #[test]
     fn the_gain_follows_the_cubic_curve_times_the_master() {
         let mut policy = policy_with(&["a"]);
@@ -1474,6 +1478,7 @@ mod tests {
         assert_eq!(policy.params("a").gain, 0.0);
     }
 
+    // covers: S76
     #[test]
     fn volumes_are_clamped_and_non_finite_ones_ignored() {
         let mut policy = policy_with(&["a"]);

@@ -916,6 +916,7 @@ pub mod tests {
         );
     }
 
+    // covers: S298
     #[test]
     fn a_download_percentage_keeps_the_notice_time() {
         let (mut updater, _) = updater("notice-time");

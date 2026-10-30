@@ -965,6 +965,7 @@ mod tests {
         answers.join().expect("the answer comes");
     }
 
+    // covers: S330
     #[test]
     fn a_format_read_that_hangs_answers_in_time_and_starts_no_second_read() {
         static STUCK: StuckThreads = StuckThreads::new();
@@ -998,6 +999,7 @@ mod tests {
         assert_eq!(answered, Ok(FORMAT));
     }
 
+    // covers: S330
     #[test]
     fn a_format_read_that_hangs_answers_every_other_output_at_once() {
         static STUCK: StuckThreads = StuckThreads::new();
