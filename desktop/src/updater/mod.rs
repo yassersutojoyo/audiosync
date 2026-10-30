@@ -129,6 +129,8 @@ pub struct Updater {
     after_undo: Option<Arc<dyn Fn() + Send + Sync>>,
     /// The version that failed its first start or was blocked (spec S316).
     record: Option<UpdateRecord>,
+    /// The version whose `.new` vanished at step 4 once (spec S302).
+    vanished: Option<String>,
 }
 
 impl Updater {
@@ -149,6 +151,7 @@ impl Updater {
             #[cfg(test)]
             after_undo: None,
             record: None,
+            vanished: None,
         }
     }
 
@@ -336,11 +339,16 @@ impl Updater {
                     Installed::DiskFull => Some(UpdaterNotice::DiskFull),
                     Installed::ReadOnly => Some(UpdaterNotice::ReadOnly),
                     Installed::InUse => Some(UpdaterNotice::InUse),
+                    Installed::Vanished if self.vanished.as_ref() != Some(&version) => {
+                        self.vanished = Some(version);
+                        Some(UpdaterNotice::InUse)
+                    }
                     Installed::Failed => Some(UpdaterNotice::Failed),
                     Installed::RestoreFailed { renames } => Some(UpdaterNotice::RestoreFailed {
                         renames: notice_renames(renames),
                     }),
-                    Installed::Blocked => {
+                    // A `.new` gone a second time is unlikely to be another copy.
+                    Installed::Blocked | Installed::Vanished => {
                         self.keep_record(
                             Some(UpdateRecord {
                                 version,
@@ -1176,6 +1184,62 @@ pub mod tests {
         assert!(std::fs::read(exe).unwrap().ends_with(b"new exe"));
     }
 
+    /// Real files, except that `audiosync.exe.new` is gone before step 4
+    /// every time, with no error that names Windows security.
+    struct NewVanishes;
+
+    impl crate::updater::files::Files for NewVanishes {
+        fn create(
+            &self,
+            path: &Path,
+            exclusive: bool,
+        ) -> std::io::Result<Box<dyn crate::updater::files::Sink>> {
+            RealFiles.create(path, exclusive)
+        }
+        fn remove(&self, path: &Path) -> std::io::Result<()> {
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            if to
+                .file_name()
+                .is_some_and(|name| name == "audiosync.exe.bak")
+            {
+                std::fs::remove_file(from.with_file_name("audiosync.exe.new"))?;
+            }
+            RealFiles.rename(from, to)
+        }
+        fn replace(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            RealFiles.replace(from, to)
+        }
+    }
+
+    // covers: S302, S315, S316
+    #[test]
+    fn a_new_exe_that_vanishes_on_two_tries_is_blocked() {
+        let f = fixture(
+            "new-vanishes",
+            false,
+            Arc::new(NewVanishes),
+            DebugLog::default(),
+        );
+        let mut updater = Updater::new(f.env);
+        updater.check(Trigger::Manual);
+        updater.wait();
+        updater.press(UpdaterButton::Download);
+        updater.wait();
+        assert_eq!(updater.notice(), Some(&UpdaterNotice::InUse));
+        assert_eq!(updater.record(), None);
+        updater.press(UpdaterButton::TryAgain);
+        let polled = updater.wait();
+        assert_eq!(updater.notice(), Some(&UpdaterNotice::Blocked));
+        assert!(polled.record_changed);
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::Blocked).as_ref()
+        );
+        assert_eq!(folder(&updater), old_folder());
+    }
+
     /// A new version that signals its start at once.
     struct Signals;
 
@@ -1407,6 +1471,9 @@ pub mod tests {
             fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
                 RealFiles.rename(from, to)
             }
+            fn replace(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+                RealFiles.replace(from, to)
+            }
             fn open(&self, path: &Path) -> std::io::Result<std::fs::File> {
                 if path.file_name().is_some_and(|name| name == "update.zip") {
                     let _ = std::fs::remove_file(path);
@@ -1431,9 +1498,9 @@ pub mod tests {
         assert_eq!(std::fs::read_dir(temp_root).unwrap().count(), 0);
     }
 
-    /// Real files, except that deleting `audiosync.exe` meets a sharing
-    /// violation `locked` times, as while Defender still scans the new exe,
-    /// and each try records the thread it ran on.
+    /// Real files, except that moving a `.bak` over `audiosync.exe` meets a
+    /// sharing violation `locked` times, as while Defender still scans the
+    /// new exe, and each try records the thread it ran on.
     struct Scanned {
         locked: Mutex<u32>,
         threads: Mutex<Vec<Option<String>>>,
@@ -1448,10 +1515,13 @@ pub mod tests {
             RealFiles.create(path, exclusive)
         }
         fn remove(&self, path: &Path) -> std::io::Result<()> {
-            if path
-                .file_name()
-                .is_some_and(|name| name == archive::EXE_NAME)
-            {
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            RealFiles.rename(from, to)
+        }
+        fn replace(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            if to.file_name().is_some_and(|name| name == archive::EXE_NAME) {
                 self.threads
                     .lock()
                     .unwrap()
@@ -1462,10 +1532,7 @@ pub mod tests {
                     return Err(std::io::Error::from_raw_os_error(32));
                 }
             }
-            RealFiles.remove(path)
-        }
-        fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
-            RealFiles.rename(from, to)
+            RealFiles.replace(from, to)
         }
     }
 
@@ -1483,7 +1550,7 @@ pub mod tests {
 
     // covers: S303, S315
     #[test]
-    fn a_new_exe_still_scanned_after_a_failed_restart_is_deleted_on_a_retry() {
+    fn a_new_exe_still_scanned_after_a_failed_restart_is_replaced_on_a_retry() {
         let files = Arc::new(Scanned {
             locked: Mutex::new(2),
             threads: Mutex::new(Vec::new()),
@@ -1523,7 +1590,7 @@ pub mod tests {
             ]
         );
         let threads = files.threads.lock().unwrap();
-        assert_eq!(threads.len(), 3, "two locked tries, then the delete");
+        assert_eq!(threads.len(), 3, "two locked tries, then the move");
         assert!(
             threads
                 .iter()
@@ -1602,6 +1669,9 @@ pub mod tests {
                 return Err(std::io::Error::from_raw_os_error(32));
             }
             RealFiles.rename(from, to)
+        }
+        fn replace(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            self.rename(from, to)
         }
     }
 
@@ -1686,6 +1756,9 @@ pub mod tests {
             }
             RealFiles.rename(from, to)?;
             RealFiles.remove(to)
+        }
+        fn replace(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+            RealFiles.replace(from, to)
         }
     }
 

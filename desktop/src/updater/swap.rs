@@ -27,6 +27,9 @@ pub enum SwapError {
     },
     /// Windows security removed or blocked a file (spec S315).
     Blocked,
+    /// The `.new` was gone at step 4 with no Windows security error; another
+    /// copy's step 1 deletes it (spec S302).
+    Vanished,
 }
 
 /// A rename the user has to make by hand: `bak` back to `live`.
@@ -170,9 +173,10 @@ fn swap_one(
     }
     let into_place = files.rename(&pair.new, &pair.live);
     logged(log, format!("4: rename {name}.new to {name}"), into_place).map_err(|error| {
-        // A `.new` gone since step 1 was removed by Windows security.
-        if is_blocked(&error) || error.kind() == io::ErrorKind::NotFound {
+        if is_blocked(&error) {
             SwapError::Blocked
+        } else if error.kind() == io::ErrorKind::NotFound {
+            SwapError::Vanished
         } else {
             SwapError::Failed {
                 step: "rename into place",
@@ -211,7 +215,7 @@ fn restore(
     let mut renames = Vec::new();
     for progress in done.iter().rev() {
         let pair = Pair::new(dir, progress.name);
-        if progress.renamed_in {
+        if progress.renamed_in && !progress.renamed_aside {
             let result = files.remove(&pair.live);
             log.push((
                 restore_line("remove the new", &pair.live),
@@ -219,7 +223,9 @@ fn restore(
             ));
         }
         if progress.renamed_aside {
-            let result = files.rename(&pair.bak, &pair.live);
+            // One move over the new file: a refused move leaves the new exe
+            // in place, never a folder without one.
+            let result = files.replace(&pair.bak, &pair.live);
             log.push((
                 restore_line("rename back", &pair.bak),
                 result.as_ref().err().map_or(0, code),
@@ -248,9 +254,9 @@ pub fn file_name(path: &Path) -> String {
         .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
 }
 
-/// Undoes a completed swap whose restart failed (spec S303): the new
-/// files go, then each `.bak` this swap made, the running one included, is
-/// renamed back.
+/// Undoes a completed swap whose restart failed (spec S303): each `.bak`
+/// this swap made, the running one included, moves back over its new file,
+/// and a new notices file with no `.bak` goes.
 pub fn undo_completed(
     dir: &Path,
     swapped: &Swapped,
@@ -298,6 +304,12 @@ mod tests {
             match (self.fail)("rename", to) {
                 Some(error) => Err(error),
                 None => RealFiles.rename(from, to),
+            }
+        }
+        fn replace(&self, from: &Path, to: &Path) -> io::Result<()> {
+            match (self.fail)("rename", to) {
+                Some(error) => Err(error),
+                None => RealFiles.replace(from, to),
             }
         }
     }
@@ -413,6 +425,26 @@ mod tests {
         assert_eq!(names(&dir), [NOTICES_NAME, EXE_NAME]);
     }
 
+    // covers: S302, S315
+    #[test]
+    fn a_new_another_copy_deleted_before_step_4_reports_another_copy() {
+        let (dir, exe, _) = install("new-taken");
+        let new = dir.join("audiosync.exe.new");
+        // Another copy's step 1 deletes this one's .new before step 3.
+        let files = failing(move |op, path| {
+            if op == "rename" && file_name(path) == "audiosync.exe.bak" {
+                std::fs::remove_file(&new).unwrap();
+            }
+            None
+        });
+        let mut log = StepLog::new();
+        assert_eq!(
+            swap(&dir, exe, None, &files, &mut log),
+            Err(SwapError::Vanished)
+        );
+        assert_eq!(read(dir.join(EXE_NAME)), "old exe");
+    }
+
     // covers: S302
     #[test]
     fn a_read_only_install_folder_offers_the_release_page() {
@@ -478,6 +510,9 @@ mod tests {
             }
             fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
                 RealFiles.rename(from, to)
+            }
+            fn replace(&self, from: &Path, to: &Path) -> io::Result<()> {
+                RealFiles.replace(from, to)
             }
         }
         let (dir, exe, _) = install("swap-disk-full-copy");
@@ -573,6 +608,8 @@ mod tests {
         );
         assert_eq!(read(dir.join("audiosync.exe.bak")), "old exe");
         assert_eq!(read(dir.join("THIRD-PARTY-NOTICES.txt.bak")), "old notices");
+        // A refused move back leaves the folder an exe to start.
+        assert_eq!(read(dir.join(EXE_NAME)), "new exe");
 
         // Only the notices pair failing names only that pair.
         let (dir, exe, notices) = install("restore-lists-notices");

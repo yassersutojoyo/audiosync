@@ -126,14 +126,17 @@ pub enum Installed {
     },
     /// Windows security removed or blocked an update file (spec S315).
     Blocked,
+    /// See [`SwapError::Vanished`].
+    Vanished,
 }
 
 fn host(url: &str) -> String {
     fetch::https_target(url).map_or_else(|| "?".to_owned(), |target| target.host)
 }
 
-/// A new, empty `AudioSync-update-<random>` folder in `root`.
-fn new_temp_folder(root: &Path) -> io::Result<PathBuf> {
+/// A new, empty `AudioSync-update-<random>` folder in `root`, with its
+/// `hold`.
+fn new_temp_folder(root: &Path) -> io::Result<(PathBuf, io::Result<fs::File>)> {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
     for _ in 0..8 {
@@ -142,10 +145,27 @@ fn new_temp_folder(root: &Path) -> io::Result<PathBuf> {
         let dir = root.join(format!("{TEMP_PREFIX}{:016x}", hasher.finish()));
         match fs::create_dir(&dir) {
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            other => return other.map(|()| dir),
+            Err(error) => return Err(error),
+            Ok(()) => {}
+        }
+        #[cfg(test)]
+        if let Some(hook) = AFTER_CREATE.take() {
+            hook();
+        }
+        match hold(&dir) {
+            // Another copy's launch cleanup deleted it before the hold.
+            Err(_) if !dir.exists() => continue,
+            held => return Ok((dir, held)),
         }
     }
     Err(io::Error::from(io::ErrorKind::AlreadyExists))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Runs once right after a temp folder is made, before it is held.
+    static AFTER_CREATE: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// Downloads, verifies, unpacks and swaps `update`; the temp folder goes
@@ -158,8 +178,8 @@ pub fn install(
     cancel: &AtomicBool,
     closed: &Mutex<bool>,
 ) -> Installed {
-    let dir = match new_temp_folder(&env.temp_root) {
-        Ok(dir) => dir,
+    let (dir, held) = match new_temp_folder(&env.temp_root) {
+        Ok(made) => made,
         Err(error) => {
             env.log
                 .log(|| format!("updater: the temp folder can't be made ({error})"));
@@ -170,7 +190,6 @@ pub fn install(
             };
         }
     };
-    let held = hold(&dir);
     if let Err(error) = &held {
         env.log.log(|| {
             format!("updater: the temp folder can't be held, another copy may delete it ({error})")
@@ -389,6 +408,7 @@ fn install_in(
         Err(SwapError::Failed { .. }) => Installed::Failed,
         Err(SwapError::RestoreFailed { renames }) => Installed::RestoreFailed { renames },
         Err(SwapError::Blocked) => Installed::Blocked,
+        Err(SwapError::Vanished) => Installed::Vanished,
     }
 }
 
@@ -815,6 +835,9 @@ pub mod tests {
         fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
             RealFiles.rename(from, to)
         }
+        fn replace(&self, from: &Path, to: &Path) -> io::Result<()> {
+            RealFiles.replace(from, to)
+        }
         fn open(&self, path: &Path) -> io::Result<fs::File> {
             let in_temp = path
                 .parent()
@@ -993,6 +1016,9 @@ pub mod tests {
             fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
                 RealFiles.rename(from, to)
             }
+            fn replace(&self, from: &Path, to: &Path) -> io::Result<()> {
+                RealFiles.replace(from, to)
+            }
         }
         for (at, case) in [("update.zip", "download"), ("audiosync.exe.new", "copy")] {
             let f = fixture(
@@ -1067,6 +1093,25 @@ pub mod tests {
         assert!(temp_folders(&f.env).is_empty());
     }
 
+    // covers: S304
+    #[test]
+    fn another_sessions_cleanup_right_after_the_temp_folder_is_made_is_survived() {
+        let f = fixture(
+            "other-session-create",
+            false,
+            Arc::new(RealFiles),
+            DebugLog::default(),
+        );
+        let update = update_of(&f.env);
+        let (install_dir, temp_root) = (f.env.install_dir.clone(), f.env.temp_root.clone());
+        AFTER_CREATE.set(Some(Box::new(move || {
+            remove_leftovers(&install_dir, &temp_root, &DebugLog::default());
+        })));
+        let done = run(&f.env, &update);
+        assert!(matches!(done, Installed::Done(_)), "{done:?}");
+        assert!(temp_folders(&f.env).is_empty());
+    }
+
     /// Real files, except that the swap's rename of the running exe aside
     /// (step 3) comes after another session's launch cleanup.
     struct SweptMidSwap;
@@ -1088,6 +1133,9 @@ pub mod tests {
                 remove_leftovers(install_dir, &root.join("temp"), &DebugLog::default());
             }
             RealFiles.rename(from, to)
+        }
+        fn replace(&self, from: &Path, to: &Path) -> io::Result<()> {
+            RealFiles.replace(from, to)
         }
     }
 
@@ -1210,6 +1258,9 @@ pub mod tests {
                 None => RealFiles.rename(from, to),
             }
         }
+        fn replace(&self, from: &Path, to: &Path) -> io::Result<()> {
+            RealFiles.replace(from, to)
+        }
     }
 
     // covers: S302, S315, S316
@@ -1269,6 +1320,9 @@ pub mod tests {
         }
         fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
             RealFiles.rename(from, to)
+        }
+        fn replace(&self, from: &Path, to: &Path) -> io::Result<()> {
+            RealFiles.replace(from, to)
         }
         fn open(&self, path: &Path) -> io::Result<fs::File> {
             if path.file_name().is_some_and(|name| name == "update.zip")

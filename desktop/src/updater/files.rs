@@ -26,6 +26,8 @@ pub trait Files: Send + Sync {
     fn remove(&self, path: &Path) -> io::Result<()>;
     /// A rename within the volume that is on disk when it returns.
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+    /// [`Files::rename`] that replaces a file `to` names, in one step.
+    fn replace(&self, from: &Path, to: &Path) -> io::Result<()>;
     fn open(&self, path: &Path) -> io::Result<File> {
         File::open(path)
     }
@@ -50,13 +52,19 @@ impl Files for RealFiles {
     }
 
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        rename_write_through(from, to)
+        move_write_through(from, to, false)
+    }
+
+    fn replace(&self, from: &Path, to: &Path) -> io::Result<()> {
+        move_write_through(from, to, true)
     }
 }
 
-fn rename_write_through(from: &Path, to: &Path) -> io::Result<()> {
+fn move_write_through(from: &Path, to: &Path, replace: bool) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
+    use windows::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
     use windows::core::PCWSTR;
     let wide =
         |path: &Path| -> Vec<u16> { path.as_os_str().encode_wide().chain(Some(0)).collect() };
@@ -66,7 +74,11 @@ fn rename_write_through(from: &Path, to: &Path) -> io::Result<()> {
         MoveFileExW(
             PCWSTR(from.as_ptr()),
             PCWSTR(to.as_ptr()),
-            MOVEFILE_WRITE_THROUGH,
+            if replace {
+                MOVEFILE_WRITE_THROUGH | MOVEFILE_REPLACE_EXISTING
+            } else {
+                MOVEFILE_WRITE_THROUGH
+            },
         )
     }
     .map_err(|error| io::Error::from_raw_os_error(error.code().0 & 0xFFFF))
@@ -237,6 +249,9 @@ impl Files for Retrying<'_> {
     }
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         self.retried("rename", from, || self.inner.rename(from, to))
+    }
+    fn replace(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.retried("replace", from, || self.inner.replace(from, to))
     }
     fn open(&self, path: &Path) -> io::Result<File> {
         self.retried("open", path, || self.inner.open(path))
