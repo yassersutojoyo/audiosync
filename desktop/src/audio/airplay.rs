@@ -10722,18 +10722,22 @@ pub mod tests {
         false
     }
 
-    // covers: S290
-    #[test]
-    fn the_tv_keeps_a_level_held_at_master_0_through_calibrate_all_and_a_zone_at_100() {
+    /// A television playing at `master` in a zone at `zone` (100: none),
+    /// set to 30 on its own remote and given that level back after another
+    /// speaker's calibration.
+    fn a_tv_holding_30_after_calibrate_all(
+        master: f64,
+        zone: f64,
+    ) -> (LoopbackReceiver, InputWriter, AirPlaySpeakers, String) {
         let receiver = LoopbackReceiver::start();
-        let (link, _input) = SenderLink::start(false).expect("the sender starts");
+        let (link, input) = SenderLink::start(false).expect("the sender starts");
         link.sender
             .start_discovery_with(Box::new(OneService(Some(BrowseEvent::Resolved(
                 receiver.record(),
             )))));
         let mut airplay = AirPlaySpeakers::new(
             Box::new(link),
-            0.0,
+            master,
             DebugLog::default(),
             PairingStore::in_memory(),
         );
@@ -10742,6 +10746,7 @@ pub mod tests {
             "the television is listed"
         );
         let id = airplay.speakers()[0].id.clone();
+        airplay.set_zones(BTreeMap::from([(id.clone(), zone)]));
         airplay.set_enabled(&id, true).unwrap();
         airplay.set_streaming(true);
         assert!(
@@ -10770,7 +10775,13 @@ pub mod tests {
             receiver.level()
         );
         assert_eq!(row_of(&airplay, &id), 30.0);
+        (receiver, input, airplay, id)
+    }
 
+    // covers: S290
+    #[test]
+    fn the_tv_keeps_a_level_held_at_master_0_through_calibrate_all_and_a_zone_at_100() {
+        let (receiver, _input, mut airplay, id) = a_tv_holding_30_after_calibrate_all(0.0, 100.0);
         for zones in [BTreeMap::from([(id.clone(), 100.0)]), BTreeMap::new()] {
             airplay.set_zones(zones);
             let until = Instant::now() + Duration::from_millis(500);
@@ -10785,6 +10796,17 @@ pub mod tests {
             "S290.held.m0",
             "TV -21.00 dB at master 0 shows row 30; muted for another speaker's calibration, \
              back at -21.00 dB row 30 after it; zone 100 join and leave keep -21.00 dB row 30",
+        );
+    }
+
+    // covers: S290
+    #[test]
+    fn the_tv_keeps_a_level_held_at_zone_0_through_calibrate_all() {
+        let (_receiver, _input, _airplay, _id) = a_tv_holding_30_after_calibrate_all(100.0, 0.0);
+        cell(
+            "S290.held.z0",
+            "TV -21.00 dB in a zone at 0 shows row 30; muted for another speaker's calibration, \
+             back at -21.00 dB row 30 after it",
         );
     }
 

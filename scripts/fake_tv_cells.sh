@@ -71,10 +71,11 @@ cells_from_tests --lib \
     "$core::the_s290_vector_cases_land_on_the_television=S290.row100,S290.tv80.m64,S290.row100.m50,S290.tv80.cap,DV.100.m63,DV.80-99.m63,DV.40.m0" \
     "$core::a_withdrawn_receiver_loses_only_its_row_and_comes_back_when_announced=Stale.row"
 
-# Calibrate All and zones live in the Windows host's speaker list, so this cell runs there.
+# Calibrate All and zones live in the Windows host's speaker list, so these cells run there.
 cd "$root/desktop"
 cells_from_tests "--bin audiosync" \
-    "audio::airplay::tests::the_tv_keeps_a_level_held_at_master_0_through_calibrate_all_and_a_zone_at_100=S290.held.m0"
+    "audio::airplay::tests::the_tv_keeps_a_level_held_at_master_0_through_calibrate_all_and_a_zone_at_100=S290.held.m0" \
+    "audio::airplay::tests::the_tv_keeps_a_level_held_at_zone_0_through_calibrate_all=S290.held.z0"
 
 cd "$root/airplay"
 cells_from_tests "--test ap2_volume" \
