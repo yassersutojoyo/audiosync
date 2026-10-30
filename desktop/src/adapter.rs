@@ -5621,6 +5621,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.settings_file.path().is_some() && self.current_settings() == self.saved
     }
 
+    fn shut_down(&mut self) {
+        self.audio.shut_down();
+    }
+
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
         self.log.log(|| {
             format!(

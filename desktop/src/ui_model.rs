@@ -1728,6 +1728,11 @@ pub trait Backend {
     fn save_settings(&mut self) -> bool {
         true
     }
+
+    /// Runs Quit's teardown now, for a process that may end before the
+    /// backend drops.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn shut_down(&mut self) {}
 }
 
 /// Where the main window was and how big: the position of its outer frame

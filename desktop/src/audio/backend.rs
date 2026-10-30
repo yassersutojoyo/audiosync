@@ -1148,6 +1148,11 @@ pub trait AudioBackend {
     /// AirPlay sender reports, and returns what the UI should know. Call it
     /// about twice a second.
     fn poll(&mut self) -> Vec<BackendEvent>;
+
+    /// Quit's teardown: the outputs fade out, the AirPlay and Cast senders
+    /// stop. A later call, or the drop, does nothing more.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn shut_down(&mut self);
 }
 
 #[cfg(test)]

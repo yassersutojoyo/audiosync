@@ -3619,6 +3619,12 @@ impl<D: Driver> Controller<D> {
 
 impl<D: Driver> Drop for Controller<D> {
     fn drop(&mut self) {
+        self.shut_down();
+    }
+}
+
+impl<D: Driver> AudioBackend for Controller<D> {
+    fn shut_down(&mut self) {
         // The Cast host's quit runs beside the fade and the AirPlay
         // teardown, so the quit stays within its budget.
         let cast = self.cast.as_mut().and_then(CastSpeakers::begin_shutdown);
@@ -3635,9 +3641,7 @@ impl<D: Driver> Drop for Controller<D> {
             }
         }
     }
-}
 
-impl<D: Driver> AudioBackend for Controller<D> {
     fn list_sources(&mut self) -> Result<Vec<SourceInfo>, BackendError> {
         let sources = self.read_sources();
         match &sources {

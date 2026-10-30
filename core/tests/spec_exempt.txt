@@ -123,3 +123,4 @@ S346 Hosts only: the Mac's native AirPlay texts (PTP timing, PIN prompt, the Air
 S348 Hosts only: both hosts keeping the phone's volume for a speaker that is off, a Cast speaker's following its slider; the Windows host's tests and the Mac logic suite check it.
 S349 Hosts only: an auto-connect AirPlay speaker that appears asking for a PIN or password goes off with a notice; the Windows host's tests and the Mac logic suite check it.
 S350 Hosts only: the Waiting for audio notice when a capture session starts and gets no audio, and the Mac's not-working notice; the Mac's capture tests check it, Windows has no notice yet.
+S351 Hosts only: the end of the user session runs the quit steps; the Windows host's tests check it, and the Mac runs its quit steps from applicationWillTerminate.

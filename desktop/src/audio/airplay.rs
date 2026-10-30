@@ -4847,6 +4847,12 @@ pub mod tests {
             Box::new(self.clone())
         }
 
+        /// Every link handed out was dropped, which tears the sender down.
+        #[cfg_attr(not(windows), allow(dead_code))]
+        pub fn links_dropped(&self) -> bool {
+            Rc::strong_count(&self.0) == 1
+        }
+
         /// Queues an event for the backend's next poll.
         pub fn push(&self, event: SenderEvent) {
             self.0.borrow_mut().events.push_back(event);

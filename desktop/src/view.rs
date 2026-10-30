@@ -3329,7 +3329,9 @@ impl App {
     #[cfg(windows)]
     pub fn at_session_end(&self) -> bool {
         self.updater_at_exit();
-        self.save_settings()
+        let saved = self.save_settings();
+        self.backend.borrow_mut().shut_down();
+        saved
     }
 
     /// Takes the updater worker's news; a check that read the appcast
@@ -7673,6 +7675,41 @@ mod tests {
             })],
             "the one save already holds the record"
         );
+    }
+
+    // covers: S351
+    #[cfg(windows)]
+    #[test]
+    fn the_end_of_a_windows_session_tears_the_airplay_and_cast_senders_down() {
+        use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, id_of};
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let mut audio = crate::audio::mock::MockBackend::empty();
+        audio.connect_output("speakers", "Speakers");
+        let airplay = FakeAirPlay::new();
+        audio.set_airplay(airplay.link(), None);
+        let den = device(1, "Den", OPEN_TXT);
+        airplay.appear(&den);
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        audio.set_cast(cast.link());
+        let mut adapter =
+            crate::adapter::AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.poll();
+        adapter.set_speaker_enabled(&format!("ap:{}", id_of(&den)), true);
+        adapter.set_speaker_enabled(&format!("cc:{KITCHEN}"), true);
+        adapter.set_running(true);
+        assert!(adapter.snapshot().running);
+        assert_eq!(cast.state().started.len(), 1, "the Cast speaker joined");
+        let calls = airplay.take_calls();
+        assert!(
+            calls.iter().any(|call| matches!(call, Call::Add { .. })),
+            "the AirPlay speaker joined: {calls:?}"
+        );
+        let app = app_over(adapter);
+
+        app.at_session_end();
+        assert!(airplay.links_dropped(), "the AirPlay sender tore down");
+        assert_eq!(cast.state().shutdowns, 1, "the Cast host shut down");
     }
 
     #[test]
