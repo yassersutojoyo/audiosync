@@ -3144,6 +3144,11 @@ do {
     // covers: S224
     check(paths.isPaired("H8") && !paths.isPaired("I9") && !paths.isPaired("J0"),
           "native airplay: only a receiver AudioSync keeps a pairing for offers Forget Pairing")
+    var pathsGone = paths
+    pathsGone.apply(.gone(id: "H8", name: "Loft"))
+    // covers: S346
+    check(pathsGone.reachedOverAirPlay2("H8"),
+          "native airplay: a receiver reached over AirPlay 2 still names AirPlay 2 as its kind while it is off the network")
     // covers: S346
     check(kinds.nativePairPINMessage(name: "Loft").hasPrefix("Loft shows a 4-digit PIN on its screen. Enter it to pair; "
                                                               + "after that, it connects without a PIN.")
@@ -4226,9 +4231,15 @@ do {
           "P215 native airplay: going off the network or coming back without playing refreshes the row once")
     let away = t.rowNote(cast: nil, waitingForAirPlay2: false, unannounced: true, target: row)
     check(away == "Not on the network right now, plays once it's back" && away == t.notOnNetwork
-            && t.rowHint(SpeakerState(enabled: true, streaming: true), note: away).hasPrefix(t.notOnNetwork)
             && t.rowNote(cast: nil, waitingForAirPlay2: true, unannounced: true, target: row) == t.waitingForAirPlay2,
           "P215 native airplay: an unannounced row says it is off the network, also to VoiceOver; the AirPlay 2 wait says so first")
+    check(t.rowValue(SpeakerState(enabled: true, streaming: true), offline: true).hasSuffix(", " + t.notOnNetwork)
+            && t.rowValue(SpeakerState(enabled: true, streaming: true), offline: false) == t.on
+            && !t.rowHint(SpeakerState(enabled: true, streaming: true), note: away).contains(t.notOnNetwork)
+            && t.rowHint(SpeakerState(enabled: true, streaming: false), note: away) == t.willPlayHelp,
+          "P215 native airplay: VoiceOver reads an unannounced row's value as on, then off the network, "
+            + "and its hint doesn't say it again",
+          t.rowValue(SpeakerState(enabled: true, streaming: true), offline: true))
 
     var missing = listedPair()
     missing.apply(.gone(id: right, name: "Right"))
@@ -6114,6 +6125,10 @@ do {
     check(!pressed(CGPoint(x: 1154, y: 876), icon, 0.05), "menu bar icon: the line below the icon is not on it")
     check(!pressed(CGPoint(x: 700, y: 500), icon, 0.05), "menu bar icon: a press elsewhere is not a press on the icon")
     check(!pressed(CGPoint(x: 1154, y: 888), icon, 3), "menu bar icon: Escape with the pointer resting on the icon is no press")
+    check(UIStrings().statusItemValue(running: false, notices: 0) == "Streaming off"
+            && UIStrings().statusItemValue(running: true, notices: 2) == "Streaming on, 2 notices",
+          "menu bar icon: VoiceOver hears streaming on/off, then the notice count",
+          UIStrings().statusItemValue(running: true, notices: 2))
     let addRow = CastAddRow.state
     check(addRow(true, .searching) == .reserved && addRow(true, .noneFound) == .shown,
           "menu bar panel: the Add by Address row keeps its room while the Cast search runs, so the panel never grows when it ends")

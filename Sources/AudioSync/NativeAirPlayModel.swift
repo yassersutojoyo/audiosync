@@ -560,6 +560,9 @@ struct NativeAirPlayModel {
     /// target is listed or in the sender, so a gone member is named missing
     /// and a gone target that still plays holds its members.
     private(set) var memberOf: [String: String] = [:]
+    /// The receivers last listed as reached over AirPlay 2, kept while they
+    /// are gone, so a row off the network keeps its kind.
+    private(set) var reachedOverAirPlay2Before: Set<String> = []
 
     mutating func apply(_ change: NativeReceiverChange) {
         switch change {
@@ -570,6 +573,11 @@ struct NativeAirPlayModel {
             } else {
                 receivers[receiver.id] = receiver
                 if !receiver.target.isEmpty { memberOf[receiver.id] = receiver.target }
+                if receiver.overAirPlay2 {
+                    reachedOverAirPlay2Before.insert(receiver.id)
+                } else {
+                    reachedOverAirPlay2Before.remove(receiver.id)
+                }
             }
         case .gone(let id, _):
             receivers.removeValue(forKey: id)
@@ -620,12 +628,12 @@ struct NativeAirPlayModel {
 
     func isPlaying(_ id: String) -> Bool { states[id] == .playing }
 
-    /// Whether the sender reaches the listed receiver `id` over AirPlay 2:
-    /// its row then names AirPlay 2 as its kind.
+    /// Whether the sender reaches the receiver `id` over AirPlay 2, as last
+    /// listed: its row then names AirPlay 2 as its kind.
     /// A target counts when one of its members does.
     func reachedOverAirPlay2(_ id: String) -> Bool {
-        if NativeTarget.kind(id) != nil { return members(of: id).contains { receivers[$0]?.overAirPlay2 == true } }
-        return receivers[id]?.overAirPlay2 == true
+        if NativeTarget.kind(id) != nil { return members(of: id).contains { reachedOverAirPlay2($0) } }
+        return receivers[id].map(\.overAirPlay2) ?? reachedOverAirPlay2Before.contains(id)
     }
 
     /// Whether credentials no answer turned down are kept for the listed

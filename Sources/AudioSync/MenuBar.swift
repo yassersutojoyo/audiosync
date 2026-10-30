@@ -740,7 +740,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // The badge sits beside the mark, so the item widens while it shows.
         statusItem.length = badge ? NSStatusItem.variableLength : NSStatusItem.squareLength
         button.image = Self.statusImage(running: running, badge: badge)
-        button.setAccessibilityValue(badge ? model.text.noticesWaiting(noticeCount) : nil)
+        button.setAccessibilityValue(model.text.statusItemValue(running: running, notices: noticeCount))
     }
 
     /// The brand mark as a template image (the menu bar tints it), dimmed while
@@ -1822,7 +1822,9 @@ struct MenuBarView: View {
                           hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
                                           waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
                                           unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? note,
-                          renamedFrom: speaker.renamedFrom, kind: speaker.tag, airPlay2: speaker.airPlay2,
+                          renamedFrom: speaker.renamedFrom,
+                          value: t.rowValue(model.state(of: speaker), offline: speaker.unannounced),
+                          kind: speaker.tag, airPlay2: speaker.airPlay2,
                           availability: speaker.availability,
                           deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
             model.setEnabled(speaker, model.state(of: speaker).clickTurnsOn)

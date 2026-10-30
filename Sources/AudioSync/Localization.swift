@@ -106,6 +106,13 @@ struct UIStrings {
         count == 1 ? "1 notice" : "\(count) notices"
     }
 
+    /// The menu bar icon's accessibility value: streaming on or off, then the
+    /// notices waiting.
+    func statusItemValue(running: Bool, notices: Int) -> String {
+        let streaming = streamingSwitch + " " + (running ? on : off).lowercased()
+        return notices > 0 ? streaming + ", " + noticesWaiting(notices) : streaming
+    }
+
     func speakerOptions(name: String) -> String { "Options for \(name)" }
 
     /// A speaker's (or group's) accessibility value.
@@ -115,6 +122,12 @@ struct UIStrings {
         case .willPlay: return willPlay
         case .playing: return on
         }
+    }
+
+    /// A speaker row's accessibility value: its state, then that it is off
+    /// the network.
+    func rowValue(_ state: SpeakerState, offline: Bool) -> String {
+        offline ? value(state) + ", " + notOnNetwork : value(state)
     }
 
     /// What clicking a speaker (or group) does, as its tooltip.
@@ -127,9 +140,10 @@ struct UIStrings {
     }
 
     /// A speaker's (or group's) VoiceOver hint: its note, if any, then what a
-    /// click does while it waits for streaming to start.
+    /// click does while it waits for streaming to start. Off the network is
+    /// left out, since the row's value (`rowValue`) says it.
     func rowHint(_ state: SpeakerState, note: String?) -> String {
-        [note, state == .willPlay ? willPlayHelp : nil]
+        [note == notOnNetwork ? nil : note, state == .willPlay ? willPlayHelp : nil]
             .compactMap { $0 }
             .joined(separator: ". ")
     }
