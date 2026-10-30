@@ -65,6 +65,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, a stereo pair stays on when one of its speakers fails while the other is still connecting, and plays on the one that connects, as on Windows. Before, the whole pair turned off.
 - On the Mac, a stereo pair that named a missing side stops naming it once you turn the pair off or stop streaming. Before, its row kept saying the side was missing until the speaker list changed.
 - On Windows, the debug log stays within 50 MB. Before, it wrote the line that went past 50 MB and then the line saying the log is full.
+- On the Mac, the debug log stays within 50 MB. Before, the line saying it stopped could take it past 50 MB.
 - On the Mac, a speaker whose system name changes in macOS, a Bluetooth one included, shows the new name in AudioSync at once, as on Windows. Before, its row could keep the old name for up to 30 seconds. A name you gave the speaker in AudioSync stays.
 - On the Mac, after you pause and resume the app AudioSync captures, a speaker on this computer that waits for the AirPlay speakers plays the new audio together with them. Before, it first played the audio from just before the pause, which the AirPlay speakers had already played.
 - On the Mac, the arrow keys on a Google Cast speaker's volume slider in the web remote move it by the speaker's own step, or by 5 when the speaker reports none, as on the Mac's own slider. Before, they moved it by 1.

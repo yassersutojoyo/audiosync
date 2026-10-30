@@ -161,6 +161,8 @@ final class DebugLogFile: @unchecked Sendable {
 
     private let lock = NSLock()
     private let clock: () -> Date
+    private let stopMessage: String
+    private let stopLength: Int
     // Guarded by `lock`.
     private var descriptor: Int32 = -1
     private var size = 0
@@ -171,6 +173,10 @@ final class DebugLogFile: @unchecked Sendable {
         filePath = path
         self.limit = limit
         self.clock = clock
+        let stop = "[AudioSync] debug log reached \(limit / (1024 * 1024)) MB; "
+            + "nothing more is written until the next launch"
+        stopMessage = stop
+        stopLength = DebugLogFile.line(stop, at: Date(timeIntervalSince1970: 0)).utf8.count
     }
 
     deinit {
@@ -193,9 +199,9 @@ final class DebugLogFile: @unchecked Sendable {
         append(message, at: clock())
     }
 
-    /// Appends `message` as one line stamped with `date`. The line that would
-    /// pass the limit is replaced by one saying the log stopped; later messages
-    /// are dropped.
+    /// Appends `message` as one line stamped with `date`. The file never passes
+    /// the limit: a line that would leave no room for the line saying the log
+    /// stopped is replaced by it, and later messages are dropped.
     func append(_ message: String, at date: Date) {
         lock.lock()
         defer { lock.unlock() }
@@ -206,10 +212,10 @@ final class DebugLogFile: @unchecked Sendable {
             guard descriptor >= 0 else { return }
         }
         var line = Self.line(message, at: date)
-        if size + line.utf8.count > limit {
+        if size + line.utf8.count + stopLength > limit {
             reachedLimit = true
-            line = Self.line("[AudioSync] debug log reached \(limit / (1024 * 1024)) MB; "
-                             + "nothing more is written until the next launch", at: date)
+            guard size + stopLength <= limit else { return }
+            line = Self.line(stopMessage, at: date)
         }
         writeAll(line)
     }

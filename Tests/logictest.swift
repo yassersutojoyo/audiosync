@@ -886,13 +886,13 @@ do {
 
     let path = dir.appendingPathComponent("debug.log").path
     try? "previous launch\n".write(toFile: path, atomically: false, encoding: .utf8)
-    let file = DebugLogFile(path: path, limit: 100, clock: { t })
+    let file = DebugLogFile(path: path, limit: 200, clock: { t })
     file.empty()
     file.append("one")
     file.append("two")
     let firstTwo = DebugLogFile.line("one", at: t) + DebugLogFile.line("two", at: t)
     check(contents(path) == firstTwo, "debug log: a launch starts empty, then lines append in order")
-    file.append(String(repeating: "x", count: 30))   // 58 + 56 bytes would pass the 100-byte limit
+    file.append(String(repeating: "x", count: 30))   // 58 + 56 bytes leave no room for the 107-byte stop line
     file.append("later")
     let capped = contents(path)
     check(capped.hasPrefix(firstTwo) && capped.hasSuffix("nothing more is written until the next launch\n")
@@ -901,6 +901,12 @@ do {
     file.empty()
     file.append("again")
     check(contents(path) == DebugLogFile.line("again", at: t), "debug log: emptying starts the limit over")
+    let full = dir.appendingPathComponent("full.log").path
+    let filled = DebugLogFile(path: full, limit: 200, clock: { t })
+    for n in 0..<20 { filled.append("line \(n) of a long run") }
+    let atLimit = contents(full)
+    check(atLimit.utf8.count <= 200 && atLimit.hasSuffix("nothing more is written until the next launch\n"),
+          "debug log: the line saying it stopped fits under the limit too", "\(atLimit.utf8.count) bytes")
 
     let kept = dir.appendingPathComponent("kept.log").path
     try? "earlier\n".write(toFile: kept, atomically: false, encoding: .utf8)
