@@ -97,6 +97,7 @@ struct CaptureFlowWatch {
         case noCallback(TimeInterval)
         case serviceRestarted
         case aggregateDied
+        case inputLeft
 
         /// For the debug log.
         var description: String {
@@ -104,6 +105,7 @@ struct CaptureFlowWatch {
             case .noCallback(let seconds): return "no callback for \((seconds * 10).rounded() / 10) s"
             case .serviceRestarted: return "Core Audio's service restarted"
             case .aggregateDied: return "the aggregate device is no longer alive"
+            case .inputLeft: return "the input device left"
             }
         }
     }
@@ -151,6 +153,8 @@ struct CaptureFlowWatch {
         /// The capture is closed; try `next` is due at uptime `at`.
         case waiting(next: Int, at: TimeInterval)
         case trial(Int, since: TimeInterval)
+        /// The input device left (S329); try `next` is due once it is listed again after it was `gone`.
+        case away(next: Int, gone: Bool)
     }
 
     private var phase = Phase.watching
@@ -168,12 +172,23 @@ struct CaptureFlowWatch {
     /// `callbacks` is nil while the capture has no IOProc; `reading` is false
     /// while an app tap waits for an audio process, which is no stop. A tap of
     /// a paused source calls back nothing (S335 D3), so `source` says when
-    /// missing callbacks can count at all.
-    mutating func tick(callbacks: UInt64?, reading: Bool, source: Source, at uptime: TimeInterval) -> Step {
+    /// missing callbacks can count at all. `inputListed` is whether an input
+    /// device source's device is listed now.
+    mutating func tick(callbacks: UInt64?, reading: Bool, source: Source, at uptime: TimeInterval,
+                       inputListed: Bool = true) -> Step {
         guard !paused else { return .none }
         read(source)
         if case .waiting(let next, let due) = phase {
             guard uptime >= due else { return .none }
+            phase = .trial(next, since: uptime)
+            forgetCount()
+            return .tryOpen(next)
+        }
+        if case .away(let next, let gone) = phase {
+            guard inputListed, gone else {
+                phase = .away(next: next, gone: gone || !inputListed)
+                return .none
+            }
             phase = .trial(next, since: uptime)
             forgetCount()
             return .tryOpen(next)
@@ -193,7 +208,7 @@ struct CaptureFlowWatch {
             if moved { movedAt = uptime }
         }
         switch phase {
-        case .waiting:
+        case .waiting, .away:
             return .none
         case .watching:
             guard let movedAt, missing(since: movedAt, source: source, at: uptime) else { return .none }
@@ -266,10 +281,25 @@ struct CaptureFlowWatch {
         lastPosition = nil
         movingSince = nil
         switch phase {
-        case .watching: break
+        case .watching, .away: break
         case .waiting(let next, _): phase = .waiting(next: next, at: uptime + (busyWait ? Self.busySpacing : Self.trySpacing))
         case .trial(let number, _): phase = .trial(number, since: uptime)
         }
+    }
+
+    /// The input device left, or a try found it gone (S329): the capture
+    /// closes and waits, outside the `tries`, for the device to leave the
+    /// list unless it is already `gone` and to be listed again.
+    mutating func deviceLeft(at uptime: TimeInterval, gone: Bool) -> Step {
+        var next = 1
+        switch phase {
+        case .away: return .none
+        case .trial(let number, _): next = number
+        case .watching, .waiting: break
+        }
+        forgetCount()
+        phase = .away(next: next, gone: gone)
+        return .stopped(.inputLeft)
     }
 
     /// The try `tick` asked for could not open the capture.
@@ -288,10 +318,12 @@ struct CaptureFlowWatch {
     }
 
     /// Whether a try that threw `error` leaves room for the next one: an app
-    /// that quit (S142, S164) and an input device that left keep their own handling.
-    static func retries(after error: SourceCapture.CaptureError) -> Bool {
+    /// that quit (S142, S164) and an input device that left keep their own handling;
+    /// one whose input device is still listed gets the tries (S329).
+    static func retries(after error: SourceCapture.CaptureError, inputListed: Bool = false) -> Bool {
         switch error {
-        case .appNotRunning, .inputNotFound, .inputHandsFree, .inputDisconnected: return false
+        case .inputNotFound, .inputDisconnected: return inputListed
+        case .appNotRunning, .inputHandsFree: return false
         case .ownProcessUnknown, .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted, .inputBusy:
             return true
         }

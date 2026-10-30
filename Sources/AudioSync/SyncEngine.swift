@@ -56,8 +56,9 @@ final class StreamEngine {
     /// per attach. The host decides whether `dropRunaway` ends it.
     var onOutputRunaway: ((String, Int) -> Void)?
     private var runawayReports = OutputRunawayReports()
-    /// A reopen try met an input another process holds (S333), with its
-    /// error, the first time it does; nil once a try opens it again.
+    /// A reopen try met an input another process holds (S333), or the input
+    /// device left (S329), with its error, the first time; nil once a try
+    /// opens it again.
     var onInputBusy: ((SourceCapture.CaptureError?) -> Void)?
 
     /// Now Playing's latest reading, nil while the monitor doesn't run (S335 D3).
@@ -105,6 +106,8 @@ final class StreamEngine {
     private var reopenError: SourceCapture.CaptureError?
     /// The uptime of the first try that met a busy input; nil when none did.
     private var busySince: TimeInterval?
+    /// Whether the input device left and the capture waits for it (S329).
+    private var inputAway = false
     /// The 0.5 s check for outputs whose render callback stopped (S334).
     private var stallTimer: DispatchSourceTimer?
     private var stallWatch = OutputStallWatch()
@@ -415,6 +418,10 @@ final class StreamEngine {
             follow(flowWatch.report(.aggregateDied, at: ProcessInfo.processInfo.systemUptime))
             return
         }
+        if case .sourceLost(.inputDisconnected) = reason {
+            inputLeft(.inputDisconnected, gone: true)
+            return
+        }
         stop()
         onInterrupted?(reason)
     }
@@ -462,8 +469,11 @@ final class StreamEngine {
         timer.setEventHandler { [weak self] in
             guard let self, self.isRunning else { return }
             let watched = self.opened.map { CaptureFlowWatch.source($0.source, reading: self.nowPlayingReading?()) }
+            var listed = true
+            if case .input(let uid)? = self.opened?.source { listed = SourceCapture.inputListed(uid: uid) }
             self.follow(self.flowWatch.tick(callbacks: self.capture.counts?.callbacks, reading: self.capture.isReading,
-                                            source: watched ?? .unwatched, at: ProcessInfo.processInfo.systemUptime))
+                                            source: watched ?? .unwatched, at: ProcessInfo.processInfo.systemUptime,
+                                            inputListed: listed))
         }
         timer.resume()
         flowTimer = timer
@@ -474,6 +484,7 @@ final class StreamEngine {
         flowTimer = nil
         opened = nil
         busySince = nil
+        inputAway = false
     }
 
     private func follow(_ step: CaptureFlowWatch.Step) {
@@ -517,7 +528,17 @@ final class StreamEngine {
             }
             DebugTrace.log("[AudioSync] capture reopen try \(number) of \(CaptureFlowWatch.tries) failed: \(failure)")
             reopenError = failure
-            guard CaptureFlowWatch.retries(after: failure) else {
+            var listed = false
+            if case .input(let uid) = opened.source { listed = SourceCapture.inputListed(uid: uid) }
+            switch failure {
+            case .inputNotFound, .inputDisconnected:
+                guard listed else {
+                    inputLeft(failure, gone: false)
+                    return
+                }
+            default: break
+            }
+            guard CaptureFlowWatch.retries(after: failure, inputListed: listed) else {
                 stopForLostCapture(failure)
                 return
             }
@@ -526,10 +547,15 @@ final class StreamEngine {
         }
         DebugTrace.log("[AudioSync] capture reopen try \(number) of \(CaptureFlowWatch.tries): "
                        + "open at \(capture.sampleRate) Hz")
+        reopenError = nil
         if let since = busySince {
             busySince = nil
             let held = (ProcessInfo.processInfo.systemUptime - since).rounded()
             DebugTrace.log("[AudioSync] capture: the input was held by another process for about \(Int(held)) s")
+            onInputBusy?(nil)
+        }
+        if inputAway {
+            inputAway = false
             onInputBusy?(nil)
         }
         if CaptureRate.needsRestart(current: rate, reported: capture.sampleRate) {
@@ -537,6 +563,16 @@ final class StreamEngine {
             stop()
             onInterrupted?(.formatChanged)
         }
+    }
+
+    /// The input device left (S329): only the capture closes, the notice says
+    /// so, and the capture opens again once the device is listed again.
+    private func inputLeft(_ error: SourceCapture.CaptureError, gone: Bool) {
+        if !inputAway {
+            inputAway = true
+            onInputBusy?(error)
+        }
+        follow(flowWatch.deviceLeft(at: ProcessInfo.processInfo.systemUptime, gone: gone))
     }
 
     private func stopForLostCapture(_ error: SourceCapture.CaptureError) {

@@ -463,6 +463,9 @@ struct Session<D: Driver> {
     /// The start leads of switched-on outputs whose renderers stopped as
     /// their devices went away, still counted in the session lead (S328).
     held_leads: BTreeMap<String, LostLead>,
+    /// Whether a follow found none of the apps of an "only these" mix, whose
+    /// quit then waits for the next follow.
+    quit_held: bool,
 }
 
 /// A single app captured whose process Windows won't open for a wait (an
@@ -1222,6 +1225,13 @@ impl<D: Driver> Controller<D> {
     #[cfg(test)]
     pub fn driver_mut(&mut self) -> &mut D {
         &mut self.driver
+    }
+
+    /// Lets the next poll follow a mix's apps, as if [`MIX_FOLLOW_INTERVAL`]
+    /// passed.
+    #[cfg(test)]
+    pub fn pass_mix_follow(&mut self) {
+        self.mix_checked = None;
     }
 
     /// The output settings.
@@ -3173,6 +3183,7 @@ impl<D: Driver> Controller<D> {
             logged_lead: None,
             unwatched,
             held_leads: BTreeMap::new(),
+            quit_held: false,
         });
         self.refresh_if_needed(false);
         let failures = self.sync_outputs();
@@ -3340,10 +3351,23 @@ impl<D: Driver> Controller<D> {
         self.mix_checked = Some(now);
         let (source, running) = (session.source.clone(), session.target.clone());
         let target = match self.follow_target(&source) {
-            Ok(target) => target,
+            Ok(target) => {
+                if let Some(session) = self.session.as_mut() {
+                    session.quit_held = false;
+                }
+                target
+            }
             // One app Windows won't let AudioSync wait for leaves the whole
             // mix unwatched, so its capture never reports the quit itself.
             Err(BackendError::SourceGone) if matches!(source, SourceId::Apps { .. }) => {
+                // The next follow takes in an app that starts again (a
+                // relaunch to update), as the Mac looks again after a quit.
+                if let Some(session) = self.session.as_mut()
+                    && !session.quit_held
+                {
+                    session.quit_held = true;
+                    return;
+                }
                 if self.decide_quit(&source, Streaming::Running) == SourceQuitAction::SwitchToSystem
                 {
                     self.switch_to_system();
@@ -4287,10 +4311,16 @@ impl<D: Driver> AudioBackend for Controller<D> {
                     None
                 }
                 // "All except" outlives its apps: the mix follows the apps left.
+                // "Only these" ends at its follow, as an unwatched one does.
                 Some(CaptureState::SourceQuit)
-                    if matches!(session.source, SourceId::AppsExcept { .. }) =>
+                    if matches!(
+                        session.source,
+                        SourceId::Apps { .. } | SourceId::AppsExcept { .. }
+                    ) =>
                 {
-                    self.mix_checked = None;
+                    if !session.quit_held {
+                        self.mix_checked = None;
+                    }
                     None
                 }
                 Some(CaptureState::SourceQuit) => Some(StopReason::SourceQuit),
@@ -5283,9 +5313,11 @@ mod tests {
             backend.driver().capture_target(),
             Some(included(&[PLAYER_PID, PLAYER_PID + 1]))
         );
-        // Once every app of it quits, the source quit.
+        // Once every app of it quits, the source quit at the next follow.
         backend.quit_app(PLAYER_PID);
         backend.quit_app(PLAYER_PID + 1);
+        backend.poll();
+        backend.mix_checked = None;
         let events = backend.poll();
         assert!(
             events.iter().any(|event| matches!(
@@ -5295,6 +5327,34 @@ mod tests {
                 }
             )),
             "{events:?}"
+        );
+    }
+
+    // covers: S327
+    #[test]
+    fn an_only_these_mix_streams_on_through_a_relaunch_of_its_app() {
+        let mut backend = backend();
+        let source = SourceId::Apps {
+            root_pids: vec![PLAYER_PID],
+            executables: vec!["player.exe".to_owned()],
+        };
+        backend.start(&source).unwrap();
+        // A relaunch to update: the process quits and a new one starts.
+        backend.quit_app(PLAYER_PID);
+        backend.add_app(PLAYER_PID + 1, "player.exe");
+        let mut events = backend.poll();
+        backend.mix_checked = None;
+        events.extend(backend.poll());
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::Stopped { .. })),
+            "{events:?}"
+        );
+        assert_eq!(backend.driver().captures_started().len(), 1);
+        assert_eq!(
+            backend.driver().capture_target(),
+            Some(included(&[PLAYER_PID + 1]))
         );
     }
 
@@ -7035,6 +7095,8 @@ mod tests {
                 backend.start(&mix).unwrap();
                 backend.quit_app(PLAYER_PID);
                 backend.quit_app(ADMIN_PID);
+                backend.poll();
+                backend.mix_checked = None;
                 let events = backend.poll();
                 poll_quietly(&mut backend, 2);
                 (events, backend.running_source(), playing(&backend))

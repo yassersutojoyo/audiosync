@@ -203,6 +203,11 @@ final class SourceCapture {
         }
     }
 
+    /// Whether the input device with `uid` is listed now (S329).
+    static func inputListed(uid: String) -> Bool {
+        HAL.device(uid: uid) != nil
+    }
+
     /// Builds whatever reading `source` takes; on failure the caller releases
     /// what was built so far.
     private func startSource(_ source: AudioSource, rebuild: Bool) throws {

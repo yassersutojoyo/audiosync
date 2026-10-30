@@ -2250,6 +2250,52 @@ do {
           "capture watch: an input device that stops delivering is opened again and kept once it calls back; one that stays silent gets 5 tries, one unplugged none",
           "\(back) \(off)")
 }
+// covers: S329 (the Mac: an input device that left is waited for, outside the tries)
+do {
+    var watch = CaptureFlowWatch()
+    let input = CaptureFlowWatch.source(.input(uid: "line-in"), reading: nil)
+    var uptime = 10.0
+    var steps = [watch.deviceLeft(at: uptime, gone: true)]
+    var waits: [CaptureFlowWatch.Step] = []
+    // Unplugged for a minute, plugged in, and gone again at the try, more times than there are tries.
+    for _ in 0...CaptureFlowWatch.tries {
+        uptime += 60
+        waits.append(watch.tick(callbacks: nil, reading: true, source: input, at: uptime, inputListed: false))
+        uptime += 0.5
+        steps.append(watch.tick(callbacks: nil, reading: true, source: input, at: uptime, inputListed: true))
+        steps.append(watch.deviceLeft(at: uptime, gone: false))
+    }
+    // Still listed as it failed: no try until it leaves the list and comes back.
+    waits.append(watch.tick(callbacks: nil, reading: true, source: input, at: uptime + 0.5, inputListed: true))
+    uptime += 60
+    waits.append(watch.tick(callbacks: nil, reading: true, source: input, at: uptime, inputListed: false))
+    uptime += 0.5
+    let back = watch.tick(callbacks: nil, reading: true, source: input, at: uptime, inputListed: true)
+    var kept = CaptureFlowWatch.Step.none
+    for tick in 1...12 {
+        let step = watch.tick(callbacks: UInt64(tick * 50), reading: true, source: input,
+                              at: uptime + 0.5 * Double(tick), inputListed: true)
+        if step != .none { kept = step }
+    }
+    let tries = steps.filter { $0 == .tryOpen(1) }.count
+    check(!steps.contains(.giveUp) && tries == CaptureFlowWatch.tries + 1 && waits.allSatisfy { $0 == .none }
+            && back == .tryOpen(1) && kept == .kept(1),
+          "capture watch: an input device that left is opened again each time it is listed again, never giving up",
+          "\(steps) \(waits) \(back) \(kept)")
+}
+// covers: S329 (the Mac: a loss the input listener reports while the device stays listed, and a failed try on a listed device)
+do {
+    var watch = CaptureFlowWatch()
+    let input = CaptureFlowWatch.source(.input(uid: "line-in"), reading: nil)
+    let left = watch.deviceLeft(at: 10, gone: true)
+    let next = watch.tick(callbacks: nil, reading: true, source: input, at: 10.5, inputListed: true)
+    check(left == .stopped(.inputLeft) && next == .tryOpen(1)
+            && CaptureFlowWatch.retries(after: .inputNotFound("line-in"), inputListed: true)
+            && CaptureFlowWatch.retries(after: .inputDisconnected, inputListed: true)
+            && !CaptureFlowWatch.retries(after: .inputNotFound("line-in"), inputListed: false),
+          "capture watch: an input device reported lost while still listed is tried at the next tick; a try that fails while it stays listed gets the tries",
+          "\(left) \(next)")
+}
 // covers: S333 (the Mac: the hog owner read decides whether an input is busy)
 do {
     typealias CE = SourceCapture.CaptureError

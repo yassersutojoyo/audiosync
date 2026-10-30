@@ -792,6 +792,11 @@ const MIX_FORMAT: StreamFormat = StreamFormat {
 /// How often the opener looks at the plan when nothing wakes it, in ms.
 const OPENER_WAIT_MS: u32 = 50;
 
+/// Slots of a mix's retired mailbox: every lane that can reach it between
+/// two sweeps of the opener, those held, those ready and those one round
+/// opens, so the mix thread never finds it full.
+const RETIRED_SLOTS: usize = 3 * MAX_MIX_APPS;
+
 /// One app's loopback in a mix.
 struct LoopbackLane {
     stream: CaptureStream,
@@ -876,7 +881,7 @@ pub(super) struct MixShare {
     /// Loopbacks opened for the mix to take in.
     ready: [LanePtr; MAX_MIX_APPS],
     /// Loopbacks the mix let go, for the opener to stop and free.
-    retired: [LanePtr; MAX_MIX_APPS],
+    retired: [LanePtr; RETIRED_SLOTS],
     /// Wakes the opener.
     wake: Event,
     quit: AtomicBool,
@@ -888,7 +893,7 @@ impl MixShare {
             plan: MixPlan::default(),
             held: MixPlan::default(),
             ready: [const { AtomicPtr::new(ptr::null_mut()) }; MAX_MIX_APPS],
-            retired: [const { AtomicPtr::new(ptr::null_mut()) }; MAX_MIX_APPS],
+            retired: [const { AtomicPtr::new(ptr::null_mut()) }; RETIRED_SLOTS],
             wake: Event::auto_reset()?,
             quit: AtomicBool::new(false),
         })
@@ -910,10 +915,7 @@ impl MixShare {
 
     /// Hands `lane` over through the first free slot of `slots`; gives it
     /// back when none is free.
-    fn post(
-        slots: &[LanePtr],
-        lane: Box<Opened<LoopbackLane>>,
-    ) -> Result<usize, Box<Opened<LoopbackLane>>> {
+    fn post<T>(slots: &[AtomicPtr<T>], lane: Box<T>) -> Result<usize, Box<T>> {
         let raw = Box::into_raw(lane);
         for (index, slot) in slots.iter().enumerate() {
             if slot
@@ -949,7 +951,10 @@ impl Drop for MixShare {
 /// The opener thread of a mix: opens the loopback of each app the plan
 /// names that the mix doesn't hold yet, once per plan, and stops the ones
 /// the mix let go, until the mix quits.
-fn opener(share: &MixShare, frequency: i64, counters: &Arc<CaptureCounters>) {
+fn opener(
+    share: &MixShare,
+    mut open: impl FnMut(u32) -> Result<Box<Opened<LoopbackLane>>, BackendError>,
+) {
     let _apartment = Apartment::enter();
     let (mut seen, mut count) = (0, 0);
     let mut planned = [0_u32; MAX_MIX_APPS];
@@ -971,6 +976,10 @@ fn opener(share: &MixShare, frequency: i64, counters: &Arc<CaptureCounters>) {
         }
         if let Some((holding, _)) = share.held.read(u64::MAX, &mut held) {
             for &pid in &planned[..count] {
+                // Each open may hang for seconds; a stop waits for one at most.
+                if share.quit.load(Ordering::Acquire) {
+                    break;
+                }
                 let waiting = share.ready.iter().zip(&posted).any(|(slot, &posted)| {
                     posted == pid && !slot.load(Ordering::Acquire).is_null()
                 });
@@ -978,7 +987,7 @@ fn opener(share: &MixShare, frequency: i64, counters: &Arc<CaptureCounters>) {
                     continue;
                 }
                 tried.push(pid);
-                if let Ok(lane) = LoopbackLane::open(pid, frequency, counters)
+                if let Ok(lane) = open(pid)
                     && let Ok(index) = MixShare::post(&share.ready, lane)
                 {
                     posted[index] = pid;
@@ -1060,7 +1069,7 @@ fn run_mix(
         let counters = Arc::clone(counters);
         thread::Builder::new()
             .name("audiosync-mix-opener".into())
-            .spawn(move || opener(&share, frequency, &counters))
+            .spawn(move || opener(&share, |pid| LoopbackLane::open(pid, frequency, &counters)))
     };
     let opener_thread = match opener_thread {
         Ok(thread) => thread,
@@ -1108,12 +1117,7 @@ fn mix_loop(
     let mut sink = |stereo: &[f32], frames: usize, filled: &[bool]| {
         converter.push_mixed(as_bytes(stereo), frames, filled);
     };
-    let mut handed = |lane| {
-        // A full mailbox means the opener is stuck; this one is freed here.
-        if let Err(lane) = MixShare::post(&share.retired, lane) {
-            drop(lane);
-        }
-    };
+    let mut handed = |lane| retire(&share.retired, lane);
     loop {
         // SAFETY: every handle lives as long as its stream, which lives
         // until the handles are taken again below.
@@ -1153,6 +1157,15 @@ fn mix_loop(
             share.wake.set();
             count = wait_handles(lanes, stop, &mut handles);
         }
+    }
+}
+
+/// Hands `lane`, which the mix let go, to the opener through `retired`;
+/// called on the mix's real-time thread.
+fn retire<T>(retired: &[AtomicPtr<T>], lane: Box<T>) {
+    // Unreachable at RETIRED_SLOTS; a leak beats stopping a stream here.
+    if let Err(lane) = MixShare::post(retired, lane) {
+        Box::leak(lane);
     }
 }
 
@@ -1245,6 +1258,37 @@ mod tests {
                 input.name
             );
         }
+    }
+
+    #[test]
+    fn a_mix_that_stops_while_an_app_opens_tries_no_other_app() {
+        let share = MixShare::new().expect("a share");
+        share.plan.set(&[1, 2, 3]);
+        let mut tried = Vec::new();
+        opener(&share, |pid| {
+            tried.push(pid);
+            // The mix stops while Windows audio hangs in this open.
+            share.quit.store(true, Ordering::Release);
+            Err(BackendError::NotResponding)
+        });
+        assert_eq!(tried, [1]);
+    }
+
+    #[test]
+    fn a_full_retired_mailbox_never_frees_a_lane_on_the_mix_thread() {
+        struct Lane(Arc<AtomicBool>);
+        impl Drop for Lane {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Relaxed);
+            }
+        }
+        let waiting = Box::into_raw(Box::new(Lane(Arc::new(AtomicBool::new(false)))));
+        let retired = [AtomicPtr::new(waiting)];
+        let freed = Arc::new(AtomicBool::new(false));
+        retire(&retired, Box::new(Lane(Arc::clone(&freed))));
+        assert!(!freed.load(Ordering::Relaxed), "freed on the mix thread");
+        // SAFETY: `waiting` came from `Box::into_raw` above and nothing took it.
+        drop(unsafe { Box::from_raw(waiting) });
     }
 
     #[test]

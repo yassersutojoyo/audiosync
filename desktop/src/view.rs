@@ -11134,6 +11134,7 @@ mod tests {
             adapter.audio_mut().quit_app(2000);
             adapter.audio_mut().quit_app(3000);
             adapter.poll();
+            adapter.audio_mut().pass_mix_follow();
             adapter.poll();
             let app = app_over(adapter);
             let notice = app.main.get_notices().row_data(0).expect("a notice");
