@@ -14,6 +14,7 @@ use audiosync_core::eq::{self, CurveMatch, EqSettings, UserCurve};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::presets::{self as policy_presets, Preset, Scene, SpeakerNow};
 use audiosync_core::policy::source_quit::WhenSourceQuits;
+use audiosync_core::policy::speakers::compare_names;
 use audiosync_core::policy::zones::{self, ClickAction, MemberKind, Situation, Zone, Zones};
 #[cfg(any(test, feature = "mock-backend"))]
 use audiosync_core::volume;
@@ -1362,7 +1363,8 @@ impl AppState {
     }
 
     /// The speaker lists both windows show: the PC's own outputs in their
-    /// order, then every other speaker by name, case-insensitively.
+    /// order, then every other speaker by name, case-insensitively, numbers
+    /// by value.
     pub fn layout(&self) -> (Vec<&Speaker>, Vec<&Speaker>) {
         let this_pc = self
             .speakers
@@ -1375,7 +1377,7 @@ impl AppState {
             .filter(|s| !s.kind.is_this_pc())
             .collect();
         // A stable sort keeps the order of equal names.
-        connected.sort_by_key(|s| s.name.to_lowercase());
+        connected.sort_by(|a, b| compare_names(&a.name, &b.name));
         (this_pc, connected)
     }
 
@@ -3071,6 +3073,22 @@ mod tests {
                 "Living Room"
             ]
         );
+    }
+
+    // covers: S152
+    #[test]
+    fn connected_speakers_sort_numbers_by_value() {
+        let mut state = MockBackend::new().snapshot();
+        let mut others = state.speakers.iter_mut().filter(|s| !s.kind.is_this_pc());
+        others.next().unwrap().name = "Room 10".into();
+        others.next().unwrap().name = "Room 2".into();
+        let (_, connected) = state.layout();
+        let rooms: Vec<&str> = connected
+            .iter()
+            .map(|s| s.name.as_str())
+            .filter(|name| name.starts_with("Room"))
+            .collect();
+        assert_eq!(rooms, ["Room 2", "Room 10"]);
     }
 
     #[test]

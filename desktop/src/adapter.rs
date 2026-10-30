@@ -74,7 +74,7 @@ use audiosync_core::policy::session::{
     source_switch, starts, streaming_after,
 };
 use audiosync_core::policy::source_quit::WhenSourceQuits;
-use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey};
+use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey, compare_names};
 use audiosync_core::policy::zones::{self, MemberKind, Situation, Step, Zone, Zones};
 use audiosync_core::reader::DRIFT_TOLERANCE_MS;
 use audiosync_core::volume::row_level;
@@ -3268,8 +3268,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// `speakers` without the hidden ones, and the Hidden Speakers entries:
-    /// a listed one by its name now, sorted by name, case-insensitively,
-    /// then by ID.
+    /// a listed one by its name now, sorted by name, case-insensitively and
+    /// numbers by value, then by ID.
     fn without_hidden(&self, speakers: Vec<Speaker>) -> (Vec<Speaker>, Vec<HiddenSpeaker>) {
         let (hidden_rows, listed): (Vec<Speaker>, Vec<Speaker>) = speakers
             .into_iter()
@@ -3287,12 +3287,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 }
             })
             .collect();
-        hidden.sort_by(|a, b| {
-            a.name
-                .to_lowercase()
-                .cmp(&b.name.to_lowercase())
-                .then_with(|| a.id.cmp(&b.id))
-        });
+        hidden.sort_by(|a, b| compare_names(&a.name, &b.name).then_with(|| a.id.cmp(&b.id)));
         (listed, hidden)
     }
 
@@ -11613,6 +11608,26 @@ mod tests {
         assert_eq!(hidden.len(), 1, "no stale entry: {hidden:?}");
         assert_eq!(hidden[0].id, key(DAC_PORT_2));
         assert!(hidden[0].present.is_some());
+    }
+
+    // covers: S152
+    #[test]
+    fn hidden_speakers_sort_numbers_by_value() {
+        let mut adapter = adapter();
+        adapter.restore(Settings {
+            hidden_speakers: vec![
+                hidden_cast(&cc("aa"), "Room 10"),
+                hidden_cast(&cc("bb"), "Room 2"),
+            ],
+            ..Settings::default()
+        });
+        let names: Vec<String> = adapter
+            .snapshot()
+            .hidden
+            .into_iter()
+            .map(|h| h.name)
+            .collect();
+        assert_eq!(names, ["Room 2", "Room 10"]);
     }
 
     #[test]
