@@ -4833,6 +4833,15 @@ do {
         slept.sleeping()
         check(!slept.begin(uid: "bt", ticket: sleptTicket, session: 1),
               "EC2 Bluetooth fresh link: a sleep cancels the second restart")
+        let dozed = FreshLinkWatch()
+        dozed.noteListing([], now: 0)
+        dozed.noteListing(["bt"], now: 1)
+        _ = dozed.decide(uid: "bt", bluetooth: true, now: 1.5, session: 1)
+        let quickTicket = dozed.pendingTicket(uid: "bt")
+        dozed.sleeping()
+        check(quickTicket != nil && dozed.pendingTicket(uid: "bt") == nil
+                && !dozed.begin(uid: "bt", ticket: quickTicket ?? -1, session: 1),
+              "EC2 Bluetooth fresh link: a sleep before the 2 s restart is due cancels it")
         let flapping = FreshLinkWatch()
         let firstTicket = cameBack(flapping, at: 10)
         flapping.noteListing([], now: 100, session: 1)

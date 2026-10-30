@@ -35,6 +35,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On the Mac, a Bluetooth speaker that had just connected when the Mac went to sleep no longer gets a quick restart left over from before the sleep, which cut the sound for a moment within 2 seconds of wake.
 - After you pause and resume the app AudioSync captures, a speaker on this computer that waits for the AirPlay speakers plays the new audio together with them. Before, it first played the audio from just before the pause, which the AirPlay speakers had already played. On the Mac.
 - On the Mac, the arrow keys on a Google Cast speaker's volume slider in the web remote move it by the speaker's own step, or by 5 when the speaker reports none, as on the Mac's own slider. Before, they moved it by 1.
 - On the Mac, the web remote says to turn on in AudioSync a speaker that asks for a code, a stereo pair whose member asks for a password included, even when its row has a note of its own. Before, the phone showed only that note.

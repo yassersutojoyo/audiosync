@@ -165,7 +165,9 @@ extension AppDelegate {
             guard let self else { return }
             self.macAsleep = true
             self.engine.macWillSleep()
-            self.freshLinks.sleeping()
+            for uid in self.freshLinks.sleeping() {
+                DebugTrace.log("[AudioSync] fresh link: restart of Bluetooth output \(uid) cancelled: the Mac slept")
+            }
             self.endNativePinSessions(.sleep, streaming: self.engine.isRunning)
         }
         center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in

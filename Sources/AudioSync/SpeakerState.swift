@@ -392,6 +392,13 @@ final class FreshLinkWatch {
         calm[uid] = nil
     }
 
-    /// The Mac goes to sleep: the restart of a link back mid-session is dropped.
-    func sleeping() { calm = [:] }
+    /// The Mac goes to sleep: the restarts still due are dropped, since the link's
+    /// timing before the sleep says nothing about it after. Returns the UIDs whose 2 s restart went.
+    @discardableResult
+    func sleeping() -> [String] {
+        let dropped = Array(pending.keys)
+        pending = [:]
+        calm = [:]
+        return dropped
+    }
 }
