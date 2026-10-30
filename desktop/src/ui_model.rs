@@ -14,7 +14,6 @@ use audiosync_core::eq::{self, CurveMatch, EqSettings, UserCurve};
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::presets::{self as policy_presets, Preset, Scene, SpeakerNow};
 use audiosync_core::policy::source_quit::WhenSourceQuits;
-use audiosync_core::policy::speakers::{NoticeSubject, SpeakerKey};
 use audiosync_core::policy::zones::{self, ClickAction, MemberKind, Situation, Zone, Zones};
 #[cfg(any(test, feature = "mock-backend"))]
 use audiosync_core::volume;
@@ -337,6 +336,9 @@ pub struct CastRow {
     pub added_by_address: bool,
     /// Nothing vouches for it now, so it can't start (spec C17, C18).
     pub offline: bool,
+    /// Another app took it over: it stays off until the user switches it on
+    /// (spec S246).
+    pub taken_over: bool,
 }
 
 /// A Google Cast group and what its row knows of its members.
@@ -1254,25 +1256,6 @@ impl AppState {
         }
     }
 
-    /// Whether another app took Cast speaker `id` over: only its notice
-    /// records it, in the subject the adapter writes.
-    fn cast_taken_over(&self, id: &str) -> bool {
-        let Some(device) = SpeakerKey::cast_id(id) else {
-            return false;
-        };
-        let subject = format!("{:?}", NoticeSubject::Cast(device.to_owned()));
-        self.notices.iter().any(|notice| {
-            notice.subject == subject
-                && matches!(
-                    notice.message,
-                    NoticeMessage::CastCantPlay {
-                        problem: CastProblem::TakenOver,
-                        ..
-                    }
-                )
-        })
-    }
-
     /// A zone is on when a click with streaming on would switch it off
     /// (spec S246), so a Cast member the click leaves off counts toward
     /// neither. Playing, it waits when each member it counts waits.
@@ -1295,8 +1278,10 @@ impl AppState {
                 },
                 listed: true,
                 on: s.enabled,
-                busy: s.cast.as_ref().is_some_and(|cast| cast.offline)
-                    || self.cast_taken_over(&s.id),
+                busy: s
+                    .cast
+                    .as_ref()
+                    .is_some_and(|cast| cast.offline || cast.taken_over),
                 needs_airplay2: false,
                 in_target: s.in_target.is_some(),
             })
@@ -2248,6 +2233,7 @@ impl MockBackend {
                 group: None,
                 added_by_address: false,
                 offline: false,
+                taken_over: false,
             }),
             ..template
         };
@@ -2722,6 +2708,7 @@ impl Backend for MockBackend {
                     group: None,
                     added_by_address: true,
                     offline: false,
+                    taken_over: false,
                 }),
                 group: None,
                 mic_left_out: None,
@@ -3324,6 +3311,7 @@ mod tests {
             group: None,
             added_by_address: false,
             offline: true,
+            taken_over: false,
         });
         let state = backend.snapshot();
         assert_eq!(
@@ -3333,16 +3321,8 @@ mod tests {
         );
         if let Some(cast) = backend.speaker_mut("cc:kitchen").unwrap().cast.as_mut() {
             cast.offline = false;
+            cast.taken_over = true;
         }
-        backend.state.notices.push(Notice {
-            id: 9,
-            subject: format!("{:?}", NoticeSubject::Cast("kitchen".into())),
-            message: NoticeMessage::CastCantPlay {
-                speaker: "Kitchen".into(),
-                problem: CastProblem::TakenOver,
-            },
-            time: "09.40".into(),
-        });
         let state = backend.snapshot();
         assert_eq!(
             state.zone_state(&state.zones[0]),
@@ -3490,6 +3470,7 @@ mod tests {
                 group: None,
                 added_by_address: true,
                 offline: true,
+                taken_over: false,
             }),
             ..template
         });

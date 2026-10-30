@@ -527,6 +527,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     recall_watch: Option<RecallWatch>,
     gate: AutoStartGate,
     notices: Notices<NoticeSubject, Posted>,
+    /// Cast speakers another app took over, until the user switches one on
+    /// (spec S246): dismissing the notice doesn't free them.
+    taken_over_cast: BTreeSet<String>,
     next_notice: u64,
     /// What the double-audio notice showing is about.
     heard_twice: Option<HeardTwiceSubject>,
@@ -709,6 +712,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             recall_watch: None,
             gate: AutoStartGate::default(),
             notices: Notices::new(),
+            taken_over_cast: BTreeSet::new(),
             next_notice: 1,
             heard_twice: None,
             heard_twice_dismissed: BTreeMap::new(),
@@ -2103,6 +2107,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         });
         if on {
             self.notices.clear(&[NoticeSubject::Cast(id.to_owned())]);
+            self.taken_over_cast.remove(id);
         }
         match self.audio.set_cast_enabled(id, on) {
             Err(problem) => self.cast_cant_play(id, problem),
@@ -2112,19 +2117,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.take_events();
     }
 
-    /// Whether another app took Cast speaker `id` over, as its notice says:
-    /// a zone click leaves it off (spec S246).
+    /// Whether another app took Cast speaker `id` over: a zone click leaves
+    /// it off (spec S246).
     fn cast_taken_over(&self, id: &str) -> bool {
-        self.notices.iter().any(|(subject, posted)| {
-            *subject == NoticeSubject::Cast(id.to_owned())
-                && matches!(
-                    posted.message,
-                    NoticeMessage::CastCantPlay {
-                        problem: ui_model::CastProblem::TakenOver,
-                        ..
-                    }
-                )
-        })
+        self.taken_over_cast.contains(id)
     }
 
     /// Adds a zone named `typed` (S150) holding `members`, each leaving the
@@ -2173,6 +2169,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             SpeakerKey::Cast(id) => {
                 if on {
                     self.notices.clear(&[NoticeSubject::Cast(id.clone())]);
+                    self.taken_over_cast.remove(id);
                 }
                 if let Err(problem) = self.audio.set_cast_enabled(id, on) {
                     self.cast_cant_play(id, problem);
@@ -2591,8 +2588,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// A member the latest recall switched on that fails to start: its
     /// line goes into the preset notice, and no notice of its own posts
     /// (spec S266). Whether `message` about `subject` went there. A Cast
-    /// takeover keeps its own notice, which tells later recalls and zone
-    /// clicks the speaker is busy, and so does an AirPlay problem whose
+    /// takeover keeps its own notice, and so does an AirPlay problem whose
     /// notice says what to do or why it can't play.
     fn fold_into_preset_notice(
         &mut self,
@@ -2675,6 +2671,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Tells why a Cast speaker can't play; it is off.
     fn cast_cant_play(&mut self, id: &str, problem: CastProblem) {
+        if problem == CastProblem::TakenOver {
+            self.taken_over_cast.insert(id.to_owned());
+        }
         let speaker = self.cast_name(id);
         self.post(
             NoticeSubject::Cast(id.to_owned()),
@@ -2746,6 +2745,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 }),
                 added_by_address: speaker.address.is_some(),
                 offline: speaker.offline,
+                taken_over: self.cast_taken_over(&speaker.id),
             }),
             group: None,
             mic_left_out: None,
@@ -3047,6 +3047,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         {
             let before = self.cast_found_ids.insert(address.text(), to.to_owned());
             self.must_save |= before.as_deref() != Some(to);
+        }
+        if self.taken_over_cast.remove(from) {
+            self.taken_over_cast.insert(to.to_owned());
         }
         let (from_key, to_key) = (cast_key(from), cast_key(to));
         if !self.key_kept(&from_key) {
@@ -14231,6 +14234,23 @@ mod tests {
         assert!(state.speaker(&cc(DEN)).is_none() && state.speaker(&address).is_none());
     }
 
+    /// As on the Mac, a takeover moves with the speaker to the ID a browse
+    /// found it under.
+    // covers: S246, C18
+    #[test]
+    fn a_takeover_moves_to_the_id_a_browse_found() {
+        let (mut adapter, _fake) = cast_adapter();
+        let address = cc_address("192.0.2.31");
+        let from = &address["cc:".len()..];
+        adapter.taken_over_cast.insert(from.to_owned());
+        adapter.handle(BackendEvent::CastIdentified {
+            from: from.to_owned(),
+            to: DEN.to_owned(),
+        });
+        assert!(adapter.cast_taken_over(DEN));
+        assert!(!adapter.cast_taken_over(from));
+    }
+
     // covers: S341
     #[test]
     fn identifying_a_speaker_again_writes_no_settings() {
@@ -16077,6 +16097,84 @@ mod tests {
         assert!(preset_notices(&adapter).is_empty());
 
         adapter.recall_preset("preset:1");
+        assert_eq!(
+            preset_notices(&adapter),
+            [left_off_notice(
+                "Evening",
+                &[("Kitchen", PresetLeftOff::Busy)]
+            )]
+        );
+    }
+
+    /// As on the Mac, a takeover outlives its notice: a zone click leaves
+    /// the speaker off until the user switches it on.
+    // covers: S246, C2
+    #[test]
+    fn a_zone_click_leaves_a_taken_over_cast_member_off_after_its_notice_goes() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.add_zone("Lounge", &[key(SPEAKERS), cc(CAST_KITCHEN)]);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        fake.report(cast_ended(1, SessionEnd::TakenOver));
+        adapter.poll();
+        Backend::dismiss_all_notices(&mut adapter);
+
+        adapter.toggle_zone("zone:1");
+        assert!(enabled(&adapter, SPEAKERS));
+        assert!(!speaker_of(&adapter, &cc(CAST_KITCHEN)).enabled);
+
+        adapter.toggle_zone("zone:1");
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), false);
+        adapter.toggle_zone("zone:1");
+        assert!(speaker_of(&adapter, &cc(CAST_KITCHEN)).enabled);
+    }
+
+    /// The zone row reads the takeover as the click does: with Speakers on
+    /// it shows on, and a click switches it off.
+    // covers: S246, C2
+    #[test]
+    fn a_zone_shows_on_while_its_taken_over_cast_member_is_off_after_the_notice_goes() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.add_zone("Lounge", &[key(SPEAKERS), cc(CAST_KITCHEN)]);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        fake.report(cast_ended(1, SessionEnd::TakenOver));
+        adapter.poll();
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        Backend::dismiss_all_notices(&mut adapter);
+
+        let state = adapter.snapshot();
+        assert_ne!(state.zone_state(&state.zones[0]), SpeakerState::Off);
+        adapter.toggle_zone("zone:1");
+        assert!(!enabled(&adapter, SPEAKERS));
+    }
+
+    /// As on the Mac, a recall after the takeover notice is dismissed still
+    /// leaves the speaker off as in use.
+    // covers: S246, S265, C2
+    #[test]
+    fn a_recall_leaves_a_taken_over_cast_member_off_after_its_notice_goes() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[
+                (key(SPEAKERS), None),
+                (cc(CAST_KITCHEN), None),
+            ])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        fake.report(cast_ended(1, SessionEnd::TakenOver));
+        adapter.poll();
+        let notice = adapter
+            .notices
+            .iter()
+            .find(|(subject, _)| **subject == NoticeSubject::Cast(CAST_KITCHEN.to_owned()))
+            .map(|(_, posted)| posted.id)
+            .expect("the takeover notice");
+        Backend::dismiss_notice(&mut adapter, notice);
+
+        adapter.recall_preset("preset:1");
+        assert!(!speaker_of(&adapter, &cc(CAST_KITCHEN)).enabled);
         assert_eq!(
             preset_notices(&adapter),
             [left_off_notice(

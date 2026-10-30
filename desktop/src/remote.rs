@@ -794,6 +794,7 @@ mod tests {
             volume_fixed: false,
             added_by_address: false,
             offline: false,
+            taken_over: false,
             volume_step: 1.0,
         });
         let mut den = speaker("den", SpeakerKind::AirPlay2, None);

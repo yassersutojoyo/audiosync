@@ -8327,6 +8327,7 @@ mod tests {
             group: None,
             added_by_address: false,
             offline: false,
+            taken_over: false,
         });
         backend.add_speaker(speaker);
         let app = app_over(backend);
@@ -8862,6 +8863,7 @@ mod tests {
             group: None,
             added_by_address: false,
             offline: false,
+            taken_over: false,
         });
         let row = speaker_item(&state, &speaker, true, false, None);
         assert_eq!(row.kind, SpeakerKind::Cast);
@@ -8927,6 +8929,7 @@ mod tests {
             group: None,
             added_by_address: false,
             offline: false,
+            taken_over: false,
         });
         let row = speaker_item(&state, &speaker, true, false, None);
         // The slider's `enabled` and the hint in widgets.slint key off this flag.
@@ -8958,6 +8961,7 @@ mod tests {
             group: group(ui_model::CastMembers::NotReported),
             added_by_address: false,
             offline: false,
+            taken_over: false,
         });
         let row = speaker_item(&state, &speaker, true, false, None);
         assert!(row.cast && row.cast_group);
