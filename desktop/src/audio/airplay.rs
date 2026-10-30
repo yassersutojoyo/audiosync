@@ -10204,6 +10204,80 @@ pub mod tests {
         assert_eq!(ids, [id_of(&left), id_of(&right)]);
     }
 
+    /// The stereo pair, switched on with Right's password typed, where Right
+    /// is reached over AirPlay 2 and its flags ask for a password and no
+    /// pairing.
+    fn pair_on_with_typed_password(fake: &FakeAirPlay) -> (AirPlaySpeakers, Device, Device) {
+        let (mut pair, left, _) = stereo_pair();
+        let right = airplay2_flagged(22, "Right", 0x80);
+        pair.members[1] = member_of(&right);
+        let mut airplay = with_target(fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        assert_eq!(
+            airplay.set_enabled(PAIR, true),
+            Err(AirPlayProblem::NeedsPassword)
+        );
+        airplay.ask_password(PAIR).expect("the prompt opens");
+        let prompt = airplay.password_prompt().expect("a prompt");
+        assert_eq!((prompt.name.as_str(), prompt.wrong), ("Right", false));
+        assert!(airplay.submit_password(&id_of(&right), "hunter2"));
+        assert!(matches!(&fake.take_calls()[..], [Call::AddTarget { id, .. }] if id == PAIR));
+        (airplay, left, right)
+    }
+
+    // covers: P176
+    #[test]
+    fn a_password_only_member_over_airplay2_that_answers_pairing_required_is_asked_by_name() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, left, right) = pair_on_with_typed_password(&fake);
+        fake.fail(&right, ErrorKind::PairingRequired);
+        let events = airplay.poll();
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                BackendEvent::AirPlayFailed { .. }
+                    | BackendEvent::AirPlayMemberNeedsPassword { .. }
+            )),
+            "the prompt asks instead: {events:?}"
+        );
+        assert_eq!(fake.take_calls(), [Call::RemoveTarget(PAIR.to_owned())]);
+        let prompt = airplay.password_prompt().expect("a prompt");
+        assert_eq!(
+            (prompt.id.as_str(), prompt.name.as_str()),
+            (id_of(&right).as_str(), "Right")
+        );
+
+        // Outside the attempt the pair goes off with a notice naming Right.
+        assert!(airplay.submit_password(&id_of(&right), "hunter2"));
+        fake.state(&left, SpeakerState::Playing);
+        airplay.poll();
+        fake.fail(&right, ErrorKind::PairingRequired);
+        let events = airplay.poll();
+        assert!(events.contains(&BackendEvent::AirPlayMemberNeedsPassword {
+            id: PAIR.to_owned(),
+            member: "Right".to_owned(),
+        }));
+        assert!(airplay.enabled_ids().is_empty());
+        assert_eq!(airplay.password_prompt(), None);
+    }
+
+    // covers: P176
+    #[test]
+    fn a_member_asked_again_for_a_password_typed_this_run_gets_the_turned_down_prompt() {
+        for kind in [ErrorKind::PasswordRequired, ErrorKind::PairingRequired] {
+            let fake = FakeAirPlay::new();
+            let (mut airplay, _, right) = pair_on_with_typed_password(&fake);
+            fake.fail(&right, kind);
+            airplay.poll();
+            let prompt = airplay.password_prompt().expect("a prompt");
+            assert_eq!(
+                (prompt.name.as_str(), prompt.wrong),
+                ("Right", true),
+                "{kind:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_speaker_counts_as_chosen_while_listed_or_playing() {
         let fake = FakeAirPlay::new();
