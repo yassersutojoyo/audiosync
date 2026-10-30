@@ -6407,6 +6407,18 @@ do {
     check(clamped.preamp == 12 && clamped.gains[1] == -12 && clamped.gains[0] == 6,
           "equalizer storage: an out-of-range preamp or gain is clamped to ±12 dB (S23)",
           "preamp \(clamped.preamp), gains \(clamped.gains)")
+    let badPreamp = StoredEqualizer.decode(Data(#"{"enabled":true,"preamp":"x","gains":[6,0,0,0,0,0,0,0,0,0]}"#.utf8))
+    check(badPreamp.enabled && badPreamp.preamp == 0 && badPreamp.gains[0] == 6,
+          "equalizer storage: a preamp that doesn't read is 0 dB and the switch and bands are kept (S212)",
+          "\(badPreamp)")
+    let badBand = StoredEqualizer.decode(Data(#"{"enabled":true,"preamp":-3,"gains":[6,"x",0,0,0,0,0,0,0,0]}"#.utf8))
+    check(badBand.enabled && badBand.preamp == -3 && badBand.gains[0] == 6 && badBand.gains[1] == 0,
+          "equalizer storage: a band that doesn't read is flat and the rest are kept (S212)",
+          "\(badBand)")
+    let badSwitch = StoredEqualizer.decode(Data(#"{"enabled":"x","preamp":-3,"gains":[6,0,0,0,0,0,0,0,0,0]}"#.utf8))
+    check(!badSwitch.enabled && badSwitch.preamp == -3 && badSwitch.gains[0] == 6,
+          "equalizer storage: a switch that doesn't read is off and the preamp and bands are kept (S212)",
+          "\(badSwitch)")
 
     func fades(content: CGFloat, top: CGFloat, height: CGFloat = 400) -> ScrollEdgeFades {
         ScrollEdgeFades.of(contentHeight: content, visibleTop: top, visibleHeight: height, fade: 12)

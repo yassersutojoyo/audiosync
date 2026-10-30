@@ -643,20 +643,37 @@ struct PromptWithdrawal {
 
 /// Equalizer settings as the app stores them (JSON in UserDefaults).
 enum StoredEqualizer {
-    /// The saved settings, or the defaults when nothing usable is saved: no
-    /// data or data that doesn't decode. A band count other than the
+    /// The saved settings, or the defaults when no data or no JSON object is
+    /// saved. A value that doesn't read costs only itself, as on Windows: the
+    /// switch is off, the preamp or a band 0 dB. A band count other than the
     /// equalizer's (from a build with different bands) keeps the saved bands,
     /// flat for missing ones, extras dropped.
     static func decode(_ data: Data?) -> Equalizer.Settings {
-        guard let data, let saved = try? JSONDecoder().decode(Equalizer.Settings.self, from: data),
-              saved.preamp.isFinite, saved.gains.allSatisfy(\.isFinite)
+        guard let data, let saved = try? JSONDecoder().decode(Lenient.self, from: data)
         else { return Equalizer.Settings() }
         let count = Equalizer.frequencies.count
-        var stepped = saved
-        stepped.preamp = Equalizer.quantized(saved.preamp)
-        stepped.gains = (Array(saved.gains.prefix(count)) + [Double](repeating: 0, count: max(0, count - saved.gains.count)))
+        let gains = (saved.gains ?? []).map { $0.db ?? .nan }
+        var stepped = Equalizer.Settings()
+        stepped.enabled = saved.enabled ?? false
+        stepped.preamp = Equalizer.quantized(saved.preamp ?? 0)
+        stepped.gains = (Array(gains.prefix(count)) + [Double](repeating: 0, count: max(0, count - gains.count)))
             .map(Equalizer.quantized)
         return stepped
+    }
+
+    private struct Lenient: Decodable {
+        enum Key: String, CodingKey { case enabled, preamp, gains }
+        struct Gain: Decodable {
+            let db: Double?
+            init(from decoder: Decoder) throws { db = try? decoder.singleValueContainer().decode(Double.self) }
+        }
+        let enabled: Bool?, preamp: Double?, gains: [Gain]?
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: Key.self)
+            enabled = try? values.decode(Bool.self, forKey: .enabled)
+            preamp = try? values.decode(Double.self, forKey: .preamp)
+            gains = try? values.decode([Gain].self, forKey: .gains)
+        }
     }
 
     static func encode(_ settings: Equalizer.Settings) -> Data? {

@@ -36,6 +36,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Fixed
 
 - On the Mac, calibrating one speaker or using Measure Again with no microphone, or with a Bluetooth headset's hands-free one, now stops before the music fades, as on Windows. Before, it found out only after the fade. A microphone at a sample rate calibration can't use is reported as that, no longer as a microphone it couldn't record from.
+- On the Mac, one damaged equalizer value in the saved settings now resets only that value: the preamp or band goes to 0 dB, or the switch to off, and the rest stays as saved, as on Windows. Before, the whole equalizer went back to off and flat.
 - On the Mac, a Bluetooth speaker that had just connected when the Mac went to sleep no longer gets a quick restart left over from before the sleep, which cut the sound for a moment within 2 seconds of wake.
 - On the Mac, the debug log says why a Google Cast speaker failed to connect, reconnected, stopped or refused WAV, such as the TLS alert of a failed handshake, as on Windows. Before, it showed at most an error code.
 - On the Mac, the right and left arrow keys move an equalizer band one step up or down, as the up and down arrows already did.
