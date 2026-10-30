@@ -752,11 +752,14 @@ struct NativeAirPlayModel {
     }
 
     /// The app IDs local outputs line up with when switched on (S79 under
-    /// this sender, as in the Windows app): listed as able to play, or
-    /// playing. A receiver listed as unable to play and not playing, or one
-    /// that is gone, doesn't hold local outputs back.
+    /// this sender, as in the Windows app): listed as able to play or as
+    /// asking for a password given this run, or playing. A receiver listed
+    /// as unable to play and not playing, or one that is gone, doesn't hold
+    /// local outputs back.
     var soundingIDs: [String] {
-        let ids = Set(receivers.values.filter { $0.availability == .available }.map(\.id))
+        let ids = Set(receivers.values.filter {
+            $0.availability == .available || ($0.availability == .needsPassword && passwords.contains($0.id))
+        }.map(\.id))
             .union(states.keys.filter { isPlaying($0) })
         return ids.sorted().map(NativeAirPlayID.app)
     }

@@ -3061,6 +3061,10 @@ do {
             && appearedAsking(pairedByUser) == ["C3"],
           "native airplay: auto-connect leaves alone a new row asking every time, one the user's attempt waits on, one with this run's password or one paired in the attempt",
           "\(appearedAsking(attempting)) \(appearedAsking(passwordGiven)) \(appearedAsking(pairedByUser))")
+    // covers: S79
+    check(passwordGiven.soundingIDs == ["native:A1", "native:C3"],
+          "native airplay: a password receiver given its password this run holds local outputs back, as on Windows",
+          "\(passwordGiven.soundingIDs)")
 
     // Lounge was paired by hand this run, so it can play until its session ends.
     var lounge = receiver("G7", "Lounge", .available)
