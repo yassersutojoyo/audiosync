@@ -19,6 +19,11 @@ the host its tag or section names (names in parentheses are notes, and a
 check that no string in Tests/, or in a script run-tests.sh calls, prints (`…`,
 `<…>` and interpolations match anything); and when a section repeats a row.
 
+Outside the test maps, a live clause that cites a test right after "test",
+"check" or "suite" (or in a list after one) must name a real one: a check name
+in quotes, or a Rust test in words ("render start: a late output …" for a fn
+starting a_late_output in render_start.rs), or a fn name in backticks.
+
 Usage:
     scripts/spec_markers.py              check every tracked file in scope
     scripts/spec_markers.py --self-test  check the parser on made-up input
@@ -44,6 +49,11 @@ _FN = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
 _TEST_NAME = re.compile(r"(?<![\w./-])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![\w./-])")
 _ONE_WORD = re.compile(r"[a-z][a-z0-9]*")
 _PATH = re.compile(r"`([\w./-]+(?:\.rs|/))`")
+# A clause cites a test by its check name in quotes or its fn name in backticks, right
+# after "test", "check" or "suite" or in a list that follows one.
+_CITED = re.compile(r'"([^"]+)"|`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`')
+_CITES = re.compile(r"\b(tests?|checks?|suite)[,:]? \(?$", re.IGNORECASE)
+_LISTED = re.compile(r",? (and |or )?")
 
 
 def in_scope(path):
@@ -218,6 +228,60 @@ def test_map_problems(spec, text, fns, labels=None):
             if not any(_label_found(form, labels) for form in _label_forms(label)):
                 found.append(f'docs/{spec}:{number}: the test map names the check "{label}", which no test prints')
     return found
+
+
+def citation_problems(spec, text, fns, labels):
+    """Test names a live clause cites in its own text that no test defines or prints."""
+    lines = text.splitlines()
+    tables = {line[4:].split(" (")[0] for line in lines if line.startswith("### ")}
+    found = []
+    in_map = live = False
+    for number, line in enumerate(lines, 1):
+        if line.startswith("## "):
+            in_map = bool(_TEST_MAP.match(line))
+        clause = _CLAUSE.match(line)
+        if clause:
+            live = not _withdrawn(clause.group(2))
+        elif not line.startswith(" "):
+            live = False
+        if in_map or not live:
+            continue
+        listed = -1
+        for match in _CITED.finditer(line):
+            before = line[: match.start()]
+            if not (_CITES.search(before) or _LISTED.fullmatch(before[listed:]) and listed >= 0):
+                continue
+            listed = match.end()
+            name = match.group(1) or match.group(2)
+            if name not in fns and name not in tables and not _cited_test_found(name, fns, labels):
+                found.append(f'docs/{spec}:{number}: a clause cites the test "{name}", which no test defines or prints')
+    return found
+
+
+def _cited_test_found(name, fns, labels):
+    """A check label, or a Rust test fn in words: "render start: a late output …" is a fn
+    starting a_late_output in render_start.rs, and "render start: …" the file itself.
+    An ellipsis needs a module before it: "F …" alone would match nearly anything."""
+    name = name.replace("...", "…")
+    if "…" in name and not re.match(r"[^…:]*\w[^…:]*: ", name):
+        return False
+    for form in _label_forms(name):
+        if _label_found(form.replace(" …", "…"), labels):
+            return True
+        module, _, words = form.rpartition(": ")
+        stem = _snake(module)
+        parts = [_snake(part) for part in words.split("…")]
+        code = re.compile(".*".join(parts))
+        for fn, paths in fns.items():
+            in_file = any(os.path.splitext(os.path.basename(p))[0] == stem for p in paths)
+            if (in_file or not stem) and (code.fullmatch(fn) or words.strip() == "…"):
+                return True
+    return False
+
+
+def _snake(words):
+    """Words as a pattern of a snake-case name; an apostrophe may become _ or vanish."""
+    return re.sub(r"[^a-z0-9']+", "_", words.lower()).strip("_'").replace("'", "_?")
 
 
 def _label_forms(label):
@@ -442,9 +506,27 @@ def self_test():
     got = [line.split(":")[1] for line in test_map_problems("X_SPEC.md", doc, {}, labels)]
     if got != ["4", "5", "6"]:
         failures.append(f"test_map_problems (catch-all strings): expected lines 4 to 6, got {got}")
+    fns = {"a_late_output_never_runs_dry": {"core/tests/render_start.rs"}, "an_output_s_lead": {"x.rs"}}
+    doc = (
+        '- **S1** One (core tests "render start: a late output …", `an_output_s_lead`, "a: one").\n'
+        '- **S2** Two (tests "render: a late output …" and "a gone check"; a "quoted word").\n'
+        '- **S3** *Withdrawn* (test "a gone check").\n'
+        '- **S4** Four (Tests: "x gone"; test "a …"; check "…"; tests (`gone_fn`); suite "a: …").\n'
+        '## 18. Test map\n| a_gone_name | S1 |\n'
+    )
+    got = citation_problems("X_SPEC.md", doc, fns, check_labels([("Tests/t.swift", 'check(ok, "a: one")\n')]))
+    want = [
+        'docs/X_SPEC.md:2: a clause cites the test "render: a late output …", which no test defines or prints',
+        'docs/X_SPEC.md:2: a clause cites the test "a gone check", which no test defines or prints',
+    ] + [
+        f'docs/X_SPEC.md:4: a clause cites the test "{name}", which no test defines or prints'
+        for name in ("x gone", "a …", "…", "gone_fn")
+    ]
+    if got != want:
+        failures.append(f"citation_problems: expected {want}, got {got}")
     for failure in failures:
         print(f"self-test: {failure}", file=sys.stderr)
-    cases = len(ids) + 8 + len(titled) + len(scope)
+    cases = len(ids) + 9 + len(titled) + len(scope)
     print(f"self-test: {cases} cases, {len(failures)} failure(s)")
     return 1 if failures else 0
 
@@ -486,7 +568,9 @@ def main(argv):
     labels = check_labels([(p, t) for p, t in tests.items() if p.startswith("Tests/") or p in called])
     for spec in SPECS.values():
         with open(os.path.join(root, "docs", spec), encoding="utf-8") as f:
-            found += test_map_problems(spec, f.read(), fns, labels)
+            text = f.read()
+        found += test_map_problems(spec, text, fns, labels)
+        found += citation_problems(spec, text, fns, labels)
     for problem in found:
         print(problem)
     print(f"{markers} host markers, {len(found)} problem(s)")
