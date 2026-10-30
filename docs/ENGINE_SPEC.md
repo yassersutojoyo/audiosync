@@ -3455,6 +3455,8 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | a_tv_that_asks_every_time_needs_its_pin_again_on_a_new_sender (`desktop/src/audio/airplay.rs`) | S223 |
 | a_pairing_failed_as_unsupported_for_another_reason_keeps_that_reason (`desktop/src/adapter.rs`) | S223 |
 | a_phone_recall_turns_a_refused_speaker_off_again_with_its_notice (`desktop/src/adapter.rs`) | S223 |
+| a_password_speaker_switched_on_stays_on_and_waits_while_its_prompt_is_open (`desktop/src/adapter.rs`) | S223, S285 |
+| an_apple_tv_switched_on_stays_on_and_waits_while_its_pin_prompt_is_open (`desktop/src/adapter.rs`) | S223, S285 |
 | a_file_others_may_write_is_made_owner_only_and_still_used (`core/src/airplay2_identity.rs`) | S224 |
 | a_file_that_isnt_read_is_reported_unread_and_left_alone (`core/src/airplay2_identity.rs`) | S224 |
 | a_file_with_a_bad_entry_is_kept_aside_before_it_is_replaced (`core/src/airplay2_identity.rs`) | S224 |
