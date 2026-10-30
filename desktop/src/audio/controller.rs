@@ -7757,6 +7757,44 @@ mod tests {
         );
     }
 
+    // covers: S332, S329
+    #[test]
+    fn a_menu_held_30_s_hands_on_what_queued_and_burns_no_capture_try() {
+        let (mut backend, log, dir) = logged_backend("controller-menu-held");
+        let fake = FakeAirPlay::new();
+        backend.set_airplay(fake.link(), None);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        backend.poll();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut backend, 1);
+        // Both queue while a native menu holds the polls 30 s, longer than
+        // the 5 tries of S329 take.
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        fake.gone(&kitchen);
+        backend.hold_ui_loop(Duration::from_secs(30));
+        assert_eq!(backend.poll(), [BackendEvent::AirPlayChanged]);
+        assert!(backend.airplay_speakers().is_empty());
+        assert_eq!(backend.driver().capture_attempts(), 1);
+        poll_until_tried(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().capture_attempts(), 1 + 1, "one try");
+        // The other 4 tries follow at their spacing in polls.
+        poll_quietly(&mut backend, (RESTART_TRIES - 1) * RESTART_DELAY_POLLS - 1);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(BackendError::DeviceGone),
+            }]
+        );
+        assert_eq!(backend.driver().capture_attempts(), 1 + 5);
+        let lines = logged(&log, &dir);
+        assert!(
+            !lines.iter().any(|line| line.contains("the PC woke")),
+            "{lines:?}"
+        );
+    }
+
     // covers: S332, S331, S327
     #[test]
     fn a_refusal_or_an_app_check_never_counts_the_time_asleep() {
