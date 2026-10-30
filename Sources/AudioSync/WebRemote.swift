@@ -260,7 +260,10 @@ final class WebRemote {
 
     /// The picker's entries and the page ID of the one in use, if it is listed.
     private func sourceList() -> (sources: [RemoteSource], current: String?) {
-        let sources = model.sources.map { RemoteSource(pickerID: $0.id, name: $0.name) }
+        let sources = model.sources.map {
+            RemoteSource(pickerID: $0.id, name: $0.deviceName ?? $0.name,
+                         notConnected: $0.connected ? nil : model.text.sourceNotConnectedNote)
+        }
         let current = RemoteSource.pageID(model.sourceID)
         return (sources, sources.contains { $0.id == current } ? current : nil)
     }

@@ -122,6 +122,8 @@ final class AppModel: ObservableObject {
         var pairs: [String] = []
         /// False for the chosen input device while it is unplugged.
         var connected = true
+        /// The plain device name while the chosen input is unplugged.
+        var deviceName: String? = nil
         static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name && a.pairs == b.pairs && a.connected == b.connected }
     }
 

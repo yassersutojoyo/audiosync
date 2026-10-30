@@ -177,11 +177,16 @@ struct RemoteSource: Equatable {
     var id: String
     var name: String
     var kind: Kind
+    var available: Bool
+    var notice: String?
 
-    /// `pickerID` is `AudioSource.defaultsValue`, as `SourceList.entries` gives it.
-    init(pickerID: String, name: String) {
+    /// `pickerID` is `AudioSource.defaultsValue`, as `SourceList.entries` gives it;
+    /// `notConnected` is the note of an unplugged chosen input, which the page greys out.
+    init(pickerID: String, name: String, notConnected: String? = nil) {
         id = Self.pageID(pickerID)
         self.name = name
+        available = notConnected == nil
+        notice = notConnected
         kind = switch AudioSource(defaultsValue: pickerID) {
         case .system: .system
         case .app, .mix: .app
@@ -207,9 +212,10 @@ struct RemoteSource: Equatable {
         return nil
     }
 
-    /// The picker refuses none of its entries.
+    /// Only an unplugged chosen input is unavailable, as the picker greys it.
     var json: [String: Any] {
-        ["id": id, "name": name, "kind": kind.rawValue, "available": true, "notice": NSNull()]
+        ["id": id, "name": name, "kind": kind.rawValue, "available": available,
+         "notice": notice.map { $0 as Any } ?? NSNull()]
     }
 }
 

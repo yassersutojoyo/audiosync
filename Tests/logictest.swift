@@ -6434,7 +6434,11 @@ do {
     check(list(.input(uid: "gone")).last.map { $0.id == "input:gone" && $0.isInput && $0.name != "All System Audio" } == true,
           "sources: an unplugged chosen input isn't labelled as the whole system")
     check(UIStrings().sourceNotConnected("USB Microphone") == "USB Microphone (not connected)"
-            && UIStrings().sourceNotConnected(nil) == "Input Device (not connected)",
+            && UIStrings().sourceNotConnected(nil) == "Input Device (not connected)"
+            && SourceList.entries(systemName: "All System Audio", apps: apps, inputs: inputs, chosen: .input(uid: "gone"),
+                                  chosenAppName: { $0 },
+                                  unpluggedInputName: UIStrings().sourceNotConnected("USB Microphone"))
+                .last?.name == "USB Microphone (not connected)",
           "sources: an unplugged chosen input reads its remembered name, or Input Device, not connected")
     check(list(.app(bundleID: "com.spotify.client")).count == 4,
           "sources: a chosen app that is running is listed once")
@@ -10877,6 +10881,19 @@ do {
           "calibrate all row: only a blocker that keeps the sheet shut dims the row and shows a reason", "\(rows)")
 }
 
+// MARK: While a calibrate button is off, its reason is the only line under it
+do {
+    let t = UIStrings()
+    let reason = t.calibrationButtonReason(running: false, unavailable: .notPlaying(.streaming), held: false)
+    let failed = CalibrationPhase.failed(.notPlaying(.streaming))
+    // covers: S232
+    check(reason != nil && t.calibrationMessage(failed, under: reason) == nil && t.calibrationMessage(failed) != nil
+            && t.calibrationMessage(.done(offsetMs: 40, clamped: false), under: reason) != nil
+            && t.calibrationMessage(.cancelled, under: reason) != nil,
+          "calibration: an off button's reason replaces a failed run's line, which comes back once the reason clears",
+          "\(String(describing: reason)) | \(String(describing: t.calibrationMessage(failed, under: reason)))")
+}
+
 // MARK: A calibration that can't start names only what is off, in the order streaming, the speaker, the reference
 do {
     let t = UIStrings()
@@ -12667,6 +12684,22 @@ do {
     try? FileManager.default.removeItem(at: devicesFolder)
     check(countedBefore == 1 && forgot && countedAfter == 0 && forgotMissing,
           "web remote: Forget All clears the devices file without a running remote; a missing file is already forgotten")
+}
+
+// MARK: The web remote greys an unplugged chosen input under its own name, as the picker does
+do {
+    let t = UIStrings()
+    let unplugged = RemoteSource(pickerID: "input:gone", name: "USB Microphone", notConnected: t.sourceNotConnectedNote).json
+    let plugged = RemoteSource(pickerID: "input:BuiltInMic", name: "MacBook Microphone").json
+    let shownName = unplugged["name"] as? String ?? ""
+    let note = unplugged["notice"] as? String ?? ""
+    // covers: S344, S211
+    check(unplugged["available"] as? Bool == false && note == t.sourceNotConnectedNote && shownName == "USB Microphone"
+            && "\(shownName) (\(note))" == t.sourceNotConnected("USB Microphone"),
+          "web remote: an unplugged chosen input goes out greyed under its own name, not connected", "\(unplugged)")
+    // covers: S344
+    check(plugged["available"] as? Bool == true && plugged["notice"] is NSNull,
+          "web remote: a plugged-in source goes out available with no notice", "\(plugged)")
 }
 
 // MARK: Google Cast speakers added by address (C18): what the sheet reads, and the stored list

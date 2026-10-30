@@ -626,7 +626,8 @@ extension AppDelegate {
                 pairs = InputChannelPair.offered(channels: channels[uid] ?? 0).map(text.inputChannelPair)
             }
             return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput, pairs: pairs,
-                                   connected: entry.connected)
+                                   connected: entry.connected,
+                                   deviceName: entry.connected ? nil : inputName ?? text.sourceInputDevice)
         }
         publish(\.sources, sources)
         let mode = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)

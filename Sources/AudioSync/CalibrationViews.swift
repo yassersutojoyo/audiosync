@@ -63,13 +63,13 @@ struct CalibrationControl: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityHidden(true)
             }
-            if let message = t.calibrationMessage(phase) {
+            if let message = t.calibrationMessage(phase, under: reason) {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(isFailure(phase) ? Brand.errorText : Brand.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if case .failed(.microphoneDenied) = phase {
+            if reason == nil, case .failed(.microphoneDenied) = phase {
                 Button(t.openMicrophoneSettings) { NSWorkspace.shared.open(PrivacyPane.microphone.url) }
                     .controlSize(.small)
             }

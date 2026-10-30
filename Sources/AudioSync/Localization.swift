@@ -251,8 +251,8 @@ struct UIStrings {
     }
 
     /// The line under the button once a calibration ended; nil while none
-    /// did or one runs.
-    func calibrationMessage(_ phase: CalibrationPhase) -> String? {
+    /// did or one runs, and for a failure while the button's off `reason` shows.
+    func calibrationMessage(_ phase: CalibrationPhase, under reason: String? = nil) -> String? {
         switch phase {
         case .idle, .running:
             return nil
@@ -262,7 +262,7 @@ struct UIStrings {
                     + "so this speaker stays a little out of sync."
                 : "Delay set to \(offsetValue(ms: ms))."
         case .failed(let failure):
-            return calibrationFailure(failure) + " The delay wasn't changed."
+            return reason == nil ? calibrationFailure(failure) + " The delay wasn't changed." : nil
         case .cancelled:
             return "Calibration cancelled. The delay wasn't changed."
         }
@@ -575,9 +575,11 @@ struct UIStrings {
     let sourceLabel = "Audio Source"
     let sourceSystem = "All System Audio"
     let sourceInputsHeader = "Input Devices"
+    let sourceInputDevice = "Input Device"
+    let sourceNotConnectedNote = "not connected"
     /// The chosen input device while it is unplugged; `name` is the one it
     /// had when last seen, nil when none was remembered.
-    func sourceNotConnected(_ name: String?) -> String { "\(name ?? "Input Device") (not connected)" }
+    func sourceNotConnected(_ name: String?) -> String { "\(name ?? sourceInputDevice) (\(sourceNotConnectedNote))" }
     let inputChannelsLabel = "Input Channels"
     /// One channel pair of an input device, counted from 1 as the device's
     /// own settings count them.
