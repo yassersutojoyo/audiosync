@@ -7005,6 +7005,7 @@ pub mod tests {
 
     // The receiver quit under the open prompt and came back before its
     // closed connection ended the pairing.
+    // covers: S223
     #[test]
     fn a_pairing_cancelled_after_its_receiver_left_and_came_back_turns_the_speaker_off() {
         let fake = FakeAirPlay::new();
