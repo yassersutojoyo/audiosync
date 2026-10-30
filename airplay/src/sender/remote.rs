@@ -33,7 +33,7 @@ const ROLL_EVERY: Duration = Duration::from_millis(250);
 /// for a receiver retrying a stale value, about 42 years on average to
 /// guess a 32-bit Active-Remote.
 const STRIKE_LIMIT: u32 = 8;
-const STRIKE_WINDOW: Duration = Duration::from_secs(5);
+pub(crate) const STRIKE_WINDOW: Duration = Duration::from_secs(5);
 /// Peers tracked at once; the oldest window gives way to a new one.
 const STRIKE_PEERS: usize = 64;
 
@@ -150,20 +150,27 @@ impl Table {
     }
 }
 
-/// Each peer's 403s in its current window (P191).
-#[derive(Default)]
-struct Strikes(HashMap<IpAddr, (Instant, u32)>);
+/// Each peer's 403s in its current window (P191), and how long a window
+/// lasts, [`STRIKE_WINDOW`].
+struct Strikes(HashMap<IpAddr, (Instant, u32)>, Duration);
+
+impl Default for Strikes {
+    fn default() -> Strikes {
+        Strikes(HashMap::new(), STRIKE_WINDOW)
+    }
+}
 
 impl Strikes {
     fn blocked(&self, peer: IpAddr, now: Instant) -> bool {
         self.0
             .get(&peer)
-            .is_some_and(|(since, count)| *count >= STRIKE_LIMIT && now < *since + STRIKE_WINDOW)
+            .is_some_and(|(since, count)| *count >= STRIKE_LIMIT && now < *since + self.1)
     }
 
     /// Counts a 403 for `peer`; true when this one reaches the limit.
     fn strike(&mut self, peer: IpAddr, now: Instant) -> bool {
-        self.0.retain(|_, (since, _)| now < *since + STRIKE_WINDOW);
+        let window = self.1;
+        self.0.retain(|_, (since, _)| now < *since + window);
         if self.0.len() >= STRIKE_PEERS
             && !self.0.contains_key(&peer)
             && let Some(oldest) = self
@@ -188,6 +195,10 @@ struct Shared {
     /// reach the driver in the order the requests were answered (P193).
     deliver: Mutex<()>,
     strikes: Mutex<Strikes>,
+    /// How long a connection may sit idle after an answer, [`IDLE_TIMEOUT`].
+    idle: Duration,
+    /// The window of `strikes`, kept here for the log line, [`STRIKE_WINDOW`].
+    strike_window: Duration,
     open: AtomicUsize,
     counters: Arc<DacpCounters>,
     sink: Sink,
@@ -255,6 +266,8 @@ impl Server {
                 table: Mutex::new(Table::default()),
                 deliver: Mutex::new(()),
                 strikes: Mutex::new(Strikes::default()),
+                idle: IDLE_TIMEOUT,
+                strike_window: STRIKE_WINDOW,
                 open: AtomicUsize::new(0),
                 counters: Arc::new(DacpCounters::default()),
                 sink,
@@ -275,6 +288,17 @@ impl Server {
 
     pub(crate) fn set_linger(&mut self, linger: Duration) {
         self.linger = linger;
+    }
+
+    pub(crate) fn set_timeouts(&mut self, idle: Duration, strike_window: Duration) {
+        // Only before the first listener, while the driver alone holds it.
+        let shared = Arc::get_mut(&mut self.shared);
+        debug_assert!(shared.is_some(), "set_timeouts after the first listener");
+        if let Some(shared) = shared {
+            shared.idle = idle;
+            shared.strike_window = strike_window;
+            shared.strikes = Mutex::new(Strikes(HashMap::new(), strike_window));
+        }
     }
 
     pub(crate) fn counters(&self) -> Arc<DacpCounters> {
@@ -643,7 +667,7 @@ fn serve(mut stream: TcpStream, peer: IpAddr, shared: &Shared) {
         }
         let (head, length) = match dacp::read_head(&buffer) {
             HeadRead::Partial => {
-                let deadline = started.map_or(answered + IDLE_TIMEOUT, |at| at + HEAD_TIMEOUT);
+                let deadline = started.map_or(answered + shared.idle, |at| at + HEAD_TIMEOUT);
                 match fill(&mut stream, &mut buffer, deadline) {
                     Fill::More => continue,
                     Fill::Done => return,
@@ -747,7 +771,7 @@ fn handle(stream: &mut TcpStream, peer: IpAddr, head: &dacp::RequestHead, shared
     if capped {
         shared.log(format!(
             "DACP {peer}: {STRIKE_LIMIT} requests refused with 403 -> connections closed for {} s",
-            STRIKE_WINDOW.as_secs()
+            shared.strike_window.as_secs()
         ));
     }
     close

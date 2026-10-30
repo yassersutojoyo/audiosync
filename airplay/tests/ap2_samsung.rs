@@ -41,6 +41,9 @@ const ASK_EVERY: Duration = Duration::from_secs(1);
 const ECHO_DB: f64 = 0.5;
 const BASELINE_DB: f64 = 0.05;
 const FRAMES_PER_PACKET: u32 = 352;
+/// How often the sender posts its feedback in the tests that wait for it:
+/// 2 s in the app (P132).
+const FEEDBACK: Duration = Duration::from_millis(500);
 
 fn samsung_tv(server: &Ap2Server) -> Device {
     samsung_tv_showing(server, 0)
@@ -82,11 +85,15 @@ struct Playing {
 /// A sender playing to `server` at -20 dB, once the check read of the
 /// initial volume (P183) has gone out.
 fn play(server: &Ap2Server) -> Playing {
-    play_listed(server, samsung_tv(server))
+    play_listed(
+        server,
+        samsung_tv(server),
+        SenderConfig::default().feedback_interval,
+    )
 }
 
-fn play_listed(server: &Ap2Server, device: Device) -> Playing {
-    let (sender, host) = start_sender(Duration::from_secs(1));
+fn play_listed(server: &Ap2Server, device: Device, feedback_interval: Duration) -> Playing {
+    let (sender, host) = start_sender(Duration::from_secs(1), feedback_interval);
     let mut events = Events::default();
     let key = device.key.clone();
     sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
@@ -116,11 +123,12 @@ fn play_listed(server: &Ap2Server, device: Device) -> Playing {
     }
 }
 
-fn start_sender(retry_unit: Duration) -> (Sender, HostAudio) {
+fn start_sender(retry_unit: Duration, feedback_interval: Duration) -> (Sender, HostAudio) {
     let (sender, writer) = Sender::start(SenderConfig {
         airplay2: true,
         airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
         retry_unit,
+        feedback_interval,
         ..SenderConfig::default()
     })
     .expect("the sender starts");
@@ -230,11 +238,11 @@ fn refused_volume() -> Warning {
 fn a_volume_set_the_tv_answers_500_and_applies_neither_warns_nor_goes_again() {
     let _serial = serial();
     let server = Ap2Server::start(FakeAp2::samsung());
-    let mut tv = play(&server);
+    let mut tv = play_listed(&server, samsung_tv(&server), FEEDBACK);
     tv.run(Duration::from_secs(1), false);
     tv.sender.set_volume(&tv.key, Volume::Db(-28.110378));
     // Past two feedback requests, which would carry a resend (P132).
-    tv.run(Duration::from_secs(5), false);
+    tv.run(FEEDBACK * 5 / 2, false);
     assert_eq!(
         volume_sets(&server),
         ["volume: -20.000000\r\n", "volume: -28.110378\r\n"]
@@ -259,12 +267,12 @@ fn a_volume_set_the_tv_answers_500_and_applies_neither_warns_nor_goes_again() {
 fn a_volume_set_the_tv_answers_500_and_ignores_warns_once_and_goes_once_more() {
     let _serial = serial();
     let server = Ap2Server::start(FakeAp2::samsung());
-    let mut tv = play(&server);
+    let mut tv = play_listed(&server, samsung_tv(&server), FEEDBACK);
     tv.run(Duration::from_secs(1), false);
     // From here the television keeps its level whatever it is sent.
     server.fake().applies_volume = None;
     tv.sender.set_volume(&tv.key, Volume::Db(-10.0));
-    tv.run(Duration::from_secs(6), false);
+    tv.run(FEEDBACK * 3, false);
     assert_eq!(
         volume_sets(&server),
         [
@@ -1019,7 +1027,11 @@ fn progress_stays_on_the_track_time_across_a_pause_and_a_seek() {
     fake.data_port = socket.local_addr().expect("address").port();
     fake.info_body = samsung_info(PROGRESS_BIT, None);
     let server = Ap2Server::start(fake);
-    let mut tv = play_listed(&server, samsung_tv_showing(&server, PROGRESS_BIT));
+    let mut tv = play_listed(
+        &server,
+        samsung_tv_showing(&server, PROGRESS_BIT),
+        SenderConfig::default().feedback_interval,
+    );
     assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 100));
     let set = |tv: &mut Playing, elapsed: Duration| -> ([u32; 3], Instant) {
         let sent = progress_sets(&server).len();
@@ -1119,7 +1131,7 @@ fn refused_for_a_while(refusals: &[(&str, u16)]) -> (Vec<UserReason>, usize) {
         fake.status.insert((*key).to_owned(), *status);
     }
     let server = Ap2Server::start(fake);
-    let (sender, _host) = start_sender(RETRY_UNIT);
+    let (sender, _host) = start_sender(RETRY_UNIT, SenderConfig::default().feedback_interval);
     let mut events = Events::default();
     let device = samsung_tv(&server);
     let key = device.key.clone();

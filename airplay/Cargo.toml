@@ -49,3 +49,8 @@ ctrlc = "3.5.2"
 # (P190); std can't bind a TCP socket before it connects. Already in the
 # tree through mdns-sd.
 socket2 = "0.6.5"
+
+# The SRP and curve arithmetic of the pairing tests runs about seven times
+# faster at opt-level 1; debug assertions and overflow checks stay on.
+[profile.test]
+opt-level = 1

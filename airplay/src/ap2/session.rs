@@ -105,6 +105,9 @@ pub struct Ap2Config {
     /// The SRP step of a pair-setup is handed out through
     /// [`Ap2Session::take_work`] instead of run in place (P223).
     pub offload_srp: bool,
+    /// How often `POST /feedback` goes out, [`FEEDBACK_INTERVAL`] (P132); a
+    /// test picks a shorter one.
+    pub feedback_interval: Duration,
 }
 
 impl Ap2Config {
@@ -125,6 +128,7 @@ impl Ap2Config {
             trace: false,
             read_volume: false,
             offload_srp: false,
+            feedback_interval: FEEDBACK_INTERVAL,
         }
     }
 }
@@ -1059,7 +1063,7 @@ impl Ap2Session {
             && let Some(due) = self.feedback_due
             && now >= due
         {
-            self.feedback_due = Some(now + FEEDBACK_INTERVAL);
+            self.feedback_due = Some(now + self.config.feedback_interval);
             if self.state == Ap2State::Ready
                 && self.volume_retry == VolumeRetry::Due
                 && self.pending_volume.is_none()
@@ -2330,7 +2334,7 @@ impl Ap2Session {
         self.state = Ap2State::Starting;
         self.event_port = Some(event_port);
         self.event(Ap2Event::TimingChosen(self.timing));
-        self.feedback_due = Some(now + FEEDBACK_INTERVAL);
+        self.feedback_due = Some(now + self.config.feedback_interval);
         if let Some(remote) = self.remote {
             self.events_attempts = 1;
             self.outputs

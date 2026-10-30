@@ -725,11 +725,26 @@ fn device(server: &Ap2Server, id: u8, features: &str) -> Device {
 }
 
 fn start(clock: SenderClock, ptp_ports: PtpPorts, receiver: PtpPorts) -> (Sender, HostAudio) {
+    start_feeding(
+        clock,
+        ptp_ports,
+        receiver,
+        SenderConfig::default().feedback_interval,
+    )
+}
+
+fn start_feeding(
+    clock: SenderClock,
+    ptp_ports: PtpPorts,
+    receiver: PtpPorts,
+    feedback_interval: Duration,
+) -> (Sender, HostAudio) {
     let config = SenderConfig {
         airplay2: true,
         clock: Some(clock),
         ptp_ports,
         ptp_receiver_ports: receiver,
+        feedback_interval,
         ..SenderConfig::default()
     };
     let (sender, writer) = Sender::start(config).expect("the sender starts");
@@ -940,14 +955,16 @@ fn ap2_a_pair_sends_every_member_the_same_full_stereo_audio() {
 #[test]
 fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     const ANSWER: Duration = Duration::from_millis(800);
+    // 2 s in the app (P132).
+    const FEEDBACK: Duration = Duration::from_millis(500);
     // Feedback answered this late goes out every third interval, as on a
-    // runner too loaded to keep the 2 s rhythm.
-    const SLOW_FEEDBACK: Duration = Duration::from_millis(4_200);
+    // runner too loaded to keep the rhythm.
+    const SLOW_FEEDBACK: Duration = Duration::from_millis(1_050);
     let _serial = serial();
     let udp = Udp::bind();
     let server = Ap2Server::start(udp.fake(FakeAp2::new()));
     let clock = SenderClock::new(Instant::now());
-    let (sender, _host) = start(clock, free_ptp_ports(), udp.ptp_ports());
+    let (sender, _host) = start_feeding(clock, free_ptp_ports(), udp.ptp_ports(), FEEDBACK);
     let mut events = Events::default();
     let speaker = device(&server, 62, "0x0,0x10040");
     let key = speaker.key.clone();

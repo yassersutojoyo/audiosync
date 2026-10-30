@@ -236,6 +236,7 @@ impl Driver {
         config.trace = speaker.options.trace;
         config.read_volume = speaker.reads_volume;
         config.offload_srp = true;
+        config.feedback_interval = self.feedback_interval;
         config.txt_flags = device
             .airplay_txt
             .as_ref()

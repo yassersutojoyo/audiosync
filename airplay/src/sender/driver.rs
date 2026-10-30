@@ -419,6 +419,8 @@ pub(crate) struct Driver {
     held_for: Duration,
     /// What one second of a speaker's retry schedule lasts (P142).
     retry_unit: Duration,
+    /// How often an AirPlay 2 session posts its feedback (P132).
+    feedback_interval: Duration,
     /// AirPlay 2 sessions at once (P204).
     ap2_sessions: usize,
     stream_ids: HashMap<stream::SpeakerId, DeviceKey>,
@@ -524,6 +526,7 @@ impl Driver {
             held: BTreeMap::new(),
             held_for: super::PAIRING_HOLD,
             retry_unit: Duration::from_secs(1),
+            feedback_interval: crate::ap2::session::FEEDBACK_INTERVAL,
             ap2_sessions: super::AIRPLAY2_SESSIONS,
             stream_ids: HashMap::new(),
             next_session: 0,
@@ -590,6 +593,16 @@ impl Driver {
 
     pub(crate) fn with_retry_unit(mut self, unit: Duration) -> Driver {
         self.retry_unit = unit;
+        self
+    }
+
+    pub(crate) fn with_feedback_interval(mut self, interval: Duration) -> Driver {
+        self.feedback_interval = interval;
+        self
+    }
+
+    pub(crate) fn with_dacp_timeouts(mut self, idle: Duration, strike_window: Duration) -> Driver {
+        self.dacp.set_timeouts(idle, strike_window);
         self
     }
 

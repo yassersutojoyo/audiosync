@@ -130,6 +130,15 @@ pub struct SenderConfig {
     /// How long the remote-control server outlives the last session, 10 s
     /// (P189); a test picks a shorter one.
     pub dacp_linger: Duration,
+    /// How long a remote-control connection may sit idle after an answer,
+    /// 5 s (P189); a test picks a shorter one.
+    pub dacp_idle: Duration,
+    /// How long a peer that reached the 403 limit stays refused, counted
+    /// from its first 403, 5 s (P191); a test picks a shorter one.
+    pub dacp_strike_window: Duration,
+    /// How often an AirPlay 2 session posts its feedback, 2 s (P132); a test
+    /// picks a shorter one.
+    pub feedback_interval: Duration,
     /// AirPlay 2 sessions at once, [`AIRPLAY2_SESSIONS`] (P204); a test
     /// picks fewer so it needs fewer receivers.
     pub airplay2_sessions: usize,
@@ -255,6 +264,9 @@ impl Default for SenderConfig {
             pairing_hold: PAIRING_HOLD,
             retry_unit: Duration::from_secs(1),
             dacp_linger: crate::dacp::LINGER,
+            dacp_idle: crate::dacp::IDLE_TIMEOUT,
+            dacp_strike_window: remote::STRIKE_WINDOW,
+            feedback_interval: crate::ap2::session::FEEDBACK_INTERVAL,
             airplay2_sessions: AIRPLAY2_SESSIONS,
             on_driver_thread: None,
         }
@@ -714,6 +726,8 @@ impl Sender {
         .with_pairing_hold(config.pairing_hold)
         .with_retry_unit(config.retry_unit)
         .with_dacp_linger(config.dacp_linger)
+        .with_dacp_timeouts(config.dacp_idle, config.dacp_strike_window)
+        .with_feedback_interval(config.feedback_interval)
         .with_airplay2_sessions(config.airplay2_sessions)
         .with_sounding(sounding.clone());
         let dacp_counters = driver.dacp_counters();

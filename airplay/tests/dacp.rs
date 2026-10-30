@@ -34,6 +34,11 @@ const ANSWER_WITHIN: Duration = Duration::from_millis(100);
 /// How long the server outlives the last session in the tests that wait
 /// for it to stop: 10 s in the app (P189).
 const LINGER: Duration = Duration::from_secs(1);
+/// How long a connection may sit idle, and how long a capped peer stays
+/// refused, in the tests that wait for them: 5 s each in the app (P189,
+/// P191).
+const IDLE: Duration = Duration::from_secs(2);
+const STRIKE_WINDOW: Duration = Duration::from_secs(2);
 
 fn start_lingering() -> (Sender, HostAudio) {
     start_with(SenderConfig {
@@ -607,7 +612,11 @@ fn dacp_service_record() {
 fn dacp_server_lifecycle() {
     let _serial = serial();
     let receiver = NetReceiver::start(Behavior::default());
-    let (sender, _host) = start_lingering();
+    let (sender, _host) = start_with(SenderConfig {
+        dacp_linger: LINGER,
+        dacp_idle: IDLE,
+        ..SenderConfig::default()
+    });
     let counters = sender.dacp_counters();
     assert_eq!(counters.port(), 0, "no server before the first session");
     let mut events = Events::default();
@@ -637,12 +646,12 @@ fn dacp_server_lifecycle() {
         remote_events(&events).len() == sent.len()
     }));
     assert_eq!(remote_events(&events), sent);
-    // Closed after 5 s idle.
+    // Closed after its idle time.
     let idle = client
-        .closed_within(Duration::from_secs(9))
+        .closed_within(IDLE + Duration::from_secs(4))
         .expect("closed");
     assert!(
-        idle >= Duration::from_millis(4_500) && idle < Duration::from_secs(8),
+        idle >= IDLE.mul_f64(0.9) && idle < IDLE + Duration::from_secs(3),
         "{idle:?}"
     );
 
@@ -1106,7 +1115,10 @@ fn dacp_events_name_the_speaker() {
 fn dacp_refusals_close() {
     let _serial = serial();
     let receiver = NetReceiver::start(Behavior::default());
-    let (sender, _host) = start();
+    let (sender, _host) = start_with(SenderConfig {
+        dacp_strike_window: STRIKE_WINDOW,
+        ..SenderConfig::default()
+    });
     let mut events = Events::default();
     let (_, remote) = play(&sender, &mut events, &receiver, 1);
     let port = sender.dacp_counters().port();
@@ -1124,8 +1136,8 @@ fn dacp_refusals_close() {
         "a request after a 403 on the same connection is not answered"
     );
 
-    // Eight 403s within 5 s close the peer's connections unread until
-    // the 5 s from its first 403 have passed.
+    // Eight 403s within the window close the peer's connections unread
+    // until the window from its first 403 has passed.
     let first = client.sent_at;
     for _ in 1..8 {
         let mut client = Client::connect(LOOPBACK, port);
@@ -1141,7 +1153,10 @@ fn dacp_refusals_close() {
         .stream
         .write_all(&get("/ctrl-int/1/beginff", Some(&remote)));
     assert!(client.reply().is_none(), "a capped peer gets no answer");
-    thread::sleep((first + Duration::from_millis(5_200)).saturating_duration_since(Instant::now()));
+    thread::sleep(
+        (first + STRIKE_WINDOW + Duration::from_millis(200))
+            .saturating_duration_since(Instant::now()),
+    );
     let mut client = Client::connect(LOOPBACK, port);
     assert_eq!(
         client.request("/ctrl-int/1/beginff", Some(&remote)).status,
