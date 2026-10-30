@@ -44,6 +44,7 @@ Thread.sleep(forTimeInterval: 3.5)   // build up history beyond the largest dela
 // covers: S60, S61, S66, S67 (on every listed output device, at gain 0)
 let devices = AudioDevices().allOutputDevices().filter { !$0.uid.isEmpty && !$0.name.contains("Aggregate") }
 check(!devices.isEmpty, "found output devices", devices.map(\.name).joined(separator: ", "))
+var ranAt44k = false
 
 for dev in devices {
     guard let r = parts.makeRenderer(captureRate: rate) else {
@@ -88,6 +89,29 @@ for dev in devices {
         check(abs(lagMs - ms) < 60, "\(dev.name): delay \(Int(ms)) ms",
               String(format: "measured %.0f ms", lagMs))
     }
+
+    // covers: S187 (an increase closes the output for its masked silence, so the fade-out shows as .closed)
+    let resyncsBefore = r.counters.resyncs
+    let framesBefore = r.framesRendered.load(ordering: .relaxed)
+    let changed = Date()
+    r.setDelay(ms: 400)
+    var changeStates: [CoreRenderer.FadeState] = [r.fadeState]
+    while Date().timeIntervalSince(changed) < 0.7 {
+        let state = r.fadeState
+        if changeStates.last != state { changeStates.append(state) }
+        usleep(250)
+    }
+    let changeSeconds = Date().timeIntervalSince(changed)
+    let changeFrames = r.framesRendered.load(ordering: .relaxed) - framesBefore
+    let changeResyncs = r.counters.resyncs - resyncsBefore
+    let changeLagMs = Double(r.lagFrames) / rate * 1000
+    check(changeStates.first == .open && changeStates.contains(.closed) && changeStates.last == .open
+          && changeResyncs == 1 && Double(changeFrames) > 0.8 * r.renderRate * changeSeconds
+          && abs(changeLagMs - 400) < 60 && r.stopNote == "running",
+          "\(dev.name): delay change fades out and in without restarting the output",
+          "\(changeStates), \(changeResyncs) resyncs, \(changeFrames) frames in "
+              + String(format: "%.0f ms at %.0f Hz, lag %.0f ms; ", changeSeconds * 1000, r.renderRate, changeLagMs)
+              + r.stopNote)
 
     // S185: asked to fade out, the output keeps its IO running and renders
     // zeros after the fade until the host clock passes the fade's last
@@ -143,6 +167,26 @@ for dev in devices {
         check(false, "\(dev.name): stop returns once the fade has played, within 500 ms", "restart: \(error)")
     }
     r.halt()
+
+    // covers: S206 (the Mac's 44.1 kHz outputs at hold-back 0 starved right after each start)
+    // Related, not covered here: S209 (late callbacks) and S317 (the start window).
+    do {
+        try r.start(on: dev.id, captureRate: rate, delayMs: 0)
+        r.setGain(linear: 0)
+        if r.renderRate == 44100 {
+            ranAt44k = true
+            Thread.sleep(forTimeInterval: 2)
+            let counted = r.counters
+            check(counted.starvedRenders == 0, "\(dev.name): 44.1 kHz output at hold-back 0 never starves after start",
+                  "\(counted.starvedRenders) starved renders, \(counted.starvedFrames) frames in 2 s")
+        }
+    } catch {
+        check(false, "\(dev.name): output restarts at hold-back 0", "\(error)")
+    }
+    r.halt()
+}
+if !ranAt44k {
+    print("   SKIP  44.1 kHz output at hold-back 0 never starves after start: no output device runs at 44.1 kHz")
 }
 
 producing.store(false, ordering: .relaxed)
