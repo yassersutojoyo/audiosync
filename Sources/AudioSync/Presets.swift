@@ -366,6 +366,10 @@ enum PresetRecallSource: Equatable {
     /// Only a recall made in the app begins AirPlay pairing attempts; from
     /// the phone a code request becomes a notice, as for auto-connect.
     var beginsAttempts: Bool { self == .app }
+    /// The speakers of `ids`, just switched on by the recall, that begin
+    /// attempts (`AppDelegate.beginNativeAttempts`), so one asking for a PIN
+    /// or password opens its prompt as a click does; nil from the phone (S266).
+    func attemptsToBegin(_ ids: [String]) -> [String]? { beginsAttempts ? ids : nil }
 }
 
 /// The text of the preset notice (S265).

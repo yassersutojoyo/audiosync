@@ -16803,6 +16803,42 @@ mod tests {
 
     // covers: S266
     #[test]
+    fn a_recall_from_the_app_opens_the_password_or_pin_prompt_of_a_speaker_it_switches_on() {
+        let (mut adapter, _fake, _, study) = airplay_adapter();
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[(key(SPEAKERS), None), (ap(&study), None)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.recall_preset("preset:1");
+        assert_eq!(
+            adapter.snapshot().password_prompt,
+            Some(PasswordPrompt {
+                speaker_id: ap(&study),
+                name: "Study".to_owned(),
+                wrong: false,
+            })
+        );
+
+        let (mut adapter, fake, loft) = airplay2_adapter(true);
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[(key(SPEAKERS), None), (ap(&loft), None)])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        fake.take_calls();
+        adapter.recall_preset("preset:1");
+        assert!(starts_a_pairing(&fake.take_calls()));
+        fake.pairing(&loft, PairingEvent::PinRequested);
+        adapter.poll();
+        assert_eq!(
+            adapter.snapshot().pin_prompt.map(|prompt| prompt.phase),
+            Some(PinPhase::Ready)
+        );
+    }
+
+    // covers: S266
+    #[test]
     fn a_member_that_was_on_before_a_recall_keeps_its_own_failure_notice() {
         let (mut adapter, fake) = cast_adapter();
         adapter.restore(Settings {

@@ -6646,6 +6646,13 @@ do {
             && appFailure?.alertNames == nil && appFailure?.notices.count == 1,
           "presets: a recall from the app or the phone shows no alert")
 
+    // covers: S266
+    let recalledOn = ["native:R1", "native:R2"]
+    check(PresetRecallSource.app.attemptsToBegin(recalledOn) == StartOrigin.user.attemptsToBegin(recalledOn)
+            && PresetRecallSource.app.attemptsToBegin(recalledOn) == recalledOn
+            && PresetRecallSource.phone.attemptsToBegin(recalledOn) == nil,
+          "presets: a recall from the app begins the attempts of the speakers it switches on, as a click does, one from the phone none")
+
     var boosted = louder
     boosted.gains[3] = 3
     check(PresetCore.current(updated, louder) == "p1" && PresetCore.current(updated, boosted) == nil

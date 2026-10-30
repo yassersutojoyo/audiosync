@@ -768,6 +768,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | presets: the notice goes once its preset is current or every member it names is on | S265 |
 | presets: with no member present nothing changes and only the notice posts | S252, S265 |
 | presets: a recall from the app or the phone shows no alert | S120, S266 |
+| presets: a recall from the app begins the attempts of the speakers it switches on, as a click does, one from the phone none | S266 |
 | presets: the current mark follows a band change (for S259 the mark is worked out again after a band change; publishing on every model push is not checked) | S264, S259 |
 | presets: no presets, the submenu holds No Presets and the panel row is hidden | S260, S263 |
 | presets: the preset texts | S269 |
@@ -2716,6 +2717,7 @@ The checks for S251 to S254 in the Rust core (`core/tests/policy_presets.rs`, `c
 | a_recall_that_leaves_a_hidden_speaker_off_says_so_in_one_notice (`desktop/src/view.rs`) | S265 |
 | a_recall_with_no_speaker_left_changes_nothing_and_says_so (`desktop/src/view.rs`) | S265 |
 | a_member_that_was_on_before_a_recall_keeps_its_own_failure_notice (`desktop/src/adapter.rs`) | S266 |
+| a_recall_from_the_app_opens_the_password_or_pin_prompt_of_a_speaker_it_switches_on (`desktop/src/adapter.rs`) | S266 |
 | a_recall_leaves_the_keyboard_focus_on_the_row_or_the_notice_that_had_it (`desktop/src/view.rs`) | S266 |
 | after_a_delete_the_focus_goes_to_the_next_row_then_to_save_as_preset (`desktop/src/view.rs`) | S267 |
 | the_menu_key_and_shift_f10_open_a_preset_rows_menu (`desktop/src/view.rs`) | S267 |
