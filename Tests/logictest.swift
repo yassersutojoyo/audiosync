@@ -10217,6 +10217,22 @@ do {
             && m.apply(.volume(attempt: 3, CastVolume(level: 0.4, muted: true, fixed: false))) == .changed
             && m.volumes[kitchen]?.muted == true,
           "cast: a mute toggle shows at once and the device's next status wins")
+    var fixedMute = m
+    _ = fixedMute.apply(.volume(attempt: 3, CastVolume(level: 0.4, muted: false, fixed: true)))
+    check(!fixedMute.setMuted(kitchen, true) && fixedMute.volumes[kitchen]?.muted == false,
+          "cast: a fixed volume can't be muted, so a mute never shows (C68)")
+    var refusedMute = m
+    _ = refusedMute.apply(.volume(attempt: 3, CastVolume(level: 0.4, muted: false, fixed: false)))
+    check(refusedMute.setMuted(kitchen, true)
+            && refusedMute.apply(.commandFailed(attempt: 3, error: .volume)) == .changed
+            && refusedMute.volumes[kitchen]?.muted == false,
+          "cast: a mute the device refuses is undone")
+    var refusedLevel = m
+    _ = refusedLevel.apply(.volume(attempt: 3, CastVolume(level: 0.4, muted: false, fixed: false)))
+    check(refusedLevel.setMuted(kitchen, true) && refusedLevel.setVolume(kitchen, position: 70) != nil
+            && refusedLevel.apply(.commandFailed(attempt: 3, error: .volume)) == nil
+            && refusedLevel.volumes[kitchen]?.muted == true,
+          "cast: a level the device refuses after a mute leaves the mute shown")
     check(m.setVolume(kitchen, position: 70) == 0.7 && approx(m.volume(of: kitchen), 70, 1e-9)
             && m.setVolume(den, position: 50) == nil && m.setVolume(kitchen, position: .nan) == nil,
           "cast: the slider sets the device's level only while its session runs")
@@ -10735,6 +10751,37 @@ do {
             && asc_cast_start_own_level(1, true, 0.8, 0.1) == 0.8 && approx(asc_cast_start_own_level(0.5, false, 0, 0.2), 0.4, 1e-12)
             && asc_cast_level_answers(0.4, 0.404) && !asc_cast_level_answers(0.4, 0.41),
           "cast master: the core's arithmetic")
+
+    // covers: C70, C104 (a device that rounds to its 0.05 step)
+    func stepped(_ level: Double) -> CastVolume { CastVolume(level: level, muted: false, fixed: false, step: 0.05) }
+    var rounding = session(master: 100, attempt: 5)
+    _ = rounding.apply(.volume(attempt: 5, stepped(0.5)))
+    _ = rounding.setVolume(tv, position: 33)
+    _ = rounding.apply(.volume(attempt: 5, stepped(0.35)))
+    check(approx(rounding.volume(of: tv), 33, 1e-9),
+          "cast master: a device that rounds to its step answers within half a step")
+    _ = rounding.setVolume(tv, position: 36)
+    _ = rounding.apply(.volume(attempt: 5, stepped(0.4)))
+    _ = rounding.apply(.volume(attempt: 5, stepped(0.35)))
+    check(approx(rounding.volume(of: tv), 35, 1e-9),
+          "cast master: 0.36 rounds to the 0.35 it has, so 0.35 after 0.4 is a change from elsewhere")
+    var scaled = session(master: 60, attempt: 6)
+    _ = scaled.apply(.volume(attempt: 6, stepped(0.5)))
+    _ = scaled.setVolume(tv, position: 53)
+    _ = scaled.apply(.volume(attempt: 6, stepped(0.3)))
+    check(approx(scaled.volume(of: tv), 53, 1e-9),
+          "cast master: at master 60 the device's 0.30 answers the 0.318 sent and the slider stays at 53")
+
+    // covers: C70, C104 (the sender paces a drag after the model recorded it)
+    var dragged = session(master: 100, attempt: 7)
+    _ = dragged.apply(.volume(attempt: 7, reported(1)))
+    for position in stride(from: 99, through: 40, by: -1) {
+        _ = dragged.setVolume(tv, position: Double(position))
+    }
+    _ = dragged.apply(.volume(attempt: 7, reported(0.99)))
+    _ = dragged.apply(.volume(attempt: 7, reported(0.4)))
+    check(approx(dragged.volume(of: tv), 40, 1e-9),
+          "cast master: the answer to the first level of a 60-level drag is not read as a change")
 }
 
 // MARK: Zone volumes (S71, S249, S250, C104, C105)

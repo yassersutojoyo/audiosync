@@ -2268,6 +2268,13 @@ double asc_cast_zone_start_own_level(double master, double zone, bool has_own, d
 bool asc_cast_level_answers(double sent, double reported);
 
 /*
+ * Whether a reported level answers the level sent: within half a percent,
+ * or within half of `step`, the device's own volume step (0 for none), as a
+ * device that rounds to its step answers.
+ */
+bool asc_cast_volume_answers(double sent, double reported, double step);
+
+/*
  * Sets the track's title, artist and album (UTF-8) for the next time the
  * stream is loaded: the next start, or a Resync; a playing stream is not
  * reloaded for it. NULL or "" leaves a field out. Returns false, changing

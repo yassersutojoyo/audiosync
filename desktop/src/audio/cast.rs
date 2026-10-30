@@ -87,6 +87,11 @@ const PAGE_BYTES: usize = 4096;
 /// The volume step of a device that reports none, 0 to 100.
 const DEFAULT_VOLUME_STEP: f64 = 1.0;
 
+/// The levels kept waiting for an answer, so a device or group that never
+/// answers can't grow the list without end; room for every level of a fast
+/// drag sent before its first answer arrives.
+const MAX_UNANSWERED: usize = 256;
+
 /// Discovery answers handled per UI tick, so a flood of mDNS answers
 /// cannot stall the UI thread; the rest wait for the next tick (C106).
 const MAX_BROWSE_PER_POLL: usize = 256;
@@ -589,8 +594,8 @@ pub struct CastSpeakers {
     /// here is in no zone.
     zones: BTreeMap<DeviceId, f64>,
     /// The levels sent in this session that no status has answered yet,
-    /// oldest first; all of them, since the sender paces a drag later (C70)
-    /// and may send any of them.
+    /// oldest first, the latest [`MAX_UNANSWERED`]; the sender paces a drag
+    /// later (C70) and may send any of them.
     unanswered: Vec<f64>,
     attempt: Option<Attempt>,
     /// How long the feed waits for L, in ms (C77).
@@ -1439,6 +1444,9 @@ impl CastSpeakers {
             }
         } else if self.unanswered.last() != Some(&level) {
             // The same level sent twice in a row gets one answer.
+            if self.unanswered.len() == MAX_UNANSWERED {
+                self.unanswered.remove(0);
+            }
             self.unanswered.push(level);
         }
         if let Some(link) = self.link.as_mut() {
@@ -2962,6 +2970,19 @@ pub mod tests {
         stepped(0.35);
         cast.poll();
         assert_eq!(shown(&cast, KITCHEN), 35.0, "a change from elsewhere");
+    }
+
+    // covers: C70 (a device or group that never answers)
+    #[test]
+    fn the_levels_no_status_answers_stay_bounded() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for i in 0..1000 {
+            cast.set_volume(KITCHEN, f64::from(i % 40));
+        }
+        assert!(cast.unanswered.len() <= MAX_UNANSWERED);
     }
 
     // covers: C105 (a device that rounds to its 0.05 step)

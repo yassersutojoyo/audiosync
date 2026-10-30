@@ -405,6 +405,9 @@ struct CastModel {
         /// Whether the session reported the device's volume yet (C104).
         var heardVolume = false
         var connectFailures = 0
+        /// The device's own mute while one the user asked for shows, until its next
+        /// status or a level sent, whose refusal can't be told from the mute's.
+        var reportedMute: Bool?
     }
 
     /// The connect failures before a first connect that turn the device off (C80).
@@ -440,7 +443,8 @@ struct CastModel {
     /// A level a re-key left to send once (S341).
     private var levelDue: Double?
     private var offsetCopiedTo: String?
-    private static let maxUnanswered = 16
+    // Room for every level of a fast drag sent before its first answer arrives.
+    private static let maxUnanswered = 256
     /// The offset the device memory holds, per device, in ms. 0 ms counts as
     /// none: the sender can't forget an offset, so Undo leaves 0 ms behind.
     private(set) var offsets: [String: Double] = [:]
@@ -853,6 +857,7 @@ struct CastModel {
             enabled = nil
             return .turnedOff(id, problem: .notResponding)
         case .volume(_, let volume):
+            attempt?.reportedMute = nil
             return volumeReported(id, volume)
         case .members(_, let list):
             guard devices[id]?.group == true, members != list else { return nil }
@@ -866,6 +871,11 @@ struct CastModel {
             if enabled == id { enabled = nil }
             if end == .takenOver { takenOver.insert(id) }
             return .turnedOff(id, problem: end.problem)
+        case .commandFailed(_, .volume?), .commandFailed(_, .volumeFixed?):
+            guard let muted = attempt?.reportedMute, volumes[id] != nil else { return nil }
+            attempt?.reportedMute = nil
+            volumes[id]?.muted = muted
+            return .changed
         case .commandFailed, .note, .groupLog, .memoryChanged, .discoveryStopped, .failed:
             return nil
         }
@@ -892,10 +902,11 @@ struct CastModel {
         return levelToSend(id, own: own)
     }
 
-    /// Shows a mute the user asked for until the device's next status (C70);
-    /// true when the row changes.
+    /// Shows a mute the user asked for until the device's next status (C70)
+    /// or a refusal; true when the row changes. A fixed volume has no mute (C68).
     mutating func setMuted(_ id: String, _ muted: Bool) -> Bool {
-        guard isLive(id), volumes[id] != nil, volumes[id]?.muted != muted else { return false }
+        guard isLive(id), let current = volumes[id], !current.fixed, current.muted != muted else { return false }
+        if attempt?.reportedMute == nil { attempt?.reportedMute = current.muted }
         volumes[id]?.muted = muted
         return true
     }
@@ -935,8 +946,9 @@ struct CastModel {
     /// a fixed volume (C68).
     private mutating func levelToSend(_ id: String, own: Double) -> Double? {
         guard volumes[id]?.fixed != true else { return nil }
+        attempt?.reportedMute = nil
         let level = asc_cast_zone_level(master, zone(of: id), own)
-        if let current = volumes[id]?.level, asc_cast_level_answers(level, current) {
+        if let current = volumes[id], asc_cast_volume_answers(level, current.level, current.step) {
             // The device reports only changes, so this level gets no answer; it
             // is still sent, so it replaces a level the sender holds back.
             unanswered = []
@@ -959,7 +971,7 @@ struct CastModel {
         let level = volume.level
         let first = attempt?.heardVolume == false
         attempt?.heardVolume = true
-        let answered = unanswered.firstIndex { asc_cast_level_answers($0, level) }
+        let answered = unanswered.firstIndex { asc_cast_volume_answers($0, level, volume.step) }
         if let answered { unanswered.removeFirst(answered + 1) }
         let own: Double
         if first {
@@ -973,7 +985,7 @@ struct CastModel {
         levels[id] = own
         let changed = volumes[id] != volume || ownLevel(of: id) != shown
         volumes[id] = volume
-        if first, !asc_cast_level_answers(asc_cast_zone_level(master, zone, own), level),
+        if first, !asc_cast_volume_answers(asc_cast_zone_level(master, zone, own), level, volume.step),
            let send = levelToSend(id, own: own) {
             return .setVolume(send)
         }
@@ -994,6 +1006,7 @@ struct CastModel {
         let size = deviceStep > 0 ? deviceStep : Self.fallbackVolumeStep
         let own = min(1, max(0, volume(of: id) / 100 + (up ? size : -size)))
         requested = (id, own)
+        attempt?.reportedMute = nil
         // The device's own step moves its level, which is the own level only at master × zone 1 (C104).
         if deviceStep > 0, master == 1, zone(of: id) == 1 { return .device(up: up) }
         return levelToSend(id, own: own).map { .level($0) }

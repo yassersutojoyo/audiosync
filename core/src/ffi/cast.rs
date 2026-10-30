@@ -1634,6 +1634,19 @@ pub extern "C" fn asc_cast_level_answers(sent: f64, reported: f64) -> bool {
     status::answers_level(sent, reported)
 }
 
+/// Whether a reported level answers the level `sent` (C70): within half a
+/// percent, or within half of `step`, the device's own step, 0 for none.
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_cast_volume_answers(sent: f64, reported: f64, step: f64) -> bool {
+    let volume = status::DeviceVolume {
+        level: reported,
+        has_level: true,
+        step_interval: (step > 0.0).then_some(step),
+        ..Default::default()
+    };
+    status::answers_volume(sent, &volume)
+}
+
 /// Sets the track's title, artist and album (UTF-8) for the next `LOAD`:
 /// the next start, or a Resync; a playing stream is not reloaded (C54).
 /// NULL or "" leaves a field out (C53). False, changing nothing, for a null
@@ -2183,6 +2196,16 @@ mod tests {
                 asc_cast_start_own_level(master, false, 0.0, reported).to_bits()
             );
         }
+    }
+
+    // CAST_SPEC: C70
+    #[test]
+    fn a_level_within_half_the_devices_step_answers_the_level_sent() {
+        assert!(asc_cast_volume_answers(0.32, 0.30, 0.05));
+        assert!(!asc_cast_volume_answers(0.33, 0.30, 0.05));
+        assert!(asc_cast_volume_answers(0.4, 0.404, 0.0));
+        assert!(!asc_cast_volume_answers(0.32, 0.30, 0.0));
+        assert!(!asc_cast_volume_answers(0.32, 0.30, f64::NAN));
     }
 
     /// A browser that hands over a fixed list of events, then nothing; one
