@@ -2255,7 +2255,7 @@ do {
     var watch = CaptureFlowWatch()
     let input = CaptureFlowWatch.source(.input(uid: "line-in"), reading: nil)
     var uptime = 10.0
-    var steps = [watch.deviceLeft(at: uptime, gone: true)]
+    var steps = [watch.deviceLeft(at: uptime)]
     var waits: [CaptureFlowWatch.Step] = []
     // Unplugged for a minute, plugged in, and gone again at the try, more times than there are tries.
     for _ in 0...CaptureFlowWatch.tries {
@@ -2263,10 +2263,8 @@ do {
         waits.append(watch.tick(callbacks: nil, reading: true, source: input, at: uptime, inputListed: false))
         uptime += 0.5
         steps.append(watch.tick(callbacks: nil, reading: true, source: input, at: uptime, inputListed: true))
-        steps.append(watch.deviceLeft(at: uptime, gone: false))
+        steps.append(watch.deviceLeft(at: uptime))
     }
-    // Still listed as it failed: no try until it leaves the list and comes back.
-    waits.append(watch.tick(callbacks: nil, reading: true, source: input, at: uptime + 0.5, inputListed: true))
     uptime += 60
     waits.append(watch.tick(callbacks: nil, reading: true, source: input, at: uptime, inputListed: false))
     uptime += 0.5
@@ -2287,7 +2285,7 @@ do {
 do {
     var watch = CaptureFlowWatch()
     let input = CaptureFlowWatch.source(.input(uid: "line-in"), reading: nil)
-    let left = watch.deviceLeft(at: 10, gone: true)
+    let left = watch.deviceLeft(at: 10)
     let next = watch.tick(callbacks: nil, reading: true, source: input, at: 10.5, inputListed: true)
     check(left == .stopped(.inputLeft) && next == .tryOpen(1)
             && CaptureFlowWatch.retries(after: .inputNotFound("line-in"), inputListed: true)
@@ -2295,6 +2293,18 @@ do {
             && !CaptureFlowWatch.retries(after: .inputNotFound("line-in"), inputListed: false),
           "capture watch: an input device reported lost while still listed is tried at the next tick; a try that fails while it stays listed gets the tries",
           "\(left) \(next)")
+}
+// covers: S329 (the Mac: a USB input listed again before the tick after the try that found it unlisted)
+do {
+    var watch = CaptureFlowWatch()
+    let input = CaptureFlowWatch.source(.input(uid: "line-in"), reading: nil)
+    _ = watch.deviceLeft(at: 10)
+    let first = watch.tick(callbacks: nil, reading: true, source: input, at: 10.5, inputListed: true)
+    let unlisted = watch.deviceLeft(at: 10.5)
+    let next = watch.tick(callbacks: nil, reading: true, source: input, at: 11, inputListed: true)
+    check(first == .tryOpen(1) && unlisted == .stopped(.inputLeft) && next == .tryOpen(1),
+          "capture watch: a try that finds the input unlisted is followed by one at the next tick that lists it",
+          "\(first) \(unlisted) \(next)")
 }
 // covers: S333 (the Mac: the hog owner read decides whether an input is busy)
 do {
@@ -4891,6 +4901,12 @@ do {
     check(SourceSwitch.noticesCleared(by: SourceSwitch.decide(from: .system, to: music, streaming: true), streaming: true)
             == [Notice.source, Notice.capture],
           "EC5 source: picking another source clears the old source's notices")
+    // covers: S329, S333 (the Mac: the notice of an input that left or another process holds is posted once per wait)
+    let inputRepick = SourceSwitch.decide(from: .input(uid: "mic"), to: .input(uid: "mic"), streaming: true)
+    check(SourceSwitch.noticesCleared(by: inputRepick, streaming: true, inputWaiting: true).isEmpty
+            && SourceSwitch.noticesCleared(by: InputChannelPair.change(from: 1, to: 1, streaming: true), streaming: true,
+                                           inputWaiting: true).isEmpty,
+          "EC5 source: picking the input or channel pair in use again while the capture waits for the input keeps its notice")
     do {
         let tv = SpeakerKey.make(id: "tv", airplay: true)
         var list = NoticeList()

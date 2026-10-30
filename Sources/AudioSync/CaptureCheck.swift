@@ -153,8 +153,8 @@ struct CaptureFlowWatch {
         /// The capture is closed; try `next` is due at uptime `at`.
         case waiting(next: Int, at: TimeInterval)
         case trial(Int, since: TimeInterval)
-        /// The input device left (S329); try `next` is due once it is listed again after it was `gone`.
-        case away(next: Int, gone: Bool)
+        /// The input device left (S329); try `next` is due at the first tick that lists it.
+        case away(next: Int)
     }
 
     private var phase = Phase.watching
@@ -184,11 +184,8 @@ struct CaptureFlowWatch {
             forgetCount()
             return .tryOpen(next)
         }
-        if case .away(let next, let gone) = phase {
-            guard inputListed, gone else {
-                phase = .away(next: next, gone: gone || !inputListed)
-                return .none
-            }
+        if case .away(let next) = phase {
+            guard inputListed else { return .none }
             phase = .trial(next, since: uptime)
             forgetCount()
             return .tryOpen(next)
@@ -288,9 +285,8 @@ struct CaptureFlowWatch {
     }
 
     /// The input device left, or a try found it gone (S329): the capture
-    /// closes and waits, outside the `tries`, for the device to leave the
-    /// list unless it is already `gone` and to be listed again.
-    mutating func deviceLeft(at uptime: TimeInterval, gone: Bool) -> Step {
+    /// closes and waits, outside the `tries`, for the device to be listed.
+    mutating func deviceLeft(at uptime: TimeInterval) -> Step {
         var next = 1
         switch phase {
         case .away: return .none
@@ -298,7 +294,7 @@ struct CaptureFlowWatch {
         case .watching, .waiting: break
         }
         forgetCount()
-        phase = .away(next: next, gone: gone)
+        phase = .away(next: next)
         return .stopped(.inputLeft)
     }
 

@@ -294,7 +294,8 @@ extension AppDelegate {
 
     func setSource(_ source: AudioSource, origin: StartOrigin) {
         let change = SourceSwitch.decide(from: audioSource, to: source, streaming: engine.isRunning)
-        clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
+        clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning,
+                                                  inputWaiting: engine.waitsForInput))
         guard change != .none else {
             microphoneRequest.repicked(source: source, pair: currentInputPair)
             return
@@ -324,7 +325,8 @@ extension AppDelegate {
         let channels = devices.allInputDevices().first { $0.uid == uid }?.inputChannels ?? 0
         let change = InputChannelPair.change(from: currentInputPair, to: index, channels: channels,
                                              streaming: engine.isRunning)
-        clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning))
+        clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning,
+                                                  inputWaiting: engine.waitsForInput))
         guard change != .none else {
             if InputChannelPair.stores(index, over: currentInputPair) {
                 inputPairs[uid] = index == 0 ? nil : index

@@ -108,6 +108,8 @@ final class StreamEngine {
     private var busySince: TimeInterval?
     /// Whether the input device left and the capture waits for it (S329).
     private var inputAway = false
+    /// Whether the capture waits for an input that left or another process holds, its notice up.
+    var waitsForInput: Bool { inputAway || busySince != nil }
     /// The 0.5 s check for outputs whose render callback stopped (S334).
     private var stallTimer: DispatchSourceTimer?
     private var stallWatch = OutputStallWatch()
@@ -419,7 +421,7 @@ final class StreamEngine {
             return
         }
         if case .sourceLost(.inputDisconnected) = reason {
-            inputLeft(.inputDisconnected, gone: true)
+            inputLeft(.inputDisconnected)
             return
         }
         stop()
@@ -533,7 +535,7 @@ final class StreamEngine {
             switch failure {
             case .inputNotFound, .inputDisconnected:
                 guard listed else {
-                    inputLeft(failure, gone: false)
+                    inputLeft(failure)
                     return
                 }
             default: break
@@ -567,12 +569,12 @@ final class StreamEngine {
 
     /// The input device left (S329): only the capture closes, the notice says
     /// so, and the capture opens again once the device is listed again.
-    private func inputLeft(_ error: SourceCapture.CaptureError, gone: Bool) {
+    private func inputLeft(_ error: SourceCapture.CaptureError) {
         if !inputAway {
             inputAway = true
             onInputBusy?(error)
         }
-        follow(flowWatch.deviceLeft(at: ProcessInfo.processInfo.systemUptime, gone: gone))
+        follow(flowWatch.deviceLeft(at: ProcessInfo.processInfo.systemUptime))
     }
 
     private func stopForLostCapture(_ error: SourceCapture.CaptureError) {
