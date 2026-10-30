@@ -1263,6 +1263,9 @@ impl App {
 
     /// Lets the backend take in what happened on its own, and shows it.
     fn poll(&self) {
+        // Kept before the backend's poll saves, so a crash or a kill keeps
+        // where the main window was.
+        self.remember_view();
         let changed = self.backend.borrow_mut().poll();
         if self.backend.borrow_mut().take_view_restored() {
             let (remote, airplay2, airplay2_at_launch) = {
@@ -6230,6 +6233,25 @@ mod tests {
         );
         app.save_settings();
         assert_eq!(app.backend.borrow().view_settings(), file);
+    }
+
+    // covers: S212
+    #[test]
+    fn the_poll_keeps_the_main_windows_new_frame_without_a_close() {
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        // The headless window has no position to move, so a resize stands in.
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(911.0, 733.0));
+        app.poll();
+        let kept = app.backend.borrow().view_settings().window;
+        assert_eq!(
+            kept.map(|frame| (frame.width, frame.height)),
+            Some((911.0, 733.0)),
+            "a crash after this poll keeps where the window was"
+        );
     }
 
     #[test]

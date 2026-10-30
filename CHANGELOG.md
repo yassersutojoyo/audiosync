@@ -211,6 +211,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, using a stereo pair or home theater instead of its speaker in a zone moves the pair into that zone, out of any other zone it was in, and takes its other speakers out of the zone, as on the Mac. Before, a pair already in another zone stayed there and the speaker just left.
 - Forget Pairing on an AirPlay speaker now also removes its AirPlay 2 pairing while AirPlay 2 is turned off. Before, turning AirPlay 2 back on let the speaker play again without asking for its PIN. On the Mac and on Windows.
 - On Windows, a calibration of one speaker changes nothing when that speaker is turned off or the reference changes while it works out the delay, as on the Mac. Before, it could still set the delay. A microphone that changes during a calibration is now reported as such, instead of as a change between two measurements.
+- On Windows, the main window keeps its size and place within half a second of a move or resize, so it opens where it was even after AudioSync crashes or is ended from Task Manager. Before, they were saved only when the window closed, the app quit or a View setting changed.
 
 ## [0.7.1] - 2026-10-27
 
