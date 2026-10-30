@@ -2838,8 +2838,8 @@ impl Backend for MockBackend {
 }
 
 /// The curve the equalizer picker shows: `chosen`, the curve last picked or
-/// saved, while it has the current gains; else the first preset, then the
-/// first saved curve, with them (spec S270).
+/// saved, while it has the current gains; else the first saved curve, then
+/// the first preset, with them (spec S270).
 pub fn shown_curve(state: &AppState, chosen: Option<CurveMatch>) -> Option<CurveMatch> {
     let gains_db = |curve| match curve {
         CurveMatch::Preset(index) => eq::PRESETS.get(index).map(|p| p.gains_db),
@@ -3560,6 +3560,24 @@ mod tests {
 
     // covers: S270
     #[test]
+    fn a_saved_flat_curve_shows_by_the_name_the_user_gave_it() {
+        let mut backend = MockBackend::new();
+        backend.set_equalizer_curves(vec![UserCurve {
+            name: "Netral".into(),
+            gains_db: [0.0; eq::BAND_COUNT],
+        }]);
+        backend.set_equalizer(EqSettings::default());
+        let state = backend.snapshot();
+        assert_eq!(shown_curve(&state, None), Some(CurveMatch::User(0)));
+        assert_eq!(
+            shown_curve(&state, Some(CurveMatch::Preset(0))),
+            Some(CurveMatch::Preset(0)),
+            "Reset shows Flat"
+        );
+    }
+
+    // covers: S270
+    #[test]
     fn a_picked_saved_curve_shows_beside_a_curve_with_the_same_gains() {
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
         let gains_db = eq::PRESETS[rock].gains_db;
@@ -3580,7 +3598,7 @@ mod tests {
             gains_db,
         });
         let state = backend.snapshot();
-        assert_eq!(shown_curve(&state, None), Some(CurveMatch::Preset(rock)));
+        assert_eq!(shown_curve(&state, None), Some(CurveMatch::User(0)));
         for picked in [
             CurveMatch::User(0),
             CurveMatch::User(1),

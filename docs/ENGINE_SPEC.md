@@ -79,7 +79,7 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
   | smallSpeakers | −4 | −2 | 2 | 3 | 2 | 1 | 1 | 2 | 2 | 1 |
 
 - **S34** *Observed* (`Equalizer.swift:4-5`; `docs/DEVELOPMENT.md`). The equalizer runs once, on the capture thread, before the ring buffer and the FIFO feed (S7). *Now covered by the core.*
-- **S270** *Required.* Saved curves. The user can save the ten gains under a name, as a curve the picker lists after the presets. A name is the typed text trimmed and cut to 40 Unicode scalars, the same count on both hosts; an empty name saves nothing. Saving under a name a saved curve already has, ignoring case, gives that curve the new gains in its place; otherwise the curve goes last, up to 50 curves, and a full list refuses a new name. Gains are stored on the 0.5 dB steps of S23 and never include the preamp (S33). Rename refuses an empty name or one another saved curve has, ignoring case; Delete removes the curve and leaves the current gains as they are. The picker shows the first curve whose ten gains all equal the current ones exactly, the presets in menu order before the saved curves in their order; with no match it shows a "Custom" placeholder that is not a list entry. Ahead of that order, the curve the user last picked or saved stays shown while the gains still equal it, so a saved curve with the gains of a preset or of another saved curve can still be picked, renamed and deleted. Read back from storage, the list keeps names as above, puts every gain on the steps (a value that is not a number is 0 dB), leaves out unnamed curves and later duplicates of a name, and keeps the first 50. The hosts store the list as JSON in their settings (`equalizerCurves` on the Mac, `equalizer_curves` on Windows). AudioSync's own design; no other project's equalizer was studied.
+- **S270** *Required.* Saved curves. The user can save the ten gains under a name, as a curve the picker lists after the presets. A name is the typed text trimmed and cut to 40 Unicode scalars, the same count on both hosts; an empty name saves nothing. Saving under a name a saved curve already has, ignoring case, gives that curve the new gains in its place; otherwise the curve goes last, up to 50 curves, and a full list refuses a new name. Gains are stored on the 0.5 dB steps of S23 and never include the preamp (S33). Rename refuses an empty name or one another saved curve has, ignoring case; Delete removes the curve and leaves the current gains as they are. The picker shows the curve the user last picked, saved or reset to while its ten gains still equal the current ones exactly; otherwise the first match among the saved curves in their order, then the presets in menu order, so a saved curve with a preset's gains keeps its name, Rename and Delete, and a saved curve with another saved curve's gains can still be picked, renamed and deleted. The last choice is not stored, so at launch the gains alone decide; with no match the picker shows a "Custom" placeholder that is not a list entry. Read back from storage, the list keeps names as above, puts every gain on the steps (a value that is not a number is 0 dB), leaves out unnamed curves and later duplicates of a name, and keeps the first 50. The hosts store the list as JSON in their settings (`equalizerCurves` on the Mac, `equalizer_curves` on Windows). AudioSync's own design; no other project's equalizer was studied.
 
 ## 4. Delay ring buffer
 
@@ -1796,7 +1796,7 @@ The checks for the delay reader (S41 to S59, S158, S159), in `core/src/reader.rs
 | reset_reads_flat_and_zeroes_the_preamp (`core/tests/eq.rs`) | S33 |
 | finite_input_after_a_non_finite_one_is_finite_within_one_block (`core/tests/eq.rs`) | S125 |
 | work_per_block_is_twenty_biquad_steps_per_frame (`core/src/eq.rs`) | S127 |
-| a_saved_curve_keeps_its_gains_and_matches_after_the_presets (`core/tests/eq.rs`) | S270 |
+| a_saved_curve_keeps_its_gains_and_matches_before_the_presets (`core/tests/eq.rs`) | S270 |
 | saving_under_a_taken_name_replaces_that_curve_and_names_are_checked (`core/tests/eq.rs`) | S270 |
 | the_list_is_capped_and_stored_curves_are_cleaned_on_reading (`core/tests/eq.rs`) | S270 |
 | a_published_set_is_adopted_whole_while_the_control_thread_keeps_flipping (`core/src/eq.rs`) | S31, S130, S132, S133 |
@@ -2867,6 +2867,7 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | equalizer_curves_are_read_leniently_and_left_out_while_none_is (`desktop/src/settings.rs`) | S270 |
 | the_picker_lists_the_presets_then_the_saved_curves (`desktop/src/ui_model.rs`) | S270 |
 | a_picked_saved_curve_shows_beside_a_curve_with_the_same_gains (`desktop/src/ui_model.rs`) | S270 |
+| a_saved_flat_curve_shows_by_the_name_the_user_gave_it (`desktop/src/ui_model.rs`) | S270 |
 | a_saved_curve_with_a_presets_gains_can_be_picked_renamed_and_deleted (`desktop/src/view.rs`) | S270 |
 | a_preset_recall_lets_go_of_the_picked_curve (`desktop/src/view.rs`) | S270 |
 | the_log_is_on_only_when_audiosync_debug_is_exactly_1 (`desktop/src/debug_log.rs`) | S170 |

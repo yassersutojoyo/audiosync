@@ -211,16 +211,18 @@ pub enum CurveMatch {
     User(usize),
 }
 
-/// The first curve whose ten gains all equal `gains_db` exactly: the presets
-/// in menu order, then the saved curves in their order. The preamp never
-/// counts (S33, S270).
+/// The first curve whose ten gains all equal `gains_db` exactly: the saved
+/// curves in their order, then the presets in menu order, so a saved curve
+/// with a preset's gains keeps Rename and Delete. The preamp never counts
+/// (S33, S270).
 pub fn matching_curve(gains_db: &[f64; BAND_COUNT], user: &[UserCurve]) -> Option<CurveMatch> {
-    if let Some(index) = PRESETS.iter().position(|p| p.gains_db == *gains_db) {
-        return Some(CurveMatch::Preset(index));
+    if let Some(index) = user.iter().position(|curve| curve.gains_db == *gains_db) {
+        return Some(CurveMatch::User(index));
     }
-    user.iter()
-        .position(|curve| curve.gains_db == *gains_db)
-        .map(CurveMatch::User)
+    PRESETS
+        .iter()
+        .position(|p| p.gains_db == *gains_db)
+        .map(CurveMatch::Preset)
 }
 
 /// A typed name as a curve keeps it: trimmed and cut to

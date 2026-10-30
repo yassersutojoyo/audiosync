@@ -590,7 +590,7 @@ fn reset_reads_flat_and_zeroes_the_preamp() {
 
 // covers: S270
 #[test]
-fn a_saved_curve_keeps_its_gains_and_matches_after_the_presets() {
+fn a_saved_curve_keeps_its_gains_and_matches_before_the_presets() {
     let mut curves = Vec::new();
     let mine = [1.0, 1.5, 2.0, 0.0, -0.5, 0.0, 0.0, 1.0, 2.0, 3.0];
     assert_eq!(save_curve(&mut curves, "  Desk  ", &mine), Some(0));
@@ -600,8 +600,8 @@ fn a_saved_curve_keeps_its_gains_and_matches_after_the_presets() {
     assert_eq!(save_curve(&mut curves, "Rocky", &rock), Some(1));
     assert_eq!(
         matching_curve(&rock, &curves),
-        Some(CurveMatch::Preset(5)),
-        "the presets come first"
+        Some(CurveMatch::User(1)),
+        "a saved curve keeps its name over a preset with its gains"
     );
     assert_eq!(matching_curve(&[0.5; BAND_COUNT], &curves), None);
 

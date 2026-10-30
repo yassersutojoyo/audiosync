@@ -2862,7 +2862,8 @@ impl App {
         let w = weak.clone();
         eq_window.on_reset(move || {
             with_app(&w, |app| {
-                app.ui.borrow_mut().chosen_curve = None;
+                // Preset 0 is Flat: Reset reads Flat even beside a saved flat curve.
+                app.ui.borrow_mut().chosen_curve = Some(CurveMatch::Preset(0));
                 app.change_equalizer(EqSettings::reset);
             })
         });
@@ -10742,11 +10743,24 @@ mod tests {
             .map(|c| c.name)
             .collect();
         assert_eq!(names, ["Twin"]);
-        assert_eq!(eq_window.get_preset_index(), rock, "the gains stay");
+        assert_eq!(
+            eq_window.get_preset_index(),
+            presets,
+            "the gains stay, shown by the saved curve's name"
+        );
 
         eq_window.invoke_preset_selected(presets);
         eq_window.invoke_reset();
         assert_eq!(eq_window.get_preset_index(), 0, "Reset reads Flat");
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Netral".into());
+        assert_eq!(eq_window.get_preset_index(), presets + 1);
+        eq_window.invoke_reset();
+        assert_eq!(
+            eq_window.get_preset_index(),
+            0,
+            "Reset reads Flat beside a saved flat curve"
+        );
     }
 
     #[test]
@@ -10759,13 +10773,18 @@ mod tests {
         eq_window.invoke_preset_selected(rock);
         eq_window.invoke_save_curve();
         app.zone_dialog.invoke_confirmed("Mine".into());
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Twin".into());
         app.save_preset("Rock");
         let ids = preset_ids(&app);
 
         app.recall_preset(&ids[0]);
         app.recall_preset(&ids[1]);
-        assert_eq!(eq_window.get_preset_index(), rock);
-        assert!(!eq_window.get_saved_curve_shown());
+        assert_eq!(
+            eq_window.get_preset_index(),
+            eq::PRESETS.len() as i32,
+            "the first saved curve with the gains, not the picked Twin"
+        );
     }
 
     #[test]
