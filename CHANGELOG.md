@@ -36,6 +36,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Fixed
 
 - On Windows, calibrating one speaker now goes on when you switch another speaker on or off, or one reconnects, during the measurement, as on the Mac, unless that change moves the timing of the measured speaker or the PC's own speakers. Before, any change to the speakers that play cancelled it.
+- On Windows, the web remote keeps the controls of a speaker that is on while it pairs, waits to pair or can't be used, so the phone can switch it off or set its volume and delay, as on the Mac. Before, the phone showed it without a switch and couldn't turn it off.
 - On the Mac, calibrating one speaker or using Measure Again with no microphone, or with a Bluetooth headset's hands-free one, now stops before the music fades, as on Windows. Before, it found out only after the fade. A microphone at a sample rate calibration can't use is reported as that, no longer as a microphone it couldn't record from.
 - On the Mac, one damaged equalizer value in the saved settings now resets only that value: the preamp or band goes to 0 dB, or the switch to off, and the rest stays as saved, as on Windows. Before, the whole equalizer went back to off and flat.
 - On the Mac, a Google Cast speaker whose volume can't be changed no longer offers Mute in its menu or under its volume, as on Windows. Before, Mute was there but did nothing.

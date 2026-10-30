@@ -131,10 +131,13 @@ fn asks_for_code(state: &AppState, speaker: &Speaker) -> bool {
         && state.speaker_state(speaker).click_turns_on()
 }
 
-/// Whether the page may drive `speaker`: one that needs a kind of pairing
-/// or a protocol AudioSync lacks, is pairing now, or would ask for a code
-/// is shown without controls.
+/// Whether the page may drive `speaker`: one that is off and needs a kind
+/// of pairing or a protocol AudioSync lacks, is pairing now, or would ask
+/// for a code is shown without controls.
 pub fn can_drive(state: &AppState, speaker: &Speaker) -> bool {
+    if !state.speaker_state(speaker).click_turns_on() {
+        return true;
+    }
     match speaker.availability {
         Availability::Open => true,
         Availability::NeedsCode => !asks_for_code(state, speaker),
@@ -1093,6 +1096,63 @@ mod tests {
         let mut playing = state.clone();
         playing.speakers.last_mut().unwrap().enabled = true;
         assert!(tv(&playing).available, "on, it can be turned off");
+    }
+
+    // covers: S257
+    #[test]
+    fn a_phone_can_switch_off_a_speaker_that_is_on_whatever_its_availability() {
+        let switch = |on: bool| SpeakerChange {
+            on: Some(on),
+            ..Default::default()
+        };
+        for availability in [
+            Availability::Pairing,
+            Availability::WaitingToPair,
+            Availability::PairingNotYet,
+            Availability::AirPlay2NotYet,
+            Availability::Unsupported,
+        ] {
+            let off = with_apple_tv(availability);
+            assert_eq!(
+                actions(&speaker_command("tv", switch(true)), &off, not_virtual),
+                Err(Refusal::Unavailable),
+                "{availability:?}: off, it stays off"
+            );
+            let mut on = off.clone();
+            on.speakers.last_mut().unwrap().enabled = true;
+            let row = snapshot(&on, not_virtual, None, "pc", &Text)
+                .speakers
+                .into_iter()
+                .find(|s| s.id == "tv")
+                .unwrap();
+            assert!(
+                row.on && row.available,
+                "{availability:?}: on, it shows its switch"
+            );
+            assert_eq!(
+                actions(&speaker_command("tv", switch(false)), &on, not_virtual),
+                Ok(vec![Action::Enable {
+                    id: "tv".to_owned(),
+                    on: false
+                }]),
+                "{availability:?}"
+            );
+            on.zones = vec![Zone {
+                id: "zone:tv".into(),
+                name: "Den".into(),
+                members: vec!["tv".into()],
+                volume: 100.0,
+                member_names: Default::default(),
+            }];
+            assert_eq!(
+                actions(&zone_command("zone:tv", true, None), &on, not_virtual),
+                Ok(vec![Action::ToggleZone {
+                    id: "zone:tv".to_owned(),
+                    keep_off: Vec::new()
+                }]),
+                "{availability:?}: its zone"
+            );
+        }
     }
 
     #[test]
