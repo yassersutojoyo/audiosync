@@ -304,6 +304,49 @@ do {
     check(offered.map(\.id) == [music, safari], "mix: a checked app that isn't running stays in the menu to be unchecked")
 }
 
+// MARK: The last mix
+// covers: S354
+do {
+    let music = "com.apple.Music", safari = "com.apple.Safari", chat = "com.example.chat"
+    let both = AudioSource.mixed(.only, bundleIDs: [music, safari])
+    let except = AudioSource.mixed(.allExcept, bundleIDs: [chat])
+    check(LastMix.kept(nil, leaving: both, for: .app(bundleID: music)) == both
+            && LastMix.kept(nil, leaving: except, for: .system) == except
+            && LastMix.kept(both, leaving: .system, for: .input(uid: "mic")) == both
+            && LastMix.kept(both, leaving: except, for: .system) == except
+            && LastMix.kept(both, leaving: both, for: both) == both,
+          "last mix: a mix left for another source is kept, and only another mix left replaces it")
+    check(LastMix.kept(both, leaving: .system, for: except) == both && LastMix.kept(nil, leaving: .app(bundleID: music), for: both) == nil,
+          "last mix: picking a mix never makes it the last mix by itself, so a failed pick that puts the old source back keeps the one kept")
+    let stored: [String: Any] = ["lastMixSource": both.defaultsValue]
+    let single: [String: Any] = ["lastMixSource": "apps:" + music + ",,"]
+    let storedExcept: [String: Any] = ["lastMixSource": except.defaultsValue]
+    check(AppSettings.load { stored[$0] }.lastMix == both && AppSettings.load { _ in nil }.lastMix == nil
+            && AppSettings.load { single[$0] }.lastMix == nil
+            && AppSettings.load { storedExcept[$0] }.lastMix == except,
+          "last mix: a stored last mix is read as the source in use is; one that reads back as no mix is dropped")
+
+    let apps = [(bundleID: chat, name: "Chat"), (bundleID: music, name: "Music")]
+    func listed(_ chosen: AudioSource, _ lastMix: AudioSource?) -> [SourceList.Entry] {
+        SourceList.entries(systemName: "All System Audio", apps: apps,
+                           inputs: [SourceList.Input(uid: "mic", name: "Mic", transport: 0)],
+                           chosen: chosen, chosenAppName: { _ in "Safari" }, mixName: { $1.joined(separator: " + ") },
+                           lastMix: lastMix)
+    }
+    let kept = listed(.app(bundleID: music), both)
+    check(kept.map(\.id) == ["", both.defaultsValue, chat, music, "input:mic"] && kept[1].name == "Music + Safari"
+            && listed(.system, nil).map(\.id) == ["", chat, music, "input:mic"],
+          "last mix: the picker lists the last mix once, right after the whole system, an app that isn't running under its kept name",
+          "\(kept)")
+    check(listed(except, both).map(\.id) == ["", except.defaultsValue, chat, music, "input:mic"]
+            && listed(both, both).filter { $0.id == both.defaultsValue }.count == 1,
+          "last mix: while a mix is in use the picker lists that one alone, never the kept one beside it")
+    let phone = kept.map { RemoteSource(pickerID: $0.id, name: $0.name) }
+    check(phone[1].id == both.defaultsValue && phone[1].kind == .app && phone[1].name == "Music + Safari"
+            && RemoteSource.pickerID(phone[1].id) == both.defaultsValue,
+          "last mix: the phone lists the last mix as an app under the picker's name, and its pick maps back to it")
+}
+
 // MARK: Source apps — display names and the picker's app list
 // covers: S12 (the picker's apps and their names)
 check(SourceApps.displayName(running: "Music", installed: "Apple Music", bundleID: "com.apple.Music") == "Music",
