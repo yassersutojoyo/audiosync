@@ -1346,6 +1346,60 @@ mod tests {
         answers.join().expect("the answer comes");
     }
 
+    // covers: S134
+    // Only its stop-before-free part: Windows never resets the ring and has
+    // no FIFO writer.
+    #[test]
+    fn dropping_a_capture_stops_its_stream_before_the_ring_can_go() {
+        static STUCK: StuckThreads = StuckThreads::new();
+        let ring = Ring::for_rate(SESSION_RATE).expect("a ring");
+        let writer = ring.writer().expect("the only writer");
+        let stop = Arc::new(Event::manual_reset().expect("an event"));
+        let (stopped, stream_stopped) = mpsc::channel();
+        let (thread, ()) = {
+            let stop = Arc::clone(&stop);
+            spawn_worker_within("audiosync-test", READY_TIMEOUT, &STUCK, move |ready| {
+                if ready.ok(()) {
+                    // SAFETY: waits on an event that outlives this thread's
+                    // use of it.
+                    unsafe { WaitForSingleObject(stop.raw(), INFINITE) };
+                    // Stopping the stream takes a moment, so a drop that
+                    // doesn't wait for it returns first.
+                    thread::sleep(Duration::from_millis(20));
+                    drop(writer);
+                    let _ = stopped.send(());
+                }
+            })
+            .expect("it starts")
+        };
+        let capture = LoopbackCapture {
+            stop,
+            failure: Arc::new(AtomicI32::new(0)),
+            ended: Arc::new(AtomicBool::new(false)),
+            counters: Arc::new(CaptureCounters::default()),
+            thread,
+            sources: Vec::new(),
+            watch_refused: None,
+            mix: None,
+            mix_pids: Vec::new(),
+            setup: CAPTURE_ATTEMPTS[0],
+            call: "process loopback capture",
+            input: false,
+        };
+        drop(capture);
+        assert_eq!(
+            stream_stopped.try_recv(),
+            Ok(()),
+            "the stream stopped before the drop returned"
+        );
+        assert_eq!(
+            Arc::strong_count(&ring),
+            1,
+            "only the owner holds the ring, so freeing it frees nothing the thread uses"
+        );
+        assert!(!STUCK.any());
+    }
+
     fn microphone() -> CaptureTarget {
         CaptureTarget::Input {
             endpoint_id: "{0.0.1.00000000}.{mic}".to_owned(),

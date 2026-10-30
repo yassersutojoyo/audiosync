@@ -3475,6 +3475,7 @@ The release side:
 | an_input_whose_device_went_away_is_gone_at_initialize (`desktop/src/audio/wasapi/loopback.rs`) | S333 |
 | a_mix_lane_whose_device_went_away_is_gone_at_start (`desktop/src/audio/wasapi/loopback.rs`) | S333 |
 | a_capture_whose_device_went_away_after_initialize_is_gone (`desktop/src/audio/wasapi/loopback.rs`) | S333 |
+| dropping_a_capture_stops_its_stream_before_the_ring_can_go (`desktop/src/audio/wasapi/loopback.rs`) | S134 (stop before free; Windows has no ring reset or FIFO writer) |
 | an_output_whose_device_leaves_as_its_restart_rest_ends_is_lost (`desktop/src/audio/controller.rs`) | S325, S68 |
 | a_busy_input_that_goes_away_gets_the_usual_tries (`desktop/src/audio/controller.rs`) | S333, S329 |
 | an_app_that_quits_as_its_capture_comes_back_in_another_format_gives_way_when_set (`desktop/src/audio/controller.rs`) | S227, S329 |
