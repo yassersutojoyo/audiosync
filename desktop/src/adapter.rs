@@ -3772,10 +3772,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         Ok(())
     }
 
-    /// An AirPlay speaker the user switched on didn't turn on: an Apple TV
-    /// that asks for a PIN is paired (it turns on once paired), one that asks
-    /// for a password prompts for it (it turns on once typed); any other
-    /// stays off with a notice.
+    /// An AirPlay speaker the user switched on can't play yet: an Apple TV
+    /// that asks for a PIN is paired and one that asks for a password prompts
+    /// for it, each on meanwhile; any other stays off with a notice.
     fn airplay_switch_failed(&mut self, id: &str, problem: AirPlayProblem) {
         if problem == AirPlayProblem::NeedsPassword {
             self.log.log(|| {
@@ -4437,9 +4436,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
             // An AirPlay speaker's volume is its own slider (S192).
             device_volume: None,
             waiting: self
-                .reconnecting
-                .get(&speaker.id)
-                .copied()
+                .audio
+                .airplay_waiting_for_user()
+                .contains(&speaker.id)
+                .then_some(if speaker.pairing {
+                    Waiting::ForPin
+                } else {
+                    Waiting::ForPassword
+                })
+                .or_else(|| self.reconnecting.get(&speaker.id).copied())
                 .filter(|_| speaker.enabled),
             cast: None,
             group: speaker.group,
@@ -10550,7 +10555,7 @@ mod tests {
                 wrong: false,
             })
         );
-        assert!(!state.speaker(&ap(study)).unwrap().enabled);
+        assert!(state.speaker(&ap(study)).unwrap().enabled);
         assert!(!state.running);
         assert!(fake.take_calls().is_empty(), "nothing connects before it");
         assert!(messages(adapter).is_empty());

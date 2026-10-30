@@ -33,6 +33,9 @@ export global Strings {
     out property <string> waiting-for-airplay2: @tr("Waiting: too many AirPlay 2 speakers");
     out property <string> waiting-for-ptp: @tr("Waiting: AirPlay 2 speakers on another network");
     out property <string> not-on-network: @tr("Not on the network right now, plays once it's back");
+    // An AirPlay speaker the user switched on, while its prompt is open.
+    out property <string> waiting-for-password: @tr("Waiting for the password");
+    out property <string> waiting-for-pin: @tr("Enter the code shown on the TV");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
     // The flyout's speaker list when it has no speaker and no zone.
@@ -1191,7 +1194,8 @@ export global Strings {
         }
         if state == RowState.waiting-for-device || state == RowState.reconnecting
                 || state == RowState.waiting-for-airplay2 || state == RowState.waiting-for-ptp
-                || state == RowState.not-on-network {
+                || state == RowState.not-on-network || state == RowState.waiting-for-password
+                || state == RowState.waiting-for-pin {
             return root.row-note(state);
         }
         return root.on;
@@ -1215,6 +1219,12 @@ export global Strings {
         if state == RowState.not-on-network {
             return root.not-on-network;
         }
+        if state == RowState.waiting-for-password {
+            return root.waiting-for-password;
+        }
+        if state == RowState.waiting-for-pin {
+            return root.waiting-for-pin;
+        }
         return "";
     }
 
@@ -1232,6 +1242,11 @@ export global Strings {
     // The note of a speaker that asks for a code every time, while it asks
     // for one or is off; any other note otherwise (`availability`).
     public pure function speaker-availability(a: Availability, every-time: bool, state: RowState) -> string {
+        // The row's own note says what its prompt waits for.
+        if (state == RowState.waiting-for-password || state == RowState.waiting-for-pin)
+                && a != Availability.waiting-to-pair {
+            return "";
+        }
         if every-time && (a == Availability.needs-code || (a == Availability.open && state == RowState.off)) {
             return @tr("Asks for a code every time");
         }

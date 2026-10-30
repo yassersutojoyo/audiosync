@@ -438,6 +438,12 @@ pub enum Waiting {
     /// An AirPlay speaker that stopped announcing itself on the network; it
     /// plays once it is announced again (P215).
     NotOnNetwork,
+    /// An AirPlay speaker the user switched on whose password prompt is
+    /// open or queued (S223).
+    ForPassword,
+    /// An AirPlay speaker the user switched on whose PIN pairing runs
+    /// (S223).
+    ForPin,
 }
 
 /// Where a pairing's PIN prompt is.
