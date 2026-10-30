@@ -415,6 +415,12 @@ struct CastModel {
             if case .browsing = self { return .browsing(since: now) }
             return self
         }
+
+        /// The search once a fresh browse runs (S352): a failed one starts
+        /// over, so the 20 s count again; a running one keeps its start.
+        func afterRebrowse(now: Date) -> Discovery {
+            self == .failed ? .browsing(since: now) : self
+        }
     }
 
     struct Attempt: Equatable {

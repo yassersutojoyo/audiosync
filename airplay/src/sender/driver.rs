@@ -1804,6 +1804,14 @@ impl Driver {
             }
             Command::SetAirPlay2DeviceId(id) => self.device_id = id,
             Command::StartDiscovery(browser) => {
+                // What the old browser still holds, a receiver that left included, counts first.
+                if let Some(mut old) = self.browser.take() {
+                    let mut changes = Vec::new();
+                    while let Some(event) = old.poll_event() {
+                        changes.extend(self.directory.apply(event));
+                    }
+                    self.report_changes(changes);
+                }
                 self.browser = Some(browser);
                 self.poll_discovery();
             }
@@ -3170,6 +3178,57 @@ mod tests {
             instance,
         });
         assert!(driver.lapsed(&place_key(n)));
+    }
+
+    /// A browser that hands over its events, then nothing.
+    struct Held(Vec<crate::discovery::BrowseEvent>);
+
+    impl crate::discovery::Browser for Held {
+        fn poll_event(&mut self) -> Option<crate::discovery::BrowseEvent> {
+            (!self.0.is_empty()).then(|| self.0.remove(0))
+        }
+    }
+
+    // A fresh browse first takes in what the old browser still holds, a
+    // receiver that left included (S352).
+    #[test]
+    fn a_fresh_browse_takes_in_what_the_old_browser_still_held() {
+        use crate::discovery::{BrowseEvent, ServiceKind};
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, seen) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency);
+        let first = place_record(ServiceKind::AirPlay, 1, 7000);
+        let instance = first.instance.clone();
+        let browser = Held(vec![BrowseEvent::Resolved(first)]);
+        driver.command(Command::StartDiscovery(Box::new(browser)), now);
+        driver.browser = Some(Box::new(Held(vec![BrowseEvent::Removed {
+            kind: ServiceKind::AirPlay,
+            instance,
+        }])));
+        let second = place_record(ServiceKind::AirPlay, 2, 7000);
+        let fresh = Held(vec![BrowseEvent::Resolved(second)]);
+        driver.command(Command::StartDiscovery(Box::new(fresh)), now);
+        let listed: Vec<(bool, DeviceKey)> = seen
+            .try_iter()
+            .filter_map(|event| match event {
+                SenderEvent::Receiver(ReceiverEvent::Appeared(info)) => {
+                    Some((true, info.device.key))
+                }
+                SenderEvent::Receiver(ReceiverEvent::Gone(key)) => Some((false, key)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (true, place_key(1)),
+                (false, place_key(1)),
+                (true, place_key(2))
+            ]
+        );
     }
 
     fn place_options() -> SpeakerOptions {

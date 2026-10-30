@@ -150,6 +150,21 @@ extension AppDelegate {
     func recheckLocalNetwork() {
         if localNetworkProbe.isRunning { localNetworkProbe.startBrowsing() }
     }
+
+    /// `DiscoveryRestart.afterAllowed` after access turned allowed (S352).
+    func rebrowseIfNothingFound() {
+        let access = localNetworkProbe.access
+        if let native = nativeAirPlay,
+           DiscoveryRestart.due(access: access, found: !native.model.names.isEmpty) {
+            DebugTrace.log("[AudioSync] native AirPlay: nothing found since Local Network access was allowed, browsing afresh")
+            native.rebrowse()
+        }
+        if let cast = castSender,
+           DiscoveryRestart.due(access: access, found: castModel.devices.values.contains(where: { !$0.manual })) {
+            DebugTrace.log("[AudioSync] Cast: nothing found since Local Network access was allowed, browsing afresh")
+            cast.rebrowse()
+        }
+    }
 }
 
 // MARK: - Sleep and wake

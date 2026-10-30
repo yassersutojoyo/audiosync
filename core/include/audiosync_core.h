@@ -1653,8 +1653,9 @@ void asc_airplay_destroy(AscAirPlay **airplay);
 
 /*
  * Starts browsing the local network for AirPlay receivers over multicast DNS;
- * they arrive through asc_airplay_next_receiver. Returns false when the handle
- * is NULL or dead or multicast DNS can't start.
+ * they arrive through asc_airplay_next_receiver. When it runs already, a
+ * fresh browser takes the running one's place and the list stays. Returns
+ * false when the handle is NULL or dead or multicast DNS can't start.
  */
 bool asc_airplay_start_discovery(AscAirPlay *airplay);
 
@@ -2148,8 +2149,9 @@ void asc_cast_destroy(AscCast **cast);
 
 /*
  * Starts browsing the local network for Cast devices over multicast DNS;
- * they arrive through asc_cast_next_device. True when it runs already.
- * Returns false when the handle is NULL or dead or multicast DNS can't start.
+ * they arrive through asc_cast_next_device. When it runs already, a fresh
+ * browser takes the running one's place and the list stays. Returns false
+ * when the handle is NULL or dead or multicast DNS can't start.
  */
 bool asc_cast_start_discovery(AscCast *cast);
 

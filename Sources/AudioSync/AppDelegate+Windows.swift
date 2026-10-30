@@ -448,6 +448,18 @@ extension AppDelegate {
     /// Lists the outputs afresh, asks the AirPlay sender again and reads the
     /// sources. A virtual device already listed stays, even when switched off.
     private func rescanDevices() {
+        nativeAirPlay?.rebrowse()   // S352
+        let cast = castSender
+        cast?.rebrowse { [weak self] browsing in
+            guard let self, browsing, self.castSender === cast else { return }
+            let before = self.castModel.discovery
+            self.castModel.discovery = before.afterRebrowse(now: Date())
+            guard self.castModel.discovery != before else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + CastModel.noneFoundAfter + 0.5) { [weak self] in
+                self?.pushModel()
+            }
+            self.pushModel()
+        }
         reconcileLocal(keepListed: true)
         reconcileAirPlaySpeakers(origin: .user)
         pushSources()

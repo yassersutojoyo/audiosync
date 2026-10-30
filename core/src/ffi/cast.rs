@@ -1253,8 +1253,10 @@ pub unsafe extern "C" fn asc_cast_destroy(cast: *mut *mut AscCast) {
 }
 
 /// Starts browsing for Cast devices over multicast DNS (C10); they arrive
-/// through [`asc_cast_next_device`]. True when it runs already. False when
-/// the handle is null or dead or multicast DNS can't start.
+/// through [`asc_cast_next_device`]. When it runs already, a fresh browser
+/// takes the running one's place and the list stays (S352); without one the
+/// running browser stays. False when the handle is null or dead or multicast
+/// DNS can't start.
 ///
 /// # Safety
 ///
@@ -1264,8 +1266,10 @@ pub unsafe extern "C" fn asc_cast_start_discovery(cast: *mut AscCast) -> bool {
     // SAFETY: as the caller's.
     unsafe {
         live(cast, false, |cast| {
-            if cast.browser.is_none() {
-                cast.browser = (cast.open_browser)();
+            // What the old browser still holds, a device that left included, counts first.
+            cast.pump_discovery();
+            if let Some(fresh) = (cast.open_browser)() {
+                cast.browser = Some(fresh);
             }
             cast.browser.is_some()
         })
@@ -3336,6 +3340,76 @@ mod tests {
             assert!(asc_cast_start_discovery(handle));
             asc_cast_stop_discovery(handle);
         }
+        destroy(handle);
+    }
+
+    const DEN: &str = "fedcba9876543210fedcba9876543210";
+
+    fn kitchen_and_den() -> Option<Box<dyn Browse>> {
+        let kitchen = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));
+        let den = record(DEN, "Den", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 6));
+        let events = vec![BrowseEvent::Resolved(kitchen), BrowseEvent::Resolved(den)];
+        Some(Box::new(Script(events.into(), false)))
+    }
+
+    // covers: S352
+    #[test]
+    fn starting_discovery_again_browses_afresh_and_keeps_the_list() {
+        let handle = create_with("", kitchen_and_den);
+        let kitchen = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));
+        browse(handle, vec![BrowseEvent::Resolved(kitchen)], false);
+        let first: Vec<(i32, String)> = devices(handle)
+            .into_iter()
+            .map(|c| (c.event, c.id))
+            .collect();
+        assert_eq!(first, [(CAST_APPEARED, KITCHEN.to_owned())]);
+        // SAFETY: a live handle, used by this thread only.
+        assert!(unsafe { asc_cast_start_discovery(handle) });
+        let again: Vec<(i32, String)> = devices(handle)
+            .into_iter()
+            .map(|c| (c.event, c.id))
+            .collect();
+        // A record found again reads as changed, as any repeated announcement does.
+        assert_eq!(
+            again,
+            [
+                (CAST_CHANGED, KITCHEN.to_owned()),
+                (CAST_APPEARED, DEN.to_owned())
+            ]
+        );
+        destroy(handle);
+    }
+
+    fn den_only() -> Option<Box<dyn Browse>> {
+        let den = record(DEN, "Den", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 6));
+        Some(Box::new(Script(
+            vec![BrowseEvent::Resolved(den)].into(),
+            false,
+        )))
+    }
+
+    // covers: S352
+    #[test]
+    fn starting_discovery_again_first_takes_in_what_the_old_browser_held() {
+        let handle = create_with("", den_only);
+        let kitchen = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));
+        let fullname = kitchen.fullname.clone();
+        browse(handle, vec![BrowseEvent::Resolved(kitchen)], false);
+        assert_eq!(devices(handle).len(), 1);
+        browse(handle, vec![BrowseEvent::Removed { fullname }], false);
+        // SAFETY: a live handle, used by this thread only.
+        assert!(unsafe { asc_cast_start_discovery(handle) });
+        let seen: Vec<(i32, String)> = devices(handle)
+            .into_iter()
+            .map(|c| (c.event, c.id))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (CAST_GONE, KITCHEN.to_owned()),
+                (CAST_APPEARED, DEN.to_owned())
+            ]
+        );
         destroy(handle);
     }
 

@@ -510,6 +510,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         localNetworkProbe.onChange = { [weak self] access in
             DebugTrace.log("[AudioSync] Local Network access: \(access)")
             self?.pushModel()
+            guard access == .allowed else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + DiscoveryRestart.afterAllowed) { [weak self] in
+                self?.rebrowseIfNothingFound()
+            }
         }
     }
 

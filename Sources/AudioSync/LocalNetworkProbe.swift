@@ -88,6 +88,20 @@ enum AirPlaySearch {
     }
 }
 
+/// On the first launch after the app was replaced, macOS can let the
+/// senders' browses open before Local Network access takes effect; their
+/// queries fail and the next one waits out a doubling retry delay, so a fresh
+/// browse asks at once (S352).
+enum DiscoveryRestart {
+    static let afterAllowed: TimeInterval = 3
+
+    /// Whether a running sender's browse starts afresh `afterAllowed` after
+    /// access turned allowed.
+    static func due(access: LocalNetworkAccess, found: Bool) -> Bool {
+        access == .allowed && !found
+    }
+}
+
 /// Finds out whether macOS lets AudioSync use the local network.
 ///
 /// There is no API that reports Local Network permission, but Bonjour

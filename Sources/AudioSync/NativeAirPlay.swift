@@ -100,6 +100,14 @@ final class NativeAirPlay {
         }
     }
 
+    /// Browses afresh, keeping the receivers listed (S352).
+    func rebrowse() {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            _ = asc_airplay_start_discovery(handle)
+        }
+    }
+
     /// Adds the receiver `id` as a speaker at slider position `volume` (0 to
     /// 100) times the master. Main queue.
     func add(_ id: String, volume: Double) {

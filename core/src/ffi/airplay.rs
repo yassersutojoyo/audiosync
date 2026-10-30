@@ -2552,8 +2552,10 @@ pub unsafe extern "C" fn asc_airplay_destroy(airplay: *mut *mut AscAirPlay) {
 }
 
 /// Starts browsing the local network for AirPlay receivers over multicast
-/// DNS (P7); they arrive through [`asc_airplay_next_receiver`]. False when
-/// the handle is null or dead or multicast DNS can't start.
+/// DNS (P7); they arrive through [`asc_airplay_next_receiver`]. When it
+/// runs already, a fresh browser takes the running one's place and the list
+/// stays (S352). False when the handle is null or dead or multicast DNS
+/// can't start.
 ///
 /// # Safety
 ///
@@ -4703,6 +4705,40 @@ mod tests {
             started.elapsed()
         );
         assert!(handle.is_null());
+        assert_no_live_discovery();
+    }
+
+    fn kitchen_and_den() -> Option<Box<dyn Browser + Send>> {
+        Some(Box::new(Script(vec![
+            BrowseEvent::Resolved(raop("02005E005341", "Kitchen", OPEN)),
+            BrowseEvent::Resolved(raop("02005E005342", "Den", OPEN)),
+        ])))
+    }
+
+    // covers: S352
+    #[test]
+    fn starting_discovery_again_browses_afresh_and_keeps_the_list() {
+        let mut handle = create_with(kitchen_and_den);
+        start_with(
+            handle,
+            vec![BrowseEvent::Resolved(raop("02005E005341", "Kitchen", OPEN))],
+        );
+        let first: Vec<(i32, String)> = next(handle, 1)
+            .into_iter()
+            .map(|s| (s.event, s.id))
+            .collect();
+        assert_eq!(first, [(AIRPLAY_APPEARED, "02005E005341".to_owned())]);
+        // SAFETY: a live handle, used by this thread only.
+        assert!(unsafe { asc_airplay_start_discovery(handle) });
+        let again: Vec<(i32, String)> = next(handle, 1)
+            .into_iter()
+            .map(|s| (s.event, s.id))
+            .collect();
+        assert_eq!(again, [(AIRPLAY_APPEARED, "02005E005342".to_owned())]);
+        let after = more_within(handle, Duration::from_millis(500));
+        assert!(after.is_empty(), "the kept receiver changed: {after:?}");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
         assert_no_live_discovery();
     }
 

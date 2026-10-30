@@ -1289,6 +1289,11 @@ do {
             && LocalNetworkProbe.recheckDate(running: true, access: .allowed, startedAt: t0) == nil
             && LocalNetworkProbe.recheckDate(running: false, access: .denied, startedAt: t0) == nil,
           "local network probe: only a running probe's denied answer is asked again (S101)")
+    check(DiscoveryRestart.due(access: .allowed, found: false) && DiscoveryRestart.afterAllowed == 3,
+          "local network: a sender that found nothing 3 s after access turned allowed browses afresh (S352)")
+    check(!DiscoveryRestart.due(access: .allowed, found: true) && !DiscoveryRestart.due(access: .unknown, found: false)
+            && !DiscoveryRestart.due(access: .denied, found: false),
+          "local network: a sender that found something, or whose access isn't allowed, keeps its browse (S352)")
     // What the in-process Bonjour browser's states say about access.
     let policyDenied = NWError.dns(DNSServiceErrorType(kDNSServiceErr_PolicyDenied))
     check(LocalNetworkProbe.access(for: .waiting(policyDenied)) == .denied,
@@ -3629,6 +3634,21 @@ do {
         var unnamed = NativeAirPlayModel()
         unnamed.apply(.appeared(mac))
         check(unnamed.rows(enabled: []) == [NativeAirPlayID.app(mac.id)], "native airplay: with no computer name known, nothing is hidden")
+        var seenOnly = NativeAirPlayModel()
+        seenOnly.computerName = "Studio Mac"
+        seenOnly.apply(.appeared(mac))
+        var pairing = NativeAirPlayModel()
+        pairing.apply(.appeared(NativeReceiver(id: "02005E005342", name: "Hall", model: "AppleTV5,3",
+                                               availability: .needsPairing, reason: nil, hints: ["airplay"])))
+        check(!DiscoveryRestart.due(access: .allowed, found: !seenOnly.names.isEmpty)
+                && !DiscoveryRestart.due(access: .allowed, found: !pairing.names.isEmpty),
+              "local network: this Mac's own receiver or one needing pairing counts as found, so the browse stays (S352)")
+        let rebrowsedAt = Date(timeIntervalSince1970: 1_000)
+        check(CastModel.Discovery.failed.afterRebrowse(now: rebrowsedAt) == .browsing(since: rebrowsedAt)
+                && CastModel.Discovery.browsing(since: .distantPast).afterRebrowse(now: rebrowsedAt)
+                    == .browsing(since: .distantPast)
+                && CastModel.Discovery.off.afterRebrowse(now: rebrowsedAt) == .off,
+              "cast: a fresh browse starts a failed search over, so its 20 s count again; a running one keeps its start (S352)")
     }
     // covers: S205 (the detail goes to the debug log; the model's outcome carries none of it)
     do {

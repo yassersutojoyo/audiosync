@@ -94,6 +94,16 @@ final class CastSender {
         }
     }
 
+    /// Browses afresh, keeping the devices listed (S352); `completion` gets,
+    /// on the main queue, whether discovery runs.
+    func rebrowse(completion: @escaping (Bool) -> Void = { _ in }) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            let browsing = asc_cast_start_discovery(handle)
+            DispatchQueue.main.async { completion(browsing) }
+        }
+    }
+
     func stopSession() {
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
