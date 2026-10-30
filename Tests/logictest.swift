@@ -4006,6 +4006,27 @@ do {
               "S284 airplay latency: the next values come once E may change")
     }
 
+    // covers: S283, S141 (the Mac host: a capture switch reaches the sender as nativeCaptureStarted)
+    do {
+        var estimates: [String] = []
+        let sender = NativeAirPlay(onChange: { _ in }, onEvent: { event, _ in
+            if case .estimate(let detail) = event { estimates.append(detail) }
+        })
+        sender.model.receiverLatency.report("A1", us: 220_000)
+        sender.add("A1", volume: 50)
+        sender.model.sounding = true
+        sender.model.receiverLatency.report("J9", us: 300_000)
+        sender.add("J9", volume: 50)
+        let heldBefore = sender.model.receiverLatency.heldMs
+        sender.captureStarted()
+        let latency = sender.model.receiverLatency
+        check(heldBefore == 300 && estimates.count == 1 && latency.estimateMs == 220 && latency.heldMs == 300
+                && latency.offsetMs(of: ["A1"]) == 0,
+              "airplay latency: a capture switch keeps a held E (220 ms while a joiner at 300 ms waits)",
+              "E \(latency.estimateMs), held \(String(describing: latency.heldMs)), \(estimates)")
+        sender.shutdown()
+    }
+
     // covers: S284, S285
     do {
         var group = NativeAirPlayModel()
@@ -8686,8 +8707,10 @@ do {
         }
     }
 
-    // S186: a source change is a stop and a start, and the start waits for
-    // the stop (StreamEngine.start calls finishAll first).
+    // S186: a source change rebuilds only the capture under the
+    // speakers; the local outputs fade out on the old capture, which runs
+    // until they have, and are re-added on the new one, whose start waits
+    // for that (StreamEngine.start calls finishAll first).
     do {
         let bench = FadeBench(), r = bench.retirement()
         stopSession(r, bench, [FakeFadingOutput("A", bench, fadesAfterMs: 45)])
@@ -8696,7 +8719,35 @@ do {
         let order = ["fade A", "capture stops", "stop A", "new capture starts"].map(bench.index)
         let faded = bench.times["fade A"].map { (bench.times["capture stops"] ?? 0) >= $0 + 45 * ms } ?? false
         check(order == order.sorted() && !order.contains(Int.max) && faded,
-              "fade: a source change fades out on the old source before the new one starts", "\(bench.events)")
+              "fade: a source change fades the local outputs out on the old capture before the new one starts",
+              "\(bench.events)")
+    }
+
+    // covers: S186, S189 (a source change: the AirPlay and Cast inputs fade out while the old capture runs)
+    // The engine as startEngine(switching:) drives it: its stop, then the
+    // start's wait for that stop before the new capture runs.
+    do {
+        let name = "fade: a source change asks the AirPlay input to fade out while the old capture runs, "
+            + "and the new one starts after the old one stopped"
+        if let oldParts = EngineParts.make(), let newParts = EngineParts.make() {
+            var steps: [String] = []
+            let engine = StreamEngine()
+            engine.fadeSenderInputs = { steps.append("fade out") }
+            oldParts.prepare(captureRate: 44_100)
+            engine.run(oldParts, captureRate: 44_100)
+            engine.stop(then: { steps.append("old capture stopped") })
+            let capturingWhileFading = steps.contains("fade out") && !steps.contains("old capture stopped")
+            engine.finishStopping()
+            newParts.prepare(captureRate: 48_000)
+            engine.run(newParts, captureRate: 48_000)
+            let switched = (steps: steps, running: engine.isRunning)
+            engine.stop()
+            engine.finishStopping()
+            check(capturingWhileFading && switched.steps == ["fade out", "old capture stopped"] && switched.running,
+                  name, "\(switched.steps)")
+        } else {
+            check(false, name, "the core's parts could not be made")
+        }
     }
 
     // S185, S186: a switched-off speaker plays its fade before its IO stops.

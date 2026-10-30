@@ -935,6 +935,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | native airplay: a pairing failure keeps its unsupported reason | S223 |
 | airplay latency: a playing speaker that leaves discovery keeps its R_s until it leaves the sender | S280 |
 | airplay latency: a pair member that leaves discovery keeps its R_s until the pair leaves the sender | S280 |
+| airplay latency: a capture switch keeps a held E (220 ms while a joiner at 300 ms waits) | S283, S141 |
 | native pairing: a pairing that needs the password asks for it, then pairs again with it | S223 |
 | native pairing: a prompt its pairing waits for stays open | S223 |
 | native pairing: a pairing that fails under its open PIN prompt takes the prompt back, once | S223 |
@@ -1510,7 +1511,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | fade: with only AirPlay speakers on, a stop keeps capturing until the AirPlay inputs have faded | S186, S189 |
 | fade: a stop waits for the slowest output, never more than 500 ms | S186 |
 | fade: an output is faded once the host clock passes its last faded frame's output time plus its latency | S185 |
-| fade: a source change fades out on the old source before the new one starts | S186 |
+| fade: a source change fades the local outputs out on the old capture before the new one starts | S186 |
+| fade: a source change asks the AirPlay input to fade out while the old capture runs, and the new one starts after the old one stopped | S186, S189 |
 | fade: a speaker switched off is stopped only after it faded | S185, S186 |
 | fade: switching several speakers off asks all of them to fade, then waits once | S186 |
 | fade: a lost device is stopped at once, without a fade | S185 |

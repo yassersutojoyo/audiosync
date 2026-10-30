@@ -84,6 +84,11 @@ final class StreamEngine {
     private var equalizerSettings = Equalizer.Settings()
     /// Outputs fading out before they stop, and the stop that waits for them.
     private let retirement = OutputRetirement()
+    /// Asks AudioSync's own AirPlay and Cast inputs to fade out at a stop (S186, S189).
+    var fadeSenderInputs: () -> Void = {
+        NativeAirPlayTap.requestFadeOut()
+        CastTap.requestFadeOut()
+    }
     /// Finishes what `retirement` waits for, while it waits for anything.
     private var fadeTimer: DispatchSourceTimer?
     /// Set by `deinit`, which finishes what fades itself.
@@ -368,10 +373,8 @@ final class StreamEngine {
         let capture = self.capture
         let inputs = Self.inputsFadedCheck(ring: parts.ring, captureRate: capture.sampleRate)
         DebugTrace.log("[AudioSync] session stopping: \(leaving.count) output(s) and the AirPlay inputs fade out")
-        retirement.stopSession(leaving.map { $0.renderer }, fadeInputs: {
-            NativeAirPlayTap.requestFadeOut()
-            CastTap.requestFadeOut()
-        }, inputsFaded: inputs.faded, inputsFallbackNs: inputs.fallbackNs, stopCapture: {
+        retirement.stopSession(leaving.map { $0.renderer }, fadeInputs: fadeSenderInputs,
+                               inputsFaded: inputs.faded, inputsFallbackNs: inputs.fallbackNs, stopCapture: {
             capture.halt()
         }, then: {
             for output in leaving {
