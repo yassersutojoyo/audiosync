@@ -3784,6 +3784,17 @@ impl AirPlaySpeakers {
                 self.airplay1_outcome.remove(member);
             }
         }
+        self.forget_reported(id, added);
+    }
+
+    /// Drops the R_s of the row `id` that left the sender, and of its
+    /// members, once discovery doesn't list them either (S280).
+    fn forget_reported(&mut self, id: &str, added: &Added) {
+        for left in std::iter::once(id).chain(added.members.keys().map(String::as_str)) {
+            if !self.listed.contains_key(left) && !self.in_sender(left) {
+                self.reported_us.remove(left);
+            }
+        }
     }
 
     /// Lists the speaker `id` as needing a PIN after an answer turned its
@@ -3866,7 +3877,11 @@ impl AirPlaySpeakers {
             }
             ReceiverEvent::Gone(key) => {
                 let id = speaker_id(&key);
-                self.reported_us.remove(&id);
+                // The crate reports R_s once, at first sound, so a speaker
+                // still in the sender keeps it (S280).
+                if !self.in_sender(&id) {
+                    self.reported_us.remove(&id);
+                }
                 if self.listed.remove(&id).is_some() {
                     self.log
                         .log(|| format!("AirPlay receiver gone: {}", self.label(&id)));
@@ -3968,6 +3983,11 @@ impl AirPlaySpeakers {
         if !used {
             self.names.remove(id);
         }
+    }
+
+    /// Whether the speaker `id` is in the sender, alone or in a target.
+    fn in_sender(&self, id: &str) -> bool {
+        self.added.contains_key(id) || self.added_target_of(id).is_some()
     }
 
     /// The added target whose member is the speaker `id`.
@@ -4314,6 +4334,7 @@ impl AirPlaySpeakers {
                     // meanwhile.
                     added.remove(self.link.as_mut());
                     self.airplay1_outcome.remove(id);
+                    self.forget_reported(id, &added);
                     self.queue_password_ask(id, turned_down, false, None);
                     return true;
                 }
@@ -10298,6 +10319,60 @@ pub mod tests {
         let calls = fake.take_calls();
         assert_eq!(latencies(&calls), [77_175, 88_200], "{calls:?}");
         assert_eq!(airplay.speakers()[0].reported_latency_ms, 1600.0);
+    }
+
+    // covers: S280
+    #[test]
+    fn a_playing_speaker_that_leaves_discovery_keeps_its_rs_until_it_leaves_the_sender() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, _den) = kitchen_and_den(&fake, 0.0);
+        let id = id_of(&kitchen);
+        fake.report_latency(&kitchen, 220_000, LatencySources::AUDIO_LATENCY);
+        airplay.poll();
+        fake.gone(&kitchen);
+        airplay.poll();
+        let rows = airplay.speakers();
+        let row = rows.iter().find(|row| row.id == id).expect("Kitchen");
+        assert_eq!(row.reported_latency_ms, 220.0);
+        airplay.set_enabled(&id, false).unwrap();
+        assert!(!airplay.reported_us.contains_key(&id));
+    }
+
+    // covers: S280
+    #[test]
+    fn a_speaker_out_of_discovery_that_leaves_the_sender_to_ask_for_a_password_drops_its_rs() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, _den) = kitchen_and_den(&fake, 0.0);
+        let id = id_of(&kitchen);
+        airplay.begin_attempt(&id);
+        fake.report_latency(&kitchen, 220_000, LatencySources::AUDIO_LATENCY);
+        airplay.poll();
+        fake.gone(&kitchen);
+        airplay.poll();
+        assert!(airplay.reported_us.contains_key(&id));
+        fake.fail(&kitchen, ErrorKind::PasswordRequired);
+        airplay.poll();
+        assert!(airplay.password_prompt().is_some(), "it asks");
+        assert!(!airplay.reported_us.contains_key(&id));
+    }
+
+    // covers: S280
+    #[test]
+    fn a_pair_member_that_leaves_discovery_keeps_its_rs_until_the_pair_leaves_the_sender() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        fake.report_latency(&right, 1_600_000, LatencySources::AUDIO_LATENCIES);
+        airplay.poll();
+        fake.gone(&right);
+        airplay.poll();
+        let rows = airplay.speakers();
+        let row = rows.iter().find(|row| row.id == PAIR).expect("the pair");
+        assert_eq!(row.reported_latency_ms, 1600.0);
+        airplay.set_enabled(PAIR, false).unwrap();
+        assert!(!airplay.reported_us.contains_key(&id_of(&right)));
     }
 
     // covers: S283
