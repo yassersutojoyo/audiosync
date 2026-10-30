@@ -45,7 +45,7 @@ What you can set:
 - Calibrate with Microphone sets a local speaker's delay for you, and Calibrate All Speakers does every speaker that's on, one after the other.
 - Web Remote lets a phone on your home network turn speakers on and off and set volumes and delays.
 
-AudioSync sits in the notification area and can start when you sign in.
+AudioSync sits in the notification area and can start when you sign in, once you turn that on.
 
 What doesn't work yet:
 - Everything is about two seconds late. Fine for music, not for video or games.
@@ -137,11 +137,11 @@ Music ("apps for listening, recording, creating, or performing music"), no subca
 
 ### System requirements
 
-Windows 11 (build 22000 or later), x64 or ARM64. Older versions get a message and the app exits.
+Windows 11 (build 22000 or later), x64 only. Older versions get a message and the app exits.
 
 ### Privacy policy URL
 
-Required when the app accesses, collects or transmits personal information, and Partner Center asks for one by itself when the package declares capabilities that could. The repository and the site have no privacy policy page yet.
+Required when the app accesses, collects or transmits personal information, and Partner Center asks for one by itself when the package declares capabilities that could. The package declares `microphone`, `privateNetworkClientServer` (speakers and Web Remote on the home network) and `runFullTrust`, and not `internetClient`. The repository and the site have no privacy policy page yet.
 
 TODO (maintainer): privacy policy URL.
 
