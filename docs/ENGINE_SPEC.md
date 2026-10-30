@@ -2856,6 +2856,17 @@ The checks for S256 to S258, S287, S288, S337, S338 and S343 to S345 and S348 in
 | web remote: a phone mix of two running apps selects them as the several-apps menu would, one app a plain app source (pending, [MAC]) | S353 |
 | web remote: the last mix is kept across a switch and a relaunch and listed once in the picker and on the phone (pending, [MAC]) | S354 |
 
+### The last mix: Mac (the logic suite)
+
+| Check | Clauses |
+|---|---|
+| last mix: a mix left for another source is kept, and only another mix left replaces it | S354 |
+| last mix: picking a mix never makes it the last mix by itself, so a failed pick that puts the old source back keeps the one kept | S354 |
+| last mix: a stored last mix is read as the source in use is; one that reads back as no mix is dropped | S354, S242 |
+| last mix: the picker lists the last mix once, right after the whole system, an app that isn't running under its kept name | S354, S211 |
+| last mix: while a mix is in use the picker lists that one alone, never the kept one beside it | S354 |
+| last mix: the phone lists the last mix as an app under the picker's name, and its pick maps back to it | S354, S344 |
+
 ### Receiver latency: AirPlay crate, core, Windows and Mac (`cargo test` in `airplay/`, `core/` and `desktop/`, the logic suite)
 
 The crate's checks are in AirPlay spec section 12. The rule and the C interface (`core/tests/airplay_latency.rs`, `core/src/ffi/airplay.rs`; the P clauses are the AirPlay spec's):
