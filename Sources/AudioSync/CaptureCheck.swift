@@ -79,6 +79,42 @@ struct CaptureWatch {
     }
 }
 
+/// What each of one session's capture checks does with the notice (S350).
+struct CaptureNoticeGate {
+    /// Seconds from the session's start to its first check.
+    static let firstCheck: TimeInterval = 3
+    /// Seconds between the checks that follow.
+    static let recheck: TimeInterval = 2
+
+    enum Step: Equatable {
+        /// The session this check was scheduled for is over: no notice, no further check.
+        case end
+        /// Audio flows: clear the notice; the checks end.
+        case clear
+        /// Post the notice for this verdict, naming the app when one was found; check again.
+        case post(CaptureCheck, String?)
+        /// The notice for this verdict was already posted: check again.
+        case keep
+    }
+
+    let session: Int
+    private var said: CaptureCheck?
+
+    init(session: Int) {
+        self.session = session
+    }
+
+    mutating func step(verdict: CaptureCheck, session current: Int, running: Bool,
+                       app: @autoclosure () -> String?) -> Step {
+        guard current == session, running else { return .end }
+        if verdict == .flowing { return .clear }
+        // Only a changed verdict posts, so a notice the user dismissed stays dismissed.
+        guard verdict != said else { return .keep }
+        said = verdict
+        return .post(verdict, app())
+    }
+}
+
 /// A running session's capture, watched from its first callback until the
 /// session ends (S335). Fed on the main queue every 0.5 s with the capture's
 /// callback count, Now Playing's latest reading and the uptime clock, which

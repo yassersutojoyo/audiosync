@@ -1859,6 +1859,30 @@ check(CaptureCheck.provesPermission(.system) && CaptureCheck.provesPermission(.a
       "capture: sound from a system or app tap proves the permission")
 check(!CaptureCheck.provesPermission(.input(uid: "BuiltInMicrophoneDevice")),
       "capture: a microphone or line-in heard never proves the tap permission")
+// covers: S350
+do {
+    var gate = CaptureNoticeGate(session: 4)
+    check(gate.step(verdict: .waiting, session: 4, running: true, app: "Spotify") == .post(.waiting, "Spotify"),
+          "capture notice: the first waiting check posts the waiting notice naming the app")
+    check(gate.step(verdict: .waiting, session: 4, running: true, app: "Spotify") == .keep,
+          "capture notice: the same verdict again posts nothing, so a dismissed notice stays dismissed")
+    check(gate.step(verdict: .notWorking, session: 4, running: true, app: nil) == .post(.notWorking, nil),
+          "capture notice: a verdict turning not working replaces the waiting notice")
+    check(gate.step(verdict: .waiting, session: 5, running: true, app: nil) == .end,
+          "capture notice: a check scheduled for an earlier session does nothing")
+    check(gate.step(verdict: .waiting, session: 4, running: false, app: nil) == .end,
+          "capture notice: a check after streaming stopped does nothing")
+    check(gate.step(verdict: .flowing, session: 4, running: true, app: nil) == .clear,
+          "capture notice: audio flowing clears the notice and ends the checks")
+    var fresh = CaptureNoticeGate(session: 6)
+    check(fresh.step(verdict: .waiting, session: 6, running: true, app: nil) == .post(.waiting, nil),
+          "capture notice: a new session posts its waiting notice again, without an app name when none was found")
+    check(UIStrings().waitingForAudio("Spotify") == "Waiting for audio from Spotify. Start playback there and it streams right away."
+          && UIStrings().waitingForAudio(nil) == "Waiting for audio. Play something and it streams right away.",
+          "capture notice: the waiting text names the app when one was found, and reads generic otherwise")
+    check(CaptureNoticeGate.firstCheck == 3 && CaptureNoticeGate.recheck == 2,
+          "capture notice: the first check comes 3 s after the start, then one every 2 s")
+}
 // covers: S19
 do {
     let spotify = "com.spotify.client", music = "com.apple.Music"

@@ -423,34 +423,32 @@ extension AppDelegate {
         // only a source Now Playing shows playing, while no tap in this app
         // run ever captured sound, points at a problem (`CaptureCheck`).
         // Never a modal alert: the user may simply not have pressed play yet.
-        let scheduledFor = session
+        var gate = CaptureNoticeGate(session: session)
         var watch = CaptureWatch()
-        var said: CaptureCheck?   // post a notice only when the verdict changes, so a dismissed one stays dismissed
         func check() {
-            guard session == scheduledFor, engine.isRunning else { return }
             let playing = sourcePlayingReading()
             let verdict = watch.verdict(at: ProcessInfo.processInfo.systemUptime,
                                         sessionHeard: engine.sessionHeard, runHeard: engine.runHeard,
                                         reportsPlaying: playing != nil, position: playing?.position)
-            if verdict == .flowing {
+            switch gate.step(verdict: verdict, session: session, running: engine.isRunning, app: sourceDisplayName()) {
+            case .end:
+                return
+            case .clear:
                 clearNotices([Notice.capture])
                 return
-            }
-            if verdict != said {
-                said = verdict
-                switch verdict {
-                case .waiting:
-                    postNotice(text.waitingForAudio(sourceDisplayName()), subject: Notice.capture)
-                default:
-                    notify(text.captureNotWorking(sourceDisplayName()), origin: .automatic, subject: Notice.capture,
-                           settings: Permission.needed(for: audioSource).pane)
-                }
+            case .post(.waiting, let app):
+                postNotice(text.waitingForAudio(app), subject: Notice.capture)
+            case .post(_, let app):
+                notify(text.captureNotWorking(app), origin: .automatic, subject: Notice.capture,
+                       settings: Permission.needed(for: audioSource).pane)
+            case .keep:
+                break
             }
             // Keep watching until audio flows or the session ends, so the
             // notice always clears once playback starts.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { check() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + CaptureNoticeGate.recheck) { check() }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { check() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + CaptureNoticeGate.firstCheck) { check() }
     }
 
     /// Now Playing's latest reading when it reports the selected source as
