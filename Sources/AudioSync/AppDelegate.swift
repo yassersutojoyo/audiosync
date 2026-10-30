@@ -204,6 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var inputPairs: [String: Int] {
         didSet { if inputPairs != oldValue { store.save(inputPairs: inputPairs) } }
     }
+    var inputListings = InputListings()
 
     /// Where a speaker without a volume of its own starts (S71, S105).
     let defaultVolume = AppSettings.defaultVolume

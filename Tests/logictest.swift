@@ -2306,6 +2306,37 @@ do {
           "capture watch: a try that finds the input unlisted is followed by one at the next tick that lists it",
           "\(first) \(unlisted) \(next)")
 }
+// covers: S329 (the Mac: an input that left is followed to the new UID it is listed under)
+do {
+    let mic = { (uid: String) in InputListings.Input(uid: uid, name: "USB Mic", transport: kAudioDeviceTransportTypeUSB) }
+    let line = InputListings.Input(uid: "line-in", name: "Line In", transport: kAudioDeviceTransportTypeBuiltIn)
+    var listings = InputListings()
+    var pairs = ["usb-1": 2, "line-in": 1]
+    let playing = listings.take([mic("usb-1"), line], waiting: nil, pairs: &pairs)
+    let away = listings.take([line], waiting: "usb-1", pairs: &pairs)
+    let back = listings.take([line, mic("usb-2")], waiting: "usb-1", pairs: &pairs)
+    let backPairs = pairs
+    _ = listings.take([line], waiting: "usb-2", pairs: &pairs)
+    let home = listings.take([line, mic("usb-1")], waiting: "usb-2", pairs: &pairs)
+    check(playing == nil && away == nil && back == "usb-2" && backPairs == ["usb-2": 2, "line-in": 1]
+            && home == "usb-1" && pairs == ["usb-1": 2, "line-in": 1],
+          "capture watch: an input listed again under a new UID with its name and transport becomes the source and keeps its channel pair",
+          "\(String(describing: playing)) \(String(describing: away)) \(String(describing: back)) \(backPairs) "
+            + "\(String(describing: home)) \(pairs)")
+}
+// covers: S329 (the Mac: no input is followed when the name and transport don't single one out)
+do {
+    let mic = { (uid: String) in InputListings.Input(uid: uid, name: "USB Mic", transport: kAudioDeviceTransportTypeUSB) }
+    var two = InputListings(), twin = InputListings()
+    var pairs = ["usb-1": 2]
+    _ = two.take([mic("usb-1")], waiting: nil, pairs: &pairs)
+    let both = two.take([mic("usb-2"), mic("usb-3")], waiting: "usb-1", pairs: &pairs)
+    _ = twin.take([mic("usb-1"), mic("usb-twin")], waiting: nil, pairs: &pairs)
+    let played = twin.take([mic("usb-twin")], waiting: "usb-1", pairs: &pairs)
+    check(both == nil && played == nil && pairs == ["usb-1": 2],
+          "capture watch: an input that left follows neither of two new UIDs with its name and transport nor a twin listed while it played",
+          "\(String(describing: both)) \(String(describing: played)) \(pairs)")
+}
 // covers: S333 (the Mac: the hog owner read decides whether an input is busy)
 do {
     typealias CE = SourceCapture.CaptureError

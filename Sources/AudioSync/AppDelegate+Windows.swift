@@ -579,6 +579,15 @@ extension AppDelegate {
             loggedInputs = inputLog
             inputLog.forEach { DebugTrace.log($0) }
         }
+        var waiting: String?
+        if case .input(let uid) = audioSource, engine.waitsForInput { waiting = uid }
+        let listed = inputDevices.map { InputListings.Input(uid: $0.uid, name: $0.name, transport: $0.transport) }
+        if let to = inputListings.take(listed, waiting: waiting, pairs: &inputPairs), let from = waiting {
+            DebugTrace.log("[AudioSync] the capture's input device is listed under a new UID (\(to), was \(from)): "
+                           + "the capture follows it")
+            audioSource = .input(uid: to)
+            engine.followInput(to: to)
+        }
         var inputName = store.read(Keys.sourceInputName) as? String
         if case .input(let uid) = audioSource, let plugged = inputs.first(where: { $0.uid == uid }),
            plugged.name != inputName {

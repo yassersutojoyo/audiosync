@@ -567,6 +567,13 @@ final class StreamEngine {
         }
     }
 
+    /// The input device the capture waits for is listed under the new UID
+    /// `uid` (S329): the watch's next check tries that one.
+    func followInput(to uid: String) {
+        guard let opened, case .input = opened.source else { return }
+        self.opened = (source: .input(uid: uid), inputPair: opened.inputPair)
+    }
+
     /// The input device left (S329): only the capture closes, the notice says
     /// so, and the capture opens again once the device is listed again.
     private func inputLeft(_ error: SourceCapture.CaptureError) {

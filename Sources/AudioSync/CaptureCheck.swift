@@ -373,3 +373,45 @@ enum CaptureRate {
         reported.isFinite && reported > 0 ? reported : fallback
     }
 }
+
+/// The input devices listed in this run, so a captured input that left can be
+/// followed to the new UID it is listed under (S329).
+struct InputListings {
+    struct Input: Equatable {
+        let uid: String, name: String, transport: UInt32
+    }
+
+    private var seen: [String: Input] = [:]
+    /// UIDs a device was followed away from; one listed again is a device of its own once more.
+    private var leftBehind: Set<String> = []
+
+    /// Takes in the inputs `listed` now. When the capture waits for input
+    /// `waiting` and its device is listed under a new UID, returns that UID
+    /// and moves `waiting`'s channel pair in `pairs` to it.
+    mutating func take(_ listed: [Input], waiting: String?, pairs: inout [String: Int]) -> String? {
+        let to = waiting.flatMap { moved(from: $0, listed: listed) }
+        if let waiting, let to {
+            leftBehind.insert(waiting)
+            if let pair = pairs.removeValue(forKey: waiting) { pairs[to] = pair }
+        }
+        for input in listed {
+            leftBehind.remove(input.uid)
+            seen[input.uid] = input
+        }
+        return to
+    }
+
+    /// The only input listed with `from`'s name and transport that is new in
+    /// this run or under a UID a device left, while `from` is the only one
+    /// with them that was listed and is gone.
+    private func moved(from: String, listed: [Input]) -> String? {
+        guard let lost = seen[from], !listed.contains(where: { $0.uid == from }) else { return nil }
+        let same = { (input: Input) in input.name == lost.name && input.transport == lost.transport }
+        let new = listed.filter { same($0) && (seen[$0.uid] == nil || leftBehind.contains($0.uid)) }
+        let gone = seen.values.filter { input in
+            same(input) && !leftBehind.contains(input.uid) && !listed.contains { $0.uid == input.uid }
+        }
+        guard new.count == 1, gone.count == 1 else { return nil }
+        return new[0].uid
+    }
+}
