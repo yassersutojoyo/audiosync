@@ -2942,6 +2942,9 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | escape_drops_the_typed_airplay_delay (`desktop/src/view.rs`) | S220 |
 | escape_in_the_airplay_delay_field_leaves_the_applied_delay (`desktop/src/view.rs`) | S220 |
 | an_airplay_delay_over_its_range_applies_clamped_once (`desktop/src/view.rs`) | S220 |
+| a_typed_speaker_delay_applies_only_on_enter (`desktop/src/view.rs`) | S220 |
+| an_airplay_delay_step_builds_on_the_typed_value (`desktop/src/view.rs`) | S220 |
+| a_cast_delay_step_floors_the_typed_value_first (`desktop/src/view.rs`) | S220 |
 | now_playing_carries_two_images_and_an_airplay1_speaker_gets_the_small_one (`core/src/ffi/airplay.rs`) | S272 |
 
 ### Windows updater: Windows (`cargo test` in `desktop/`)

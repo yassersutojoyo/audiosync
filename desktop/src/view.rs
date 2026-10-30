@@ -208,8 +208,8 @@ impl TypedDelay {
         number
     }
 
-    /// Drops the typed text (Escape, or a step replaced it): the field shows
-    /// the applied value again, and leaving it applies nothing.
+    /// Drops the typed text (Escape): the field shows the applied value
+    /// again, and leaving it applies nothing.
     fn cancel(&mut self) {
         self.draft = None;
     }
@@ -3582,11 +3582,23 @@ impl App {
 
     fn step_delay(&self, id: &str, delta: i32) {
         let state = self.snapshot();
-        let Some(current) = state.speaker(id).and_then(|s| s.delay_ms) else {
+        let Some(speaker) = state.speaker(id) else {
             return;
         };
-        self.ui.borrow_mut().delay_drafts.remove(id);
-        self.update(|b| b.set_speaker_delay(id, current + f64::from(delta)));
+        let Some(current) = speaker.delay_ms else {
+            return;
+        };
+        let typed = self.ui.borrow_mut().delay_drafts.remove(id);
+        let mut base = typed
+            .as_ref()
+            .and_then(|typed| typed.text(Some(current)))
+            .and_then(ui_model::parse_delay_ms)
+            .unwrap_or(current);
+        if speaker.kind == ui_model::SpeakerKind::Cast {
+            // A Cast offset can't go below 0, so the step starts from there.
+            base = base.max(0.0);
+        }
+        self.update(|b| b.set_speaker_delay(id, base + f64::from(delta)));
     }
 
     /// Keeps what is typed in a speaker's delay field ("+150", "−250");
@@ -3806,8 +3818,13 @@ impl App {
         let Some(current) = self.snapshot().airplay_delay_ms else {
             return;
         };
-        self.ui.borrow_mut().airplay_delay_draft.cancel();
-        self.update(|b| b.set_airplay_delay(current + f64::from(delta)));
+        let typed = self
+            .ui
+            .borrow_mut()
+            .airplay_delay_draft
+            .commit(Some(current));
+        let base = typed.map_or(current, |ms| ms.clamp(0.0, ui_model::MAX_DELAY_MS));
+        self.update(|b| b.set_airplay_delay(base + f64::from(delta)));
     }
 
     /// Keeps what is typed in the AirPlay delay field; nothing applies until
@@ -6388,10 +6405,11 @@ mod tests {
         assert!(!pending(), "a step clears it");
 
         app.main
-            .invoke_delay_edited("local:desk".into(), "+230".into());
+            .invoke_delay_edited("local:desk".into(), "+19".into());
         assert!(!pending(), "the applied value typed again is no draft");
     }
 
+    // covers: S220
     #[test]
     fn a_typed_speaker_delay_applies_only_on_enter() {
         let app = app_over(MockBackend::new());
@@ -6429,14 +6447,47 @@ mod tests {
         assert_eq!(applied(), Some(220.0));
         assert_eq!(desk_delay_text(&app), "+220", "unreadable text reverts");
 
-        // A step applies at once and drops half-typed text.
+        // A step applies at once, on top of the typed value.
         app.main
-            .invoke_delay_edited("local:desk".into(), "9".into());
+            .invoke_delay_edited("local:desk".into(), "150".into());
         app.main.invoke_delay_stepped("local:desk".into(), 10);
-        assert_eq!(applied(), Some(230.0), "a step applies at once");
-        assert_eq!(desk_delay_text(&app), "+230", "a step drops the typed text");
+        assert_eq!(applied(), Some(160.0), "a step builds on the typed value");
+        assert_eq!(desk_delay_text(&app), "+160", "a step ends the typing");
         app.main.invoke_delay_committed("local:desk".into());
-        assert_eq!(applied(), Some(230.0), "the dropped text stays dropped");
+        assert_eq!(applied(), Some(160.0), "the typing applied once");
+
+        // Unreadable text: the step builds on the saved value.
+        app.main
+            .invoke_delay_edited("local:desk".into(), "+".into());
+        app.main.invoke_delay_stepped("local:desk".into(), 10);
+        assert_eq!(applied(), Some(170.0), "a step over unreadable text");
+        assert_eq!(desk_delay_text(&app), "+170");
+    }
+
+    // covers: S220
+    #[test]
+    fn an_airplay_delay_step_builds_on_the_typed_value() {
+        let app = app_over(MockBackend::new());
+        let shown = || app.main.get_airplay_delay_text().to_string();
+        app.main.invoke_airplay_delay_edited("2000".into());
+        app.main.invoke_airplay_delay_stepped(100);
+        assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0));
+        assert_eq!(shown(), format_ms(2100.0), "a step ends the typing");
+        assert!(!app.main.get_airplay_delay_pending());
+    }
+
+    // covers: S220
+    #[test]
+    fn a_cast_delay_step_floors_the_typed_value_first() {
+        let mut backend = MockBackend::new();
+        let mut speaker = backend.snapshot().speaker("local:desk").unwrap().clone();
+        speaker.id = "cc:attic".into();
+        speaker.kind = ui_model::SpeakerKind::Cast;
+        backend.add_speaker(speaker);
+        let app = app_over(backend);
+        app.main.invoke_delay_edited("cc:attic".into(), "-5".into());
+        app.main.invoke_delay_stepped("cc:attic".into(), 10);
+        assert_eq!(delay_of(&app, "cc:attic"), Some(10.0), "-5 reads as 0");
     }
 
     /// A speaker's applied delay.
