@@ -2711,6 +2711,7 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | a_speaker_whose_reads_stopped_is_not_asked_again | S271 |
 | a_new_session_asks_a_speaker_whose_reads_stopped_again | S271 |
 | a_reading_maps_linearly_onto_0_to_100 (core) | S289 |
+| speaker_volume_spreads_the_product_of_both_sliders_over_30_db (`core/src/ffi/airplay.rs`; the Mac sends through the same core path) | S289 |
 | the_row_shows_the_device_level_rounded_down | S290 |
 | a_row_move_sends_the_row_and_stores_the_row_over_k | S290 |
 | the_master_and_the_zone_are_no_ceiling_for_a_row_move (core) | S290 |

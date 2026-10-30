@@ -6030,10 +6030,16 @@ mod tests {
         }
     }
 
+    // covers: S289
     #[test]
     fn speaker_volume_spreads_the_product_of_both_sliders_over_30_db() {
         let no_zone = NO_ZONE_POSITION;
         assert_eq!(speaker_volume(100.0, no_zone, 100.0), Volume::Db(0.0));
+        let lowest = speaker_volume(1.0, no_zone, 100.0).wire_db();
+        assert!(
+            (lowest + 29.7).abs() < 1e-9,
+            "level 1 is -29.7 dB: {lowest}"
+        );
         assert_eq!(speaker_volume(50.0, no_zone, 100.0), Volume::Db(-15.0));
         assert_eq!(speaker_volume(100.0, no_zone, 50.0), Volume::Db(-15.0));
         assert_eq!(speaker_volume(0.0, no_zone, 100.0), Volume::Muted);
