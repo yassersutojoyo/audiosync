@@ -8080,6 +8080,23 @@ pub mod tests {
         assert_eq!(fake.take_calls(), joined_with(&id, "hunter2"));
     }
 
+    // covers: S223
+    #[test]
+    fn a_password_required_after_the_password_typed_this_run_says_it_was_turned_down() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let study = password_asked(&fake, &mut airplay);
+        let id = id_of(&study);
+        assert!(airplay.submit_password(&id, "hunter1"));
+        fake.take_calls();
+        fake.fail(&study, ErrorKind::PasswordRequired);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged], "no notice");
+        assert_eq!(
+            airplay.password_prompt().map(|prompt| prompt.wrong),
+            Some(true)
+        );
+    }
+
     #[test]
     fn a_sender_that_stops_during_a_password_prompt_turns_the_speaker_off() {
         let fake = FakeAirPlay::new();
