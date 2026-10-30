@@ -3613,6 +3613,7 @@ do {
         unnamed.apply(.appeared(mac))
         check(unnamed.rows(enabled: []) == [NativeAirPlayID.app(mac.id)], "native airplay: with no computer name known, nothing is hidden")
     }
+    // covers: S205 (the detail goes to the debug log; the model's outcome carries none of it)
     do {
         var failing = NativeAirPlayModel()
         failing.added("A1")
@@ -5231,6 +5232,7 @@ do {
     check(toMusic.stop == .sourceChanged && toPair.stop == .inputPairChanged,
           "EC5 source: the log names a source change and a pair change apart")
 
+    // covers: S227 (Switch: only the capture is rebuilt, and a whole system that can't start stops)
     // S227 Switch: the source app quitting moves the session to the whole
     // system the way a switch does, under the same speakers.
     let musicQuits = CaptureSwitch.Change.sourceAppQuit(bundleID: "com.apple.Music")
@@ -7342,7 +7344,7 @@ do {
           "AirPlay delay: the native sender's field shows L + A, follows a new L and an edit stores the difference",
           "shown \(shown), followed \(followed), A \(native.adjustmentMs)")
 
-    // S179: the stored absolute delays become offsets, once.
+    // covers: S179 (the stored absolute delays become offsets, once)
     func migrate(_ stored: [String: Double], legacy: Double? = nil, enabled: Set<String> = [],
                  listed: [String], reference: String? = "BuiltInSpeakerDevice") -> LocalDelay.Migration? {
         LocalDelay.migrate(storedDelays: stored, legacyDelayMs: legacy, enabled: enabled, listed: listed,
@@ -8057,6 +8059,7 @@ do {
 }
 
 // MARK: Observer line — per output values and the Wi-Fi link in the debug log (OutputObservation, WiFiNote, S229)
+// covers: S229 (the Mac's per-output observer line and Wi-Fi note)
 do {
     let measured = OutputObservation(leastSlackMs: -0.666, floorDropMs: 10.04, shortageFrames: 912, overloads: 3,
                                      timeSteps: 1, bluetoothOutputs: 2)
@@ -8629,6 +8632,7 @@ do {
                 + "finishAll waited \(waited / ms) ms")
     }
 
+    // covers: S185 (the Mac: the fade end's output time plus the latency)
     // S185: a renderer publishes the output time of its fade's last frame;
     // the output has faded once the host clock passes it plus the latency.
     // The core's renderer at 48 kHz with 512-frame callbacks: the fade-out
@@ -8672,6 +8676,7 @@ do {
         }
     }
 
+    // covers: S230
     // S230: an output the host marks as Bluetooth adds a capture block of
     // 512 frames to its start lead, which its start line logs in ms.
     do {
@@ -8687,6 +8692,7 @@ do {
         }
     }
 
+    // covers: S231
     // S231: a Bluetooth output's latency report outside 50 to 1000 ms gives
     // way to its latest plausible one, else 150 ms; any other stays as it is.
     do {
@@ -10836,6 +10842,7 @@ do {
             && refused.enabled == nil && refused.status(of: den) == .idle,
           "cast: attempt 0 means refused, and the speaker goes off")
 
+    // covers: C80 (the third failure turns a speaker off; on the Mac no group counts)
     var tvOff = CastModel()
     tvOff.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
     tvOff.apply(.appeared(CastDevice(id: "group1", name: "Everywhere", group: true), offsetMs: nil))
@@ -13040,6 +13047,25 @@ do {
           "late callbacks: the last output's stop flushes the pending suppressed count once")
     check(LateCallbackLog.suppressedLine(15) == "[AudioSync] 15 more late callbacks suppressed",
           "late callbacks: suppressed-count line")
+}
+
+// MARK: A followed clock rate in the debug log (FollowedRateLog in OutputRenderer.swift)
+// covers: S207 (following more than 0.1% for 10 s writes one line, and one more per change)
+do {
+    let second: UInt64 = 1_000_000_000
+    var rate = FollowedRateLog()
+    let early = [rate.admit(ppm: 1500, nowNs: 0), rate.admit(ppm: 1500, nowNs: 9 * second)]
+    let first = rate.admit(ppm: 1500, nowNs: 10 * second)
+    let same = rate.admit(ppm: 1500, nowNs: 11 * second)
+    let changed = rate.admit(ppm: -2000, nowNs: 12 * second)
+    check(early == [nil, nil] && first == 1500 && same == nil && changed == -2000,
+          "followed rate: one line after 10 s past 1000 ppm, one more when the rate changes",
+          "\(early) \(String(describing: first)) \(String(describing: same)) \(String(describing: changed))")
+    _ = rate.admit(ppm: 1000, nowNs: 13 * second)
+    let again = [rate.admit(ppm: -2000, nowNs: 14 * second), rate.admit(ppm: -2000, nowNs: 23 * second),
+                 rate.admit(ppm: -2000, nowNs: 24 * second)]
+    check(again == [nil, nil, -2000],
+          "followed rate: back at 1000 ppm or less, the 10 s start over and the same rate logs again", "\(again)")
 }
 
 // MARK: Updates run only in release builds that carry the EdDSA public key (UpdateGate.swift)

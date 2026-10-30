@@ -827,8 +827,7 @@ final class OutputRenderer: FadingOutput {
         var seen = target.lateCount.load(ordering: .acquiring)
         var reanchors = target.renderer.stallReanchors
         var lateReanchors = target.renderer.lateReanchors
-        var followedSince: UInt64?
-        var followedLogged: Int64 = 0
+        var followed = FollowedRateLog()
         let timer = DispatchSource.makeTimerSource(queue: LateCallbackLog.queue)
         timer.schedule(deadline: .now() + .milliseconds(20), repeating: .milliseconds(20),
                        leeway: .milliseconds(10))
@@ -851,18 +850,8 @@ final class OutputRenderer: FadingOutput {
                 lateReanchors = late
                 DebugTrace.log("[AudioSync] \"\(name)\" re-anchored at its delay after a lasting lateness")
             }
-            let ppm = target.renderer.followedPpm
-            if abs(ppm) <= 1000 {
-                followedSince = nil
-                followedLogged = 0
-            } else {
-                let now = HostClock.now()
-                let since = followedSince ?? now
-                followedSince = since
-                if now &- since >= 10_000_000_000, ppm != followedLogged {
-                    followedLogged = ppm
-                    DebugTrace.log("[AudioSync] \"\(name)\" follows its clock at \(ppm) ppm")
-                }
+            if let ppm = followed.admit(ppm: target.renderer.followedPpm, nowNs: HostClock.now()) {
+                DebugTrace.log("[AudioSync] \"\(name)\" follows its clock at \(ppm) ppm")
             }
         }
         timer.setCancelHandler {
@@ -871,6 +860,26 @@ final class OutputRenderer: FadingOutput {
         LateCallbackLog.queue.async { LateCallbackLog.reporterStarted() }
         timer.resume()
         lateTimer = timer
+    }
+}
+
+/// When to log a followed clock rate: once past 1000 ppm for 10 s, then at
+/// each change of it while it stays past.
+struct FollowedRateLog {
+    private var since: UInt64?
+    private var logged: Int64 = 0
+
+    mutating func admit(ppm: Int64, nowNs: UInt64) -> Int64? {
+        guard abs(ppm) > 1000 else {
+            since = nil
+            logged = 0
+            return nil
+        }
+        let start = since ?? nowNs
+        since = start
+        guard nowNs &- start >= 10_000_000_000, ppm != logged else { return nil }
+        logged = ppm
+        return ppm
     }
 }
 
