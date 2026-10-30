@@ -1462,6 +1462,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | migration: runs once and leaves the old values in place | S179 |
 | settings: offsets are kept in −2000…20 000 ms and the AirPlay delay in its range (S175, S178) | S175, S178 |
 | start error: the audio core failing to set up asks to reopen the app | S121, S215 |
+| start failure helpers: the origin raises an alert only for a click at the Mac (the helper, not `failStart`) | S121 |
+| start failure helpers: the stop's plan and the stream's end turn no chosen AirPlay speaker off (the helpers, not `failStart`) | S121 |
 | offset text: +150 ms, −250 ms and 0 ms | S181 |
 | offset text: a leading + or − (a hyphen too) is read and other text is ignored | S175, S181 |
 | speaker row: the reference has no delay field | S181 |

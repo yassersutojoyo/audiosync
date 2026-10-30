@@ -4400,6 +4400,28 @@ do {
           "every time: a pairing that outlived one stream and fails in the next says it failed")
 }
 
+// MARK: A failed start: the helpers failStart goes through (AppDelegate itself can't run here)
+// covers: S121 (the helpers only: the origin's alert rule, the stop's plan and the stream's end)
+do {
+    check(StartOrigin.user.raisesAlert && !StartOrigin.automatic.raisesAlert && !StartOrigin.remote.raisesAlert,
+          "start failure helpers: the origin raises an alert only for a click at the Mac")
+    // failStart stops the engine: the sender's plan with nothing streaming, then the end of the stream.
+    var model = NativeAirPlayModel()
+    model.apply(.appeared(NativeReceiver(id: "S1", name: "Den", model: "", availability: .available, reason: nil,
+                                         hints: [])))
+    _ = model.turnedOnByUser("S1")
+    model.added("S1")
+    _ = model.apply(.state(id: "S1", .playing, retryMs: nil))
+    let chosen: Set<String> = ["native:S1"]
+    let stopPlan = model.plan(streaming: false, enabled: chosen)
+    var marks = EveryTimeGuard()
+    marks.turnedOnByHand(["native:S1"])
+    let failedStart = marks.streamEnded(.stopped(.startFailed), streaming: false, model: model, enabled: chosen)
+    check(stopPlan.release.isEmpty && stopPlan.remove == ["S1"] && failedStart.isEmpty,
+          "start failure helpers: the stop's plan and the stream's end turn no chosen AirPlay speaker off",
+          "\(stopPlan), \(failedStart)")
+}
+
 // MARK: Every time at launch: on from the last run and discovered, it stays off with no pairing for 15 s
 do {
     func tv(_ availability: NativeReceiver.Availability, everyTime: Bool) -> NativeReceiver {
