@@ -547,9 +547,7 @@ extension AppDelegate {
     /// A zone move keeps each own volume, so the AirPlay rows whose zone
     /// volume changed show min(100, s × k) again (S290).
     func forgetAirPlayHeldLevels(zonedFrom old: [SpeakerZone]) {
-        let before: [String: Double] = SpeakerZone.volumes(old, kind: .airplay)
-        let after: [String: Double] = SpeakerZone.volumes(zones, kind: .airplay)
-        for id in Set(before.keys).union(after.keys) where before[id] != after[id] {
+        for id in SpeakerZone.volumeChanged(old, zones, kind: .airplay) {
             airplayHeldLevel[id] = nil
         }
     }

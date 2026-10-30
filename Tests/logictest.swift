@@ -81,6 +81,17 @@ do {
           "\(String(describing: dacpHeld)) row \(dacpRow)")
 }
 
+// covers: S290 (a zone move that leaves the zone volume at 100 keeps a held level)
+do {
+    let old = [SpeakerZone(id: "z1", name: "Den", members: ["ap:out"], volume: 100)]
+    let new = [SpeakerZone(id: "z1", name: "Den", members: ["ap:full"], volume: 100),
+               SpeakerZone(id: "z2", name: "Kitchen", members: ["ap:half"], volume: 50)]
+    let changed = SpeakerZone.volumeChanged(old, new, kind: .airplay)
+    check(changed == ["half"],
+          "airplay level: joining a zone at 100 or leaving one keeps the held level, joining a zone at 50 drops it",
+          "\(changed.sorted())")
+}
+
 // covers: S290 (core/tests/vectors/s290_volume.json, the vectors the core and Windows run, through the calls the Mac makes)
 do {
     let file = URL(fileURLWithPath: "core/tests/vectors/s290_volume.json")

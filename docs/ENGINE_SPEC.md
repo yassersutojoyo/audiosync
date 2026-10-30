@@ -2523,6 +2523,7 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | a_device_volume_at_k_0_reports_its_level_and_keeps_the_own_volume (core) | S276, S290 |
 | a_device_volume_at_k_0_holds_its_level_and_keeps_the_own_volume (Windows) | S276, S290 |
 | a_level_held_at_k_0_goes_when_the_speaker_gets_its_level_again (Windows) | S290 |
+| a_level_held_at_k_0_stays_when_the_speaker_joins_or_leaves_a_zone_at_100 (Windows) | S290 |
 | an_added_speaker_keeps_an_own_volume_above_100 (core) | S290 |
 | an_airplay_members_own_volume_may_pass_100 (core) | S251, S290 |
 | a_level_set_on_the_speaker_sets_the_row_and_the_own_volume (core) | S290 |

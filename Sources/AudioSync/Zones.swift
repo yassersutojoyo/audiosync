@@ -96,6 +96,14 @@ struct SpeakerZone: Codable, Equatable {
         }
         return out
     }
+
+    /// The IDs of `kind` whose zone volume differs between `old` and `new`, 100 in no zone (S290).
+    static func volumeChanged(_ old: [SpeakerZone], _ new: [SpeakerZone], kind: SpeakerKey.Kind) -> Set<String> {
+        let before = volumes(old, kind: kind)
+        let after = volumes(new, kind: kind)
+        return Set(before.keys).union(after.keys)
+            .filter { (before[$0] ?? noZoneVolume) != (after[$0] ?? noZoneVolume) }
+    }
 }
 
 // Read value by value, so one that can't be read is dropped or falls back on its own (S245, S286).

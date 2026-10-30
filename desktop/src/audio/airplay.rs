@@ -9412,6 +9412,23 @@ pub mod tests {
         assert_eq!(own(&airplay), 50.0);
     }
 
+    // covers: S290
+    #[test]
+    fn a_level_held_at_k_0_stays_when_the_speaker_joins_or_leaves_a_zone_at_100() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_master(0.0);
+        settle(&mut airplay, &id);
+        read_now(&mut airplay);
+        report_volume(&fake, &kitchen, -21.0);
+        assert_eq!(airplay.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(row_of(&airplay, &id), 30.0);
+        airplay.set_zones(BTreeMap::from([(id.clone(), 100.0)]));
+        assert_eq!(row_of(&airplay, &id), 30.0);
+        airplay.set_zones(BTreeMap::new());
+        assert_eq!(row_of(&airplay, &id), 30.0);
+    }
+
     // covers: S276, S290
     #[test]
     fn a_device_volume_at_k_0_holds_its_level_and_keeps_the_own_volume() {
