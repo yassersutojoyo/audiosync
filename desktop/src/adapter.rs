@@ -3627,7 +3627,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     self.output_name(endpoint_id)
                 )
             });
-            self.audio.stop();
+            self.stop_streaming();
         }
     }
 
@@ -3666,7 +3666,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     self.airplay_name(id)
                 )
             });
-            self.audio.stop();
+            self.stop_streaming();
         }
     }
 
@@ -3774,6 +3774,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.audio.stop();
             self.clear_switch_failed();
         }
+    }
+
+    /// A stop clears the switch notice, which says the old source still plays (S141).
+    fn stop_streaming(&mut self) {
+        self.audio.stop();
+        self.clear_switch_failed();
     }
 
     /// The notice of a switch that couldn't start goes when streaming stops.
@@ -11474,6 +11480,58 @@ mod tests {
         assert!(!state.running);
         assert_eq!(state.source_id, "system");
         assert_eq!(messages(&adapter), [NoticeMessage::CaptureFailed]);
+    }
+
+    // covers: S141
+    #[test]
+    fn the_switch_notice_goes_when_the_last_airplay_speaker_drops() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        adapter.audio.refuse_next_capture(BackendError::DeviceGone);
+        adapter.select_source(&player());
+        assert_eq!(
+            messages(&adapter),
+            [switch_failed(player_name(), SwitchName::System)]
+        );
+
+        fake.fail(&kitchen, ErrorKind::PairingRequired);
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Kitchen".to_owned(),
+                problem: ui_model::AirPlayProblem::PairingNotYet,
+            }]
+        );
+    }
+
+    // covers: S141
+    #[test]
+    fn the_switch_notice_goes_when_the_last_local_output_fails_to_start() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio.refuse_next_capture(BackendError::DeviceGone);
+        adapter.select_source(&player());
+        assert_eq!(
+            messages(&adapter),
+            [switch_failed(player_name(), SwitchName::System)]
+        );
+
+        adapter.audio_mut().end_renderer(SPEAKERS);
+        adapter
+            .audio_mut()
+            .fail_output(SPEAKERS, Some(BackendError::UnsupportedFormat));
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::SpeakerFailed {
+                speaker: "Speakers".into()
+            }]
+        );
     }
 
     // covers: S141

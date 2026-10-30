@@ -3166,6 +3166,8 @@ The release side:
 | a_source_that_cant_start_gives_way_to_the_old_one_under_the_same_airplay_speaker (`desktop/src/adapter.rs`) | S141 |
 | a_source_that_fails_once_the_old_outputs_faded_gives_way_under_the_same_cast_speaker (`desktop/src/adapter.rs`) | S141 |
 | an_input_or_channel_pair_that_cant_start_gives_way_to_the_old_one (`desktop/src/adapter.rs`) | S141 |
+| the_switch_notice_goes_when_the_last_airplay_speaker_drops (`desktop/src/adapter.rs`) | S141 |
+| the_switch_notice_goes_when_the_last_local_output_fails_to_start (`desktop/src/adapter.rs`) | S141 |
 | picking_the_playing_input_again_keeps_the_busy_input_notice (`desktop/src/adapter.rs`) | S163 |
 | another_channel_pair_while_stopped_clears_the_notice_of_why_the_input_stopped (`desktop/src/adapter.rs`) | S163 |
 | picking_the_playing_source_again_keeps_the_speaker_and_pairing_notices (`desktop/src/adapter.rs`) | S163 |
