@@ -2620,6 +2620,10 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | a_slider_set_with_no_release_stops_holding_the_row_once_idle (`desktop/src/audio/airplay.rs`) | S271, S291 |
 | a_slider_moved_at_master_0_keeps_holding_the_row (`desktop/src/audio/airplay.rs`) | S271, S290 |
 | the_echo_of_a_level_held_at_k_0_changes_nothing (`desktop/src/audio/airplay.rs`) | S271, S276, S290 |
+| the_tv_keeps_a_level_held_at_master_0_through_calibrate_all_and_a_zone_at_100 (`desktop/src/audio/airplay.rs`) | S290 |
+| the_tv_keeps_a_level_held_at_zone_0_through_calibrate_all (`desktop/src/audio/airplay.rs`) | S290 |
+| the_tv_lets_a_level_held_at_zone_0_go_once_the_zone_moves (`desktop/src/audio/airplay.rs`) | S290 |
+| the_tv_lets_a_level_held_at_master_0_go_once_the_master_moves (`desktop/src/audio/airplay.rs`) | S290 |
 | a_zone_with_an_unreadable_volume_member_or_name_keeps_the_rest (`desktop/src/settings.rs`) | S245, S212 |
 | zone_member_rows_say_why_they_dont_play (`desktop/src/view.rs`) | S246, S247 |
 

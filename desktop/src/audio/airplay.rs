@@ -10805,8 +10805,37 @@ pub mod tests {
         let (_receiver, _input, _airplay, _id) = a_tv_holding_30_after_calibrate_all(100.0, 0.0);
         cell(
             "S290.held.z0",
-            "TV -21.00 dB in a zone at 0 shows row 30; muted for another speaker's calibration, \
-             back at -21.00 dB row 30 after it",
+            "TV -21.00 dB at master 100 in a zone at 0 shows row 30; muted for another \
+             speaker's calibration, back at -21.00 dB row 30 after it",
+        );
+    }
+
+    // covers: S290
+    #[test]
+    fn the_tv_lets_a_level_held_at_zone_0_go_once_the_zone_moves() {
+        let (receiver, _input, mut airplay, id) = a_tv_holding_30_after_calibrate_all(100.0, 0.0);
+        // The own volume is still the default 60, so zone 80 gives D 48.
+        airplay.set_zones(BTreeMap::from([(id.clone(), 80.0)]));
+        assert!(receiver.reaches(-15.6), "{:?}", receiver.level());
+        assert_eq!(row_of(&airplay, &id), 48.0);
+        cell(
+            "S290.held.z0.release",
+            "TV held at -21.00 dB row 30 at master 100 in a zone at 0 goes to -15.60 dB \
+             row 48 when the zone moves to 80",
+        );
+    }
+
+    // covers: S290
+    #[test]
+    fn the_tv_lets_a_level_held_at_master_0_go_once_the_master_moves() {
+        let (receiver, _input, mut airplay, id) = a_tv_holding_30_after_calibrate_all(0.0, 100.0);
+        airplay.set_master(80.0);
+        assert!(receiver.reaches(-15.6), "{:?}", receiver.level());
+        assert_eq!(row_of(&airplay, &id), 48.0);
+        cell(
+            "S290.held.m0.release",
+            "TV held at -21.00 dB row 30 at master 0 in a zone at 100 goes to -15.60 dB \
+             row 48 when the master moves to 80",
         );
     }
 

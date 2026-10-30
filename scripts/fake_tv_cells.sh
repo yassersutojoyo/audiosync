@@ -19,8 +19,10 @@ cd "$root"
 
 # A debug build binds the sender's sockets to loopback unless this is set.
 unset AUDIOSYNC_LAN_TESTS
+windows=0
 case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*)
+        windows=1
         main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
         export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$main/windows/target}"
         export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}"
@@ -71,11 +73,22 @@ cells_from_tests --lib \
     "$core::the_s290_vector_cases_land_on_the_television=S290.row100,S290.tv80.m64,S290.row100.m50,S290.tv80.cap,DV.100.m63,DV.80-99.m63,DV.40.m0" \
     "$core::a_withdrawn_receiver_loses_only_its_row_and_comes_back_when_announced=Stale.row"
 
-# Calibrate All and zones live in the Windows host's speaker list, so these cells run there.
-cd "$root/desktop"
-cells_from_tests "--bin audiosync" \
-    "audio::airplay::tests::the_tv_keeps_a_level_held_at_master_0_through_calibrate_all_and_a_zone_at_100=S290.held.m0" \
+# Calibrate All and zones live in the Windows host's speaker list, so these cells run there;
+# elsewhere the desktop crate lacks the system libraries it links (fontconfig on Linux).
+held=(
+    "audio::airplay::tests::the_tv_keeps_a_level_held_at_master_0_through_calibrate_all_and_a_zone_at_100=S290.held.m0"
     "audio::airplay::tests::the_tv_keeps_a_level_held_at_zone_0_through_calibrate_all=S290.held.z0"
+    "audio::airplay::tests::the_tv_lets_a_level_held_at_zone_0_go_once_the_zone_moves=S290.held.z0.release"
+    "audio::airplay::tests::the_tv_lets_a_level_held_at_master_0_go_once_the_master_moves=S290.held.m0.release"
+)
+if [ "$windows" = 1 ]; then
+    cd "$root/desktop"
+    cells_from_tests "--bin audiosync" "${held[@]}"
+else
+    for spec in "${held[@]}"; do
+        printf '%-16s %-7s %s\n' "${spec#*=}" MANUAL "PC: cargo test --bin audiosync ${spec%%=*} in desktop/"
+    done
+fi
 
 cd "$root/airplay"
 cells_from_tests "--test ap2_volume" \
