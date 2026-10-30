@@ -57,7 +57,7 @@ S256 Web remote and hosts only: the snapshot's zones, presets and calibrating fl
 S257 Web remote and hosts only: the zone and preset routes and what the hosts apply; the remote crate's, the Windows host's and the Mac logic suites check it.
 S258 Web remote and hosts only: writes wait out a microphone run; the remote crate's, the Windows host's and the Mac logic suites check it.
 S242 Hosts only: the Mac process tap and the Windows per-app loopback mix pick and follow the apps; the Mac logic suite and the Windows capture tests check it.
-S244 Hosts only: the core's local delay model takes no source, so live input can't change it; the Windows controller tests check that the hosts pass the network wait under every source.
+S244 Hosts only: the core's local delay model takes no source, so live input can't change it; the Windows controller tests check that the hosts pass the network wait under every source, and the Mac check "local delay: the Mac's AirPlay wait takes no source input" that the Mac's wait takes no source input.
 S259 Hosts only: the Presets card in the main window; the Windows tests check it, and the Mac logic suite checks its rows (PresetCore.rows), not its SwiftUI layout.
 S260 Hosts only: the preset row of the menu bar panel and the tray flyout; the Mac logic suite and the Windows tests check it.
 S261 Hosts only: the Presets submenu and its shortcuts; the Mac logic suite and the Windows tests check it.

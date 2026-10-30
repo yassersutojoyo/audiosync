@@ -1765,6 +1765,21 @@ do {
               "\(host.lines)")
     }
 
+    // covers: S201 (a repeat read: the same outputs followed again, a notification with the same value)
+    do {
+        let host = Host()
+        host.access.set(builtIn, .volume, 0.5)
+        host.access.set(builtIn, .mute, 0)
+        host.volumes.follow([uid: builtIn])
+        let first = host.lines
+        host.volumes.follow([uid: builtIn])
+        host.access.change(builtIn, .volume, to: 0.5)
+        host.runMain()
+        check(first.count == 1 && first[0].contains(uid) && first[0].contains("50%") && host.lines.count == 1,
+              "device volume: the first read of an output's volume writes one debug line",
+              "\(host.lines)")
+    }
+
     do {
         let host = Host()
         host.access.set(builtIn, .volume, 0.13)
@@ -3169,6 +3184,19 @@ do {
     check(model.apply(.state(id: "A1", .connecting, retryMs: nil)) == nil
             && model.apply(.state(id: "A1", .playing, retryMs: nil)) == .playingChanged("native:A1", playing: true),
           "native airplay: playing is reported once")
+    // covers: P224 (the Mac side: a start the sender holds for its turn reads as any session starting)
+    do {
+        var turn = NativeAirPlayModel()
+        turn.apply(.appeared(NativeReceiver(id: "W1", name: "Hall", model: "", availability: .available,
+                                            reason: nil, hints: [])))
+        turn.added("W1")
+        let outcome = turn.apply(.state(id: "W1", .connecting, retryMs: nil))
+        let note = UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, reconnecting: turn.isReconnecting("W1"),
+                                       unannounced: turn.isUnannounced("W1"), target: nil)
+        check(outcome == nil && turn.waitReason("W1") == nil && note == nil,
+              "native airplay: a connecting state adds no wait or row note",
+              "\(String(describing: outcome)), \(note ?? "no note")")
+    }
     model.apply(.gone(id: "A1", name: nil))
     check(model.rows(enabled: []).contains("native:A1") && model.access("A1") == .open && model.soundingIDs == ["native:A1"],
           "EC12 native airplay: a speaker that plays on after its announcement lapsed stays listed and chosen")
@@ -7063,6 +7091,14 @@ do {
     let nativeL = AirPlayDelay(adjustmentMs: 250).latencyMs(senderMs: 1750)
     check(nativeL == 2000 && holds([r, usb, bt], airPlay: true, l: nativeL) == [r: 2000, usb: 2150, bt: 1750],
           "local delay: the native sender adds the latency it reports plus the AirPlay adjustment", "L \(nativeL)")
+    // covers: S244 (the host's wait, localHoldBackTargets, is built from these alone)
+    do {
+        let chosen = NativeSyncRule().airPlayChosen(enabled: ["native:A1"], listed: ["native:A1"])
+        let wait = CastModel.networkWaitMs(airPlay: chosen ? nativeL : nil, cast: nil)
+        check(wait == 2000,
+              "local delay: the Mac's AirPlay wait takes no source input",
+              "\(String(describing: wait))")
+    }
 
     // S177: the running renderers whose hold-back changed get it, the others no call.
     let at2000 = holds([r, usb, bt], airPlay: true, l: 2000)
