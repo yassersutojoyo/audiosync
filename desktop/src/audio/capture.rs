@@ -2019,6 +2019,52 @@ mod tests {
         assert!(newest(&ring, 480 * 3).iter().all(|s| *s == 0.0));
     }
 
+    // covers: S232 (the Windows host; network speakers stay silent during a single run)
+    #[test]
+    fn a_signal_for_a_local_output_leaves_the_network_feeds_silent() {
+        use audiosync_cast::audio::audio_ring;
+
+        use crate::audio::cast::CastFeed;
+        let clock = SenderClock::new(std::time::Instant::now());
+        let (_stream, input) =
+            Stream::new(StreamConfig::default(), clock, std::time::Instant::now());
+        let airplay = FeedSlot::new(input);
+        let mut cast = CastFeed::new();
+        let (writer, mut cast_heard) = audio_ring(96_000);
+        assert!(cast.hand(Some(writer)));
+        let (ring, writer) = session_ring_after_lead_in();
+        let (_control, processor) = equalizer();
+        let tap = Arc::new(CalibrationTap::new());
+        let feeds = Feeds {
+            airplay: Some(airplay.lease().expect("the feed is free")),
+            cast: Some(cast.slot().lease().expect("the tap is free")),
+            calibration: Some(Arc::clone(&tap)),
+        };
+        let mut converter =
+            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, feeds).unwrap();
+        let music = f32_bytes(&[0.5; 960]);
+        tap.engage();
+        for _ in 0..3 {
+            converter.push(&music, 480, false);
+        }
+        let airplay_sound = airplay.sound_seconds();
+        let mut bytes = Vec::new();
+        cast_heard.read_into(&mut bytes, cast_heard.available());
+        tap.play();
+        let mut ring_heard = false;
+        // The whole 0.75 s signal.
+        for _ in 0..80 {
+            converter.push(&music, 480, false);
+            ring_heard |= newest(&ring, 480).iter().any(|s| *s != 0.0);
+        }
+        assert!(ring_heard, "the signal plays on the ring");
+        assert_eq!(airplay.sound_seconds(), airplay_sound, "AirPlay gets none");
+        bytes.clear();
+        let frames = cast_heard.read_into(&mut bytes, cast_heard.available());
+        assert!(frames >= 480 * 75, "{frames} frames reached Cast");
+        assert!(bytes.iter().all(|b| *b == 0), "Cast gets only silence");
+    }
+
     #[test]
     fn float_stereo_at_the_session_rate_is_written_unchanged() {
         let (ring, writer) = session_ring_after_lead_in();
