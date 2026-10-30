@@ -192,7 +192,8 @@ enum CastEvent: Equatable {
     case recovering(attempt: UInt64, detail: String = "")
     case recovered(attempt: UInt64)
     case reloaded(attempt: UInt64)
-    case volume(attempt: UInt64, CastVolume)
+    /// `answersMute`: the first status since a mute was sent (C70).
+    case volume(attempt: UInt64, CastVolume, answersMute: Bool = false)
     case commandFailed(attempt: UInt64, error: CastError?)
     case ended(attempt: UInt64, CastEnd)
     /// The device refused WAV; `format` is loaded instead (C84).
@@ -211,7 +212,7 @@ enum CastEvent: Equatable {
     var attempt: UInt64? {
         switch self {
         case .started(let a, _), .formatFallback(let a, _, _), .playing(let a), .connectFailed(let a, _, _, _),
-             .recovering(let a, _), .recovered(let a), .reloaded(let a), .volume(let a, _), .commandFailed(let a, _),
+             .recovering(let a, _), .recovered(let a), .reloaded(let a), .volume(let a, _, _), .commandFailed(let a, _),
              .ended(let a, _), .note(let a, _), .members(let a, _):
             return a
         case .groupLog, .memoryChanged, .discoveryStopped, .failed:
@@ -245,7 +246,7 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_RELOADED: self = .reloaded(attempt: a)
         case ASC_CAST_EVENT_VOLUME:
             self = .volume(attempt: a, CastVolume(level: raw.level, muted: raw.muted, fixed: raw.volume_fixed,
-                                                  step: raw.step))
+                                                  step: raw.step), answersMute: raw.answers_mute)
         case ASC_CAST_EVENT_COMMAND_FAILED: self = .commandFailed(attempt: a, error: error)
         case ASC_CAST_EVENT_ENDED:
             let end: CastEnd
@@ -863,9 +864,9 @@ struct CastModel {
             guard attempt?.connectFailures == Self.failuresBeforeOff else { return nil }
             enabled = nil
             return .turnedOff(id, problem: .notResponding)
-        case .volume(_, let volume):
+        case .volume(_, let volume, let answersMute):
             attempt?.reportedMute = nil
-            return volumeReported(id, volume)
+            return volumeReported(id, volume, answersMute: answersMute)
         case .members(_, let list):
             guard devices[id]?.group == true, members != list else { return nil }
             members = list
@@ -972,7 +973,7 @@ struct CastModel {
     /// A status's volume (C70, C104, C105): the answer to a level sent keeps
     /// the own level and any other level moves it by master × zone, except
     /// the session's first, which is set to master × zone × own level instead.
-    private mutating func volumeReported(_ id: String, _ volume: CastVolume) -> CastOutcome? {
+    private mutating func volumeReported(_ id: String, _ volume: CastVolume, answersMute: Bool) -> CastOutcome? {
         let shown = ownLevel(of: id)
         let zone = self.zone(of: id)
         let level = volume.level
@@ -980,15 +981,17 @@ struct CastModel {
         attempt?.heardVolume = true
         let answered = unanswered.firstIndex { asc_cast_volume_answers($0, level, volume.step) }
         if let answered { unanswered.removeFirst(answered + 1) }
+        // The answer to a mute repeating the known level is no change from elsewhere: a level still awaited stays.
+        let elsewhere = answered == nil && !(answersMute && volumes[id]?.level == level)
         let own: Double
         if first {
             own = asc_cast_zone_start_own_level(master, zone, shown != nil, shown ?? 0, level)
-        } else if answered != nil {
+        } else if !elsewhere {
             own = shown ?? asc_cast_zone_own_level(level, master, zone, level)
         } else {
             own = asc_cast_zone_own_level(level, master, zone, shown ?? level)
         }
-        if requested?.id == id, answered == nil || unanswered.isEmpty { requested = nil }
+        if requested?.id == id, elsewhere || unanswered.isEmpty { requested = nil }
         levels[id] = own
         let changed = volumes[id] != volume || ownLevel(of: id) != shown
         volumes[id] = volume

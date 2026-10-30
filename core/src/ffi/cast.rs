@@ -254,6 +254,8 @@ pub struct AscCastEvent {
     /// A volume event's status gave the level; `level` means nothing
     /// without it (C105).
     pub has_level: bool,
+    /// A volume event's status is the first since a mute was sent (C70).
+    pub answers_mute: bool,
     /// The device's volume step; 0 when it reports none (C69).
     pub step: f64,
     /// Diagnostics: dropped audio plus rebuffering since the `LOAD` (C79).
@@ -312,6 +314,7 @@ struct Pending {
     muted: bool,
     volume_fixed: bool,
     has_level: bool,
+    answers_mute: bool,
     step: f64,
     drift_ms: f64,
     queued_ms: f64,
@@ -335,6 +338,7 @@ impl Pending {
             muted: false,
             volume_fixed: false,
             has_level: false,
+            answers_mute: false,
             step: 0.0,
             drift_ms: 0.0,
             queued_ms: 0.0,
@@ -1016,6 +1020,7 @@ impl AscCast {
             muted: pending.muted,
             volume_fixed: pending.volume_fixed,
             has_level: pending.has_level,
+            answers_mute: pending.answers_mute,
             step: pending.step,
             drift_ms: pending.drift_ms,
             queued_ms: pending.queued_ms,
@@ -1040,12 +1045,13 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             pending
         }
         SessionEvent::Rebuffering => Pending::new(CAST_EVENT_REBUFFERING),
-        SessionEvent::Volume(volume, _) => {
+        SessionEvent::Volume(volume, answers_mute) => {
             let mut pending = Pending::new(CAST_EVENT_VOLUME);
             pending.level = volume.level;
             pending.muted = volume.muted;
             pending.volume_fixed = volume.control_type == ControlType::Fixed;
             pending.has_level = volume.has_level;
+            pending.answers_mute = answers_mute;
             pending.step = volume.step_interval.unwrap_or(0.0);
             pending
         }
@@ -2306,6 +2312,7 @@ mod tests {
             muted: false,
             volume_fixed: false,
             has_level: false,
+            answers_mute: false,
             step: 0.0,
             drift_ms: 0.0,
             queued_ms: 0.0,
@@ -2415,6 +2422,18 @@ mod tests {
             };
             let pending = session_event(SessionEvent::Volume(volume, false), |_| {});
             assert_eq!(pending.has_level, has_level);
+        }
+    }
+
+    // CAST_SPEC: C70
+    #[test]
+    fn a_volume_event_says_whether_its_status_answers_a_mute() {
+        for answers_mute in [false, true] {
+            let pending = session_event(
+                SessionEvent::Volume(status::DeviceVolume::default(), answers_mute),
+                |_| {},
+            );
+            assert_eq!(pending.answers_mute, answers_mute);
         }
     }
 

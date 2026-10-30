@@ -10590,6 +10590,15 @@ do {
             && refusedLevel.apply(.commandFailed(attempt: 3, error: .volume)) == nil
             && refusedLevel.volumes[kitchen]?.muted == true,
           "cast: a level the device refuses after a mute leaves the mute shown")
+    // covers: C70
+    var ignoredMute = m
+    _ = ignoredMute.apply(.volume(attempt: 3, CastVolume(level: 0.4, muted: false, fixed: false)))
+    check(ignoredMute.setVolume(kitchen, position: 70) != nil && ignoredMute.setMuted(kitchen, true)
+            && ignoredMute.apply(.volume(attempt: 3, CastVolume(level: 0.4, muted: false, fixed: false),
+                                         answersMute: true)) == .changed
+            && approx(ignoredMute.volume(of: kitchen), 70, 1e-9),
+          "cast: a mute's answer that repeats the known level leaves a level still awaited on the slider",
+          "\(ignoredMute.volume(of: kitchen))")
     check(m.setVolume(kitchen, position: 70) == 0.7 && approx(m.volume(of: kitchen), 70, 1e-9)
             && m.setVolume(den, position: 50) == nil && m.setVolume(kitchen, position: .nan) == nil,
           "cast: the slider sets the device's level only while its session runs")

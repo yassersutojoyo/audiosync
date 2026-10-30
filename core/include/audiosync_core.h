@@ -2119,6 +2119,7 @@ typedef struct AscCastEvent {
     bool muted;
     bool volume_fixed;   /* the device's volume can't be changed: show the control as unavailable */
     bool has_level;      /* the status gave the level; .level means nothing without it */
+    bool answers_mute;   /* a volume event's status is the first since a mute was sent */
     double step;         /* the device's volume step; 0 when it reports none */
     double drift_ms;     /* dropped audio plus rebuffering since the stream was loaded */
     double queued_ms;    /* audio waiting in the sender's queue */

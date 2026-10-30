@@ -72,6 +72,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Stop or Quit while a few chosen apps are still being opened for streaming no longer waits on each of them in turn when they don't answer. On Windows.
 - Streaming a few chosen apps no longer stops when one of them restarts and plays again within about 2 seconds, as a browser can when it relaunches to install an update. On Windows.
 - On Windows, muting a Google Cast speaker right after changing its volume no longer jumps its volume slider back to the old level.
+- On the Mac, muting a Google Cast speaker right after changing its volume no longer jumps its volume slider back to the old level, as on Windows.
 - On Windows, when AirPlay can't start at launch, AudioSync tries again every 10 seconds, and once it runs, either that way or after Retry, the AirPlay speakers you left on come on again, as on the Mac. Before, AirPlay waited for Retry and those speakers stayed off until the next launch.
 - On Windows, after a start that AudioSync made by itself failed, for example because the saved source app wasn't running, picking another source or input channel pair lets a speaker you set to connect automatically start streaming again, as on the Mac.
 - On the Mac, the web remote keeps a volume you set for a speaker that is off, a Google Cast speaker included, and uses it once the speaker plays, as on Windows. Before, the slider jumped back a second later.

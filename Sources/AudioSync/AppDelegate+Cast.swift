@@ -412,7 +412,7 @@ extension AppDelegate {
         case .recovering(let a, let detail): return "attempt \(a): reconnecting (\(detail))"
         case .recovered(let a): return "attempt \(a): recovered"
         case .reloaded(let a): return "attempt \(a): the stream was loaded again"
-        case .volume(let a, let v):
+        case .volume(let a, let v, _):
             return "attempt \(a): volume \(Int((v.level * 100).rounded()))" + (v.muted ? ", muted" : "")
                 + (v.fixed ? ", fixed" : "")
         case .commandFailed(let a, let error): return "attempt \(a): a request failed (\(String(describing: error)))"
