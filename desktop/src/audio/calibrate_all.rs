@@ -2063,6 +2063,7 @@ pub(crate) mod tests {
         given_back(&rig);
     }
 
+    // covers: S240
     #[test]
     fn a_microphone_that_stalls_is_waited_for_until_the_deadline() {
         let mut rig = FakeRig::new();
@@ -2090,6 +2091,7 @@ pub(crate) mod tests {
         given_back(&rig);
     }
 
+    // covers: S240
     #[test]
     fn a_microphone_that_never_delivers_a_frame_gives_up_after_the_warm_up_limit() {
         let mut rig = FakeRig::new();
@@ -2108,6 +2110,7 @@ pub(crate) mod tests {
         given_back(&rig);
     }
 
+    // covers: S240
     #[test]
     fn a_source_that_sends_nothing_fails_as_silent() {
         let mut rig = FakeRig::new();
@@ -2176,6 +2179,7 @@ pub(crate) mod tests {
         given_back(&rig);
     }
 
+    // covers: S239
     #[test]
     fn measure_again_of_a_speaker_turned_off_since_is_refused() {
         let mut rig = FakeRig::new();
@@ -2222,6 +2226,7 @@ pub(crate) mod tests {
         given_back(&rig);
     }
 
+    // covers: S239
     #[test]
     fn measure_again_while_stopped_names_the_speaker_only_when_its_switch_is_off() {
         let mut rig = FakeRig::new();
@@ -2305,7 +2310,7 @@ pub(crate) mod tests {
         );
     }
 
-    // covers: C77a
+    // covers: C77a, S241
     #[test]
     fn only_a_cast_speaker_without_an_offset_waits_for_the_unknown_start_guess() {
         use audiosync_cast::audio::Codec;
