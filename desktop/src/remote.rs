@@ -465,6 +465,12 @@ pub fn actions(
                 return Err(Refusal::Unavailable);
             }
             let mut actions = Vec::new();
+            if let Some(on) = change.on {
+                let is_on = !state.speaker_state(speaker).click_turns_on();
+                if on != is_on {
+                    actions.push(Action::Enable { id: id.clone(), on });
+                }
+            }
             if let Some(volume) = change.volume {
                 if !in_range(volume) {
                     return Err(Refusal::OutOfRange);
@@ -491,12 +497,6 @@ pub fn actions(
                     }
                     None if ms == 0 => {}
                     _ => return Err(Refusal::OutOfRange),
-                }
-            }
-            if let Some(on) = change.on {
-                let is_on = !state.speaker_state(speaker).click_turns_on();
-                if on != is_on {
-                    actions.push(Action::Enable { id: id.clone(), on });
                 }
             }
             Ok(actions)
@@ -952,6 +952,29 @@ mod tests {
                 id: "desk".to_owned(),
                 on: true
             }])
+        );
+    }
+
+    // covers: S345
+    #[test]
+    fn a_phone_switch_on_with_a_volume_flips_the_switch_first() {
+        let change = SpeakerChange {
+            on: Some(true),
+            volume: Some(40.0),
+            ..Default::default()
+        };
+        assert_eq!(
+            actions(&speaker_command("kitchen", change), &state(), not_virtual),
+            Ok(vec![
+                Action::Enable {
+                    id: "kitchen".to_owned(),
+                    on: true
+                },
+                Action::Volume {
+                    id: "kitchen".to_owned(),
+                    volume: 40.0
+                }
+            ])
         );
     }
 
