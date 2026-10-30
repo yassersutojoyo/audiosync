@@ -4,7 +4,8 @@
 This repository is public. Published files must not contain home-directory
 paths from either development machine (macOS `/Users/...`, Windows
 `C:\\Users\\...` or `C:/Users/...`, Git Bash `/c/Users/...`), LAN hostnames,
-private or link-local IP addresses, or internal plan IDs.
+private or link-local IP addresses, internal plan IDs, or numbered entries
+from the private complaints ledger.
 
 Names that must stay private can't be listed in a public script without
 publishing them, so they live in an untracked, one-per-line list:
@@ -136,6 +137,7 @@ PATTERNS = [
     ),
     ("default Windows hostname", re.compile(r"\b(?:DESKTOP|LAPTOP)-[A-Z0-9]{7}\b")),
     ("internal plan ID", re.compile(r"\bPLAN (?:v\d+|[A-F]\d{1,2})\b", re.IGNORECASE)),
+    ("private ledger reference", re.compile(r"\b(?:complaint|keluhan) #?\d+\b", re.IGNORECASE)),
 ]
 
 SELF = "scripts/privacy_check.py"
@@ -679,6 +681,8 @@ def self_test():
         "utf8-bom.md": codecs.BOM_UTF8 + "Built on name.local yesterday.\n".encode(),
         "winhost.md": "Runner DESKTOP-AB12CD3 passed.",
         "planid.md": "Done for Plan A1.",
+        "ledger.md": "Measured for complaint 34.",
+        "ledger-id.md": "See Keluhan #7 first.",
         "name.md": f"Ask {marker.capitalize()} about it.",
         "folder.md": "The plan is in zebrafolder/STATUS.md.",
         "hyphen.md": f"Run the {marker}-reviewer agent.",
