@@ -746,6 +746,19 @@ do {
           "presets: a stored value that can't be read loses only that value, or its preset, never the others", "\(oneBad)")
     stored.values[Keys.presets] = Data(#"{"id":"p1"}"#.utf8)
     check(store.load().presets.isEmpty, "presets: stored presets that aren't a list read as none")
+
+    // covers: S245 (the Mac host: a preset keeps a deleted zone's ID and volume)
+    let twoZones = [SpeakerZone(id: "z1", name: "Kitchen", members: ["lc:usb:out"], volume: 60),
+                    SpeakerZone(id: "z2", name: "Den", members: ["cc:Group-7"], volume: 80)]
+    let bothRooms = SpeakerPreset(id: "p5", name: "Both rooms",
+                                  members: [.init(key: "lc:usb:out", volume: 50), .init(key: "cc:Group-7", volume: nil)],
+                                  zones: [.init(id: "z1", volume: 40), .init(id: "z2", volume: 70)], master: 90, gains: flat)
+    store.save(zones: twoZones)
+    store.save(presets: [bothRooms])
+    store.save(zones: twoZones.filter { $0.id != "z1" })   // what Delete Zone stores (`deleteZone`)
+    let afterDelete = store.load()
+    check(afterDelete.zones.map(\.id) == ["z2"] && afterDelete.presets == [bothRooms],
+          "presets: a preset keeps a deleted zone's ID and volume across a save and reload (the stored side of S245)", "\(afterDelete.presets)")
 }
 
 // MARK: Output devices — virtual ones hidden unless asked for or chosen
@@ -7625,7 +7638,7 @@ do {
           "zone rename: Escape drops it, and a zone deleted mid-rename ends its rename")
 
     let quitBody = ((try? String(contentsOfFile: "Sources/AudioSync/AppDelegate.swift", encoding: .utf8)) ?? "")
-        .components(separatedBy: "func runQuitSteps()").dropFirst().first ?? ""
+        .components(separatedBy: "func performQuitSteps()").dropFirst().first ?? ""
     let renameAt = quitBody.range(of: "appModel.commitOpenRename()")
     let stopAt = quitBody.range(of: "stopEngine(")
     check(renameAt != nil && stopAt != nil && renameAt!.lowerBound < stopAt!.lowerBound,
@@ -9741,6 +9754,29 @@ do {
     check(atOnce == ["quit", "exit 130"] && twice.log == ["quit", "exit 130", "quit done"],
           "quit: a second Ctrl-C while the quit steps run exits at once with 130, and nothing exits again later (S111)",
           "at once \(atOnce), later \(twice.log)")
+}
+
+// MARK: The end of the user session runs the quit steps (QuitSteps, AppLifecycle.swift)
+// covers: S351 (the Mac host)
+do {
+    let sessionEnd = NotificationCenter()
+    var runs = 0
+    let quit = QuitSteps(center: sessionEnd) { runs += 1 }
+    sessionEnd.post(name: NSApplication.willTerminateNotification, object: nil)
+    let afterTerminate = runs
+    quit.run()   // an exit signal after it (main.swift)
+    sessionEnd.post(name: NSApplication.willTerminateNotification, object: nil)
+    check(afterTerminate == 1 && runs == 1 && quit.ran,
+          "quit: AppKit's termination at a logout, shutdown or restart runs the quit steps, and nothing runs them again (S351)",
+          "\(afterTerminate), then \(runs)")
+
+    let signalFirst = NotificationCenter()
+    var signalRuns = 0
+    let signalled = QuitSteps(center: signalFirst) { signalRuns += 1 }
+    signalled.run()
+    signalFirst.post(name: NSApplication.willTerminateNotification, object: nil)
+    check(signalRuns == 1, "quit: a session that ends after an exit signal ran the quit steps doesn't run them twice (S351)",
+          "\(signalRuns)")
 }
 
 // MARK: Microphone calibration — what the estimate does to an offset (CalibrationFlow.swift, S232-S234)

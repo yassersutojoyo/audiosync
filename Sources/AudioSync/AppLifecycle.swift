@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import CoreServices
 
@@ -388,6 +389,29 @@ final class SignalQuit: @unchecked Sendable {
         guard !exited else { return }
         exited = true
         exitProcess(status)
+    }
+}
+
+/// Quit's steps (S110), run once, whichever of Quit, an exit signal (S111)
+/// and the end of the user session (S351) asks first. Quit and a logout,
+/// shutdown or restart end in AppKit's termination, which posts
+/// `willTerminateNotification` where a delegate's `applicationWillTerminate`
+/// would run. Main thread only.
+final class QuitSteps {
+    private(set) var ran = false
+    private let steps: () -> Void
+    private var observer: NSObjectProtocol?
+
+    init(center: NotificationCenter = .default, steps: @escaping () -> Void) {
+        self.steps = steps
+        observer = center.addObserver(forName: NSApplication.willTerminateNotification, object: nil,
+                                      queue: nil) { [weak self] _ in self?.run() }
+    }
+
+    func run() {
+        guard !ran else { return }
+        ran = true
+        steps()
     }
 }
 

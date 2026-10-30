@@ -308,8 +308,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     private var dueReconcileAt: Date?
     private var lastDueReconcile: Date?
     private var observers: [NSObjectProtocol] = []
-    /// Set by `runQuitSteps`, so Quit and an exit signal never run them twice.
-    private var quitStepsRan = false
+    /// Quit's steps, once whichever of Quit, an exit signal and the session's end asks first.
+    private lazy var quitOnce: QuitSteps = QuitSteps { [unowned self] in self.performQuitSteps() }
     private var deviceRescanPending = false
     /// The listeners on Core Audio's system object, by property, so a service
     /// restart can remove them before it adds them again.
@@ -383,6 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         // Every window stands on its own: no tab items in the menus, and the
         // Equalizer and the Guide never open as tabs of the main window.
         NSWindow.allowsAutomaticWindowTabbing = false
+        _ = quitOnce   // its observer is where AppKit's termination runs the quit steps (S351)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -541,7 +542,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// model update, which follows every change that can move one of those
     /// times; arms nothing while the Mac sleeps or once AudioSync quits.
     func scheduleDueReconcile() {
-        guard !quitStepsRan else { return }
+        guard !quitOnce.ran else { return }
         let restart = nativeAirPlay == nil ? nativeStarts.restartAt : nil   // none while a start is under way
         let hint = LocalNetworkHint.dueAt(access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
                                           emptySince: airplayEmptySince, now: Date())
@@ -701,10 +702,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 
-    func applicationWillTerminate(_ notification: Notification) {
-        runQuitSteps()
-    }
-
     /// Quit (S110, S186): stop the session, letting the outputs and the
     /// AirPlay inputs fade out (at most 0.5 s), then tear AudioSync's own
     /// AirPlay sender down, which ends every speaker's session, while the
@@ -712,8 +709,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// signal runs the same steps before it exits (S111, `SignalQuit` in
     /// main.swift). Runs once, whichever asks first.
     func runQuitSteps() {
-        guard !quitStepsRan else { return }
-        quitStepsRan = true
+        quitOnce.run()
+    }
+
+    private func performQuitSteps() {
         appModel.commitOpenRename()
         Self.exiting.store(true, ordering: .relaxed)
         dataSourceWatch.stop()
