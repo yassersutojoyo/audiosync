@@ -122,3 +122,4 @@ S345 Hosts only: the Mac host reading the phone's speaker and master commands an
 S346 Hosts only: the Mac's native AirPlay texts (PTP timing, PIN prompt, the AirPlay 2 kind, its tooltip and VoiceOver label); the Mac logic suite checks them.
 S348 Hosts only: both hosts keeping the phone's volume for a speaker that is off, a Cast speaker's following its slider; the Windows host's tests and the Mac logic suite check it.
 S349 Hosts only: an auto-connect AirPlay speaker that appears asking for a PIN or password goes off with a notice; the Windows host's tests and the Mac logic suite check it.
+S350 Hosts only: the Waiting for audio notice when a capture session starts and gets no audio, and the Mac's not-working notice; the Mac's capture tests check it, Windows has no notice yet.
