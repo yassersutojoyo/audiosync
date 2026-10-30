@@ -501,6 +501,7 @@ impl App {
                     .log
                     .log(|| format!("web remote: a change was refused ({refusal:?})")),
             }
+            self.forget_curve_left();
         }
         self.refresh();
     }
@@ -1259,6 +1260,38 @@ mod tests {
         app.remote.borrow_mut().commands = Some(receiver);
         sender.send(command).expect("sent");
         app.take_remote_commands();
+    }
+
+    // covers: S270
+    #[test]
+    fn a_phone_recall_that_leaves_rock_lets_go_of_it_for_good() {
+        use audiosync_core::eq;
+        let app = app_over(MockBackend::new());
+        app.update(|b| b.set_speaker_enabled("local:desk", true));
+        app.save_preset("Flat");
+        let eq_window = &app.equalizer;
+        let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
+        eq_window.invoke_preset_selected(rock);
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Mine".into());
+        app.save_preset("Rock");
+        eq_window.invoke_preset_selected(rock);
+        let ids: Vec<String> = app.snapshot().presets.into_iter().map(|p| p.id).collect();
+
+        from_phone(
+            &app,
+            audiosync_remote::Command::Preset { id: ids[0].clone() },
+        );
+        assert_eq!(app.ui.borrow().chosen_curve, None, "left");
+        from_phone(
+            &app,
+            audiosync_remote::Command::Preset { id: ids[1].clone() },
+        );
+        assert_eq!(
+            eq_window.get_preset_index(),
+            eq::PRESETS.len() as i32,
+            "back on Rock's gains, the saved curve shows, not the forgotten pick"
+        );
     }
 
     fn switch_on(id: &str) -> audiosync_remote::Command {
