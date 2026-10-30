@@ -166,7 +166,6 @@ final class CalibrationRun {
         signal = buffer
         CalibrationTap.install(buffer, frames: samples.count)
         CalibrationTap.engage()
-        app?.engine.holdCalibrationTime(true)
         stage = .quiet(untilNs: clock.nowNs() + seconds(CalibrationFlow.quietSeconds(largestHoldBackMs: largestHoldBackMs)))
         show(.running(.preparing))
         DebugTrace.log("[AudioSync] calibration of \(chosen) against \(reference) started: hold-backs \(holdBacks), "
@@ -369,7 +368,6 @@ final class CalibrationRun {
         timer = nil
         restoreOutputs()
         CalibrationTap.disengage()
-        app?.engine.holdCalibrationTime(false)
         if let signal {
             CalibrationTap.uninstall()
             signal.deallocate()

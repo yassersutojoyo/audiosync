@@ -2352,7 +2352,7 @@ do {
 do {
     // Calibrate All on All System Audio with nothing playing failed every time: the
     // signal rides on captured blocks, and a tap whose source is silent delivers none.
-    var pace = CalibrationFillPace(rate: 48_000)
+    var pace = QuietFillPace(rate: 48_000)
     let s: UInt64 = 1_000_000_000
     let first = pace.step(nowNs: 10 * s, lastCaptureNs: 0)
     check(first.frames == 1920 && first.firstNs == 10 * s - 40_000_000,
@@ -2365,22 +2365,103 @@ do {
     let racing = pace.step(nowNs: 11 * s, lastCaptureNs: 11 * s + 1000)
     check(flowing.frames == 0 && racing.frames == 0,
           "calibration fill: nothing while the capture delivers", "\(flowing) \(racing)")
-    let quietAgain = pace.step(nowNs: 12 * s, lastCaptureNs: 11 * s)
-    check(quietAgain.frames == 1920 && quietAgain.firstNs == 12 * s - 40_000_000,
-          "calibration fill: a capture gone quiet again starts a new stretch", "\(quietAgain)")
+    let quietAgain = pace.step(nowNs: 11 * s + 50_000_000, lastCaptureNs: 11 * s)
+    check(quietAgain.frames == 2400 && quietAgain.firstNs == 11 * s,
+          "calibration fill: a capture gone quiet again starts a new stretch where its last block ended",
+          "\(quietAgain)")
     let late = pace.step(nowNs: 15 * s, lastCaptureNs: 11 * s)
     check(late.frames == 48_000 && late.firstNs == 14 * s,
           "calibration fill: a fill held up for seconds writes the last second only", "\(late)")
 
     // An input device another app set to 4096-frame buffers calls back every
     // 85 ms: a 40 ms limit would fill spans the next block writes too.
-    var input = CalibrationFillPace(rate: 48_000)
+    var input = QuietFillPace(rate: 48_000)
     let between = input.step(nowNs: 20 * s, lastCaptureNs: 20 * s - 100_000_000, captureFrames: 4096)
     let stalled = input.step(nowNs: 20 * s + 80_000_000, lastCaptureNs: 20 * s - 100_000_000, captureFrames: 4096)
-    let idle = UInt64((2 * 4096 * 1e9 / 48_000).rounded(.up))
-    check(between.frames == 0 && stalled.frames > 0 && stalled.firstNs == 20 * s + 80_000_000 - idle,
+    check(between.frames == 0 && stalled.frames > 0 && stalled.firstNs == 20 * s - 100_000_000,
           "calibration fill: a capture with long buffers counts as quiet only after two of its periods",
           "\(between) \(stalled)")
+}
+
+// MARK: Quiet capture: a session's ring keeps time while its tap calls back nothing (SyncEngine.swift)
+// covers: S335 (a paused app's tap calls back nothing; an output held 1.75 s for AirPlay played the tail from before the pause after it)
+do {
+    if let parts = EngineParts.make(), let reader = CoreDelayReader(ring: parts.ring, captureRate: 48_000) {
+        parts.prepare(captureRate: 48_000)
+        let engine = StreamEngine()
+        engine.run(parts, captureRate: 48_000)
+        var block = [Float](repeating: 0, count: 512 * 2)
+        var out = [Float](repeating: 0, count: 512 * 2)
+        /// Captures `blocks` blocks at `level` (none for nil), each read by an
+        /// output held back 0.35 s; whether it played the audio from
+        /// before the pause (0.5) or after it (0.25).
+        func play(_ level: Float?, blocks: Int) -> (old: Bool, new: Bool) {
+            var heard = (old: false, new: false)
+            for _ in 0..<blocks {
+                if let level {
+                    block.withUnsafeMutableBufferPointer {
+                        $0.baseAddress!.update(repeating: level, count: 512 * 2)
+                        parts.deliver($0.baseAddress!, frames: 512)
+                    }
+                }
+                reader.readAtTarget(into: &out, frames: 512)
+                heard.old = heard.old || out.contains { abs($0 - 0.5) < 0.05 }
+                heard.new = heard.new || out.contains { abs($0 - 0.25) < 0.05 }
+            }
+            return heard
+        }
+        reader.setDelay(ms: 350)
+        _ = play(0.5, blocks: 38)    // 0.4 s of audio
+        usleep(400_000)              // the app paused: its tap calls back nothing for 0.4 s
+        _ = play(nil, blocks: 38)    // what the output read meanwhile
+        let after = play(0.25, blocks: 76)
+        engine.stop()
+        check(!after.old && after.new,
+              "quiet capture: after a pause longer than its hold an output plays only the new audio",
+              "old \(after.old), new \(after.new), \(parts.ring.framesWritten) frames written")
+    } else {
+        check(false, "quiet capture: the core's parts can be made")
+    }
+}
+
+// covers: S335 (the first block after a pause was written whole over the period the fill had covered, about 10 ms more per pause)
+do {
+    if let parts = EngineParts.make() {
+        parts.prepare(captureRate: 48_000)
+        let engine = StreamEngine()
+        engine.run(parts, captureRate: 48_000)
+        var block = [Float](repeating: 0.1, count: 512 * 2)
+        let period = parts.gate.ticks(frames: 512)
+        var first: UInt64 = 0
+        var last: UInt64 = 0
+        /// A tap calling back 512 frames each period for `ms` ms, each block
+        /// stamped with the end of its period.
+        func capture(ms: UInt64) {
+            let begin = mach_absolute_time()
+            let end = begin + HostClock.shared.ticks(nanoseconds: ms * 1_000_000)
+            var due = begin + period
+            while due <= end {
+                while mach_absolute_time() < due { usleep(500) }
+                if first == 0 { first = due - period }
+                block.withUnsafeMutableBufferPointer { parts.deliver($0.baseAddress!, frames: 512, now: due) }
+                last = due
+                due += period
+            }
+        }
+        capture(ms: 50)
+        for _ in 0..<5 {
+            usleep(60_000)
+            capture(ms: 50)
+        }
+        engine.stop()
+        let elapsed = Double(HostClock.shared.nanoseconds(ticks: last - first)) * 48_000 / 1e9
+        let written = Double(parts.ring.framesWritten)
+        check(abs(written - elapsed) <= 512,
+              "quiet capture: five pauses leave the ring within one callback of the time they took",
+              "\(Int(written)) frames written over \(Int(elapsed))")
+    } else {
+        check(false, "quiet capture: the core's parts can be made")
+    }
 }
 
 // MARK: Capture stage — stereo from any input layout, a rate for every session, an app tap that follows the app

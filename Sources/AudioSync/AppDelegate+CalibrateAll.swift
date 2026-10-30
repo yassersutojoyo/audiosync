@@ -598,7 +598,6 @@ final class CalibrateAllRun {
         signal = buffer
         CalibrationTap.install(buffer, frames: samples.count)
         CalibrationTap.engage()
-        app?.engine.holdCalibrationTime(true)
         let partOf = speakers.filter { taking.contains($0.id) }
         stage = .quiet(untilNs: clock.nowNs() + seconds(CalibrateAllFlow.quietSeconds(partOf + outside)))
         app?.showCalibrateAll(.preparing)
@@ -819,7 +818,6 @@ final class CalibrateAllRun {
         }
         silenced = []
         CalibrationTap.disengage()
-        app?.engine.holdCalibrationTime(false)
         if let signal {
             CalibrationTap.uninstall()
             signal.deallocate()

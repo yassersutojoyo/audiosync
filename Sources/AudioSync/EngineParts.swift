@@ -53,10 +53,11 @@ struct EngineParts {
     /// run (`NativeAirPlayTap`, `CastTap`), the same samples for all (S7). During a
     /// microphone calibration (`CalibrationTap`) the music fades to silence
     /// on every path and the test signal goes into the one path it targets.
-    /// A block that meets the calibration's fill writing is dropped: the fill
-    /// writes only after the capture gave nothing for a while, while the
-    /// music is faded out. The block starts `offset` frames into a callback
-    /// of `callbackFrames` frames that ended at host time `now`. Real-time safe.
+    /// A block that meets the fill (`QuietFill`) writing is dropped: the
+    /// fill writes only after the capture gave nothing for a while, so only
+    /// the first block after a pause can meet it. The block starts `offset`
+    /// frames into a callback of `callbackFrames` frames that ended at host
+    /// time `now`. Real-time safe.
     @inline(__always)
     func deliver(_ block: UnsafeMutablePointer<Float>, frames: Int, offset: Int = 0, callbackFrames: Int? = nil,
                  now: UInt64 = mach_absolute_time()) {
@@ -64,19 +65,28 @@ struct EngineParts {
         guard gate.enter() else { return }
         // The block's first frame, as the fill stamps its own, so a run whose two
         // recordings start on different writers lines up.
-        write(block, frames: frames,
-              ticks: gate.blockStartTicks(callbackNow: now, callbackFrames: callbackFrames ?? offset + frames,
-                                          offset: offset), filled: false)
+        let start = gate.blockStartTicks(callbackNow: now, callbackFrames: callbackFrames ?? offset + frames,
+                                         offset: offset)
+        // Frames the fill already wrote silence for would put the ring ahead of time (S335).
+        let skip = gate.filledFrames(from: start, frames: frames)
+        if skip < frames {
+            write(block + 2 * skip, frames: frames - skip, ticks: start &+ gate.ticks(frames: skip), filled: false)
+        }
         gate.leave()
     }
 
-    /// The calibration's fill thread (`CalibrationFill`): a block of silence
+    /// The session's fill thread (`QuietFill`): a block of silence
     /// written like a captured one, its first frame due at host time `ticks`.
-    /// False when the capture holds the gate. Real-time safe.
-    @discardableResult
-    func fill(_ block: UnsafeMutablePointer<Float>, frames: Int, ticks: UInt64) -> Bool {
+    /// False when the capture holds the gate or has delivered since its block
+    /// at `last`. Real-time safe.
+    func fill(_ block: UnsafeMutablePointer<Float>, frames: Int, ticks: UInt64, last: UInt64) -> Bool {
         guard gate.enter() else { return false }
+        guard gate.lastCaptureTicks.load(ordering: .acquiring) == last else {
+            gate.leave()
+            return false
+        }
         write(block, frames: frames, ticks: ticks, filled: true)
+        gate.filledTo.store(ticks &+ gate.ticks(frames: frames), ordering: .relaxed)
         gate.leave()
         return true
     }
@@ -112,15 +122,18 @@ struct EngineParts {
     }
 }
 
-/// Keeps a session's two possible writers apart: the capture IOProc and,
-/// during a calibration, the fill that writes silence while the capture
-/// delivers nothing. The ring, the equalizer and the senders' inputs take
-/// one writer at a time. Never waits: a writer that finds it taken skips.
+/// Keeps a session's two writers apart: the capture IOProc and the fill
+/// that writes silence while the capture delivers nothing. The ring, the
+/// equalizer and the senders' inputs take one writer at a time. Never
+/// waits: a writer that finds it taken skips.
 final class BlockGate {
     /// Host ticks of the capture's latest block; 0 before the first.
     let lastCaptureTicks = Atomic<UInt64>(0)
     /// Frames in the capture's latest callback; 0 before the first.
     let lastCallbackFrames = Atomic<Int>(0)
+    /// Host ticks where the fill's latest block ends, until a captured block
+    /// reaches past it; 0 otherwise. Used inside the gate only.
+    let filledTo = Atomic<UInt64>(0)
     /// Host ticks per frame at the capture rate, as a `Double`'s bits; 0 until `prepare`.
     private let ticksPerFrame = Atomic<UInt64>(0)
     private let busy = Atomic<Bool>(false)
@@ -144,6 +157,18 @@ final class BlockGate {
     @inline(__always)
     func blockStartTicks(callbackNow: UInt64, callbackFrames: Int, offset: Int) -> UInt64 {
         callbackNow &- ticks(frames: callbackFrames - offset)
+    }
+
+    /// Inside the gate: how many of the first frames of a captured block of
+    /// `frames` frames starting at host time `start` the fill already wrote.
+    @inline(__always)
+    func filledFrames(from start: UInt64, frames: Int) -> Int {
+        let end = filledTo.load(ordering: .relaxed)
+        guard end != 0 else { return 0 }
+        let perFrame = Double(bitPattern: ticksPerFrame.load(ordering: .acquiring))
+        let covered = end > start && perFrame > 0 ? min(Double(frames), (Double(end - start) / perFrame).rounded()) : 0
+        if covered < Double(frames) { filledTo.store(0, ordering: .relaxed) }
+        return Int(covered)
     }
 
     @inline(__always)

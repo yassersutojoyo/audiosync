@@ -17,7 +17,7 @@ import Synchronization
 /// or Cast sender instead (`setTarget`); the other paths get silence then.
 ///
 /// The capture thread calls `isActive`, `fadeMusic` and `addSignal` from
-/// `EngineParts.deliver`, and the fill thread (`CalibrationFill`) from
+/// `EngineParts.deliver`, and the fill thread (`QuietFill`) from
 /// `EngineParts.fill`, never both at once (`BlockGate`); everything else runs
 /// on the main thread. One calibration at a time.
 enum CalibrationTap {
@@ -44,7 +44,7 @@ enum CalibrationTap {
     private static let position = Atomic<Int>(-1)
     /// Host ticks of the block that carried the signal's first frame; 0 before.
     private static let startTicks = Atomic<UInt64>(0)
-    /// That block came from `CalibrationFill`, not the capture.
+    /// That block came from `QuietFill`, not the capture.
     private static let startFilled = Atomic<Bool>(false)
     /// The signal's level in frames of its fade-out; written by the capture
     /// thread while it plays, by `play` before it does.
@@ -167,11 +167,11 @@ enum CalibrationTap {
     }
 }
 
-/// How much silence the calibration's fill writes (`CalibrationFill`), from
+/// How much silence the session's fill writes (`QuietFill`), from
 /// the host clock and the time of the capture's latest block. While the
-/// capture delivers, nothing; once it has given nothing for `idle(captureFrames:)`, the
-/// ring is kept in real time from that moment on, the gap included.
-struct CalibrationFillPace {
+/// capture delivers, nothing; once it has given nothing for
+/// `idle(captureFrames:)`, the ring is kept in real time from that block on.
+struct QuietFillPace {
     /// 40 ms: more than a tap's block (1024 frames at 44.1 kHz last 23 ms)
     /// and inside the readers' 50 ms dead band (S50).
     static let idleNs: UInt64 = 40_000_000
@@ -208,7 +208,7 @@ struct CalibrationFillPace {
         if let anchorNs {
             anchor = anchorNs
         } else {
-            anchor = nowNs - quiet
+            anchor = lastCaptureNs != 0 ? lastCaptureNs : nowNs - quiet
             anchorNs = anchor
             written = 0
         }
@@ -222,26 +222,27 @@ struct CalibrationFillPace {
     }
 }
 
-/// Writes silence through a session's parts while a calibration runs and the
-/// capture delivers nothing, so the test signal has blocks to ride on: a
-/// process tap delivers no block while its source plays nothing. Its thread
-/// wakes every 2 ms and never allocates, locks or logs. Main thread: `init`,
-/// `start`, `stop`.
-final class CalibrationFill {
+/// Writes silence through a session's parts, for the whole session, while
+/// the capture delivers nothing (a process tap whose source plays nothing
+/// delivers no block), so the ring keeps time across a pause (S335) and a
+/// calibration's test signal has blocks to ride on. Its thread wakes every
+/// 2 ms and never allocates, locks or logs. Main thread: `init`, `start`,
+/// `stop`.
+final class QuietFill {
     static let chunkFrames = 512
 
     private let parts: EngineParts
     private let clock = HostClock.shared
     private let block: UnsafeMutablePointer<Float>
     /// The fill thread's own.
-    private var pace: CalibrationFillPace
+    private var pace: QuietFillPace
     private let running = Atomic<Bool>(true)
     private let finished = Atomic<Bool>(false)
     private var started = false
 
     init(parts: EngineParts, captureRate: Double) {
         self.parts = parts
-        pace = CalibrationFillPace(rate: captureRate)
+        pace = QuietFillPace(rate: captureRate)
         block = .allocate(capacity: 2 * Self.chunkFrames)
         block.initialize(repeating: 0, count: 2 * Self.chunkFrames)
     }
@@ -269,6 +270,11 @@ final class CalibrationFill {
     private func run() {
         while running.load(ordering: .acquiring) {
             let last = parts.gate.lastCaptureTicks.load(ordering: .acquiring)
+            // Before the capture's first block only a calibration needs silence, as the Windows gap fill writes none.
+            guard last != 0 || CalibrationTap.isActive else {
+                usleep(2000)
+                continue
+            }
             let step = pace.step(nowNs: clock.nowNs(), lastCaptureNs: clock.nanoseconds(ticks: last),
                                  captureFrames: parts.gate.lastCallbackFrames.load(ordering: .relaxed))
             var done = 0
@@ -276,7 +282,8 @@ final class CalibrationFill {
                 let count = min(step.frames - done, Self.chunkFrames)
                 block.update(repeating: 0, count: 2 * count)
                 let dueNs = step.firstNs + UInt64((Double(done) * 1e9 / pace.rate).rounded())
-                parts.fill(block, frames: count, ticks: clock.ticks(nanoseconds: dueNs))
+                let ticks = clock.ticks(nanoseconds: dueNs)
+                guard parts.fill(block, frames: count, ticks: ticks, last: last) else { break }
                 done += count
             }
             usleep(2000)

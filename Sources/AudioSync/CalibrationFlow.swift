@@ -53,7 +53,7 @@ enum CalibrationFailure: Equatable {
     /// The capture's rate is outside the test signal's range (S233).
     case unsupportedRate
     /// No block carried the signal: neither the capture nor the fill that
-    /// stands in for a quiet capture (`CalibrationFill`) wrote one.
+    /// stands in for a quiet capture (`QuietFill`) wrote one.
     case sourceSilent
     /// Streaming stopped, or the speakers or their delays changed, during
     /// the measurement.

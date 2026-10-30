@@ -42,7 +42,7 @@ func calibrationFillChecks() {
     CalibrationTap.install(signal, frames: 4800)
     CalibrationTap.engage()
     CalibrationTap.play()
-    let fill = CalibrationFill(parts: parts, captureRate: 48000)
+    let fill = QuietFill(parts: parts, captureRate: 48000)
     fill.start()
     let deadline = Date().addingTimeInterval(2)
     while CalibrationTap.playedAtTicks == nil && Date() < deadline { usleep(5000) }

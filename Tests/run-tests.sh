@@ -159,7 +159,7 @@ if [ "$workflow_groups_ok" -eq 1 ]; then echo "PASSED"; else status=1; fi
 echo "▶ capture IOProc stays real-time safe"
 # The capture IOProc runs CaptureSink (ProcessTapCapture.swift), the
 # CaptureChannels it builds (CaptureSupport.swift) and, during a calibration,
-# CalibrationTap, which CalibrationFill's thread also writes through while the
+# CalibrationTap, which QuietFill's thread also writes through while the
 # capture is quiet; the calibration's microphone IOProc runs MicrophoneSink. None
 # may log, lock, dispatch or build strings; the debug log is written from the
 # main thread only.
