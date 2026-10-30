@@ -193,6 +193,10 @@ const FRESH_RESTART_POLLS: u32 = 4;
 /// new start: 1 s.
 const FRESH_REST_POLLS: u32 = 2;
 
+/// A sender that couldn't start is tried again this many polls later, 10 s
+/// (S101), until one runs.
+const AIRPLAY_RESTART_POLLS: u32 = 20;
+
 /// How a running capture is doing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CaptureState {
@@ -755,6 +759,8 @@ pub struct Controller<D: Driver> {
     /// Starts a new sender when the user retries after the sender stopped
     /// or couldn't start.
     starter: Option<SenderStarter>,
+    /// Polls left until a sender that couldn't start is tried again.
+    airplay_restart_in: Option<u32>,
     /// The paired Apple TVs' credentials while no sender ever started: the
     /// first one that does gets them.
     waiting_store: Option<PairingStore>,
@@ -858,6 +864,7 @@ impl<D: Driver> Controller<D> {
             feed: None,
             cast: None,
             starter: None,
+            airplay_restart_in: None,
             waiting_store: None,
             retiring: Vec::new(),
             next_start: None,
@@ -917,7 +924,8 @@ impl<D: Driver> Controller<D> {
             Some(started) => self.use_sender(started),
             None => {
                 self.log
-                    .log(|| "AirPlay: no sender runs; AirPlay stays off until Retry".to_owned());
+                    .log(|| "AirPlay: no sender runs; it is tried again in 10 s".to_owned());
+                self.airplay_restart_in = Some(AIRPLAY_RESTART_POLLS);
                 self.pending.push(BackendEvent::AirPlayStopped);
             }
         }
@@ -925,7 +933,8 @@ impl<D: Driver> Controller<D> {
 
     /// Plays to AirPlay through `started`: the first sender, or one that
     /// replaces a sender that stopped. One whose discovery couldn't start
-    /// lists nothing, so it counts as stopped and is reported.
+    /// lists nothing, so it counts as stopped, is reported and is tried
+    /// again in 10 s.
     fn use_sender(&mut self, started: StartedSender) {
         let StartedSender {
             link,
@@ -945,9 +954,74 @@ impl<D: Driver> Controller<D> {
                 self.set_airplay_with_pairings(link, feed, store);
             }
         }
+        if !browsing {
+            self.airplay_restart_in = Some(AIRPLAY_RESTART_POLLS);
+        }
         if !browsing && let Some(airplay) = self.airplay.as_mut() {
             airplay.discovery_unavailable(&mut self.pending);
         }
+    }
+
+    /// A sender that couldn't start is tried again once its 10 s are up; a
+    /// failure then isn't told again (S101).
+    fn restart_airplay_when_due(&mut self) {
+        let Some(polls) = self.airplay_restart_in.as_mut() else {
+            return;
+        };
+        *polls = polls.saturating_sub(1);
+        if *polls > 0 {
+            return;
+        }
+        self.log
+            .log(|| "AirPlay: starting a sender again, 10 s after one couldn't".to_owned());
+        if !self.restart_airplay() {
+            self.log
+                .log(|| "AirPlay: no sender runs; it is tried again in 10 s".to_owned());
+        }
+    }
+
+    /// Starts a new sender in place of none or one that stopped; one that
+    /// can't start, or whose discovery can't, is dropped and tried again in
+    /// 10 s, so a running capture restarts only for one that lists
+    /// receivers. Returns whether one started.
+    fn restart_airplay(&mut self) -> bool {
+        self.airplay_restart_in = None;
+        let Some(started) = self
+            .starter
+            .as_mut()
+            .and_then(|starter| starter())
+            .filter(|started| started.browsing)
+        else {
+            self.airplay_restart_in = Some(AIRPLAY_RESTART_POLLS);
+            return false;
+        };
+        // A running capture feeds the old sender, or none: it starts again
+        // with the new sender's feed (the capture can't swap it while it
+        // runs). One waiting for its input device holds no feed and waits on;
+        // its next try takes the new feed (S329).
+        let source = self
+            .session
+            .as_ref()
+            .filter(|session| !session.reopen.is_some_and(|reopen| reopen.away))
+            .map(|session| session.source.clone());
+        if source.is_some() {
+            self.end_session();
+        }
+        self.use_sender(started);
+        self.sync_airplay_rule();
+        if let Some(source) = source
+            && let Err(error) = self.begin_session(&source)
+        {
+            self.log.log(|| {
+                format!("the capture couldn't start again after a sender restart: {error}")
+            });
+            self.airplay_streaming(false);
+            self.pending.push(BackendEvent::Stopped {
+                reason: StopReason::CaptureFailed(error),
+            });
+        }
+        self.pending.push(BackendEvent::AirPlayChanged);
+        true
     }
 
     /// Sends what the backend does to `log`.
@@ -4222,42 +4296,16 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 .log(|| "AirPlay: Retry, but the sender runs".to_owned());
             return;
         }
-        let Some(starter) = self.starter.as_mut() else {
+        if self.starter.is_none() {
             self.log
                 .log(|| "AirPlay: Retry, but there is no way to start a sender".to_owned());
             return;
-        };
+        }
         self.log
             .log(|| "AirPlay: Retry: starting a new sender".to_owned());
-        let Some(started) = starter() else {
+        if !self.restart_airplay() {
             self.pending.push(BackendEvent::AirPlayStopped);
-            return;
-        };
-        // A running capture feeds the old sender, or none: it starts again
-        // with the new sender's feed (the capture can't swap it while it
-        // runs). One waiting for its input device holds no feed and waits on;
-        // its next try takes the new feed (S329).
-        let source = self
-            .session
-            .as_ref()
-            .filter(|session| !session.reopen.is_some_and(|reopen| reopen.away))
-            .map(|session| session.source.clone());
-        if source.is_some() {
-            self.end_session();
         }
-        self.use_sender(started);
-        self.sync_airplay_rule();
-        if let Some(source) = source
-            && let Err(error) = self.begin_session(&source)
-        {
-            self.log
-                .log(|| format!("the capture couldn't start again after Retry: {error}"));
-            self.airplay_streaming(false);
-            self.pending.push(BackendEvent::Stopped {
-                reason: StopReason::CaptureFailed(error),
-            });
-        }
-        self.pending.push(BackendEvent::AirPlayChanged);
     }
 
     fn poll(&mut self) -> Vec<BackendEvent> {
@@ -4275,6 +4323,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
         self.tick_stall_trials();
         self.device_volumes.tick();
+        self.restart_airplay_when_due();
         if self.policy.tick() {
             self.log.log(|| {
                 "a lost output's 10 s are up: it no longer counts for the others' delays".to_owned()
@@ -10429,6 +10478,141 @@ mod tests {
         backend.retry_airplay();
         assert_eq!(backend.poll(), [BackendEvent::AirPlayStopped]);
         assert!(backend.airplay_speakers().is_empty());
+    }
+
+    /// Polls in 10 s, the wait before a failed sender start is tried again.
+    fn polls_in_ten_seconds() -> usize {
+        (Duration::from_secs(10).as_millis() / super::super::outputs::POLL_PERIOD.as_millis())
+            as usize
+    }
+
+    /// A starter that counts its calls and gives a sender only at call `works_at`.
+    fn counted_starter(
+        fake: &FakeAirPlay,
+        works_at: u32,
+    ) -> (SenderStarter, std::rc::Rc<std::cell::Cell<u32>>) {
+        let starts = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = starts.clone();
+        let fake = fake.clone();
+        let starter: SenderStarter = Box::new(move || {
+            counted.set(counted.get() + 1);
+            (counted.get() == works_at).then(|| StartedSender::browsing(fake.link(), None))
+        });
+        (starter, starts)
+    }
+
+    // covers: S101
+    #[test]
+    fn an_airplay_sender_that_cant_start_is_started_again_every_ten_seconds_until_one_runs() {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let (starter, starts) = counted_starter(&fake, 3);
+        backend.start_airplay(starter, PairingStore::in_memory());
+        let wait = polls_in_ten_seconds();
+        let events: Vec<BackendEvent> = (1..wait).flat_map(|_| backend.poll()).collect();
+        assert_eq!(events, [BackendEvent::AirPlayStopped]);
+        assert_eq!(starts.get(), 1, "nothing starts before 10 s");
+        assert!(
+            backend.poll().is_empty(),
+            "a start failing again is told once"
+        );
+        assert_eq!(starts.get(), 2, "10 s after the failed start");
+        for _ in 1..wait {
+            backend.poll();
+        }
+        assert_eq!(starts.get(), 2);
+        assert_eq!(backend.poll(), [BackendEvent::AirPlayChanged]);
+        assert_eq!(starts.get(), 3);
+        assert!(backend.airplay_browsing());
+        for _ in 0..3 * wait {
+            backend.poll();
+        }
+        assert_eq!(starts.get(), 3, "a running sender isn't started again");
+    }
+
+    // covers: S101
+    #[test]
+    fn a_retry_while_a_restart_waits_starts_the_sender_once() {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let (starter, starts) = counted_starter(&fake, 2);
+        backend.start_airplay(starter, PairingStore::in_memory());
+        backend.poll();
+        backend.poll();
+        backend.retry_airplay();
+        assert_eq!(starts.get(), 2);
+        for _ in 0..3 * polls_in_ten_seconds() {
+            backend.poll();
+        }
+        assert_eq!(
+            starts.get(),
+            2,
+            "the restart the failure planned is dropped"
+        );
+        assert!(backend.airplay_browsing());
+    }
+
+    // covers: S101
+    #[test]
+    fn an_airplay_sender_whose_discovery_cant_start_is_started_again_every_ten_seconds() {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let starts = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = starts.clone();
+        let link = fake.clone();
+        let starter: SenderStarter = Box::new(move || {
+            counted.set(counted.get() + 1);
+            Some(StartedSender {
+                link: link.link(),
+                feed: None,
+                browsing: counted.get() == 3,
+            })
+        });
+        backend.start_airplay(starter, PairingStore::in_memory());
+        let wait = polls_in_ten_seconds();
+        let events: Vec<BackendEvent> = (1..wait).flat_map(|_| backend.poll()).collect();
+        assert_eq!(events, [BackendEvent::AirPlayStopped]);
+        assert!(
+            !backend.poll().contains(&BackendEvent::AirPlayStopped),
+            "told once"
+        );
+        assert_eq!(starts.get(), 2, "10 s after the start without discovery");
+        for _ in 0..wait {
+            backend.poll();
+        }
+        assert_eq!(starts.get(), 3);
+        assert!(backend.airplay_browsing());
+        for _ in 0..3 * wait {
+            backend.poll();
+        }
+        assert_eq!(starts.get(), 3, "a sender that lists isn't started again");
+    }
+
+    // covers: S101
+    #[test]
+    fn restarts_whose_discovery_still_cant_start_leave_a_running_capture_alone() {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let starts = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = starts.clone();
+        let starter: SenderStarter = Box::new(move || {
+            counted.set(counted.get() + 1);
+            Some(StartedSender {
+                link: fake.link(),
+                feed: None,
+                browsing: false,
+            })
+        });
+        backend.start_airplay(starter, PairingStore::in_memory());
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let captures = backend.driver().captures_started().len();
+        let outputs = playing(&backend);
+        for _ in 0..2 * polls_in_ten_seconds() {
+            backend.poll();
+        }
+        assert_eq!(starts.get(), 3, "two restarts");
+        assert_eq!(backend.driver().captures_started().len(), captures);
+        assert_eq!(playing(&backend), outputs);
     }
 
     // covers: S281, S178, S177

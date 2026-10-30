@@ -1796,6 +1796,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// The user picked `picked`: a new source also ends the hold of a
+    /// failed automatic start.
+    fn pick(&mut self, picked: Chosen) {
+        if picked.key() != self.chosen.key() {
+            self.gate.source_picked();
+        }
+        self.choose(picked);
+    }
+
     /// Makes `picked` the source: the old one's notices go, and while
     /// streaming, capture starts again from the new one (S141, S163).
     fn choose(&mut self, picked: Chosen) {
@@ -2254,6 +2263,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if turn_on {
             self.start_if_switched_on();
         } else {
+            self.airplay_unrestored
+                .retain(|id| !zone.members.contains(&airplay_key(id)));
             self.stop_if_idle();
         }
         self.take_events();
@@ -2504,6 +2515,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.switch_zone_member(&key, false);
             }
         }
+        self.airplay_unrestored.retain(|id| {
+            let key = airplay_key(id);
+            preset.members.iter().any(|member| member.key == key)
+        });
         let running = self.running();
         for ((key, volume, _, facts), (step, set_volume)) in
             members.iter().zip(plan.steps.iter().zip(&plan.set_volume))
@@ -3069,12 +3084,31 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.must_save = true;
     }
 
+    /// A sender runs, maybe one started after launch (Retry, or the restart
+    /// 10 s after a failed start, S101): its stopped notice goes, and the
+    /// speakers saved as on switch on as at a launch with a sender.
+    fn airplay_sender_runs(&mut self) {
+        self.clear_if(NoticeSubject::AirPlay, |message| {
+            matches!(message, NoticeMessage::AirPlayStopped)
+        });
+        for id in std::mem::take(&mut self.airplay_unrestored) {
+            if !self.is_hidden(&airplay_key(&id))
+                && self.audio.set_airplay_enabled(&id, true).is_err()
+            {
+                self.airplay_unrestored.insert(id);
+            }
+        }
+    }
+
     /// Takes in the AirPlay speakers as last listed: remembers their names,
     /// and switches on the auto-connect speakers that appeared. One that
     /// asks for a code every time and doesn't play goes off instead, when
     /// it appears (also on from the last run) and when a listed one starts
     /// asking, unless the user turned it on in this stream.
     fn airplay_listed(&mut self) {
+        if self.audio.airplay_browsing() {
+            self.airplay_sender_runs();
+        }
         let mut listed = BTreeSet::new();
         let mut appeared = Vec::new();
         let mut asking = Vec::new();
@@ -4556,7 +4590,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         else {
             return;
         };
-        self.choose(picked);
+        self.pick(picked);
     }
 
     fn toggle_mix_app(&mut self, executable: &str) {
@@ -4576,7 +4610,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 name: app.name,
             },
         );
-        self.choose(picked);
+        self.pick(picked);
     }
 
     fn set_mix_all_except(&mut self, on: bool) {
@@ -4590,7 +4624,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         if mode != current {
             // The checked apps carry over to the other mode.
             let picked = mix_choice(mode, mix_checked(&self.chosen, current));
-            self.choose(picked);
+            self.pick(picked);
         }
     }
 
@@ -4614,6 +4648,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             self.clear_source_notice_if_running();
             return;
         }
+        self.gate.source_picked();
         // A session waiting for its unplugged input opens on the new pair
         // once the device is listed again (S329).
         let waits = self.audio.waits_for_input();
@@ -6598,6 +6633,88 @@ mod tests {
         assert_eq!(adapter.snapshot().notices[0].time, "09.41");
         adapter.set_running(true);
         assert!(messages(&adapter).is_empty(), "the user's start clears it");
+    }
+
+    // covers: S120
+    #[test]
+    fn picking_a_source_after_a_failed_automatic_start_lets_auto_connect_start_again() {
+        let mut adapter = adapter();
+        adapter.select_source(&player());
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.poll();
+        adapter.set_auto_connect(&key(HEADPHONES), true);
+        let reconnect = |adapter: &mut AudioAdapter<MockBackend>| {
+            adapter.audio_mut().disconnect_output(HEADPHONES);
+            adapter.poll();
+            adapter.audio_mut().connect_output(HEADPHONES, "Headphones");
+            adapter.poll();
+        };
+        reconnect(&mut adapter);
+        assert!(enabled(&adapter, HEADPHONES));
+        assert!(!adapter.snapshot().running, "the player isn't running");
+
+        adapter.select_source("system");
+        assert!(
+            !adapter.snapshot().running,
+            "picking a source starts nothing"
+        );
+        reconnect(&mut adapter);
+        assert!(adapter.snapshot().running, "auto-connect starts again");
+    }
+
+    // covers: S120
+    #[test]
+    fn picking_an_input_pair_ends_the_hold_of_a_failed_automatic_start() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Interface (USB Audio)", "USB");
+        adapter.audio.set_input_channels(MIC, 6);
+        adapter.refresh_sources();
+        adapter.select_source(&mic());
+        adapter.gate.start_failed(StartOrigin::AutoConnect);
+        adapter.select_input_pair(1);
+        assert!(adapter.gate.allows(StartOrigin::AutoConnect));
+    }
+
+    // covers: S120, S14
+    #[test]
+    fn picking_the_pair_a_saved_pair_fell_back_to_keeps_the_hold_of_a_failed_automatic_start() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Interface (USB Audio)", "USB");
+        adapter.audio.set_input_channels(MIC, 8);
+        adapter.refresh_sources();
+        adapter.select_source(&mic());
+        adapter.select_input_pair(3);
+        adapter.audio.set_input_channels(MIC, 4);
+        adapter.refresh_sources();
+        adapter.gate.start_failed(StartOrigin::AutoConnect);
+        adapter.select_input_pair(0);
+        assert!(
+            !adapter.gate.allows(StartOrigin::AutoConnect),
+            "1-2 already plays, so nothing changed"
+        );
+    }
+
+    // covers: S120, S212
+    #[test]
+    fn a_settings_file_read_late_keeps_the_hold_of_a_failed_automatic_start() {
+        use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
+        let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-hold");
+        adapter.gate.start_failed(StartOrigin::AutoConnect);
+        std::fs::remove_dir(&path).expect("the folder is removed");
+        std::fs::rename(dir.join("held"), &path).expect("moved back");
+        for _ in 0..KEEP_ASIDE_RETRY_POLLS {
+            adapter.poll();
+        }
+        assert!(matches!(adapter.chosen, Chosen::App { .. }), "read");
+        assert!(
+            !adapter.gate.allows(StartOrigin::AutoConnect),
+            "the file's source isn't the user's pick"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -10805,6 +10922,143 @@ mod tests {
         fake.appear(&kitchen);
         adapter.poll();
         assert!(adapter.snapshot().speaker(&ap(&kitchen)).is_some());
+    }
+
+    /// The adapter at a launch with `kitchen` saved as on, whose AirPlay
+    /// sender can't start then and comes from `fake` at the next start.
+    fn launch_with_airplay_saved_on(
+        name: &str,
+        fake: &FakeAirPlay,
+        kitchen: &Device,
+    ) -> (AudioAdapter<MockBackend>, PathBuf) {
+        let dir = test_dir(name);
+        let path = dir.join(settings::FILE_NAME);
+        let saved = Settings {
+            airplay: BTreeMap::from([(
+                id_of(kitchen),
+                SavedSpeaker {
+                    enabled: true,
+                    ..SavedSpeaker::default()
+                },
+            )]),
+            ..Settings::default()
+        };
+        std::fs::write(&path, saved.to_json()).expect("written");
+        let mut audio = launch_audio();
+        let mut senders = vec![None, Some(StartedSender::browsing(fake.link(), None))].into_iter();
+        audio.start_airplay(
+            Box::new(move || senders.next().flatten()),
+            PairingStore::in_memory(),
+        );
+        (launch(audio, &path), dir)
+    }
+
+    // covers: S101
+    #[test]
+    fn airplay_speakers_saved_as_on_come_on_once_retry_starts_the_sender() {
+        let fake = FakeAirPlay::new();
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let (mut adapter, dir) =
+            launch_with_airplay_saved_on("adapter-airplay-saved-on-retry", &fake, &kitchen);
+        adapter.poll();
+        adapter.retry_airplay();
+        fake.appear(&kitchen);
+        adapter.poll();
+        assert!(speaker_of(&adapter, &ap(&kitchen)).enabled, "on, as saved");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S101
+    #[test]
+    fn a_sender_restarted_after_a_failed_launch_start_clears_the_notice_and_saved_speakers_come_on()
+    {
+        let fake = FakeAirPlay::new();
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let (mut adapter, dir) =
+            launch_with_airplay_saved_on("adapter-airplay-saved-on-restart", &fake, &kitchen);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayStopped]);
+        let ten_seconds = std::time::Duration::from_secs(10).as_millis()
+            / crate::audio::outputs::POLL_PERIOD.as_millis();
+        for _ in 0..ten_seconds {
+            adapter.poll();
+        }
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        fake.appear(&kitchen);
+        adapter.poll();
+        assert!(speaker_of(&adapter, &ap(&kitchen)).enabled, "on, as saved");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S101
+    #[test]
+    fn an_airplay_speaker_saved_as_on_stays_off_after_a_preset_without_it_until_the_sender_runs() {
+        let fake = FakeAirPlay::new();
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let (mut adapter, dir) =
+            launch_with_airplay_saved_on("adapter-airplay-saved-on-preset", &fake, &kitchen);
+        adapter.poll();
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.save_preset("Evening").expect("saved");
+        adapter.recall_preset("preset:1");
+        adapter.retry_airplay();
+        fake.appear(&kitchen);
+        adapter.poll();
+        assert!(
+            !speaker_of(&adapter, &ap(&kitchen)).enabled,
+            "the preset left it off"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S101
+    #[test]
+    fn an_airplay_speaker_saved_as_on_stays_off_after_its_zone_goes_off_until_the_sender_runs() {
+        let fake = FakeAirPlay::new();
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let (mut adapter, dir) =
+            launch_with_airplay_saved_on("adapter-airplay-saved-on-zone", &fake, &kitchen);
+        adapter.poll();
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.set_running(true);
+        adapter.add_zone("Upstairs", &[key(HEADPHONES), ap(&kitchen)]);
+        adapter.toggle_zone("zone:1");
+        assert!(!enabled(&adapter, HEADPHONES), "the zone went off");
+        adapter.retry_airplay();
+        fake.appear(&kitchen);
+        adapter.poll();
+        assert!(
+            !speaker_of(&adapter, &ap(&kitchen)).enabled,
+            "its zone left it off"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S101
+    #[test]
+    fn an_airplay_speaker_saved_as_on_and_hidden_before_the_sender_runs_stays_off_once_shown() {
+        let fake = FakeAirPlay::new();
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let (mut adapter, dir) =
+            launch_with_airplay_saved_on("adapter-airplay-saved-on-hidden", &fake, &kitchen);
+        adapter.poll();
+        // Hidden as the Hidden Speakers list holds it; it has no row to hide yet.
+        adapter.hidden.push(SavedHidden {
+            key: ap(&kitchen),
+            name: "Kitchen".to_owned(),
+            kind: "AirPlay".to_owned(),
+        });
+        adapter.retry_airplay();
+        fake.appear(&kitchen);
+        adapter.poll();
+        adapter.unhide_speaker(&ap(&kitchen));
+        fake.appear(&device(2, "Den", OPEN_TXT));
+        adapter.poll();
+        assert!(
+            !speaker_of(&adapter, &ap(&kitchen)).enabled,
+            "hiding it switched it off"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

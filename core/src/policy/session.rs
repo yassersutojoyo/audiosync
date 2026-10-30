@@ -302,6 +302,14 @@ impl AutoStartGate {
         self.switched_off_by_user = false;
     }
 
+    /// The user picked another source or input pair, never a settings
+    /// read: a failed automatic start holds
+    /// nothing more, while streaming switched off by hand still holds
+    /// auto-connect.
+    pub fn source_picked(&mut self) {
+        self.automatic_start_failed = false;
+    }
+
     /// The user switched streaming off by hand.
     pub fn user_switched_off(&mut self) {
         self.switched_off_by_user = true;

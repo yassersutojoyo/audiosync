@@ -195,6 +195,22 @@ fn a_failed_automatic_start_holds_automatic_starts_until_the_user_acts() {
 
 // covers: S120
 #[test]
+fn picking_a_source_ends_only_the_hold_of_a_failed_automatic_start() {
+    let mut gate = AutoStartGate::default();
+    gate.start_failed(StartOrigin::AutoConnect);
+    gate.source_picked();
+    assert!(gate.allows(StartOrigin::AutoConnect));
+    assert!(gate.allows(StartOrigin::FormatChange));
+    gate.user_switched_off();
+    gate.source_picked();
+    assert!(
+        !gate.allows(StartOrigin::AutoConnect),
+        "streaming switched off by hand stays off"
+    );
+}
+
+// covers: S120
+#[test]
 fn switching_streaming_off_by_hand_holds_auto_connect() {
     let mut gate = AutoStartGate::default();
     gate.user_switched_off();
