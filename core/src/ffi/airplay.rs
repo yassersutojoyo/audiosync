@@ -1208,7 +1208,8 @@ impl AscAirPlay {
 
     /// A member's state and errors reach the host under the target it
     /// added as well: the target plays while any member plays, and a
-    /// member's error is the target's while none does (P181).
+    /// member's error is the target's only while no other member plays or
+    /// connects (P181).
     fn member_event(&mut self, member: &str, event: &SpeakerEvent) {
         let Some(target) = self
             .added
@@ -1223,7 +1224,14 @@ impl AscAirPlay {
                 self.member_states.insert(member.to_owned(), *state);
             }
             SpeakerEvent::Error(_) => {
-                if self.target_states.get(&target) != Some(&SpeakerState::Playing) {
+                let others_on = self.added[&target].members.iter().any(|id| {
+                    id != member
+                        && matches!(
+                            self.member_states.get(id),
+                            Some(SpeakerState::Playing | SpeakerState::Connecting)
+                        )
+                });
+                if !others_on {
                     self.queue_event(Pending::Speaker(target, event.clone()));
                 }
                 return;
@@ -10338,6 +10346,136 @@ mod tests {
         assert_eq!(text(report.missing), "");
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    /// What an added stereo pair reports to the host once its left (`true`)
+    /// and right members send `events`.
+    fn pair_reports(events: Vec<(bool, SpeakerEvent)>) -> Vec<SpeakerEvent> {
+        let mut handle = create_with(quiet);
+        let (left, right) = (pair_member(0x1A, "0x2004"), pair_member(0x1B, "0x4"));
+        let found = audiosync_airplay::targets::find_targets([&left, &right]);
+        let pair = found.first().cloned().expect("a pair");
+        let pair_id = pair.id.to_string();
+        inside(handle).airplay2 = true;
+        inside(handle).take_in(SenderEvent::Receiver(ReceiverEvent::Target(
+            TargetChange::Updated(Box::new(pair)),
+        )));
+        let c_id = c_string(&pair_id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 40.0)) };
+        for (is_left, event) in events {
+            let key = if is_left { &left.key } else { &right.key };
+            inside(handle).take_in(SenderEvent::Speaker {
+                key: key.clone(),
+                event,
+            });
+        }
+        let reported = inside(handle)
+            .events
+            .iter()
+            .filter_map(|(_, pending)| match pending {
+                Pending::Speaker(id, event) if *id == pair_id => Some(event.clone()),
+                _ => None,
+            })
+            .collect();
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        reported
+    }
+
+    fn member_error(
+        kind: ErrorKind,
+        reason: UserReason,
+        retry_at: Option<Instant>,
+    ) -> SpeakerEvent {
+        SpeakerEvent::Error(SpeakerError {
+            error: audiosync_airplay::error::SessionError::new(kind),
+            reason,
+            retry_at,
+        })
+    }
+
+    #[test]
+    fn a_pair_member_failing_while_the_other_connects_leaves_the_pair_on() {
+        let retry = Instant::now() + Duration::from_secs(1);
+        let one_fails = vec![
+            (true, SpeakerEvent::State(SpeakerState::Connecting)),
+            (false, SpeakerEvent::State(SpeakerState::Connecting)),
+            (
+                false,
+                member_error(ErrorKind::Lost, UserReason::ConnectionLost, Some(retry)),
+            ),
+            (
+                false,
+                SpeakerEvent::State(SpeakerState::Retrying { at: retry }),
+            ),
+            (
+                false,
+                member_error(ErrorKind::Refused, UserReason::Refused, None),
+            ),
+            (false, SpeakerEvent::State(SpeakerState::Failed)),
+        ];
+        let reported = pair_reports(one_fails.clone());
+        assert!(
+            matches!(
+                reported.as_slice(),
+                [SpeakerEvent::State(SpeakerState::Connecting)]
+            ),
+            "{reported:?}"
+        );
+
+        let mut both_fail = one_fails;
+        both_fail.push((
+            true,
+            member_error(ErrorKind::Refused, UserReason::Refused, None),
+        ));
+        both_fail.push((true, SpeakerEvent::State(SpeakerState::Failed)));
+        let reported = pair_reports(both_fail);
+        assert!(
+            matches!(
+                reported.as_slice(),
+                [
+                    SpeakerEvent::State(SpeakerState::Connecting),
+                    SpeakerEvent::Error(SpeakerError {
+                        reason: UserReason::Refused,
+                        ..
+                    }),
+                    SpeakerEvent::State(SpeakerState::Failed),
+                ]
+            ),
+            "{reported:?}"
+        );
+    }
+
+    #[test]
+    fn the_only_playing_pair_member_lost_reports_its_error_for_the_pair() {
+        let retry = Instant::now() + Duration::from_secs(1);
+        let reported = pair_reports(vec![
+            (true, SpeakerEvent::State(SpeakerState::Playing)),
+            (false, SpeakerEvent::State(SpeakerState::Failed)),
+            (
+                true,
+                member_error(ErrorKind::Lost, UserReason::ConnectionLost, Some(retry)),
+            ),
+            (
+                true,
+                SpeakerEvent::State(SpeakerState::Retrying { at: retry }),
+            ),
+        ]);
+        assert!(
+            matches!(
+                reported.as_slice(),
+                [
+                    SpeakerEvent::State(SpeakerState::Playing),
+                    SpeakerEvent::Error(SpeakerError {
+                        reason: UserReason::ConnectionLost,
+                        ..
+                    }),
+                    SpeakerEvent::State(SpeakerState::Retrying { .. }),
+                ]
+            ),
+            "{reported:?}"
+        );
     }
 
     #[test]
