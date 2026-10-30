@@ -28,6 +28,9 @@ pub enum FetchError {
 /// Bytes as they arrive; returns `false` to stop the fetch.
 pub type Sink<'a> = dyn FnMut(&[u8]) -> bool + 'a;
 
+/// Fills the buffer within `wait` when given; returns the count, 0 at the end.
+type Read<'a> = dyn FnMut(&mut [u8], Option<Duration>) -> Result<usize, FetchError> + 'a;
+
 pub trait Fetch: Send + Sync {
     fn get(&self, url: &str, kind: Kind, sink: &mut Sink<'_>) -> Result<(), FetchError>;
 }
@@ -88,18 +91,13 @@ pub fn user_agent(version: &str, arch: &str) -> String {
 }
 
 /// Collects an appcast through `fetch`, refusing more than [`MAX_APPCAST`]
-/// bytes and more than [`APPCAST_TIMEOUT`] in total.
+/// bytes; the fetch itself keeps [`APPCAST_TIMEOUT`].
 pub fn appcast(fetch: &dyn Fetch, url: &str) -> Result<Vec<u8>, FetchError> {
-    let started = Instant::now();
     let mut body = Vec::new();
     let mut over = None;
     let result = fetch.get(url, Kind::Appcast, &mut |bytes| {
         if body.len() + bytes.len() > MAX_APPCAST {
             over = Some("over 1 MiB");
-            return false;
-        }
-        if started.elapsed() > APPCAST_TIMEOUT {
-            over = Some("over 30 s");
             return false;
         }
         body.extend_from_slice(bytes);
@@ -112,6 +110,59 @@ pub fn appcast(fetch: &dyn Fetch, url: &str) -> Result<Vec<u8>, FetchError> {
         (Err(error), _) => Err(error),
         (Ok(()), _) => Ok(body),
     }
+}
+
+/// Reads a body to its end, by `deadline` when given: a per-read timeout
+/// alone lets a trickling server stretch the whole body.
+fn read_body(
+    deadline: Option<Instant>,
+    now: &dyn Fn() -> Instant,
+    read: &mut Read<'_>,
+    sink: &mut Sink<'_>,
+) -> Result<(), FetchError> {
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = read(&mut buffer, time_left(deadline, now)?)?;
+        if read == 0 {
+            return Ok(());
+        }
+        if !sink(&buffer[..read]) {
+            return Err(FetchError::Stopped);
+        }
+    }
+}
+
+/// One request: the next URL for a redirect, `None` once its body is read.
+type Hop<'a> = dyn FnMut(&str, Option<Duration>) -> Result<Option<String>, FetchError> + 'a;
+
+/// The time left before `deadline`, failing once it has passed.
+fn time_left(
+    deadline: Option<Instant>,
+    now: &dyn Fn() -> Instant,
+) -> Result<Option<Duration>, FetchError> {
+    let left = deadline.map(|deadline| deadline.saturating_duration_since(now()));
+    if left.is_some_and(|left| left.is_zero()) {
+        return Err(FetchError::Failed("the appcast is over 30 s".to_owned()));
+    }
+    Ok(left)
+}
+
+/// Follows redirects from `url` up to [`MAX_REDIRECTS`] hops, each hop
+/// bounded by what is left of `deadline`.
+fn follow(
+    url: &str,
+    deadline: Option<Instant>,
+    now: &dyn Fn() -> Instant,
+    hop: &mut Hop<'_>,
+) -> Result<(), FetchError> {
+    let mut url = url.to_owned();
+    for _ in 0..=MAX_REDIRECTS {
+        match hop(&url, time_left(deadline, now)?)? {
+            Some(next) => url = next,
+            None => return Ok(()),
+        }
+    }
+    Err(FetchError::Failed("more than 5 redirects".to_owned()))
 }
 
 pub struct WinHttp {
@@ -239,6 +290,7 @@ mod winhttp {
             },
             "open",
         )?;
+        let deadline = (kind == Kind::Appcast).then(|| Instant::now() + APPCAST_TIMEOUT);
         let receive = match kind {
             Kind::Appcast => APPCAST_TIMEOUT,
             Kind::Download => STALL_TIMEOUT,
@@ -254,11 +306,10 @@ mod winhttp {
             )
         }
         .map_err(failed("timeouts"))?;
-        let mut url = url.to_owned();
-        for _ in 0..=MAX_REDIRECTS {
-            let (target, secure) = match https_target(&url) {
+        let mut hop = |url: &str, wait: Option<Duration>| -> Result<Option<String>, FetchError> {
+            let (target, secure) = match https_target(url) {
                 Some(target) => (target, true),
-                None => match loopback_target(&url).filter(|_| plain_loopback) {
+                None => match loopback_target(url).filter(|_| plain_loopback) {
                     Some(target) => (target, false),
                     None => return Err(FetchError::Failed("not an https: URL".to_owned())),
                 },
@@ -309,6 +360,19 @@ mod winhttp {
                 WINHTTP_OPTION_AUTOLOGON_POLICY,
                 WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH,
             )?;
+            if let Some(left) = wait {
+                let left = millis(left).max(1);
+                let connect = left.min(millis(CONNECT_TIMEOUT));
+                // SAFETY: the request is open.
+                unsafe { WinHttpSetTimeouts(request.0, connect, connect, left, left) }
+                    .map_err(failed("timeouts"))?;
+                // The receive timeout covers one socket read; this one all the headers.
+                set_u32(
+                    &request,
+                    WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT,
+                    left as u32,
+                )?;
+            }
             // SAFETY: the request is open and sends no body.
             unsafe { WinHttpSendRequest(request.0, None, None, 0, 0, 0) }
                 .map_err(failed("send"))?;
@@ -321,19 +385,24 @@ mod winhttp {
                 let location = query_text(&request, WINHTTP_QUERY_LOCATION).ok_or_else(|| {
                     FetchError::Failed("a redirect without a location".to_owned())
                 })?;
-                url = if secure {
+                return Ok(Some(if secure {
                     redirect_target(&target, &location)
                         .ok_or_else(|| FetchError::Failed("a redirect off https".to_owned()))?
                 } else {
                     format!("http://127.0.0.1:{}{location}", target.port)
-                };
-                continue;
+                }));
             }
             if status != 200 {
                 return Err(FetchError::Status(u16::try_from(status).unwrap_or(0)));
             }
-            let mut buffer = vec![0u8; 64 * 1024];
-            loop {
+            let mut read = |buffer: &mut [u8], wait: Option<Duration>| {
+                if let Some(wait) = wait {
+                    set_u32(
+                        &request,
+                        WINHTTP_OPTION_RECEIVE_TIMEOUT,
+                        millis(wait).max(1) as u32,
+                    )?;
+                }
                 let mut read = 0u32;
                 // SAFETY: the buffer holds `len` bytes.
                 unsafe {
@@ -345,20 +414,18 @@ mod winhttp {
                     )
                 }
                 .map_err(failed("read"))?;
-                if read == 0 {
-                    return Ok(());
-                }
-                if !sink(&buffer[..read as usize]) {
-                    return Err(FetchError::Stopped);
-                }
-            }
-        }
-        Err(FetchError::Failed("more than 5 redirects".to_owned()))
+                Ok(read as usize)
+            };
+            read_body(deadline, &Instant::now, &mut read, sink)?;
+            Ok(None)
+        };
+        follow(url, deadline, &Instant::now, &mut hop)
     }
 }
 
 #[cfg(test)]
 pub mod tests {
+    use std::cell::Cell;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -445,5 +512,60 @@ pub mod tests {
             appcast(&fetch, "https://f.invalid/ok").map(|b| b.len()),
             Ok(MAX_APPCAST)
         );
+    }
+
+    // covers: S294
+    #[test]
+    fn a_trickled_appcast_fails_at_its_deadline() {
+        let start = Instant::now();
+        let deadline = start + APPCAST_TIMEOUT;
+        let clock = Cell::new(start);
+        let gap = Duration::from_secs(20);
+        let mut sent = 0;
+        // A server that sends one byte every 20 s for three minutes.
+        let mut read = |buffer: &mut [u8], wait: Option<Duration>| {
+            if let Some(wait) = wait.filter(|wait| *wait < gap) {
+                clock.set(clock.get() + wait);
+                return Err(FetchError::Failed("timed out".to_owned()));
+            }
+            clock.set(clock.get() + gap);
+            sent += 1;
+            if sent > 9 {
+                return Ok(0);
+            }
+            buffer[0] = b'<';
+            Ok(1)
+        };
+        let result = read_body(Some(deadline), &|| clock.get(), &mut read, &mut |_| true);
+        assert!(matches!(result, Err(FetchError::Failed(_))), "{result:?}");
+        assert!(clock.get() <= deadline);
+    }
+
+    // covers: S294
+    #[test]
+    fn slow_headers_across_redirects_fail_at_the_deadline() {
+        let start = Instant::now();
+        let deadline = start + APPCAST_TIMEOUT;
+        let clock = Cell::new(start);
+        let gap = Duration::from_secs(20);
+        let mut hops = 0;
+        // Each hop's headers take 20 s: two redirects, then the appcast.
+        let mut hop = |_url: &str, wait: Option<Duration>| {
+            if let Some(wait) = wait.filter(|wait| *wait < gap) {
+                clock.set(clock.get() + wait);
+                return Err(FetchError::Failed("timed out".to_owned()));
+            }
+            clock.set(clock.get() + gap);
+            hops += 1;
+            Ok((hops < 3).then(|| format!("https://f.invalid/{hops}")))
+        };
+        let result = follow(
+            "https://f.invalid/0",
+            Some(deadline),
+            &|| clock.get(),
+            &mut hop,
+        );
+        assert!(matches!(result, Err(FetchError::Failed(_))), "{result:?}");
+        assert!(clock.get() <= deadline);
     }
 }
