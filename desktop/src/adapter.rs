@@ -465,7 +465,7 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// of a pairing, or went off asking for a PIN outside the user's
     /// attempt: auto-connect leaves them off until the user turns one on,
     /// so a refusal never loops (S349).
-    airplay_refused: BTreeSet<String>,
+    airplay_refused: BTreeMap<String, AirPlayProblem>,
     /// Set while a web remote command runs: the AirPlay speakers it switches
     /// on start no attempt, so they never pair or prompt (S257).
     from_phone: bool,
@@ -689,7 +689,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             left_behind: BTreeSet::new(),
             airplay_listed: BTreeSet::new(),
             airplay_on_by_hand: BTreeSet::new(),
-            airplay_refused: BTreeSet::new(),
+            airplay_refused: BTreeMap::new(),
             from_phone: false,
             streamed: false,
             airplay_quiet_polls: 0,
@@ -3207,7 +3207,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 let key = airplay_key(id);
                 self.auto_connect.contains(&key)
                     && !self.is_hidden(&key)
-                    && !self.airplay_refused.contains(id)
+                    && !self.airplay_refused.contains_key(id)
             })
             .collect();
         if hits.is_empty() || self.auto_connect_skipped {
@@ -3709,6 +3709,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// ([`AudioBackend::begin_airplay_attempt`]).
     fn switch_airplay_by_user(&mut self, id: &str, on: bool) -> Result<(), AirPlayProblem> {
         if on {
+            if self.from_phone
+                && let Some(&problem) = self.airplay_refused.get(id)
+            {
+                // No attempt to try it again (S223): it stays off, with why.
+                let message = NoticeMessage::AirPlayCantPlay {
+                    speaker: self.airplay_name(id),
+                    problem: ui_problem(problem),
+                };
+                self.post(airplay_subject(id), message);
+                return Ok(());
+            }
             self.airplay_on_by_hand.insert(id.to_owned());
             self.airplay_refused.remove(id);
         } else {
@@ -4101,7 +4112,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     AirPlayProblem::NotAccepted | AirPlayProblem::PairingNotYet
                 ) || (problem == AirPlayProblem::NeedsPin && !by_hand)
                 {
-                    self.airplay_refused.insert(id.clone());
+                    self.airplay_refused.insert(id.clone(), problem);
                 }
                 let raises = problem == AirPlayProblem::TimingUnavailable
                     && self
@@ -10237,6 +10248,61 @@ mod tests {
             } else {
                 assert!(speaker_of(&adapter, &id).enabled, "{id}");
             }
+        }
+    }
+
+    // covers: S223
+    #[test]
+    fn a_phone_recall_turns_a_refused_speaker_off_again_with_its_notice() {
+        for way in ["preset", "zone", "row"] {
+            let mut audio = MockBackend::empty();
+            audio.connect_output(SPEAKERS, "Speakers");
+            let fake = FakeAirPlay::new();
+            audio.set_airplay(fake.link(), None);
+            let kitchen = device(1, "Kitchen", OPEN_TXT);
+            fake.appear(&kitchen);
+            let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+            adapter.poll();
+            let id = ap(&kitchen);
+            adapter.set_auto_connect(&id, true);
+            fake.gone(&kitchen);
+            adapter.poll();
+            fake.appear(&kitchen);
+            adapter.poll();
+            fake.fail(&kitchen, ErrorKind::PairingRequired);
+            adapter.poll();
+            let refusal = messages(&adapter);
+            assert_eq!(refusal.len(), 1, "{refusal:?}");
+            adapter.dismiss_all_notices();
+            adapter.restore(Settings {
+                speaker_zones: vec![zone(vec![key(SPEAKERS), id.clone()])],
+                speaker_presets: vec![saved_preset(&[(key(SPEAKERS), None), (id.clone(), None)])],
+                ..Settings::default()
+            });
+            adapter.poll();
+            fake.take_calls();
+
+            match way {
+                "preset" => adapter.recall_preset_from_phone("preset:1", &[]),
+                "zone" => adapter.toggle_zone_from_phone("zone:1", &[]),
+                _ => adapter.set_speaker_enabled_from_phone(&id, true),
+            }
+            adapter.poll();
+            assert_eq!(enabled(&adapter, SPEAKERS), way != "row", "{way}");
+            assert!(!speaker_of(&adapter, &id).enabled, "{way}");
+            assert!(
+                !fake
+                    .take_calls()
+                    .iter()
+                    .any(|call| matches!(call, Call::Add { .. })),
+                "{way}"
+            );
+            let told = if way == "preset" {
+                left_off_notice("Evening", &[("Kitchen", PresetLeftOff::CantPlay)])
+            } else {
+                refusal[0].clone()
+            };
+            assert!(messages(&adapter).contains(&told), "{way}");
         }
     }
 
