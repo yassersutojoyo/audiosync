@@ -806,6 +806,7 @@ mod tests {
         assert!(out.iter().all(|&sample| sample == 0.375));
     }
 
+    // covers: S64
     #[test]
     fn the_gain_is_applied_and_follows_changes_from_the_next_callback() {
         let mut s = setup(SESSION_RATE, 2, 4_000, 0.5);
@@ -823,6 +824,24 @@ mod tests {
         assert!(out.iter().all(|&sample| sample == 0.2));
     }
 
+    // covers: S64
+    #[test]
+    fn an_output_at_gain_0_writes_exact_zeros_from_the_first_callback() {
+        for device_rate in [SESSION_RATE, 44_100] {
+            let mut s = setup(device_rate, 2, 4_000, 0.0);
+            s.writer.write(&vec![0.8f32; 20_000], 10_000);
+            let mut out = vec![9.0; 256 * 2];
+            for callback in 0..8 {
+                s.pipeline.render(&mut out);
+                assert!(
+                    out.iter().all(|&sample| sample == 0.0),
+                    "{device_rate} Hz, callback {callback}"
+                );
+            }
+        }
+    }
+
+    // covers: S65
     #[test]
     fn samples_that_are_not_finite_reach_the_device_as_zero() {
         let mut s = setup(SESSION_RATE, 2, 4_000, 1.0);
@@ -909,21 +928,25 @@ mod tests {
         );
     }
 
+    // covers: S62
     #[test]
     fn a_device_at_44_1_khz_gets_the_tone_converted() {
         play_tone_at(44_100, 441);
     }
 
+    // covers: S62
     #[test]
     fn a_device_at_96_khz_gets_the_tone_converted() {
         play_tone_at(96_000, 960);
     }
 
+    // covers: S62
     #[test]
     fn a_device_at_the_session_rate_plays_the_tone_unchanged() {
         play_tone_at(SESSION_RATE, 480);
     }
 
+    // covers: S62
     #[test]
     fn odd_callback_sizes_at_another_rate_never_run_short() {
         play_tone_at(44_100, 1_031);

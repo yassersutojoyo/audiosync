@@ -9038,6 +9038,36 @@ mod tests {
         assert_eq!(backend.feed_capture_level(4, 0.25), [0.25; 8], "off");
     }
 
+    // covers: S27
+    #[test]
+    fn turning_the_equalizer_off_ramps_to_the_dry_signal_over_10_ms_across_blocks() {
+        let mut backend = backend();
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: 6.0,
+            ..EqSettings::default()
+        });
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let raised = 0.25 * 10f32.powf(6.0 / 20.0);
+        backend.feed_capture_level(480, 0.25);
+        backend.set_equalizer(EqSettings {
+            enabled: false,
+            preamp_db: 6.0,
+            ..EqSettings::default()
+        });
+        // 10 ms at the session rate, in blocks of 96 frames.
+        let left: Vec<f32> = (0..5)
+            .flat_map(|_| backend.feed_capture_level(96, 0.25))
+            .step_by(2)
+            .collect();
+        let step = (raised - 0.25) / 480.0;
+        for (frame, &sample) in left.iter().enumerate() {
+            let expected = raised - step * (frame + 1) as f32;
+            assert!((sample - expected).abs() < 1e-4, "frame {frame}: {sample}");
+        }
+        assert_eq!(backend.feed_capture_level(4, 0.25), [0.25; 8], "dry after");
+    }
+
     // covers: S146, S161, S165 (the local half: eight outputs attached by one sync)
     /// EC10: eight local outputs switched on together, while streaming
     /// runs and before it starts.
@@ -9494,6 +9524,24 @@ mod tests {
         backend.pause_on(PLAYER_PID, SPEAKERS);
         backend.play_on(PLAYER_PID + 1, SPEAKERS);
         assert!(check_routing(&mut backend).is_empty(), "the same outputs");
+    }
+
+    // covers: S355
+    #[test]
+    fn an_input_device_source_runs_no_double_audio_check() {
+        let mut backend = streaming_player();
+        backend.play_on(PLAYER_PID, TV);
+        assert_eq!(check_routing(&mut backend), [[TV]], "an app is checked");
+        backend.connect_input("mic", "Microphone", "USB");
+        backend
+            .start(&SourceId::Input {
+                endpoint_id: "mic".to_owned(),
+            })
+            .unwrap();
+        backend.poll();
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        assert!(check_routing(&mut backend).is_empty());
+        assert!(check_routing(&mut backend).is_empty());
     }
 
     #[test]

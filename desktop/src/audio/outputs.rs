@@ -1404,6 +1404,7 @@ mod tests {
         assert_eq!(policy.settings("new").delay_ms, 0.0);
     }
 
+    // covers: S3
     #[test]
     fn a_delay_becomes_frames_at_the_session_rate() {
         let mut policy = policy_with(&["a", "b"]);
@@ -1411,6 +1412,8 @@ mod tests {
         assert_eq!(policy.params("a").delay_frames, 96_000);
         policy.set_delay_ms("a", 1820.0);
         assert_eq!(policy.params("a").delay_frames, 87_360);
+        policy.set_delay_ms("a", 10.02);
+        assert_eq!(policy.params("a").delay_frames, 480, "480.96 floored");
         policy.set_delay_ms("a", 0.0);
         assert_eq!(policy.params("a").delay_frames, 0);
     }

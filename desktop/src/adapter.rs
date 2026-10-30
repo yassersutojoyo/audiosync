@@ -6270,6 +6270,35 @@ mod tests {
         );
     }
 
+    // covers: S12
+    #[test]
+    fn each_source_kind_comes_back_from_the_settings_file_and_none_saved_is_the_whole_system() {
+        let with_mic = || {
+            let mut adapter = adapter();
+            adapter
+                .audio
+                .connect_input(MIC, "Microphone (USB Audio)", "USB");
+            adapter.refresh_sources();
+            adapter
+        };
+        let mut adapter = with_mic();
+        for id in [player(), mic(), SYSTEM_KEY.to_owned()] {
+            adapter.select_source(&id);
+            let (saved, _) =
+                Settings::from_json(&adapter.current_settings().to_json()).expect("read");
+            let mut restored = with_mic();
+            restored.restore(saved);
+            restored.refresh_sources();
+            assert_eq!(restored.snapshot().source_id, id);
+        }
+        let (saved, _) = Settings::from_json(r#"{"version": 3}"#).expect("read");
+        assert_eq!(saved.source, SavedSource::System);
+        let mut restored = with_mic();
+        restored.restore(saved);
+        restored.refresh_sources();
+        assert_eq!(restored.snapshot().source_id, SYSTEM_KEY);
+    }
+
     // covers: S355
     #[test]
     fn a_microphone_blocked_by_windows_privacy_settings_gets_its_own_notice() {
@@ -8227,6 +8256,32 @@ mod tests {
         assert_eq!(
             names(&adapter),
             ["All System Audio", "Music", "Player", "Video"]
+        );
+    }
+
+    // covers: S355
+    #[test]
+    fn an_input_device_plugged_in_is_offered_at_the_next_source_poll() {
+        let mut adapter = adapter();
+        for _ in 0..SOURCE_POLLS {
+            adapter.poll();
+        }
+        adapter
+            .audio_mut()
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        let offered = |adapter: &AudioAdapter<MockBackend>| {
+            adapter.snapshot().sources.iter().any(|s| s.id == mic())
+        };
+        for _ in 1..SOURCE_POLLS {
+            adapter.poll();
+            assert!(!offered(&adapter));
+        }
+        assert!(adapter.poll());
+        let state = adapter.snapshot();
+        let last = state.sources.last().expect("listed");
+        assert_eq!(
+            (last.id.as_str(), last.name.as_str(), last.kind),
+            (mic().as_str(), "Microphone (USB Audio)", SourceKind::Input)
         );
     }
 
