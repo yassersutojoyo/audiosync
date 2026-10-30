@@ -1,11 +1,9 @@
-//! Unzipping a verified download inside its temp folder (spec S300).
+//! Unzipping a verified download in memory (spec S300).
 
-use std::fs::File;
-use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::io::{self, Read};
 
 use super::appcast::Arch;
-use super::files::{Files, is_blocked, is_disk_full};
+use super::version::Version;
 
 pub const EXE_NAME: &str = "audiosync.exe";
 pub const NOTICES_NAME: &str = "THIRD-PARTY-NOTICES.txt";
@@ -20,9 +18,6 @@ pub enum ArchiveError {
     TooBig,
     /// The exe isn't a PE image for this machine.
     WrongMachine,
-    DiskFull,
-    /// Windows security removed or blocked a file (spec S315).
-    Blocked,
     Io(io::Error),
 }
 
@@ -35,8 +30,6 @@ impl std::fmt::Display for ArchiveError {
             ArchiveError::TwoExes => write!(f, "two {EXE_NAME} entries"),
             ArchiveError::TooBig => write!(f, "over {MAX_UNPACKED} bytes unpacked"),
             ArchiveError::WrongMachine => write!(f, "an exe for another machine"),
-            ArchiveError::DiskFull => write!(f, "the disk is full"),
-            ArchiveError::Blocked => write!(f, "blocked by Windows security"),
             ArchiveError::Io(error) => write!(f, "{error}"),
         }
     }
@@ -44,20 +37,14 @@ impl std::fmt::Display for ArchiveError {
 
 impl From<io::Error> for ArchiveError {
     fn from(error: io::Error) -> ArchiveError {
-        if is_disk_full(&error) {
-            ArchiveError::DiskFull
-        } else if is_blocked(&error) {
-            ArchiveError::Blocked
-        } else {
-            ArchiveError::Io(error)
-        }
+        ArchiveError::Io(error)
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Unpacked {
-    pub exe: PathBuf,
-    pub notices: Option<PathBuf>,
+    pub exe: Vec<u8>,
+    pub notices: Option<Vec<u8>>,
 }
 
 /// Whether `name` is a plain file name at the top of the archive.
@@ -69,15 +56,10 @@ pub fn plain_name(name: &str) -> bool {
         && name != "."
 }
 
-/// Unpacks `zip` into `dir`: the one `audiosync.exe` and the notices, if
-/// there, checked before anything is written.
-pub fn unpack(
-    zip: &Path,
-    dir: &Path,
-    arch: Arch,
-    files: &dyn Files,
-) -> Result<Unpacked, ArchiveError> {
-    let mut archive = zip::ZipArchive::new(files.open(zip).map_err(gone_is_blocked)?)
+/// Unpacks the verified `zip` bytes in memory: the one `audiosync.exe` and
+/// the notices, if there, checked before either is read.
+pub fn unpack(zip: &[u8], arch: Arch) -> Result<Unpacked, ArchiveError> {
+    let mut archive = zip::ZipArchive::new(io::Cursor::new(zip))
         .map_err(|error| ArchiveError::NotAZip(error.to_string()))?;
     let mut exe = None;
     let mut notices = None;
@@ -99,83 +81,82 @@ pub fn unpack(
     }
     let exe = exe.ok_or(ArchiveError::NoExe)?;
     let mut budget = MAX_UNPACKED;
-    let exe_path = dir.join(EXE_NAME);
-    write_entry(&mut archive, exe, &exe_path, &mut budget, files)?;
-    if pe_machine(files, &exe_path).map_err(gone_is_blocked)? != Some(arch.pe_machine()) {
+    let exe = read_entry(&mut archive, exe, &mut budget)?;
+    if pe_machine(&exe) != Some(arch.pe_machine()) {
         return Err(ArchiveError::WrongMachine);
     }
     let notices = match notices {
-        Some(index) => {
-            let path = dir.join(NOTICES_NAME);
-            write_entry(&mut archive, index, &path, &mut budget, files)?;
-            Some(path)
-        }
+        Some(index) => Some(read_entry(&mut archive, index, &mut budget)?),
         None => None,
     };
-    Ok(Unpacked {
-        exe: exe_path,
-        notices,
-    })
+    Ok(Unpacked { exe, notices })
 }
 
-/// A file this update just wrote that is gone was removed by Windows security.
-fn gone_is_blocked(error: io::Error) -> ArchiveError {
-    if error.kind() == io::ErrorKind::NotFound {
-        ArchiveError::Blocked
-    } else {
-        ArchiveError::from(error)
-    }
-}
-
-fn write_entry(
-    archive: &mut zip::ZipArchive<File>,
+fn read_entry(
+    archive: &mut zip::ZipArchive<io::Cursor<&[u8]>>,
     index: usize,
-    path: &Path,
     budget: &mut u64,
-    files: &dyn Files,
-) -> Result<(), ArchiveError> {
+) -> Result<Vec<u8>, ArchiveError> {
     let entry = archive
         .by_index(index)
         .map_err(|error| ArchiveError::NotAZip(error.to_string()))?;
-    let mut out = files.create(path, true)?;
-    let written = io::copy(&mut entry.take(*budget + 1), &mut out)?;
-    if written > *budget {
+    let mut bytes = Vec::new();
+    let read = entry.take(*budget + 1).read_to_end(&mut bytes)? as u64;
+    if read > *budget {
         return Err(ArchiveError::TooBig);
     }
-    *budget -= written;
-    out.flush()?;
-    out.sync()?;
-    Ok(())
+    *budget -= read;
+    Ok(bytes)
 }
 
-/// The machine field of the PE image at `path`, or `None` when it isn't one.
-pub fn pe_machine(files: &dyn Files, path: &Path) -> io::Result<Option<u16>> {
-    let mut head = Vec::new();
-    files.open(path)?.take(4096).read_to_end(&mut head)?;
+/// The machine field of the PE image `exe`, or `None` when it isn't one.
+pub fn pe_machine(exe: &[u8]) -> Option<u16> {
+    let head = &exe[..exe.len().min(4096)];
     if head.get(..2) != Some(b"MZ") {
-        return Ok(None);
+        return None;
     }
-    let Some(offset) = head
+    let offset = head
         .get(0x3C..0x40)
-        .map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize)
-    else {
-        return Ok(None);
-    };
+        .map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize)?;
     if head.get(offset..offset + 4) != Some(b"PE\0\0") {
-        return Ok(None);
+        return None;
     }
-    Ok(head
-        .get(offset + 4..offset + 6)
-        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]])))
+    head.get(offset + 4..offset + 6)
+        .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
+}
+
+/// The product version in `exe`'s version resource (`VS_FIXEDFILEINFO`), or
+/// `None` without one.
+pub fn product_version(exe: &[u8]) -> Option<Version> {
+    let key: Vec<u8> = "VS_VERSION_INFO\0"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let word = |at: usize| {
+        exe.get(at..at + 4)
+            .map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    };
+    // The fixed part follows the key at the next 32-bit boundary.
+    exe.windows(key.len())
+        .enumerate()
+        .filter(|(_, window)| *window == key.as_slice())
+        .map(|(at, _)| (at + key.len()).next_multiple_of(4))
+        .find(|&fixed| word(fixed) == Some(0xFEEF_04BD))
+        .and_then(|fixed| {
+            let (high, low) = (word(fixed + 16)?, word(fixed + 20)?);
+            Some(Version::from_parts(
+                &[high >> 16, high & 0xFFFF, low >> 16, low & 0xFFFF].map(u64::from),
+            ))
+        })
 }
 
 #[cfg(test)]
 pub mod tests {
     use zip::write::SimpleFileOptions;
 
+    use std::io::Write;
+
     use super::*;
-    use crate::updater::files::RealFiles;
-    use crate::updater::tests::test_dir;
 
     /// The first bytes of a PE image for `machine`, enough for the check.
     pub fn fake_exe(machine: u16, marker: &[u8]) -> Vec<u8> {
@@ -184,6 +165,32 @@ pub mod tests {
         bytes[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes());
         bytes[0x40..0x44].copy_from_slice(b"PE\0\0");
         bytes[0x44..0x46].copy_from_slice(&machine.to_le_bytes());
+        bytes.extend_from_slice(marker);
+        bytes
+    }
+
+    /// An x64 PE image whose version resource reports `version` as its
+    /// product version, laid out as the resource compiler writes it.
+    pub fn fake_exe_reporting(version: [u16; 4], marker: &[u8]) -> Vec<u8> {
+        let mut bytes = fake_exe(Arch::X64.pe_machine(), b"");
+        bytes.extend([0u8; 6]);
+        bytes.extend(
+            "VS_VERSION_INFO\0"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes),
+        );
+        bytes.resize(bytes.len().next_multiple_of(4), 0);
+        let pair = |high: u16, low: u16| ((u32::from(high) << 16) | u32::from(low)).to_le_bytes();
+        for word in [
+            0xFEEF_04BD_u32.to_le_bytes(),
+            0x0001_0000_u32.to_le_bytes(),
+            pair(version[0], version[1]),
+            pair(version[2], version[3]),
+            pair(version[0], version[1]),
+            pair(version[2], version[3]),
+        ] {
+            bytes.extend(word);
+        }
         bytes.extend_from_slice(marker);
         bytes
     }
@@ -197,14 +204,6 @@ pub mod tests {
             writer.write_all(data).expect("an entry is written");
         }
         writer.finish().expect("the zip finishes").into_inner()
-    }
-
-    fn unpack_bytes(name: &str, zip: &[u8]) -> (PathBuf, Result<Unpacked, ArchiveError>) {
-        let dir = test_dir(name);
-        let path = dir.join("download.zip");
-        std::fs::write(&path, zip).expect("the zip is written");
-        let result = unpack(&path, &dir, Arch::X64, &RealFiles);
-        (dir, result)
     }
 
     // covers: S300
@@ -222,12 +221,11 @@ pub mod tests {
             "folder/",
         ] {
             let zip = zip_of(&[("audiosync.exe", &exe), (bad, b"x")]);
-            let (dir, result) = unpack_bytes("bad-name", &zip);
+            let result = unpack(&zip, Arch::X64);
             assert!(
                 matches!(result, Err(ArchiveError::BadName(_))),
                 "{bad:?}: {result:?}"
             );
-            assert!(!dir.join(EXE_NAME).exists(), "{bad:?} wrote nothing");
         }
         assert!(!plain_name(""));
         assert!(plain_name("README.md"));
@@ -236,17 +234,17 @@ pub mod tests {
     // covers: S300
     #[test]
     fn a_zip_without_audiosync_exe_or_with_an_exe_for_the_other_machine_is_refused() {
-        let (_, result) = unpack_bytes("no-exe", &zip_of(&[(NOTICES_NAME, b"n")]));
+        let result = unpack(&zip_of(&[(NOTICES_NAME, b"n")]), Arch::X64);
         assert!(matches!(result, Err(ArchiveError::NoExe)), "{result:?}");
 
         let arm = fake_exe(Arch::Arm64.pe_machine(), b"");
-        let (_, result) = unpack_bytes("other-machine", &zip_of(&[(EXE_NAME, &arm)]));
+        let result = unpack(&zip_of(&[(EXE_NAME, &arm)]), Arch::X64);
         assert!(
             matches!(result, Err(ArchiveError::WrongMachine)),
             "{result:?}"
         );
 
-        let (_, result) = unpack_bytes("not-pe", &zip_of(&[(EXE_NAME, b"plain text")]));
+        let result = unpack(&zip_of(&[(EXE_NAME, b"plain text")]), Arch::X64);
         assert!(
             matches!(result, Err(ArchiveError::WrongMachine)),
             "{result:?}"
@@ -254,10 +252,10 @@ pub mod tests {
 
         let x64 = fake_exe(Arch::X64.pe_machine(), b"");
         let two = zip_of(&[(EXE_NAME, &x64), ("AudioSync.EXE", &x64)]);
-        let (_, result) = unpack_bytes("two-exes", &two);
+        let result = unpack(&two, Arch::X64);
         assert!(matches!(result, Err(ArchiveError::TwoExes)), "{result:?}");
 
-        let (_, result) = unpack_bytes("not-a-zip", b"PK but not really");
+        let result = unpack(b"PK but not really", Arch::X64);
         assert!(
             matches!(result, Err(ArchiveError::NotAZip(_))),
             "{result:?}"
@@ -268,9 +266,8 @@ pub mod tests {
             (NOTICES_NAME, b"n"),
             ("extra.txt", b"skip"),
         ]);
-        let (dir, result) = unpack_bytes("good", &good);
-        let unpacked = result.expect("a good zip unpacks");
-        assert_eq!(unpacked.notices, Some(dir.join(NOTICES_NAME)));
-        assert!(!dir.join("extra.txt").exists(), "other entries are skipped");
+        let unpacked = unpack(&good, Arch::X64).expect("a good zip unpacks");
+        assert_eq!(unpacked.exe, x64);
+        assert_eq!(unpacked.notices.as_deref(), Some(&b"n"[..]));
     }
 }

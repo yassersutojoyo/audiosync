@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 use ed25519_dalek::VerifyingKey;
 
 use super::appcast::{self, Arch, Update};
-use super::archive::{self, ArchiveError};
+use super::archive;
 use super::fetch::{self, Fetch, FetchError, Kind};
-use super::files::{Files, Pause, Retrying, is_blocked, is_disk_full};
+use super::files::{Files, Pause, Retrying, is_blocked, is_disk_full, is_locked};
 use super::relaunch::Launch;
 use super::signature;
 use super::swap::{self, Rename, StepLog, SwapError, Swapped};
@@ -170,7 +170,14 @@ pub fn install(
             };
         }
     };
+    let held = hold(&dir);
+    if let Err(error) = &held {
+        env.log.log(|| {
+            format!("updater: the temp folder can't be held, another copy may delete it ({error})")
+        });
+    }
     let outcome = install_in(env, update, &dir, progress, cancel, closed);
+    drop(held);
     let removed = fs::remove_dir_all(&dir);
     env.log.log(|| {
         let said = match &outcome {
@@ -188,6 +195,32 @@ pub fn install(
         )
     });
     outcome
+}
+
+/// A handle on `dir` that shares reading and writing but not deleting, so
+/// another copy's `remove_leftovers` (the same user in another session)
+/// sees the folder in use and leaves it.
+fn hold(dir: &Path) -> io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    fs::OpenOptions::new()
+        .read(true)
+        .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE).0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0)
+        .open(dir)
+}
+
+/// Whether another copy holds `dir` through `hold`.
+fn held_elsewhere(dir: &Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows::Win32::Storage::FileSystem::{DELETE, FILE_FLAG_BACKUP_SEMANTICS};
+    fs::OpenOptions::new()
+        .access_mode(DELETE.0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0)
+        .open(dir)
+        .is_err_and(|error| is_locked(&error))
 }
 
 fn install_in(
@@ -289,7 +322,6 @@ fn install_in(
             if good { "verified" } else { "is bad" }
         )
     });
-    drop(bytes);
     if !good {
         return Installed::BadSignature;
     }
@@ -297,7 +329,8 @@ fn install_in(
         return Installed::Cancelled;
     }
 
-    let unpacked = archive::unpack(&zip, dir, env.arch, &files);
+    let unpacked = archive::unpack(&bytes, env.arch);
+    drop(bytes);
     env.log.log(|| match &unpacked {
         Ok(unpacked) => format!(
             "updater: unpacked {}{}",
@@ -312,10 +345,22 @@ fn install_in(
     });
     let unpacked = match unpacked {
         Ok(unpacked) => unpacked,
-        Err(ArchiveError::DiskFull) => return Installed::DiskFull,
-        Err(ArchiveError::Blocked) => return Installed::Blocked,
         Err(_) => return Installed::BrokenDownload,
     };
+    // The signature covers the bytes only, not the version the appcast names.
+    match archive::product_version(&unpacked.exe) {
+        Some(reported) if reported == update.version && reported > env.running => {}
+        reported => {
+            env.log.log(|| {
+                format!(
+                    "updater: the zip is refused (its exe reports version {}, not {})",
+                    reported.map_or_else(|| "none".to_owned(), |v| v.to_string()),
+                    update.version_text
+                )
+            });
+            return Installed::BrokenDownload;
+        }
+    }
     // The last point where a Cancel or a quit still leaves the install
     // folder untouched; past it, a quit waits for the guard.
     let closed = closed.lock().unwrap_or_else(PoisonError::into_inner);
@@ -375,15 +420,24 @@ fn code(error: &io::Error) -> i32 {
     error.raw_os_error().unwrap_or(-1)
 }
 
-/// Deletes the `.new` files in the install folder and every temp folder an
-/// earlier update left; the `.bak` stays.
+/// Deletes the `.new` files in the install folder, unless another copy holds
+/// an update folder, and every temp folder an earlier update left; the `.bak` stays.
 pub fn remove_leftovers(install_dir: &Path, temp_root: &Path, log: &DebugLog) {
+    // A held temp folder means another copy may be between swap steps 1 and 4.
+    let swapping = fs::read_dir(temp_root).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry.file_name().to_string_lossy().starts_with(TEMP_PREFIX)
+                && held_elsewhere(&entry.path())
+        })
+    });
     for name in [
         format!("{}.new", archive::EXE_NAME),
         format!("{}.new", archive::NOTICES_NAME),
     ] {
         let path = install_dir.join(&name);
-        if path.exists() {
+        if path.exists() && swapping {
+            log.log(|| format!("updater: leftover {name} kept (an update is in progress)"));
+        } else if path.exists() {
             let removed = fs::remove_file(&path);
             log.log(|| format!("updater: leftover {name} {}", removed_text(&removed)));
         }
@@ -394,6 +448,10 @@ pub fn remove_leftovers(install_dir: &Path, temp_root: &Path, log: &DebugLog) {
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with(TEMP_PREFIX) && entry.path().is_dir() {
+            if held_elsewhere(&entry.path()) {
+                log.log(|| format!("updater: leftover {name} kept (in use by another copy)"));
+                continue;
+            }
             let removed = fs::remove_dir_all(entry.path());
             log.log(|| format!("updater: leftover {name} {}", removed_text(&removed)));
         }
@@ -431,7 +489,7 @@ pub fn launch_check(automatic: bool, last: Option<u64>, now: u64) -> LaunchCheck
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::updater::archive::tests::{fake_exe, zip_of};
+    use crate::updater::archive::tests::{fake_exe, fake_exe_reporting, zip_of};
     use crate::updater::fetch::tests::MemoryFetch;
     use crate::updater::files::{LOCK_RETRIES, RealFiles, Sink};
     use crate::updater::signature::test_key;
@@ -473,7 +531,7 @@ pub mod tests {
         let zip = zip_of(&[
             (
                 archive::EXE_NAME,
-                &fake_exe(Arch::X64.pe_machine(), b"new exe"),
+                &fake_exe_reporting([0, 9, 0, 0], b"new exe"),
             ),
             (archive::NOTICES_NAME, b"new notices"),
         ]);
@@ -637,7 +695,7 @@ pub mod tests {
         let zip = zip_of(&[
             (
                 archive::EXE_NAME,
-                &fake_exe(Arch::X64.pe_machine(), b"served exe"),
+                &fake_exe_reporting([0, 9, 0, 0], b"served exe"),
             ),
             (archive::NOTICES_NAME, b"served notices"),
         ]);
@@ -740,6 +798,122 @@ pub mod tests {
         assert!(temp_folders(&f.env).is_empty());
     }
 
+    /// Real files, except that every open in the temp folder after the first
+    /// finds the file replaced by an unsigned one, as another process of the
+    /// same user could replace it.
+    struct Planter {
+        opened: std::sync::Mutex<u32>,
+    }
+
+    impl Files for Planter {
+        fn create(&self, path: &Path, exclusive: bool) -> io::Result<Box<dyn Sink>> {
+            RealFiles.create(path, exclusive)
+        }
+        fn remove(&self, path: &Path) -> io::Result<()> {
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            RealFiles.rename(from, to)
+        }
+        fn open(&self, path: &Path) -> io::Result<fs::File> {
+            let in_temp = path
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|dir| dir.to_string_lossy().starts_with(TEMP_PREFIX));
+            let mut opened = self.opened.lock().unwrap();
+            if in_temp && *opened > 0 {
+                let planted = fake_exe(Arch::X64.pe_machine(), b"planted exe");
+                if path.file_name().is_some_and(|name| name == "update.zip") {
+                    fs::write(path, zip_of(&[(archive::EXE_NAME, &planted)]))?;
+                } else {
+                    fs::write(path, planted)?;
+                }
+            }
+            *opened += u32::from(in_temp);
+            fs::File::open(path)
+        }
+    }
+
+    // covers: S299, S300
+    #[test]
+    fn only_the_verified_bytes_are_unpacked_and_installed() {
+        let f = fixture(
+            "planted",
+            false,
+            Arc::new(Planter {
+                opened: std::sync::Mutex::new(0),
+            }),
+            DebugLog::default(),
+        );
+        let update = update_of(&f.env);
+        assert!(matches!(run(&f.env, &update), Installed::Done(_)));
+        assert!(
+            fs::read(f.env.install_dir.join(archive::EXE_NAME))
+                .unwrap()
+                .ends_with(b"new exe")
+        );
+    }
+
+    /// Offers `exe` as 0.9.0 in a zip signed with a new throwaway key.
+    fn offer(env: &mut Env, exe: &[u8]) {
+        let zip = zip_of(&[(archive::EXE_NAME, exe)]);
+        let key = test_key::new();
+        let signed = test_key::sign(&key, &zip);
+        let mut fetch = MemoryFetch::default();
+        fetch.files.insert(
+            FEED.to_owned(),
+            appcast_with("windows-x64", zip.len(), &signed).into_bytes(),
+        );
+        fetch.files.insert(ZIP_URL.to_owned(), zip);
+        env.fetch = Arc::new(fetch);
+        env.key = key.verifying_key();
+    }
+
+    // covers: S300
+    #[test]
+    fn an_exe_reporting_another_version_than_offered_is_refused() {
+        for (case, exe, running) in [
+            ("older", fake_exe_reporting([0, 7, 0, 0], b"0.7.0"), "0.8.0"),
+            (
+                "none",
+                fake_exe(Arch::X64.pe_machine(), b"no version"),
+                "0.8.0",
+            ),
+            (
+                "not newer",
+                fake_exe_reporting([0, 9, 0, 0], b"0.9.0"),
+                "0.9.0",
+            ),
+        ] {
+            let mut f = fixture(
+                &format!("version-{case}"),
+                false,
+                Arc::new(RealFiles),
+                DebugLog::default(),
+            );
+            offer(&mut f.env, &exe);
+            let update = update_of(&f.env);
+            f.env.running = Version::parse(running).unwrap();
+            assert_eq!(run(&f.env, &update), Installed::BrokenDownload, "{case}");
+            assert_eq!(
+                fs::read(f.env.install_dir.join(archive::EXE_NAME)).unwrap(),
+                b"old exe",
+                "{case}"
+            );
+            assert!(temp_folders(&f.env).is_empty(), "{case}");
+        }
+
+        let mut f = fixture(
+            "version-offered",
+            false,
+            Arc::new(RealFiles),
+            DebugLog::default(),
+        );
+        offer(&mut f.env, &fake_exe_reporting([0, 9, 0, 0], b"0.9.0"));
+        let update = update_of(&f.env);
+        assert!(matches!(run(&f.env, &update), Installed::Done(_)));
+    }
+
     // covers: S297, S306
     #[test]
     fn nothing_downloads_before_the_click() {
@@ -820,11 +994,7 @@ pub mod tests {
                 RealFiles.rename(from, to)
             }
         }
-        for (at, case) in [
-            ("update.zip", "download"),
-            ("audiosync.exe", "unpack"),
-            ("audiosync.exe.new", "copy"),
-        ] {
+        for (at, case) in [("update.zip", "download"), ("audiosync.exe.new", "copy")] {
             let f = fixture(
                 &format!("disk-full-{case}"),
                 false,
@@ -858,6 +1028,86 @@ pub mod tests {
         assert!(!install.join("THIRD-PARTY-NOTICES.txt.new").exists());
         assert!(install.join("audiosync.exe.bak").exists());
         assert_eq!(temp_folders(&f.env), ["Other-folder"]);
+    }
+
+    /// A fetch whose download starts only after another copy of the app,
+    /// the same user in another session, ran its launch cleanup.
+    struct SweptMidDownload {
+        inner: Arc<MemoryFetch>,
+        install_dir: PathBuf,
+        temp_root: PathBuf,
+    }
+
+    impl Fetch for SweptMidDownload {
+        fn get(&self, url: &str, kind: Kind, sink: &mut fetch::Sink<'_>) -> Result<(), FetchError> {
+            if kind == Kind::Download {
+                remove_leftovers(&self.install_dir, &self.temp_root, &DebugLog::default());
+            }
+            self.inner.get(url, kind, sink)
+        }
+    }
+
+    // covers: S304
+    #[test]
+    fn another_sessions_cleanup_leaves_a_running_download_alone() {
+        let mut f = fixture(
+            "other-session",
+            false,
+            Arc::new(RealFiles),
+            DebugLog::default(),
+        );
+        f.env.fetch = Arc::new(SweptMidDownload {
+            inner: f.fetch.clone(),
+            install_dir: f.env.install_dir.clone(),
+            temp_root: f.env.temp_root.clone(),
+        });
+        let update = update_of(&f.env);
+        let done = run(&f.env, &update);
+        assert!(matches!(done, Installed::Done(_)), "{done:?}");
+        assert!(temp_folders(&f.env).is_empty());
+    }
+
+    /// Real files, except that the swap's rename of the running exe aside
+    /// (step 3) comes after another session's launch cleanup.
+    struct SweptMidSwap;
+
+    impl Files for SweptMidSwap {
+        fn create(&self, path: &Path, exclusive: bool) -> io::Result<Box<dyn Sink>> {
+            RealFiles.create(path, exclusive)
+        }
+        fn remove(&self, path: &Path) -> io::Result<()> {
+            RealFiles.remove(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            if to
+                .file_name()
+                .is_some_and(|name| name == "audiosync.exe.bak")
+                && let Some(install_dir) = from.parent()
+                && let Some(root) = install_dir.parent()
+            {
+                remove_leftovers(install_dir, &root.join("temp"), &DebugLog::default());
+            }
+            RealFiles.rename(from, to)
+        }
+    }
+
+    // covers: S304
+    #[test]
+    fn another_sessions_cleanup_leaves_a_running_swap_alone() {
+        let f = fixture(
+            "other-session-swap",
+            false,
+            Arc::new(SweptMidSwap),
+            DebugLog::default(),
+        );
+        let update = update_of(&f.env);
+        let done = run(&f.env, &update);
+        assert!(matches!(done, Installed::Done(_)), "{done:?}");
+        assert!(
+            fs::read(f.env.install_dir.join(archive::EXE_NAME))
+                .unwrap()
+                .ends_with(b"new exe")
+        );
     }
 
     // covers: S305
@@ -1003,8 +1253,8 @@ pub mod tests {
         }
     }
 
-    /// Real files, except that the swap's open of the unpacked exe finds it
-    /// held without sharing by another handle until `release` is sent.
+    /// Real files, except that the read of the download after it is written
+    /// finds it held without sharing by another handle until `release` is sent.
     struct Held {
         release: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
         held: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -1021,20 +1271,7 @@ pub mod tests {
             RealFiles.rename(from, to)
         }
         fn open(&self, path: &Path) -> io::Result<fs::File> {
-            let in_temp = path
-                .parent()
-                .and_then(Path::file_name)
-                .is_some_and(|dir| dir.to_string_lossy().starts_with(TEMP_PREFIX));
-            let swapping = path
-                .parent()
-                .and_then(Path::parent)
-                .and_then(Path::parent)
-                .is_some_and(|root| root.join("install").join("audiosync.exe.new").exists());
-            if in_temp
-                && swapping
-                && path
-                    .file_name()
-                    .is_some_and(|name| name == archive::EXE_NAME)
+            if path.file_name().is_some_and(|name| name == "update.zip")
                 && let Some(release) = self.release.lock().unwrap().take()
             {
                 use std::os::windows::fs::OpenOptionsExt;
@@ -1042,7 +1279,7 @@ pub mod tests {
                     .read(true)
                     .share_mode(0)
                     .open(path)
-                    .expect("the test holds the unpacked exe");
+                    .expect("the test holds the download");
                 *self.held.lock().unwrap() = Some(std::thread::spawn(move || {
                     let _ = release.recv();
                     drop(holder);
