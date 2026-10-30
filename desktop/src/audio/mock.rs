@@ -327,6 +327,8 @@ pub struct MockDriver {
     capture_error: Option<BackendError>,
     /// The error only the next capture start fails with.
     next_capture_error: Option<BackendError>,
+    /// The error the capture start after the next one fails with.
+    later_capture_error: Option<BackendError>,
     /// The format the next captures start in.
     capture_setup: CaptureAttempt,
     /// The processes that can't be opened to wait for their exit.
@@ -404,6 +406,7 @@ impl MockDriver {
             periods: BTreeMap::new(),
             capture_error: None,
             next_capture_error: None,
+            later_capture_error: None,
             capture_setup: CAPTURE_ATTEMPTS[0],
             unwatchable: BTreeSet::new(),
             last_created: 0,
@@ -772,6 +775,7 @@ impl Driver for MockDriver {
             return Err(BackendError::InputGone);
         }
         self.captures_started.push(target.clone());
+        self.next_capture_error = self.later_capture_error.take();
         let watch_refused = refused_watch(&target, &self.unwatchable);
         let link = Arc::new(Mutex::new(CaptureLink {
             target,
@@ -1202,6 +1206,12 @@ impl Controller<MockDriver> {
     /// Makes only the next capture start fail with `error`.
     pub fn refuse_next_capture(&mut self, error: BackendError) {
         self.driver_mut().next_capture_error = Some(error);
+    }
+
+    /// Makes the capture start after the next one that works fail with
+    /// `error`.
+    pub fn refuse_capture_after_next(&mut self, error: BackendError) {
+        self.driver_mut().later_capture_error = Some(error);
     }
 
     /// Windows tells of a suspend or a resume, as the next poll finds out.

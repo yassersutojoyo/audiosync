@@ -2747,10 +2747,8 @@ impl<D: Driver> Controller<D> {
                             .to_owned()
                     });
                     self.end_session();
-                    match self.begin_session(&source) {
-                        Ok(()) => self.follow_device_volumes(),
-                        Err(error) => self.stop_for(error),
-                    }
+                    self.next_start = Some(source);
+                    self.start_when_faded();
                     return;
                 }
                 let unwatched = self.unwatched_app(&target, &capture);
@@ -2889,13 +2887,16 @@ impl<D: Driver> Controller<D> {
     }
 
     /// Ends streaming after the capture couldn't start: the network
-    /// speakers leave the stream, and the UI hears why (S21).
+    /// speakers leave the stream, and the UI hears why (S21); a source whose
+    /// app quit stops as at a quit while streaming (S142, S227 e).
     fn stop_for(&mut self, error: BackendError) {
         self.airplay_streaming(false);
         self.release_busy();
-        self.pending.push(BackendEvent::Stopped {
-            reason: StopReason::CaptureFailed(error),
-        });
+        let reason = match error {
+            BackendError::SourceGone => StopReason::SourceQuit,
+            error => StopReason::CaptureFailed(error),
+        };
+        self.pending.push(BackendEvent::Stopped { reason });
     }
 
     /// Ends the wait of every output reported busy, once streaming stopped:
@@ -8459,7 +8460,7 @@ mod tests {
         assert_eq!(
             backend.poll(),
             [BackendEvent::Stopped {
-                reason: StopReason::CaptureFailed(BackendError::SourceGone),
+                reason: StopReason::SourceQuit,
             }]
         );
         assert_eq!(backend.running_source(), None);
@@ -8623,6 +8624,25 @@ mod tests {
         assert_eq!(backend.poll(), [BackendEvent::SwitchedToSystem]);
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
         assert_eq!(backend.driver().captures_started().len(), 2, "one rebuild");
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S227, S329
+    #[test]
+    fn an_app_that_quits_as_its_capture_comes_back_in_another_format_gives_way_when_set() {
+        let mut backend = backend();
+        backend.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.set_capture_setup(crate::audio::capture::CAPTURE_ATTEMPTS[3]);
+        backend.refuse_capture_after_next(BackendError::SourceGone);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.poll(), [BackendEvent::SwitchedToSystem]);
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
