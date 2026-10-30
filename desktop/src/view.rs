@@ -3207,7 +3207,7 @@ impl App {
     fn toggle_speaker(&self, id: &str) {
         let state = self.snapshot();
         if let Some(speaker) = state.speaker(id) {
-            let on = state.speaker_state(speaker).click_turns_on();
+            let on = state.row_click_turns_on(speaker);
             self.update(|b| b.set_speaker_enabled(id, on));
         }
     }

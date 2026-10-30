@@ -166,6 +166,14 @@ pub enum Availability {
     Unsupported,
 }
 
+impl Availability {
+    /// Whether a switch-on may start it, at once or after its PIN or
+    /// password (S257).
+    pub fn can_switch_on(self) -> bool {
+        matches!(self, Availability::Open | Availability::NeedsCode)
+    }
+}
+
 /// What went wrong with an AirPlay speaker, as a notice words it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
@@ -1149,6 +1157,17 @@ impl AppState {
                 .waiting
                 .map_or(SpeakerState::Playing, SpeakerState::Waiting),
             state => state,
+        }
+    }
+
+    /// Whether a click on the speaker's row, in the window or the tray
+    /// flyout, switches it on; otherwise it switches it off. One that will
+    /// play but can't be switched on goes off, as the phone may (S257).
+    pub fn row_click_turns_on(&self, speaker: &Speaker) -> bool {
+        match self.speaker_state(speaker) {
+            SpeakerState::Off => true,
+            SpeakerState::WillPlay => speaker.availability.can_switch_on(),
+            SpeakerState::Playing | SpeakerState::Waiting(_) => false,
         }
     }
 
@@ -3065,6 +3084,32 @@ mod tests {
         state.running = true;
         kitchen.enabled = false;
         assert_eq!(state.speaker_state(&kitchen), SpeakerState::Off);
+    }
+
+    // covers: S257
+    #[test]
+    fn a_row_click_turns_off_a_will_play_speaker_that_cant_be_switched_on() {
+        let mut state = MockBackend::new().snapshot();
+        state.running = false;
+        let mut kitchen = state.speaker("airplay:kitchen").unwrap().clone();
+        for (availability, enabled, turns_on) in [
+            (Availability::Unsupported, true, false),
+            (Availability::AirPlay2NotYet, true, false),
+            (Availability::Pairing, true, false),
+            (Availability::WaitingToPair, true, false),
+            (Availability::PairingNotYet, true, false),
+            (Availability::Open, true, true),
+            (Availability::NeedsCode, true, true),
+            (Availability::Unsupported, false, true),
+        ] {
+            kitchen.availability = availability;
+            kitchen.enabled = enabled;
+            assert_eq!(
+                state.row_click_turns_on(&kitchen),
+                turns_on,
+                "{availability:?}, on: {enabled}"
+            );
+        }
     }
 
     #[test]

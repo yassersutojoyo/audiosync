@@ -138,11 +138,7 @@ pub fn can_drive(state: &AppState, speaker: &Speaker) -> bool {
     if !state.speaker_state(speaker).click_turns_on() {
         return true;
     }
-    match speaker.availability {
-        Availability::Open => true,
-        Availability::NeedsCode => !asks_for_code(state, speaker),
-        _ => false,
-    }
+    speaker.availability.can_switch_on() && !asks_for_code(state, speaker)
 }
 
 fn is_airplay(speaker: &Speaker) -> bool {
