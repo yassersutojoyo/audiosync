@@ -97,7 +97,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 - The window doesn't open at login. Click the Dock icon.
 - Speaker plays too early? Raise its delay. Too late? Lower it, below zero if needed. Bluetooth usually ends up around −150 to −300 ms.
 - Mac plays before the HomePod? Raise the AirPlay delay. After? Lower it.
-- Speakers that want a PIN or password ask for it when you turn them on. An Apple TV pairs once.
+- Speakers that want a PIN or password ask for it when you turn them on. An Apple TV pairs once, unless it's set to ask for a code every time.
 - More in the AudioSync Guide, in the gear menu.
 
 ## What doesn't work (yet)
@@ -110,7 +110,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 
 ## Windows
 
-A Windows 11 version (x64 and ARM64) is out as a preview since 0.7.1, with the same Rust engine and its own AirPlay sender. The zips are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. CI builds it too, and [desktop/README.md](desktop/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on the Mac, there in the File menu), it asks for AirPlay passwords, and it hasn't been tried on a real speaker yet.
+A Windows 11 version (x64 and ARM64) is out as a preview since 0.7.1, with the same Rust engine and its own AirPlay sender. The zips are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. CI builds it too, and [desktop/README.md](desktop/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay 1 and Google Cast speakers (AirPlay 2 behind the same switch as on the Mac, there in the File menu), it asks for AirPlay PINs and passwords, and it hasn't been tried on a real speaker yet.
 
 Versions after 0.7.1 update themselves. 0.7.1 doesn't, so get the next one from Releases by hand. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, does it at launch, at most once a day. Nothing downloads until you click Download and Install.
 
