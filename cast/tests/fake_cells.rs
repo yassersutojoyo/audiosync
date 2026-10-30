@@ -285,13 +285,13 @@ fn mute_and_level_changed_on_the_device_reach_the_host_and_nothing_goes_back() {
     let seen = run_until(
         &mut session,
         Duration::from_secs(3),
-        |event| matches!(event, SessionEvent::Volume(volume) if close(volume.level, 0.7) && !volume.muted),
+        |event| matches!(event, SessionEvent::Volume(volume, _) if close(volume.level, 0.7) && !volume.muted),
     );
     device.send(device_volume(0.7, true));
     run_until(
         &mut session,
         Duration::from_secs(3),
-        |event| matches!(event, SessionEvent::Volume(volume) if volume.muted),
+        |event| matches!(event, SessionEvent::Volume(volume, _) if volume.muted),
     );
     run(&mut session, Duration::from_millis(500));
     assert_eq!(
@@ -396,7 +396,7 @@ fn the_level_set_stays_shown_after_a_reconnect_whose_first_status_has_no_level()
     assert!(
         !seen
             .iter()
-            .any(|event| matches!(event, SessionEvent::Volume(_))),
+            .any(|event| matches!(event, SessionEvent::Volume(..))),
         "{seen:?}"
     );
     let shown = session.volume().expect("volume").level;

@@ -695,18 +695,18 @@ impl Worker {
         // A level is reported once (C70): a newer one replaces it, nothing else pushes it out.
         if let HostEvent::Session {
             device,
-            event: SessionEvent::Volume(_),
+            event: SessionEvent::Volume(..),
             ..
         } = &event
         {
             let device = *device;
             held.retain(|held| {
-                !matches!(held, HostEvent::Session { device: d, event: SessionEvent::Volume(_), .. } if *d == device)
+                !matches!(held, HostEvent::Session { device: d, event: SessionEvent::Volume(..), .. } if *d == device)
             });
         }
         if held.len() >= MAX_HOST_EVENTS {
             let oldest_session = held.iter().position(|held| {
-                matches!(held, HostEvent::Session { event, .. } if !matches!(event, SessionEvent::Volume(_)))
+                matches!(held, HostEvent::Session { event, .. } if !matches!(event, SessionEvent::Volume(..)))
             });
             if let Some(index) = oldest_session {
                 held.remove(index);

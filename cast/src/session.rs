@@ -142,8 +142,10 @@ pub enum SessionEvent {
     /// The receiver ran dry (C51).
     Rebuffering,
     /// The device's volume as its latest status reports it; the host moves
-    /// its control there and sends nothing back (C69, C70).
-    Volume(DeviceVolume),
+    /// its control there and sends nothing back (C69, C70). The flag says
+    /// it is the first status since a mute was sent, so a level it repeats
+    /// leaves a level the host still awaits awaited.
+    Volume(DeviceVolume, bool),
     /// A connect attempt failed; the next one follows after `retry_in`
     /// (C80).
     ConnectFailed {
@@ -714,9 +716,9 @@ impl CastSession {
 
     fn report(&mut self, event: SessionEvent) {
         // A level is reported once (C70): a newer one replaces it, a full queue never drops it.
-        if matches!(event, SessionEvent::Volume(_)) {
+        if matches!(event, SessionEvent::Volume(..)) {
             self.events
-                .retain(|queued| !matches!(queued, SessionEvent::Volume(_)));
+                .retain(|queued| !matches!(queued, SessionEvent::Volume(..)));
         }
         make_room(&mut self.events);
         self.events.push_back(event);
@@ -846,9 +848,9 @@ impl CastSession {
                 // when it changed nothing, as when the device ignored the mute (C70).
                 let changed = self.last_volume.as_ref() != Some(&status.volume);
                 if status.volume.has_level && (changed || self.mute_asked) {
-                    self.mute_asked = false;
+                    let answers_mute = std::mem::take(&mut self.mute_asked);
                     self.last_volume = Some(status.volume.clone());
-                    self.report(SessionEvent::Volume(status.volume));
+                    self.report(SessionEvent::Volume(status.volume, answers_mute));
                 }
             }
             Event::MediaStatus(status) => self.last_media = Some(status),
@@ -1166,13 +1168,13 @@ mod tests {
     fn a_full_queue_never_drops_a_volume_report() {
         let mut events: VecDeque<SessionEvent> =
             (0..MAX_SESSION_EVENTS - 1).map(|_| failure()).collect();
-        events.insert(5, SessionEvent::Volume(DeviceVolume::default()));
+        events.insert(5, SessionEvent::Volume(DeviceVolume::default(), false));
         make_room(&mut events);
         assert_eq!(events.len(), MAX_SESSION_EVENTS - 1);
         assert!(
             events
                 .iter()
-                .any(|event| matches!(event, SessionEvent::Volume(_)))
+                .any(|event| matches!(event, SessionEvent::Volume(..)))
         );
     }
 

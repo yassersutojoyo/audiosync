@@ -810,7 +810,7 @@ fn a_volume_change_while_the_host_falls_behind_still_reaches_it() {
     let events = wait_for(&host, Duration::from_secs(5), |event| {
         matches!(
             event,
-            HostEvent::Session { event: SessionEvent::Volume(volume), .. }
+            HostEvent::Session { event: SessionEvent::Volume(volume, _), .. }
                 if (volume.level - 0.7).abs() < 1e-9
         )
     });
@@ -818,7 +818,7 @@ fn a_volume_change_while_the_host_falls_behind_still_reaches_it() {
         .iter()
         .filter_map(|event| match event {
             HostEvent::Session {
-                event: SessionEvent::Volume(volume),
+                event: SessionEvent::Volume(volume, _),
                 ..
             } => Some(volume.level),
             _ => None,

@@ -1040,7 +1040,7 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             pending
         }
         SessionEvent::Rebuffering => Pending::new(CAST_EVENT_REBUFFERING),
-        SessionEvent::Volume(volume) => {
+        SessionEvent::Volume(volume, _) => {
             let mut pending = Pending::new(CAST_EVENT_VOLUME);
             pending.level = volume.level;
             pending.muted = volume.muted;
@@ -2413,7 +2413,7 @@ mod tests {
                 has_level,
                 ..Default::default()
             };
-            let pending = session_event(SessionEvent::Volume(volume), |_| {});
+            let pending = session_event(SessionEvent::Volume(volume, false), |_| {});
             assert_eq!(pending.has_level, has_level);
         }
     }

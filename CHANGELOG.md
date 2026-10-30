@@ -50,6 +50,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, unplugging the input device you stream from no longer stops streaming. A notice says the device isn't connected, and stays when you pick that input again, and the sound comes back once you plug it in again, also when it drops off and comes straight back, as on Windows.
 - Stop or Quit while a few chosen apps are still being opened for streaming no longer waits on each of them in turn when they don't answer. On Windows.
 - Streaming a few chosen apps no longer stops when one of them restarts and plays again within about 2 seconds, as a browser can when it relaunches to install an update. On Windows.
+- On Windows, muting a Google Cast speaker right after changing its volume no longer jumps its volume slider back to the old level.
 - On the Mac, the web remote keeps a volume you set for a speaker that is off, a Google Cast speaker included, and uses it once the speaker plays, as on Windows. Before, the slider jumped back a second later.
 - On Windows, a renamed stereo pair, home theater or Google Cast speaker shows by its new name in the notice that AirPlay plays ahead of Cast, in the note and notice of a pair member, and in the member list of a Cast group.
 - On Windows, after Remove from Zone on an In zones row, the keyboard focus moves to the next row there, or the one before it, or to the speaker list once none is left, instead of getting lost.

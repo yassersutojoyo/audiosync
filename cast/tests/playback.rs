@@ -1051,7 +1051,7 @@ fn device_volume_changes_never_touch_the_samples() {
     let seen = run_until(
         &mut session,
         Duration::from_secs(3),
-        |event| matches!(event, SessionEvent::Volume(volume) if (volume.level - 0.2).abs() < 1e-9),
+        |event| matches!(event, SessionEvent::Volume(volume, _) if (volume.level - 0.2).abs() < 1e-9),
     );
     assert!(!seen.is_empty());
     // A starved feed thread falls behind real time and the stream fills in silence (C52),
@@ -1144,7 +1144,7 @@ fn a_reconnect_whose_first_status_has_no_level_keeps_the_known_level() {
     assert!(
         !seen
             .iter()
-            .any(|event| matches!(event, SessionEvent::Volume(_))),
+            .any(|event| matches!(event, SessionEvent::Volume(..))),
         "{seen:?}"
     );
     assert_eq!(session.volume().expect("volume").level, known);
@@ -1165,7 +1165,7 @@ fn a_mute_answered_by_an_unchanged_status_still_reports_the_volume() {
     run_until(
         &mut session,
         Duration::from_secs(3),
-        |event| matches!(event, SessionEvent::Volume(volume) if !volume.muted),
+        |event| matches!(event, SessionEvent::Volume(volume, true) if !volume.muted),
     );
     session.stop();
     device.join();
@@ -1184,14 +1184,14 @@ fn a_fresh_sessions_first_status_without_a_level_sets_no_level() {
     assert!(
         !seen
             .iter()
-            .any(|event| matches!(event, SessionEvent::Volume(_))),
+            .any(|event| matches!(event, SessionEvent::Volume(..))),
         "{seen:?}"
     );
     session.set_volume(0.3).expect("sent");
     run_until(
         &mut session,
         Duration::from_secs(3),
-        |event| matches!(event, SessionEvent::Volume(volume) if (volume.level - 0.3).abs() < 1e-9),
+        |event| matches!(event, SessionEvent::Volume(volume, _) if (volume.level - 0.3).abs() < 1e-9),
     );
     session.stop();
     device.join();

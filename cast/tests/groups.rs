@@ -678,7 +678,7 @@ fn the_group_volume_goes_to_the_groups_platform_only() {
     run_until(
         &mut session,
         Duration::from_secs(3),
-        |event| matches!(event, SessionEvent::Volume(volume) if (volume.level - 0.7).abs() < 1e-9),
+        |event| matches!(event, SessionEvent::Volume(volume, _) if (volume.level - 0.7).abs() < 1e-9),
     );
     let sets: Vec<(String, Value)> = leader
         .received()

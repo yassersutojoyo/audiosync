@@ -14418,11 +14418,14 @@ mod tests {
         fake.report(HostEvent::Session {
             attempt: AttemptId(1),
             device: cast_device(CAST_KITCHEN),
-            event: SessionEvent::Volume(audiosync_cast::status::DeviceVolume {
-                level,
-                has_level: true,
-                ..Default::default()
-            }),
+            event: SessionEvent::Volume(
+                audiosync_cast::status::DeviceVolume {
+                    level,
+                    has_level: true,
+                    ..Default::default()
+                },
+                false,
+            ),
         });
         adapter.poll();
     }

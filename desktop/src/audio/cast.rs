@@ -1458,7 +1458,7 @@ impl CastSpeakers {
     /// the own level and any other level moves it by master × zone, except
     /// the session's first, which is set to master × zone × own level
     /// instead. A status without a level is not the first.
-    fn volume_reported(&mut self, device: DeviceId, volume: DeviceVolume) {
+    fn volume_reported(&mut self, device: DeviceId, volume: DeviceVolume, answers_mute: bool) {
         if !volume.has_level {
             return;
         }
@@ -1478,15 +1478,23 @@ impl CastSpeakers {
         if let Some(index) = answered {
             self.unanswered.drain(..=index);
         }
-        let own = match (first, answered) {
+        // The answer to a mute repeating the known level is no change from
+        // elsewhere: a level still awaited stays (C70).
+        let elsewhere = answered.is_none()
+            && !(answers_mute
+                && self
+                    .volumes
+                    .get(&device)
+                    .is_some_and(|known| known.has_level && known.level == level));
+        let own = match (first, elsewhere) {
             (true, _) => start_own_level(self.master, zone, shown, level),
-            (false, Some(_)) => shown.unwrap_or_else(|| own_level(level, self.master, zone, level)),
-            (false, None) => own_level(level, self.master, zone, shown.unwrap_or(level)),
+            (false, false) => shown.unwrap_or_else(|| own_level(level, self.master, zone, level)),
+            (false, true) => own_level(level, self.master, zone, shown.unwrap_or(level)),
         };
         if self
             .requested
             .is_some_and(|(requested, _)| requested == device)
-            && (answered.is_none() || self.unanswered.is_empty())
+            && (elsewhere || self.unanswered.is_empty())
         {
             self.requested = None;
         }
@@ -1842,7 +1850,9 @@ impl CastSpeakers {
                     self.fail(device, CastProblem::NotResponding);
                 }
             }
-            SessionEvent::Volume(volume) => self.volume_reported(device, volume),
+            SessionEvent::Volume(volume, answers_mute) => {
+                self.volume_reported(device, volume, answers_mute)
+            }
             SessionEvent::Diagnostics(diagnostics) => {
                 self.log
                     .log(|| format!("Cast diagnostics: {diagnostics:?}"));
@@ -2842,6 +2852,45 @@ pub mod tests {
         assert!(!cast.speakers()[1].muted);
     }
 
+    // covers: C70
+    #[test]
+    fn an_ignored_mute_leaves_a_level_still_awaited_on_the_slider() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.4);
+        cast.set_volume(KITCHEN, 70.0);
+        cast.set_muted(KITCHEN, true);
+
+        let answer = DeviceVolume {
+            level: 0.4,
+            has_level: true,
+            ..DeviceVolume::default()
+        };
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(answer, true),
+        });
+        cast.poll();
+        assert_eq!(shown(&cast, KITCHEN), 70.0);
+        report(&fake, &mut cast, 0.7);
+        assert_eq!(shown(&cast, KITCHEN), 70.0);
+    }
+
+    // covers: C70 (the answer to 0.7 and a phone's 0.4 arrive as one report)
+    #[test]
+    fn a_change_elsewhere_back_to_the_known_level_moves_an_awaited_slider() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.4);
+        cast.set_volume(KITCHEN, 70.0);
+
+        report(&fake, &mut cast, 0.4);
+        assert_eq!(shown(&cast, KITCHEN), 40.0);
+    }
+
     #[test]
     fn an_unanswered_volume_is_forgotten_when_the_session_ends() {
         let (fake, mut cast) = listed();
@@ -2948,12 +2997,15 @@ pub mod tests {
             fake.report(HostEvent::Session {
                 attempt: AttemptId(1),
                 device: id(KITCHEN),
-                event: SessionEvent::Volume(DeviceVolume {
-                    level,
-                    step_interval: Some(0.05),
-                    has_level: true,
-                    ..DeviceVolume::default()
-                }),
+                event: SessionEvent::Volume(
+                    DeviceVolume {
+                        level,
+                        step_interval: Some(0.05),
+                        has_level: true,
+                        ..DeviceVolume::default()
+                    },
+                    false,
+                ),
             });
         };
         stepped(0.5);
@@ -2995,12 +3047,15 @@ pub mod tests {
         fake.report(HostEvent::Session {
             attempt: AttemptId(1),
             device: id(KITCHEN),
-            event: SessionEvent::Volume(DeviceVolume {
-                level: 0.35,
-                step_interval: Some(0.05),
-                has_level: true,
-                ..DeviceVolume::default()
-            }),
+            event: SessionEvent::Volume(
+                DeviceVolume {
+                    level: 0.35,
+                    step_interval: Some(0.05),
+                    has_level: true,
+                    ..DeviceVolume::default()
+                },
+                false,
+            ),
         });
         cast.poll();
         assert!(sent(&fake).is_empty(), "{:?}", sent(&fake));
@@ -3415,12 +3470,15 @@ pub mod tests {
         fake.report(HostEvent::Session {
             attempt: AttemptId(2),
             device: id(KITCHEN),
-            event: SessionEvent::Volume(DeviceVolume {
-                level: 0.4,
-                control_type: ControlType::Attenuation,
-                has_level: true,
-                ..DeviceVolume::default()
-            }),
+            event: SessionEvent::Volume(
+                DeviceVolume {
+                    level: 0.4,
+                    control_type: ControlType::Attenuation,
+                    has_level: true,
+                    ..DeviceVolume::default()
+                },
+                false,
+            ),
         });
         cast.poll();
         assert_eq!(sent(&fake), before, "it keeps playing at 0.4");
@@ -3457,12 +3515,15 @@ pub mod tests {
             fake.report(HostEvent::Session {
                 attempt: AttemptId(2),
                 device: id(KITCHEN),
-                event: SessionEvent::Volume(DeviceVolume {
-                    level: 0.4,
-                    control_type: ControlType::Attenuation,
-                    has_level: true,
-                    ..DeviceVolume::default()
-                }),
+                event: SessionEvent::Volume(
+                    DeviceVolume {
+                        level: 0.4,
+                        control_type: ControlType::Attenuation,
+                        has_level: true,
+                        ..DeviceVolume::default()
+                    },
+                    false,
+                ),
             });
             cast.poll();
             (sent(&fake)[before.len()..].to_vec(), shown(&cast, KITCHEN))
@@ -3517,13 +3578,16 @@ pub mod tests {
         fake.report(HostEvent::Session {
             attempt: AttemptId(1),
             device: id(&manual),
-            event: SessionEvent::Volume(DeviceVolume {
-                level: 0.4,
-                control_type: ControlType::Fixed,
-                step_interval: Some(0.05),
-                has_level: true,
-                ..DeviceVolume::default()
-            }),
+            event: SessionEvent::Volume(
+                DeviceVolume {
+                    level: 0.4,
+                    control_type: ControlType::Fixed,
+                    step_interval: Some(0.05),
+                    has_level: true,
+                    ..DeviceVolume::default()
+                },
+                false,
+            ),
         });
         cast.poll();
         assert_eq!(cast.set_enabled(&manual, false), Ok(()));
@@ -3588,12 +3652,15 @@ pub mod tests {
         fake.report(HostEvent::Session {
             attempt: AttemptId(2),
             device: id(KITCHEN),
-            event: SessionEvent::Volume(DeviceVolume {
-                level: 0.4,
-                control_type: ControlType::Attenuation,
-                has_level: true,
-                ..DeviceVolume::default()
-            }),
+            event: SessionEvent::Volume(
+                DeviceVolume {
+                    level: 0.4,
+                    control_type: ControlType::Attenuation,
+                    has_level: true,
+                    ..DeviceVolume::default()
+                },
+                false,
+            ),
         });
         cast.poll();
         assert!(!volume_fixed(&cast, KITCHEN));
@@ -3975,7 +4042,7 @@ pub mod tests {
         fake.report(HostEvent::Session {
             attempt: AttemptId(1),
             device: id(KITCHEN),
-            event: SessionEvent::Volume(reported(Some(0.02))),
+            event: SessionEvent::Volume(reported(Some(0.02)), false),
         });
         cast.poll();
         assert_eq!(step_of(&cast), Some(2.0));
@@ -3985,12 +4052,15 @@ pub mod tests {
         HostEvent::Session {
             attempt: AttemptId(1),
             device: id(device),
-            event: SessionEvent::Volume(DeviceVolume {
-                level,
-                control_type,
-                has_level: true,
-                ..DeviceVolume::default()
-            }),
+            event: SessionEvent::Volume(
+                DeviceVolume {
+                    level,
+                    control_type,
+                    has_level: true,
+                    ..DeviceVolume::default()
+                },
+                false,
+            ),
         }
     }
 
@@ -4114,11 +4184,14 @@ pub mod tests {
         fake.report(HostEvent::Session {
             attempt: AttemptId(2),
             device: id(KITCHEN),
-            event: SessionEvent::Volume(DeviceVolume {
-                level: 0.8,
-                has_level: true,
-                ..DeviceVolume::default()
-            }),
+            event: SessionEvent::Volume(
+                DeviceVolume {
+                    level: 0.8,
+                    has_level: true,
+                    ..DeviceVolume::default()
+                },
+                false,
+            ),
         });
         cast.poll();
         assert_eq!(sent(&fake), [0.0, 0.35], "louder than master × own: set");
@@ -4141,6 +4214,7 @@ pub mod tests {
                     payload.as_object().expect("object"),
                 )
                 .volume,
+                false,
             ),
         });
         cast.poll();
@@ -4188,11 +4262,14 @@ pub mod tests {
         fake.report(HostEvent::Session {
             attempt: AttemptId(2),
             device: id(KITCHEN),
-            event: SessionEvent::Volume(DeviceVolume {
-                level: 0.1,
-                has_level: true,
-                ..DeviceVolume::default()
-            }),
+            event: SessionEvent::Volume(
+                DeviceVolume {
+                    level: 0.1,
+                    has_level: true,
+                    ..DeviceVolume::default()
+                },
+                false,
+            ),
         });
         cast.poll();
         assert_eq!(sent(&fake), [0.8, 0.8], "quieter than master × own: set");
@@ -4215,12 +4292,15 @@ pub mod tests {
         fake.report(HostEvent::Session {
             attempt: AttemptId(2),
             device: id(KITCHEN),
-            event: SessionEvent::Volume(DeviceVolume {
-                level: 0.6,
-                control_type: ControlType::Fixed,
-                has_level: true,
-                ..DeviceVolume::default()
-            }),
+            event: SessionEvent::Volume(
+                DeviceVolume {
+                    level: 0.6,
+                    control_type: ControlType::Fixed,
+                    has_level: true,
+                    ..DeviceVolume::default()
+                },
+                false,
+            ),
         });
         cast.poll();
         cast.set_master(20.0);
@@ -4249,12 +4329,15 @@ pub mod tests {
         let report = |control_type| HostEvent::Session {
             attempt: AttemptId(1),
             device: id(KITCHEN),
-            event: SessionEvent::Volume(DeviceVolume {
-                level: 0.6,
-                control_type,
-                has_level: true,
-                ..DeviceVolume::default()
-            }),
+            event: SessionEvent::Volume(
+                DeviceVolume {
+                    level: 0.6,
+                    control_type,
+                    has_level: true,
+                    ..DeviceVolume::default()
+                },
+                false,
+            ),
         };
         fake.report(report(ControlType::Fixed));
         cast.poll();
