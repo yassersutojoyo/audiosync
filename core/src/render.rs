@@ -263,6 +263,12 @@ pub const EARLIEST_LEAK_NS_PER_S: u64 = 1_000_000;
 /// [`Renderer::late_callbacks`] (S209).
 pub const LATE_COUNT_MS: u64 = 5;
 
+/// Whether a callback `late_ns` later than the earliest ones counts in
+/// [`Renderer::late_callbacks`] (S209).
+fn counts_as_late(late_ns: u64) -> bool {
+    late_ns > LATE_COUNT_MS * 1_000_000
+}
+
 /// The device frames, in ms, over which a renderer counts its starved
 /// callbacks (S347).
 pub const STARVE_WINDOW_MS: u64 = 5000;
@@ -1354,7 +1360,7 @@ impl Renderer {
         if late_ns > 0 {
             let shared = &*self.shared;
             shared.late_max_ns.fetch_max(late_ns, Ordering::Relaxed);
-            if late_ns > LATE_COUNT_MS * 1_000_000 {
+            if counts_as_late(late_ns) {
                 shared.late_callbacks.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -2911,6 +2917,14 @@ mod tests {
             "{counters:?}"
         );
         (behind, s.renderer.late_callbacks())
+    }
+
+    // covers: S209
+    #[test]
+    fn a_callback_counts_as_late_only_past_5_ms() {
+        assert!(!counts_as_late(0));
+        assert!(!counts_as_late(5_000_000));
+        assert!(counts_as_late(5_000_001));
     }
 
     // covers: S209

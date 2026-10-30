@@ -8987,6 +8987,36 @@ do {
         check(sped.count == 2 && sped.allSatisfy { $0 > 0 }, name, "sped frames \(sped)")
     }
 
+    // covers: S209 (the Mac: the counters the host reads at stop; the core tests the 5 ms boundary)
+    // Output times come from the host clock, so the count is taken across the late callback only:
+    // a scheduler pause on an on-time one could count it too.
+    do {
+        let name = "late callbacks: a callback 20 ms later than the earliest ones counts once, as the host reads it"
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
+           let renderer = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 48_000, channels: 2, gain: 1) {
+            renderer.setDelay(ms: 100)
+            let history = [Float](repeating: 0.5, count: 4_800 * 2)
+            history.withUnsafeBufferPointer { ring.write(interleaved: $0.baseAddress!, frames: 4_800) }
+            let block = [Float](repeating: 0.5, count: 480 * 2)
+            var out = [Float](repeating: 0, count: 480 * 2)
+            func callback(lateNs: UInt64) {
+                block.withUnsafeBufferPointer { ring.write(interleaved: $0.baseAddress!, frames: 480) }
+                out.withUnsafeMutableBufferPointer {
+                    renderer.render(into: $0.baseAddress!, frames: 480,
+                                    outputTimeNs: HostClock.now() + 30_000_000 - lateNs)
+                }
+            }
+            // 400 ms of callbacks, past the 300 ms the floor forms over.
+            for _ in 0..<40 { callback(lateNs: 0) }
+            let before = renderer.lateCallbacks
+            callback(lateNs: 20_000_000)
+            check(renderer.lateCallbacks - before == 1 && renderer.lateMaxMs >= 15, name,
+                  "\(renderer.lateCallbacks - before) counted, most \(renderer.lateMaxMs) ms")
+        } else {
+            check(false, name, "the core's renderer could not be made")
+        }
+    }
+
     // S186: a source change rebuilds only the capture under the
     // speakers; the local outputs fade out on the old capture, which runs
     // until they have, and are re-added on the new one, whose start waits

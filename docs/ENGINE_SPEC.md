@@ -2523,6 +2523,7 @@ The checks for S206 and S207 (`core/tests/render_start.rs`). The capture writes 
 | Check | Clauses |
 |---|---|
 | clock trim: a capture 0.1% faster than the device speeds the converter, at 48 and 44.1 kHz | S226, S207 |
+| late callbacks: a callback 20 ms later than the earliest ones counts once, as the host reads it | S209 |
 
 ### device volume: core (`cargo test` in `core/`)
 
@@ -3569,6 +3570,7 @@ The release side:
 | a_resync_after_two_stray_early_stamps_lands_where_it_would_without_them (`core/src/render.rs`) | S209 |
 | a_resync_on_a_third_stray_early_stamp_lands_where_it_would_without_them (`core/src/render.rs`) | S209 |
 | callbacks_that_drift_late_slowly_are_lateness_not_drift (`core/tests/render_wander.rs`) | S209 |
+| a_callback_counts_as_late_only_past_5_ms (`core/src/render.rs`) | S209 |
 | late_bluetooth_callbacks_never_run_an_output_dry_or_correct_drift_once_settled (`core/tests/render_jitter.rs`) | S209 |
 | one_stray_early_callback_never_moves_an_output (`core/tests/render_jitter.rs`) | S209 |
 | outputs_on_time_play_the_same_with_output_times_as_without (`core/tests/render_jitter.rs`) | S209 |
