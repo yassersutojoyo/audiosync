@@ -30,3 +30,25 @@ pub mod volume;
 
 /// The crate version, also exported through the C interface.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// This test process's folder under the crate's `target`, after removing
+/// the folders there that no run has touched for an hour.
+#[cfg(test)]
+pub(crate) fn test_scratch() -> std::path::PathBuf {
+    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("test-scratch");
+    // Per process: test runs that overlap on one target share this folder.
+    let pid = std::process::id().to_string();
+    let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for entry in std::fs::read_dir(&parent).into_iter().flatten().flatten() {
+        let old = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .is_ok_and(|time| time < stale);
+        if old && entry.file_name() != pid.as_str() {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+    parent.join(pid)
+}

@@ -633,9 +633,7 @@ mod tests {
     fn a_folder_in_the_files_place_is_never_written_over() {
         // A folder reads as an error other than NotFound on every host, as a
         // permission or disk error would.
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("test-scratch")
+        let path = crate::test_scratch()
             .join("airplay-pairings-store")
             .join("unreadable.dat");
         let _ = fs::remove_dir_all(&path);

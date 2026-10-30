@@ -7041,10 +7041,7 @@ mod tests {
 
     /// A fresh folder for one test under the crate's own `target`.
     fn scratch(name: &str) -> PathBuf {
-        let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("test-scratch")
-            .join(name);
+        let folder = crate::test_scratch().join(name);
         let _ = std::fs::remove_dir_all(&folder);
         folder
     }

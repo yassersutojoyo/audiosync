@@ -14,11 +14,28 @@ fn credentials(client: &str, fill: u8) -> Credentials {
     Credentials::new(client, [fill; SECRET_BYTES]).expect("valid credentials")
 }
 
+/// This process's folder under `parent`, after removing the folders there
+/// that no run has touched for an hour.
+fn process_folder(parent: PathBuf) -> PathBuf {
+    let pid = std::process::id().to_string();
+    let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for entry in fs::read_dir(&parent).into_iter().flatten().flatten() {
+        let old = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .is_ok_and(|time| time < stale);
+        if old && entry.file_name() != pid.as_str() {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+    parent.join(pid)
+}
+
 /// A fresh folder for one test, in the target folder's scratch space.
 fn folder(name: &str) -> PathBuf {
-    let folder = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("airplay-pairings")
-        .join(name);
+    let folder =
+        process_folder(PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("airplay-pairings"))
+            .join(name);
     let _ = fs::remove_dir_all(&folder);
     folder
 }

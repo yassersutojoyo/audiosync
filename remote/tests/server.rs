@@ -36,10 +36,26 @@ struct Remote {
     received: Received,
 }
 
+/// This process's folder under `parent`, after removing the folders there
+/// that no run has touched for an hour.
+fn process_folder(parent: PathBuf) -> PathBuf {
+    let pid = std::process::id().to_string();
+    let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for entry in fs::read_dir(&parent).into_iter().flatten().flatten() {
+        let old = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .is_ok_and(|time| time < stale);
+        if old && entry.file_name() != pid.as_str() {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+    parent.join(pid)
+}
+
 fn scratch(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("remote-tests")
-        .join(name);
+    let dir =
+        process_folder(PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("remote-tests")).join(name);
     let _ = fs::remove_dir_all(&dir);
     dir.join("remote-devices.json")
 }

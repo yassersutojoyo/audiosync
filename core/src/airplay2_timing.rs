@@ -173,10 +173,7 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("test-scratch")
-            .join("airplay2-timing-store");
+        let folder = crate::test_scratch().join("airplay2-timing-store");
         fs::create_dir_all(&folder).expect("a scratch folder");
         let path = folder.join(name);
         let _ = fs::remove_file(&path);
