@@ -16,21 +16,31 @@ mod common;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
-use audiosync_airplay::clock::NtpTime;
+use audiosync_airplay::ap2::bodies::{self, MAX_PLIST_BYTES, TRACE_LIMIT};
+use audiosync_airplay::ap2::framing::{
+    CONTROL_READ, CONTROL_SALT, Framing, LENGTH_BYTES, frame_nonce,
+};
+use audiosync_airplay::clock::{NtpTime, SenderClock};
+use audiosync_airplay::dacp::{self, HeadRead, MAX_BODY, MAX_HEAD, SessionCheck};
 use audiosync_airplay::digest::{self, Challenge};
 use audiosync_airplay::discovery::mdns::{browse_event, instance_name};
 use audiosync_airplay::discovery::txt::{parse_bool, parse_int};
 use audiosync_airplay::discovery::{
     AirPlayTxt, BrowseEvent, Device, DeviceId, DeviceKey, Directory, DirectoryEvent, DnsRecord,
-    Features, RaopTxt, Resolver, ScopedAddr, ServiceKind, ServiceRecord, StatusFlags, Txt,
-    parse_raop_instance,
+    Features, GroupKeys, RaopTxt, Resolver, ScopedAddr, ServiceKind, ServiceRecord, StatusFlags,
+    Txt, parse_raop_instance,
 };
 use audiosync_airplay::error::ErrorKind;
+use audiosync_airplay::homekit::{
+    self,
+    tlv8::{self, Tlv8},
+};
 use audiosync_airplay::pairing::srp::{self, SrpGroup};
 use audiosync_airplay::pairing::{
     self, Credentials, LegacyVerifier, MAX_PAIRING_BODY_BYTES, Pairing, PairingEvent, PairingState,
     keys,
 };
+use audiosync_airplay::ptp::{self, PtpPorts, PtpService};
 use audiosync_airplay::rtp::{self, ResendRequest, RtpHeader, SyncPacket, TimingPacket};
 use audiosync_airplay::rtsp::{
     self, Headers, JackStatus, MAX_BODY_BYTES, MAX_HEAD_BYTES, Message, Method, ParseError, Parser,
@@ -41,7 +51,9 @@ use audiosync_airplay::secret::Secret;
 use audiosync_airplay::session::{self, Session, SessionConfig, Verifier};
 use audiosync_airplay::store::HISTORY_PACKETS;
 use audiosync_airplay::stream::MAX_RESEND_REQUEST;
-use audiosync_airplay::volume::{self, Volume};
+use audiosync_airplay::volume::{self, MAX_DB, MIN_DB, Volume};
+use chacha20poly1305::ChaCha20Poly1305;
+use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use common::atv::{CLIENT, FakeAppleTv, TestEntropy};
 use common::rig::{Rig, Rng, speaker};
 use common::{FakeReceiver, PasswordGate, RAOP_PORT, RECEIVER, SENDER, config, connection, ids};
@@ -2283,5 +2295,436 @@ fn a_session_survives_any_answer_at_any_step() {
                 run_session(variant, target, &mut tamper);
             }
         }
+    }
+}
+
+// ---- AirPlay 2, PTP and the remote-control server ------------------------------------
+
+/// Strings in DNS TXT wire form: a length byte, then the string.
+fn wire(strings: &[&str]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for string in strings {
+        out.push(string.len() as u8);
+        out.extend_from_slice(string.as_bytes());
+    }
+    out
+}
+
+fn dict(entries: Vec<(&str, Value)>) -> Value {
+    let mut dictionary = Dictionary::new();
+    for (key, value) in entries {
+        dictionary.insert(key.to_owned(), value);
+    }
+    Value::Dictionary(dictionary)
+}
+
+fn info_answer() -> Value {
+    dict(vec![
+        ("features", Value::Integer(0x4A7F_DFD5_BC15_7FDEu64.into())),
+        ("statusFlags", Value::Integer(4u64.into())),
+        ("name", Value::String("Living Room".to_owned())),
+        ("model", Value::String("AppleTV6,2".to_owned())),
+        ("sourceVersion", Value::String("770.8.1".to_owned())),
+        ("initialVolume", Value::Real(-20.0)),
+        (
+            "audioLatencies",
+            Value::Array(vec![dict(vec![(
+                "outputLatencyMicros",
+                Value::Integer(250_000u64.into()),
+            )])]),
+        ),
+        (
+            "txtAirPlay",
+            Value::Data(wire(&[
+                "features=0x4A7FDFD5,0xBC157FDE",
+                "flags=0x244",
+                "model=AudioAccessory5,1",
+                "gid=4B2C+1+5D3E",
+                "srcvers=770.8.1",
+            ])),
+        ),
+    ])
+}
+
+fn session_setup_answer() -> Value {
+    dict(vec![
+        ("eventPort", Value::Integer(51_234u64.into())),
+        ("timingPort", Value::Integer(0u64.into())),
+        (
+            "timingPeerInfo",
+            dict(vec![("ID", Value::String("1E:2F".to_owned()))]),
+        ),
+    ])
+}
+
+fn stream_setup_answer() -> Value {
+    dict(vec![(
+        "streams",
+        Value::Array(vec![dict(vec![
+            ("dataPort", Value::Integer(50_001u64.into())),
+            ("controlPort", Value::Integer(50_002u64.into())),
+            ("streamID", Value::Integer(96i64.into())),
+            ("arrivalToRenderLatencyMs", Value::Real(18.5)),
+        ])]),
+    )])
+}
+
+const KEYS: &[&str] = &[
+    "features",
+    "statusFlags",
+    "name",
+    "model",
+    "sourceVersion",
+    "initialVolume",
+    "audioLatencies",
+    "outputLatencyMicros",
+    "txtAirPlay",
+    "txtRAOP",
+    "eventPort",
+    "timingPort",
+    "timingPeerInfo",
+    "streams",
+    "dataPort",
+    "controlPort",
+    "streamID",
+    "arrivalToRenderLatencyMs",
+    "",
+];
+
+const TXT_STRINGS: &[&str] = &[
+    "features=0x4A7FDFD5,0xBC157FDE",
+    "ft=0x5A7FFFF7,0x1E",
+    "flags=0x244",
+    "sf=0xffffffffffffffffff",
+    "model=",
+    "gid=+",
+    "igl=maybe",
+    "tsm=0x",
+    "=",
+    "features=,,,",
+];
+
+fn random_value(rng: &mut Rng, depth: usize) -> Value {
+    match below(rng, if depth == 0 { 6 } else { 8 }) {
+        0 => Value::Boolean(below(rng, 2) == 0),
+        1 => {
+            let any = rng.next_u64() as i64;
+            Value::Integer((*pick(rng, &[0i64, -1, i64::MIN, i64::MAX, 65_536, any])).into())
+        }
+        2 => {
+            let any = rng.next_u64();
+            Value::Integer((*pick(rng, &[u64::MAX, 1u64 << 63, any])).into())
+        }
+        3 => Value::Real(*pick(
+            rng,
+            &[
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                -0.0,
+                1e308,
+                -1.0,
+                1e-320,
+            ],
+        )),
+        4 => {
+            let len = below(rng, 40);
+            Value::String(String::from_utf8_lossy(&random_bytes(rng, len)).into_owned())
+        }
+        5 => {
+            let strings: Vec<&str> = (0..below(rng, 5))
+                .map(|_| *pick(rng, TXT_STRINGS))
+                .collect();
+            Value::Data(mutate(rng, &wire(&strings)))
+        }
+        6 => Value::Array(
+            (0..below(rng, 4))
+                .map(|_| random_value(rng, depth - 1))
+                .collect(),
+        ),
+        _ => random_dictionary(rng, depth - 1),
+    }
+}
+
+fn random_dictionary(rng: &mut Rng, depth: usize) -> Value {
+    let mut dictionary = Dictionary::new();
+    for _ in 0..below(rng, 6) {
+        let key = (*pick(rng, KEYS)).to_owned();
+        let value = random_value(rng, depth);
+        dictionary.insert(key, value);
+    }
+    Value::Dictionary(dictionary)
+}
+
+fn read_answer(body: &[u8]) {
+    let dictionary = bodies::read_dictionary(body);
+    if body.len() > MAX_PLIST_BYTES {
+        assert!(dictionary.is_none(), "{} bytes read", body.len());
+    }
+    let info = bodies::read_info(body);
+    if let Some(name) = &info.name {
+        assert!(name.len() <= body.len());
+    }
+    let _ = bodies::read_session_setup(body);
+    let _ = bodies::read_stream_setup(body);
+    let trace = bodies::trace_text(body);
+    assert!(trace.len() <= TRACE_LIMIT, "{} bytes", trace.len());
+}
+
+// covers: P133
+#[test]
+fn airplay2_plist_answers_survive_any_body() {
+    let mut rng = Rng::new(0xA1E5_0001);
+    let seeds: Vec<Vec<u8>> = [info_answer(), session_setup_answer(), stream_setup_answer()]
+        .into_iter()
+        .map(bodies::binary)
+        .collect();
+    for seed in &seeds {
+        assert!(seed.starts_with(b"bplist00"));
+        read_answer(seed);
+        for _ in 0..1500 {
+            read_answer(&mutate(&mut rng, seed));
+        }
+        for len in 0..seed.len() {
+            read_answer(&seed[..len]);
+        }
+    }
+    for _ in 0..1500 {
+        let body = bodies::binary(random_dictionary(&mut rng, 3));
+        read_answer(&body);
+        read_answer(&mutate(&mut rng, &body));
+    }
+    for _ in 0..1000 {
+        let len = below(&mut rng, 512);
+        let mut body = b"bplist00".to_vec();
+        body.extend(random_bytes(&mut rng, len));
+        read_answer(&body);
+    }
+    let mut big = bodies::binary(dict(vec![(
+        "name",
+        Value::Data(vec![b'a'; MAX_PLIST_BYTES]),
+    )]));
+    read_answer(&big);
+    big.truncate(MAX_PLIST_BYTES);
+    read_answer(&big);
+}
+
+/// What a receiver sends on the control connection, sealed with the key
+/// the sender opens with (P68).
+fn seal_as_receiver(secret: &[u8], counter: u64, plaintext: &[u8]) -> Vec<u8> {
+    let key = homekit::keys::derive(secret, (CONTROL_SALT, CONTROL_READ));
+    let length = (plaintext.len() as u16).to_le_bytes();
+    let mut sealed = plaintext.to_vec();
+    let tag = ChaCha20Poly1305::new((&*key).into())
+        .encrypt_inout_detached(
+            &frame_nonce(counter).into(),
+            &length,
+            sealed.as_mut_slice().into(),
+        )
+        .expect("sealed");
+    let mut out = length.to_vec();
+    out.extend_from_slice(&sealed);
+    out.extend_from_slice(&tag);
+    out
+}
+
+// covers: P133
+#[test]
+fn airplay2_frames_survive_any_bytes() {
+    let mut rng = Rng::new(0xA1E5_0002);
+    let secret = [7u8; 32];
+    let mut frames = seal_as_receiver(&secret, 0, b"RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n");
+    frames.extend(seal_as_receiver(&secret, 1, &[0xAB; 1500]));
+    let mut whole = Framing::control(&secret);
+    assert_eq!(whole.open(&frames).map(|plain| plain.len()), Ok(1528));
+    for _ in 0..3000 {
+        let input = if below(&mut rng, 4) == 0 {
+            let len = below(&mut rng, 200);
+            random_bytes(&mut rng, len)
+        } else {
+            mutate(&mut rng, &frames)
+        };
+        let mut framing = Framing::control(&secret);
+        let mut opened = 0;
+        let mut at = 0;
+        while at < input.len() {
+            let end = (at + 1 + below(&mut rng, 700)).min(input.len());
+            match framing.open(&input[at..end]) {
+                Ok(plain) => opened += plain.len(),
+                Err(_) => {
+                    assert!(framing.open(&[0; 4]).is_err());
+                    break;
+                }
+            }
+            at = end;
+        }
+        assert!(opened <= input.len(), "{opened} of {}", input.len());
+    }
+    // A length field at its largest is waited for, not allocated past.
+    let mut framing = Framing::control(&secret);
+    assert_eq!(framing.open(&[0xFF, 0xFF]), Ok(Vec::new()));
+    let filler = vec![0u8; usize::from(u16::MAX) + homekit::keys::TAG_BYTES + LENGTH_BYTES - 3];
+    assert_eq!(framing.open(&filler), Ok(Vec::new()));
+    assert!(framing.open(&[0]).is_err());
+}
+
+// covers: P133
+#[test]
+fn tlv8_frames_survive_any_bytes() {
+    let mut rng = Rng::new(0xA1E5_0003);
+    let sample = Tlv8::new()
+        .with(tlv8::STATE, &[2])
+        .with(tlv8::SALT, &[0x11; 16])
+        .with(tlv8::PUBLIC_KEY, &[0x22; 384])
+        .with(tlv8::ERROR, &[2])
+        .encode();
+    assert!(Tlv8::decode(&sample).is_ok());
+    for _ in 0..5000 {
+        let input = mutate(&mut rng, &sample);
+        if let Ok(tlv) = Tlv8::decode(&input) {
+            let kept: usize = tlv.items().map(|(_, value)| value.len()).sum();
+            assert!(kept <= input.len());
+            let _ = tlv.byte(tlv8::STATE);
+            let _ = tlv.get(tlv8::PUBLIC_KEY);
+        }
+    }
+}
+
+// covers: P133
+#[test]
+fn ptp_datagrams_from_a_served_receiver_survive_any_bytes() {
+    let mut rng = Rng::new(0xA1E5_0004);
+    let origin = Instant::now();
+    let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7)), 7000);
+    let mut service = PtpService::new(SenderClock::new(origin), [1; 8], PtpPorts::default());
+    service.start(peer, origin);
+    let mut announce = None;
+    while let Some(transmit) = service.poll_transmit() {
+        if ptp::may_be_announce(&transmit.bytes) {
+            announce = Some(transmit.bytes);
+        }
+    }
+    let announce = announce.expect("the sender's own Announce");
+    let mut delay_req = vec![0u8; ptp::DELAY_REQ_BYTES];
+    delay_req[0] = ptp::MessageType::DelayReq as u8;
+    delay_req[1] = 2;
+    assert!(ptp::may_be_delay_req(&delay_req));
+    let mut now = origin;
+    for round in 0..6000 {
+        let seed = if round % 2 == 0 {
+            &announce
+        } else {
+            &delay_req
+        };
+        let input = if below(&mut rng, 5) == 0 {
+            let len = below(&mut rng, 128);
+            random_bytes(&mut rng, len)
+        } else {
+            mutate(&mut rng, seed)
+        };
+        let _ = ptp::may_be_delay_req(&input);
+        let _ = ptp::may_be_announce(&input);
+        now += Duration::from_millis(below(&mut rng, 400) as u64);
+        let from = SocketAddr::new(peer.ip(), 319 + below(&mut rng, 2) as u16);
+        service.handle_message(&input, from, now);
+        let mut answers = 0;
+        while let Some(transmit) = service.poll_transmit() {
+            if transmit.kind == ptp::MessageType::DelayResp {
+                answers += 1;
+                assert_eq!(transmit.bytes.len(), ptp::DELAY_RESP_BYTES);
+            }
+        }
+        assert!(answers <= 1);
+        while service.poll_outranked().is_some() {}
+        service.handle_timeout(now);
+    }
+}
+
+fn read_request(buffer: &[u8]) {
+    let read = dacp::read_head(buffer);
+    match &read {
+        HeadRead::Partial => assert!(buffer.len() <= MAX_HEAD),
+        HeadRead::Complete { head, length } => {
+            assert!(*length <= MAX_HEAD && *length <= buffer.len());
+            assert!(head.content_length <= MAX_BODY);
+            let _ = head.wants_close();
+            for check in [SessionCheck::Match, SessionCheck::Mismatch] {
+                let answer = dacp::answer(head, |_| check);
+                assert!([204, 400, 403, 404, 405].contains(&answer.status));
+                if let Some(dacp::RemoteCommand::DeviceVolume(Volume::Db(db))) = answer.command {
+                    assert!((MIN_DB..=MAX_DB).contains(&db), "{db}");
+                }
+            }
+            let logged = dacp::log_command(&head.target);
+            assert!(logged.chars().count() <= 96 + 3 + 20 + 24 + 3, "{logged}");
+        }
+        HeadRead::Malformed | HeadRead::TooLarge => {}
+    }
+}
+
+// covers: P133
+#[test]
+fn dacp_requests_survive_any_bytes() {
+    let mut rng = Rng::new(0xA1E5_0005);
+    let seeds: [&[u8]; 3] = [
+        b"GET /ctrl-int/1/playpause HTTP/1.1\r\nHost: sender\r\nActive-Remote: 1986535575\r\n\r\n",
+        b"GET /ctrl-int/1/setproperty?dmcp.device-volume=-15.5&x=%41 HTTP/1.1\r\nActive-Remote: 7\r\nContent-Length: 4\r\n\r\nbody",
+        b"GET /ctrl-int/1/setproperty?dmcp.device-volume=-144.000000 HTTP/1.0\nActive-Remote: 4294967295\nConnection: keep-alive\n\n",
+    ];
+    for seed in seeds {
+        assert!(matches!(dacp::read_head(seed), HeadRead::Complete { .. }));
+        for _ in 0..2000 {
+            read_request(&mutate(&mut rng, seed));
+        }
+        for len in 0..seed.len() {
+            read_request(&seed[..len]);
+        }
+    }
+    for _ in 0..1000 {
+        let len = below(&mut rng, 300);
+        read_request(&random_bytes(&mut rng, len));
+    }
+    let mut long = b"GET /ctrl-int/1/".to_vec();
+    long.extend(vec![b'a'; MAX_HEAD]);
+    read_request(&long);
+    long.extend_from_slice(b" HTTP/1.1\r\n\r\n");
+    assert_eq!(dacp::read_head(&long), HeadRead::TooLarge);
+    for _ in 0..3000 {
+        let text = String::from_utf8_lossy(&mutate(&mut rng, b"%2D1%2e5&dmcp.device-volume=+0.%"))
+            .into_owned();
+        let _ = dacp::percent_decode(&text);
+        if let Some(Volume::Db(db)) = dacp::device_volume(text.clone()) {
+            assert!((MIN_DB..=MAX_DB).contains(&db), "{db}");
+        }
+        let _ = dacp::device_volume_value(Some(&text));
+        let _ = dacp::parse_active_remote(&text);
+    }
+}
+
+// covers: P133
+#[test]
+fn airplay2_group_keys_survive_any_txt_strings() {
+    let mut rng = Rng::new(0xA1E5_0006);
+    const GROUP: &[&str] = &[
+        "gid=4B2C+1+5D3E",
+        "igl=1",
+        "isGroupLeader=false",
+        "gcgl=0",
+        "pgid=",
+        "tsm=0xFFFFFFFFFFFFFFFFF",
+        "psgsz=12",
+        "hgid= ",
+        "gpn=Kitchen",
+    ];
+    for _ in 0..4000 {
+        let strings: Vec<Vec<u8>> = (0..below(&mut rng, 8))
+            .map(|_| {
+                let base = *pick(&mut rng, GROUP);
+                mutate(&mut rng, base.as_bytes())
+            })
+            .collect();
+        let keys = GroupKeys::read(&Txt::parse(&strings));
+        let _ = keys.group_key();
+        let _ = keys.gid_middle();
     }
 }

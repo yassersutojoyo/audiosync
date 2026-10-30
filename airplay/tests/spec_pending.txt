@@ -7,3 +7,5 @@
 
 # Several AirPlay 2 receivers at once, specified for a later stage.
 P212 Hardware: two or more AirPlay 2 receivers on one PTP timeline (G20).
+
+# Gap: no clause states the 8 KiB cap on an AirPlay 2 answer read as a property list (MAX_PLIST_BYTES, src/ap2/bodies.rs).

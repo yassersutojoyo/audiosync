@@ -12,6 +12,7 @@ use std::net::SocketAddr;
 use std::thread;
 use std::time::Instant;
 
+use audiosync_airplay::ap2::bodies;
 use audiosync_airplay::error::ErrorKind;
 use audiosync_airplay::pairing::{
     self, MAX_PAIRING_BODY_BYTES, Pairing, PairingEvent, PairingState,
@@ -219,4 +220,29 @@ fn the_deepest_ascii_answer_within_the_body_cap_is_read_on_the_driver_stack() {
         ),
         "{events:?}"
     );
+}
+
+// An AirPlay 2 answer is read up to 8 KiB, twice the pairing cap, so it
+// nests twice as deep: read and dropped on the driver thread's own stack.
+// covers: P133
+#[test]
+fn the_deepest_airplay2_answer_within_its_cap_is_read_on_the_driver_stack() {
+    let levels = u32::try_from((bodies::MAX_PLIST_BYTES - 38) / 5).expect("a small count");
+    let body = deep_binary(levels, 2);
+    assert!(
+        body.len() <= bodies::MAX_PLIST_BYTES,
+        "{} bytes",
+        body.len()
+    );
+    let info = thread::Builder::new()
+        .name("deep-plist".to_owned())
+        .spawn(move || {
+            assert_eq!(bodies::read_stream_setup(&body), Default::default());
+            assert!(bodies::trace_text(&body).starts_with("hex["));
+            bodies::read_info(&body)
+        })
+        .expect("a thread")
+        .join()
+        .expect("reading never panics");
+    assert_eq!(info, Default::default());
 }
