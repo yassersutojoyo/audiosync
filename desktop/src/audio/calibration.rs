@@ -789,7 +789,6 @@ pub struct CalibrationRun {
     first_microphone: Option<MicrophoneId>,
     // What the measurement depends on, as it was at the start (S232).
     session: u64,
-    playing: Vec<String>,
     hold_backs_ms: BTreeMap<String, f64>,
     old_offset_ms: f64,
     largest_hold_back_ms: f64,
@@ -851,7 +850,6 @@ impl CalibrationRun {
             reference_take: None,
             first_microphone: None,
             session,
-            playing: sorted(engine.playing),
             hold_backs_ms: engine.hold_backs_ms,
             old_offset_ms,
             largest_hold_back_ms,
@@ -1029,11 +1027,12 @@ impl CalibrationRun {
         let hold_back = |engine_map: &BTreeMap<String, f64>, id: &str| engine_map.get(id).copied();
         engine.session != Some(self.session)
             || engine.reference.as_deref() != Some(self.reference.as_str())
-            || sorted(engine.playing.clone()) != self.playing
             || [self.chosen.as_str(), self.reference.as_str()]
                 .iter()
                 .any(|id| {
-                    hold_back(&engine.hold_backs_ms, id) != hold_back(&self.hold_backs_ms, id)
+                    !engine.playing.iter().any(|p| p == id)
+                        || hold_back(&engine.hold_backs_ms, id)
+                            != hold_back(&self.hold_backs_ms, id)
                 })
     }
 
@@ -1209,11 +1208,6 @@ impl Drop for CalibrationRun {
             self.tap.disengage();
         }
     }
-}
-
-fn sorted(mut ids: Vec<String>) -> Vec<String> {
-    ids.sort();
-    ids
 }
 
 #[cfg(test)]
@@ -1532,6 +1526,19 @@ mod tests {
     }
 
     #[test]
+    fn the_reference_turned_off_mid_run_cancels_it() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        run_to_end(&mut rig, &mut run, |rig, run| {
+            if run.phase() == Phase::Running(Step::Measuring(Which::Chosen)) {
+                rig.engine.playing.retain(|id| id != "builtin");
+            }
+        });
+        assert_eq!(run.phase(), Phase::Failed(Failure::Interrupted));
+        assert!(rig.set_offsets.borrow().is_empty());
+    }
+
+    #[test]
     fn a_source_switched_mid_run_cancels_it() {
         let mut rig = FakeRig::new();
         let mut run = start(&mut rig);
@@ -1545,16 +1552,38 @@ mod tests {
     }
 
     #[test]
-    fn a_speaker_added_mid_run_cancels_it() {
+    fn a_speaker_added_mid_run_that_re_times_the_two_cancels_it() {
         let mut rig = FakeRig::new();
         let mut run = start(&mut rig);
         run_to_end(&mut rig, &mut run, |rig, run| {
             if run.phase() == Phase::Running(Step::Measuring(Which::Chosen)) {
                 rig.engine.playing.push("hdmi".to_owned());
+                for hold_back in rig.engine.hold_backs_ms.values_mut() {
+                    *hold_back += 50.0;
+                }
             }
         });
         assert_eq!(run.phase(), Phase::Failed(Failure::Interrupted));
         assert!(rig.set_offsets.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_third_output_stopping_mid_run_still_ends_done() {
+        let mut rig = FakeRig::new();
+        rig.engine.playing.push("hdmi".to_owned());
+        rig.engine.hold_backs_ms.insert("hdmi".to_owned(), 100.0);
+        let mut run = start(&mut rig);
+        run_to_end(&mut rig, &mut run, |rig, run| {
+            if run.phase() == Phase::Running(Step::Measuring(Which::Chosen)) {
+                rig.engine.playing.retain(|id| id != "hdmi");
+                rig.engine.hold_backs_ms.remove("hdmi");
+            }
+        });
+        assert!(
+            matches!(run.phase(), Phase::Done { .. }),
+            "{:?}",
+            run.phase()
+        );
     }
 
     #[test]
