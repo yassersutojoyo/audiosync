@@ -2231,6 +2231,33 @@ mod tests {
         ));
     }
 
+    /// An input device playing a pair other than 1-2 at 8 or 384 kHz is
+    /// captured at its own rate and converted to the session rate; a rate
+    /// just outside gets no attempt.
+    // covers: S16
+    #[test]
+    fn an_input_device_from_8_to_384_khz_is_captured_at_its_own_rate() {
+        for rate in [8_000, 384_000] {
+            let own = pair_attempts(1, 4, rate)
+                .into_iter()
+                .find(|attempt| !attempt.autoconvert)
+                .expect("an attempt at the device's own rate");
+            assert_eq!(own.format.rate, rate);
+            let (ring, writer) = session_ring();
+            let mut converter = new_converter(own.format, writer).unwrap();
+            let frames = rate as usize;
+            converter.push(&f32_bytes(&vec![0.25; frames * 4]), frames, false);
+            let written = ring.frames_written() as i64;
+            assert!(
+                (written - 48_000).abs() <= 2,
+                "{rate} Hz: wrote {written} frames for one second"
+            );
+        }
+        for rate in [7_999, 384_001] {
+            assert_eq!(pair_attempts(1, 4, rate).len(), 1, "{rate} Hz");
+        }
+    }
+
     #[test]
     fn a_format_without_channels_is_refused() {
         let (_ring, writer) = session_ring();

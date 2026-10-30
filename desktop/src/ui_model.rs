@@ -3146,6 +3146,36 @@ mod tests {
         assert_eq!(rooms, ["Room 2", "Room 10"]);
     }
 
+    // covers: S165
+    #[test]
+    fn a_built_in_output_and_sixteen_connected_speakers_are_all_listed_by_name() {
+        let mut state = MockBackend::new().snapshot();
+        let template = state.speakers[0].clone();
+        let built_in = Speaker {
+            kind: SpeakerKind::BuiltIn,
+            ..template.clone()
+        };
+        state.speakers = (1..=16)
+            .rev()
+            .map(|n| Speaker {
+                id: format!("speaker-{n}"),
+                name: format!("Speaker {n}"),
+                kind: if n % 2 == 0 {
+                    SpeakerKind::Usb
+                } else {
+                    SpeakerKind::AirPlay
+                },
+                ..template.clone()
+            })
+            .chain([built_in])
+            .collect();
+        let (this_pc, connected) = state.layout();
+        assert_eq!(this_pc.len(), 1);
+        let names: Vec<&str> = connected.iter().map(|s| s.name.as_str()).collect();
+        let expected: Vec<String> = (1..=16).map(|n| format!("Speaker {n}")).collect();
+        assert_eq!(names, expected);
+    }
+
     #[test]
     fn virtual_outputs_are_listed_only_when_shown_or_on() {
         let speaker = |kind, enabled| Speaker {

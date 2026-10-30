@@ -6103,6 +6103,29 @@ mod tests {
         );
     }
 
+    // covers: S138
+    #[test]
+    fn a_headset_back_at_another_rate_plays_in_it_with_the_delay_it_had() {
+        let mut backend = backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_output_delay(HEADPHONES, 300.0);
+        let before = backend.playing_params(HEADPHONES).unwrap();
+
+        backend.disconnect_output(HEADPHONES);
+        backend.poll();
+        // Back in its hands-free profile.
+        let hands_free = RenderFormat {
+            rate: 16_000,
+            ..crate::audio::mock::MOCK_STREAM.format
+        };
+        backend.change_output_format(HEADPHONES, hands_free);
+        backend.connect_output(HEADPHONES, "Headphones");
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(backend.playing_format(HEADPHONES), Some(hands_free));
+        assert_eq!(backend.playing_params(HEADPHONES), Some(before));
+    }
+
     #[test]
     fn an_unplugged_output_whose_stream_never_notices_is_lost_and_comes_back() {
         let mut backend = backend();
@@ -7471,6 +7494,17 @@ mod tests {
         );
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+    }
+
+    // covers: S157
+    #[test]
+    fn a_new_capture_rate_rebuilds_and_an_unreadable_one_keeps_the_session() {
+        let [at_48, _, at_48_i16, at_44_1] = crate::audio::capture::CAPTURE_ATTEMPTS.map(Some);
+        assert!(another_format(at_44_1, at_48), "44.1 to 48 kHz");
+        assert!(another_format(at_48, at_44_1), "48 to 44.1 kHz");
+        assert!(!another_format(at_48, at_48_i16), "the same rate");
+        assert!(!another_format(at_44_1, None), "unreadable now");
+        assert!(!another_format(None, at_48), "unreadable at the start");
     }
 
     // covers: S329, S21

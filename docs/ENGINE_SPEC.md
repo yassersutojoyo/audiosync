@@ -42,7 +42,7 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
 - **S17** *Observed* (`CaptureCheck.swift:3-11`; `AppDelegate+Engine.swift:406-413`; `ProcessTapCapture.swift:102`; Windows: `desktop/src/audio/controller.rs`, `frames_captured`). A process tap delivers no frames until its source actually plays; "no frames yet" is normal. The Mac engine reports `sessionHeard`: whether any frame captured in the current session was not silent (S18), false at the start of each session and while stopped; it keeps no frame count since a denied tap delivers zeros, which a count would take for audio. On Windows, `framesCaptured` is the number of frames written to the ring in the current session (W) and restarts at 0 with each session.
 - **S18** *Observed* (`CaptureCheck.swift:30-80`; `CaptureSupport.swift:184-187`; `AppDelegate+Engine.swift:324-357`; tests "capture: …"). Capture verdict: a session *hears* sound once any captured frame, among the frames a block delivers, has a sample other than zero; a tap that delivers only zeros hears nothing, since a denied tap and a silent source look alike. A session that heard sound → *flowing*. Otherwise → *notWorking* only when Now Playing has shown the source playing, its position moving on between two distinct readings, for at least 6 s (`playingGrace`) and no system or app tap in this app run has heard sound (a microphone or line-in heard proves nothing about the tap permission); otherwise → *waiting*. A source reported paused or unknown, one reported playing whose position stands still or that has no position to watch, never yields *notWorking*, and sound arriving later clears the verdict. The host checks 3 s after a start, then every 2 s until audio flows or the session ends, posting a notice only when the verdict changes.
 - **S19** *Observed* (`AppDelegate+Engine.swift:155-165`). "Known playing" comes only from a live Now Playing reading (Spotify, Music): for the system source any playing player counts; for an app source only that app; for an input source never.
-- **S20** *Observed* (`AppDelegate.swift:267-274`; `AppLifecycle.swift:49`). When the capture format changes under a running session, the engine reports an interruption `formatChanged` on the main thread, and the host restarts the session (stop, then start, automatic origin) at the new rate.
+- **S20** *Observed* (`AppDelegate.swift:267-274`; `AppLifecycle.swift:49`). When the capture format changes under a running session, the engine reports an interruption `formatChanged` on the main thread, and the host restarts the session (stop, then start, automatic origin) at the new rate. On Windows the change shows as a capture reopened after a loss at another rate (S329), not as a notice under a running session; the restarted session's ring stays at 48 kHz and its capture converts the new rate, since the Windows ring always runs at the session rate.
 - **S157** *Observed* (`CaptureCheck.swift:33-43`; tests "EC4 rate: …"). Capture-rate decision: a rate reported for the running capture rebuilds the session (S20) only when it is a real rate (greater than 0) that differs from the session's Rc, lower or higher (48 000 → 44 100 and 44 100 → 96 000 both rebuild); the same rate, or one that couldn't be read (reported as 0), keeps the session playing. *Required:* the engine reports `interrupted(formatChanged)` only when this rule asks for a rebuild.
 - **S242** *Observed* (`AudioSource.swift`, `.mix`; `desktop/src/audio/capture.rs`, `decide_apps_capture` and `decide_except_capture`; `desktop/src/audio/mix.rs`). A source can be several apps mixed, or every app except chosen ones, never AudioSync itself; an app that isn't running is skipped, and "only these" fails to start only when none of its apps runs. The Mac taps them in one process tap (a process list, or a global tap that excludes them). Windows opens one process loopback per app and mixes them at 48 kHz, following the apps every 2 s without restarting the session. Platform difference: Windows' "all except" captures each other app that has an audio session, so system sounds (notification chimes, which no app process owns) are left out, while the Mac's global tap takes in every process but the excluded ones.
 - **S21** *Observed* (`AppDelegate.swift:297-302`). When capture fails for good, the engine reports `sourceLost(error)` on the main thread; the host stops the session and posts a "source" notice. Stopping ends every AirPlay speaker's session, but the speakers the user chose stay chosen (`AppDelegate.swift`, `.sourceLost`, and `AppDelegate+Engine.swift`, `stopEngine`; Windows: `desktop/src/audio/controller.rs`, `StopReason::CaptureFailed`). Before 2026-10-21 this clause said every AirPlay speaker was deselected, which the bundled engine's host did and neither app has done since that engine went (2026-10-20).
@@ -2044,6 +2044,7 @@ The decisions the hosts take from the core: sources and capture, session start a
 | start_problems_name_the_chosen_app (`desktop/src/adapter.rs`) | S121 |
 | switching_streaming_off_keeps_the_speakers_on (`desktop/src/adapter.rs`) | S122 |
 | a_device_removed_and_added_again_plays_again_with_its_settings (`desktop/src/audio/controller.rs`) | S137, S138 |
+| a_headset_back_at_another_rate_plays_in_it_with_the_delay_it_had (`desktop/src/audio/controller.rs`) | S138 |
 | an_unplugged_output_is_reported_until_it_is_back (`desktop/src/adapter.rs`) | S137 |
 | the_session_ends_when_the_captured_app_quits (`desktop/src/audio/controller.rs`) | S142 |
 | an_app_that_quits_ends_the_session_without_a_restart (`desktop/src/audio/controller.rs`) | S142 |
@@ -3406,6 +3407,7 @@ The release side:
 | a_capture_device_gone_reopens_only_the_capture_and_keeps_every_output_running (`desktop/src/audio/controller.rs`) | S329 |
 | a_capture_reopen_waits_while_the_lost_capture_still_holds_the_ring (`desktop/src/audio/controller.rs`) | S329, S157 |
 | a_capture_back_in_another_format_restarts_the_session (`desktop/src/audio/controller.rs`) | S329, S20, S140, S157 |
+| a_new_capture_rate_rebuilds_and_an_unreadable_one_keeps_the_session (`desktop/src/audio/controller.rs`) | S157 |
 | a_capture_that_fails_its_last_try_stops_as_before (`desktop/src/audio/controller.rs`) | S21, S329 |
 | an_input_device_unplugged_while_streaming_waits_for_it_without_timed_tries (`desktop/src/audio/controller.rs`) | S329 |
 | an_input_still_listed_whose_capture_fails_gets_the_five_tries (`desktop/src/audio/controller.rs`) | S329 |
@@ -3531,6 +3533,7 @@ The release side:
 | frames_captured_count_from_each_start (`desktop/src/audio/controller.rs`) | S133, S17 |
 | hidden_speakers_sort_numbers_by_value (`desktop/src/adapter.rs`) | S152 |
 | connected_speakers_sort_numbers_by_value (`desktop/src/ui_model.rs`) | S152 |
+| a_built_in_output_and_sixteen_connected_speakers_are_all_listed_by_name (`desktop/src/ui_model.rs`) | S165 |
 | an_appearance_this_build_does_not_know_follows_windows (`desktop/src/settings.rs`) | S155 |
 | a_stop_asked_from_the_control_thread_comes_back_as_faded (`desktop/src/audio/render.rs`) | S190 |
 | input_devices_are_listed_after_the_apps_and_can_be_streamed (`desktop/src/adapter.rs`) | S211 |
@@ -3552,6 +3555,7 @@ The release side:
 | input_devices_are_offered_by_name_without_hands_free_or_unreadable_ones (`desktop/src/audio/capture.rs`) | S355 |
 | a_failed_input_listing_leaves_the_inputs_out_and_keeps_the_apps (`desktop/src/audio/controller.rs`) | S355 |
 | an_input_device_is_captured_from_its_endpoint_not_by_process_loopback (`desktop/src/audio/capture.rs`) | S355 |
+| an_input_device_from_8_to_384_khz_is_captured_at_its_own_rate (`desktop/src/audio/capture.rs`) | S16 |
 | an_input_device_choice_survives_a_round_trip_and_older_builds_read_the_whole_system (`desktop/src/settings.rs`) | S355 |
 | an_input_device_choice_is_saved_and_restored_while_it_is_unplugged (`desktop/src/adapter.rs`) | S355 |
 | an_input_device_denied_by_privacy_settings_is_a_blocked_microphone (`desktop/src/audio/wasapi/com.rs`) | S355 |
