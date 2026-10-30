@@ -3809,9 +3809,20 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 let speaker = self.output_name(&id);
                 self.post(speaker_subject(&id), NoticeMessage::SpeakerLost { speaker });
             }
+            // It ran away twice within 30 s (S347) and plays on.
+            BackendEvent::OutputStruggling { id } => {
+                let speaker = self.output_name(&id);
+                self.post(
+                    speaker_subject(&id),
+                    NoticeMessage::SpeakerStruggling { speaker },
+                );
+            }
             BackendEvent::OutputPlaysAgain { id } => {
                 self.clear_if(speaker_subject(&id), |message| {
-                    matches!(message, NoticeMessage::SpeakerLost { .. })
+                    matches!(
+                        message,
+                        NoticeMessage::SpeakerLost { .. } | NoticeMessage::SpeakerStruggling { .. }
+                    )
                 });
             }
             BackendEvent::OutputFailed { id, .. } => {
@@ -7291,6 +7302,41 @@ mod tests {
             adapter.poll();
         }
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    // covers: S347
+    #[test]
+    fn a_struggling_output_posts_its_notice_and_unlisting_it_clears_it() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
+        for id in [SPEAKERS, HEADPHONES] {
+            adapter.handle(BackendEvent::OutputStruggling { id: id.into() });
+        }
+        assert!(enabled(&adapter, SPEAKERS), "it plays on");
+        assert_eq!(
+            messages(&adapter),
+            [
+                NoticeMessage::SpeakerStruggling {
+                    speaker: "Headphones".into(),
+                },
+                NoticeMessage::SpeakerStruggling {
+                    speaker: "Speakers".into(),
+                },
+            ]
+        );
+        // Switched off or stopped, the controller tells it plays again.
+        adapter.handle(BackendEvent::OutputPlaysAgain {
+            id: HEADPHONES.into(),
+        });
+        adapter.audio_mut().disconnect_output(SPEAKERS);
+        adapter.poll();
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::SpeakerLost {
+                speaker: "Speakers".into(),
+            }]
+        );
     }
 
     // covers: S331

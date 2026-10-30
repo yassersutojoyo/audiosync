@@ -393,6 +393,8 @@ extension AppDelegate {
         clearNotices(stallRetry.settle(enabled: enabledLocal, listed: listed, nowS: now)
             .map { SpeakerKey.make(id: $0, airplay: false) })
         refusalRetry.settle(enabled: enabledLocal, listed: listed)
+        clearNotices(runawayRetry.settle(enabled: enabledLocal, listed: listed)
+            .map { SpeakerKey.make(id: $0, airplay: false) })
         let afterStall = stallRetry.afterStall(formatReopens: formatReopens)
         let applied = LocalOutputSync.apply(enabled: enabledLocal.subtracting(freshLinks.held)
                                                 .subtracting(stallRetry.held(nowS: now))
@@ -403,7 +405,9 @@ extension AppDelegate {
         for (uid, holdBack) in applied.attached {
             localHoldBacks[uid] = holdBack
             // A disconnected notice stays until the reopened stream has played 5 s (S334).
-            if !stallRetry.lost.contains(uid) { clearNotices([SpeakerKey.make(id: uid, airplay: false)]) }
+            if !stallRetry.lost.contains(uid), !runawayRetry.struggling.contains(uid) {
+                clearNotices([SpeakerKey.make(id: uid, airplay: false)])
+            }
             if let device = listing.first(where: { $0.uid == uid }) { noteFreshLinkStart(uid, device) }
             if let refusedS = refusalRetry.started(uid, nowS: now) {
                 DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) started after its device refused it for "
@@ -479,6 +483,24 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) stalled again before playing "
             + "\(Int(OutputStallRetry.trialS)) s; trying again every \(Int(OutputStallRetry.retryEveryS)) s")
         scheduleStallRetry(atS: atS)
+    }
+
+    /// Local output `uid` ran away (S347): the first time, or 30 s after its
+    /// latest reopen, its stream ends and opens again; a second time within
+    /// those 30 s it plays on and gets the struggling notice, once.
+    func outputRanAway(_ uid: String, percent: Int) {
+        switch runawayRetry.ranAway(uid, nowS: ProcessInfo.processInfo.systemUptime) {
+        case .reopen:
+            engine.dropRunaway(uid, percent: percent)
+        case .notice:
+            postNotice(text.outputLinkStruggling(name: shownName(local: uid, system: localDevices[uid]?.name ?? "")),
+                       subject: SpeakerKey.make(id: uid, airplay: false))
+            DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) ran away again within "
+                + "\(Int(OutputRunawayRetry.noticeWithinS)) s of its reopen: \(percent)% of its callbacks starved; "
+                + "it plays on with the struggling notice")
+        case .quiet:
+            break
+        }
     }
 
     /// The listed device of output `uid` refused its start (S331): the speaker

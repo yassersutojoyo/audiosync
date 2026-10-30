@@ -52,6 +52,11 @@ final class StreamEngine {
     /// halted and detached; the speaker stays on.
     var onOutputGone: ((String, OutputLoss) -> Void)?
 
+    /// A local output ran away (S347), with its UID and starved share; once
+    /// per attach. The host decides whether `dropRunaway` ends it.
+    var onOutputRunaway: ((String, Int) -> Void)?
+    private var runawayReports = OutputRunawayReports()
+
     /// Now Playing's latest reading, nil while the monitor doesn't run (S335 D3).
     var nowPlayingReading: (() -> NowPlayingMonitor.Track?)?
 
@@ -276,6 +281,17 @@ final class StreamEngine {
             renderer.noteStalled()
             handleOutputLost(stall.uid, renderer, .stalled(quietS: stall.quietS, sign: sign))
         }
+        let percents = renderers.mapValues(\.starvedPercent)
+        for uid in runawayReports.fresh(OutputRunawayRetry.runaways(percents), tokens: attachTokens.byUID) {
+            onOutputRunaway?(uid, percents[uid] ?? 0)
+        }
+    }
+
+    /// Ends output `uid`'s stream as a stall does, the speaker on, so the next
+    /// sync opens it again (S347).
+    func dropRunaway(_ uid: String, percent: Int) {
+        guard let renderer = renderers[uid] else { return }
+        handleOutputLost(uid, renderer, .ranAway(percent: percent))
     }
 
     /// Output `uid`'s number in the status line, given now if it has none, so
@@ -646,6 +662,10 @@ final class StreamEngine {
         }
         if case .formatChanged(let old, let new) = loss {
             DebugTrace.log("[AudioSync] " + OutputFormatWatch.line(number: outputNumber(uid), old: old, new: new))
+        }
+        if case .ranAway(let percent) = loss {
+            DebugTrace.log("[AudioSync] output \(outputNumber(uid)) ran away: \(percent)% of its callbacks starved "
+                + "over 5 s while the capture wrote; it opens again")
         }
         onOutputGone?(uid, loss)
     }

@@ -964,6 +964,11 @@ uint64_t asc_renderer_late_reanchors(const AscRenderer *renderer);
    or for a NULL handle. */
 int64_t asc_renderer_followed_ppm(const AscRenderer *renderer);
 
+/* Any thread: the share of the renderer's callbacks, in percent, that starved
+   while the capture was writing, over its latest 5 s of device frames (S347);
+   0 before the first or for a NULL handle. */
+uint32_t asc_renderer_starved_percent(const AscRenderer *renderer);
+
 /* ---- Delay helpers ------------------------------------------------------- */
 
 /*

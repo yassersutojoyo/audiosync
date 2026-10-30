@@ -73,9 +73,30 @@ fn run_stalls(
 fn run_device(
     stalls: &[(u128, u128, u128)],
     slow_ppm: i128,
+    stray_ms: Option<u128>,
+    stopping: bool,
+    pull_endpoint: bool,
+) -> (Vec<(f64, f64)>, RendererControl, Vec<f64>) {
+    let mut ignore = |_: f64, _: &RendererControl| {};
+    run_observed(
+        stalls,
+        slow_ppm,
+        stray_ms,
+        stopping,
+        pull_endpoint,
+        &mut ignore,
+    )
+}
+
+/// [`run_device`], handing `observe` the time in s and the control after
+/// each callback.
+fn run_observed(
+    stalls: &[(u128, u128, u128)],
+    slow_ppm: i128,
     mut stray_ms: Option<u128>,
     stopping: bool,
     pull_endpoint: bool,
+    observe: &mut dyn FnMut(f64, &RendererControl),
 ) -> (Vec<(f64, f64)>, RendererControl, Vec<f64>) {
     let ring = Ring::for_rate(RATE).unwrap();
     let mut writer = ring.writer().unwrap();
@@ -150,6 +171,7 @@ fn run_device(
         if control.counters().resyncs != before {
             resyncs.push(pull_at as f64 / SECOND as f64);
         }
+        observe(pull_at as f64 / SECOND as f64, &control);
         if renderer.fade_state() != FadeState::Open || pull_at < 2 * SECOND {
             continue;
         }
@@ -165,6 +187,25 @@ fn run_device(
         delays.push((played_at, (played_at - captured_at) * 1000.0));
     }
     (delays, control, resyncs)
+}
+
+/// The time in s at which the output's starved share first reached half
+/// its callbacks (S347), if it did, and the largest share it reached, on a
+/// device clock `slow_ppm` slow with `stalls`; with its control.
+fn starved_share(
+    stalls: &[(u128, u128, u128)],
+    slow_ppm: i128,
+) -> (Option<f64>, u32, RendererControl) {
+    let (mut first, mut most) = (None, 0);
+    let mut observe = |at: f64, control: &RendererControl| {
+        let percent = control.starved_percent();
+        most = most.max(percent);
+        if percent >= 50 && first.is_none() {
+            first = Some(at);
+        }
+    };
+    let (_, control, _) = run_observed(stalls, slow_ppm, None, false, false, &mut observe);
+    (first, most, control)
 }
 
 /// The largest offset, in ms, from `from_s` on, from the mean delay before
@@ -326,4 +367,33 @@ fn one_stray_callback_late_in_the_hold_keeps_no_step_from_its_re_anchor() {
         resyncs[0] <= STALL_AT_S as f64 + 1.5,
         "resyncs at {resyncs:?} s"
     );
+}
+
+// covers: S347
+#[test]
+fn an_output_on_a_clock_11_percent_fast_starves_half_its_callbacks_within_5_s() {
+    // A Mac's Bluetooth speaker whose device pulled about 11% more than the
+    // capture wrote played in bursts and never recovered.
+    let (first, most, _) = starved_share(&[], -110_000);
+    assert!(
+        first.is_some_and(|at| at <= 5.0),
+        "half starved first at {first:?} s, at most {most}%"
+    );
+}
+
+// covers: S347
+#[test]
+fn an_output_on_a_clock_2_percent_slow_never_counts_a_starved_callback() {
+    let (first, most, _) = starved_share(&[], 20_000);
+    assert_eq!((first, most), (None, 0));
+}
+
+// covers: S347
+#[test]
+fn an_input_gap_that_starves_the_output_never_counts_toward_its_share() {
+    // The capture writes nothing for 10 s while the output plays on.
+    let (first, most, control) = starved_share(&[(STALL_AT_S * 1000, 10_000, 0)], 0);
+    let starved = control.counters().starved_renders;
+    assert!(starved > 100, "the gap starved {starved} callbacks");
+    assert!(first.is_none() && most < 10, "at most {most}%");
 }

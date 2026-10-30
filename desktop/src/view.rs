@@ -5428,6 +5428,9 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::SpeakerBusy { speaker } => {
             strings.invoke_notice_speaker_busy(speaker.as_str().into())
         }
+        NoticeMessage::SpeakerStruggling { speaker } => {
+            strings.invoke_notice_speaker_struggling(speaker.as_str().into())
+        }
         NoticeMessage::PairFirst { speaker } => {
             strings.invoke_notice_pair_first(speaker.as_str().into())
         }
@@ -5593,6 +5596,9 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::SpeakerFailed { speaker } => (NoticeKind::SpeakerFailed, speaker.as_str()),
         NoticeMessage::SpeakerLost { speaker } => (NoticeKind::SpeakerLost, speaker.as_str()),
         NoticeMessage::SpeakerBusy { speaker } => (NoticeKind::SpeakerBusy, speaker.as_str()),
+        NoticeMessage::SpeakerStruggling { speaker } => {
+            (NoticeKind::SpeakerStruggling, speaker.as_str())
+        }
         NoticeMessage::PairFirst { speaker } => (NoticeKind::PairFirst, speaker.as_str()),
         NoticeMessage::AirPlayRetrying {
             speaker,
@@ -11174,6 +11180,9 @@ mod tests {
                 speaker: "A".into(),
             },
             NoticeMessage::SpeakerBusy {
+                speaker: "A".into(),
+            },
+            NoticeMessage::SpeakerStruggling {
                 speaker: "A".into(),
             },
             NoticeMessage::PairFirst {

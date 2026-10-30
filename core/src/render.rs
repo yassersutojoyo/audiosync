@@ -93,7 +93,7 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::convert::map_to_device;
@@ -262,6 +262,10 @@ pub const EARLIEST_LEAK_NS_PER_S: u64 = 1_000_000;
 /// A callback later than this, in ms, counts as late in
 /// [`Renderer::late_callbacks`] (S209).
 pub const LATE_COUNT_MS: u64 = 5;
+
+/// The device frames, in ms, over which a renderer counts its starved
+/// callbacks (S347).
+pub const STARVE_WINDOW_MS: u64 = 5000;
 
 /// A delay increase larger than this, in ms, restarts the reader at the new
 /// delay (S187, S159) instead of inserting the increase as silence (S47).
@@ -448,6 +452,8 @@ struct Shared {
     /// The clock rate the renderer follows, in ppm: positive when the
     /// device's clock runs slow (S207).
     followed_ppm: AtomicI64,
+    /// The share of callbacks that starved over the latest span (S347).
+    starved_percent: AtomicU32,
     /// Start steps made, and the capture frames they moved the output
     /// later by (S318).
     start_steps: AtomicU64,
@@ -541,6 +547,7 @@ impl RendererControl {
                 stall_reanchors: AtomicU64::new(0),
                 late_reanchors: AtomicU64::new(0),
                 followed_ppm: AtomicI64::new(0),
+                starved_percent: AtomicU32::new(0),
                 start_steps: AtomicU64::new(0),
                 start_step_frames: AtomicU64::new(0),
                 bluetooth: AtomicBool::new(false),
@@ -729,6 +736,13 @@ impl RendererControl {
     /// up, negative when it runs fast; 0 when it follows none.
     pub fn followed_ppm(&self) -> i64 {
         self.shared.followed_ppm.load(Ordering::Relaxed)
+    }
+
+    /// The share of the renderer's callbacks, in percent, that starved
+    /// while the capture was writing, over its latest completed
+    /// [`STARVE_WINDOW_MS`] of device frames (S347); 0 before the first.
+    pub fn starved_percent(&self) -> u32 {
+        self.shared.starved_percent.load(Ordering::Relaxed)
     }
 
     /// The start steps the renderer made inside its start window (S318).
@@ -942,6 +956,11 @@ pub struct Renderer {
     warming: bool,
     /// The latest timed callback's `now - output time`, in ns (S209).
     callback_late_ns: i64,
+    /// The device frames, callbacks and starved callbacks of the span the
+    /// starved share is counted over (S347).
+    starve_frames: u64,
+    starve_callbacks: u32,
+    starve_count: u32,
     /// The higher of that value and the one of the timed callback before,
     /// so one stray early stamp on an anchor drops no anchor floor (S209).
     anchor_late_ns: i64,
@@ -1114,6 +1133,9 @@ impl Renderer {
             floor_formed: false,
             warming: false,
             callback_late_ns: 0,
+            starve_frames: 0,
+            starve_callbacks: 0,
+            starve_count: 0,
             anchor_late_ns: 0,
             start_lead_fixed: false,
             awaiting_resync: false,
@@ -1368,6 +1390,7 @@ impl Renderer {
         let ramp = self.stage.begin(self.gain.get(), frames);
         let read_capacity = self.stereo.len() / 2;
         let mut done = 0;
+        let mut starved = false;
         while done < frames {
             let n = (frames - done).min(RENDER_CHUNK);
             let need = self.resampler.input_frames_for(n).min(read_capacity);
@@ -1379,6 +1402,7 @@ impl Renderer {
             };
             if need > 0 {
                 let report = self.read(need, done);
+                starved |= report.starved > 0;
                 layout = self.layout(&report, need, n);
             }
             let (_, produced) = self
@@ -1398,6 +1422,9 @@ impl Renderer {
         }
         // A trailing partial frame is never played; keep it silent.
         out[frames * channels..].fill(0.0);
+        // A stale or missing stamp means the capture isn't writing, which
+        // starves every output alike.
+        self.count_starved(frames, starved && capture.is_some());
         self.finish_callback(frames, time);
         self.shared
             .state
@@ -1688,6 +1715,22 @@ impl Renderer {
                 let by = (off.abs() - TRIM_DEAD_ZONE_FRAMES).ceil().min(most) as i64;
                 if off < 0.0 { by } else { -by }
             }
+        }
+    }
+
+    /// Counts a callback of `frames` device frames, `starved` or not, and
+    /// once the span holds [`STARVE_WINDOW_MS`] of device frames publishes
+    /// the share of its callbacks that starved and starts the next (S347).
+    fn count_starved(&mut self, frames: usize, starved: bool) {
+        self.starve_frames = self.starve_frames.saturating_add(frames as u64);
+        self.starve_callbacks = self.starve_callbacks.saturating_add(1);
+        self.starve_count += u32::from(starved);
+        if self.starve_frames >= u64::from(self.device_rate) * STARVE_WINDOW_MS / 1000 {
+            let percent = u64::from(self.starve_count) * 100 / u64::from(self.starve_callbacks);
+            self.shared
+                .starved_percent
+                .store(percent as u32, Ordering::Relaxed);
+            (self.starve_frames, self.starve_callbacks, self.starve_count) = (0, 0, 0);
         }
     }
 

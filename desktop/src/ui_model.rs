@@ -640,6 +640,9 @@ pub enum NoticeMessage {
     /// Another app holds a speaker's device for itself (exclusive mode). It
     /// stays on and plays once that app lets go; the notice then clears.
     SpeakerBusy { speaker: String },
+    /// A speaker's device ran away again soon after its reopen (S347). It
+    /// plays on; switching it off, or streaming stopping, clears this.
+    SpeakerStruggling { speaker: String },
     /// A zone or preset the web remote turned on left this speaker off: it
     /// asks for a code, which only the PC can answer.
     PairFirst { speaker: String },

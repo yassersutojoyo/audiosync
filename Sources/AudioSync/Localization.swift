@@ -875,6 +875,11 @@ struct UIStrings {
     /// A local output that stalled again before playing 5 s; it stays on (S334).
     func outputLost(name: String) -> String { "\(name) was disconnected. It plays again as soon as it's back." }
 
+    /// A local output that ran away again within 30 s of its reopen; it plays on (S347).
+    func outputLinkStruggling(name: String) -> String {
+        "\(name)'s link is struggling. Turn the speaker off and on again."
+    }
+
     /// `refusedCaptureRate`: the capture rate (Hz) when that was the reason.
     func outputCouldNotStart(names: [String], refusedCaptureRate: Double? = nil) -> String {
         let shown = listed(names)

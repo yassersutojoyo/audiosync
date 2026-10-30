@@ -158,6 +158,18 @@ const RESTART_TRIAL_POLLS: u32 = 10;
 /// of seconds.
 const RESUME_WINDOW_POLLS: u32 = 120;
 
+/// A second runaway of an output this many polls after its reopen, about
+/// 30 s, posts the struggling notice instead of reopening it again (S347).
+const RUNAWAY_RETRY_POLLS: u64 = 60;
+
+/// An output runs away once its starved share reaches this percent while
+/// every other output of the session stays under [`OTHERS_BELOW_PERCENT`]
+/// (S347).
+const RUNAWAY_PERCENT: u32 = 50;
+
+/// See [`RUNAWAY_PERCENT`].
+const OTHERS_BELOW_PERCENT: u32 = 10;
+
 /// A poll this long in wall time after the one before counts as a resume
 /// when no notice said so (S332): above the 5 s a start that doesn't answer
 /// may hold a poll.
@@ -539,6 +551,77 @@ struct StallTrial {
     told: bool,
 }
 
+/// What an output that ran away leads to (S347).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunawayStep {
+    /// Its stream ends and opens again at once.
+    Reopen,
+    /// It plays on, and [`BackendEvent::OutputStruggling`] tells of it.
+    Notice,
+    /// It plays on, already told of.
+    Quiet,
+}
+
+/// The outputs that ran away (S347): a second runaway within
+/// [`RUNAWAY_RETRY_POLLS`] of a reopen posts the struggling notice instead.
+#[derive(Default)]
+struct RunawayRetry {
+    /// Each output's poll of its latest reopen, and whether it was told of.
+    entries: BTreeMap<String, (u64, bool)>,
+}
+
+impl RunawayRetry {
+    fn ran_away(&mut self, id: &str, poll: u64) -> RunawayStep {
+        match self.entries.get_mut(id) {
+            Some((reopened, told)) if poll.saturating_sub(*reopened) < RUNAWAY_RETRY_POLLS => {
+                if std::mem::replace(told, true) {
+                    RunawayStep::Quiet
+                } else {
+                    RunawayStep::Notice
+                }
+            }
+            // A notice already up stays through a later reopen.
+            Some((reopened, _)) => {
+                *reopened = poll;
+                RunawayStep::Reopen
+            }
+            None => {
+                self.entries.insert(id.to_owned(), (poll, false));
+                RunawayStep::Reopen
+            }
+        }
+    }
+
+    /// Forgets output `id`; true when it was told of, so its notice ends.
+    fn forget(&mut self, id: &str) -> bool {
+        self.entries.remove(id).is_some_and(|(_, told)| told)
+    }
+
+    /// Forgets every output and returns those told of.
+    fn clear(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.entries)
+            .into_iter()
+            .filter_map(|(id, (_, told))| told.then_some(id))
+            .collect()
+    }
+}
+
+/// The outputs among `percents`, each one's starved share, that ran away
+/// (S347): at least [`RUNAWAY_PERCENT`] while every other stays under
+/// [`OTHERS_BELOW_PERCENT`], so a capture that starves them all never counts.
+fn runaways(percents: &BTreeMap<String, u32>) -> Vec<String> {
+    percents
+        .iter()
+        .filter(|&(id, &percent)| {
+            percent >= RUNAWAY_PERCENT
+                && percents
+                    .iter()
+                    .all(|(other, &p)| other == id || p < OTHERS_BELOW_PERCENT)
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
 /// An output whose listed device refuses to open as if it were gone
 /// (S331).
 struct Refusal {
@@ -564,6 +647,8 @@ struct Playing<R> {
     control: RendererControl,
     gain: Arc<SharedGain>,
     handle: R,
+    /// Its stream ran away (S347), which is acted on once.
+    ran_away: bool,
 }
 
 /// Where the one restart of an output that started on a new Bluetooth link
@@ -705,6 +790,8 @@ pub struct Controller<D: Driver> {
     /// The outputs whose stream stalled and hasn't played five seconds
     /// since (S326).
     stall_trials: BTreeMap<String, StallTrial>,
+    /// The outputs that ran away (S347).
+    runaway: RunawayRetry,
     /// What AirPlay receivers with a screen show of the playing track.
     track_info: TrackInfo,
     /// The source track info last followed, as it looks to track info.
@@ -781,6 +868,7 @@ impl<D: Driver> Controller<D> {
             hung: BTreeSet::new(),
             refused: BTreeMap::new(),
             stall_trials: BTreeMap::new(),
+            runaway: RunawayRetry::default(),
             track_info: TrackInfo::default(),
             track_source: None,
             calibration_tap: Arc::new(CalibrationTap::new()),
@@ -1591,6 +1679,7 @@ impl<D: Driver> Controller<D> {
                             control,
                             gain,
                             handle,
+                            ran_away: false,
                         },
                     );
                     None
@@ -1735,6 +1824,8 @@ impl<D: Driver> Controller<D> {
             {
                 keep_lead(&mut session.held_leads, id, &playing.control);
             }
+            // Its lost notice takes the struggling notice's place (S68).
+            self.runaway.forget(id);
         }
         for id in &unlisted {
             self.log.log(|| {
@@ -2321,6 +2412,62 @@ impl<D: Driver> Controller<D> {
         dropped
     }
 
+    /// Acts once on each playing output that ran away (S347): the first
+    /// time, or [`RUNAWAY_RETRY_POLLS`] after its latest reopen, its stream
+    /// ends at once, without a fade, its lead held, and the same poll's
+    /// [`Self::sync_outputs`] opens it again; a second time within those
+    /// polls it plays on and [`BackendEvent::OutputStruggling`] tells of it
+    /// once. Returns the outputs it ended.
+    fn drop_runaway_outputs(&mut self) -> Vec<String> {
+        let Some(session) = self.session.as_mut() else {
+            return Vec::new();
+        };
+        let percents: BTreeMap<String, u32> = session
+            .outputs
+            .iter()
+            .map(|(id, playing)| (id.clone(), playing.control.starved_percent()))
+            .collect();
+        let mut dropped = Vec::new();
+        for id in runaways(&percents) {
+            let Some(playing) = session.outputs.get_mut(&id) else {
+                continue;
+            };
+            if std::mem::replace(&mut playing.ran_away, true) {
+                continue;
+            }
+            let percent = percents[&id];
+            let step = self.runaway.ran_away(&id, self.polls);
+            if step == RunawayStep::Reopen {
+                if let Some(playing) = session.outputs.remove(&id)
+                    && self.policy.settings(&id).enabled
+                {
+                    keep_lead(&mut session.held_leads, &id, &playing.control);
+                }
+                dropped.push(id.clone());
+            } else if step == RunawayStep::Notice {
+                self.pending
+                    .push(BackendEvent::OutputStruggling { id: id.clone() });
+            }
+            // Written once a dropped stream is released (S126).
+            self.log.log(|| {
+                let next = match step {
+                    RunawayStep::Reopen => "it opens again",
+                    RunawayStep::Notice => {
+                        "it ran away again within 30 s of its reopen, so it plays on with the \
+                         struggling notice"
+                    }
+                    RunawayStep::Quiet => "it plays on",
+                };
+                format!(
+                    "output {} ran away: {percent}% of its callbacks starved over 5 s while the \
+                     capture wrote; {next}",
+                    label(&self.names, &id)
+                )
+            });
+        }
+        dropped
+    }
+
     /// Counts a poll of play for each reopened output that stalled (S326):
     /// once one has played [`RESTART_TRIAL_POLLS`], its stall is over, and
     /// a notice about it clears.
@@ -2760,6 +2907,9 @@ impl<D: Driver> Controller<D> {
             if trial.told {
                 self.pending.push(BackendEvent::OutputPlaysAgain { id });
             }
+        }
+        for id in self.runaway.clear() {
+            self.pending.push(BackendEvent::OutputPlaysAgain { id });
         }
         for id in std::mem::take(&mut self.busy).into_keys() {
             self.pending.push(BackendEvent::OutputFree { id });
@@ -3553,6 +3703,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 self.pending
                     .push(BackendEvent::OutputPlaysAgain { id: id.to_owned() });
             }
+            if self.runaway.forget(id) {
+                self.pending
+                    .push(BackendEvent::OutputPlaysAgain { id: id.to_owned() });
+            }
         }
         if !enabled && self.busy.remove(id).is_some() {
             self.pending
@@ -4245,6 +4399,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             }
         }
         ended.extend(self.drop_reformatted_outputs());
+        ended.extend(self.drop_runaway_outputs());
 
         // A stopped output may mean a device went away before its
         // notification arrived, so the list is read again then too.
@@ -4872,6 +5027,12 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::OutputStalled { id } => {
             format!(
                 "output {} stalled again soon after a reopen",
+                label(names, id)
+            )
+        }
+        BackendEvent::OutputStruggling { id } => {
+            format!(
+                "output {} ran away again soon after a reopen",
                 label(names, id)
             )
         }
@@ -6461,6 +6622,39 @@ mod tests {
         span: Duration::from_secs(2),
         sign: StallSign::FullPadding,
     };
+
+    // covers: S347
+    #[test]
+    fn an_output_running_away_reopens_once_and_the_second_within_30_s_posts_the_struggling_notice()
+    {
+        let shares = |pairs: &[(&str, u32)]| -> BTreeMap<String, u32> {
+            pairs.iter().map(|&(id, p)| (id.to_owned(), p)).collect()
+        };
+        assert_eq!(runaways(&shares(&[("a", 80)])), ["a"]);
+        assert_eq!(runaways(&shares(&[("a", 80), ("b", 9)])), ["a"]);
+        // An input gap starves every output: none ran away.
+        assert!(runaways(&shares(&[("a", 80), ("b", 60)])).is_empty());
+        assert!(runaways(&shares(&[("a", 80), ("b", 10)])).is_empty());
+        assert!(runaways(&shares(&[("a", 49), ("b", 0)])).is_empty());
+
+        let mut retry = RunawayRetry::default();
+        let steps = [
+            retry.ran_away("a", 100),
+            retry.ran_away("a", 100 + RUNAWAY_RETRY_POLLS - 1),
+            retry.ran_away("a", 100 + RUNAWAY_RETRY_POLLS - 1),
+            retry.ran_away("a", 100 + RUNAWAY_RETRY_POLLS),
+        ];
+        use RunawayStep::{Notice, Quiet, Reopen};
+        assert_eq!(steps, [Reopen, Notice, Quiet, Reopen]);
+        // Switched off or unlisted, its notice ends and the next is a first.
+        assert!(retry.forget("a"));
+        assert!(!retry.forget("a"));
+        assert_eq!(retry.ran_away("a", 300), Reopen);
+        assert_eq!(retry.ran_away("b", 300), Reopen);
+        assert_eq!(retry.ran_away("b", 301), Notice);
+        assert_eq!(retry.clear(), ["b"]);
+        assert_eq!(retry.ran_away("b", 302), Reopen);
+    }
 
     // covers: S326
     #[test]

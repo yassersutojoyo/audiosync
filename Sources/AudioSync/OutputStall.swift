@@ -106,12 +106,15 @@ enum OutputLoss: Equatable {
     case stalled(quietS: Double, sign: OutputStallSign)
     /// Its device's rate or channel count changed under it (S330).
     case formatChanged(old: OutputDeviceFormat, new: OutputDeviceFormat)
+    /// `percent` of its callbacks starved while the others played (S347).
+    case ranAway(percent: Int)
 
     var reason: String {
         switch self {
         case .deviceGone: return "device lost"
         case .stalled: return "stalled"
         case .formatChanged: return "format changed"
+        case .ranAway: return "ran away"
         }
     }
 }
@@ -224,6 +227,81 @@ struct OutputStallRetry {
 
     mutating func reset() {
         entries = [:]
+    }
+}
+
+/// A local output whose device pulls faster than the capture writes (S347):
+/// at least half its callbacks starve while every other output starves
+/// under a tenth. The first runaway reopens it; a second within 30 s of
+/// that reopen posts the struggling notice and it plays on. Uptime. Main
+/// queue only.
+struct OutputRunawayRetry {
+    static let runawayPercent = 50
+    static let othersBelowPercent = 10
+    static let noticeWithinS = 30.0
+
+    enum Step: Equatable {
+        case reopen
+        case notice
+        case quiet
+    }
+
+    /// The outputs among `percents`, each one's starved share, that ran away.
+    static func runaways(_ percents: [String: Int]) -> Set<String> {
+        Set(percents.filter { uid, percent in
+            percent >= runawayPercent && percents.allSatisfy { $0.key == uid || $0.value < othersBelowPercent }
+        }.keys)
+    }
+
+    private struct Entry {
+        var reopenedAtS: Double
+        var noticed: Bool
+    }
+
+    private var entries: [String: Entry] = [:]
+
+    /// The outputs whose struggling notice is up.
+    var struggling: Set<String> { Set(entries.filter { $0.value.noticed }.keys) }
+
+    mutating func ranAway(_ uid: String, nowS: Double) -> Step {
+        guard let entry = entries[uid], nowS - entry.reopenedAtS < Self.noticeWithinS else {
+            // A notice already up stays through a later reopen.
+            entries[uid] = Entry(reopenedAtS: nowS, noticed: entries[uid]?.noticed ?? false)
+            return .reopen
+        }
+        if entry.noticed { return .quiet }
+        entries[uid]?.noticed = true
+        return .notice
+    }
+
+    /// Forgets the outputs switched off and those whose device left the
+    /// list. Returns those of them whose notice ends.
+    @discardableResult
+    mutating func settle(enabled: Set<String>, listed: Set<String>) -> Set<String> {
+        let before = struggling
+        entries = entries.filter { enabled.contains($0.key) && listed.contains($0.key) }
+        return before.subtracting(struggling)
+    }
+
+    mutating func reset() {
+        entries = [:]
+    }
+}
+
+/// The runaways already reported, by each output's attach token, so a
+/// reopened output, which gets a new token, is reported again (S347). A
+/// renderer's identity can't key it: a reopened one may take a freed one's
+/// address. Main queue only.
+struct OutputRunawayReports {
+    private var reported: [String: UInt64] = [:]
+
+    /// The outputs among `runaways` not yet reported under their current
+    /// token, now counted as reported; forgets those whose token changed.
+    mutating func fresh(_ runaways: Set<String>, tokens: [String: UInt64]) -> Set<String> {
+        reported = reported.filter { tokens[$0.key] == $0.value }
+        let fresh = runaways.filter { uid in tokens[uid].map { reported[uid] != $0 } ?? false }
+        for uid in fresh { reported[uid] = tokens[uid] }
+        return fresh
     }
 }
 

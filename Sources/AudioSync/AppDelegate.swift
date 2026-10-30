@@ -258,6 +258,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var briefLoss = LocalBriefLoss()
     /// Local outputs whose render callback stopped, until a stream plays 5 s (S334).
     var stallRetry = OutputStallRetry()
+    /// Local outputs that ran away, for 30 s after each reopen (S347).
+    var runawayRetry = OutputRunawayRetry()
     /// Local outputs whose listed device refuses to start, until one starts (S331).
     var refusalRetry = OutputRefusalRetry()
     /// The microphone calibration under way, if any (S232).
@@ -441,12 +443,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 self.noteRelinked(lostUID)
                 self.outputStalled(lostUID)
                 self.devicesChanged()
+            case .ranAway:
+                self.noteRelinked(lostUID)
+                self.devicesChanged()
             case .deviceGone:
                 self.noteRelinked(lostUID)   // it may return inside one rescan, never missing from a list
                 DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
                 self.devicesChanged()
             }
             self.checkBriefLosses()   // its start lead counts for 10 s at most (S328)
+        }
+        engine.onOutputRunaway = { [weak self] uid, percent in
+            self?.outputRanAway(uid, percent: percent)
         }
         engine.nowPlayingReading = { [weak self] in
             guard let monitor = self?.nowPlaying, monitor.isRunning else { return nil }

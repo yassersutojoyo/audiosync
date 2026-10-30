@@ -401,6 +401,9 @@ final class CoreRenderer {
     /// Any thread: the clock rate it follows, in ppm, positive when the
     /// device's clock runs slow (S207).
     var followedPpm: Int64 { asc_renderer_followed_ppm(handle) }
+    /// Any thread: the share of its callbacks, in percent, that starved while
+    /// the capture wrote, over its latest 5 s (S347).
+    var starvedPercent: UInt32 { asc_renderer_starved_percent(handle) }
 }
 
 /// A lost speaker's start lead, still counted in the session lead until this

@@ -7717,6 +7717,47 @@ do {
           "output stall: a start failing for good after a stall ends the stall and is switched off with its notice; a refusal retries",
           "\(hardStep) \(refusedStep) \(hard.tracked)")
 }
+// covers: S347
+do {
+    let alone = OutputRunawayRetry.runaways(["A": 80])
+    let beside = OutputRunawayRetry.runaways(["A": 80, "B": 9])
+    let allStarve = OutputRunawayRetry.runaways(["A": 80, "B": 60])
+    let otherAtTen = OutputRunawayRetry.runaways(["A": 80, "B": 10])
+    let under = OutputRunawayRetry.runaways(["A": 49, "B": 0])
+    check(alone == ["A"] && beside == ["A"] && allStarve.isEmpty && otherAtTen.isEmpty && under.isEmpty,
+          "output runaway: half its callbacks starved runs away while every other output starves under a tenth; "
+            + "an input gap that starves them all never does",
+          "\(alone) \(beside) \(allStarve) \(otherAtTen) \(under)")
+    var retry = OutputRunawayRetry()
+    let steps = [retry.ranAway("A", nowS: 100), retry.ranAway("A", nowS: 129.9), retry.ranAway("A", nowS: 129.9),
+                 retry.ranAway("A", nowS: 130)]
+    let struggling = retry.struggling
+    let kept = retry.settle(enabled: ["A"], listed: ["A"])
+    let switchedOff = retry.settle(enabled: [], listed: ["A"])
+    let afterOff = retry.ranAway("A", nowS: 140)
+    _ = retry.ranAway("B", nowS: 200)
+    _ = retry.ranAway("B", nowS: 201)
+    let unlisted = retry.settle(enabled: ["A", "B"], listed: ["A"])
+    _ = retry.ranAway("C", nowS: 300)
+    _ = retry.ranAway("C", nowS: 301)
+    let beforeStop = retry.struggling
+    retry.reset()
+    check(steps == [.reopen, .notice, .quiet, .reopen] && struggling == ["A"] && kept.isEmpty && switchedOff == ["A"]
+            && afterOff == .reopen && unlisted == ["B"] && beforeStop == ["C"] && retry.struggling.isEmpty
+            && UIStrings().outputLinkStruggling(name: "Desk")
+                == "Desk's link is struggling. Turn the speaker off and on again."
+            && OutputLoss.ranAway(percent: 90).reason == "ran away",
+          "output runaway: a first reopens, a second within 30 s posts the struggling notice, a third stays quiet, one after "
+            + "30 s reopens again; switch-off, unlisting and stop end the notice",
+          "\(steps) \(struggling) \(switchedOff) \(afterOff) \(unlisted) \(beforeStop)")
+    var reports = OutputRunawayReports()
+    let firstReport = reports.fresh(["A"], tokens: ["A": 1, "B": 2])
+    let sameAttach = reports.fresh(["A"], tokens: ["A": 1, "B": 2])
+    let reopened = reports.fresh(["A", "C"], tokens: ["A": 3, "B": 2])
+    check(firstReport == ["A"] && sameAttach.isEmpty && reopened == ["A"],
+          "output runaway: reported once per attach; a reopened output, with a new attach token, is reported again",
+          "\(firstReport) \(sameAttach) \(reopened)")
+}
 // covers: S334, S335 (a Mac sitting on 2026-10-28: both watches fired between the will-sleep notice and the sleep)
 do {
     typealias R = OutputStallWatch.Reading

@@ -69,7 +69,9 @@ extension AppDelegate {
         var outcome = CaptureSwitch.Outcome.switched
         briefLoss.restart()   // a new session counts only the devices listed now (S328)
         clearNotices(stallRetry.lost.map { SpeakerKey.make(id: $0, airplay: false) })   // every output opens anew
+        clearNotices(runawayRetry.struggling.map { SpeakerKey.make(id: $0, airplay: false) })
         stallRetry.reset()
+        runawayRetry.reset()
         refusalRetry.reset()
         do {
             try engine.start(source: audioSource, inputPair: currentInputPair, rebuild: rebuild)
@@ -409,6 +411,8 @@ extension AppDelegate {
         // ended is posted after this.
         clearNotices(wasRunning ? [Notice.capture, Notice.source] : [Notice.capture])
         clearNotices(stallRetry.lost.map { SpeakerKey.make(id: $0, airplay: false) })   // nothing retries them now
+        clearNotices(runawayRetry.struggling.map { SpeakerKey.make(id: $0, airplay: false) })
+        runawayRetry.reset()
         refreshStreamingViews()
     }
 
