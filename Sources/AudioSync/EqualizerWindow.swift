@@ -189,7 +189,7 @@ struct EqualizerView: View {
 
 /// A centered (−range…+range) vertical slider in 0.5 dB steps; double-click
 /// resets to 0. VoiceOver adjusts it like a slider, and once focused (Tab with
-/// keyboard navigation on) the up and down arrow keys move it one step.
+/// keyboard navigation on) the arrow keys move it one step.
 struct VerticalSlider: View {
     let value: Double
     let range: Double
@@ -209,6 +209,8 @@ struct VerticalSlider: View {
             .focusable(interactions: .activate)   // keyboard navigation only, like a native slider
             .onKeyPress(.upArrow) { nudge(1); return .handled }
             .onKeyPress(.downArrow) { nudge(-1); return .handled }
+            .onKeyPress(.rightArrow) { nudge(1); return .handled }
+            .onKeyPress(.leftArrow) { nudge(-1); return .handled }
             .accessibilityElement(children: .ignore)
             .accessibilityAdjustableAction { direction in
                 switch direction {
