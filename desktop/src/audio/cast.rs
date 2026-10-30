@@ -1498,11 +1498,20 @@ impl CastSpeakers {
         }
     }
 
+    /// Shown at once; the device's next status replaces it (C70).
     pub fn set_muted(&mut self, id: &str, muted: bool) {
-        if self.playing_device(id).is_some()
-            && let Some(link) = self.link.as_mut()
+        let Some(device) = self.playing_device(id) else {
+            return;
+        };
+        let Some(link) = self.link.as_mut() else {
+            return;
+        };
+        link.set_muted(muted);
+        if let Some(volume) = self.volumes.get_mut(&device)
+            && volume.muted != muted
         {
-            link.set_muted(muted);
+            volume.muted = muted;
+            self.pending.push(BackendEvent::CastChanged);
         }
     }
 
@@ -2782,6 +2791,23 @@ pub mod tests {
         assert_eq!(fake.state().mutes, [true]);
         assert_eq!(fake.state().resyncs, 1);
         assert_eq!(cast.speakers()[1].volume, 40.0);
+    }
+
+    // covers: C70
+    #[test]
+    fn a_mute_toggle_shows_at_once_and_the_devices_next_status_wins() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.4);
+        cast.set_muted(KITCHEN, true);
+        assert!(cast.speakers()[1].muted);
+        assert_eq!(cast.poll(), [BackendEvent::CastChanged]);
+        cast.set_muted(KITCHEN, true);
+        assert!(cast.poll().is_empty());
+
+        report(&fake, &mut cast, 0.4);
+        assert!(!cast.speakers()[1].muted);
     }
 
     #[test]
