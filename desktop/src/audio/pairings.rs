@@ -36,7 +36,7 @@
 //! that are wiped when dropped, and nothing here logs a secret: callers log
 //! what [`Loaded`] and the I/O errors say, which never holds one.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::io;
@@ -163,6 +163,9 @@ pub struct PairingStore {
     /// Polls left before [`PairingStore::keep_aside_if_due`] tries again to
     /// keep that file aside.
     keep_aside_wait: u32,
+    /// The speakers forgotten this run, which [`PairingStore::load_ignored`]
+    /// leaves out of the file ignored at launch.
+    forgotten: BTreeSet<String>,
     /// `None` until [`PairingStore::open_airplay2`].
     airplay2: Option<Airplay2File>,
     /// The AirPlay 2 timing entries (P217), in memory until
@@ -204,6 +207,7 @@ impl PairingStore {
             kept_aside: None,
             tell_kept_aside: true,
             keep_aside_wait: 0,
+            forgotten: BTreeSet::new(),
             airplay2: None,
             timing: TimingStore::in_memory(),
             tightened: false,
@@ -250,6 +254,7 @@ impl PairingStore {
             kept_aside: None,
             tell_kept_aside: matches!(loaded, Loaded::Ignored(_)),
             keep_aside_wait: 0,
+            forgotten: BTreeSet::new(),
             airplay2: None,
             timing: TimingStore::in_memory(),
             tightened,
@@ -343,6 +348,7 @@ impl PairingStore {
     /// those copies went.
     pub fn remove(&mut self, id: &str) -> (io::Result<bool>, io::Result<()>) {
         self.load_ignored();
+        self.forgotten.insert(id.to_owned());
         let removed = self.entries.remove(id).is_some();
         let unread = self.keep_aside
             && self
@@ -374,6 +380,9 @@ impl PairingStore {
         }
         if let Ok(Some((entries, skipped))) = read(path, self.sealer) {
             for (id, credentials) in entries {
+                if self.forgotten.contains(&id) {
+                    continue;
+                }
                 self.entries.entry(id).or_insert(credentials);
             }
             self.keep_aside = skipped > 0;
@@ -1074,6 +1083,27 @@ pub mod tests {
             let plain = sealer().open(&sealed).expect("opened");
             assert!(!plain.windows(framed.len()).any(|window| window == framed));
         }
+    }
+
+    // covers: S224
+    #[test]
+    fn a_speaker_forgotten_while_the_file_cant_be_read_stays_forgotten_once_it_reads() {
+        let path = test_dir("pairings-forget-locked").join(FILE_NAME);
+        fs::create_dir(&path).unwrap();
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        assert!(!removed(&mut store, "02005E005301"));
+        let mut plain = MAGIC.to_vec();
+        for (id, fill) in [(b"02005E005301", 1), (b"02005E005302", 2)] {
+            let blob = credentials("0123456789ABCDEF", fill).to_bytes();
+            plain.extend(entry(id, &blob));
+        }
+        fs::remove_dir(&path).unwrap();
+        fs::write(&path, sealer().seal(&plain).unwrap()).unwrap();
+
+        assert!(removed(&mut store, "02005E005302"));
+        assert!(!store.contains("02005E005301"));
+        let (reopened, _) = PairingStore::open(path.clone(), sealer());
+        assert!(!reopened.contains("02005E005301"));
     }
 
     #[test]
