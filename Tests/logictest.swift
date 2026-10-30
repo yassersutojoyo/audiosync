@@ -7254,6 +7254,23 @@ do {
                           SpeakerGroup(id: "g3", name: "C", members: ["lc:c"])],
           "settings: a stored group value that can't be read loses only that member, or its group, never the others",
           "\(oneBadGroup)")
+    // covers: S212 (the Mac debug log's path for a value that didn't read)
+    do {
+        struct PathKey: CodingKey {
+            let stringValue: String
+            let intValue: Int?
+            init(stringValue: String) { self.stringValue = stringValue; intValue = nil }
+            init(intValue: Int) { stringValue = "Index \(intValue)"; self.intValue = intValue }
+        }
+        let path = StoredTrace.pathText([PathKey(intValue: 2), PathKey(stringValue: "memberNames"),
+                                         PathKey(stringValue: "ap:Kitchen")])
+        let nested = StoredTrace.pathText([PathKey(intValue: 0), PathKey(stringValue: "members"), PathKey(intValue: 1),
+                                           PathKey(stringValue: "volume")])
+        let numeric = StoredTrace.pathText([PathKey(intValue: 0), PathKey(stringValue: "memberNames"), PathKey(intValue: 42)])
+        check(path == "[2].memberNames[key]" && nested == "[0].members[1].volume" && numeric == "[0].memberNames[key]",
+              "settings: the debug log's path to a value that didn't read masks a map's key, keeps indices and field names",
+              "\(path) \(nested) \(numeric)")
+    }
 
     // covers: S75
     stored.values = [Keys.legacyLocalGains: ["a": 3.49, "b": 150.0, "c": Double.nan] as [String: Any],

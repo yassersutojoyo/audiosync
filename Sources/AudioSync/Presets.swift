@@ -24,7 +24,12 @@ struct SpeakerPreset: Codable, Equatable {
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             key = try container.decode(String.self, forKey: .key)
-            volume = try? container.decodeIfPresent(Double.self, forKey: .volume)
+            do {
+                volume = try container.decodeIfPresent(Double.self, forKey: .volume)
+            } catch {
+                volume = nil
+                StoredTrace.log(decoder, container.codingPath + [CodingKeys.volume as CodingKey], "read as none")
+            }
         }
 
         // A missing volume is written as null, as S251 stores it.
@@ -113,7 +118,7 @@ extension SpeakerPreset {
         name = try container.decode(String.self, forKey: .name)
         members = try container.decodeLossyList(Member.self, forKey: .members)
         zones = try container.decodeLossyList(ZoneVolume.self, forKey: .zones)
-        master = container.decodeNumberOrNaN(forKey: .master)
+        master = container.decodeNumberOrNaN(forKey: .master, of: decoder)
         gains = try container.decode([Double].self, forKey: .gains)
     }
 }
@@ -122,7 +127,7 @@ extension SpeakerPreset.ZoneVolume {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
-        volume = container.decodeNumberOrNaN(forKey: .volume)
+        volume = container.decodeNumberOrNaN(forKey: .volume, of: decoder)
     }
 }
 

@@ -269,25 +269,28 @@ struct AppSettings: Equatable {
     /// The stored groups without a group that can't be read; none when the
     /// data is missing or isn't a list.
     static func decodeGroups(_ data: Data?) -> [SpeakerGroup] {
-        decodeList(SpeakerGroup.self, data)
+        decodeList(SpeakerGroup.self, data, key: Keys.groups)
     }
 
     /// The stored zones as S245 keeps them, without a zone that can't be
     /// read; none when the data is missing or isn't a list.
     static func decodeZones(_ data: Data?) -> [SpeakerZone] {
-        SpeakerZone.normalized(decodeList(SpeakerZone.self, data))
+        SpeakerZone.normalized(decodeList(SpeakerZone.self, data, key: Keys.zones))
     }
 
     /// The stored presets as S251 keeps them, without a preset that can't be
     /// read; none when the data is missing or isn't a list.
     static func decodePresets(_ data: Data?) -> [SpeakerPreset] {
-        SpeakerPreset.normalized(decodeList(SpeakerPreset.self, data))
+        SpeakerPreset.normalized(decodeList(SpeakerPreset.self, data, key: Keys.presets))
     }
 
     /// The stored list without the elements that can't be read as `T`; none
-    /// when the data is missing or isn't a list.
-    static func decodeList<T: Decodable>(_ type: T.Type, _ data: Data?) -> [T] {
-        guard let data, let list = try? JSONDecoder().decode([LossyDecoded<T>].self, from: data) else { return [] }
+    /// when the data is missing or isn't a list. The debug log names what
+    /// didn't read under `key`.
+    static func decodeList<T: Decodable>(_ type: T.Type, _ data: Data?, key: String) -> [T] {
+        let decoder = JSONDecoder()
+        decoder.userInfo[StoredTrace.settingsKey] = key
+        guard let data, let list = try? decoder.decode([LossyDecoded<T>].self, from: data) else { return [] }
         return list.compactMap(\.value)
     }
 }
@@ -299,6 +302,27 @@ struct LossyDecoded<T: Decodable>: Decodable {
 
     init(from decoder: Decoder) throws {
         value = try? T(from: decoder)
+        if value == nil { StoredTrace.log(decoder, decoder.codingPath, "dropped") }
+    }
+}
+
+/// Debug lines for stored settings that didn't read, by settings key and path
+/// only: never a value, a name or a map's key (privacy).
+enum StoredTrace {
+    static let settingsKey = CodingUserInfoKey(rawValue: "settingsKey")!
+    private static let fieldNames: Set = ["members", "zones", "memberNames", "volume", "master"]
+
+    static func log(_ decoder: Decoder, _ path: [CodingKey], _ outcome: String) {
+        DebugTrace.log("[AudioSync] settings: \((decoder.userInfo[settingsKey] as? String) ?? "?")\(pathText(path)) unreadable, \(outcome)")
+    }
+
+    static func pathText(_ path: [CodingKey]) -> String {
+        zip([""] + path.map(\.stringValue), path).map { parent, key in
+            // A map's key may be numeric text, so its intValue says nothing.
+            if parent == "memberNames" { return "[key]" }
+            if let index = key.intValue { return "[\(index)]" }
+            return fieldNames.contains(key.stringValue) ? "." + key.stringValue : "[key]"
+        }.joined()
     }
 }
 
@@ -310,9 +334,12 @@ extension KeyedDecodingContainer {
     }
 
     /// The number under `key`, NaN when it is missing or isn't one: the S245
-    /// and S251 clamps turn NaN into the default.
-    func decodeNumberOrNaN(forKey key: Key) -> Double {
-        (try? decodeIfPresent(Double.self, forKey: key)) ?? .nan
+    /// and S251 clamps turn NaN into the default, which `decoder`'s debug log
+    /// line says.
+    func decodeNumberOrNaN(forKey key: Key, of decoder: Decoder) -> Double {
+        if let number = try? decodeIfPresent(Double.self, forKey: key) { return number }
+        StoredTrace.log(decoder, codingPath + [key as CodingKey], "default used")
+        return .nan
     }
 }
 
