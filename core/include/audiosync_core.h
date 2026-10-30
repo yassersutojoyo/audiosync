@@ -201,6 +201,11 @@ extern "C" {
 #define ASC_AIRPLAY_FILE_TIGHTENED 1   /* other accounts could read or write it; it is owner-only now */
 #define ASC_AIRPLAY_FILE_STILL_OPEN 2  /* other accounts can read or write it; its mode couldn't be changed */
 
+/* What asc_airplay_forget_pairing returns. */
+#define ASC_AIRPLAY_FORGET_NOT_PAIRED 0 /* it wasn't paired, or a NULL or dead handle or a NULL id */
+#define ASC_AIRPLAY_FORGET_FORGOTTEN 1  /* forgotten, and its files written */
+#define ASC_AIRPLAY_FORGET_UNWRITTEN 2  /* forgotten for this handle, but a file couldn't be written: the next launch may find it again */
+
 /* The largest hold-back asc_airplay_set_hold_back applies, in ms: the sender's limit on a speaker's delay. */
 #define ASC_AIRPLAY_MAX_DELAY_MS 20000
 
@@ -1924,8 +1929,12 @@ int32_t asc_airplay_open_pairings(AscAirPlay *airplay, const char *path);
  * are written to it as pairings give them. Kept like the pairings file
  * (versioned, mode 0600, replaced through a temporary file); it never holds
  * a password and its credentials never cross this interface. With the hidden
- * AirPlay 2 switch off it reads and writes nothing and returns 0. Returns how
- * many receivers it holds credentials for, or an ASC_AIRPLAY_PAIRINGS_* code.
+ * AirPlay 2 switch off it reads and writes nothing and returns 0, and only
+ * asc_airplay_forget_pairing opens the file, to drop the receiver from it,
+ * and writes it only when it reads as this build's own: one it can't read
+ * or parse, or that another account owns, is left as it is.
+ * Returns how many receivers it holds credentials for, or an
+ * ASC_AIRPLAY_PAIRINGS_* code.
  */
 int32_t asc_airplay_open_airplay2_identity(AscAirPlay *airplay, const char *path);
 
@@ -1984,10 +1993,11 @@ bool asc_airplay_set_password(AscAirPlay *airplay, const char *id, const char *p
 
 /*
  * Forgets the stored credentials of `id` and rewrites the pairings file; the
- * receiver is reported again as ASC_AIRPLAY_NEEDS_PIN. Returns whether it was
- * paired. The core also forgets credentials a receiver turns down by itself.
+ * receiver is reported again as ASC_AIRPLAY_NEEDS_PIN. Returns an
+ * ASC_AIRPLAY_FORGET_* code. The core also forgets credentials a receiver
+ * turns down by itself.
  */
-bool asc_airplay_forget_pairing(AscAirPlay *airplay, const char *id);
+int32_t asc_airplay_forget_pairing(AscAirPlay *airplay, const char *id);
 
 /*
  * The sender's audio input, for the capture thread: the first call hands it

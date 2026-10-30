@@ -1146,6 +1146,9 @@ pub struct AirPlaySpeakers {
     /// that end comes (a pairing ends once), so the two never run at once;
     /// when that end is a success, it never starts and ends as paired.
     ending: BTreeSet<String>,
+    /// The speakers in `ending` whose pairing the user forgot since: what
+    /// their cancelled pairing still reports pairs nothing.
+    forgotten_while_ending: BTreeSet<String>,
     /// The next `PairingRun::shown_order`.
     next_shown_order: u64,
     /// The passwords the user typed, by speaker ID, until AudioSync quits.
@@ -1281,6 +1284,7 @@ impl AirPlaySpeakers {
             homekit_keys: BTreeMap::new(),
             pairings: BTreeMap::new(),
             ending: BTreeSet::new(),
+            forgotten_while_ending: BTreeSet::new(),
             next_shown_order: 0,
             passwords: BTreeMap::new(),
             password_asks: BTreeMap::new(),
@@ -1327,7 +1331,7 @@ impl AirPlaySpeakers {
     }
 
     /// Hands a sender with the hidden AirPlay 2 switch on the stored device
-    /// ID; with the switch off the identity file is never touched.
+    /// ID; with the switch off only Forget Pairing opens the identity file.
     fn open_airplay2(&mut self) {
         if !self.link.airplay2() {
             return;
@@ -1382,6 +1386,7 @@ impl AirPlaySpeakers {
         self.homekit_keys.clear();
         self.pairings.clear();
         self.ending.clear();
+        self.forgotten_while_ending.clear();
         self.airplay1_outcome.clear();
         self.session_paths.clear();
         // A password prompt still waiting (discovery stopped, the sessions
@@ -1441,6 +1446,7 @@ impl AirPlaySpeakers {
         self.homekit_keys.clear();
         self.pairings.clear();
         self.ending.clear();
+        self.forgotten_while_ending.clear();
         self.password_attempts.clear();
         self.airplay1_outcome.clear();
         self.session_paths.clear();
@@ -2307,6 +2313,9 @@ impl AirPlaySpeakers {
     /// the user switches it on.
     pub fn forget_pairing(&mut self, id: &str) {
         self.stop_pairing(id, "the user forgot the pairing");
+        if self.ending.contains(id) {
+            self.forgotten_while_ending.insert(id.to_owned());
+        }
         let password = self.passwords.remove(id).is_some();
         if password {
             self.log
@@ -2343,6 +2352,10 @@ impl AirPlaySpeakers {
     /// here and in the sender, if AudioSync keeps any. Returns whether it
     /// had credentials.
     fn forget_homekit(&mut self, id: &str) -> bool {
+        let (on_disk, saved) = self.store.forget_airplay2_closed(id);
+        if on_disk {
+            return self.homekit_forgotten(id, saved);
+        }
         let homekit = self.store.homekit(id).is_some();
         if !homekit && self.store.timing(id).is_none() {
             return false;
@@ -2364,6 +2377,12 @@ impl AirPlaySpeakers {
             return false;
         }
         let saved = self.store.remove_homekit(id);
+        self.homekit_forgotten(id, saved)
+    }
+
+    /// Reports the speaker's forgotten AirPlay 2 credentials and how their
+    /// file's write went. Returns true.
+    fn homekit_forgotten(&mut self, id: &str, saved: io::Result<()>) -> bool {
         self.store_written(saved.is_ok());
         self.log.log(|| {
             let saved = match &saved {
@@ -3440,7 +3459,10 @@ impl AirPlaySpeakers {
                 }
                 SenderEvent::Pairing { key, event } => {
                     let id = speaker_id(&key);
-                    if matches!(event, PairingEvent::HomeKitPaired(_)) {
+                    if matches!(
+                        event,
+                        PairingEvent::HomeKitPaired(_) | PairingEvent::PairedUnverified(_)
+                    ) {
                         self.homekit_keys.insert(id.clone(), key);
                     }
                     changed |= self.pairing_event(&id, event, &mut events);
@@ -3689,6 +3711,23 @@ impl AirPlaySpeakers {
                 pairing_summary(&event)
             )
         });
+        let event = match event {
+            PairingEvent::Paired(_)
+            | PairingEvent::HomeKitPaired(_)
+            | PairingEvent::PairedUnverified(_)
+                if self.forgotten_while_ending.contains(id) =>
+            {
+                if let Some(key) = self.homekit_keys.remove(id) {
+                    self.link.forget_homekit(&key);
+                }
+                // Not its end: the Failed that follows ends it.
+                if matches!(event, PairingEvent::PairedUnverified(_)) {
+                    return false;
+                }
+                PairingEvent::Stopped
+            }
+            event => event,
+        };
         let paired = match event {
             // Its PIN is no one's to type now.
             PairingEvent::PinRequested | PairingEvent::PinTurnedDown(_) => return false,
@@ -3711,6 +3750,7 @@ impl AirPlaySpeakers {
             | PairingEvent::Stopped => false,
         };
         self.ending.remove(id);
+        self.forgotten_while_ending.remove(id);
         if paired {
             if self.pairings.remove(id).is_some() {
                 self.log.log(|| {
@@ -5926,6 +5966,123 @@ pub mod tests {
         assert_eq!(airplay.store.homekit(&id), None, "forgotten all the same");
     }
 
+    // covers: S224
+    #[test]
+    fn a_forgotten_speakers_identity_copy_that_cant_be_deleted_is_reported() {
+        use crate::audio::pairings::tests::{failing_copy_deletes, homekit, sealer};
+        use crate::audio::pairings::{AIRPLAY2_FILE_NAME, FILE_NAME};
+
+        let folder = crate::debug_log::test_dir("airplay2-forget-copy-held");
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        let (mut store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+        store.open_airplay2();
+        store.insert_homekit(&id, homekit(0x44)).expect("saved");
+        let file = folder.join(AIRPLAY2_FILE_NAME);
+        let bytes = std::fs::read(&file).expect("written");
+        crate::data_folder::keep_bytes_aside(&file, "airplay2-identity.ignored.dat", &bytes)
+            .expect("kept");
+        failing_copy_deletes(&mut store);
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        airplay.forget_pairing(&id);
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::PairingStore { saved: false }),
+            "{events:?}"
+        );
+    }
+
+    // covers: S224
+    #[test]
+    fn forgetting_with_the_airplay2_switch_off_drops_the_airplay2_credentials_on_disk() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{credentials, homekit, sealer};
+        use audiosync_airplay::ap2::Timing;
+        use audiosync_airplay::sender::TimingMemory;
+
+        let folder = crate::debug_log::test_dir("airplay2-forget-switched-off");
+        let tv = airplay2_tv(9, "Loft");
+        let id = id_of(&tv);
+        let (mut store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+        store.open_airplay2();
+        store.insert_homekit(&id, homekit(0x44)).expect("saved");
+        store
+            .keep_timing(&id, TimingMemory::of(&tv, Timing::Ptp))
+            .expect("saved");
+        store
+            .insert(&id, credentials("0123456789ABCDEF", 2))
+            .expect("saved");
+        drop(store);
+
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(false);
+        let (store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        airplay.forget_pairing(&id);
+        drop(airplay);
+
+        let (mut again, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+        again.open_airplay2();
+        assert_eq!(
+            again.homekit(&id),
+            None,
+            "no PIN-less pairing once it is on again"
+        );
+        assert_eq!(again.timing(&id), None);
+    }
+
+    // Forget Pairing stops the pairing while its verify step still runs:
+    // the credentials it reports after that are the forgotten pairing's.
+    // covers: S224
+    #[test]
+    fn credentials_a_pairing_ending_after_a_forget_reports_are_dropped() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{homekit, sealer};
+
+        for (name, late) in [
+            (
+                "airplay2-forget-while-ending",
+                vec![PairingEvent::HomeKitPaired(homekit(0x44))],
+            ),
+            (
+                "airplay2-forget-while-ending-unverified",
+                vec![
+                    PairingEvent::PairedUnverified(homekit(0x44)),
+                    pairing_failed(ErrorKind::Lost, false),
+                ],
+            ),
+        ] {
+            let folder = crate::debug_log::test_dir(name);
+            let fake = FakeAirPlay::new();
+            fake.set_airplay2(true);
+            let (store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+            let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+            let tv = airplay2_tv(9, "Loft");
+            let id = id_of(&tv);
+            pin_shown(&fake, &mut airplay, &tv);
+            assert!(airplay.submit_pin(&id, "4821"));
+            airplay.forget_pairing(&id);
+            fake.take_calls();
+            for event in late {
+                fake.pairing(&tv, event);
+            }
+            airplay.poll();
+            assert_eq!(airplay.store.homekit(&id), None, "{name}");
+            assert!(
+                fake.take_calls().contains(&Call::ForgetHomeKit(id.clone())),
+                "{name}: the sender's copy goes"
+            );
+            assert!(!airplay.homekit_keys.contains_key(&id), "{name}");
+            assert!(!airplay.ending.contains(&id), "{name}");
+            drop(airplay);
+            let (mut again, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+            again.open_airplay2();
+            assert_eq!(again.homekit(&id), None, "{name}");
+        }
+    }
+
     // covers: P217
     #[test]
     fn a_timing_entry_reaches_the_next_launch_and_leaves_the_identity_file_alone() {
@@ -6762,15 +6919,16 @@ pub mod tests {
 
     #[test]
     fn forgetting_a_pairing_turns_the_speaker_off_and_asks_for_a_pin_again() {
+        use crate::audio::pairings::FILE_NAME;
+        use crate::audio::pairings::tests::{credentials, sealer};
+
+        let path = crate::debug_log::test_dir("airplay-forget").join(FILE_NAME);
         let fake = FakeAirPlay::new();
-        let mut store = PairingStore::in_memory();
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
         let tv = device(6, "Den TV", APPLE_TV_TXT);
         let id = id_of(&tv);
         store
-            .insert(
-                &id,
-                crate::audio::pairings::tests::credentials("0123456789ABCDEF", 2),
-            )
+            .insert(&id, credentials("0123456789ABCDEF", 2))
             .unwrap();
         let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
         fake.appear(&tv);
@@ -6784,6 +6942,9 @@ pub mod tests {
         let row = &airplay.speakers()[0];
         assert!(!row.paired);
         assert_eq!(row.availability, AirPlayAvailability::NeedsPin);
+        drop(airplay);
+        let (again, _) = PairingStore::open(path, sealer());
+        assert!(!again.contains(&id), "gone from the file too");
     }
 
     #[test]

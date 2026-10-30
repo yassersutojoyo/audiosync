@@ -350,7 +350,11 @@ final class NativeAirPlay {
     func forgetPairing(_ id: String) {
         queue.async { [weak self] in
             guard let handle = self?.handle else { return }
-            _ = asc_airplay_forget_pairing(handle, id)
+            if asc_airplay_forget_pairing(handle, id) == ASC_AIRPLAY_FORGET_UNWRITTEN {
+                DispatchQueue.main.async {
+                    DebugTrace.log("[AudioSync] native AirPlay: \(id) pairing forgotten for this run only; its file couldn't be written")
+                }
+            }
         }
     }
 
@@ -515,7 +519,7 @@ final class NativeAirPlay {
         let moved = support.map { NativeAirPlayPairings.moveOlderFile(in: $0) } ?? .nothing
         let loaded = support.map { asc_airplay_open_pairings(created, NativeAirPlayPairings.file(in: $0).path) }
             ?? ASC_AIRPLAY_PAIRINGS_FAILED
-        // Reads and writes nothing while AirPlay 2 is off.
+        // While AirPlay 2 is off only Forget Pairing reads or writes the file.
         let airPlay2 = support.map {
             asc_airplay_open_airplay2_identity(created, NativeAirPlayPairings.airPlay2File(in: $0).path)
         }

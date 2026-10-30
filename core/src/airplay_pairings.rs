@@ -370,7 +370,7 @@ fn copy_name_parts(path: &Path) -> (String, String) {
 /// with `-2`, `-3` and so on after the time when that name is taken,
 /// owner-only and flushed to disk, so the caller may then replace the file.
 /// No copy is ever replaced.
-fn keep_aside(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn keep_aside(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let (prefix, extension) = copy_name_parts(path);
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -401,19 +401,19 @@ fn keep_aside(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 /// The receiver ID `id` as the file frames it, after its 16-bit
 /// little-endian length; `None` when it is too long to be in a file.
-fn framed_id(id: &str) -> Option<Vec<u8>> {
+pub(crate) fn framed_id(id: &str) -> Option<Vec<u8>> {
     let id_len = u16::try_from(id.len()).ok()?;
     Some([&id_len.to_le_bytes()[..], id.as_bytes()].concat())
 }
 
-fn holds(bytes: &[u8], framed: &[u8]) -> bool {
+pub(crate) fn holds(bytes: &[u8], framed: &[u8]) -> bool {
     bytes.windows(framed.len()).any(|window| window == framed)
 }
 
 /// Deletes the copies kept aside next to the file at `path` that hold the
 /// receiver ID `id` as the file frames it, so a forgotten receiver's secret
 /// doesn't stay behind. A copy that can't be read as its owner's is left.
-fn prune_copies(path: &Path, id: &str) -> io::Result<()> {
+pub(crate) fn prune_copies(path: &Path, id: &str) -> io::Result<()> {
     let Some(framed) = framed_id(id) else {
         return Ok(());
     };

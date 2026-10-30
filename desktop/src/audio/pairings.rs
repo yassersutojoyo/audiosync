@@ -23,7 +23,8 @@
 //! Next to it, [`AIRPLAY2_FILE_NAME`] keeps the AirPlay 2 path's device ID
 //! and the HomeKit credentials its pairings give, sealed the same way, in
 //! the byte form [`Airplay2Identity`] defines. It is read and written only
-//! once the hidden AirPlay 2 switch is on ([`PairingStore::open_airplay2`]);
+//! once the hidden AirPlay 2 switch is on ([`PairingStore::open_airplay2`]),
+//! and by Forget Pairing ([`PairingStore::forget_airplay2_closed`]);
 //! one that can't be decrypted or parsed is kept aside and replaced, one
 //! that can't be read is never written over.
 //! The AirPlay 2 timing entries (P217) sit unsealed beside it in
@@ -172,6 +173,8 @@ pub struct PairingStore {
     /// The file or its folder was open to other accounts at launch and was
     /// made owner-only ([`make_private`]).
     tightened: bool,
+    /// How a copy kept aside is deleted; tests make it fail.
+    remove_copy: fn(&Path) -> io::Result<()>,
 }
 
 impl fmt::Debug for PairingStore {
@@ -204,6 +207,7 @@ impl PairingStore {
             airplay2: None,
             timing: TimingStore::in_memory(),
             tightened: false,
+            remove_copy: |path| fs::remove_file(path),
         }
     }
 
@@ -249,6 +253,7 @@ impl PairingStore {
             airplay2: None,
             timing: TimingStore::in_memory(),
             tightened,
+            remove_copy: |path| fs::remove_file(path),
         };
         // While it can't be read, the next try is due a few seconds later.
         let _ = if matches!(loaded, Loaded::Partly { .. }) {
@@ -330,13 +335,17 @@ impl PairingStore {
         self.save()
     }
 
-    /// Forgets the speaker's credentials and writes the file. Returns
-    /// whether it was paired.
+    /// Forgets the speaker's credentials and writes the file, then deletes
+    /// the copies of this file and of the AirPlay 2 identity file kept aside
+    /// that hold the speaker's ID. Returns whether it was paired.
     pub fn remove(&mut self, id: &str) -> io::Result<bool> {
-        if self.entries.remove(id).is_none() {
-            return Ok(false);
-        }
-        self.save().map(|()| true)
+        let removed = self.entries.remove(id).is_some();
+        let saved = if removed { self.save() } else { Ok(()) };
+        let pruned = self.path.as_deref().map_or(Ok(()), |path| {
+            let copies = |name| prune_copies(path, name, id, self.sealer, self.remove_copy);
+            copies(IGNORED_FILE_NAME).and(copies(AIRPLAY2_IGNORED_FILE_NAME))
+        });
+        saved.and(pruned).map(|()| removed)
     }
 
     /// Reads the AirPlay 2 identity next to the file, once, when the hidden
@@ -442,6 +451,40 @@ impl PairingStore {
         self.save_airplay2()
     }
 
+    /// Drops the speaker's HomeKit credentials and timing entry from their
+    /// files while the hidden AirPlay 2 switch is off and they stay closed:
+    /// credentials left there would verify with no PIN once it is on again.
+    /// Only a file this build reads is written: a missing one isn't created,
+    /// and one that can't be read, decrypted or parsed, or that another
+    /// account owns, is left as it is. An open one is left to
+    /// [`PairingStore::remove_homekit`]. Its copies kept aside are left to
+    /// [`PairingStore::remove`]. Returns whether the file held credentials
+    /// for the speaker, and how the write went.
+    pub fn forget_airplay2_closed(&mut self, id: &str) -> (bool, io::Result<()>) {
+        let Some(path) = self.airplay2_path() else {
+            return (false, Ok(()));
+        };
+        if self.airplay2.is_some() {
+            return (false, Ok(()));
+        }
+        let _ = TimingStore::open(path.with_file_name(airplay2_timing::FILE_NAME)).forget(id);
+        let read = match make_private(&path) {
+            Ok(_) => read_airplay2(&path, self.sealer),
+            Err(reason) => Err(Airplay2Read::Ignored(reason)),
+        };
+        let Ok(Some(mut identity)) = read else {
+            return (false, Ok(()));
+        };
+        if !identity.remove(id) {
+            return (false, Ok(()));
+        }
+        let written = identity
+            .to_bytes()
+            .and_then(|plain| self.sealer.seal(&plain))
+            .and_then(|sealed| data_folder::write_atomically(&path, &sealed));
+        (true, written)
+    }
+
     /// The speaker's AirPlay 2 timing entry (P217), once
     /// [`PairingStore::open_airplay2`] read it.
     pub fn timing(&self, id: &str) -> Option<&TimingMemory> {
@@ -534,6 +577,50 @@ fn read_airplay2(path: &Path, sealer: Sealer) -> Result<Option<Airplay2Identity>
             "the AirPlay 2 identity file isn't in the expected format".to_owned(),
         )),
     }
+}
+
+/// Deletes the copies kept aside next to `path` under names made from
+/// `name` ([`data_folder::keep_bytes_aside`]) that hold the speaker ID `id`
+/// as both files frame it (16-bit little-endian length first), so a
+/// forgotten speaker's secret doesn't stay behind. A copy that can't be
+/// read or decrypted is left.
+fn prune_copies(
+    path: &Path,
+    name: &str,
+    id: &str,
+    sealer: Sealer,
+    remove: fn(&Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let Ok(id_len) = u16::try_from(id.len()) else {
+        return Ok(());
+    };
+    let framed = [&id_len.to_le_bytes()[..], id.as_bytes()].concat();
+    let prefix = format!("{}-", name.trim_end_matches(".dat"));
+    let Some(folder) = path.parent() else {
+        return Ok(());
+    };
+    let listing = match fs::read_dir(folder) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        other => other?,
+    };
+    let mut result = Ok(());
+    for found in listing {
+        let copy = found?.path();
+        let named = copy
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".dat"));
+        if !named {
+            continue;
+        }
+        let Ok(plain) = fs::read(&copy).and_then(|sealed| sealer.open(&sealed)) else {
+            continue;
+        };
+        if plain.windows(framed.len()).any(|window| window == framed) {
+            result = result.and(remove(&copy));
+        }
+    }
+    result
 }
 
 /// What the log says when [`make_private`] tightened a file or its folder.
@@ -704,6 +791,12 @@ pub mod tests {
         }
     }
 
+    /// Makes every delete of a copy kept aside fail, as when another
+    /// program holds it.
+    pub fn failing_copy_deletes(store: &mut PairingStore) {
+        store.remove_copy = |_| Err(io::Error::other("held by another program"));
+    }
+
     /// The sealer the tests use: DPAPI on Windows, the stand-in elsewhere.
     pub fn sealer() -> Sealer {
         if cfg!(windows) {
@@ -802,6 +895,107 @@ pub mod tests {
         );
         let (mut store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
         assert_eq!(store.open_airplay2().0, device_id);
+    }
+
+    // covers: S224
+    #[test]
+    fn forgetting_with_airplay2_closed_leaves_an_identity_file_it_cant_use_as_it_is() {
+        let folder = test_dir("pairings-airplay2-forget-unusable");
+        let path = folder.join(AIRPLAY2_FILE_NAME);
+        let mut newer = audiosync_core::airplay2_identity::MAGIC.to_vec();
+        newer.push(u8::MAX);
+        newer.extend_from_slice(b"\x0c\x0002005E005302");
+        for bytes in [
+            b"not sealed".to_vec(),
+            sealer().seal(b"not an identity").expect("sealed"),
+            sealer().seal(&newer).expect("sealed"),
+        ] {
+            fs::write(&path, &bytes).expect("written");
+            let (mut store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+            let (held, written) = store.forget_airplay2_closed("02005E005302");
+            assert!(!held && written.is_ok());
+            assert_eq!(fs::read(&path).expect("read"), bytes, "left as it is");
+            assert!(copies_kept_aside(&folder, "airplay2-identity.ignored").is_empty());
+        }
+    }
+
+    // covers: S224
+    #[test]
+    fn forgetting_deletes_the_identity_copies_kept_aside_that_hold_the_speaker() {
+        let folder = test_dir("pairings-airplay2-forget-copies");
+        let path = folder.join(AIRPLAY2_FILE_NAME);
+        let sealed_with = |ids: &[&str]| {
+            let mut identity = Airplay2Identity::new([1; 6]);
+            for (fill, id) in ids.iter().enumerate() {
+                identity.insert(id, homekit(fill as u8));
+            }
+            sealer()
+                .seal(&identity.to_bytes().expect("bytes"))
+                .expect("sealed")
+        };
+        let both = sealed_with(&["02005E005301", "02005E005302"]);
+        let other = sealed_with(&["02005E005301"]);
+        for bytes in [&both, &other, &b"not sealed".to_vec()] {
+            data_folder::keep_bytes_aside(&path, AIRPLAY2_IGNORED_FILE_NAME, bytes).expect("kept");
+        }
+        fs::write(&path, &both).expect("written");
+        let (mut store, _) = PairingStore::open(folder.join(FILE_NAME), sealer());
+        let (held, written) = store.forget_airplay2_closed("02005E005302");
+        assert!(held && written.is_ok());
+        assert!(!store.remove("02005E005302").expect("deleted"));
+        let mut kept = copies_kept_aside(&folder, "airplay2-identity.ignored");
+        kept.sort();
+        let mut expected = vec![other.clone(), b"not sealed".to_vec()];
+        expected.sort();
+        assert_eq!(kept, expected, "only the copies without it stay");
+
+        // With the identity open the file is left to remove_homekit, the
+        // copies still go.
+        data_folder::keep_bytes_aside(&path, AIRPLAY2_IGNORED_FILE_NAME, &both).expect("kept");
+        store.open_airplay2();
+        assert!(!store.forget_airplay2_closed("02005E005302").0);
+        assert!(!store.remove("02005E005302").expect("deleted"));
+        assert_eq!(
+            copies_kept_aside(&folder, "airplay2-identity.ignored").len(),
+            2
+        );
+    }
+
+    // covers: S224
+    #[test]
+    fn forgetting_deletes_the_pairings_copies_kept_aside_that_hold_the_speaker() {
+        let folder = test_dir("pairings-forget-copies");
+        let path = folder.join(FILE_NAME);
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        store
+            .insert("02005E005301", credentials("0123456789ABCDEF", 1))
+            .expect("saved");
+        let other = fs::read(&path).expect("written");
+        store
+            .insert("02005E005302", credentials("0123456789ABCDEE", 2))
+            .expect("saved");
+        let both = fs::read(&path).expect("written");
+        for bytes in [&both, &other, &b"not sealed".to_vec()] {
+            data_folder::keep_bytes_aside(&path, IGNORED_FILE_NAME, bytes).expect("kept");
+        }
+        fs::write(folder.join("airplay-pairings.ignored-1.bak"), &both).expect("written");
+        assert!(store.remove("02005E005302").expect("saved"));
+        let mut kept = copies_kept_aside(&folder, "airplay-pairings.ignored");
+        kept.sort();
+        let mut expected = vec![other.clone(), b"not sealed".to_vec(), both.clone()];
+        expected.sort();
+        assert_eq!(
+            kept, expected,
+            "the copies without it and the misnamed one stay"
+        );
+
+        // Also once the file no longer holds it.
+        data_folder::keep_bytes_aside(&path, IGNORED_FILE_NAME, &both).expect("kept");
+        assert!(!store.remove("02005E005302").expect("saved"));
+        assert_eq!(
+            copies_kept_aside(&folder, "airplay-pairings.ignored").len(),
+            3
+        );
     }
 
     #[test]

@@ -8,8 +8,10 @@
 //! keeps them for the macOS app in a file of their own, next to the pairings
 //! file and handled the same way ([`crate::airplay_pairings`]): mode 0600,
 //! written through a temporary file renamed over the old one, a file that
-//! can't be read or parsed ignored as a whole and replaced by the next
-//! write, a file of a newer format version left as it is.
+//! can't be read or parsed ignored as a whole, a file that can't be parsed
+//! copied aside first as `<stem>.ignored-<seconds since 1970>.<extension>`
+//! (one that can't be copied is left as it is) and replaced, a file of a
+//! newer format version left as it is.
 //!
 //! The byte form holds a magic line, a format version byte, the 6-byte
 //! device ID, then per receiver its ID and the credential blob the sender
@@ -20,14 +22,15 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::sender::random_airplay2_device_id;
 use zeroize::Zeroizing;
 
 use crate::airplay_pairings::{
-    Access, Contents, Loaded, read_private, take_field, write_atomically,
+    Access, Contents, Loaded, framed_id, holds, keep_aside, prune_copies, read_private, take_field,
+    write_atomically,
 };
 
 /// The byte form's first bytes.
@@ -240,8 +243,9 @@ impl IdentityStore {
                     Err(Unreadable::Newer(version)) => (fresh().0, false, Loaded::Newer(version)),
                     Err(Unreadable::Format) => {
                         let (identity, random) = fresh();
+                        let kept = keep_aside(&path, &bytes).is_ok();
                         let reason = "the file isn't in the expected format".to_owned();
-                        (identity, random, Loaded::Ignored(reason))
+                        (identity, random && kept, Loaded::Ignored(reason))
                     }
                 }
             }
@@ -295,14 +299,20 @@ impl IdentityStore {
         }
     }
 
-    /// Forgets the receiver's credentials and writes the file; when it can't
-    /// be written they are forgotten until the store is dropped all the same.
+    /// Forgets the receiver's credentials, writes the file and deletes the
+    /// copies kept aside that hold its ID; when the file can't be written
+    /// they are forgotten until the store is dropped all the same.
     pub fn remove(&mut self, id: &str) -> io::Result<()> {
-        if self.identity.remove(id) {
+        let saved = if self.identity.remove(id) {
             self.save()
         } else {
             Ok(())
-        }
+        };
+        let pruned = self
+            .path
+            .as_deref()
+            .map_or(Ok(()), |path| prune_copies(path, id));
+        saved.and(pruned)
     }
 
     fn save(&self) -> io::Result<()> {
@@ -315,6 +325,37 @@ impl IdentityStore {
             ));
         }
         write_atomically(path, &self.identity.to_bytes()?)
+    }
+}
+
+/// Drops the receiver's credentials from the identity file at `path`
+/// without opening it as a store, for Forget Pairing while the AirPlay 2
+/// switch is off, and deletes the copies kept aside that hold its ID. Only
+/// a file this build reads is written: a missing one isn't created, and one
+/// that can't be read or parsed, or that another account owns, is left as
+/// it is. Returns whether the file held the credentials, and how the write
+/// went; a newer AudioSync's file that holds the ID counts as held and not
+/// written.
+pub fn forget_in_file(path: &Path, id: &str) -> (bool, io::Result<()>) {
+    let pruned = prune_copies(path, id);
+    let Ok(Contents::Read(bytes, _)) = read_private(path) else {
+        return (false, pruned);
+    };
+    match Airplay2Identity::from_bytes(&bytes) {
+        Ok(mut identity) => {
+            if !identity.remove(id) {
+                return (false, pruned);
+            }
+            let written = identity
+                .to_bytes()
+                .and_then(|plain| write_atomically(path, &plain));
+            (true, written.and(pruned))
+        }
+        Err(Unreadable::Newer(_)) if framed_id(id).is_some_and(|framed| holds(&bytes, &framed)) => {
+            let left = io::Error::other("the AirPlay 2 identity file is left as it is");
+            (true, Err(left))
+        }
+        Err(_) => (false, pruned),
     }
 }
 
@@ -375,6 +416,136 @@ mod tests {
         assert_eq!(loaded, Loaded::Newer(VERSION + 1));
         assert!(store.insert("A1", credentials(1)).is_err());
         assert_eq!(fs::read(&path).expect("read"), newer);
+        let _ = fs::remove_file(&path);
+    }
+
+    // covers: S224
+    #[test]
+    fn a_file_with_a_bad_entry_is_kept_aside_before_it_is_replaced() {
+        let path = scratch("kept-aside.dat");
+        let folder = path.parent().expect("a folder").to_owned();
+        let copies = || -> Vec<PathBuf> {
+            fs::read_dir(&folder)
+                .expect("the folder")
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|copy| {
+                    let name = copy.file_name().unwrap_or_default().to_string_lossy();
+                    name.starts_with("kept-aside.ignored-")
+                })
+                .collect()
+        };
+        for copy in copies() {
+            fs::remove_file(copy).expect("an old copy is removed");
+        }
+        let (mut store, _) = IdentityStore::open(path.clone());
+        store.insert("A1", credentials(5)).expect("written");
+        let mut bytes = fs::read(&path).expect("read");
+        // The credential blob's own version byte, after the device ID and
+        // the receiver ID's field.
+        bytes[MAGIC.len() + 1 + 6 + 2 + 2 + 2] = 0xEE;
+        fs::write(&path, &bytes).expect("written");
+        let (_, loaded) = IdentityStore::open(path.clone());
+        assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+        let kept: Vec<_> = copies()
+            .into_iter()
+            .map(|copy| fs::read(copy).expect("read"))
+            .collect();
+        assert_eq!(kept, [bytes], "the original bytes survive in a copy");
+        for copy in copies() {
+            let _ = fs::remove_file(copy);
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    fn copies_of(path: &Path) -> Vec<PathBuf> {
+        let stem = path.file_stem().expect("a name").to_string_lossy();
+        let prefix = format!("{stem}.ignored-");
+        fs::read_dir(path.parent().expect("a folder"))
+            .expect("the folder")
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|copy| {
+                let name = copy.file_name().unwrap_or_default().to_string_lossy();
+                name.starts_with(&prefix)
+            })
+            .collect()
+    }
+
+    // covers: S224
+    #[test]
+    fn forget_in_a_closed_file_leaves_a_file_it_cant_use_as_it_is() {
+        let path = scratch("closed-unusable.dat");
+        let (mut store, _) = IdentityStore::open(path.clone());
+        store.insert("A1", credentials(2)).expect("written");
+        drop(store);
+        let mut broken = fs::read(&path).expect("read");
+        broken[MAGIC.len() + 1 + 6 + 2 + 2 + 2] = 0xEE;
+        let mut newer = fs::read(&path).expect("read");
+        newer[MAGIC.len()] = VERSION + 1;
+        for (bytes, held) in [
+            (b"not an identity A1".to_vec(), false),
+            (broken, false),
+            (newer.clone(), true),
+        ] {
+            fs::write(&path, &bytes).expect("written");
+            let (found, written) = forget_in_file(&path, "A1");
+            assert_eq!(found, held);
+            assert_eq!(
+                written.is_err(),
+                held,
+                "a newer file holding it isn't written"
+            );
+            assert_eq!(fs::read(&path).expect("read"), bytes, "left as it is");
+            assert!(copies_of(&path).is_empty(), "nothing kept aside either");
+        }
+        fs::write(&path, &newer).expect("written");
+        let (found, written) = forget_in_file(&path, "B2");
+        assert!(!found && written.is_ok(), "a newer file without it");
+        let _ = fs::remove_file(&path);
+    }
+
+    // covers: S224
+    #[test]
+    fn forget_deletes_the_identity_copies_kept_aside_that_hold_the_receiver() {
+        let path = scratch("closed-copies.dat");
+        for copy in copies_of(&path) {
+            fs::remove_file(copy).expect("an old copy is removed");
+        }
+        let (mut store, _) = IdentityStore::open(path.clone());
+        store.insert("A1", credentials(3)).expect("written");
+        store.insert("B2", credentials(4)).expect("written");
+        keep_aside(&path, &fs::read(&path).expect("read")).expect("kept");
+        store.remove("A1").expect("written");
+        let without = fs::read(&path).expect("read");
+        keep_aside(&path, &without).expect("kept");
+        store.insert("A1", credentials(3)).expect("written");
+        drop(store);
+
+        let (found, written) = forget_in_file(&path, "A1");
+        assert!(found && written.is_ok());
+        let kept: Vec<_> = copies_of(&path)
+            .into_iter()
+            .map(|copy| fs::read(copy).expect("read"))
+            .collect();
+        assert_eq!(
+            kept,
+            std::slice::from_ref(&without),
+            "only the copy without it stays"
+        );
+
+        keep_aside(&path, &fs::read(&path).expect("read")).expect("kept");
+        let mut held = without.clone();
+        held.extend_from_slice(b"\x02\x00A1");
+        keep_aside(&path, &held).expect("kept");
+        let (mut store, _) = IdentityStore::open(path.clone());
+        store
+            .remove("A1")
+            .expect("the store didn't hold it, a copy did");
+        assert_eq!(copies_of(&path).len(), 2, "copies without it stay");
+        for copy in copies_of(&path) {
+            let _ = fs::remove_file(copy);
+        }
         let _ = fs::remove_file(&path);
     }
 

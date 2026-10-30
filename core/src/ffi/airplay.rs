@@ -64,8 +64,9 @@
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{CStr, CString, c_char};
+use std::io;
 use std::panic::{self, AssertUnwindSafe};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once, OnceLock};
@@ -401,6 +402,15 @@ pub const AIRPLAY_FILE_TIGHTENED: i32 = 1;
 /// changed.
 pub const AIRPLAY_FILE_STILL_OPEN: i32 = 2;
 
+/// What [`asc_airplay_forget_pairing`] returns when the receiver wasn't
+/// paired, or for a null or dead handle or a null `id`.
+pub const AIRPLAY_FORGET_NOT_PAIRED: i32 = 0;
+/// Its credentials are forgotten and their files written.
+pub const AIRPLAY_FORGET_FORGOTTEN: i32 = 1;
+/// Its credentials are forgotten for this handle, but a file that holds
+/// them couldn't be written, so the next launch may find them again.
+pub const AIRPLAY_FORGET_UNWRITTEN: i32 = 2;
+
 /// Output frames the input resamples into per step; bounds its buffer.
 const INPUT_CHUNK_FRAMES: usize = 4096;
 
@@ -684,6 +694,9 @@ pub struct AscAirPlay {
     /// The AirPlay 2 timing entries (P217), in their own file next to the
     /// identity's, so that file stays at the format older builds read.
     timing: TimingStore,
+    /// The identity file the host named while the AirPlay 2 switch was
+    /// off: left closed, and opened only for Forget Pairing.
+    closed_identity: Option<PathBuf>,
     /// The passwords the host handed over, by receiver ID, for this
     /// handle's life only; wiped from memory when dropped.
     passwords: HashMap<String, Secret>,
@@ -700,6 +713,9 @@ pub struct AscAirPlay {
     /// cancelled pairing's: it never reaches the host or ends the pairing
     /// the host has now, and the two pairings never run at once.
     ending: HashMap<String, Option<Device>>,
+    /// The receivers in `ending` whose pairing the host forgot since: what
+    /// their cancelled pairing still reports pairs nothing.
+    forgotten_while_ending: HashSet<String>,
     /// The master position, 0 to 100.
     master: f64,
     /// The zone position, 0 to 100, of each speaker ID in a zone
@@ -1141,7 +1157,10 @@ impl AscAirPlay {
             SenderEvent::LatencyHeld { frames } => self.queue_event(Pending::LatencyHeld(frames)),
             SenderEvent::Pairing { key, event } => {
                 let id = receiver_id(&key);
-                if matches!(event, PairingEvent::HomeKitPaired(_)) {
+                if matches!(
+                    event,
+                    PairingEvent::HomeKitPaired(_) | PairingEvent::PairedUnverified(_)
+                ) {
                     self.homekit_keys.insert(id.clone(), key);
                 }
                 self.pairing_event(id, event)
@@ -1574,6 +1593,23 @@ impl AscAirPlay {
     /// that paired. With no pairing started since, its success is stored
     /// only.
     fn ending_pairing_event(&mut self, id: &str, event: PairingEvent) {
+        let event = match event {
+            PairingEvent::Paired(_)
+            | PairingEvent::HomeKitPaired(_)
+            | PairingEvent::PairedUnverified(_)
+                if self.forgotten_while_ending.contains(id) =>
+            {
+                if let Some(key) = self.homekit_keys.remove(id) {
+                    self.sender.forget_homekit(&key);
+                }
+                // Not its end: the Failed that follows ends it.
+                if matches!(event, PairingEvent::PairedUnverified(_)) {
+                    return;
+                }
+                PairingEvent::Stopped
+            }
+            event => event,
+        };
         let paired = match event {
             PairingEvent::PinRequested | PairingEvent::PinTurnedDown(_) => return,
             PairingEvent::PairedUnverified(credentials) => {
@@ -1593,6 +1629,7 @@ impl AscAirPlay {
             // Its connection went with the cancel, and nothing was stored.
             PairingEvent::PairedForSession | PairingEvent::Stopped => None,
         };
+        self.forgotten_while_ending.remove(id);
         let Some(Some(device)) = self.ending.remove(id) else {
             return;
         };
@@ -1756,15 +1793,19 @@ impl AscAirPlay {
 
     /// Forgets the receiver's AirPlay 2 credentials and timing entry
     /// (P217), here and in the sender, so its next session pairs again.
-    /// Returns whether it had credentials.
-    fn forget_homekit(&mut self, id: &str) -> bool {
-        let homekit = self.identity.get(id).is_some();
+    /// Returns whether it had credentials, and whether their file was
+    /// written.
+    fn forget_homekit(&mut self, id: &str) -> (bool, io::Result<()>) {
+        let (on_disk, mut saved) = match self.closed_identity.as_deref() {
+            Some(path) => forget_in_closed_files(path, id),
+            None => (false, Ok(())),
+        };
+        let homekit = on_disk || self.identity.get(id).is_some();
+        // Forgotten for this handle even when the file can't be written;
+        // also when it isn't held, so a copy kept aside that holds it goes.
+        saved = saved.and(self.identity.remove(id));
         if !homekit && self.timing.get(id).is_none() {
-            return false;
-        }
-        // Forgotten for this handle even when the file can't be written.
-        if homekit {
-            let _ = self.identity.remove(id);
+            return (false, saved);
         }
         let _ = self.timing.forget(id);
         let key = self.homekit_key(id);
@@ -1772,7 +1813,7 @@ impl AscAirPlay {
         if let Some(key) = key {
             self.sender.forget_homekit(&key);
         }
-        homekit
+        (homekit, saved)
     }
 
     /// The key the sender knows the receiver `id` by, for dropping its copy
@@ -2421,9 +2462,11 @@ fn create_configured(open_browser: OpenBrowser, airplay2_setting: bool) -> *mut 
                 airplay2_preferred,
                 identity: IdentityStore::in_memory(),
                 timing: TimingStore::in_memory(),
+                closed_identity: None,
                 passwords: HashMap::new(),
                 pairing: HashMap::new(),
                 ending: HashMap::new(),
+                forgotten_while_ending: HashSet::new(),
                 master: 100.0,
                 zones: HashMap::new(),
                 hold_back: Duration::ZERO,
@@ -3604,7 +3647,9 @@ pub unsafe extern "C" fn asc_airplay_open_pairings(
 /// HomeKit credentials of the receivers it paired with (P152), which later
 /// sessions verify with; credentials a pairing gives from then on are
 /// written to it. Meant for once, before discovery starts. With the hidden
-/// AirPlay 2 switch off it reads and writes nothing and returns 0. Returns
+/// AirPlay 2 switch off it reads and writes nothing and returns 0, and only
+/// [`asc_airplay_forget_pairing`] opens the file, to drop the receiver from
+/// it. Returns
 /// how many receivers it holds credentials for, or
 /// [`AIRPLAY_PAIRINGS_IGNORED`] or [`AIRPLAY_PAIRINGS_NEWER`] for a file
 /// it ignored, or [`AIRPLAY_PAIRINGS_FAILED`] for a null or dead handle or
@@ -3631,6 +3676,7 @@ pub unsafe extern "C" fn asc_airplay_open_airplay2_identity(
     unsafe {
         live(airplay, AIRPLAY_PAIRINGS_FAILED, |airplay| {
             if !airplay.airplay2 {
+                airplay.closed_identity = Some(PathBuf::from(path));
                 return 0;
             }
             airplay.pump();
@@ -3647,6 +3693,17 @@ pub unsafe extern "C" fn asc_airplay_open_airplay2_identity(
             }
         })
     }
+}
+
+/// Drops the receiver `id` from the AirPlay 2 identity file at `path` and
+/// the timing file beside it, which stay closed while the AirPlay 2 switch
+/// is off: credentials left there would verify with no PIN once it is on
+/// again. Only a file this build reads is written
+/// ([`crate::airplay2_identity::forget_in_file`]). Returns whether the
+/// file held its credentials, and whether it was written.
+fn forget_in_closed_files(path: &Path, id: &str) -> (bool, io::Result<()>) {
+    let _ = TimingStore::open(path.with_file_name(airplay2_timing::FILE_NAME)).forget(id);
+    crate::airplay2_identity::forget_in_file(path, id)
 }
 
 /// The `AIRPLAY_FILE_*` code for how private a file was found.
@@ -3869,8 +3926,8 @@ pub unsafe extern "C" fn asc_airplay_set_password(
 /// AirPlay 2, and writes their files (the pairings file is removed once
 /// nothing is paired); the receiver is reported again as needing a PIN when
 /// listed. A session running with them goes on
-/// until it ends. Returns whether it was paired; false too for a null or
-/// dead handle or a null `id`.
+/// until it ends. Returns an `AIRPLAY_FORGET_*` code: whether it was
+/// paired, and whether its files were written.
 ///
 /// # Safety
 ///
@@ -3880,27 +3937,34 @@ pub unsafe extern "C" fn asc_airplay_set_password(
 pub unsafe extern "C" fn asc_airplay_forget_pairing(
     airplay: *mut AscAirPlay,
     id: *const c_char,
-) -> bool {
+) -> i32 {
     // SAFETY: by the caller's contract null or a NUL-terminated string.
     let Some(id) = (unsafe { host_text(id) }) else {
-        return false;
+        return AIRPLAY_FORGET_NOT_PAIRED;
     };
     // SAFETY: by the caller's contract null or a live handle that no other
     // call uses now.
     unsafe {
-        live(airplay, false, |airplay| {
+        live(airplay, AIRPLAY_FORGET_NOT_PAIRED, |airplay| {
             airplay.pump();
-            let homekit = airplay.forget_homekit(id);
+            let (homekit, saved) = airplay.forget_homekit(id);
             airplay.credentials_turned_down.remove(id);
             let paired = airplay.store.contains(id) || homekit;
+            if airplay.ending.contains_key(id) {
+                airplay.forgotten_while_ending.insert(id.to_owned());
+            }
             // Also when it isn't paired, so a copy kept aside that holds it
             // goes; forgotten for this handle even when the file can't be
             // written.
-            let _ = airplay.store.remove(id);
+            let removed = airplay.store.remove(id);
             if paired {
                 airplay.relist(id);
             }
-            paired
+            match (paired, saved.and(removed)) {
+                (false, _) => AIRPLAY_FORGET_NOT_PAIRED,
+                (true, Ok(_)) => AIRPLAY_FORGET_FORGOTTEN,
+                (true, Err(_)) => AIRPLAY_FORGET_UNWRITTEN,
+            }
         })
     }
 }
@@ -7054,7 +7118,7 @@ mod tests {
         }
         assert_eq!(inside(handle).timing.get("02005E005351"), Some(&memory));
         // A forgotten pairing takes the entry with it.
-        assert!(inside(handle).forget_homekit("02005E005351"));
+        assert!(inside(handle).forget_homekit("02005E005351").0);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
         let reopened = TimingStore::open(folder.join(airplay2_timing::FILE_NAME));
@@ -7083,11 +7147,115 @@ mod tests {
         let c_id = CString::new(id).expect("no NUL");
         // SAFETY: a live handle, used by this thread only; a local C string.
         unsafe {
-            assert!(asc_airplay_forget_pairing(handle, c_id.as_ptr()));
+            assert_eq!(
+                asc_airplay_forget_pairing(handle, c_id.as_ptr()),
+                AIRPLAY_FORGET_FORGOTTEN
+            );
         }
         assert_eq!(inside(handle).timing.get(id), None, "the entry goes too");
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S224
+    #[test]
+    fn forget_with_the_airplay2_switch_off_drops_the_airplay2_credentials_on_disk() {
+        use audiosync_airplay::ap2::Timing;
+        use audiosync_airplay::sender::TimingMemory;
+
+        let folder = scratch("airplay2-identity-forget-switched-off");
+        let path = folder.join("identity.dat");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let id = "02005E005354";
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        // SAFETY: a live handle, used by this thread only; the path is a
+        // NUL-terminated string.
+        unsafe {
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()),
+                0
+            );
+        }
+        inside(handle)
+            .identity
+            .insert(id, homekit_blob(4))
+            .expect("written");
+        let memory = TimingMemory {
+            timing: Timing::Ptp,
+            features: 0x1_0240_0000_0000,
+            srcvers: Some("366.0".to_owned()),
+        };
+        inside(handle).timing.keep(id, memory).expect("written");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = false;
+        // SAFETY: as above.
+        unsafe {
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()),
+                0
+            );
+        }
+        let credentials = audiosync_airplay::pairing::Credentials::new(
+            "0123456789ABCDEF",
+            [7; audiosync_airplay::pairing::SECRET_BYTES],
+        )
+        .expect("valid credentials");
+        let _ = inside(handle).store.insert(id, credentials);
+        let c_id = CString::new(id).expect("no NUL");
+        // SAFETY: a live handle, used by this thread only; a local C string.
+        unsafe {
+            assert_eq!(
+                asc_airplay_forget_pairing(handle, c_id.as_ptr()),
+                AIRPLAY_FORGET_FORGOTTEN
+            );
+        }
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        let (again, _) = IdentityStore::open(path);
+        assert_eq!(
+            again.get(id),
+            None,
+            "no PIN-less pairing once it is on again"
+        );
+        let timing = TimingStore::open(folder.join(airplay2_timing::FILE_NAME));
+        assert_eq!(timing.get(id), None);
+    }
+
+    // covers: S224
+    #[test]
+    fn forget_with_the_switch_off_reports_a_newer_identity_file_holding_it_unwritten() {
+        let folder = scratch("airplay2-identity-forget-newer");
+        std::fs::create_dir_all(&folder).expect("a scratch folder");
+        let path = folder.join("identity.dat");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let id = "02005E005358";
+        let c_id = CString::new(id).expect("no NUL");
+        let (mut identity, _) = IdentityStore::open(path.clone());
+        identity.insert(id, homekit_blob(5)).expect("written");
+        drop(identity);
+        let mut newer = std::fs::read(&path).expect("read");
+        newer[crate::airplay2_identity::MAGIC.len()] += 1;
+        std::fs::write(&path, &newer).expect("written");
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = false;
+        // SAFETY: a live handle, used by this thread only; local C strings.
+        unsafe {
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()),
+                0
+            );
+            assert_eq!(
+                asc_airplay_forget_pairing(handle, c_id.as_ptr()),
+                AIRPLAY_FORGET_UNWRITTEN
+            );
+        }
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        assert_eq!(std::fs::read(&path).expect("read"), newer);
     }
 
     // covers: S224
@@ -8753,8 +8921,19 @@ mod tests {
 
     #[test]
     fn an_airplay2_pin_pairing_reads_as_paired_and_forget_removes_it() {
+        let folder = scratch("airplay2-identity-forget");
+        let path = folder.join("identity.dat");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
         let mut handle = create_with(quiet);
         inside(handle).airplay2 = true;
+        // SAFETY: a live handle, used by this thread only; the path is a
+        // NUL-terminated string.
+        unsafe {
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()),
+                0
+            );
+        }
         let mut record = airplay2_only();
         record.txt.push(b"flags=0x200".to_vec());
         let device =
@@ -8780,7 +8959,10 @@ mod tests {
         blob.extend_from_slice(&[7; 64]);
         blob.extend_from_slice(b"receiver");
         let credentials = HomeKitCredentials::from_bytes(&blob).expect("a credential blob");
-        let _ = inside(handle).identity.insert(&id, credentials);
+        inside(handle)
+            .identity
+            .insert(&id, credentials)
+            .expect("written");
         let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info.clone())));
         assert_eq!(
             report.availability, AIRPLAY_AVAILABLE,
@@ -8790,8 +8972,14 @@ mod tests {
         let c_id = CString::new(id.clone()).expect("no NUL");
         // SAFETY: a live handle, used by this thread only; a local C string.
         unsafe {
-            assert!(asc_airplay_forget_pairing(handle, c_id.as_ptr()));
-            assert!(!asc_airplay_forget_pairing(handle, c_id.as_ptr()));
+            assert_eq!(
+                asc_airplay_forget_pairing(handle, c_id.as_ptr()),
+                AIRPLAY_FORGET_FORGOTTEN
+            );
+            assert_eq!(
+                asc_airplay_forget_pairing(handle, c_id.as_ptr()),
+                AIRPLAY_FORGET_NOT_PAIRED
+            );
         }
         assert_eq!(inside(handle).identity.get(&id), None);
         let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info)));
@@ -8799,6 +8987,8 @@ mod tests {
         assert_eq!(report.flags & AIRPLAY_FLAG_PAIRED, 0);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
+        let (again, _) = IdentityStore::open(path);
+        assert_eq!(again.get(&id), None, "gone from the file too");
     }
 
     #[test]
@@ -8963,9 +9153,105 @@ mod tests {
         let c_id = CString::new(id).expect("no NUL");
         // SAFETY: a live handle, used by this thread only; a local C string.
         unsafe {
-            assert!(asc_airplay_forget_pairing(handle, c_id.as_ptr()));
+            assert_eq!(
+                asc_airplay_forget_pairing(handle, c_id.as_ptr()),
+                AIRPLAY_FORGET_FORGOTTEN
+            );
         }
         assert_eq!(inside(handle).identity.get(id), None);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // The host cancels the pairing and then forgets it, while the pairing's
+    // verify step still runs: the credentials it reports after that are
+    // the forgotten pairing's.
+    // covers: S224
+    #[test]
+    fn credentials_a_pairing_ending_after_a_forget_reports_are_dropped() {
+        let folder = scratch("airplay2-identity-forget-while-ending");
+        let path = folder.join("identity.dat");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        let id = "02005E005355";
+        let c_id = CString::new(id).expect("no NUL");
+        let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x55]));
+        inside(handle).pairing.insert(id.to_owned(), key.clone());
+        // SAFETY: a live handle, used by this thread only; local C strings.
+        unsafe {
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()),
+                0
+            );
+            asc_airplay_cancel_pairing(handle, c_id.as_ptr());
+            assert_eq!(
+                asc_airplay_forget_pairing(handle, c_id.as_ptr()),
+                AIRPLAY_FORGET_NOT_PAIRED
+            );
+        }
+        inside(handle).take_in(SenderEvent::Pairing {
+            key,
+            event: PairingEvent::HomeKitPaired(homekit_blob(6)),
+        });
+        assert_eq!(inside(handle).identity.get(id), None);
+        assert_eq!(
+            inside(handle).homekit_key(id),
+            None,
+            "the sender's copy goes"
+        );
+        assert!(!inside(handle).ending.contains_key(id));
+        // The sender keeps unverified credentials too, so forgetting them,
+        // late or not, must reach its copy.
+        let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x57]));
+        inside(handle).take_in(SenderEvent::Pairing {
+            key: key.clone(),
+            event: PairingEvent::PairedUnverified(homekit_blob(7)),
+        });
+        assert_eq!(inside(handle).homekit_key("02005E005357"), Some(key));
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        let (again, _) = IdentityStore::open(path);
+        assert_eq!(again.get(id), None);
+    }
+
+    // covers: S224
+    #[test]
+    fn forget_tells_the_host_when_the_identity_file_cant_be_written() {
+        let folder = scratch("airplay2-identity-forget-unwritten");
+        let path = folder.join("identity.dat");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let id = "02005E005356";
+        let c_id = CString::new(id).expect("no NUL");
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        // SAFETY: a live handle, used by this thread only; the path is a
+        // NUL-terminated string.
+        unsafe {
+            assert_eq!(
+                asc_airplay_open_airplay2_identity(handle, c_path.as_ptr()),
+                0
+            );
+        }
+        inside(handle)
+            .identity
+            .insert(id, homekit_blob(3))
+            .expect("written");
+        // A folder where the file goes: nothing can be written there.
+        std::fs::remove_file(&path).expect("the file is removed");
+        std::fs::create_dir(&path).expect("the folder is made");
+        // SAFETY: a live handle, used by this thread only; a local C string.
+        unsafe {
+            assert_eq!(
+                asc_airplay_forget_pairing(handle, c_id.as_ptr()),
+                AIRPLAY_FORGET_UNWRITTEN
+            );
+        }
+        assert_eq!(
+            inside(handle).identity.get(id),
+            None,
+            "forgotten all the same"
+        );
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -9000,7 +9286,10 @@ mod tests {
                 id.as_ptr(),
                 c"secret".as_ptr()
             ));
-            assert!(!asc_airplay_forget_pairing(ptr::null_mut(), id.as_ptr()));
+            assert_eq!(
+                asc_airplay_forget_pairing(ptr::null_mut(), id.as_ptr()),
+                AIRPLAY_FORGET_NOT_PAIRED
+            );
         }
         let mut handle = asc_airplay_create();
         assert!(!handle.is_null());
@@ -9040,8 +9329,14 @@ mod tests {
             assert_eq!(inside(handle).passwords.len(), 1);
             assert!(asc_airplay_set_password(handle, id.as_ptr(), ptr::null()));
             assert!(inside(handle).passwords.is_empty(), "null forgets it");
-            assert!(!asc_airplay_forget_pairing(handle, id.as_ptr()));
-            assert!(!asc_airplay_forget_pairing(handle, ptr::null()));
+            assert_eq!(
+                asc_airplay_forget_pairing(handle, id.as_ptr()),
+                AIRPLAY_FORGET_NOT_PAIRED
+            );
+            assert_eq!(
+                asc_airplay_forget_pairing(handle, ptr::null()),
+                AIRPLAY_FORGET_NOT_PAIRED
+            );
             asc_airplay_destroy(&mut handle);
         }
     }
@@ -9763,8 +10058,14 @@ mod tests {
         let c_id = CString::new(id).expect("no NUL");
         // SAFETY: as above.
         unsafe {
-            assert!(asc_airplay_forget_pairing(second, c_id.as_ptr()));
-            assert!(!asc_airplay_forget_pairing(second, c_id.as_ptr()));
+            assert_eq!(
+                asc_airplay_forget_pairing(second, c_id.as_ptr()),
+                AIRPLAY_FORGET_FORGOTTEN
+            );
+            assert_eq!(
+                asc_airplay_forget_pairing(second, c_id.as_ptr()),
+                AIRPLAY_FORGET_NOT_PAIRED
+            );
         }
         assert_eq!(next(second, 1)[0].availability, AIRPLAY_NEEDS_PIN);
         assert!(!path.exists(), "nothing paired, no file");
@@ -9806,8 +10107,9 @@ mod tests {
         // SAFETY: a live handle, used by this thread only; local C strings.
         unsafe {
             assert_eq!(asc_airplay_open_pairings(handle, c_path.as_ptr()), 0);
-            assert!(
-                !asc_airplay_forget_pairing(handle, c_id.as_ptr()),
+            assert_eq!(
+                asc_airplay_forget_pairing(handle, c_id.as_ptr()),
+                AIRPLAY_FORGET_NOT_PAIRED,
                 "it wasn't paired"
             );
             asc_airplay_destroy(&mut handle);

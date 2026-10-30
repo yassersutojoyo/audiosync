@@ -1282,6 +1282,18 @@ mod tests {
                 AIRPLAY_FILE_STILL_OPEN.to_string(),
             ),
             (
+                "ASC_AIRPLAY_FORGET_NOT_PAIRED",
+                AIRPLAY_FORGET_NOT_PAIRED.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_FORGET_FORGOTTEN",
+                AIRPLAY_FORGET_FORGOTTEN.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_FORGET_UNWRITTEN",
+                AIRPLAY_FORGET_UNWRITTEN.to_string(),
+            ),
+            (
                 "ASC_DEVICE_VOLUME_UNKNOWN",
                 DEVICE_VOLUME_UNKNOWN.to_string(),
             ),

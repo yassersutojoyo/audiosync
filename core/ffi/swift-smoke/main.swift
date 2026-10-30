@@ -257,7 +257,7 @@ func airPlaySender() {
     asc_airplay_cancel_pairing(handle, "02005E005301")
     check(asc_airplay_set_password(handle, "02005E005301", "secret") && asc_airplay_set_password(handle, "02005E005301", nil),
           "a password is handed over and forgotten")
-    check(!asc_airplay_forget_pairing(handle, "02005E005301") && !FileManager.default.fileExists(atPath: pairings),
+    check(asc_airplay_forget_pairing(handle, "02005E005301") == ASC_AIRPLAY_FORGET_NOT_PAIRED && !FileManager.default.fileExists(atPath: pairings),
           "nothing to forget, no file until a pairing")
     try? FileManager.default.removeItem(at: folder)
     asc_airplay_set_master(handle, 80)
