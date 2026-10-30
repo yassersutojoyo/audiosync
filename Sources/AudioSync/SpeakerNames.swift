@@ -5,7 +5,7 @@ import Foundation
 /// reconnect and a relaunch, so the name does too. Names are display-only
 /// (S147): the engine never sees them.
 struct SpeakerNames: Equatable {
-    /// A typed name is cut to this many characters.
+    /// A typed name is cut to this many Unicode scalars.
     static let maxLength = 60
 
     private(set) var custom: [String: String] = [:]
@@ -37,7 +37,7 @@ struct SpeakerNames: Equatable {
     mutating func rename(key: String, to typed: String, system: String) -> Bool {
         let before = custom[key]
         let name = Self.clean(typed)
-        custom[key] = name.isEmpty || name == system ? nil : name
+        custom[key] = name.isEmpty || name == system || name == Self.clean(system) ? nil : name
         return custom[key] != before
     }
 
@@ -64,11 +64,13 @@ struct SpeakerNames: Equatable {
     }
 
     /// A typed name without the spaces and line breaks around it, line breaks
-    /// inside it as spaces, and at most `maxLength` characters.
+    /// inside it as spaces, and at most `maxLength` Unicode scalars, as Windows counts.
     static func clean(_ typed: String) -> String {
         let oneLine = typed.components(separatedBy: .newlines).joined(separator: " ")
         let trimmed = oneLine.trimmingCharacters(in: .whitespaces)
-        return String(trimmed.prefix(maxLength)).trimmingCharacters(in: .whitespaces)
+        var scalars = String.UnicodeScalarView()
+        scalars.append(contentsOf: trimmed.unicodeScalars.prefix(maxLength))
+        return String(scalars).trimmingCharacters(in: .whitespaces)
     }
 }
 

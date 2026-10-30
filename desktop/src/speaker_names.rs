@@ -81,7 +81,7 @@ impl SpeakerNames {
     /// anything changed.
     pub fn rename(&mut self, key: &str, typed: &str, system: &str) -> bool {
         let name = normalized(typed);
-        if name.is_empty() || name == system {
+        if name.is_empty() || name == system || name == normalized(system) {
             self.by_key.remove(key).is_some()
         } else {
             self.by_key.insert(key.to_owned(), name.clone()).as_ref() != Some(&name)
@@ -109,6 +109,22 @@ mod tests {
         assert_eq!(normalized(&long).chars().count(), MAX_NAME_CHARS);
         assert_eq!(shown_after("", "Speakers"), "Speakers");
         assert_eq!(shown_after(" Desk ", "Speakers"), "Desk");
+    }
+
+    // covers: S228
+    #[test]
+    fn a_name_is_cut_at_60_unicode_scalars_the_same_count_on_both_hosts() {
+        let typed = format!("{}e\u{301}xyz", "a".repeat(59));
+        assert_eq!(normalized(&typed), format!("{}e", "a".repeat(59)));
+    }
+
+    // covers: S228
+    #[test]
+    fn a_system_name_over_60_scalars_typed_again_stores_no_name() {
+        let system = format!("{}e\u{301}", "a".repeat(59));
+        let mut names = SpeakerNames::default();
+        assert!(!names.rename("k", &system, &system));
+        assert!(!names.contains("k"));
     }
 
     // covers: S228

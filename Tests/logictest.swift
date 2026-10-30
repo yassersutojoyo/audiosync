@@ -7166,6 +7166,14 @@ do {
     let long = names.rename(key: usb, to: String(repeating: "x", count: 80), system: "USB Audio")
     check(!unchanged && long && names.renamed(key: usb)?.count == SpeakerNames.maxLength,
           "speaker names: clearing an unrenamed speaker changes nothing; a long name is cut to 60 characters")
+    let accented = SpeakerNames.clean(String(repeating: "a", count: 59) + "e\u{301}xyz")
+    check(accented == String(repeating: "a", count: 59) + "e" && accented.unicodeScalars.count == 60,
+          "speaker names: a name is cut at 60 Unicode scalars, the same count on both hosts",
+          "cut: \(accented.unicodeScalars.count) scalars")
+    let longSystem = String(repeating: "a", count: 59) + "e\u{301}"
+    var untouched = SpeakerNames()
+    check(!untouched.rename(key: usb, to: longSystem, system: longSystem) && untouched.custom.isEmpty,
+          "speaker names: a system name over 60 scalars typed again stores no name")
 
     stored.values[AppSettings.Keys.speakerNames] = ["a": 5, "b": "  ", "c": "Den"] as [String: Any]
     check(store.load().speakerNames.custom == ["c": "Den"],
