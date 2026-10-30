@@ -21,9 +21,11 @@ shortcuts.
 
 ## Trying the preview exe
 
-There's no Windows release yet, so for now you build it yourself (below).
-It's a single exe with no installer: put it in a folder of its own, keep the
-`THIRD-PARTY-NOTICES.txt` you write for it (below) next to it, and run it.
+Since 0.7.1 the zips are on the
+[Releases](https://github.com/yassersutojoyo/audiosync/releases) page, or build
+it yourself (below). It's a single exe with no installer: put it in a folder of
+its own, keep the `THIRD-PARTY-NOTICES.txt` that comes with it next to it (for a
+build you make yourself, you write that file as shown below), and run it.
 
 - **What you need:** Windows 11 (build 22000 or later) on x64 or ARM64. On
   anything older the app says so and exits.
