@@ -31,13 +31,16 @@
 //! Every request line and its answer status goes to stdout; with `--summary`
 //! only one plain line per event a dry-run sheet judges, with its running
 //! count (the `summary` module). On stdin,
-//! `vol <dB>` moves the level as the television's remote does and `quit`
-//! stops it, as Ctrl+C does.
+//! `vol <dB>` moves the level as the television's remote does, `hide` sends
+//! the mDNS goodbye while the session already playing goes on, `show`
+//! advertises it again, and `quit` stops it, goodbye included, as Ctrl+C does.
 
 #[path = "../tests/common/mod.rs"]
 mod common;
 #[path = "fake_tv/options.rs"]
 mod options;
+#[path = "fake_tv/stdin.rs"]
+mod stdin;
 #[path = "fake_tv/summary.rs"]
 mod summary;
 #[path = "fake_tv/television.rs"]
@@ -53,14 +56,15 @@ use std::time::{Duration, Instant};
 
 use audiosync_airplay::rtsp::Request;
 use common::ap2::{Ap2Server, FakeAp2, request_key};
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo, UnregisterStatus};
 use options::{Options, parse};
+use stdin::Line;
 use summary::Summary;
 use television::{Pin, television};
 
 const SERVICE_TYPE: &str = "_airplay._tcp.local.";
 
-fn advertise(options: &Options, port: u16) -> Result<(ServiceDaemon, String), String> {
+fn advertise(options: &Options, port: u16) -> Result<(ServiceDaemon, ServiceInfo), String> {
     let mut entries = television::txt(options.pin, 0, options.device_id);
     if options.ptp_only {
         entries = television::ptp_only_txt(entries);
@@ -75,9 +79,22 @@ fn advertise(options: &Options, port: u16) -> Result<(ServiceDaemon, String), St
     let info = ServiceInfo::new(SERVICE_TYPE, &options.name, &host, (), port, &txt[..])
         .map_err(failed)?
         .enable_addr_auto();
-    let fullname = info.get_fullname().to_owned();
-    daemon.register(info).map_err(failed)?;
-    Ok((daemon, fullname))
+    daemon.register(info.clone()).map_err(failed)?;
+    Ok((daemon, info))
+}
+
+/// Unregisters and waits until the goodbye (TTL 0) went out, so a quit right
+/// after does not end the process first; mdns-sd repeats it 120 ms later.
+fn goodbye(daemon: &ServiceDaemon, fullname: &str) -> &'static str {
+    let status = daemon
+        .unregister(fullname)
+        .ok()
+        .and_then(|status| status.recv_timeout(Duration::from_secs(1)).ok());
+    thread::sleep(Duration::from_millis(250));
+    match status {
+        Some(UnregisterStatus::OK) => "goodbye sent",
+        _ => "goodbye not confirmed",
+    }
 }
 
 /// Browses for the record just registered and logs it once it resolves,
@@ -256,10 +273,11 @@ fn main() -> ExitCode {
         None
     };
     match &advertised {
-        Some((_, fullname)) => println!(
-            "{} mode: LAN, serving \"{}\" on every interface, port {port}, advertised as {fullname}",
+        Some((_, info)) => println!(
+            "{} mode: LAN, serving \"{}\" on every interface, port {port}, advertised as {}",
             stamp(start),
-            options.name
+            options.name,
+            info.get_fullname()
         ),
         None => println!(
             "{} mode: loopback, serving \"{}\" on 127.0.0.1:{port}, not advertised (--lan serves the network)",
@@ -301,11 +319,11 @@ fn main() -> ExitCode {
         );
     }
     println!(
-        "{} stdin: vol <dB> moves the level, quit or Ctrl+C stops",
+        "{} stdin: vol <dB> moves the level, hide and show the mDNS record, quit or Ctrl+C stops",
         stamp(start)
     );
-    if let Some((daemon, fullname)) = &advertised {
-        watch_advertisement(daemon, fullname.clone(), start);
+    if let Some((daemon, info)) = &advertised {
+        watch_advertisement(daemon, info.get_fullname().to_owned(), start);
     }
 
     let server = Arc::new(server);
@@ -333,34 +351,65 @@ fn main() -> ExitCode {
         }
     });
     let mut quit = false;
+    let mut shown = true;
     for line in input {
-        let mut words = line.split_whitespace();
-        match (words.next(), words.next()) {
-            (Some("quit"), _) => {
+        match stdin::read(&line) {
+            Line::Quit => {
                 quit = true;
                 break;
             }
-            (Some("vol"), Some(db)) => match db.parse::<f64>() {
-                Ok(db) => {
-                    let level = {
-                        let mut fake = server.fake();
-                        fake.set_on_tv(db);
-                        level_read(&fake).unwrap_or(db)
-                    };
-                    match &summary {
-                        Some(summary) => {
-                            println!("{}", lock(summary).pushed(seconds(start), level))
-                        }
-                        None => println!(
-                            "{} remote: level set to {db} dB (0.3 dB grid)",
-                            stamp(start)
-                        ),
+            Line::Vol(db) => {
+                let level = {
+                    let mut fake = server.fake();
+                    fake.set_on_tv(db);
+                    level_read(&fake).unwrap_or(db)
+                };
+                match &summary {
+                    Some(summary) => {
+                        println!("{}", lock(summary).pushed(seconds(start), level))
                     }
+                    None => println!(
+                        "{} remote: level set to {db} dB (0.3 dB grid)",
+                        stamp(start)
+                    ),
                 }
-                Err(_) => println!("{} vol takes a number in dB", stamp(start)),
+            }
+            Line::BadVol => println!("{} vol takes a number in dB", stamp(start)),
+            command @ (Line::Hide | Line::Show) => match &advertised {
+                None => println!(
+                    "{} hide and show need --lan: loopback advertises nothing",
+                    stamp(start)
+                ),
+                Some(_) if (command == Line::Hide) != shown => println!(
+                    "{} mDNS: already {}",
+                    stamp(start),
+                    if shown { "advertised" } else { "hidden" }
+                ),
+                Some((daemon, info)) if shown => {
+                    // An unconfirmed unregister may still have removed the record.
+                    shown = false;
+                    println!(
+                        "{} mDNS: {}, the session keeps playing",
+                        stamp(start),
+                        goodbye(daemon, info.get_fullname())
+                    );
+                }
+                Some((daemon, info)) => {
+                    shown = daemon.register(info.clone()).is_ok();
+                    println!(
+                        "{} mDNS: {} {}",
+                        stamp(start),
+                        if shown {
+                            "advertised again as"
+                        } else {
+                            "advertising failed for"
+                        },
+                        info.get_fullname()
+                    );
+                }
             },
-            (None, _) => {}
-            _ => println!("{} commands: vol <dB>, quit", stamp(start)),
+            Line::Empty => {}
+            Line::Unknown => println!("{} commands: {}", stamp(start), stdin::COMMANDS),
         }
     }
     // Only reached when the Ctrl+C handler failed to install: it serves until killed.
@@ -371,8 +420,14 @@ fn main() -> ExitCode {
     }
     stop.store(true, Ordering::SeqCst);
     let _ = logger.join();
-    if let Some((daemon, fullname)) = advertised {
-        let _ = daemon.unregister(&fullname);
+    if let Some((daemon, info)) = advertised {
+        if shown {
+            println!(
+                "{} mDNS: {}",
+                stamp(start),
+                goodbye(&daemon, info.get_fullname())
+            );
+        }
         let _ = daemon.shutdown();
     }
     println!("{} stopped", stamp(start));
