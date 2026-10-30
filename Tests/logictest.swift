@@ -9729,6 +9729,18 @@ do {
             && CalibrationFlow.microphoneRate(nominal: 16_000) == nil,
           "calibration preflight: a microphone at a rate the signal isn't made at is an unsupported rate, not no microphone")
 
+    // covers: S232
+    // defaultInputID() reads an unsupported rate as 0, which differs from every sheet's rate.
+    let sheetMic = CalibrationMicrophoneID(device: 51, rate: 48_000)
+    check(CalibrateAllFlow.againMicrophone(preflight: .unsupportedRate, rate: 48_000, first: sheetMic,
+                                           now: CalibrationMicrophoneID(device: 51, rate: 0)) == .unsupportedRate
+            && CalibrateAllFlow.againMicrophone(preflight: .noMicrophone, rate: 48_000, first: sheetMic,
+                                                now: nil) == .noMicrophone
+            && CalibrateAllFlow.againMicrophone(preflight: nil, rate: 48_000, first: sheetMic,
+                                                now: CalibrationMicrophoneID(device: 77, rate: 48_000)) == .microphoneChanged
+            && CalibrateAllFlow.againMicrophone(preflight: nil, rate: 48_000, first: sheetMic, now: sheetMic) == nil,
+          "calibration preflight: Measure Again reports a microphone switched to an unsupported rate as that, not as changed")
+
     // Both runs record with one input: a switch to another device, even at
     // the same rate, would change the input latency between them (S232).
     let builtIn = CalibrationMicrophoneID(device: 51, rate: 48_000)

@@ -120,12 +120,9 @@ extension AppDelegate {
             appModel.calibrateAll.line = .againEnded(name: speaker.name, .failed(.microphoneDenied))
             return
         }
-        if let heard = CalibrationMicrophone.defaultInputID(),
-           let changed = CalibrateAllFlow.microphoneCheck(rate: sheet.rate, first: sheet.microphone, now: heard) {
-            appModel.calibrateAll.line = .againEnded(name: speaker.name, .failed(changed))
-            return
-        }
-        if let refusal = CalibrationMicrophone.defaultInputPreflight() {
+        if let refusal = CalibrateAllFlow.againMicrophone(preflight: CalibrationMicrophone.defaultInputPreflight(),
+                                                          rate: sheet.rate, first: sheet.microphone,
+                                                          now: CalibrationMicrophone.defaultInputID()) {
             appModel.calibrateAll.line = .againEnded(name: speaker.name, .failed(refusal))
             return
         }

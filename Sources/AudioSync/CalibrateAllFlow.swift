@@ -404,6 +404,13 @@ enum CalibrateAllFlow {
         now.rate != rate || (first.map { $0 != now } ?? false) ? .microphoneChanged : nil
     }
 
+    /// Why Measure Again can't record with the default input: the preflight
+    /// first, as on Windows, so an unsupported rate isn't read as another input (S232).
+    static func againMicrophone(preflight: CalibrationFailure?, rate: UInt32, first: CalibrationMicrophoneID?,
+                                now: CalibrationMicrophoneID?) -> CalibrationFailure? {
+        preflight ?? now.flatMap { microphoneCheck(rate: rate, first: first, now: $0) }
+    }
+
     /// How long a run cut off during `speaker`'s sweep keeps the outputs as
     /// they are, so the sweep plays out on that speaker alone, faded.
     static func settleSeconds(_ speaker: CalibrateAllSpeaker) -> Double {
