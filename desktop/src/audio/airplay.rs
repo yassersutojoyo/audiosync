@@ -760,6 +760,7 @@ pub fn problem(reason: UserReason) -> AirPlayProblem {
 /// The volume an AirPlay speaker gets for its own volume, its zone's and
 /// the master's (P118 leaves the mapping to the host; S249, S290): the
 /// device level min(100, s × k) on the default line, muted at 0.
+#[cfg(test)]
 pub fn airplay_volume(position: f64, zone: f64, master: f64) -> Volume {
     device_volume(device_level(position, zone, master))
 }
@@ -2766,21 +2767,16 @@ impl AirPlaySpeakers {
         self.send_volumes();
     }
 
-    /// The volume speaker `id` gets now: muted while a calibration lets
-    /// another speaker alone be heard.
+    /// The volume speaker `id` gets now, a level held at k = 0 included
+    /// (S290): muted while a calibration lets another speaker alone be heard.
     fn volume_of(&self, id: &str) -> Volume {
         match self.calibration_solo.as_deref() {
             Some(solo) if solo != id => Volume::Muted,
-            _ => airplay_volume(self.settings(id).volume, self.zone(id), self.master),
+            _ => device_volume(self.device_level_of(id)),
         }
     }
 
     fn send_volumes(&mut self) {
-        for id in self.added.keys() {
-            if let Some(settings) = self.settings.get_mut(id) {
-                settings.held_level = None;
-            }
-        }
         let now = Instant::now();
         let volumes: Vec<(String, Volume)> = self
             .added
@@ -9375,7 +9371,7 @@ pub mod tests {
 
     // covers: S290
     #[test]
-    fn a_level_held_at_k_0_goes_when_the_speaker_gets_its_level_again() {
+    fn a_level_held_at_k_0_comes_back_after_a_calibration_and_goes_at_an_add() {
         let fake = FakeAirPlay::new();
         let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
         airplay.set_master(0.0);
@@ -9387,12 +9383,13 @@ pub mod tests {
             assert_eq!(row_of(airplay, &id), 30.0);
         };
         hold_30(&mut airplay);
-        // The end of a calibration sends every speaker the level k gives.
-        airplay.set_calibration_solo(Some(&id));
+        // The end of a calibration gives the speaker the level it held back.
+        airplay.set_calibration_solo(Some("another speaker"));
+        fake.take_calls();
         airplay.set_calibration_solo(None);
-        assert_eq!(row_of(&airplay, &id), 0.0);
-        hold_30(&mut airplay);
-        // So does adding it again when the stream starts again.
+        assert_eq!(sent_levels(&fake), [(id.clone(), Some(-21.0))]);
+        assert_eq!(row_of(&airplay, &id), 30.0);
+        // Adding it again when the stream starts again sends the level k gives.
         airplay.set_streaming(false);
         airplay.poll();
         fake.take_calls();
