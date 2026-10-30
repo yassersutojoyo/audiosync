@@ -115,5 +115,15 @@ cells_from_tests "--test fake_cells" \
     "a_group_that_answers_with_a_level_of_its_own_is_shown_as_it_says_and_never_chased=C3.e"
 
 cd "$root/airplay"
-cargo run --quiet --locked --example fake_tv_cells -- "$@" || failed=1
+if [ "$windows" = 1 ]; then
+    # Every worktree links the same example exe, which can't be relinked while one runs it (LNK1104),
+    # so this run starts its own copy.
+    cargo build --quiet --locked --example fake_tv_cells
+    copy="$CARGO_TARGET_DIR/debug/examples/fake_tv_cells-$$.exe"
+    trap 'rm -f "$copy"' EXIT
+    cp "$CARGO_TARGET_DIR/debug/examples/fake_tv_cells.exe" "$copy"
+    "$copy" "$@" || failed=1
+else
+    cargo run --quiet --locked --example fake_tv_cells -- "$@" || failed=1
+fi
 exit "$failed"
