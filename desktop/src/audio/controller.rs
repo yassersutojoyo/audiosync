@@ -9866,6 +9866,7 @@ mod tests {
         assert!(cast.state().mutes.is_empty());
     }
 
+    // covers: S241
     #[test]
     fn calibrate_all_waits_for_the_cast_feeds_hold_back_and_a_guess_by_format() {
         use audiosync_cast::audio::{Codec, StreamFormat};

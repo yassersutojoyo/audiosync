@@ -2398,6 +2398,7 @@ The checks for S235 to S241 in the Rust core (`core/tests/calibrate_all.rs`, syn
 | a_cancelled_or_changed_measure_again_leaves_the_sheet_as_it_was | S239, S240 |
 | cancel_or_a_change_mid_run_applies_nothing | S240 |
 | a_cast_speakers_wait_is_its_offset_and_hold_back_or_a_guess_by_format | S241 |
+| calibrate_all_waits_for_the_cast_feeds_hold_back_and_a_guess_by_format (`desktop/src/audio/controller.rs`) | S241 |
 | a_run_its_sheet_apply_and_measure_again_cross_the_boundary | S235, S236, S237, S238, S239 |
 | measure_again_on_an_airplay_row_works_the_shared_delay_out_again (`core/tests/calibrate_all.rs`) | S239 |
 | a_refused_reference_and_bad_arguments | S236 |

@@ -2790,6 +2790,7 @@ do {
             && converted(Int32(-1), .int32) == -1 / 2_147_483_648,
           "integer input: 32-bit min, max, zero and sign")
 
+    // covers: S14
     // Channel pairs on devices with more than two channels.
     check(InputChannelPair.offered(channels: 1).isEmpty && InputChannelPair.offered(channels: 2).isEmpty,
           "channel pairs: a mono or stereo device offers no choice")
@@ -7046,6 +7047,7 @@ do {
             && fresh.enabledAirPlay.isEmpty && fresh.enabledLocal.isEmpty && fresh.groups.isEmpty
             && !fresh.showVirtualDevices && fresh.appearance == .system,
           "settings: nothing stored gives the defaults (whole system, master 100, delays 2000 ms)")
+    // covers: S227 (the Mac's default when nothing is stored)
     check(fresh.whenSourceQuits == .system,
           "settings: Switch to All System Audio When the Source App Quits is on when nothing is stored (S227)")
     check(!fresh.airPlay2, "settings: AirPlay 2 is off when nothing is stored (P2)")
@@ -9252,6 +9254,7 @@ do {
               "EC6 app quit: an app without a bundle ID changes nothing, under either setting (S164)", "\(setting)")
     }
 
+    // covers: S227
     // S227: the setting, through the core's decision.
     check(quit(musicQuit, music, .system) == "switchToSystem com.apple.Music",
           "source quit: with the switch on, the source app quitting while streaming switches to the whole system (S227)",
@@ -10060,6 +10063,7 @@ do {
             + "L_s + E; the AirPlay delay moves only by the measured excess)",
           "\(String(describing: reportedSpeaker))")
 
+    // covers: S241
     var held = inputs
     held.cast = (id: "cast:tv", name: "TV", offsetMs: nil, waitMs: 1750, format: ASC_CAST_FORMAT_FLAC)
     let heldPlan = (try? CalibrateAllFlow.plan(held).get()) ?? []
@@ -10343,6 +10347,7 @@ do {
                       "calibrate all: a Measure Again stopped by a change is dropped (S239, S240)")
             }
 
+            // covers: S238
             // Apply: one change per certain local row and one for the AirPlay delay (S238).
             if let sheet {
                 let answer = sheet.apply()
@@ -10409,6 +10414,7 @@ do {
           "calibrate all: Apply from a clamped AirPlay delay writes the delay the run asked for (S238)",
           "A \(fromClamped.adjustmentMs)")
 
+    // covers: S238
     // Undo puts back what Apply replaced, and forgets a delay that wasn't stored (S238).
     let previous = AirPlayDelay(adjustmentMs: 250)
     let undo = CalibrateAllUndo(writes: [.local(id: "usb", ms: 100, old: 150), .local(id: "hdmi", ms: 40, old: nil),
