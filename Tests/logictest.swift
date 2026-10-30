@@ -4746,6 +4746,21 @@ do {
             && fromPhone.nextPrompt() == nil,
           "web remote: a speaker or a zone's pair the phone turned on that asks for a code when it connects goes off with its notice, no prompt")
 
+    var unpaired = listedPair()
+    _ = unpaired.turnedOnByUser(pair)
+    unpaired.added(pair)
+    check(unpaired.apply(.error(id: pair, .pairingRequired, retryMs: nil, detail: "")) == .turnOff(app(pair), .needsCode)
+            && unpaired.stages[pair] == nil,
+          "P176 native airplay: target member PairingRequired within the attempt turns the pair off as needing pairing, "
+            + "not unreachable, and starts no pairing, which the sender holds only for listed receivers")
+    var lapsedPair = unpaired
+    _ = lapsedPair.apply(.gone(id: pair, name: nil))
+    let notAccepted = "Living Room didn't accept the connection, so it's off. Turn it on again to try once more."
+    check([unpaired, lapsedPair].allSatisfy {
+              t.nativeAirPlayAsksForCode(name: "Living Room", reason: .needsCode, unasked: $0.refusedUnasked(pair)) == notAccepted
+          },
+          "P176 native airplay: a pair whose member asks for pairing gets a notice that promises no pairing, listed or not")
+
     var oneSide = listedPair()
     _ = oneSide.turnedOnByUser(pair)
     oneSide.added(pair)

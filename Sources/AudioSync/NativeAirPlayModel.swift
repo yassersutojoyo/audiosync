@@ -669,6 +669,8 @@ struct NativeAirPlayModel {
     /// play, with no stored pairing, so a refused pairing from it came before
     /// any pairing step and its `.needsCode` notice names no code.
     func refusedUnasked(_ id: String) -> Bool {
+        // A target never pairs, listed or not, so its notice offers no pairing (P176).
+        if NativeTarget.kind(id) != nil { return true }
         guard let receiver = receivers[id] else { return false }
         return receiver.availability == .available && !receiver.paired && !receiver.credentialsKept
     }
@@ -963,6 +965,9 @@ struct NativeAirPlayModel {
             return ask(id, .askingPassword(wrong: problem == .wrongPassword))
         case .pairingRequired where pairedInAttempt.contains(id):
             return .turnOff(app, .stillNeedsCode)
+        case .pairingRequired where NativeTarget.kind(id) != nil:
+            // The sender pairs only listed receivers, never a target (P176).
+            return .turnOff(app, .needsCode)
         case .pairingRequired:
             stages[id] = .pairing(afterWrongPin: false)
             return .startPairing(id)
