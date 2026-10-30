@@ -1091,6 +1091,15 @@ do {
     flatish.set(moved)
     check(flatish.shownSavedIndex == nil && flatish.shownCurve == nil,
           "eq curves: moving a band off the picked saved curve shows Custom")
+    // covers: S270 (a choice is forgotten once the gains leave it, as on Windows)
+    flatish.pick(.preset(.flat))
+    moved = flatish.settings
+    moved.gains[0] = 3
+    flatish.set(moved)
+    moved.gains[0] = 0
+    flatish.set(moved)
+    check(flatish.shownSavedIndex == 1,
+          "eq curves: a band moved off a picked preset and back shows the saved curve with its gains")
     flatish.pick(.saved(1))
     flatish.reset()
     check(flatish.shownCurve == .preset(.flat), "eq curves: Reset shows Flat beside a saved curve with its gains")
