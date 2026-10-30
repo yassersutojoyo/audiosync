@@ -9353,6 +9353,39 @@ do {
           "off the main thread: \(noting.offMain)")
 }
 
+// covers: S114 (an input UID that no device has fails before any device is opened)
+do {
+    let engine = StreamEngine()
+    var notFound = false
+    do { try engine.start(source: .input(uid: "no-such-uid")) } catch SourceCapture.CaptureError.inputNotFound {
+        notFound = true
+    } catch {}
+    check(notFound && !engine.isRunning && engine.activeOutputUIDs.isEmpty,
+          "S114 start: a source that can't be captured throws and leaves no session and no outputs",
+          "not found \(notFound), running \(engine.isRunning), active \(engine.activeOutputUIDs)")
+}
+
+// covers: S115 (the session runs on core parts with no capture, so its quiet fill is the only writer)
+do {
+    if let parts = EngineParts.make() {
+        parts.prepare(captureRate: 48_000)
+        let engine = StreamEngine()
+        engine.run(parts, captureRate: 48_000)
+        var block = [Float](repeating: 0.1, count: 512 * 2)
+        block.withUnsafeMutableBufferPointer { parts.deliver($0.baseAddress!, frames: 512) }
+        engine.stop()
+        engine.stop()
+        engine.finishStopping()
+        let atStop = parts.ring.framesWritten
+        usleep(200_000)   // well past the 40 ms after which a running session's fill writes silence
+        check(!engine.isRunning && engine.activeOutputUIDs.isEmpty && parts.ring.framesWritten == atStop,
+              "S115 stop: a second stop is safe and nothing is written to the ring after a stop",
+              "running \(engine.isRunning), \(atStop) frames at the stop, \(parts.ring.framesWritten) after")
+    } else {
+        check(false, "S115 stop: the core's parts can be made")
+    }
+}
+
 // MARK: Launch, second launch and session events (AppLifecycle.swift)
 // covers: S215
 do {

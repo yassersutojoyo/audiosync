@@ -1609,6 +1609,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | S112 interface: with no session an attach adds nothing; gain, delay and detach of unknown outputs do nothing | S112, S117 |
 | S112 interface: the host's attach, detach and gain reach the engine with the device, hold-back and gain | S112 |
 | S113 main thread: the host's sync makes every engine call on the main thread, before it returns | S113 |
+| S114 start: a source that can't be captured throws and leaves no session and no outputs | S114 |
+| S115 stop: a second stop is safe and nothing is written to the ring after a stop | S115 |
 | launch: macOS opening AudioSync at login is a login-item launch | S215 |
 | launch: any other launch is not a login-item launch | S215 |
 | launch: the main window opens at launch, but not at login | S120, S215 |
