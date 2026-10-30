@@ -7002,6 +7002,28 @@ pub mod tests {
         );
     }
 
+    // The receiver quit under the open prompt and came back before its
+    // closed connection ended the pairing.
+    #[test]
+    fn a_pairing_cancelled_after_its_receiver_left_and_came_back_turns_the_speaker_off() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        pin_shown(&fake, &mut airplay, &tv);
+        fake.gone(&tv);
+        airplay.poll();
+        fake.appear(&tv);
+        airplay.poll();
+        fake.pairing(&tv, pairing_failed(ErrorKind::PairingCancelled, false));
+        assert!(airplay.poll().contains(&BackendEvent::AirPlayFailed {
+            id,
+            problem: AirPlayProblem::PairingFailed
+        }));
+        assert_eq!(airplay.pin_prompt(), None);
+        assert!(airplay.enabled_ids().is_empty());
+    }
+
     #[test]
     fn forgetting_a_pairing_turns_the_speaker_off_and_asks_for_a_pin_again() {
         use crate::audio::pairings::FILE_NAME;

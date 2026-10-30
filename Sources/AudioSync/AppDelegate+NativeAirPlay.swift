@@ -146,7 +146,7 @@ extension AppDelegate {
             nativeAirPlay?.cancelPairing(receiver)
         case .prompt:
             // Not from inside the event loop: a prompt runs modally.
-            DispatchQueue.main.async { [weak self] in self?.showNextNativePrompt() }
+            PromptStart.later { [weak self] in self?.showNextNativePrompt() }
         case .paired(let id):
             everyTimeGuard.paired(id)
             clearNotices([SpeakerKey.make(id: id, airplay: true)])
@@ -283,7 +283,7 @@ extension AppDelegate {
         codePromptBusy = false
         // A sender that stopped meanwhile took its pairings and prompts with it.
         if nativeAirPlay === native { nativeAnswered(native, prompt, code: code) }
-        DispatchQueue.main.async { [weak self] in self?.showNextNativePrompt() }
+        PromptStart.later { [weak self] in self?.showNextNativePrompt() }
     }
 
     /// Closes the open prompt once nobody waits for its answer

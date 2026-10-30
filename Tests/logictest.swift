@@ -3847,6 +3847,19 @@ do {
               "native pairing: a pairing that fails under its open PIN prompt takes the prompt back, once")
         check(w.answered(shown, code: nil) == .ignore && w.answered(shown, code: "1234") == .ignore,
               "native pairing: a prompt taken back is no answer, and a PIN typed into it goes nowhere")
+        // The receiver quit under the open prompt and came back before its closed connection ended the pairing.
+        var quitTV = NativeAirPlayModel()
+        quitTV.apply(.appeared(receiver("B2", "B2", .needsPin)))
+        _ = quitTV.turnedOnByUser("B2")
+        _ = quitTV.apply(.pinNeeded(id: "B2"))
+        let quitPrompt = quitTV.nextPrompt()!
+        quitTV.apply(.gone(id: "B2", name: nil))
+        quitTV.apply(.appeared(receiver("B2", "B2", .needsPin)))
+        check(quitTV.withdrawPrompt() == nil
+                && quitTV.apply(.pairingFailed(id: "B2", wrongPin: false, .pairingRequired,
+                                               detail: "connection closed while waiting for the PIN")) == .turnOff("native:B2", .pairingFailed)
+                && quitTV.withdrawPrompt() == quitPrompt,
+              "native pairing: a pairing cancelled after its receiver left and came back turns the speaker off and takes the prompt back")
 
         _ = w.turnedOnByUser("B2")
         _ = w.apply(.pinNeeded(id: "B2"))
@@ -6232,6 +6245,22 @@ do {
           "windows: 120 points on screen are enough to grab the title bar")
     check(!WindowPlacement.isReachable(CGRect(x: 200, y: 100, width: 860, height: 600), screens: []),
           "windows: no screen at all is never reachable")
+
+    // covers: S223
+    // The prompt's modal loop stands in as a nested run of the main run loop:
+    // the sender's events, posted to the main queue, still arrive under it.
+    var promptLoopRan = false
+    var eventUnderPrompt = false
+    PromptStart.later {
+        promptLoopRan = true
+        DispatchQueue.main.async { eventUnderPrompt = true }
+        let promptEnds = Date().addingTimeInterval(1)
+        while !eventUnderPrompt && Date() < promptEnds { _ = RunLoop.main.run(mode: .default, before: promptEnds) }
+    }
+    let promptStartEnds = Date().addingTimeInterval(3)
+    while !promptLoopRan && Date() < promptStartEnds { _ = RunLoop.main.run(mode: .default, before: promptStartEnds) }
+    check(promptLoopRan && eventUnderPrompt,
+          "prompt start: an event posted to the main queue while the prompt is open arrives before the prompt closes")
 
     // A PIN or password prompt taken back closes once it is the frontmost
     // modal window, even when another alert sits over it at first.

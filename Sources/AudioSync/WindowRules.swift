@@ -641,6 +641,16 @@ struct PromptWithdrawal {
     }
 }
 
+/// Where a PIN or password prompt starts its modal loop from. A loop
+/// started inside a main-queue block holds back every later main-queue
+/// block (the sender's events among them) until it ends.
+enum PromptStart {
+    static func later(_ body: @escaping () -> Void) {
+        RunLoop.main.perform(inModes: [.common], block: body)
+        CFRunLoopWakeUp(CFRunLoopGetMain())   // perform alone waits for the loop's next wake
+    }
+}
+
 /// Equalizer settings as the app stores them (JSON in UserDefaults).
 enum StoredEqualizer {
     /// The saved settings, or the defaults when no data or no JSON object is
