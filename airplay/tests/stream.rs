@@ -1266,6 +1266,49 @@ fn the_master_gain_scales_the_shared_payload_for_every_speaker() {
     assert_eq!(decode(Codec::Pcm, &last.payload), expected);
 }
 
+fn gained(frame: Frame, gain: f64) -> Frame {
+    frame.map(|sample| (f64::from(sample) * gain).round() as i16)
+}
+
+// covers: P80
+#[test]
+fn a_master_gain_change_fades_over_one_packet() {
+    let mut rig = Rig::with_host();
+    let pcm = rig.add(speaker(1, Codec::Pcm));
+    rig.run_for(Duration::from_secs(2));
+    rig.stream.set_master_gain(0.25);
+    rig.run_for(Duration::from_secs(3));
+    let ramp = |n: u64, i: u64| {
+        gained(
+            host_frame(n + i),
+            1.0 - 0.75 * (i + 1) as f64 / PACKET as f64,
+        )
+    };
+    let mut stage = 0;
+    for packet in &rig.audio(pcm) {
+        let n = rig.frame_of(pcm, packet.header.timestamp) as u64;
+        let got = decode(Codec::Pcm, &packet.payload);
+        let at = |gain: f64| {
+            (n..n + PACKET)
+                .map(|f| gained(host_frame(f), gain))
+                .collect::<Vec<_>>()
+        };
+        let faded: Vec<Frame> = (0..PACKET).map(|i| ramp(n, i)).collect();
+        stage = match stage {
+            0 if got == at(1.0) => 0,
+            0 => {
+                assert_eq!(got, faded, "the first packet after the change fades");
+                1
+            }
+            _ => {
+                assert_eq!(got, at(0.25), "after the fade");
+                2
+            }
+        };
+    }
+    assert_eq!(stage, 2, "the fade and the new gain both played");
+}
+
 // covers: P143
 #[test]
 fn restart_timeline() {
