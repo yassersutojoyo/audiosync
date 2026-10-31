@@ -12252,6 +12252,69 @@ mod tests {
         assert_eq!(phone_pick(&adapter, "app:player.exe"), [in_use]);
     }
 
+    // covers: S353
+    #[test]
+    fn the_phone_gets_the_several_apps_list_with_an_app_only_a_mix_holds_as_not_running() {
+        let mut adapter = adapter();
+        adapter.audio.add_app(3000, "browser.exe");
+        adapter.refresh_sources();
+        adapter.toggle_mix_app("player.exe");
+        adapter.toggle_mix_app("browser.exe");
+        adapter.audio_mut().quit_app(3000);
+        adapter.refresh_sources();
+        let window = adapter.snapshot().mix_apps;
+        assert_eq!(window.len(), 2, "{window:?}");
+        let expected: Vec<serde_json::Value> = window
+            .iter()
+            .map(|app| {
+                let running = app.id != "browser.exe";
+                serde_json::json!({"id": app.id, "name": app.name, "running": running})
+            })
+            .collect();
+        let phone: serde_json::Value = serde_json::from_str(&page(&adapter).to_json(1)).unwrap();
+        assert_eq!(phone["mix_apps"], serde_json::Value::Array(expected));
+    }
+
+    fn phone_mix(adapter: &mut AudioAdapter<MockBackend>, apps: &[&str]) {
+        let mix = audiosync_remote::Command::Mix {
+            apps: apps.iter().map(|app| (*app).to_owned()).collect(),
+        };
+        let actions = crate::remote::actions(&mix, &adapter.snapshot(), |_| true);
+        for action in actions.expect("taken") {
+            if let crate::remote::Action::Mix { apps } = action {
+                adapter.select_mix(&apps);
+            }
+        }
+    }
+
+    // covers: S353
+    #[test]
+    fn a_phone_mix_selects_the_apps_as_the_several_apps_list_would() {
+        let mut adapter = adapter();
+        adapter.audio.add_app(3000, "browser.exe");
+        adapter.audio.add_app(4000, "chat.exe");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        let before = captures(&adapter).len();
+        phone_mix(&mut adapter, &["browser.exe", "player.exe"]);
+        let mix = "mix:only:browser.exe,player.exe";
+        assert_eq!(adapter.snapshot().source_id, mix);
+        let started = captures(&adapter).len();
+        assert!(started > before, "selected as a pick in the picker");
+
+        for (apps, why) in [
+            (&["player.exe", "browser.exe"][..], "the mix in use"),
+            (&["gone.exe"][..], "no app still listed"),
+        ] {
+            phone_mix(&mut adapter, apps);
+            assert_eq!(adapter.snapshot().source_id, mix, "{why}");
+            assert_eq!(captures(&adapter).len(), started, "{why}: no restart");
+        }
+
+        phone_mix(&mut adapter, &["chat.exe"]);
+        assert_eq!(page(&adapter).source_id.as_deref(), Some("app:chat.exe"));
+    }
+
     // covers: S163
     #[test]
     fn another_channel_pair_while_stopped_clears_the_notice_of_why_the_input_stopped() {
