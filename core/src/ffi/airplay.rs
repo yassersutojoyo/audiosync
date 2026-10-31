@@ -7142,6 +7142,7 @@ mod tests {
         assert_eq!(again.get("02005E005350"), Some(&credentials));
     }
 
+    // covers: P217
     #[test]
     fn a_timing_entry_leaves_the_airplay2_identity_file_at_format_1() {
         use audiosync_airplay::ap2::Timing;
@@ -7204,6 +7205,7 @@ mod tests {
         assert_eq!(reopened.get("02005E005351"), None);
     }
 
+    // covers: P217
     #[test]
     fn a_timing_entry_goes_with_a_forgotten_pairing_without_airplay2_credentials() {
         use audiosync_airplay::ap2::Timing;

@@ -180,6 +180,7 @@ mod tests {
         path
     }
 
+    // covers: P217
     #[test]
     fn entries_survive_a_relaunch_and_a_forgotten_one_stays_gone() {
         let path = scratch("relaunch.dat");
