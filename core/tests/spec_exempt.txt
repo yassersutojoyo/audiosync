@@ -167,3 +167,6 @@ S392 Windows host only: the names kept for speakers that left the list; the Wind
 S393 Windows host only: the AirPlay and Cast search state and the notices for no sound output and a pairing not saved; the Windows tests named in the test map check them.
 S394 Windows host only: Google Cast speakers in the Windows app; the Windows tests named in the test map check it.
 S395 Windows host only: the calibration line through delay steps and Calibrate All results a delay change makes out of date; the Windows tests named in the test map check them.
+S396 Windows host only: when the note that no AirPlay speaker was found shows; the Windows tests named in the test map check it.
+S397 Windows host only: the notice at launch that names the pairings copy; the Windows tests named in the test map check it.
+S398 Windows host only: the loopback gap fill; the Windows tests named in the test map check it.

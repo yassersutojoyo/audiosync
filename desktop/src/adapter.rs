@@ -11478,7 +11478,7 @@ mod tests {
     /// A sender that browses but finds nothing (a firewall that blocks
     /// discovery, a Public network) must not leave an empty list without a
     /// hint; it is a note in the list, not a notice.
-    // covers: S154 (the hint after 20 s of an empty list)
+    // covers: S396 (the hint after 20 s of an empty list)
     #[test]
     fn twenty_seconds_of_discovery_without_an_airplay_speaker_show_a_hint() {
         let fake = FakeAirPlay::new();
@@ -11522,7 +11522,7 @@ mod tests {
         assert!(!adapter.snapshot().airplay_searching, "a speaker was found");
     }
 
-    // covers: S154 (the hint after 20 s of an empty list)
+    // covers: S396 (the hint after 20 s of an empty list)
     #[test]
     fn the_none_found_hint_goes_once_a_speaker_appears_and_comes_back_20_seconds_after_all_are_gone()
      {
@@ -11557,7 +11557,7 @@ mod tests {
         );
     }
 
-    // covers: S154 (the hint after 20 s of an empty list)
+    // covers: S396 (the hint after 20 s of an empty list)
     #[test]
     fn a_speaker_found_within_20_seconds_keeps_the_none_found_hint_away() {
         let fake = FakeAirPlay::new();
@@ -11571,7 +11571,7 @@ mod tests {
 
     /// While discovery is dead, the AirPlay notice and its Retry say so: the
     /// list never adds the hint, even once that notice is dismissed.
-    // covers: S154 (no hint while the sender is not up)
+    // covers: S396 (no hint while the sender is not up)
     #[test]
     fn no_none_found_hint_while_discovery_is_dead() {
         // Without AirPlay at all.
@@ -11609,7 +11609,7 @@ mod tests {
         assert!(!none_found_hint(&adapter), "the sender stopped");
     }
 
-    // covers: S154, S222
+    // covers: S396, S222
     #[test]
     fn the_none_found_hint_goes_when_discovery_stops_and_counts_again_after_retry() {
         let first = FakeAirPlay::new();
@@ -14450,7 +14450,7 @@ mod tests {
         (adapter, fake)
     }
 
-    // covers: S387
+    // covers: S397
     #[test]
     fn damaged_pairings_get_their_notice_at_launch_naming_the_copy() {
         let dir = test_dir("adapter-pairings-damaged-at-launch");
@@ -14474,7 +14474,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    // covers: S387
+    // covers: S397
     #[test]
     fn pairings_unreadable_at_launch_get_their_notice_once_they_can_be_kept_aside_unchanged() {
         use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
@@ -14511,7 +14511,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    // covers: S387
+    // covers: S397
     #[test]
     fn pairings_unreadable_at_launch_get_a_notice_once_they_are_kept_aside() {
         use crate::audio::pairings::tests::sealer;
@@ -15386,7 +15386,7 @@ mod tests {
         assert_eq!(cast_id(&speaker_key(CAST_KITCHEN)), None);
     }
 
-    // covers: S393
+    // covers: S393, S396
     #[test]
     fn the_cast_list_says_it_searches_then_that_none_was_found() {
         let mut audio = MockBackend::empty();

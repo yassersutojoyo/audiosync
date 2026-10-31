@@ -2361,7 +2361,7 @@ mod tests {
     /// 100 ns units per millisecond, as packet positions count.
     const HNS_PER_MS: u64 = 10_000;
 
-    // covers: S335 (the Windows gap fill the Mac's quiet capture follows)
+    // covers: S398
     #[test]
     fn a_loopback_gap_keeps_the_ring_in_real_time_so_nothing_from_before_it_plays_after_it() {
         let (ring, writer) = session_ring();
@@ -2470,7 +2470,7 @@ mod tests {
         assert_eq!(gaps.packet(130 * HNS_PER_MS, 480, false), (0, 0, false));
     }
 
-    // covers: S332
+    // covers: S332, S398
     #[test]
     fn an_idle_wake_two_hours_on_writes_21_s_and_keeps_pace_from_now() {
         let mut gaps = GapFill::new(SESSION_RATE);
@@ -2651,7 +2651,7 @@ mod tests {
         );
     }
 
-    // covers: S335 (the Windows gap fill the Mac's quiet capture follows)
+    // covers: S398
     #[test]
     fn a_packet_inside_the_silence_written_skips_the_frames_filled() {
         let mut gaps = GapFill::new(SESSION_RATE);
@@ -2664,7 +2664,7 @@ mod tests {
         assert_eq!(gaps.packet(45 * HNS_PER_MS, 480, false), (0, 0, false));
     }
 
-    // covers: S335 (the Windows gap fill the Mac's quiet capture follows)
+    // covers: S398
     #[test]
     fn late_packets_inside_one_fill_are_never_written_twice() {
         let mut gaps = GapFill::new(SESSION_RATE);
@@ -2679,7 +2679,7 @@ mod tests {
         assert_eq!(gaps.packet(35 * HNS_PER_MS, 480, false), (0, 0, false));
     }
 
-    // covers: S335 (the Windows gap fill the Mac's quiet capture follows)
+    // covers: S398
     #[test]
     fn an_hour_of_gap_fills_exactly_the_frames_of_an_hour() {
         let mut gaps = GapFill::new(SESSION_RATE);

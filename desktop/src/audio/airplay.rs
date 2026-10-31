@@ -8374,7 +8374,7 @@ pub mod tests {
         airplay.set_playback(playback.clone(), playback, at);
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn an_app_that_stops_or_changes_tracks_never_pauses_the_speakers() {
         let fake = FakeAirPlay::new();
@@ -8393,7 +8393,7 @@ pub mod tests {
         Some(("Spotify.exe".to_owned(), playing))
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn a_remote_pause_of_a_playing_app_pauses_the_speakers_and_play_resumes() {
         let fake = FakeAirPlay::new();
@@ -8411,7 +8411,7 @@ pub mod tests {
         assert_eq!(pause_calls(&fake), [Call::Resume]);
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn a_remote_play_pause_follows_the_reading_both_ways() {
         let fake = FakeAirPlay::new();
@@ -8432,7 +8432,7 @@ pub mod tests {
         );
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn a_remote_pause_with_no_reading_or_an_app_paused_sends_no_flush() {
         let fake = FakeAirPlay::new();
@@ -8448,7 +8448,7 @@ pub mod tests {
         assert_eq!(pause_calls(&fake), []);
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn the_window_play_pause_of_the_followed_playing_app_pauses_and_resumes() {
         let fake = FakeAirPlay::new();
@@ -8461,7 +8461,7 @@ pub mod tests {
         assert_eq!(pause_calls(&fake), [Call::Resume]);
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn a_window_play_pause_the_reading_does_not_confirm_sends_no_flush() {
         let fake = FakeAirPlay::new();
@@ -8477,7 +8477,7 @@ pub mod tests {
         assert_eq!(pause_calls(&fake), []);
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn sound_in_the_capture_resumes_a_pause_the_reading_still_holds() {
         let fake = FakeAirPlay::new();
@@ -8496,7 +8496,7 @@ pub mod tests {
         assert_eq!(pause_calls(&fake), [Call::Resume], "another app plays");
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn the_feed_counts_the_sound_it_hands_over() {
         let clock = SenderClock::new(Instant::now());
@@ -8519,7 +8519,7 @@ pub mod tests {
         Some(("chrome.exe".to_owned(), playing))
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn the_app_pausing_itself_pauses_the_speakers_once_and_playing_resumes() {
         let fake = FakeAirPlay::new();
@@ -8537,7 +8537,7 @@ pub mod tests {
         assert_eq!(pause_calls(&fake), [Call::Resume]);
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn a_first_reading_paused_or_an_app_that_quits_never_pauses_the_speakers() {
         let fake = FakeAirPlay::new();
@@ -8551,7 +8551,7 @@ pub mod tests {
         assert_eq!(pause_calls(&fake), []);
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn a_player_switch_follows_the_active_player() {
         let fake = FakeAirPlay::new();
@@ -8565,7 +8565,7 @@ pub mod tests {
         assert_eq!(pause_calls(&fake), [Call::Pause]);
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn the_app_pausing_while_nothing_streams_never_pauses_the_speakers() {
         let fake = FakeAirPlay::new();
@@ -8579,7 +8579,7 @@ pub mod tests {
         assert_eq!(pause_calls(&fake), []);
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn sound_in_the_capture_resumes_a_pause_the_app_took() {
         let fake = FakeAirPlay::new();
@@ -8621,7 +8621,7 @@ pub mod tests {
         assert!(resumes[1].ends_with("(player reading)"), "{resumes:?}");
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn the_app_playing_again_after_a_pause_resumes_the_speakers() {
         let fake = FakeAirPlay::new();
@@ -8692,7 +8692,7 @@ pub mod tests {
         }
     }
 
-    // covers: P213
+    // covers: P213, S292
     #[test]
     fn a_new_capture_or_the_stream_stopping_resumes_a_paused_stream() {
         let fake = FakeAirPlay::new();
