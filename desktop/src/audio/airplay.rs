@@ -1926,10 +1926,12 @@ impl AirPlaySpeakers {
         if !self.held_by_target(id) {
             return None;
         }
-        let target = self
-            .added_target_of(id)
-            .or_else(|| self.target_of(id).map(|target| target.id.to_string()))?;
-        let name = self.targets.get(&target)?.name.clone();
+        let target = self.added_target_of(id).or_else(|| self.target_of(id))?;
+        // A listing can name its target a poll before the target's own row.
+        let name = match self.targets.get(&target) {
+            Some(listed) => listed.name.clone(),
+            None => self.names.get(&target).unwrap_or(&target).clone(),
+        };
         Some(InTarget { id: target, name })
     }
 
@@ -1939,11 +1941,10 @@ impl AirPlaySpeakers {
         self.names.get(id).map(String::as_str)
     }
 
-    /// The listed stereo pair or home theater group that the listed speaker
-    /// `id` is a member of (P176).
-    fn target_of(&self, id: &str) -> Option<&Target> {
-        let target = self.listed.get(id)?.info.target.as_ref()?;
-        self.targets.get(&target.to_string())
+    /// The ID of the stereo pair or home theater group that the listed
+    /// speaker `id` is a member of, listed yet or not (P176).
+    fn target_of(&self, id: &str) -> Option<String> {
+        Some(self.listed.get(id)?.info.target.as_ref()?.to_string())
     }
 
     /// Whether `target` can be switched on: a member that asks for a
@@ -4080,6 +4081,13 @@ impl AirPlaySpeakers {
     /// otherwise every record a LAN host announces would stay until quit.
     fn forget_name_unless_used(&mut self, id: &str) {
         let used = self.listed.contains_key(id)
+            || self.listed.values().any(|listed| {
+                listed
+                    .info
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| target.to_string() == id)
+            })
             || self.settings.contains_key(id)
             || self.added.contains_key(id)
             || self.added_target_of(id).is_some()
@@ -10427,6 +10435,47 @@ pub mod tests {
         assert_eq!(
             airplay.set_enabled(&id_of(&left), true),
             Err(AirPlayProblem::PlaysInGroup)
+        );
+    }
+
+    // covers: P176
+    #[test]
+    fn a_member_names_its_holding_pair_in_the_poll_before_the_pair_is_listed() {
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        let (pair, left, _) = stereo_pair();
+        fake.appear(&left);
+        airplay.poll();
+        let mut info = ReceiverInfo::new(left.clone());
+        info.target = Some(pair.id.clone());
+        fake.push(SenderEvent::Receiver(ReceiverEvent::Changed(Box::new(
+            info,
+        ))));
+        airplay.poll();
+        assert_eq!(
+            airplay
+                .holding_target(&id_of(&left))
+                .map(|target| target.id)
+                .as_deref(),
+            Some(PAIR)
+        );
+    }
+
+    // covers: P176
+    #[test]
+    fn a_member_keeps_its_gone_pairs_name_while_its_listing_still_names_the_pair() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        fake.target_gone(&pair);
+        airplay.poll();
+        assert_eq!(
+            airplay
+                .holding_target(&id_of(&left))
+                .map(|target| target.name)
+                .as_deref(),
+            Some("Living Room")
         );
     }
 
