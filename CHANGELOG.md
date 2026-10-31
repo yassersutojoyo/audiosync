@@ -284,6 +284,9 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a web remote command with one bad part still applies the rest, and its volumes and delays are clamped to their range, as on the Mac.
 - On the Mac, opening AudioSync a second time shows the running copy's window only once that launch has finished, and a launch at login leaves the window as it is.
 - Dragging an AirPlay speaker's volume on the web remote no longer makes its row jump back: readings from the speaker wait until 1 second after your last step. On the Mac and on Windows.
+- On Windows, any line break in a speaker or zone name you type now becomes a space, the Unicode line and paragraph separators included, as on the Mac. Before, only a Return did.
+- On the Mac, a USB output that macOS lists under a new ID after you plug it into another port keeps its settings while AudioSync runs, as on Windows: its switch, volume, delay, name, zones, presets and hidden mark follow it.
+- A PTP time that isn't a number no longer stops AudioSync's AirPlay 2 sending. Before, the AirPlay 2 speakers could go silent. On the Mac and on Windows.
 
 ## [0.7.1] - 2026-10-27
 
