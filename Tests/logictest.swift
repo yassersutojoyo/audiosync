@@ -1182,6 +1182,10 @@ do {
           "eq curves: stored curves are read leniently and cleaned")
     check(StoredCurves.decode(StoredCurves.encode(read)) == read && StoredCurves.decode(nil).isEmpty,
           "eq curves: saved curves come back unchanged")
+    // covers: S270 (a JSON true or false band is not a number, so it reads as 0 dB, as on Windows)
+    let flags = StoredCurves.decode(Data(#"[{"name":"Flags","gains":[true,false,2]}]"#.utf8))
+    check(flags.first?.gains == [0, 0, 2, 0, 0, 0, 0, 0, 0, 0],
+          "eq curves: a stored true or false band reads as 0 dB")
     let text = UIStrings()
     check(text.equalizerCurveName(nil, saved: read) == text.equalizerCustom
             && text.equalizerCurveName(.saved(1), saved: read) == "Late",

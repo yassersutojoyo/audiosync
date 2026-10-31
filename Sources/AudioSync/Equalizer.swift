@@ -148,7 +148,11 @@ enum StoredCurves {
         guard let data, let entries = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return [] }
         return Equalizer.sanitized(entries.compactMap { entry in
             guard let fields = entry as? [String: Any], let name = fields["name"] as? String else { return nil }
-            let gains = (fields["gains"] as? [Any] ?? []).map { ($0 as? NSNumber)?.doubleValue ?? 0 }
+            // JSONSerialization hands back true and false as NSNumber too.
+            let gains = (fields["gains"] as? [Any] ?? []).map { band -> Double in
+                guard let number = band as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return 0 }
+                return number.doubleValue
+            }
             return Equalizer.Curve(name: name, gains: gains)
         })
     }
