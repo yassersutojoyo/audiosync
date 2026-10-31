@@ -14225,7 +14225,9 @@ do {
 do {
     let waiting = LocalDelay.leadDescription(networkMs: 2000)
     let alone = LocalDelay.leadDescription(networkMs: nil)
+    // covers: S208
     check(waiting == "lead: local speakers wait 2000 ms for the network speakers", "lead: \(waiting)")
+    // covers: S208
     check(alone.contains("start lead") && !alone.contains("wait"), "lead: \(alone)")
 
     let meter = InputLevel()
@@ -14890,11 +14892,15 @@ do {
     }
     let window = read("Sources/AudioSync/MainWindow.swift")
 
+    // covers: S404
     check(ZoneLook.nameColumn == 54, "zone look: names start 54 pt into a card's rows", "\(ZoneLook.nameColumn)")
+    // covers: S404
     check(ZoneLook.compactRowHeight == 36 && ZoneLook.compactPaddingY == 6 && ZoneLook.compactBadge == 24,
           "zone look: an In zones row is 36 pt, a 24 pt badge with 6 pt above and below", "\(ZoneLook.compactRowHeight)")
+    // covers: S404
     check(ZoneLook.groupRadius == 9 && ZoneLook.groupFill == 0.05 && ZoneLook.groupBorderWidth == 0.5,
           "zone look: the member box is teal 5% with a 0.5 pt teal edge and corner 9")
+    // covers: S404
     check(ZoneLook.chipHeight == 18 && ZoneLook.chipPaddingX == 7 && ZoneLook.chipFill == 0.12,
           "zone look: the zone chip is an 18 pt teal 12% capsule with 7 pt sides")
 
@@ -15031,12 +15037,15 @@ do {
     func castRow(_ status: CastStatus, fixed: Bool = false) -> CastRow {
         CastRow(status: status, muted: false, volumeFixed: fixed, group: nil)
     }
+    // covers: S409
     check(t.volumeLocked(enabled: true, cast: nil) == nil
             && t.volumeLocked(enabled: true, cast: castRow(.playing)) == nil,
           "volume: no reason while the slider moves")
+    // covers: S409
     check(t.volumeLocked(enabled: false, cast: nil) != nil
             && t.volumeLocked(enabled: false, cast: castRow(.idle)) != nil,
           "volume: a speaker that is off says why its slider is dimmed")
+    // covers: S409
     check(t.volumeLocked(enabled: true, cast: castRow(.idle)) != nil
             && t.volumeLocked(enabled: true, cast: castRow(.idle)) != t.volumeLocked(enabled: false, cast: nil),
           "volume: a Cast speaker with no session says why, apart from a speaker that is off")
@@ -15049,11 +15058,16 @@ do {
 do {
     let options = AboutPanel.options(credits: NSAttributedString(string: "credits"), copyright: "copyright",
                                      info: ["CFBundleShortVersionString": "0.7.1", "CFBundleVersion": "11"])
+    // covers: S410
     check(options[.applicationVersion] as? String == "0.7.1", "about: the version line is the short version",
           String(describing: options[.applicationVersion]))
+    // covers: S410
     check(options[.version] as? String == "", "about: no build number in parentheses",
           String(describing: options[.version]))
-    check(options[.credits] is NSAttributedString, "about: the license credits stay")
+    // covers: S410
+    check((options[.credits] as? NSAttributedString)?.string == "credits"
+            && options[NSApplication.AboutPanelOptionKey(rawValue: "Copyright")] as? String == "copyright",
+          "about: the license credits and the copyright come through unchanged")
 }
 
 // MARK: Panel status counts only the AirPlay speakers it shows (StreamingPolicy.activeSpeakers)
