@@ -2870,6 +2870,9 @@ impl<D: Driver> Controller<D> {
         }
         // A sleep whose suspend notice went missing cancels them here.
         self.cancel_fresh_restarts_for_sleep();
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.woke();
+        }
         for appeared in self.appeared.values_mut() {
             *appeared = self.polls;
         }
@@ -5410,7 +5413,7 @@ mod tests {
     use audiosync_core::render::STOP_FADE_CAP;
 
     use super::*;
-    use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, id_of};
+    use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, device_at, id_of};
     use crate::audio::backend::OutputKind;
     use crate::audio::capture::Activation;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
@@ -8398,6 +8401,64 @@ mod tests {
         assert_eq!(starts_of(&ended, BUDS), 2);
     }
 
+    // covers: S412
+    #[test]
+    fn no_airplay_session_starts_while_the_pc_sleeps_and_its_failures_post_no_notice() {
+        let trouble = |events: Vec<BackendEvent>| {
+            events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::AirPlayTrouble { .. }))
+        };
+        let (mut backend, fake, kitchen) = with_airplay();
+        let office = device(2, "Office", OPEN_TXT);
+        fake.appear(&office);
+        backend.poll();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        fake.state(&kitchen, SpeakerState::Playing);
+        backend.poll();
+        fake.take_calls();
+        backend.notify_power(PowerNotice::Suspend);
+        backend.poll();
+        backend.set_airplay_enabled(&id_of(&office), true).unwrap();
+        fake.lose(&kitchen, ErrorKind::Unreachable);
+        // Kitchen, which the sender retries, moved to a new address.
+        fake.change(&device_at(
+            1,
+            "Kitchen",
+            OPEN_TXT,
+            "192.0.2.11".parse().unwrap(),
+            7000,
+        ));
+        assert!(
+            !trouble(backend.poll()),
+            "no notice for a loss while asleep"
+        );
+        let added = |calls: &[Call], speaker: &Device| {
+            calls
+                .iter()
+                .any(|call| matches!(call, Call::Add { id, .. } if *id == id_of(speaker)))
+        };
+        let calls = fake.take_calls();
+        assert!(!added(&calls, &office), "no start while asleep");
+        assert!(!added(&calls, &kitchen), "no new records while asleep");
+        backend.pass_wall_time(Duration::from_secs(2 * 3600));
+        backend.notify_power(PowerNotice::Resume);
+        backend.poll();
+        let calls = fake.take_calls();
+        assert!(added(&calls, &office), "started at the resume");
+        assert!(
+            added(&calls, &kitchen),
+            "the new records taken at the resume"
+        );
+        // The loss after the wake counts from its first failure.
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        assert!(!trouble(backend.poll()));
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        assert!(trouble(backend.poll()));
+    }
+
     // covers: S325, S332
     #[test]
     fn a_sleep_cancels_a_fresh_link_restart_and_the_output_plays_on() {
@@ -9426,6 +9487,28 @@ mod tests {
         backend.set_default_output(HEADPHONES);
         assert_eq!(backend.poll(), [BackendEvent::OutputsChanged]);
         assert!(backend.poll().is_empty());
+    }
+
+    // covers: S145
+    #[test]
+    fn a_new_default_output_leaves_playing_outputs_alone() {
+        let mut backend = backend();
+        backend.set_default_output(SPEAKERS);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        let delays = [SPEAKERS, HEADPHONES].map(|id| delay_frames(&backend, id));
+        let captures = backend.driver().capture_attempts();
+        backend.set_default_output(HEADPHONES);
+        assert_eq!(backend.poll(), [BackendEvent::OutputsChanged]);
+        poll_quietly(&mut backend, 10);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        assert_eq!(starts_of(&backend, SPEAKERS), 1);
+        assert_eq!(starts_of(&backend, HEADPHONES), 1);
+        assert_eq!(
+            [SPEAKERS, HEADPHONES].map(|id| delay_frames(&backend, id)),
+            delays
+        );
+        assert_eq!(backend.driver().capture_attempts(), captures);
     }
 
     // covers: S211

@@ -1189,6 +1189,12 @@ pub struct AirPlaySpeakers {
     /// A stream that ran stopped since the last poll, which ends the PIN
     /// sessions the user's clicks bought (S223).
     stream_ended: bool,
+    /// From the PC's suspend notice to its resume: no session starts, and
+    /// a retried error doesn't count toward reconnecting (S412).
+    asleep: bool,
+    /// Speakers whose records changed while the PC slept, which retake
+    /// them at the wake (P142, S412).
+    changed_asleep: BTreeSet<String>,
     /// How the last AirPlay 1 attempt of a speaker ended when that moved it
     /// to AirPlay 2, as the sender keeps it while the speaker stays added.
     airplay1_outcome: BTreeMap<String, ErrorKind>,
@@ -1301,6 +1307,8 @@ impl AirPlaySpeakers {
             paired_for_session: BTreeSet::new(),
             paired_by_user: BTreeSet::new(),
             stream_ended: false,
+            asleep: false,
+            changed_asleep: BTreeSet::new(),
             airplay1_outcome: BTreeMap::new(),
             session_paths: BTreeMap::new(),
             streaming: false,
@@ -3214,6 +3222,31 @@ impl AirPlaySpeakers {
     /// (S223).
     pub fn sleeping(&mut self) {
         self.stream_ended |= self.streaming;
+        self.asleep = true;
+    }
+
+    /// The PC woke: the speakers held back while it slept join (S412).
+    pub fn woke(&mut self) {
+        if std::mem::take(&mut self.asleep) {
+            for id in std::mem::take(&mut self.changed_asleep) {
+                self.retake_records(&id);
+            }
+            self.reconcile();
+        }
+    }
+
+    /// A speaker the sender is trying to reach again takes its new records
+    /// for its next session at once (P142).
+    fn retake_records(&mut self, id: &str) {
+        if self
+            .added
+            .get(id)
+            .is_some_and(|added| matches!(added.state, SpeakerState::Retrying { .. }))
+            && self.can_join(id)
+        {
+            let options = self.options(id);
+            let _ = self.link.add_speaker(self.listed[id].device(), options);
+        }
     }
 
     /// A new capture started (P143): a paused stream resumes. The timeline
@@ -3275,7 +3308,7 @@ impl AirPlaySpeakers {
         if self.added.is_empty() {
             self.latency_warned.clear();
         }
-        let joining: Vec<String> = if self.streaming {
+        let joining: Vec<String> = if self.streaming && !self.asleep {
             self.settings
                 .iter()
                 // While its PIN pairing runs, a session would pair anew and
@@ -3947,15 +3980,11 @@ impl AirPlaySpeakers {
                         describe_availability(availability)
                     )
                 });
-                // A speaker the sender is trying to reach again takes the
-                // new records for its next session at once (P142).
                 self.listed.insert(id.clone(), Listed { info: *info });
-                if let Some(added) = self.added.get(&id)
-                    && matches!(added.state, SpeakerState::Retrying { .. })
-                    && self.can_join(&id)
-                {
-                    let options = self.options(&id);
-                    let _ = self.link.add_speaker(self.listed[&id].device(), options);
+                if self.asleep {
+                    self.changed_asleep.insert(id.clone());
+                } else {
+                    self.retake_records(&id);
                 }
                 // A speaker that is on stays on whatever discovery says
                 // (see the module documentation); one listed as unable to
@@ -4202,7 +4231,7 @@ impl AirPlaySpeakers {
                     && problem.retried()
                 {
                     added.state = SpeakerState::Retrying { at: *at };
-                    if added.reconnecting() {
+                    if !self.asleep && added.reconnecting() {
                         events.push(BackendEvent::AirPlayTrouble {
                             id: target.to_owned(),
                             problem,
@@ -4446,7 +4475,7 @@ impl AirPlaySpeakers {
                         // speaker the list no longer shows.
                         return true;
                     }
-                    if added.reconnecting() {
+                    if !self.asleep && added.reconnecting() {
                         events.push(BackendEvent::AirPlayTrouble {
                             id: id.to_owned(),
                             problem,
