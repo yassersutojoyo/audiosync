@@ -1175,6 +1175,20 @@ pub unsafe extern "C" fn asc_cast_create(memory_json: *const c_char) -> *mut Asc
     create_with(text, live_browser)
 }
 
+/// Whether [`asc_cast_create`] reads `memory_json` as device memory: a JSON
+/// object that no newer format version wrote. A host keeps a file that
+/// doesn't read before it saves over it. False for null.
+///
+/// # Safety
+///
+/// `memory_json` is null or a NUL-terminated string, unchanged during the
+/// call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_cast_memory_reads(memory_json: *const c_char) -> bool {
+    // SAFETY: as the caller's.
+    unsafe { host_text(memory_json) }.is_some_and(|text| DeviceMemory::read_json(text).is_some())
+}
+
 fn create_with(memory_json: &str, open_browser: OpenBrowser) -> *mut AscCast {
     note_panic_locations();
     let panics_before = PANICS.load(Ordering::SeqCst);
@@ -3114,9 +3128,31 @@ mod tests {
             let handle = unsafe { asc_cast_create(damaged.as_ptr()) };
             assert!(!handle.is_null());
             // SAFETY: a live handle, used by this thread only.
-            assert_eq!(text(unsafe { asc_cast_memory_json(handle) }), "{}");
+            let json = text(unsafe { asc_cast_memory_json(handle) });
+            assert_eq!(json, DeviceMemory::default().to_json());
             destroy(handle);
         }
+    }
+
+    // CAST_SPEC: C77, C84
+    #[test]
+    fn memory_reads_only_what_create_reads_as_memory() {
+        use audiosync_cast::host::MEMORY_VERSION;
+        let current = CString::new(format!(r#"{{"version": {MEMORY_VERSION}}}"#)).unwrap();
+        let newer = CString::new(format!(r#"{{"version": {}}}"#, MEMORY_VERSION + 1)).unwrap();
+        let damaged_entry = c"{\"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1\": {\"offsetMs\": \"soon\"}}";
+        for reads in [c"{}", current.as_c_str(), damaged_entry] {
+            // SAFETY: a NUL-terminated string.
+            let read = unsafe { asc_cast_memory_reads(reads.as_ptr()) };
+            assert!(read, "{reads:?}");
+        }
+        for refused in [newer.as_c_str(), c"[]", c"not json", c"\xff"] {
+            // SAFETY: a NUL-terminated string.
+            let read = unsafe { asc_cast_memory_reads(refused.as_ptr()) };
+            assert!(!read, "{refused:?}");
+        }
+        // SAFETY: null is allowed.
+        assert!(!unsafe { asc_cast_memory_reads(ptr::null()) });
     }
 
     #[test]

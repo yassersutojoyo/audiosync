@@ -2155,6 +2155,13 @@ typedef struct AscCastEvent {
 AscCast *asc_cast_create(const char *memory_json);
 
 /*
+ * Whether asc_cast_create reads memory_json as device memory: a JSON object
+ * that no newer format version wrote. Keep a file that doesn't read before
+ * saving over it. False for NULL.
+ */
+bool asc_cast_memory_reads(const char *memory_json);
+
+/*
  * Stops the sender and frees it: a running or starting session is torn down
  * within 3 s, which this call waits for (about 3.5 s at most), so call it
  * from the quit path, off the main thread. Takes the address of the host's

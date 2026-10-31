@@ -1205,11 +1205,12 @@ enum CastMemoryFile {
     }
 
     /// Whether the core reads `data` as device memory: UTF-8 text holding a
-    /// JSON object. Entries it can't use are skipped by the core alone.
+    /// JSON object that no newer format version wrote. Entries it can't use
+    /// are skipped by the core alone.
     static func reads(_ data: Data) -> Bool {
         // The core's JSON reader refuses a byte order mark, which Foundation's skips.
-        guard !data.starts(with: [0xEF, 0xBB, 0xBF]), String(data: data, encoding: .utf8) != nil else { return false }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] != nil
+        guard !data.starts(with: [0xEF, 0xBB, 0xBF]), let text = String(data: data, encoding: .utf8) else { return false }
+        return asc_cast_memory_reads(text)
     }
 
     /// Copies `bytes` next to the file at `url` as

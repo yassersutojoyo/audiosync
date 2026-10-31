@@ -715,13 +715,7 @@ impl CastSession {
     }
 
     fn report(&mut self, event: SessionEvent) {
-        // A level is reported once (C70): a newer one replaces it, a full queue never drops it.
-        if matches!(event, SessionEvent::Volume(..)) {
-            self.events
-                .retain(|queued| !matches!(queued, SessionEvent::Volume(..)));
-        }
-        make_room(&mut self.events);
-        self.events.push_back(event);
+        queue_report(&mut self.events, event);
         if self.recovering {
             self.send_live();
         }
@@ -1077,6 +1071,22 @@ impl CastSession {
     }
 }
 
+fn queue_report(events: &mut VecDeque<SessionEvent>, mut event: SessionEvent) {
+    // A level is reported once (C70): a newer one replaces it, keeping its mute
+    // answer, and a full queue never drops it.
+    if let SessionEvent::Volume(_, answers_mute) = &mut event {
+        events.retain(|queued| match queued {
+            SessionEvent::Volume(_, earlier) => {
+                *answers_mute |= earlier;
+                false
+            }
+            _ => true,
+        });
+    }
+    make_room(events);
+    events.push_back(event);
+}
+
 /// Frees a place in a full event queue: the oldest routine event goes
 /// first, then the oldest connect failure, which a long outage repeats.
 fn make_room(events: &mut VecDeque<SessionEvent>) {
@@ -1175,6 +1185,24 @@ mod tests {
             events
                 .iter()
                 .any(|event| matches!(event, SessionEvent::Volume(..)))
+        );
+    }
+
+    // covers: C70
+    #[test]
+    fn a_newer_level_keeps_the_mute_answer_of_the_report_it_replaces() {
+        let mut events = VecDeque::new();
+        queue_report(
+            &mut events,
+            SessionEvent::Volume(DeviceVolume::default(), true),
+        );
+        queue_report(
+            &mut events,
+            SessionEvent::Volume(DeviceVolume::default(), false),
+        );
+        assert!(
+            matches!(events.make_contiguous(), [SessionEvent::Volume(_, true)]),
+            "{events:?}"
         );
     }
 

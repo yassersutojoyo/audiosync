@@ -12837,6 +12837,13 @@ do {
             && !CastMemoryFile.reads(Data([0xFF, 0x7B, 0x7D])) && CastMemoryFile.reads(Data("{}".utf8)),
           "cast memory: only UTF-8 text holding a JSON object, without a byte order mark, reads")
 
+    try? Data("{\"version\": 2, \"\(good)\": {\"offsetMs\": 700}}".utf8).write(to: url)
+    let held = copies().count
+    var newer = CastMemoryStore(url: url)
+    _ = try? newer.save("{}")
+    check(copies().count == held + 1 && CastMemoryFile.reads(Data("{\"version\": 1}".utf8)),
+          "cast memory: a file a newer AudioSync wrote is kept aside before it is saved over")
+
     try? damaged.write(to: url)
     try? FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
     // Skipped when running as root, where the mode doesn't stop the read.
