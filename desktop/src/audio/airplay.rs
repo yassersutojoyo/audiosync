@@ -91,6 +91,7 @@ use audiosync_airplay::stream::{
 use audiosync_airplay::targets::{Target, TargetChange, TargetId, TargetKind};
 use audiosync_airplay::volume::{MIN_DB, MUTED_DB, Volume};
 use audiosync_core::fade::InputFade;
+use audiosync_core::ffi::airplay::{latest_panic_since, panic_mark};
 use audiosync_core::policy::remote::{
     Action, App, Command, Control, Event as RemoteEvent, OwnVolume, Playback, Remote,
 };
@@ -1241,6 +1242,9 @@ pub struct AirPlaySpeakers {
     /// The sender stopped after an internal error, or its discovery did;
     /// reported once, until a new sender replaces it.
     stopped: bool,
+    /// The core's panic count when the sender was handed over, so its stop
+    /// logs where a panic since happened (S205).
+    panics_before: u64,
     /// The last write of the pairings' file failed.
     store_unsaved: bool,
     /// Whether the pairings' file can be written changed since the last
@@ -1324,6 +1328,7 @@ impl AirPlaySpeakers {
             calibration_solo: None,
             volume_read_at: Instant::now(),
             stopped: false,
+            panics_before: panic_mark(),
             store_unsaved: false,
             store_change: None,
             store_kept_aside: None,
@@ -1385,6 +1390,7 @@ impl AirPlaySpeakers {
     pub fn replace_link(&mut self, link: Box<dyn AirPlayLink>) {
         // The old sender stops as it is dropped.
         self.link = link;
+        self.panics_before = panic_mark();
         self.pause.forget();
         self.listed.clear();
         self.added.clear();
@@ -1468,8 +1474,11 @@ impl AirPlaySpeakers {
         }
         if changed || !self.stopped {
             self.log.log(|| {
-                "AirPlay: the sender stopped after an internal error; AirPlay stays silent until Retry"
-                    .to_owned()
+                let at = latest_panic_since(self.panics_before);
+                let at = if at.is_empty() { at } else { format!(" ({at})") };
+                format!(
+                    "AirPlay: the sender stopped after an internal error{at}; AirPlay stays silent until Retry"
+                )
             });
         }
         self.mark_stopped(events);
@@ -5879,6 +5888,35 @@ pub mod tests {
         let fake = FakeAirPlay::new();
         let mut airplay = paired(&fake);
         retried(&mut airplay, Vec::new());
+    }
+
+    // covers: S205
+    #[test]
+    fn the_stop_after_a_panic_logs_where_it_happened_and_never_what_it_said() {
+        let _serial = crate::debug_log::PANIC_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let path = crate::debug_log::test_dir("airplay-panic-location").join("log.txt");
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        airplay.set_debug_log(DebugLog::new(Some(path.clone())));
+        let line = line!() + 1;
+        let driver = thread::spawn(|| panic!("the receiver replied 0xSECRET"));
+        assert!(driver.join().is_err());
+        fake.stop_running();
+        airplay.poll();
+
+        assert!(airplay.log.flush(crate::debug_log::TEST_FLUSH));
+        let messages = crate::debug_log::read_messages(&path);
+        let stopped = messages
+            .iter()
+            .find(|message| message.contains("stopped after an internal error"))
+            .expect("the stop is logged");
+        assert!(
+            stopped.contains(&format!("(latest panic at src/audio/airplay.rs:{line})")),
+            "{stopped}"
+        );
+        assert!(!stopped.contains("0xSECRET"), "{stopped}");
     }
 
     // covers: S223

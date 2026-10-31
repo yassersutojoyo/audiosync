@@ -16079,6 +16079,9 @@ mod tests {
     // covers: S257
     #[test]
     fn a_phone_command_that_panics_midway_still_ends_the_phone_mark() {
+        let _serial = crate::debug_log::PANIC_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (mut adapter, _fake, tv) = apple_tv_adapter();
         let tv_id = ap(&tv);
         adapter.restore(Settings {

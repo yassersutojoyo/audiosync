@@ -2135,14 +2135,7 @@ impl AscAirPlay {
         if let Some(at) = self.death.at.get() {
             return format!("panic at {at}");
         }
-        if PANICS.load(Ordering::SeqCst) == self.panics_before {
-            return String::new();
-        }
-        LATEST_PANIC
-            .lock()
-            .ok()
-            .and_then(|latest| latest.clone())
-            .map_or_else(String::new, |at| format!("latest panic at {at}"))
+        latest_panic_since(self.panics_before)
     }
 }
 
@@ -2234,6 +2227,27 @@ pub(super) fn note_panic_locations() {
             previous(info);
         }));
     });
+}
+
+/// Installs the panic hook if it isn't yet and returns how many panics the
+/// process noted so far, for [`latest_panic_since`]: a host that drives the
+/// sender crate itself takes it when it creates a sender (S205).
+pub fn panic_mark() -> u64 {
+    note_panic_locations();
+    PANICS.load(Ordering::SeqCst)
+}
+
+/// `latest panic at <file>:<line>` for the latest panic the process noted
+/// since [`panic_mark`] returned `mark`; "" when there was none since.
+pub fn latest_panic_since(mark: u64) -> String {
+    if PANICS.load(Ordering::SeqCst) == mark {
+        return String::new();
+    }
+    LATEST_PANIC
+        .lock()
+        .ok()
+        .and_then(|latest| latest.clone())
+        .map_or_else(String::new, |at| format!("latest panic at {at}"))
 }
 
 /// The location the hook noted for the latest panic on this thread, which a
