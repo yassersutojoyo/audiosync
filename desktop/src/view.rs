@@ -1226,10 +1226,18 @@ impl App {
         }
     }
 
-    /// Starts the input level meter once an input device is captured; it
-    /// stops itself when the capture ends or the source changes.
+    /// Starts the input level meter once an input device is captured while
+    /// the main window shows; it stops itself when the capture ends, the
+    /// source changes or the window hides or is minimized.
     fn follow_input_level(&self, weak: &Weak<App>) {
-        if self.meter_timer.running() || !self.tick_input_level() {
+        if self.meter_timer.running() {
+            return;
+        }
+        if !matches!(self.main_window_shows(), MainWindowShows::Not) {
+            // Drops the peak the input kept while the window was hidden.
+            self.backend.borrow_mut().input_peak();
+        }
+        if !self.tick_input_level() {
             return;
         }
         let weak = weak.clone();
@@ -1247,6 +1255,13 @@ impl App {
     /// Moves the meter to the peak captured since the last tick, or hides
     /// it while no input device is captured. Returns whether it shows.
     fn tick_input_level(&self) -> bool {
+        if matches!(self.main_window_shows(), MainWindowShows::Not) {
+            self.meter_timer.stop();
+            self.meter_level.set(0.0);
+            self.main.set_input_level(0.0);
+            self.main.set_input_level_spoken(0);
+            return false;
+        }
         let Some(peak) = self.backend.borrow_mut().input_peak() else {
             self.meter_timer.stop();
             self.meter_level.set(0.0);
@@ -6152,6 +6167,48 @@ mod tests {
         app.main.hide().expect("the main window hides");
         app.poll();
         assert_eq!(fake.following(), None, "nothing is read while hidden");
+    }
+
+    // covers: S408
+    #[test]
+    fn the_input_level_meter_reads_only_while_the_main_window_shows() {
+        let backend = MockBackend::new();
+        let reads = backend.input_peak_reads.clone();
+        reads.set(Some(0));
+        let app = app_over(backend);
+        let weak = Rc::downgrade(&app);
+
+        app.follow_input_level(&weak);
+        assert_eq!(reads.get(), Some(0), "nothing is read while closed");
+        assert!(!app.meter_timer.running());
+
+        app.main.show().expect("the main window shows");
+        app.follow_input_level(&weak);
+        assert_eq!(
+            reads.get(),
+            Some(2),
+            "once the window shows, the kept peak is dropped and a new one read"
+        );
+        assert!(app.meter_timer.running());
+        assert!(app.main.get_input_level() > 0.0);
+
+        app.main.window().set_minimized(true);
+        app.tick_input_level();
+        app.follow_input_level(&weak);
+        assert_eq!(reads.get(), Some(2), "nothing is read while minimized");
+        assert!(!app.meter_timer.running(), "the meter's timer stops");
+        assert_eq!(app.main.get_input_level(), 0.0, "the bar empties");
+        assert_eq!(app.main.get_input_level_spoken(), 0);
+
+        app.main.window().set_minimized(false);
+        app.follow_input_level(&weak);
+        assert_eq!(reads.get(), Some(4), "it reads again once restored");
+
+        app.main.hide().expect("the main window hides");
+        app.tick_input_level();
+        app.follow_input_level(&weak);
+        assert_eq!(reads.get(), Some(4), "nothing is read while hidden");
+        assert!(!app.meter_timer.running());
     }
 
     #[test]

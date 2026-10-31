@@ -68,6 +68,7 @@ mod tests {
         (a - b).abs() < 1e-5
     }
 
+    // covers: S408
     #[test]
     fn the_bar_follows_the_peak_in_db_and_falls_back_slowly() {
         assert_eq!(meter_level(0.0, 0.0), 0.0);

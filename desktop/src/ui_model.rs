@@ -1930,6 +1930,9 @@ pub struct MockBackend {
     pub late_view: std::rc::Rc<std::cell::RefCell<Option<ViewSettings>>>,
     /// The window settings each save found.
     pub saved_views: std::rc::Rc<std::cell::RefCell<Vec<ViewSettings>>>,
+    /// While `Some`, an input device is captured, and it counts the level
+    /// meter's reads of its peak.
+    pub input_peak_reads: std::rc::Rc<std::cell::Cell<Option<u32>>>,
     view_restored: bool,
     /// The speaker that asks for its password once it is turned on.
     password_on: Option<String>,
@@ -2108,6 +2111,7 @@ impl MockBackend {
             airplay_delays: std::rc::Rc::default(),
             late_view: std::rc::Rc::default(),
             saved_views: std::rc::Rc::default(),
+            input_peak_reads: std::rc::Rc::default(),
             view_restored: false,
             password_on: None,
         }
@@ -2420,6 +2424,12 @@ impl Backend for MockBackend {
         self.view = view;
         self.view_restored = true;
         true
+    }
+
+    fn input_peak(&mut self) -> Option<f32> {
+        let reads = self.input_peak_reads.get()?;
+        self.input_peak_reads.set(Some(reads + 1));
+        Some(0.5)
     }
 
     fn take_view_restored(&mut self) -> bool {
