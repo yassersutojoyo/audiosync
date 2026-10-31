@@ -864,16 +864,13 @@ impl CastSpeakers {
     /// reported once: one that is on stays on as that device, and its offset
     /// goes with it.
     fn identified(&mut self, from: SocketAddr, id: DeviceId) {
-        let found: Vec<DeviceId> = self
+        let found: Vec<(DeviceId, Option<DeviceId>)> = self
             .manual
             .iter_mut()
             .filter(|manual| manual.resolved == Some(from) && manual.found != Some(id))
-            .map(|manual| {
-                manual.found = Some(id);
-                manual.id
-            })
+            .map(|manual| (manual.id, manual.found.replace(id)))
             .collect();
-        for manual in found {
+        for (manual, saved) in found {
             self.pending.push(BackendEvent::CastIdentified {
                 from: manual.to_string(),
                 to: id.to_string(),
@@ -881,8 +878,9 @@ impl CastSpeakers {
             // 0 ms counts as none: the sender can't forget an offset, so Undo leaves 0.
             let memory = self.memory();
             let stored = |device| memory.offset(device).filter(|offset| !offset.is_zero());
-            if let (Some(offset), None, Some(link)) =
-                (stored(&manual), stored(&id), self.link.as_mut())
+            // With another device saved there, the address's offset is that device's (S341).
+            if let (Some(offset), None, None, Some(link)) =
+                (stored(&manual), stored(&id), saved, self.link.as_mut())
             {
                 link.set_offset(id, offset);
                 self.pending.push(BackendEvent::CastMemoryChanged);
@@ -3650,6 +3648,29 @@ pub mod tests {
             "0 ms, left by an Undo, counts as none"
         );
         assert_eq!(offset(LIVING), Some(100.0), "the ID's own offset stays");
+    }
+
+    // covers: S341
+    #[test]
+    fn another_device_at_a_saved_address_does_not_take_the_saved_devices_offset() {
+        const OTHER: &str = "00112233445566778899aabbccddeeff";
+        let fake = FakeCast::default();
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.add_address(address("192.0.2.31"));
+        cast.set_found(&address("192.0.2.31"), KITCHEN);
+        assert!(cast.set_offset(&address("192.0.2.31").device_id().to_string(), 400.0));
+        assert!(cast.set_offset(KITCHEN, 400.0));
+        fake.announce_at(OTHER, "Other", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 31));
+        cast.poll();
+        let other = cast
+            .speakers()
+            .into_iter()
+            .find(|speaker| speaker.id == OTHER);
+        assert_eq!(
+            other.map(|speaker| speaker.offset_ms),
+            Some(0.0),
+            "the saved Kitchen's offset"
+        );
     }
 
     // covers: S341
