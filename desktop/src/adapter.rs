@@ -6569,6 +6569,7 @@ mod tests {
         assert!(state.notices.is_empty() && state.zones.is_empty());
     }
 
+    // covers: S381
     #[test]
     fn built_in_outputs_are_listed_under_this_pc() {
         let mut audio = MockBackend::empty();
@@ -6597,6 +6598,7 @@ mod tests {
         );
     }
 
+    // covers: S381
     #[test]
     fn a_usb_device_keeps_its_form_and_stays_under_connected_speakers() {
         let mut audio = MockBackend::empty();
@@ -7275,6 +7277,7 @@ mod tests {
         assert_eq!(captures(&adapter).len(), 2);
     }
 
+    // covers: S227
     #[test]
     fn the_setting_for_a_quitting_app_is_saved_and_restored() {
         let mut adapter = adapter();
@@ -7297,6 +7300,7 @@ mod tests {
         );
     }
 
+    // covers: S380
     #[test]
     fn an_app_that_started_again_is_found_by_its_executable() {
         let mut adapter = adapter();
@@ -7309,6 +7313,7 @@ mod tests {
         assert_eq!(adapter.snapshot().source_id, "app:2100:player.exe");
     }
 
+    // covers: S380
     #[test]
     fn the_listed_app_is_followed_whatever_the_case_of_its_executable() {
         let mut adapter = adapter();
@@ -7319,6 +7324,7 @@ mod tests {
         assert_eq!(adapter.chosen.id(), SourceId::App { root_pid: 2100 });
     }
 
+    // covers: S380
     #[test]
     fn another_app_with_the_process_id_of_one_that_quit_isnt_captured() {
         let mut adapter = adapter();
@@ -7338,6 +7344,7 @@ mod tests {
         assert_eq!(state.source_id, player());
     }
 
+    // covers: S380
     #[test]
     fn an_app_without_an_audio_session_is_still_captured() {
         let mut adapter = adapter();
@@ -7356,6 +7363,7 @@ mod tests {
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
 
+    // covers: S380
     #[test]
     fn an_app_opened_again_is_captured_before_it_plays() {
         let mut adapter = adapter();
@@ -7751,6 +7759,7 @@ mod tests {
         assert_eq!(playing(&adapter), [DAC_PORT_1]);
     }
 
+    // covers: S384
     #[test]
     fn a_usb_speaker_plugged_into_another_port_keeps_its_settings_under_its_new_id() {
         let mut adapter = adapter();
@@ -7800,6 +7809,7 @@ mod tests {
         assert_eq!(playing(&adapter), [DAC_PORT_3]);
     }
 
+    // covers: S384
     #[test]
     fn settings_follow_a_new_id_only_from_the_one_absent_speaker_of_its_name() {
         let mut adapter = adapter();
@@ -7819,6 +7829,7 @@ mod tests {
         assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1, DAC_PORT_2]);
     }
 
+    // covers: S384
     #[test]
     fn a_new_id_doesnt_take_settings_when_an_untouched_twin_left_too() {
         let mut adapter = adapter();
@@ -7852,6 +7863,7 @@ mod tests {
         adapter.poll();
     }
 
+    // covers: S384
     #[test]
     fn a_usb_speaker_windows_numbers_in_another_port_keeps_its_settings() {
         let mut adapter = adapter();
@@ -7878,6 +7890,7 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &key(DAC_PORT_1)).volume, 35.0);
     }
 
+    // covers: S384
     #[test]
     fn only_the_number_windows_puts_inside_the_parentheses_is_ignored() {
         for (name, plain) in [
@@ -7898,6 +7911,7 @@ mod tests {
         }
     }
 
+    // covers: S384
     #[test]
     fn twins_windows_numbers_apart_still_count_as_twins() {
         let mut adapter = adapter();
@@ -7916,6 +7930,7 @@ mod tests {
         assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1]);
     }
 
+    // covers: S384
     #[test]
     fn twins_windows_numbers_apart_that_appear_together_dont_take_settings() {
         const DAC_PORT_4: &str = "usb-dac-port-4";
@@ -7934,6 +7949,7 @@ mod tests {
         assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1]);
     }
 
+    // covers: S384
     #[test]
     fn a_port_a_moved_speaker_left_counts_as_new_only_until_it_is_listed_again() {
         let mut adapter = adapter();
@@ -7967,6 +7983,7 @@ mod tests {
         adapter.poll();
     }
 
+    // covers: S384
     #[test]
     fn a_twin_listed_before_that_comes_back_first_doesnt_take_the_others_settings() {
         let mut adapter = adapter();
@@ -7998,6 +8015,7 @@ mod tests {
         assert!(!speaker_of(&adapter, &key(MONITOR_B)).enabled);
     }
 
+    // covers: S384
     #[test]
     fn a_new_speaker_of_another_kind_doesnt_take_the_settings_of_one_with_its_name() {
         let mut adapter = adapter();
@@ -8103,6 +8121,7 @@ mod tests {
         }
     }
 
+    // covers: S383
     #[test]
     fn an_auto_connect_speaker_that_appears_is_turned_on_and_plays() {
         let mut adapter = adapter();
@@ -8123,6 +8142,7 @@ mod tests {
         assert_eq!(playing(&adapter), [HEADPHONES]);
     }
 
+    // covers: S120, S383
     #[test]
     fn auto_connect_doesnt_restart_streaming_the_user_switched_off() {
         let mut adapter = adapter();
@@ -8140,6 +8160,7 @@ mod tests {
         assert!(!adapter.snapshot().running);
     }
 
+    // covers: S383
     #[test]
     fn an_auto_connect_speaker_that_cant_start_posts_no_start_notice() {
         let mut adapter = adapter();
@@ -8396,6 +8417,7 @@ mod tests {
         adapter
     }
 
+    // covers: S382
     #[test]
     fn the_double_audio_notice_names_a_renamed_output_by_its_new_name() {
         let mut adapter = adapter();
@@ -8413,6 +8435,7 @@ mod tests {
         );
     }
 
+    // covers: S382
     #[test]
     fn hearing_the_app_twice_raises_one_notice_that_follows_the_routing() {
         let mut adapter = player_on_the_tv();
@@ -8442,6 +8465,7 @@ mod tests {
         assert!(heard_twice(&adapter).is_empty());
     }
 
+    // covers: S382
     #[test]
     fn the_double_audio_notice_clears_when_the_output_is_muted() {
         let mut adapter = player_on_the_tv();
@@ -8453,6 +8477,7 @@ mod tests {
         assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"], &[])]);
     }
 
+    // covers: S382
     #[test]
     fn the_double_audio_notice_clears_when_streaming_stops() {
         let mut adapter = player_on_the_tv();
@@ -8462,6 +8487,7 @@ mod tests {
         assert!(heard_twice(&adapter).is_empty());
     }
 
+    // covers: S382
     #[test]
     fn the_double_audio_notice_follows_a_new_source() {
         let mut adapter = player_on_the_tv();
@@ -8478,6 +8504,7 @@ mod tests {
         assert_eq!(heard_twice(&adapter), [twice(None, &["TV"], &[])]);
     }
 
+    // covers: S382
     #[test]
     fn the_whole_system_notice_names_the_default_output() {
         let mut adapter = player_on_the_tv();
@@ -8494,6 +8521,7 @@ mod tests {
         assert_eq!(heard_twice(&adapter), [expected]);
     }
 
+    // covers: S382
     #[test]
     fn a_dismissed_double_audio_notice_comes_back_only_when_the_routing_changes() {
         let mut adapter = player_on_the_tv();
@@ -8509,6 +8537,7 @@ mod tests {
         );
     }
 
+    // covers: S382
     #[test]
     fn turning_on_an_output_the_notice_names_changes_it_in_place() {
         let mut adapter = player_on_the_tv();
@@ -8526,6 +8555,7 @@ mod tests {
         assert!(heard_twice(&adapter).is_empty());
     }
 
+    // covers: S382
     #[test]
     fn a_dismissed_double_audio_notice_stays_away_until_the_app_quits() {
         const BUDS: &str = "buds";
@@ -12230,6 +12260,7 @@ mod tests {
         assert!(adapter.snapshot().hidden.is_empty());
     }
 
+    // covers: S384
     #[test]
     fn a_hidden_usb_speaker_moved_to_another_port_stays_hidden() {
         let mut adapter = adapter();
@@ -13375,6 +13406,7 @@ mod tests {
         assert_eq!(shown(&adapter()), None);
     }
 
+    // covers: S383
     #[test]
     fn an_auto_connect_speaker_that_is_there_at_launch_starts_streaming() {
         let dir = test_dir("adapter-settings-auto-connect");
@@ -13529,6 +13561,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S384
     #[test]
     fn a_device_missing_at_launch_keeps_its_settings_until_it_is_back() {
         let dir = test_dir("adapter-settings-missing");
@@ -13743,6 +13776,7 @@ mod tests {
         assert!(!clean.iter().any(|m| m.contains("unreadable")), "{clean:?}");
     }
 
+    // covers: S385
     #[test]
     fn a_newer_settings_file_is_kept_aside_once_and_logged() {
         let dir = test_dir("adapter-settings-newer");
@@ -14000,6 +14034,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S385
     #[test]
     fn settings_unreadable_at_launch_get_a_notice_once_they_are_kept_aside() {
         let dir = test_dir("adapter-settings-kept-aside");
@@ -14032,6 +14067,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S385
     #[test]
     fn a_damaged_settings_file_gets_its_notice_at_launch_naming_the_copy() {
         let dir = test_dir("adapter-settings-damaged-at-launch");
@@ -14063,6 +14099,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S385
     #[test]
     fn settings_unreadable_at_launch_get_their_notice_once_they_can_be_kept_aside_unchanged() {
         use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
@@ -17044,6 +17081,7 @@ mod tests {
         );
     }
 
+    // covers: S385
     #[test]
     fn a_cast_speakers_file_that_didnt_read_is_kept_aside_once_before_it_is_saved_over() {
         let (mut adapter, _fake) = cast_adapter();
@@ -17072,6 +17110,7 @@ mod tests {
         assert_eq!(kept().len(), 1, "one copy a run");
     }
 
+    // covers: S385
     #[test]
     fn a_cast_speakers_file_unread_at_launch_is_kept_aside_before_it_is_saved_over() {
         let (mut adapter, _fake) = cast_adapter();
@@ -17097,6 +17136,7 @@ mod tests {
         );
     }
 
+    // covers: S385
     #[test]
     fn a_cast_speakers_file_with_a_stray_byte_the_launch_reads_isnt_kept_aside() {
         let (mut adapter, _fake) = cast_adapter();

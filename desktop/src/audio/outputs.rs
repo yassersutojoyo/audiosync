@@ -997,6 +997,7 @@ mod tests {
         );
     }
 
+    // covers: S174, S381
     #[test]
     fn the_form_factor_tells_the_rest() {
         let kind = |form, bus| output_kind(Some(form), bus, false);
@@ -1040,6 +1041,7 @@ mod tests {
         }
     }
 
+    // covers: S381
     #[test]
     fn bluetooth_hands_free_endpoints_are_left_out_and_noted() {
         let listing = list_endpoints(
@@ -1079,6 +1081,7 @@ mod tests {
         );
     }
 
+    // covers: S381
     #[test]
     fn headsets_on_other_buses_are_listed() {
         let listing = list_endpoints(
@@ -1092,6 +1095,7 @@ mod tests {
         assert!(listing.notes.is_empty());
     }
 
+    // covers: S381
     #[test]
     fn an_endpoint_whose_properties_fail_is_listed_under_its_id_and_noted() {
         let listing = list_endpoints(
@@ -1121,6 +1125,7 @@ mod tests {
         );
     }
 
+    // covers: S381
     #[test]
     fn an_endpoint_without_an_id_is_left_out_and_noted() {
         let listing = list_endpoints(
@@ -1144,6 +1149,7 @@ mod tests {
         );
     }
 
+    // covers: S381
     #[test]
     fn a_name_that_cannot_be_read_falls_back_to_the_id() {
         let mut nameless = reading(0, "a", "", 1, "HDAUDIO");
@@ -1763,6 +1769,7 @@ mod tests {
         }
     }
 
+    // covers: S381
     #[test]
     fn the_listing_keeps_what_windows_said_about_each_device() {
         let listing = list_endpoints(vec![reading(0, "a", "Headphones", 3, "HDAUDIO")], None);

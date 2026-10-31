@@ -151,3 +151,9 @@ S376 Web remote only: the speaker, master and source routes; the remote crate's 
 S377 Web remote only: the event stream; the remote crate's tests check it.
 S378 Web remote only: the connection slots per address and for paired devices; the remote crate's tests check it.
 S379 Web remote only: the start settings and stopping; the remote crate's tests check it.
+S380 Windows host only: an app source followed by its executable and the process parent rule; the Windows tests named in the test map check it.
+S381 Hosts only: the Windows and Linux output lists, output kinds and the This PC section; the Windows tests named in the test map check them.
+S382 Hosts only: the Windows and Linux double-audio check and its notice; the Windows tests named in the test map check them.
+S383 Windows host only: auto-connect speakers switching on and starting streaming; the Windows tests named in the test map check it.
+S384 Windows host only: a local output's settings following it to a new endpoint ID; the Windows tests named in the test map check it.
+S385 Hosts only: the Windows and Linux settings and Cast speakers files kept aside and written whole; the Windows tests named in the test map check them.

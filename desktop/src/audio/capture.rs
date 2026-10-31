@@ -1557,6 +1557,7 @@ mod tests {
         );
     }
 
+    // covers: S380
     #[test]
     fn an_old_parent_id_reused_by_audiosync_does_not_block_an_app() {
         // The app's creator exited and AudioSync, started later, got its ID.
@@ -1587,6 +1588,7 @@ mod tests {
         ])
     }
 
+    // covers: S380
     #[test]
     fn an_app_that_got_the_id_of_an_exited_ancestor_can_be_captured() {
         let table = reused_explorer_parent(Some(60));
@@ -1602,6 +1604,7 @@ mod tests {
         assert_eq!(sources[1].id, app(90));
     }
 
+    // covers: S10, S380
     #[test]
     fn audiosyncs_real_ancestors_and_children_stay_refused() {
         let table = reused_explorer_parent(Some(60));
@@ -1619,6 +1622,7 @@ mod tests {
         }
     }
 
+    // covers: S380
     #[test]
     fn an_app_that_may_be_an_ancestor_is_refused() {
         // The player can't be opened, so whether it started after Explorer
@@ -1631,6 +1635,7 @@ mod tests {
         assert_eq!(source_list(&table, &[90], OWN_PID).len(), 1);
     }
 
+    // covers: S380
     #[test]
     fn an_app_that_got_the_id_of_audiosyncs_exited_launcher_can_be_captured() {
         // AudioSync's launcher (300) exited, and a player started after

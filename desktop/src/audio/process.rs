@@ -182,6 +182,7 @@ pub(crate) mod tests {
         ])
     }
 
+    // covers: S380
     #[test]
     fn a_parent_is_the_listed_creator() {
         let table = desktop();
@@ -189,6 +190,7 @@ pub(crate) mod tests {
         assert_eq!(table.parent(100), None, "explorer's creator has exited");
     }
 
+    // covers: S380
     #[test]
     fn a_parent_created_after_its_child_is_a_reused_id() {
         let table = ProcessTable::new([
@@ -199,6 +201,7 @@ pub(crate) mod tests {
         assert!(table.ancestors(10).is_empty());
     }
 
+    // covers: S380
     #[test]
     fn an_unknown_creation_time_counts_as_a_real_parent() {
         let table = ProcessTable::new([
@@ -210,6 +213,7 @@ pub(crate) mod tests {
         assert_eq!(table.parent(30), Some(20), "the child's time is unknown");
     }
 
+    // covers: S380
     #[test]
     fn a_parent_created_in_the_same_clock_tick_counts() {
         let table = ProcessTable::new([
@@ -219,6 +223,7 @@ pub(crate) mod tests {
         assert_eq!(table.parent(10), Some(20));
     }
 
+    // covers: S380
     #[test]
     fn ancestry_ends_at_an_id_that_a_later_process_got() {
         // Explorer's creator (90) exited long ago, and an app started after
@@ -231,11 +236,13 @@ pub(crate) mod tests {
         assert!(!table.in_tree(401, 200), "nor the app that started it");
     }
 
+    // covers: S380
     #[test]
     fn ancestors_are_listed_nearest_first() {
         assert_eq!(desktop().ancestors(401), vec![400, 300, 100]);
     }
 
+    // covers: S380
     #[test]
     fn a_loop_in_the_recorded_parents_ends_the_walk() {
         let table = ProcessTable::new([
@@ -247,12 +254,14 @@ pub(crate) mod tests {
         assert_eq!(table.app_root(10), 10);
     }
 
+    // covers: S380
     #[test]
     fn a_process_that_names_itself_as_parent_has_none() {
         let table = ProcessTable::new([entry(10, 10, None, "a.exe")]);
         assert_eq!(table.parent(10), None);
     }
 
+    // covers: S380
     #[test]
     fn a_tree_holds_its_root_and_every_descendant() {
         let table = desktop();
@@ -266,6 +275,7 @@ pub(crate) mod tests {
         assert_eq!(table.tree(999), BTreeSet::from([999]), "a root that quit");
     }
 
+    // covers: S380
     #[test]
     fn a_tree_walk_ends_at_a_loop_or_a_missing_process() {
         let table = ProcessTable::new([
@@ -281,6 +291,7 @@ pub(crate) mod tests {
         assert!(table.in_tree(9999, 9999));
     }
 
+    // covers: S380
     #[test]
     fn an_apps_helpers_lead_to_its_top_process() {
         let table = desktop();
@@ -289,6 +300,7 @@ pub(crate) mod tests {
         assert_eq!(table.app_root(401), 401);
     }
 
+    // covers: S380
     #[test]
     fn a_process_missing_from_the_snapshot_is_its_own_root() {
         let table = desktop();
@@ -296,6 +308,7 @@ pub(crate) mod tests {
         assert!(table.ancestors(9999).is_empty());
     }
 
+    // covers: S380
     #[test]
     fn processes_are_found_by_their_executable_whatever_its_case() {
         let table = desktop();

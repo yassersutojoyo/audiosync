@@ -2581,6 +2581,7 @@ mod tests {
         assert_eq!(file.load().0, sample());
     }
 
+    // covers: S385
     #[test]
     fn a_newer_version_is_ignored_and_an_older_one_is_read() {
         let path = test_dir("settings-versions").join(FILE_NAME);
@@ -3059,6 +3060,7 @@ mod tests {
         assert!(file.path().is_none());
     }
 
+    // covers: S385
     #[test]
     fn a_save_leaves_no_temporary_file_and_a_stale_one_is_harmless() {
         let path = test_dir("settings-atomic").join(FILE_NAME);
@@ -3103,6 +3105,7 @@ mod tests {
         assert!(read.to_json().contains(r#""maximized": false"#));
     }
 
+    // covers: S385
     #[test]
     fn a_newer_file_is_kept_aside_before_the_first_save_over_it() {
         let folder = test_dir("settings-newer-kept");
@@ -3142,6 +3145,7 @@ mod tests {
         assert_eq!(both, expected);
     }
 
+    // covers: S385
     #[test]
     fn a_file_that_cant_be_read_at_launch_is_never_saved_over() {
         let folder = test_dir("settings-unreadable");
@@ -3175,6 +3179,7 @@ mod tests {
         assert!(kept().is_empty());
     }
 
+    // covers: S385
     #[test]
     fn settings_unreadable_at_two_launches_in_a_row_are_never_lost() {
         let folder = test_dir("settings-unreadable-twice");
@@ -3208,6 +3213,7 @@ mod tests {
         assert!(copies_kept_aside(&folder, "settings.ignored").is_empty());
     }
 
+    // covers: S385
     #[test]
     fn a_damaged_file_is_kept_aside_before_the_first_save_over_it() {
         let folder = test_dir("settings-damaged-kept");
@@ -3223,6 +3229,7 @@ mod tests {
         assert_eq!(file.load().0, sample());
     }
 
+    // covers: S385
     #[cfg(windows)]
     #[test]
     fn a_file_another_program_holds_for_a_moment_at_launch_is_read_at_the_second_try() {
@@ -3246,6 +3253,7 @@ mod tests {
         assert_eq!(loaded, sample());
     }
 
+    // covers: S385
     #[test]
     fn a_file_this_build_reads_is_not_kept_aside() {
         let folder = test_dir("settings-not-newer");

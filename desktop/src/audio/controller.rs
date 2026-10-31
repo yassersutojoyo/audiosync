@@ -8966,6 +8966,7 @@ mod tests {
         assert_eq!(backend.frames_captured(), 0);
     }
 
+    // covers: S381
     #[test]
     fn outputs_are_listed_by_name_with_their_settings() {
         let mut backend = backend();
@@ -8984,6 +8985,7 @@ mod tests {
         assert_eq!(speakers.delay_ms, 0.0);
     }
 
+    // covers: S381
     #[test]
     fn a_new_default_output_is_announced() {
         let mut backend = backend();
@@ -9488,6 +9490,7 @@ mod tests {
         backend
     }
 
+    // covers: S382
     #[test]
     fn an_app_heard_straight_from_an_output_is_reported_when_that_changes() {
         let mut backend = streaming_player();
@@ -9544,6 +9547,7 @@ mod tests {
         assert!(check_routing(&mut backend).is_empty());
     }
 
+    // covers: S382
     #[test]
     fn an_app_moved_to_a_virtual_cable_is_heard_once_again() {
         let mut backend = streaming_player();
@@ -9560,6 +9564,7 @@ mod tests {
         assert_eq!(check_routing(&mut backend), [[CABLE]]);
     }
 
+    // covers: S382
     #[test]
     fn muting_the_output_or_turning_it_down_to_0_clears_the_report() {
         let mut backend = streaming_player();
@@ -9576,6 +9581,7 @@ mod tests {
         assert_eq!(check_routing(&mut backend), [[TV]]);
     }
 
+    // covers: S382
     #[test]
     fn a_paused_app_stays_reported_where_it_played() {
         let mut backend = streaming_player();
@@ -9592,6 +9598,7 @@ mod tests {
         assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
     }
 
+    // covers: S382
     #[test]
     fn stopping_or_changing_the_source_clears_the_report() {
         let mut backend = streaming_player();
@@ -9616,6 +9623,7 @@ mod tests {
         );
     }
 
+    // covers: S382
     #[test]
     fn nothing_is_heard_twice_while_no_output_plays() {
         let mut backend = streaming_player();
@@ -9626,6 +9634,7 @@ mod tests {
         assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
     }
 
+    // covers: S382
     #[test]
     fn the_whole_system_is_heard_twice_from_the_default_output() {
         let mut backend = backend();
@@ -9672,6 +9681,7 @@ mod tests {
         assert_eq!(check_routing(&mut backend), [[SPEAKERS]]);
     }
 
+    // covers: S382
     #[test]
     fn another_app_pausing_now_and_then_doesnt_flap_the_whole_system_report() {
         let mut backend = backend();
@@ -9696,6 +9706,7 @@ mod tests {
         }
     }
 
+    // covers: S382
     #[test]
     fn the_check_runs_at_the_first_poll_then_every_few_seconds() {
         let mut backend = backend();
@@ -9717,6 +9728,7 @@ mod tests {
         assert_eq!(heard_twice(&backend.poll()), [Vec::<String>::new()]);
     }
 
+    // covers: S382
     #[test]
     fn a_snapshot_that_fails_keeps_the_last_answer() {
         let mut backend = streaming_player();
@@ -9729,6 +9741,7 @@ mod tests {
         assert_eq!(check_routing(&mut backend), [Vec::<String>::new()]);
     }
 
+    // covers: S382
     #[test]
     fn double_audio_is_logged_when_it_changes() {
         let (mut backend, log, dir) = logged_backend("controller-double-audio");

@@ -531,6 +531,7 @@ mod tests {
         graph.add(id, Kind::Node, all);
     }
 
+    // covers: S381
     #[test]
     fn sinks_are_listed_by_node_name_with_the_default_marked() {
         let mut graph = Graph::default();
@@ -555,6 +556,7 @@ mod tests {
         assert!(listing.notes.is_empty());
     }
 
+    // covers: S381
     #[test]
     fn hands_free_and_airplay_sinks_are_left_out_with_a_note() {
         let mut graph = Graph::default();
@@ -584,6 +586,7 @@ mod tests {
         ));
     }
 
+    // covers: S381
     #[test]
     fn kinds_come_from_bus_form_factor_and_name() {
         let node = |pairs: &[(&str, &str)]| Node {
@@ -779,6 +782,7 @@ mod tests {
         assert!(input_channels("LFE").is_empty());
     }
 
+    // covers: S382
     #[test]
     fn endpoint_audio_names_the_running_streams_on_each_output() {
         let (mut graph, processes) = playing_graph();
@@ -800,6 +804,7 @@ mod tests {
         assert_eq!(linear_volume(2.0), 1.0);
     }
 
+    // covers: S381
     #[test]
     fn removing_a_sink_says_the_listing_changed() {
         let mut graph = Graph::default();

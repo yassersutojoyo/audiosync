@@ -313,6 +313,7 @@ mod tests {
         answer
     }
 
+    // covers: S382
     #[test]
     fn an_app_playing_on_an_audible_endpoint_is_heard_twice() {
         let endpoints = [endpoint("speakers", &[PLAYER]), endpoint("tv", &[OWN])];
@@ -329,6 +330,7 @@ mod tests {
         assert_eq!(answer.played_on, played(&[("speakers", 0)]));
     }
 
+    // covers: S382
     #[test]
     fn a_helper_process_of_the_app_counts_and_other_apps_dont() {
         let endpoints = [
@@ -340,6 +342,7 @@ mod tests {
         assert_eq!(heard(&answer), [("headphones", DirectReason::Session)]);
     }
 
+    // covers: S382
     #[test]
     fn nothing_is_heard_twice_while_audiosync_plays_nowhere() {
         let endpoints = [endpoint("speakers", &[PLAYER])];
@@ -352,6 +355,7 @@ mod tests {
         );
     }
 
+    // covers: S382
     #[test]
     fn a_muted_or_silent_endpoint_isnt_heard() {
         let mut muted = endpoint("speakers", &[PLAYER]);
@@ -369,6 +373,7 @@ mod tests {
         assert!(answer.paths.is_empty(), "{answer:?}");
     }
 
+    // covers: S382
     #[test]
     fn an_endpoint_whose_volume_cant_be_read_counts_as_audible() {
         let mut unknown = endpoint("speakers", &[PLAYER]);
@@ -377,6 +382,7 @@ mod tests {
         assert_eq!(heard(&answer), [("speakers", DirectReason::Session)]);
     }
 
+    // covers: S382
     #[test]
     fn an_output_audiosync_plays_to_counts_too() {
         let endpoints = [endpoint("speakers", &[PLAYER, OWN])];
@@ -385,6 +391,7 @@ mod tests {
         assert!(answer.paths[0].audiosync_plays_here);
     }
 
+    // covers: S382
     #[test]
     fn a_virtual_device_is_heard_only_while_audiosync_plays_to_it() {
         let mut cable = endpoint("cable", &[PLAYER]);
@@ -397,6 +404,7 @@ mod tests {
         assert_eq!(heard(&answer), [("cable", DirectReason::Session)]);
     }
 
+    // covers: S382
     #[test]
     fn a_paused_app_still_counts_where_audiosync_doesnt_play() {
         let endpoints = [endpoint("speakers", &[OWN]), endpoint("tv", &[])];
@@ -422,6 +430,7 @@ mod tests {
         assert_eq!(answer.played_on, played(&[("tv", 0)]));
     }
 
+    // covers: S382
     #[test]
     fn an_app_moved_to_another_output_drops_the_old_one_after_a_few_checks() {
         let endpoints = [
@@ -447,6 +456,7 @@ mod tests {
         assert_eq!(answer.played_on, played(&[("cable", 0)]));
     }
 
+    // covers: S382
     #[test]
     fn another_app_pausing_now_and_then_doesnt_flip_the_whole_system_answer() {
         // The player plays on the TV all along, another app on the
@@ -490,6 +500,7 @@ mod tests {
         assert_eq!(answer.played_on, played(&[("tv", 0)]));
     }
 
+    // covers: S382
     #[test]
     fn an_endpoint_that_went_away_drops_out_after_a_few_checks() {
         let endpoints = [endpoint("tv", &[OWN])];
@@ -498,6 +509,7 @@ mod tests {
         assert!(answer.played_on.is_empty(), "{answer:?}");
     }
 
+    // covers: S382
     #[test]
     fn the_whole_system_is_heard_from_the_default_output() {
         let endpoints = [
@@ -512,6 +524,7 @@ mod tests {
         );
     }
 
+    // covers: S382
     #[test]
     fn the_whole_system_is_heard_where_another_app_plays_but_not_audiosync() {
         let endpoints = [
@@ -538,6 +551,7 @@ mod tests {
         assert!(answer.paths[1].audiosync_plays_here);
     }
 
+    // covers: S382
     #[test]
     fn an_app_on_the_default_output_is_heard_for_its_session_only() {
         let endpoints = [default_endpoint("speakers", &[]), endpoint("tv", &[OWN])];

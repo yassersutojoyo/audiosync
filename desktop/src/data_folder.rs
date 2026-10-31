@@ -243,6 +243,7 @@ mod tests {
     use super::*;
     use crate::debug_log::test_dir;
 
+    // covers: S385
     #[test]
     fn a_write_replaces_the_whole_file_and_leaves_no_temporary_file() {
         let path = test_dir("data-folder-write")
@@ -265,6 +266,7 @@ mod tests {
         assert_eq!(fs::read(&path).expect("still there"), b"old contents");
     }
 
+    // covers: S385
     #[test]
     fn a_link_planted_at_the_temporary_path_is_not_written_through() {
         let folder = test_dir("data-folder-link");
@@ -279,6 +281,7 @@ mod tests {
         assert!(!temporary_path(&path).exists());
     }
 
+    // covers: S385
     #[test]
     fn each_process_writes_through_its_own_temporary_file() {
         let path = Path::new("folder").join("file.json");
@@ -288,6 +291,7 @@ mod tests {
         assert_eq!(name, Some(expected.as_str()));
     }
 
+    // covers: S385
     #[test]
     fn a_copy_kept_aside_never_replaces_an_older_one() {
         let folder = test_dir("data-folder-keep-aside");
@@ -329,6 +333,7 @@ mod tests {
         assert_eq!(fs::read(&first).unwrap(), b"first contents");
     }
 
+    // covers: S385
     #[test]
     fn a_copy_is_named_after_the_file_and_the_time_and_never_takes_a_name_in_use() {
         use std::time::UNIX_EPOCH;
@@ -353,6 +358,7 @@ mod tests {
         assert!(!path.exists(), "the file itself isn't touched");
     }
 
+    // covers: S385
     #[test]
     fn a_leftover_temporary_file_from_a_crash_does_not_block_the_write() {
         let path = test_dir("data-folder-leftover").join("file.json");
@@ -362,6 +368,7 @@ mod tests {
         assert!(!temporary_path(&path).exists());
     }
 
+    // covers: S385
     #[cfg(target_os = "linux")]
     #[test]
     fn new_folders_and_files_are_owner_only() {
