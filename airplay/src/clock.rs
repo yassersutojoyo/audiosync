@@ -98,8 +98,9 @@ impl SenderClock {
     }
 
     /// The PTP time `seconds` after the origin, as the stream's model gives
-    /// it; 0 before the origin.
+    /// it; 0 before the origin or when not finite.
     pub fn ptp_at(&self, seconds: f64) -> PtpTime {
+        let seconds = if seconds.is_finite() { seconds } else { 0.0 };
         PtpTime::from(Duration::from_secs_f64(seconds.clamp(0.0, 1e12)))
     }
 }

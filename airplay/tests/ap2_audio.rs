@@ -348,7 +348,7 @@ fn ptp_messages() {
             if header(&transmit.bytes).kind == 0x0 {
                 let at = now + Duration::from_micros(40);
                 follow_up_times.insert(transmit.sequence_id, at);
-                service.sync_sent(transmit.sequence_id, at);
+                service.sync_sent_to(transmit.sequence_id, transmit.to, at);
             }
             sent.push((now, transmit));
         }
