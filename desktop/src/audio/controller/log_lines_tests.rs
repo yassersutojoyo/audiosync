@@ -16,7 +16,7 @@ use audiosync_core::ring::Ring;
 use audiosync_core::volume::SharedGain;
 
 use super::{
-    CONVERTER, OutputStatus, STATUS_INTERVAL, StatusSpan, describe_capture_start,
+    CONVERTER, DriftLog, OutputStatus, STATUS_INTERVAL, StatusSpan, describe_capture_start,
     describe_output_start, describe_status, label, status_due,
 };
 use crate::audio::SESSION_RATE;
@@ -578,4 +578,33 @@ fn a_status_line_shows_what_a_real_reader_and_render_pipeline_count() {
     );
     assert!(text.contains(&starved), "{text}");
     assert_eq!(text.lines().count(), 2, "no AirPlay status: {text}");
+}
+
+#[test]
+fn drift_lines_name_each_new_reanchor_and_a_lasting_followed_rate() {
+    // covers: S207
+    let label = label(&names(), HDMI_ID);
+    let stall = format!("{label} re-anchored at its delay after a stall");
+    let lateness = format!("{label} re-anchored at its delay after a lasting lateness");
+    let follows = |ppm: i64| vec![format!("{label} follows its clock at {ppm} ppm")];
+    let start = Instant::now();
+    let at = |seconds: u64| start + Duration::from_secs(seconds);
+    let mut log = DriftLog::default();
+
+    assert!(log.lines(&label, 0, 0, 0, at(0)).is_empty());
+    // Re-anchors counted since the last poll: one line for each kind.
+    assert_eq!(log.lines(&label, 2, 1, 0, at(1)), vec![stall, lateness]);
+    assert!(log.lines(&label, 2, 1, 0, at(2)).is_empty());
+    // A rate past 1000 ppm is named once it has lasted 10 s, then at each
+    // change while it stays past.
+    assert!(log.lines(&label, 2, 1, 1500, at(3)).is_empty());
+    assert!(log.lines(&label, 2, 1, 1500, at(12)).is_empty());
+    assert_eq!(log.lines(&label, 2, 1, 1500, at(13)), follows(1500));
+    assert!(log.lines(&label, 2, 1, 1500, at(14)).is_empty());
+    assert_eq!(log.lines(&label, 2, 1, -1600, at(15)), follows(-1600));
+    // Back within 1000 ppm, the 10 s start over.
+    assert!(log.lines(&label, 2, 1, 1000, at(16)).is_empty());
+    assert!(log.lines(&label, 2, 1, 1500, at(17)).is_empty());
+    assert!(log.lines(&label, 2, 1, 1500, at(26)).is_empty());
+    assert_eq!(log.lines(&label, 2, 1, 1500, at(27)), follows(1500));
 }

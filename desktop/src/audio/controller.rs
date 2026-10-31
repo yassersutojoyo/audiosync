@@ -662,6 +662,55 @@ struct Playing<R> {
     handle: R,
     /// Its stream ran away (S347), which is acted on once.
     ran_away: bool,
+    drift: DriftLog,
+}
+
+/// What the debug log last said of an output's re-anchors and followed
+/// clock rate (S207).
+#[derive(Default)]
+struct DriftLog {
+    stalls: u64,
+    late: u64,
+    /// Since when the followed rate has been past 1000 ppm.
+    past_since: Option<Instant>,
+    logged_ppm: i64,
+}
+
+impl DriftLog {
+    /// The lines for the renderer's counters read at `now`: one when either
+    /// re-anchor count moved, and the followed rate once past 1000 ppm for
+    /// 10 s, then at each change of it while it stays past.
+    fn lines(
+        &mut self,
+        label: &str,
+        stalls: u64,
+        late: u64,
+        ppm: i64,
+        now: Instant,
+    ) -> Vec<String> {
+        let mut lines = Vec::new();
+        if stalls != self.stalls {
+            self.stalls = stalls;
+            lines.push(format!("{label} re-anchored at its delay after a stall"));
+        }
+        if late != self.late {
+            self.late = late;
+            lines.push(format!(
+                "{label} re-anchored at its delay after a lasting lateness"
+            ));
+        }
+        if ppm.abs() <= 1000 {
+            self.past_since = None;
+            self.logged_ppm = 0;
+            return lines;
+        }
+        let since = *self.past_since.get_or_insert(now);
+        if now.duration_since(since) >= Duration::from_secs(10) && ppm != self.logged_ppm {
+            self.logged_ppm = ppm;
+            lines.push(format!("{label} follows its clock at {ppm} ppm"));
+        }
+        lines
+    }
 }
 
 /// Where the one restart of an output that started on a new Bluetooth link
@@ -1770,6 +1819,7 @@ impl<D: Driver> Controller<D> {
                             gain,
                             handle,
                             ran_away: false,
+                            drift: DriftLog::default(),
                         },
                     );
                     None
@@ -2227,6 +2277,29 @@ impl<D: Driver> Controller<D> {
             if let Some(queue) = playing.handle.clock_queue() {
                 let name = self.names.get(id).map_or(id.as_str(), String::as_str);
                 self.log.log(|| describe_clock_queue(name, &queue));
+            }
+        }
+    }
+
+    /// Logs each playing output's re-anchors and followed clock rate, as the
+    /// Mac does (S207).
+    fn log_drift(&mut self, now: Instant) {
+        if !self.log.enabled() {
+            return;
+        }
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        for (id, playing) in &mut session.outputs {
+            let control = &playing.control;
+            for line in playing.drift.lines(
+                &label(&self.names, id),
+                control.stall_reanchors(),
+                control.late_reanchors(),
+                control.followed_ppm(),
+                now,
+            ) {
+                self.log.log(|| line);
             }
         }
     }
@@ -4527,6 +4600,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.check_routing_if_due(now);
         self.follow_mix_apps(now);
         self.log_status_if_due(now);
+        self.log_drift(now);
         self.power.awake = Some((self.driver.wall_clock(), self.driver.awake_clock()));
         let events = std::mem::take(&mut self.pending);
         // A device volume that changed is logged when its decision changes
