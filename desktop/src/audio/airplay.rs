@@ -11468,6 +11468,19 @@ pub mod tests {
         assert!(airplay.ahead_ms() <= 0.0);
     }
 
+    // covers: S401, P99
+    #[test]
+    fn a_speakers_receiver_offset_counts_in_how_far_airplay_plays_ahead() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, den) = kitchen_and_den(&fake, 100.0);
+        fake.report_latency(&kitchen, 250_000, LatencySources::AUDIO_LATENCY);
+        fake.report_latency(&den, 50_000, LatencySources::AUDIO_LATENCY);
+        airplay.poll();
+        airplay.set_hold_back(19_800.0);
+        // Den wants 100 + (250 - 50) + 19 800 = 20 100 ms; d_s stops at 20 000.
+        assert_eq!(airplay.ahead_ms(), 100.0);
+    }
+
     // covers: S283, S282
     #[test]
     fn a_receiver_reporting_nothing_starts_at_zero_without_a_warning() {
