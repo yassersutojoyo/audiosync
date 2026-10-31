@@ -706,6 +706,39 @@ mod tests {
         assert_eq!(c.counters().starved_renders, 0);
     }
 
+    // covers: S324
+    #[test]
+    fn a_wasapi_output_skips_the_silence_its_device_played_after_a_late_wake_found_it_dry() {
+        // Set up as the WASAPI loop does: a 10 ms period, a 20 ms buffer
+        // and no output times. The second wake comes 70 ms late, so the
+        // device plays 60 ms of silence.
+        const BUFFER: u64 = 960;
+        let mut s = primed(SESSION_RATE);
+        s.pipeline.set_period_frames(480);
+        let start = clock::now_ns();
+        let (mut t, mut captured, mut queued_until) = (start, 0, BUFFER);
+        let mut silence = Vec::new();
+        for wake in 0..100 {
+            t += if wake == 1 { 80_000_000 } else { 10_000_000 };
+            let now = (t - start) * u64::from(SESSION_RATE) / 1_000_000_000;
+            let write = (now - captured) as usize;
+            s.writer.write_at(&vec![0.5f32; write * 2], write, t);
+            captured = now;
+            if now > queued_until {
+                silence.push(now - queued_until);
+                queued_until = now;
+            }
+            let free = BUFFER - (queued_until - now);
+            queued_until += free;
+            let mut out = vec![0.0f32; free as usize * 2];
+            s.pipeline.renderer.render_at(&mut out, t);
+        }
+        assert_eq!(silence, [2_880]);
+        assert_eq!(s.control.start_steps(), 1);
+        let stepped = s.control.start_step_frames();
+        assert!(stepped.abs_diff(2_880) <= 96, "stepped {stepped} frames");
+    }
+
     // covers: S190
     #[test]
     fn a_stop_asked_from_the_control_thread_comes_back_as_faded() {

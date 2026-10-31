@@ -4026,6 +4026,7 @@ The release side:
 | no_start_step_after_the_window_or_once_a_stop_began (`core/src/render.rs`) | S317, S319 |
 | a_resync_while_the_anchor_floor_falls_after_a_late_start_lands_on_its_delay (`core/src/render.rs`) | S209, S319 |
 | without_output_times_no_wake_counts_late_and_no_start_step_is_made (`desktop/src/audio/render.rs`) | S209, S317 |
+| a_wasapi_output_skips_the_silence_its_device_played_after_a_late_wake_found_it_dry (`desktop/src/audio/render.rs`) | S324 |
 
 ### Pro Audio threads, stalled outputs, capture loss, format changes, busy inputs, refused outputs and unwatched apps: Windows (`cargo test` in `desktop/`)
 

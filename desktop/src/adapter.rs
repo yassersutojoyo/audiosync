@@ -7260,7 +7260,7 @@ mod tests {
         assert_eq!(captures(&adapter).len(), 1, "nothing started");
     }
 
-    // covers: S227
+    // covers: S164, S227
     #[test]
     fn an_app_that_quits_gives_way_to_the_whole_system_when_the_setting_says_so() {
         let mut adapter = adapter();
