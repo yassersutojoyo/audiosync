@@ -262,8 +262,8 @@ pub struct SpeakerNow {
 }
 
 /// What the host plays now (S251, S253): the speakers on, in list order,
-/// waiting AirPlay 2 speakers included and, on Windows, the reference output left out;
-/// the zones; the master position and the ten gains.
+/// waiting AirPlay 2 speakers and the reference output included; the zones;
+/// the master position and the ten gains.
 #[derive(Clone, Copy, Debug)]
 pub struct Scene<'a> {
     pub on: &'a [SpeakerNow],
@@ -359,7 +359,9 @@ pub struct RecallMember {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecallOther {
     pub on: bool,
-    /// The Windows reference output, which a recall leaves alone; the Mac passes false (S252).
+    /// The reference output, when the preset was saved before the reference
+    /// became a member like any other (a Windows preset, S252): a recall
+    /// leaves it alone.
     pub reference: bool,
 }
 
@@ -427,8 +429,8 @@ impl RecallPlan {
 /// The plan of a preset recall (S252), a full scene. Every stored member
 /// that is listed, not hidden, not a target that needs AirPlay 2, not
 /// playing as part of a target and, for a Cast speaker, not busy goes on;
-/// every other speaker that is on goes off, Cast included, but the
-/// Windows reference output; streaming starts when it is off. Every AirPlay 2 member
+/// every other speaker that is on goes off, Cast included, but a `reference`
+/// one; streaming starts when it is off. Every AirPlay 2 member
 /// goes on, and all but the one P169 lets play (the one already playing,
 /// else the first) wait. A member that goes on gets its stored own volume,
 /// unless it is a fixed-volume Cast speaker. When no member can go on,

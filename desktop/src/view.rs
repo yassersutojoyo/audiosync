@@ -14367,6 +14367,7 @@ mod tests {
         let app = app_over(MockBackend::new());
         app.update(|b| b.set_speaker_enabled("local:desk", true));
         app.update(|b| b.set_speaker_enabled("airplay:kitchen", false));
+        app.update(|b| b.set_speaker_enabled("local:speakers", false));
         app.save_preset("Desk");
         app.update(|b| b.hide_speaker("local:desk", "USB"));
         app.update(|b| b.set_master_volume(40.0));

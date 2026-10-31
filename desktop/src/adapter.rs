@@ -554,6 +554,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The speaker presets (spec S251), the overlapping groups among them
     /// once (S254).
     presets: Vec<Preset>,
+    /// The IDs of the presets saved before the reference output became a
+    /// member (spec S252): their recall leaves it alone.
+    presets_leaving_reference: BTreeSet<String>,
     /// The highest zone and preset ID numbers given out (spec S245, S251).
     last_zone_id: u64,
     last_preset_id: u64,
@@ -752,6 +755,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             groups: Vec::new(),
             zones: Zones::default(),
             presets: Vec::new(),
+            presets_leaving_reference: BTreeSet::new(),
             last_zone_id: 0,
             last_preset_id: 0,
             preset_notice: None,
@@ -896,6 +900,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }));
         self.saved_kinds = saved.zone_member_kinds.clone();
         self.presets = presets::from_stored(saved.speaker_presets.iter().map(SavedPreset::preset));
+        self.presets_leaving_reference = saved
+            .speaker_presets
+            .iter()
+            .filter(|preset| !preset.reference_member)
+            .map(|preset| preset.id.clone())
+            .collect();
         self.last_zone_id = saved.last_zone_id;
         self.last_preset_id = saved.last_preset_id;
         self.push_zone_volumes();
@@ -1101,7 +1111,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .presets
                 .iter()
                 .cloned()
-                .map(SavedPreset::from)
+                .map(|preset| SavedPreset {
+                    reference_member: !self.presets_leaving_reference.contains(&preset.id),
+                    ..SavedPreset::from(preset)
+                })
                 .collect(),
             speaker_presets_migrated: true,
             last_zone_id: self.last_zone_id,
@@ -2359,7 +2372,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// list order (spec S253).
     #[cfg(test)]
     pub(crate) fn current_preset(&self) -> Option<String> {
-        ui_model::current_preset(&self.presets, &self.snapshot())
+        ui_model::current_preset(
+            &self.presets,
+            &self.presets_leaving_reference,
+            &self.snapshot(),
+        )
     }
 
     /// Recalls preset `id` as the core's plan says (spec S252), a full
@@ -2605,7 +2622,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let others: Vec<(&str, bool, bool)> = state
             .speakers
             .iter()
-            .map(|speaker| (speaker.id.as_str(), speaker.enabled, speaker.is_reference()))
+            .map(|speaker| {
+                let reference =
+                    speaker.is_reference() && self.presets_leaving_reference.contains(&preset.id);
+                (speaker.id.as_str(), speaker.enabled, reference)
+            })
             .chain(
                 on_now
                     .iter()
@@ -4845,7 +4866,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             },
             calibrate_all: self.calibrate_all_state(),
         };
-        ui_model::show_presets(&mut state, &self.presets);
+        ui_model::show_presets(&mut state, &self.presets, &self.presets_leaving_reference);
         state
     }
 
@@ -5464,6 +5485,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         };
         let name = self.presets[index].name.clone();
         self.presets[index] = self.capture_preset(id, &name)?;
+        self.presets_leaving_reference.remove(id);
         self.log.log(|| format!("preset \"{name}\" updated"));
         Ok(())
     }
@@ -17429,6 +17451,7 @@ mod tests {
             }],
             master_volume: 70.0,
             gains_db: [2.0; audiosync_core::eq::BAND_COUNT],
+            reference_member: true,
         }
     }
 
@@ -17471,8 +17494,8 @@ mod tests {
         assert_eq!(left, [(String::new(), LeftOff::NotFound)]);
         assert!(enabled(&adapter, HEADPHONES) && !enabled(&adapter, SPEAKERS));
         assert!(
-            enabled(&adapter, "builtin"),
-            "the reference output stays on"
+            !enabled(&adapter, "builtin"),
+            "the reference output goes off like any other"
         );
         assert!(adapter.snapshot().running);
         assert_eq!(delays(&adapter), before);
@@ -17832,10 +17855,10 @@ mod tests {
     #[test]
     fn save_and_update_capture_what_plays_and_need_a_speaker_on() {
         let mut adapter = preset_adapter(Vec::new());
+        adapter.set_speaker_enabled(&key("builtin"), false);
         assert_eq!(
             Backend::save_preset(&mut adapter, "Evening"),
-            Err(PresetError::NoSpeakerOn),
-            "the reference output alone is no preset"
+            Err(PresetError::NoSpeakerOn)
         );
         turn_on(&mut adapter, HEADPHONES);
         Backend::save_preset(&mut adapter, "Evening").expect("saved");
@@ -17851,6 +17874,112 @@ mod tests {
         assert_eq!(adapter.presets[0].name, "Evening");
         assert_eq!(adapter.presets[0].members.len(), 2);
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+    }
+
+    /// Built-in, Speakers and Headphones with Built-in and Speakers on, read
+    /// from a settings file whose one preset holds Headphones alone, with or
+    /// without the mark of a preset saved since the reference output became a
+    /// member (spec S252).
+    fn headphones_preset_adapter(marked: bool) -> AudioAdapter<MockBackend> {
+        let file = Settings {
+            speaker_presets: vec![saved_preset(&[(key(HEADPHONES), None)])],
+            ..Settings::default()
+        };
+        let mut json: serde_json::Value = serde_json::from_str(&file.to_json()).unwrap();
+        let preset = json["speaker_presets"][0].as_object_mut().unwrap();
+        preset.remove("reference_member");
+        if marked {
+            preset.insert("reference_member".to_owned(), true.into());
+        }
+        let mut adapter = preset_adapter(Vec::new());
+        adapter.restore(Settings::from_json(&json.to_string()).unwrap().0);
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, SPEAKERS);
+        adapter
+    }
+
+    fn first_preset_marked(adapter: &AudioAdapter<MockBackend>) -> bool {
+        let json: serde_json::Value =
+            serde_json::from_str(&adapter.current_settings().to_json()).unwrap();
+        json["speaker_presets"][0]["reference_member"] == true
+    }
+
+    // covers: S252
+    #[test]
+    fn a_recall_switches_the_reference_off_when_the_preset_leaves_it_out() {
+        let mut adapter = headphones_preset_adapter(true);
+
+        let left = adapter
+            .recall_preset("preset:1")
+            .expect("the preset exists");
+        assert!(left.is_empty(), "{left:?}");
+        assert!(enabled(&adapter, HEADPHONES) && !enabled(&adapter, SPEAKERS));
+        assert!(
+            !enabled(&adapter, "builtin"),
+            "the reference output is a member like any other"
+        );
+        assert!(
+            adapter
+                .snapshot()
+                .speaker(&key("builtin"))
+                .is_some_and(|speaker| speaker.is_reference()),
+            "switched off, it stays the reference"
+        );
+    }
+
+    // covers: S251, S252
+    #[test]
+    fn a_preset_saved_before_the_reference_was_a_member_leaves_it_alone_until_saved_again() {
+        let mut adapter = headphones_preset_adapter(false);
+        adapter.recall_preset("preset:1");
+        assert!(enabled(&adapter, HEADPHONES) && !enabled(&adapter, SPEAKERS));
+        assert!(
+            enabled(&adapter, "builtin"),
+            "the older preset leaves it alone"
+        );
+        assert!(
+            !first_preset_marked(&adapter),
+            "a settings save keeps it older"
+        );
+
+        let text = adapter.current_settings().to_json();
+        let mut adapter = preset_adapter(Vec::new());
+        adapter.restore(Settings::from_json(&text).unwrap().0);
+        turn_on(&mut adapter, "builtin");
+        adapter.recall_preset("preset:1");
+        assert!(enabled(&adapter, "builtin"), "and so does the next launch");
+
+        adapter.set_speaker_enabled(&key("builtin"), false);
+        Backend::update_preset(&mut adapter, "preset:1").expect("updated");
+        assert!(first_preset_marked(&adapter), "an update saves it again");
+        turn_on(&mut adapter, "builtin");
+        adapter.recall_preset("preset:1");
+        assert!(!enabled(&adapter, "builtin"));
+    }
+
+    // covers: S252, S253
+    #[test]
+    fn an_older_preset_is_current_whether_the_reference_is_on_or_off() {
+        let mut adapter = headphones_preset_adapter(false);
+        adapter.recall_preset("preset:1");
+        assert!(enabled(&adapter, "builtin"));
+        assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+        adapter.set_speaker_enabled(&key("builtin"), false);
+        assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+    }
+
+    // covers: S251, S262
+    #[test]
+    fn a_save_with_only_the_reference_on_holds_the_reference() {
+        let mut adapter = preset_adapter(Vec::new());
+        Backend::save_preset(&mut adapter, "Built-in").expect("saved");
+        let members: Vec<&str> = adapter.presets[0]
+            .members
+            .iter()
+            .map(|member| member.key.as_str())
+            .collect();
+        assert_eq!(members, [key("builtin")]);
+        assert!(first_preset_marked(&adapter));
     }
 
     // covers: S245, S252

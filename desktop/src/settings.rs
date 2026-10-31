@@ -360,6 +360,10 @@ pub struct SavedPreset {
     /// skipped when read, and a gain that isn't a number reads as 0 dB.
     #[serde(deserialize_with = "ten_gains")]
     pub gains_db: [f64; BAND_COUNT],
+    /// Saved since the reference output became a member like any other
+    /// (spec S252); a recall of a preset saved before leaves it alone.
+    #[serde(deserialize_with = "bool_or_false")]
+    pub reference_member: bool,
 }
 
 impl Default for SavedPreset {
@@ -371,6 +375,7 @@ impl Default for SavedPreset {
             zones: Vec::new(),
             master_volume: DEFAULT_MASTER_POSITION,
             gains_db: [0.0; BAND_COUNT],
+            reference_member: false,
         }
     }
 }
@@ -398,6 +403,7 @@ impl From<Preset> for SavedPreset {
                 .collect(),
             master_volume: preset.master,
             gains_db: preset.gains_db,
+            reference_member: true,
         }
     }
 }
@@ -1165,7 +1171,14 @@ impl Settings {
                 }),
         )
         .into_iter()
-        .map(SavedPreset::from)
+        .map(|preset| SavedPreset {
+            reference_member: self
+                .speaker_presets
+                .iter()
+                .find(|saved| saved.id == preset.id)
+                .is_some_and(|saved| saved.reference_member),
+            ..SavedPreset::from(preset)
+        })
         .collect();
         // A format 1 file kept trims, 0 to 20 000 ms; [`migrate_delays`]
         // turns them into offsets.
@@ -1877,6 +1890,7 @@ mod tests {
                 }],
                 master_volume: 80.0,
                 gains_db: [1.0; BAND_COUNT],
+                reference_member: true,
             }],
             speaker_presets_migrated: true,
             last_zone_id: 1,
@@ -2159,6 +2173,7 @@ mod tests {
                 }],
                 master_volume: 80.0,
                 gains_db: [0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 12.0],
+                reference_member: false,
             }]
         );
         let (again, _) = Settings::from_json(&read.to_json()).expect("read");
@@ -2256,6 +2271,7 @@ mod tests {
                 "master_volume",
                 "members",
                 "name",
+                "reference_member",
                 "zones"
             ]
         );
@@ -3720,6 +3736,7 @@ mod tests {
                 }],
                 master_volume: 100.0,
                 gains_db: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                reference_member: false,
             }]
         );
     }

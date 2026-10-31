@@ -291,7 +291,7 @@ pub unsafe extern "C" fn asc_preset_recall_plan(
 }
 
 /// Whether the host plays a preset exactly ([`presets::matches`], S253):
-/// `on_now` speakers are on, on Windows the reference output left out; NaN stands for
+/// `on_now` speakers are on, the reference output included; NaN stands for
 /// no own volume and, in a zone's `volume`, a deleted zone. False for a null
 /// array with a count above 0, or null gains.
 ///

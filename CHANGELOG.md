@@ -16,6 +16,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, when a newer version of AudioSync wrote your settings, the notice says so and that updating AudioSync gets them back. Before, it said AudioSync couldn't read them.
 - On Windows, the notice about blocked microphone access and the calibration name both switches to turn on: "Let desktop apps access your microphone" and "Microphone access".
 - On the Mac, an equalizer curve name matches a saved one by the same rule as on Windows: ignoring case only. A name typed with a ready-made accented letter and one typed with a separate accent mark are now two curves.
+- On Windows, a preset holds the reference output like any other speaker, as on the Mac: recalling a preset without it switches it off, and a preset can hold it alone. A preset saved before this version leaves it as it is until you change something and choose Update to Current Settings for it.
 
 ### Fixed
 
