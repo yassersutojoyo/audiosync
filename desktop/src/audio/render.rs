@@ -1068,6 +1068,58 @@ mod tests {
         assert_eq!(s.control.counters().starved_renders, 0);
     }
 
+    // covers: S208
+    /// A 44.1 kHz output at hold-back 0, which converts, and a 48 kHz one
+    /// held back by `held_back` frames read one ring in 10 ms periods, the
+    /// capture writing a ramp in 10 ms blocks: frame 147 n of the first and
+    /// 160 n of the second play at the same instant, `held_back` apart.
+    #[test]
+    fn local_outputs_play_exactly_their_hold_backs_apart_with_the_converter() {
+        for held_back in [240i64, 4_800] {
+            let ring = Ring::for_rate(SESSION_RATE).unwrap();
+            let mut writer = ring.writer().unwrap();
+            let gain = Arc::new(SharedGain::new(1.0));
+            let make = |rate: u32, delay: i64| {
+                let reader = Reader::new(Arc::clone(&ring), SESSION_RATE);
+                reader.control().set_delay_frames(delay);
+                let control = RendererControl::new(&reader);
+                let mut pipeline =
+                    RenderPipeline::new(reader, &control, Arc::clone(&gain), rate, 2).unwrap();
+                pipeline.set_period_frames(rate as usize / 100);
+                (pipeline, control)
+            };
+            let mut outputs = [make(44_100, 0), make(SESSION_RATE, held_back)];
+            let mut written = 0;
+            for _ in 0..100 {
+                write_ramp(&mut writer, written, 480);
+                written += 480;
+            }
+            let mut played = [Vec::new(), Vec::new()];
+            for _ in 0..300 {
+                write_ramp(&mut writer, written, 480);
+                written += 480;
+                for ((pipeline, _), played) in outputs.iter_mut().zip(&mut played) {
+                    let mut out = vec![0.0f32; pipeline.device_rate() as usize / 100 * 2];
+                    pipeline.render(&mut out);
+                    played.extend(out.as_chunks::<2>().0.iter().map(|frame| frame[0]));
+                }
+            }
+            for (_, control) in &outputs {
+                assert_eq!(control.counters().starved_renders, 0, "{held_back}");
+            }
+            let start = played[0].iter().position(|&x| x != 0.0).unwrap();
+            assert!(start < 44_100 / 20, "the earliest starts at frame {start}");
+            for n in 30..890 {
+                let difference =
+                    (f64::from(played[0][147 * n]) - f64::from(played[1][160 * n])) * 1e6;
+                assert!(
+                    (difference - held_back as f64).abs() < 0.5,
+                    "at {n}/300 s: {difference} frames apart, not {held_back}"
+                );
+            }
+        }
+    }
+
     /// The capture frames the converter was sped up by over five seconds of
     /// 10 ms callbacks against a capture 1000 ppm faster than the device,
     /// its blocks stamped on the core's clock when `stamped`.

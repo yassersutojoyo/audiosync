@@ -2978,6 +2978,7 @@ The checks for S206 and S207 (`core/tests/render_start.rs`). The capture writes 
 |---|---|
 | a_converting_output_at_hold_back_0_never_runs_dry_after_its_start | S206 |
 | a_late_wake_raises_the_lead_for_its_own_fill_only | S206 |
+| local_outputs_play_exactly_their_hold_backs_apart_with_the_converter | S208 |
 | each_callback_reads_on_the_stamps_clock_so_the_trim_follows_the_capture (`desktop/src/audio/render.rs`) | S207, S226 |
 | a_packet_written_in_pieces_is_one_block_for_the_outputs_lead (`desktop/src/audio/capture.rs`) | S206 |
 | each_packet_and_gap_fill_is_stamped_as_its_block_closes (`desktop/src/audio/capture.rs`) | S207 |
@@ -3509,6 +3510,7 @@ The checks for S273 to S279 run against the core's decision with a fake now-play
 | a_command_for_a_speaker_that_stopped_does_nothing | S273 |
 | every_remote_command_gives_one_log_line | S279 |
 | a_remote_transport_goes_to_the_now_playing_control (`desktop/src/audio/airplay.rs`) | S274 |
+| each_remote_command_gives_one_debug_line_with_speaker_command_and_result (`desktop/src/audio/airplay.rs`) | S279 |
 | a_remote_command_for_a_speaker_no_longer_played_does_nothing (`desktop/src/audio/airplay.rs`) | S273 |
 | a_remote_control_goes_to_the_session_track_info_follows (`desktop/src/audio/now_playing.rs`) | S274 |
 

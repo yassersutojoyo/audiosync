@@ -8415,6 +8415,38 @@ pub mod tests {
         assert!(fake.take_calls().is_empty(), "no volume moved");
     }
 
+    // covers: S279
+    #[test]
+    fn each_remote_command_gives_one_debug_line_with_speaker_command_and_result() {
+        let path = crate::debug_log::test_dir("airplay-remote-lines").join("log.txt");
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_debug_log(DebugLog::new(Some(path.clone())));
+        remote(&fake, &kitchen, RemoteCommand::Next);
+        airplay.poll();
+        read(
+            &mut airplay,
+            Some(("Spotify.exe".to_owned(), false)),
+            Instant::now(),
+        );
+        remote(&fake, &kitchen, RemoteCommand::Play);
+        airplay.poll();
+        remote(&fake, &kitchen, RemoteCommand::VolumeUp);
+        airplay.poll();
+        assert!(airplay.log.flush(crate::debug_log::TEST_FLUSH));
+        let lines: Vec<String> = crate::debug_log::read_messages(&path)
+            .into_iter()
+            .filter(|message| message.contains("AirPlay remote"))
+            .collect();
+        let expected = [
+            "Next -> ignored, no app to control",
+            "Play -> sent to Spotify.exe as play-pause",
+            "VolumeUp -> level 50 -> 55",
+        ]
+        .map(|rest| format!("AirPlay remote \"Kitchen\" ({id}): {rest}"));
+        assert_eq!(lines, expected);
+    }
+
     /// The pause and resume calls since the last take.
     fn pause_calls(fake: &FakeAirPlay) -> Vec<Call> {
         fake.take_calls()
