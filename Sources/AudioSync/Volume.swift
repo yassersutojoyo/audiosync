@@ -15,6 +15,11 @@ enum VolumeCurve {
     static func position(gain: Double) -> Double {
         100 * cbrt(max(0, min(1, gain)))
     }
+
+    /// The position a local or master volume setter keeps; nil for one it ignores (S76).
+    static func accepted(_ position: Double) -> Double? {
+        position.isFinite ? max(0, min(100, position)) : nil
+    }
 }
 
 enum LocalOutputGain {

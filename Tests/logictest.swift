@@ -29,6 +29,11 @@ let tenDB = 20 * log10(VolumeCurve.gain(position: 10))
 check(approx(tenDB, -60, 0.1), "volume: 10 ≈ −60 dB", String(format: "%.2f dB", tenDB))
 check(approx(VolumeCurve.position(gain: VolumeCurve.gain(position: 37)), 37, 1e-9), "volume: position↔gain round-trip")
 check(approx(VolumeCurve.position(gain: 0.0349), 32.7, 0.1), "volume: legacy 3.49% migrates to ≈33")
+// covers: S76
+check(VolumeCurve.accepted(.nan) == nil && VolumeCurve.accepted(.infinity) == nil
+        && VolumeCurve.accepted(-.infinity) == nil && VolumeCurve.accepted(-5) == 0
+        && VolumeCurve.accepted(150) == 100 && VolumeCurve.accepted(37.5) == 37.5,
+      "volume: a local or master volume is clamped to 0 to 100; one that isn't a number is ignored")
 var mono = true
 for p in stride(from: 0.0, to: 100, by: 1) where VolumeCurve.gain(position: p + 1) <= VolumeCurve.gain(position: p) { mono = false }
 check(mono, "volume: strictly increasing")

@@ -197,8 +197,11 @@ impl Zones {
     }
 
     /// Sets zone `id`'s volume, through [`zone_volume`]. False when no zone
-    /// has that ID.
+    /// has that ID or the volume isn't finite, which is ignored (S76).
     pub fn set_volume(&mut self, id: &str, volume: f64) -> bool {
+        if !volume.is_finite() {
+            return false;
+        }
         let Some(zone) = self.list.iter_mut().find(|zone| zone.id == id) else {
             return false;
         };

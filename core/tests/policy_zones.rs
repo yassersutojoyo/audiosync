@@ -139,7 +139,7 @@ fn a_speaker_moved_to_another_zone_leaves_its_first() {
     );
 }
 
-// covers: S245
+// covers: S245, S76
 #[test]
 fn deleting_a_zone_leaves_its_members_in_no_zone() {
     let mut zones = Zones::from_stored([
@@ -162,11 +162,13 @@ fn deleting_a_zone_leaves_its_members_in_no_zone() {
     assert_eq!(zones.list().len(), 1);
     assert!(zones.list()[0].members.is_empty());
     assert!(!zones.remove_speaker("lc:usb"));
-    // Volumes stay within 0 to 100; one that isn't a number is 100.
+    // Volumes stay within 0 to 100; one that isn't a number is ignored (S76).
     assert!(zones.set_volume("a", -5.0));
     assert_eq!(zones.list()[0].volume, 0.0);
-    assert!(zones.set_volume("a", f64::NAN));
-    assert_eq!(zones.list()[0].volume, 100.0);
+    for not_a_number in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(!zones.set_volume("a", not_a_number));
+        assert_eq!(zones.list()[0].volume, 0.0);
+    }
     assert!(!zones.set_volume("b", 50.0));
 }
 
