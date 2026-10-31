@@ -340,6 +340,9 @@ pub enum NoticeSubject {
     SoundOutput,
     /// One Google Cast speaker, by device ID (Windows).
     Cast(String),
+    /// The AirPlay speakers play ahead of this Google Cast speaker; apart
+    /// from `Cast`, so it never replaces or clears a problem with it (Windows).
+    AirPlayAhead(String),
     /// The speaker zones: the saved groups became zones (S248).
     Zones,
     /// The members a preset recall left off (S265).

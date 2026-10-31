@@ -2891,13 +2891,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
             return false;
         }
         if let Some((noticed, _)) = self.ahead_noticed.take() {
-            self.clear_if(NoticeSubject::Cast(noticed), |message| {
-                matches!(message, NoticeMessage::AirPlayAheadOfCast { .. })
-            });
+            self.notices.clear(&[NoticeSubject::AirPlayAhead(noticed)]);
         }
         if let Some(cast) = cast {
             self.post(
-                NoticeSubject::Cast(cast.id.clone()),
+                NoticeSubject::AirPlayAhead(cast.id.clone()),
                 NoticeMessage::AirPlayAheadOfCast {
                     speaker: self.custom_names.shown(&cast_key(&cast.id), &cast.name),
                     tenths,
@@ -4124,9 +4122,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.ptp_off.remove(&id);
                 self.ptp_played = true;
                 self.ptp_rows_changed();
-                self.clear_if(airplay_subject(&id), |message| {
-                    matches!(message, NoticeMessage::AirPlayRetrying { .. })
-                });
+                self.notices.clear(&[airplay_subject(&id)]);
             }
             BackendEvent::AirPlayUnannounced { id, unannounced } => {
                 if unannounced {
@@ -9339,37 +9335,39 @@ mod tests {
     // covers: S223
     #[test]
     fn an_every_time_pairing_that_fails_after_the_stream_ended_says_it_needs_a_pin() {
-        let (mut adapter, fake, den) = every_time_adapter();
-        let id = ap(&den);
-        turn_on(&mut adapter, SPEAKERS);
-        adapter.set_speaker_enabled(&id, true);
-        fake.pairing(&den, PairingEvent::PinRequested);
-        adapter.poll();
-        adapter.set_running(false);
-        adapter.poll();
+        for kind in [ErrorKind::PairingFailed, ErrorKind::Unreachable] {
+            let (mut adapter, fake, den) = every_time_adapter();
+            let id = ap(&den);
+            turn_on(&mut adapter, SPEAKERS);
+            adapter.set_speaker_enabled(&id, true);
+            fake.pairing(&den, PairingEvent::PinRequested);
+            adapter.poll();
+            adapter.set_running(false);
+            adapter.poll();
 
-        adapter.submit_pin(&id, "4821");
-        fake.pairing(
-            &den,
-            PairingEvent::Failed {
-                error: SessionError::new(ErrorKind::PairingFailed),
-                wrong_pin: false,
-            },
-        );
-        adapter.poll();
-        assert!(!adapter.snapshot().speaker(&id).unwrap().enabled);
-        assert!(
-            messages(&adapter).contains(&NoticeMessage::AirPlayCantPlay {
-                speaker: "Den".to_owned(),
-                problem: ui_model::AirPlayProblem::NeedsPin,
-            }),
-            "{:?}",
-            messages(&adapter)
-        );
-        assert!(
-            !adapter.airplay_on_by_hand.contains(&id_of(&den)),
-            "the click's mark ends with its pairing"
-        );
+            adapter.submit_pin(&id, "4821");
+            fake.pairing(
+                &den,
+                PairingEvent::Failed {
+                    error: SessionError::new(kind),
+                    wrong_pin: false,
+                },
+            );
+            adapter.poll();
+            assert!(!adapter.snapshot().speaker(&id).unwrap().enabled);
+            assert!(
+                messages(&adapter).contains(&NoticeMessage::AirPlayCantPlay {
+                    speaker: "Den".to_owned(),
+                    problem: ui_model::AirPlayProblem::NeedsPin,
+                }),
+                "{kind:?}: {:?}",
+                messages(&adapter)
+            );
+            assert!(
+                !adapter.airplay_on_by_hand.contains(&id_of(&den)),
+                "the click's mark ends with its pairing"
+            );
+        }
     }
 
     // covers: S223
@@ -10338,7 +10336,7 @@ mod tests {
             messages(&adapter),
             [NoticeMessage::AirPlayCantPlay {
                 speaker: "Den TV".to_owned(),
-                problem: ui_model::AirPlayProblem::PairingFailed,
+                problem: ui_model::AirPlayProblem::NotResponding,
             }]
         );
     }
@@ -10895,6 +10893,28 @@ mod tests {
         adapter.poll();
         assert_eq!(messages(&adapter).len(), 1);
         adapter.set_running(false);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    // covers: S222
+    #[test]
+    fn an_airplay_speaker_auto_connect_brings_back_to_play_clears_the_notice_that_turned_it_off() {
+        use audiosync_airplay::error::UnsupportedReason;
+
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_auto_connect(&ap(&kitchen), true);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.fail(&kitchen, ErrorKind::Unsupported(UnsupportedReason::Timing));
+        adapter.poll();
+        assert!(!adapter.is_airplay_enabled(&id_of(&kitchen)));
+        assert_eq!(messages(&adapter).len(), 1, "off for PTP timing");
+        fake.gone(&kitchen);
+        adapter.poll();
+        fake.appear(&kitchen);
+        adapter.poll();
+        assert!(adapter.is_airplay_enabled(&id_of(&kitchen)), "auto-connect");
+        fake.state(&kitchen, AirPlayState::Playing);
         adapter.poll();
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
@@ -15803,6 +15823,39 @@ mod tests {
         adapter.set_speaker_delay(&cc(CAST_LIVING), 4000.0);
         adapter.poll();
         assert!(messages(&adapter).is_empty(), "cleared once they keep up");
+    }
+
+    // covers: S394
+    #[test]
+    fn the_airplay_ahead_notice_stays_when_the_cast_speaker_starts_playing() {
+        let (mut adapter, _airplay, kitchen, _) = airplay_adapter();
+        let cast = FakeCast::default();
+        cast.announce(CAST_LIVING, "Living Room", DEVICE_PORT);
+        adapter.audio.set_cast(cast.link());
+        adapter.poll();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
+        adapter.set_speaker_delay(&ap(&kitchen), 3250.0);
+        adapter.set_speaker_delay(&cc(CAST_LIVING), 20_000.0);
+        adapter.poll();
+        let reconnecting = SessionEvent::Recovering(audiosync_cast::error::EndReason::Silent);
+        for event in [SessionEvent::Playing, reconnecting, SessionEvent::Playing] {
+            cast.report(HostEvent::Session {
+                attempt: AttemptId(1),
+                device: cast_device(CAST_LIVING),
+                event,
+            });
+            adapter.poll();
+            assert_eq!(
+                messages(&adapter),
+                [NoticeMessage::AirPlayAheadOfCast {
+                    speaker: "Living Room".to_owned(),
+                    tenths: 15,
+                }]
+            );
+        }
+        let row = adapter.snapshot().speaker(&cc(CAST_LIVING)).cloned();
+        assert_eq!(row.unwrap().cast.unwrap().state, CastState::Playing);
     }
 
     // covers: S394

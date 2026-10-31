@@ -3712,12 +3712,13 @@ impl AirPlaySpeakers {
                     return false;
                 };
                 self.off_after_pairing(id);
-                let problem = if let ErrorKind::Unsupported(_) = error.kind {
-                    problem(error.kind.user_reason())
-                } else if run.outlived_stream {
-                    AirPlayProblem::NeedsPin
-                } else {
-                    AirPlayProblem::PairingFailed
+                let problem = match error.kind.user_reason() {
+                    _ if run.outlived_stream => AirPlayProblem::NeedsPin,
+                    reason @ (UserReason::Unsupported(_)
+                    | UserReason::NotResponding
+                    | UserReason::ConnectionLost) => problem(reason),
+                    UserReason::Incompatible => AirPlayProblem::Unsupported,
+                    _ => AirPlayProblem::PairingFailed,
                 };
                 events.push(BackendEvent::AirPlayFailed {
                     id: id.to_owned(),
@@ -5554,7 +5555,7 @@ pub mod tests {
         let events = airplay.poll();
         let failed = BackendEvent::AirPlayFailed {
             id: id.clone(),
-            problem: AirPlayProblem::PairingFailed,
+            problem: AirPlayProblem::ConnectionLost,
         };
         assert!(events.contains(&failed), "{events:?}");
         assert_eq!(airplay.store.homekit(&id), Some(&homekit(0x33)));
@@ -7117,6 +7118,29 @@ pub mod tests {
             airplay.speakers()[0].availability,
             AirPlayAvailability::NeedsPin
         );
+    }
+
+    // covers: S223
+    #[test]
+    fn a_pairing_lost_on_the_network_or_to_an_odd_answer_says_so_not_to_enter_the_pin() {
+        for (kind, said) in [
+            (ErrorKind::Unreachable, AirPlayProblem::NotResponding),
+            (ErrorKind::Lost, AirPlayProblem::ConnectionLost),
+            (ErrorKind::ProtocolError, AirPlayProblem::Unsupported),
+        ] {
+            let fake = FakeAirPlay::new();
+            let mut airplay = speakers(&fake);
+            let tv = device(6, "Den TV", APPLE_TV_TXT);
+            let id = id_of(&tv);
+            pin_shown(&fake, &mut airplay, &tv);
+            fake.pairing(&tv, pairing_failed(kind, false));
+            let events = airplay.poll();
+            assert!(
+                events.contains(&BackendEvent::AirPlayFailed { id, problem: said }),
+                "{kind:?}: {events:?}"
+            );
+            assert!(airplay.enabled_ids().is_empty());
+        }
     }
 
     // The receiver quit under the open prompt and came back before its
