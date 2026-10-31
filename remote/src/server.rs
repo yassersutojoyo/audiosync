@@ -1088,6 +1088,7 @@ enum ApiRoute {
     Zone(Option<String>),
     Preset(Option<String>),
     Source,
+    Mix,
 }
 
 impl ApiRoute {
@@ -1101,6 +1102,7 @@ impl ApiRoute {
                 | ApiRoute::Zone(_)
                 | ApiRoute::Preset(_)
                 | ApiRoute::Source
+                | ApiRoute::Mix
         )
     }
 }
@@ -1143,6 +1145,7 @@ fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) ->
         "/api/master" => ApiRoute::Master,
         "/api/unpair" => ApiRoute::Unpair,
         "/api/source" => ApiRoute::Source,
+        "/api/mix" => ApiRoute::Mix,
         _ => {
             if let Some(id) = path.strip_prefix("/api/speakers/") {
                 ApiRoute::Speaker(percent_decode(id))
@@ -1188,6 +1191,7 @@ fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) ->
         ApiRoute::Zone(id) => zone(request, id, shared),
         ApiRoute::Preset(id) => preset(request, id, shared),
         ApiRoute::Source => source(request, shared),
+        ApiRoute::Mix => mix(request, shared),
     };
     match answer {
         Answer::Response(response) => cookies
@@ -1408,6 +1412,28 @@ fn source(request: &Request, shared: &Shared) -> Answer {
         Ok(()) => accepted(&Command::Source { id }, shared),
         Err(problem) => error(problem),
     }
+}
+
+/// `POST /api/mix` `{apps}`: the apps checked in the several-apps list, of
+/// those the snapshot lists as running, once each in the order sent. The app
+/// checks them again when it applies them.
+fn mix(request: &Request, shared: &Shared) -> Answer {
+    let Some(asked) = state::mix_apps_from_body(&request.body) else {
+        return error(text::bad_request());
+    };
+    let mut apps: Vec<String> = Vec::new();
+    if let Some(state) = lock(&shared.published).current.as_ref() {
+        for id in asked {
+            let running = state.mix_apps.iter().any(|app| app.running && app.id == id);
+            if running && !apps.contains(&id) {
+                apps.push(id);
+            }
+        }
+    }
+    if apps.is_empty() {
+        return error(text::unknown_source());
+    }
+    accepted(&Command::Mix { apps }, shared)
 }
 
 fn preset(request: &Request, id: Option<String>, shared: &Shared) -> Answer {

@@ -289,6 +289,7 @@ pub fn snapshot(
             .iter()
             .any(|source| source.id == state.source_id)
             .then(|| page_id(&state.source_id)),
+        mix_apps: Vec::new(),
     }
 }
 
@@ -467,6 +468,7 @@ pub fn actions(
             // Even the source in use: the picker's re-pick clears a failed switch's notice (S163).
             Ok(vec![Action::Source { id: picked.clone() }])
         }
+        Command::Mix { .. } => Ok(Vec::new()),
         Command::Speaker { id, change } => {
             let speaker = state
                 .speaker(id)
