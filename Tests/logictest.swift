@@ -8585,20 +8585,26 @@ do {
     for (invalid, focused) in states {
         let rings = DelayFieldRings(invalid: invalid, focused: focused)
         let drawn = (rings.focusRing ? 1 : 0) + rings.redOutlines + (DelayFieldRings.appKitRing && focused ? 1 : 0)
+        // covers: S220
         check(drawn <= 1, "delay rings: at most one ring (invalid \(invalid), focused \(focused))", "\(rings)")
+        // covers: S220
         check(!DelayFieldRings.appKitRing, "delay rings: AppKit's own ring stays off, so it can't linger after a toggle mid-edit",
               "invalid \(invalid), focused \(focused)")
     }
     let focusedInvalid = DelayFieldRings(invalid: true, focused: true)
+    // covers: S220
     check(!focusedInvalid.focusRing && focusedInvalid.redOutlines == 1 && focusedInvalid.redOutsideBezel,
           "delay rings: invalid and focused → one red outline where the focus ring goes", "\(focusedInvalid)")
     let focusedValid = DelayFieldRings(invalid: false, focused: true)
+    // covers: S220
     check(focusedValid.focusRing && focusedValid.redOutlines == 0, "delay rings: valid and focused → the focus ring",
           "\(focusedValid)")
     let unfocusedInvalid = DelayFieldRings(invalid: true, focused: false)
+    // covers: S220
     check(!unfocusedInvalid.focusRing && unfocusedInvalid.redOutlines == 1 && !unfocusedInvalid.redOutsideBezel,
           "delay rings: invalid, focus elsewhere → a red outline on the bezel", "\(unfocusedInvalid)")
     let idle = DelayFieldRings(invalid: false, focused: false)
+    // covers: S220
     check(!idle.focusRing && idle.redOutlines == 0, "delay rings: valid, focus elsewhere → no ring", "\(idle)")
 }
 
@@ -9685,6 +9691,7 @@ do {
     let refusedOnly = LocalOutputSync.apply(enabled: ["usb", "bt"], listing: [usb, bt], to: rebuilt,
                                             holdBacks: [:], gain: { _ in 1 })
     let refusedReport = LocalOutputSync.report(refusedOnly.failures, enabled: ["usb", "bt"], origin: .user)
+    // covers: S331
     check(refusedOnly.failures.map(\.uid) == ["bt", "usb"] && refusedReport == nil,
           "S331 refused start: a listed device that refuses the start stays on, with no alert and no notice",
           "\(String(describing: refusedReport))")
@@ -9694,10 +9701,12 @@ do {
     let mixedStart = LocalOutputSync.apply(enabled: ["usb", "bt", "tv"], listing: [usb, bt], to: mixedEngine,
                                            holdBacks: [:], gain: { _ in 1 })
     let mixedReport = LocalOutputSync.report(mixedStart.failures, enabled: ["usb", "bt", "tv"], origin: .user)
+    // covers: S331
     check(mixedReport?.enabled == ["bt", "tv"] && mixedReport?.alertNames == ["USB DAC"]
             && mixedReport?.notices.map(\.uid) == ["usb"],
           "S331 refused start: next to a refusal, a hard error at the start is still switched off at once with its alert",
           "\(String(describing: mixedReport))")
+    // covers: S331
     check(refusedOnly.failures.allSatisfy { $0.refusal?.contains("!dev") == true }
             && mixedStart.failures.first(where: { $0.uid == "usb" })?.refusal == nil,
           "S331 refused start: a refusal carries the device's answer for the debug log, a hard error none",
@@ -9714,12 +9723,14 @@ do {
                            .formatRefused(OSStatus(kAudioDeviceUnsupportedFormatError)),
                            .deviceDidNotStart(OSStatus(kAudioHardwareUnspecifiedError)),
                            .unitNotCreated(OSStatus(kAudioHardwareIllegalOperationError))]
+    // covers: S331
     check(refusalKinds.allSatisfy(\.isRefusal) && !hardKinds.contains(where: \.isRefusal),
           "S331 refused start: a device gone, rebuilt, not running or held in hog mode refuses; a format or any other error is hard")
     let eagain = SF.deviceDidNotStart(OSStatus(EAGAIN))
     let hogged = RefusingEngine(active: [], refusing: ["usb"],
                                 refusal: SF.hogChecked(eagain, hogOwner: 4242, ownPID: 100))
     let hoggedStart = LocalOutputSync.apply(enabled: ["usb"], listing: [usb], to: hogged, holdBacks: [:], gain: { _ in 1 })
+    // covers: S331
     check(hoggedStart.failures.first?.refusal != nil
             && LocalOutputSync.report(hoggedStart.failures, enabled: ["usb"], origin: .user) == nil,
           "S331 refused start: a start failing with 35 (EAGAIN) while another process hogs the device stays on, with no alert",
@@ -9728,6 +9739,7 @@ do {
                                   refusal: SF.hogChecked(eagain, hogOwner: nil, ownPID: 100))
     let unhoggedStart = LocalOutputSync.apply(enabled: ["usb"], listing: [usb], to: unhogged, holdBacks: [:], gain: { _ in 1 })
     let unhoggedReport = LocalOutputSync.report(unhoggedStart.failures, enabled: ["usb"], origin: .user)
+    // covers: S331
     check(!eagain.isRefusal && !SF.hogChecked(eagain, hogOwner: 100, ownPID: 100).isRefusal
             && unhoggedReport?.enabled == [] && unhoggedReport?.alertNames == ["USB DAC"],
           "S331 refused start: a 35 with no other process hogging the device is hard, switched off with its alert",
@@ -9743,6 +9755,7 @@ do {
     let after30 = refusals.refused("bt", nowS: 133.1)
     let refusedFor = refusals.started("bt", nowS: 134)
     let neverRefused = refusals.started("usb", nowS: 134)
+    // covers: S331
     check(firstRefusal == OutputRefusalRetry.Step(retryAtS: 103, tell: .refused) && heldBeforeTry == ["bt"]
             && heldAtTry.isEmpty && quietRefusal.tell == nil && approx(quietRefusal.retryAtS, 106.1, 1e-9)
             && before30.tell == nil && at30 == OutputRefusalRetry.Step(retryAtS: 133, tell: .lost) && after30.tell == nil
@@ -9751,12 +9764,14 @@ do {
           "\(firstRefusal) \(quietRefusal) \(before30) \(at30) \(after30) \(String(describing: refusedFor))")
     _ = refusals.refused("bt", nowS: 200)
     refusals.settle(enabled: ["usb"], listed: ["usb", "bt"])
+    // covers: S331
     check(refusals.held(nowS: 200).isEmpty && refusals.started("bt", nowS: 201) == nil,
           "S331 refused start: switching the speaker off ends its tries")
     _ = refusals.refused("bt", nowS: 300)
     refusals.settle(enabled: ["bt"], listed: ["usb"])
     let backAfterLeaving = refusals.refused("bt", nowS: 340)
     let notYetLost = refusals.refused("bt", nowS: 369.9)
+    // covers: S331
     check(backAfterLeaving == OutputRefusalRetry.Step(retryAtS: 343, tell: .refused) && notYetLost.tell == nil,
           "S331 refused start: a refused device that leaves the list and comes back starts a fresh 30 s, not counted as lost",
           "\(backAfterLeaving) \(notYetLost)")
@@ -10708,6 +10723,7 @@ do {
             && clampedText != t.calibrationMessage(.done(offsetMs: -2000, clamped: false)),
           "calibration: a clamped estimate is filled in and says it was clamped (S232)", clampedText)
 
+    // covers: S232
     check(CalibrationFlow.finish(answer(ASC_CALIBRATION_ACCEPTED, offset: .nan), commit: commit) == .failed(.implausible)
             && offsets == ["usb": -2000],
           "calibration: an accepted answer without a finite offset changes nothing")
@@ -10774,10 +10790,12 @@ do {
                                            rate: 48_000, oldOffsetMs: 150)
         }
         let agree = agreed([9_648, 9_600, 9_696])
+        // covers: S232
         check(agree?.result.status == UInt32(ASC_CALIBRATION_ACCEPTED) && agree?.result.offset_ms == 49
                 && agree?.spreadMs == 0,
               "calibration: three runs within 5 ms give the middle one's offset (S232)", "\(String(describing: agree))")
         let apart = agreed([9_600, 9_600, 10_080])
+        // covers: S232
         check(apart?.result.status == UInt32(ASC_CALIBRATION_DISAGREE) && apart?.result.offset_ms == 150
                 && apart?.spreadMs == 10,
               "calibration: three runs more than 5 ms apart give no offset (S232)", "\(String(describing: apart))")
@@ -10785,12 +10803,14 @@ do {
                                                        runs: [(reference, room(arrivalFrame: 9_600)), (reference, silent),
                                                               (reference, room(arrivalFrame: 9_600))],
                                                        rate: 48_000, oldOffsetMs: 150)
+        // covers: S232
         check(silentRun?.result.status == UInt32(ASC_CALIBRATION_TOO_QUIET)
                 && silentRun?.result.recording == UInt32(ASC_CALIBRATION_RECORDING_CHOSEN)
                 && silentRun?.result.offset_ms == 150 && agreed([9_600, 9_600]) == nil,
               "calibration: one refused run of three gives no offset, and a call without three runs is refused (S232)",
               "\(String(describing: silentRun))")
     } else {
+        // covers: S233
         check(false, "calibration: the core makes the test signal at 48 kHz (S233)")
     }
 
@@ -10798,10 +10818,11 @@ do {
     // and the music silent until the sweep has played out through the
     // hold-backs; one cut off before it played gives the outputs back at once.
     let settle = CalibrationFlow.settleSeconds(signalSent: true, sameSession: true, largestHoldBackMs: 2000)
+    // covers: S240
     check(settle == CalibrationFlow.quietSeconds(largestHoldBackMs: 2000) && settle >= 2
             && CalibrationFlow.settleSeconds(signalSent: false, sameSession: true, largestHoldBackMs: 2000) == 0
             && CalibrationFlow.settleSeconds(signalSent: true, sameSession: false, largestHoldBackMs: 2000) == 0,
-          "calibration: an abort during playing restores the outputs only after the sweep played out (S185)",
+          "calibration: an abort during playing restores the outputs only after the sweep played out (S240)",
           "\(settle) s")
 
     // A recording past the estimate's limit at the microphone's rate is refused before anything plays.
@@ -10811,6 +10832,7 @@ do {
             && CalibrationFlow.fits(largestHoldBackMs: 2000, rate: 192_000),
           "calibration: a long hold-back at a high microphone rate is refused up front (S232, S234)")
 
+    // covers: S232
     check(t.calibrationMessage(.cancelled) == "Calibration cancelled. The delay wasn't changed."
             && t.calibrationMessage(.running(.preparing)) == nil && t.calibrationMessage(.idle) == nil,
           "calibration: a cancel says nothing changed")
@@ -10826,6 +10848,7 @@ do {
     speakerOff.speakerOn = false
     let measuring = CalibrationStatus(uid: "usb", phase: .running(.measuring(.reference)), context: shownIn,
                                       holdsOutputs: true)
+    // covers: S232
     check(shown.following(shownIn) == shown
             && [streamingOff, otherReference, speakerOff].allSatisfy { shown.following($0).phase(of: "usb") == .idle }
             && shown.offsetChanged("usb").phase(of: "usb") == .idle && shown.offsetChanged("bt") == shown
@@ -10834,6 +10857,7 @@ do {
 
     // The window's + step asks for 20 010 ms, the web remote for the 20 000 ms already set.
     let stepped = { (raw: Double) in LocalDelay.sanitizedOffset(raw) ?? .nan }
+    // covers: S232
     check(!CalibrationStatus.offsetDiffers(stored: 20_000, clamped: stepped(20_010))
             && !CalibrationStatus.offsetDiffers(stored: 20_000, clamped: stepped(20_000))
             && !CalibrationStatus.offsetDiffers(stored: nil, clamped: 0)
@@ -10849,6 +10873,7 @@ do {
           "calibration: the button is off while streaming or the speaker is off, or without a reference")
 
     let status = CalibrationStatus(uid: "usb", phase: .running(.measuring(.chosen)))
+    // covers: S232
     check(status.phase(of: "usb") == .running(.measuring(.chosen)) && status.phase(of: "bt") == .idle && status.isRunning,
           "calibration: only the speaker being calibrated shows its progress")
 }
@@ -11022,6 +11047,7 @@ do {
         AudioDevices.Device(id: 43, name: "AirPods", uid: "pods", transport: bt),
         AudioDevices.Device(id: 44, name: "External Headphones", uid: "jack", transport: builtIn),
     ]
+    // covers: S235
     check(DataSourceWatch.watched(watchList) == [41, 44],
           "calibration: the built-in outputs' data source is watched, so plugging into the jack updates the window")
 
@@ -11102,6 +11128,7 @@ do {
     check(CalibrateAllFlow.end(start: referenced, now: referenced, taking: taking) == nil
             && CalibrateAllFlow.end(start: referenced, now: otherReference, taking: taking) == .speakersChanged,
           "calibrate all: a new local reference stops the run as a change of the speakers (S240)")
+    // covers: S240, S362
     check(t.calibrateAllLine(.ended(.rateChanged))
                 == "The audio's sample rate changed during the measurement. No delay was changed."
             && t.calibrateAllLine(.cannotMeasureAgain(name: "Desk", missing: .all))
@@ -11264,15 +11291,18 @@ do {
             if let sheet {
                 let answer = sheet.apply()
                 let writes = CalibrateAllFlow.writes(answer.changes, speakers: speakers)
+                // covers: S238
                 check(answer.code == UInt32(ASC_CALIBRATION_APPLY_OK) && writes.count == 2
                         && writes.contains(.local(id: "usb", ms: 100, old: 150))
                         && writes.contains(.airPlay(ms: 1965, old: 1750)),
                       "calibrate all: Apply lists the certain rows and the AirPlay delay with the values they replace",
                       "\(writes)")
+                // covers: S238
                 check(sheet.apply().code == UInt32(ASC_CALIBRATION_APPLY_ALREADY_APPLIED) && sheet.measureAgain(1) == nil,
                       "calibrate all: an applied sheet is spent: no second Apply, no Measure Again (S238)")
             }
         } else {
+            // covers: S235
             check(false, "calibrate all: the core takes a run of local and AirPlay speakers at 48 kHz (S235)")
         }
 
@@ -11292,12 +11322,14 @@ do {
             }
         }
     } else {
+        // covers: S233
         check(false, "calibrate all: the core makes the test signal at 48 kHz (S233)")
     }
 
     // The stored values must still be the ones measured from.
     let measuredFrom = [CalibrateAllSpeaker(id: "mac", name: "Mac", kind: .local, offsetMs: nil, latencyMs: 0),
                         CalibrateAllSpeaker(id: "usb", name: "Desk", kind: .local, offsetMs: 150, latencyMs: 0)]
+    // covers: S238
     check(CalibrateAllFlow.unchanged(measuredFrom, reference: "mac", airPlayAdjustmentMs: 0,
                                      current: { $0.id == "usb" ? 150 : 9 })
             && !CalibrateAllFlow.unchanged(measuredFrom, reference: "mac", airPlayAdjustmentMs: 0,
@@ -11311,6 +11343,7 @@ do {
     check(CalibrateAllFlow.unchanged(withAirPlay, reference: "mac", airPlayAdjustmentMs: 100, current: storedNow)
             && !CalibrateAllFlow.unchanged(withAirPlay, reference: "mac", airPlayAdjustmentMs: 140, current: storedNow),
           "calibrate all: a new sender latency alone keeps Apply, a moved AirPlay setting refuses it (S238)")
+    // covers: S238
     check(!CalibrateAllFlow.unchanged(measuredFrom, reference: "usb", airPlayAdjustmentMs: 0,
                                       current: { $0.id == "usb" ? 150 : 9 }),
           "calibrate all: Apply writes nothing once the reference moved after the measurement")
@@ -11431,6 +11464,7 @@ do {
                    t.calibrationButtonReason(running: true, unavailable: .notPlaying(.speaker), held: true),
                    t.calibrationButtonReason(running: false, unavailable: .notPlaying(.speaker), held: false),
                    t.calibrationButtonReason(running: false, unavailable: nil, held: true)]
+    // covers: S232
     check(reasons == [nil, nil, "Turn on this speaker to calibrate it.", "Another calibration is still running."],
           "calibration reason: the line under an off button repeats its tooltip, and an enabled or running one has none",
           "\(reasons)")
@@ -13695,6 +13729,7 @@ do {
     }
     // Played at 0.4: own 0.8 in the 50 zone, 0.5 in the id's 80 zone.
     var otherZone = rekeyedModel(zones: [manualID: 50, realID: 80])
+    // covers: S341
     check(abs(otherZone.volume(of: realID) - 50) < 1e-9 && otherZone.takeLevelDue() == nil
             && otherZone.zoneLevels == [realID: 0.8],
           "cast model: a playing speaker added by address that a browse finds plays as loud as before when its id "
@@ -13702,6 +13737,7 @@ do {
     // Played at 0.4 in no zone; the id's 25 zone reaches 0.25 at most.
     var cappedZone = rekeyedModel(zones: [realID: 25])
     let capped = cappedZone.takeLevelDue()
+    // covers: S341
     check(cappedZone.volume(of: realID) == 100 && capped.map { abs($0 - 0.25) < 1e-9 } == true
             && cappedZone.takeLevelDue() == nil,
           "cast model: a playing speaker added by address whose loudness its id's zone can't reach gets the nearest "
@@ -13764,6 +13800,7 @@ do {
     _ = goneAfter.turnOn(realID)
     let goneAfterOutcome = goneAfter.apply(.discoveryStopped)
     goneAfter.apply(.gone(id: realID))
+    // covers: S339
     check(goneFirstOutcome == .turnedOff(realID, problem: .searchStopped) && goneFirst.enabled == nil
             && goneAfterOutcome == .turnedOff(realID, problem: .searchStopped) && goneAfter.enabled == nil
             && goneAfter.rows.isEmpty && goneAfter.turnOn(manualID) == nil,
@@ -13796,6 +13833,7 @@ do {
     _ = startStopped.apply(.discoveryStopped)
     _ = startStopped.started(realID, attempt: 3, refusal: 0)
     let startStoppedListed = startStopped.rows == [realID] && startStopped.status(of: realID) == .connecting
+    // covers: S339
     check(startStoppedListed && startStopped.turnOff(realID) && startStopped.plan(streaming: true) == .stop,
           "cast model: when discovery stops while a start waits for its number, the speaker stays listed "
             + "and Off still stops it")
@@ -14024,21 +14062,29 @@ do {
     check(alone.contains("start lead") && !alone.contains("wait"), "lead: \(alone)")
 
     let meter = InputLevel()
+    // covers: S408
     check(!meter.update(peak: nil) && !meter.shown && meter.level == 0, "input level: hidden without an input")
+    // covers: S408
     check(meter.update(peak: 1) && meter.shown && meter.level == 1, "input level: full scale fills it")
     meter.update(peak: 0)
+    // covers: S408
     check(abs(meter.level - 0.85) < 1e-5, "input level: it falls back a step, \(meter.level)")
+    // covers: S408
     check(!meter.update(peak: nil) && !meter.shown && meter.level == 0, "input level: hidden again, emptied")
+    // covers: S408
     check(meter.spokenPercent == 0 && asc_meter_spoken_percent(0.42) == 40 && asc_meter_spoken_percent(0.66) == 70
             && asc_meter_spoken_percent(1.4) == 100 && asc_meter_spoken_percent(.nan) == 0,
           "input level: VoiceOver hears it in steps of 10 percent")
+    // covers: S408
     check(UIStrings(locale: Locale(identifier: "en_US")).inputLevelValue(40) == "40%",
           "input level: VoiceOver reads a percent")
     let unseen = InputLevel()
     unseen.follow { 0.5 }
     unseen.setVisible(false)
+    // covers: S408
     check(!unseen.isPolling, "input level: no polling while the main window is closed")
     unseen.setVisible(true)
+    // covers: S408
     check(unseen.isPolling && unseen.shown, "input level: polling starts again once the main window shows")
     unseen.setVisible(false)
 
@@ -14053,6 +14099,7 @@ do {
     for (name, fill, track) in [("light", BrandTokens.Light.tealText, BrandTokens.Light.separator),
                                 ("dark", BrandTokens.Dark.tealText, BrandTokens.Dark.separator)] {
         let ratio = contrast(fill, track)
+        // covers: S408
         check(ratio >= 3, "input level: the fill on its track reaches 3:1 in \(name) appearance (\(ratio))")
     }
 }
