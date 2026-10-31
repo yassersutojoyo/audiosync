@@ -88,6 +88,8 @@ final class CoreDelayReader {
         /// the block with silence (underruns), and the frames filled.
         var starvedRenders: Int64 = 0
         var starvedFrames: Int64 = 0
+        /// Copies the writer overtook, which the post-copy check rejected (S40).
+        var rejectedCopies: Int64 = 0
     }
 
     private let handle: OpaquePointer
@@ -161,7 +163,8 @@ extension CoreDelayReader.Counters {
             driftSkips: Int64(clamping: c.drift_skips), driftSkipFrames: Int64(clamping: c.drift_skip_frames),
             driftSilences: Int64(clamping: c.drift_silences),
             driftSilenceFrames: Int64(clamping: c.drift_silence_frames),
-            starvedRenders: Int64(clamping: c.starved_renders), starvedFrames: Int64(clamping: c.starved_frames))
+            starvedRenders: Int64(clamping: c.starved_renders), starvedFrames: Int64(clamping: c.starved_frames),
+            rejectedCopies: Int64(clamping: c.rejected_copies))
     }
 }
 

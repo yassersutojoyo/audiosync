@@ -8888,16 +8888,19 @@ do {
           "status line: a re-attach gets a new token, the other outputs keep theirs", "\(tokens.byUID)")
     let new = SessionTally(capture: CaptureCounts(callbacks: 1_500, frames: 752_000, silentCallbacks: 4),
                            outputs: ["BT-AA:BB": Out(number: 1, attach: bt, frames: 340_000, starvedRenders: 3, starvedFrames: 1_412, driftSkips: 3,
-                                                     driftSilences: 4, lateCallbacks: 7, overloads: 2),
+                                                     driftSilences: 4, rejectedCopies: 2, lateCallbacks: 7, overloads: 2),
                                      "Built-in": Out(number: 2, attach: builtInAfter, frames: 48_000, starvedRenders: 7, starvedFrames: 3_360,
-                                                     driftSkips: 1, driftSilences: 2, lateCallbacks: 0, overloads: 0),
+                                                     driftSkips: 1, driftSilences: 2, rejectedCopies: 1, lateCallbacks: 0, overloads: 0),
                                      "USB": Out(number: 3, attach: tokens.byUID["USB"] ?? 0, starvedRenders: 0, starvedFrames: 0,
                                                 lateCallbacks: 1, overloads: 0)])
     let line = SessionTally.statusText(since: old, now: new, seconds: 5.0)
     check(line == "status over 5.0 s: capture 240000 frames (48000 frames/s), 500 callbacks, 0 without usable channels"
-              + "; output 1: 240000 frames, starved 1 (512 frames), drift skips 2, drift silences 0, late callbacks 0, IO overloads 1"
-              + "; output 2: 48000 frames, starved 7 (3360 frames), drift skips 1, drift silences 2, late callbacks 0, IO overloads 0"
-              + "; output 3: 0 frames, starved 0 (0 frames), drift skips 0, drift silences 0, late callbacks 1, IO overloads 0",
+              + "; output 1: 240000 frames, starved 1 (512 frames), drift skips 2, drift silences 0, rejected copies 2, "
+              + "late callbacks 0, IO overloads 1"
+              + "; output 2: 48000 frames, starved 7 (3360 frames), drift skips 1, drift silences 2, rejected copies 1, "
+              + "late callbacks 0, IO overloads 0"
+              + "; output 3: 0 frames, starved 0 (0 frames), drift skips 0, drift silences 0, rejected copies 0, "
+              + "late callbacks 1, IO overloads 0",
           "status line: deltas since the last line, frames rendered per output; a re-attached output's counts are all new, a new output counts from 0",
           line)
     check(!line.contains("BT-AA") && !line.contains("Built-in") && !line.contains("USB"),
@@ -8955,7 +8958,7 @@ do {
         now: SessionTally(outputs: ["BT": SessionTally.Output(number: 1, anchor: stepped)]), seconds: 5)
     // covers: S334
     check(line.hasSuffix("; output 1: 0 frames, starved 0 (0 frames), drift skips 0, drift silences 0, "
-                         + "late callbacks 0, IO overloads 0, device anchor min +0.0 max +150.0 last +150.0 ms"),
+                         + "rejected copies 0, late callbacks 0, IO overloads 0, device anchor min +0.0 max +150.0 last +150.0 ms"),
           "status line: an output with timed callbacks carries its device anchor", line)
 }
 
