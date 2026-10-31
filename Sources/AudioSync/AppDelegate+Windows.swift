@@ -68,6 +68,7 @@ extension AppDelegate {
 
     private func equalizerChanged(_ settings: Equalizer.Settings) {
         engine.updateEqualizer(settings)
+        reapplyLocalGains()   // the headroom cut given back changes with the curve (S26)
         if let data = StoredEqualizer.encode(settings) {
             store.write(data, Keys.equalizer)
         }

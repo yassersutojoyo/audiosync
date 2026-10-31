@@ -625,7 +625,8 @@ final class StreamEngine {
         guard let renderer = parts.makeRenderer(captureRate: capture.sampleRate) else {
             throw OutputRenderer.StartFailure.coreUnavailable
         }
-        renderer.setGain(linear: gain)
+        let (played, returnedDb) = parts.equalizer.returnedGain(gain)
+        renderer.setGain(linear: played)
         renderer.onDeviceGone = { [weak self, weak renderer] in
             guard let self, let renderer else { return }
             self.handleOutputLost(uid, renderer, .deviceGone)
@@ -637,7 +638,8 @@ final class StreamEngine {
         try renderer.start(on: device, captureRate: capture.sampleRate, delayMs: delayMs)
         renderers[uid] = renderer
         attachTokens.attached(uid)
-        DebugTrace.log("[AudioSync] output added: \(uid) on device \(device), delay \(delayMs) ms, gain \(gain)")
+        DebugTrace.log("[AudioSync] output added: \(uid) on device \(device), delay \(delayMs) ms, gain \(played), "
+            + "EQ headroom returned \(String(format: "%.2f", returnedDb)) dB")
         if DebugTrace.enabled {
             DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self, weak renderer] in
                 guard let self, let renderer, self.renderers[uid] === renderer else { return }
@@ -717,9 +719,10 @@ final class StreamEngine {
             + "(\(counted.driftSilenceFrames) frames)"
     }
 
-    /// A new linear gain for output `uid`, applied from its next callback (S64).
+    /// A new linear gain for output `uid`, with the equalizer's headroom cut
+    /// given back (S26, S71), applied from its next callback (S64).
     func setGain(uid: String, g: Double) {
-        renderers[uid]?.setGain(linear: g)
+        renderers[uid]?.setGain(linear: parts?.equalizer.returnedGain(g).gain ?? g)
     }
 
     /// The device of output `uid` is gone (S68), its render callback stopped

@@ -488,6 +488,13 @@ void asc_eq_process(AscEqualizer *eq, float *interleaved, size_t frames);
 /* Control thread: how often a channel produced NaN or infinity and was reset. */
 uint64_t asc_eq_nan_resets(const AscEqualizer *eq);
 
+/*
+ * Control thread: a local output's linear gain with the equalizer's headroom
+ * cut given back as far as unity allows (S26, S71). The dB given back goes to
+ * returned_db when it isn't NULL. A NULL eq gives gain unchanged.
+ */
+double asc_eq_returned_gain(const AscEqualizer *eq, double gain, double *returned_db);
+
 /* ---- Delay ring, writer and readers ------------------------------------- */
 
 /*

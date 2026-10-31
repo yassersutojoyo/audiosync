@@ -192,6 +192,14 @@ final class CoreEqualizer {
         _ = asc_eq_set_sample_rate(handle, rate)
     }
 
+    /// Control thread: a local output's linear `gain` with the headroom cut
+    /// given back as far as unity allows, and the dB given back (S26, S71).
+    func returnedGain(_ gain: Double) -> (gain: Double, db: Double) {
+        var db = 0.0
+        let played = asc_eq_returned_gain(handle, gain, &db)
+        return (played, db)
+    }
+
     /// Capture thread: equalizes interleaved stereo in place. Real-time safe.
     func process(_ buffer: UnsafeMutablePointer<Float>, frames: Int) {
         asc_eq_process(handle, buffer, frames)

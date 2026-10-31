@@ -500,6 +500,7 @@ pub fn equalizer() -> (EqControl, EqProcessor) {
         settings,
         sample_rate: DEFAULT_SAMPLE_RATE,
         epoch: 0,
+        cut_db: 0.0,
     };
     let processor = EqProcessor {
         shared,
@@ -523,6 +524,8 @@ pub struct EqControl {
     settings: EqSettings,
     sample_rate: f64,
     epoch: u64,
+    /// The headroom cut of S26 the processor applies: 0 while disabled.
+    cut_db: f64,
 }
 
 impl EqControl {
@@ -584,10 +587,20 @@ impl EqControl {
     /// A local output's linear `gain` with the headroom cut of S26 given back
     /// as far as unity allows (S71): the gain to play and the dB given back.
     pub fn returned_gain(&self, gain: f64) -> (f64, f64) {
-        (gain, 0.0)
+        let db = self.cut_db.min(-20.0 * gain.log10()).max(0.0);
+        if db > 0.0 && gain > 0.0 {
+            ((gain * 10f64.powf(db / 20.0)).min(1.0), db)
+        } else {
+            (gain, 0.0)
+        }
     }
 
     fn publish(&mut self) {
+        self.cut_db = if self.settings.enabled {
+            cascade_peak_db(&self.settings.gains_db, self.sample_rate).max(0.0)
+        } else {
+            0.0
+        };
         let snapshot = Snapshot::design(&self.settings, self.sample_rate, self.epoch);
         self.publish_snapshot(&snapshot);
     }

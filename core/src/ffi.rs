@@ -446,6 +446,34 @@ pub unsafe extern "C" fn asc_eq_nan_resets(eq: *const AscEqualizer) -> u64 {
     control.nan_resets()
 }
 
+/// Control thread: a local output's linear `gain` with the equalizer's
+/// headroom cut given back as far as unity allows (S26, S71); the dB given
+/// back goes to `returned_db` when it isn't null. A null handle gives `gain`.
+///
+/// # Safety
+///
+/// `eq` is null or a live handle, called under the threading contract (a
+/// control call); `returned_db` is null or points to a writable double.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_eq_returned_gain(
+    eq: *const AscEqualizer,
+    gain: f64,
+    returned_db: *mut f64,
+) -> f64 {
+    let (played, db) = if eq.is_null() {
+        (gain, 0.0)
+    } else {
+        // SAFETY: the handle is live; the control thread reads only the
+        // `control` field, which the capture thread never touches.
+        unsafe { &(*eq).control }.returned_gain(gain)
+    };
+    if !returned_db.is_null() {
+        // SAFETY: non-null, and by the caller's contract writable.
+        unsafe { *returned_db = db };
+    }
+    played
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1742,6 +1770,8 @@ mod tests {
             assert!(!asc_eq_set_sample_rate(std::ptr::null_mut(), 48_000.0));
             asc_eq_process(std::ptr::null_mut(), block.as_mut_ptr(), 4);
             assert_eq!(asc_eq_nan_resets(std::ptr::null()), 0);
+            let returned = asc_eq_returned_gain(std::ptr::null(), 0.5, std::ptr::null_mut());
+            assert_eq!(returned, 0.5);
             asc_apply_gain(std::ptr::null_mut(), 4, 0.5);
         }
         assert_eq!(block, copy);
