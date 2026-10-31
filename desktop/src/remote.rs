@@ -186,6 +186,21 @@ pub fn listed(state: &AppState, listed: impl Fn(&Speaker) -> bool) -> Vec<&Speak
         .collect()
 }
 
+/// The page's ID of picker entry `id`: an app (`app:<pid>:<executable>`) goes
+/// out as `app:<executable>`, so the phone gets no process ID and the ID
+/// holds when the app starts again (S353).
+fn page_id(id: &str) -> String {
+    match id
+        .strip_prefix("app:")
+        .and_then(|rest| rest.split_once(':'))
+    {
+        Some((pid, executable)) if pid.bytes().all(|b| b.is_ascii_digit()) => {
+            format!("app:{executable}")
+        }
+        _ => id.to_owned(),
+    }
+}
+
 /// What the page shows for `state`: the speakers the window lists, the
 /// master volume, the track on the Now Playing card, the source picker's
 /// entries in its order, and the computer's name.
@@ -222,11 +237,15 @@ pub fn snapshot(
             }
         })
         .collect();
-    let sources = state
-        .sources
-        .iter()
-        .map(|source| RemoteSource {
-            id: source.id.clone(),
+    let mut sources: Vec<RemoteSource> = Vec::new();
+    for source in &state.sources {
+        let id = page_id(&source.id);
+        // Two processes of one app share a page ID: the page lists it once.
+        if sources.iter().any(|listed| listed.id == id) {
+            continue;
+        }
+        sources.push(RemoteSource {
+            id,
             name: match source.kind {
                 SourceKind::System => text.source_system(),
                 SourceKind::AppsExcept => {
@@ -241,8 +260,8 @@ pub fn snapshot(
             },
             available: !source.unplugged,
             notice: source.unplugged.then(|| text.source_not_connected()),
-        })
-        .collect();
+        });
+    }
     State {
         computer_name: computer_name.to_owned(),
         master_volume: volume(state.master_volume),
@@ -269,7 +288,7 @@ pub fn snapshot(
             .sources
             .iter()
             .any(|source| source.id == state.source_id)
-            .then(|| state.source_id.clone()),
+            .then(|| page_id(&state.source_id)),
     }
 }
 
@@ -444,11 +463,20 @@ pub fn actions(
             Ok(vec![Action::Master { volume: *volume }])
         }
         Command::Source { id } => {
-            if !state.sources.iter().any(|source| &source.id == id) {
-                return Err(Refusal::UnknownSource);
-            }
+            let picked = || {
+                state
+                    .sources
+                    .iter()
+                    .map(|source| &source.id)
+                    .filter(|source| page_id(source) == *id)
+            };
+            // Of two processes of one app, the one in use, else the first listed.
+            let picked = picked()
+                .find(|source| **source == state.source_id)
+                .or_else(|| picked().next())
+                .ok_or(Refusal::UnknownSource)?;
             // Even the source in use: the picker's re-pick clears a failed switch's notice (S163).
-            Ok(vec![Action::Source { id: id.clone() }])
+            Ok(vec![Action::Source { id: picked.clone() }])
         }
         Command::Speaker { id, change } => {
             let speaker = state
@@ -694,15 +722,15 @@ pub(crate) mod tests {
             listed,
             [
                 ("system", "Alle Systemaudio", RemoteSourceKind::System),
-                ("app:42:Spotify.exe", "Spotify", RemoteSourceKind::App),
+                ("app:Spotify.exe", "Spotify", RemoteSourceKind::App),
                 ("input:{mic}", "USB Mic", RemoteSourceKind::Input),
             ]
         );
         assert!(snapshot.sources.iter().all(|source| source.available));
-        assert_eq!(snapshot.source_id.as_deref(), Some("app:42:Spotify.exe"));
+        assert_eq!(snapshot.source_id.as_deref(), Some("app:Spotify.exe"));
         // What the server serves: the JSON round trip keeps the current source.
         let served = State::from_json(&snapshot.to_json(1)).unwrap();
-        assert_eq!(served.source_id.as_deref(), Some("app:42:Spotify.exe"));
+        assert_eq!(served.source_id.as_deref(), Some("app:Spotify.exe"));
     }
 
     // covers: S344
@@ -756,13 +784,13 @@ pub(crate) mod tests {
             }])
         );
         assert_eq!(
-            actions(&pick("app:42:Spotify.exe"), &state, not_virtual),
+            actions(&pick("app:Spotify.exe"), &state, not_virtual),
             Ok(vec![Action::Source {
                 id: "app:42:Spotify.exe".to_owned()
             }])
         );
         assert_eq!(
-            actions(&pick("app:7:Gone.exe"), &state, not_virtual),
+            actions(&pick("app:Gone.exe"), &state, not_virtual),
             Err(Refusal::UnknownSource)
         );
     }

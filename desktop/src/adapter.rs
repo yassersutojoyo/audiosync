@@ -12116,6 +12116,75 @@ mod tests {
         );
     }
 
+    fn page(adapter: &AudioAdapter<MockBackend>) -> audiosync_remote::State {
+        crate::remote::snapshot(
+            &adapter.snapshot(),
+            |_| true,
+            None,
+            "Studio PC",
+            &crate::remote::tests::Text,
+        )
+    }
+
+    fn phone_pick(adapter: &AudioAdapter<MockBackend>, id: &str) -> Vec<crate::remote::Action> {
+        let pick = audiosync_remote::Command::Source { id: id.to_owned() };
+        crate::remote::actions(&pick, &adapter.snapshot(), |_| true).expect("listed")
+    }
+
+    // covers: S353
+    #[test]
+    fn the_phone_gets_an_app_by_its_executable_the_same_after_it_starts_again() {
+        let mut adapter = adapter();
+        adapter.select_source(&player());
+        let before = page(&adapter);
+        assert_eq!(before.source_id.as_deref(), Some("app:player.exe"));
+        assert!(
+            before
+                .sources
+                .iter()
+                .all(|source| !source.id.contains("2000")),
+            "no process ID: {:?}",
+            before.sources
+        );
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.audio_mut().add_app(2100, "player.exe");
+        adapter.refresh_sources();
+        assert_eq!(page(&adapter).source_id, before.source_id);
+        assert_eq!(
+            phone_pick(&adapter, "app:player.exe"),
+            [crate::remote::Action::Source {
+                id: "app:2100:player.exe".to_owned()
+            }]
+        );
+    }
+
+    // covers: S353
+    #[test]
+    fn two_processes_of_one_app_are_one_page_entry_that_picks_the_one_in_use() {
+        let mut adapter = adapter();
+        adapter.audio_mut().add_app(2100, "player.exe");
+        adapter.refresh_sources();
+        let picker: Vec<String> = adapter
+            .snapshot()
+            .sources
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
+        assert_eq!(picker.len(), 3, "the window lists both: {picker:?}");
+        let ids: Vec<String> = page(&adapter).sources.into_iter().map(|s| s.id).collect();
+        assert_eq!(ids, ["system", "app:player.exe"]);
+        let first = crate::remote::Action::Source {
+            id: picker[1].clone(),
+        };
+        assert_eq!(phone_pick(&adapter, "app:player.exe"), [first]);
+        adapter.select_source(&picker[2]);
+        assert_eq!(page(&adapter).source_id.as_deref(), Some("app:player.exe"));
+        let in_use = crate::remote::Action::Source {
+            id: picker[2].clone(),
+        };
+        assert_eq!(phone_pick(&adapter, "app:player.exe"), [in_use]);
+    }
+
     // covers: S163
     #[test]
     fn another_channel_pair_while_stopped_clears_the_notice_of_why_the_input_stopped() {
