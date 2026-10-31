@@ -3508,6 +3508,10 @@ impl AirPlaySpeakers {
                 }
                 SenderEvent::TargetMissing { id, missing } => {
                     let id = id.to_string();
+                    // One queued before the target was removed would mark it again.
+                    if !self.added.contains_key(&id) {
+                        continue;
+                    }
                     let missing: Vec<String> = missing.iter().map(speaker_id).collect();
                     self.log.log(|| {
                         let names: Vec<String> =
@@ -3549,7 +3553,11 @@ impl AirPlaySpeakers {
         }
         // A file ignored at launch is reported once kept aside: at the
         // first poll, or a few seconds after it could be read again.
-        self.store.keep_aside_if_due();
+        if let Err(error) = self.store.keep_aside_if_due() {
+            self.log.log(|| {
+                format!("AirPlay pairings: couldn't drop the speakers forgotten while the file was unreadable from the pairings file or its copies: {error}")
+            });
+        }
         self.note_kept_aside();
         if let Some(file) = self.store_kept_aside.take() {
             events.push(BackendEvent::PairingsKeptAside { file });
@@ -9996,6 +10004,25 @@ pub mod tests {
                 .expect("a group")
                 .incomplete
         );
+    }
+
+    // covers: P181
+    #[test]
+    fn a_missing_member_sent_after_the_pair_is_switched_off_is_ignored() {
+        let fake = FakeAirPlay::new();
+        let (pair, left, right) = stereo_pair();
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        airplay.set_enabled(PAIR, false).expect("off");
+
+        fake.push(SenderEvent::TargetMissing {
+            id: pair.id.clone(),
+            missing: vec![right.key.clone()],
+        });
+        airplay.poll();
+        let group = airplay.speakers()[0].group.clone().expect("a group");
+        assert!(!group.incomplete && group.missing.is_empty());
     }
 
     // covers: P176

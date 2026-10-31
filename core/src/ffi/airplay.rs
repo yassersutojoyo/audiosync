@@ -1196,6 +1196,10 @@ impl AscAirPlay {
             // which ones play.
             SenderEvent::TargetMissing { id, missing } => {
                 let id = id.to_string();
+                // One queued before the target was removed would mark it again.
+                if !self.added.contains_key(&id) {
+                    return;
+                }
                 let missing = missing.iter().map(receiver_id).collect();
                 self.target_missing.insert(id.clone(), missing);
                 if let Some(target) = self.targets.get(&id) {
@@ -10388,6 +10392,39 @@ mod tests {
         let report = inside(handle).report(queued);
         assert_eq!(report.event, AIRPLAY_CHANGED);
         assert_eq!(text(report.id), pair_id);
+        assert_eq!(report.flags & AIRPLAY_FLAG_INCOMPLETE, 0);
+        assert_eq!(text(report.missing), "");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn a_missing_side_sent_after_a_stereo_pair_is_removed_is_ignored() {
+        let mut handle = create_with(quiet);
+        let (left, right) = (pair_member(0x1C, "0x2004"), pair_member(0x1D, "0x4"));
+        let found = audiosync_airplay::targets::find_targets([&left, &right]);
+        let pair = found.first().cloned().expect("a pair");
+        let pair_id = pair.id.to_string();
+        inside(handle).airplay2 = true;
+        inside(handle).take_in(SenderEvent::Receiver(ReceiverEvent::Target(
+            TargetChange::Updated(Box::new(pair.clone())),
+        )));
+        let c_id = c_string(&pair_id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe {
+            assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 40.0));
+            assert!(asc_airplay_remove_speaker(handle, c_id.as_ptr()));
+        }
+        while let Some(queued) = inside(handle).receivers.pop_front() {
+            inside(handle).report(queued);
+        }
+
+        inside(handle).take_in(SenderEvent::TargetMissing {
+            id: pair.id.clone(),
+            missing: vec![right.key.clone()],
+        });
+        let report =
+            inside(handle).report(ReceiverEvent::Target(TargetChange::Updated(Box::new(pair))));
         assert_eq!(report.flags & AIRPLAY_FLAG_INCOMPLETE, 0);
         assert_eq!(text(report.missing), "");
         // SAFETY: destroyed once, by this thread.
