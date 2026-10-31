@@ -25,7 +25,7 @@
 //! its AirPlay 1 service only, `both` the two on one address and port.
 //! Without `--auto` the AirPlay 2 path is always on, so `ap2` takes it.
 //! With `--auto` the sender is built as the apps build it (S312): the flag
-//! from `AUDIOSYNC_AIRPLAY2_AUTO` (off by default), the switch from
+//! from `AUDIOSYNC_AIRPLAY2_AUTO` (on unless it is `0`), the switch from
 //! `AUDIOSYNC_AIRPLAY2` with no saved setting, and each summary line ends
 //! with the protocol the sender planned for that receiver and why; `path=`
 //! is the one it ended on.

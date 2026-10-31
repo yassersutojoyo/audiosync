@@ -172,6 +172,10 @@ fn the_keys_the_sender_reads_and_an_id_that_must_be_a_uuid() {
     let device = CastDevice::from_record(&full).expect("device");
     assert_eq!(device.id, DeviceId::parse(ID).expect("id"));
     assert_eq!(device.id.to_string(), ID);
+    assert_eq!(
+        format!("{:?}", ListEvent::Added(DeviceKey::Id(device.id))),
+        format!("Added(Id({ID}))")
+    );
     assert_eq!(device.name.as_deref(), Some("Office"));
     assert_eq!(device.model.as_deref(), Some("Chromecast"));
     assert_eq!(device.version.as_deref(), Some("05"));
