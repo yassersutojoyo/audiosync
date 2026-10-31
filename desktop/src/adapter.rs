@@ -6989,6 +6989,32 @@ mod tests {
         );
     }
 
+    // covers: S72
+    #[test]
+    fn a_master_change_sets_the_gain_of_every_playing_output_and_of_no_other() {
+        const DESK: &str = "desk";
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.connect_output(HEADPHONES, "Headphones");
+        audio.connect_output(DESK, "Desk");
+        audio.add_app(PLAYER_PID, "player.exe");
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.set_speaker_volume(&key(SPEAKERS), 30.0);
+        adapter.set_speaker_volume(&key(HEADPHONES), 80.0);
+
+        for master in [50.0, 20.0] {
+            adapter.set_master_volume(master);
+            assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS], "none attached");
+            let speakers = adapter.audio.playing_params(SPEAKERS).unwrap();
+            assert_eq!(speakers.gain, output_gain(30.0, master) as f32);
+            let headphones = adapter.audio.playing_params(HEADPHONES).unwrap();
+            assert_eq!(headphones.gain, output_gain(80.0, master) as f32);
+            assert!(adapter.audio.playing_params(DESK).is_none());
+        }
+    }
+
     // covers: S144
     #[test]
     fn all_speakers_off_then_one_on_starts_a_new_session_with_the_saved_settings() {

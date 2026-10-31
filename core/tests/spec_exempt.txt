@@ -11,7 +11,7 @@ S60 Mac host only: Core Audio output device enumeration and device object IDs; t
 S61 The renderer object wraps a Core Audio output unit; its pure parts are S56, S62, S64 and S65, and the --hardware engine suite checks the rest.
 S66 A renderer's delay call measured on real hardware by the --hardware engine suite; its pure parts are S3 and S46.
 S67 Frames a real output device renders per second; the --hardware engine suite checks it.
-S72 Retired in part with the bundled engine: what stands, re-applying every active local output's gain on a master change, is the host's; the gain itself is S71's; the Mac logic suite checks the host's part.
+S72 Retired in part with the bundled engine: what stands, re-applying every active local output's gain on a master change, is the host's; the gain itself is S71's; the Mac logic suite and the Windows tests check the host's part.
 S101 The host's reconciles, driven by Core Audio's device-list notice, the sender's events and a 30 s safety net (the Mac logic suite's "reconcile: …" tests); the rest, the bundled engine's HTTP client transport (timeouts, serial write queue, path encoding), is retired.
 S106 Retired in part with the bundled engine: the decisions on the engine's reports; what stands, the access kinds, is the Mac host's (AirPlayPairing.Access), which its logic suite checks; the core's policy::pairing went too.
 S111 Mac host only: the app's SIGTERM and SIGINT handlers and the exit path; its logic suite checks the quit steps.

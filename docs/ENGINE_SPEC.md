@@ -2958,6 +2958,7 @@ The decisions the hosts take from the core: sources and capture, session start a
 | a_second_stop_is_safe_and_no_capture_runs_once_a_stop_finished (`desktop/src/audio/controller.rs`) | S115 |
 | a_new_output_starts_off_at_volume_60_and_no_delay (`desktop/src/audio/outputs.rs`) | S71 |
 | the_gain_follows_the_cubic_curve_times_the_master (`desktop/src/audio/outputs.rs`) | S70, S71 |
+| a_master_change_sets_the_gain_of_every_playing_output_and_of_no_other (`desktop/src/adapter.rs`) | S72 |
 | volumes_are_clamped_and_non_finite_ones_ignored (`desktop/src/audio/outputs.rs`) | S76 |
 | nothing_plays_while_stopped (`desktop/src/audio/outputs.rs`) | S117 |
 | turning_the_last_speaker_off_stops_streaming (`desktop/src/adapter.rs`; streaming stops, the AirPlay deselect is not checked) | S118 |
