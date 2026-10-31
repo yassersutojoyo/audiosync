@@ -1147,6 +1147,8 @@ pub struct CalibrationState {
     /// A run holds the outputs (it runs, or a cut-off sweep plays out),
     /// this one or Calibrate All: no other may start.
     pub busy: bool,
+    /// The run holding the outputs is `speaker_id`'s own, not Calibrate All.
+    pub own_run_holds: bool,
 }
 
 impl AppState {

@@ -483,6 +483,8 @@ pub struct AllRun {
     session: u64,
     /// The hold-backs of the local outputs taking part, at the start.
     hold_backs_ms: BTreeMap<String, f64>,
+    /// The input of the first recording, or the sheet's for a Measure
+    /// Again: every later recording needs it (S232).
     first_microphone: Option<MicrophoneId>,
     /// Every speaker on the last sweep's path has played it by then, so
     /// none of them may be heard again before.
@@ -568,7 +570,7 @@ impl AllRun {
             .filter(|(m, off)| *off || measured.iter().any(|n| n.same(m)))
             .collect();
         let rate = match probe(rig) {
-            Ok(rate) => rate,
+            Ok(microphone) => microphone.rate,
             Err(failure) => return refuse(failure),
         };
         let speakers = rows.iter().map(|(m, _)| speaker(m)).collect();
@@ -598,6 +600,7 @@ impl AllRun {
             silenced,
             None,
             rate,
+            None,
             reference,
             session,
             tap,
@@ -608,12 +611,14 @@ impl AllRun {
     }
 
     /// Measures the sheet's row `row` again against a new reference sweep
-    /// (S239). `members` and `rate` are the sheet's own.
+    /// (S239). `members`, `rate` and `microphone` are the sheet's own.
+    #[allow(clippy::too_many_arguments)]
     pub fn again(
         rig: &mut dyn AllRig,
         sheet: &Sheet,
         members: &[Member],
         rate: u32,
+        microphone: Option<&MicrophoneId>,
         row: usize,
         now_ns: u64,
         log: DebugLog,
@@ -683,7 +688,7 @@ impl AllRun {
             return refuse(Failure::Unfinished);
         };
         match probe(rig) {
-            Ok(heard) if heard == rate => {}
+            Ok(heard) if heard.rate == rate && microphone.is_none_or(|first| *first == heard) => {}
             Ok(_) => return refuse(Failure::MicrophoneChanged),
             Err(failure) => return refuse(failure),
         }
@@ -705,6 +710,7 @@ impl AllRun {
             silenced,
             Some(row),
             rate,
+            microphone.cloned(),
             reference.id.clone(),
             session,
             tap,
@@ -722,6 +728,7 @@ impl AllRun {
         silenced: Vec<Member>,
         again: Option<usize>,
         rate: u32,
+        first_microphone: Option<MicrophoneId>,
         reference: String,
         session: u64,
         tap: Arc<CalibrationTap>,
@@ -761,7 +768,7 @@ impl AllRun {
             tap,
             session,
             hold_backs_ms,
-            first_microphone: None,
+            first_microphone,
             clear_ns: 0,
             progress: Progress::Preparing,
             pending_end: None,
@@ -778,6 +785,11 @@ impl AllRun {
     /// The microphone's rate the run records at.
     pub fn rate(&self) -> u32 {
         self.rate
+    }
+
+    /// The input of the run's first recording; `None` before it.
+    pub fn microphone(&self) -> Option<&MicrophoneId> {
+        self.first_microphone.as_ref()
     }
 
     /// The row a Measure Again measures; `None` for a whole run.
@@ -1220,14 +1232,14 @@ fn speaker(member: &Member) -> Speaker {
 /// The microphone's rate, from a recording opened and closed at once:
 /// Windows' privacy settings show only when a stream opens, so a denial
 /// comes before the music fades.
-fn probe(rig: &mut dyn AllRig) -> Result<u32, Failure> {
+fn probe(rig: &mut dyn AllRig) -> Result<MicrophoneId, Failure> {
     let mut probe = rig.open_microphone(0.1).map_err(Failure::from)?;
-    let rate = probe.id().rate;
+    let microphone = probe.id();
     drop(probe.take(0, 0));
-    if !(MIN_RATE..=MAX_RATE).contains(&rate) {
+    if !(MIN_RATE..=MAX_RATE).contains(&microphone.rate) {
         return Err(Failure::UnsupportedRate);
     }
-    Ok(rate)
+    Ok(microphone)
 }
 
 fn plan_failure(error: PlanError) -> Failure {
@@ -1864,7 +1876,8 @@ pub(crate) mod tests {
             &mut rig,
             &sheet,
             &members,
-            MIC_RATE,
+            run.rate(),
+            run.microphone(),
             1,
             now,
             DebugLog::default(),
@@ -2012,6 +2025,28 @@ pub(crate) mod tests {
         });
         assert_eq!(finished.failure, Some(Failure::MicrophoneChanged));
         assert_eq!(finished.sheet.unwrap().ended(), Some(EndReason::Cancelled));
+        given_back(&rig);
+    }
+
+    // covers: S232
+    #[test]
+    fn a_run_records_with_the_input_of_its_first_recording() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let headset = MicrophoneId {
+            device: "headset".to_owned(),
+            rate: MIC_RATE,
+        };
+        let finished = run_to_end(&mut rig, &mut run, |rig, run| {
+            if run.progress() == Progress::Preparing {
+                rig.mic = Ok(headset.clone());
+            }
+        });
+        assert_eq!(
+            finished.failure, None,
+            "switched before the first recording"
+        );
+        assert_eq!(finished.sheet.unwrap().ended(), None);
         given_back(&rig);
     }
 
@@ -2175,7 +2210,8 @@ pub(crate) mod tests {
             &mut rig,
             &sheet,
             &members,
-            MIC_RATE,
+            run.rate(),
+            run.microphone(),
             1,
             now,
             DebugLog::default(),
@@ -2205,7 +2241,8 @@ pub(crate) mod tests {
             &mut rig,
             &sheet,
             &members,
-            MIC_RATE,
+            run.rate(),
+            run.microphone(),
             3,
             now,
             DebugLog::default(),
@@ -2229,12 +2266,41 @@ pub(crate) mod tests {
             &mut rig,
             &sheet,
             &members,
-            MIC_RATE,
+            run.rate(),
+            run.microphone(),
             1,
             now,
             DebugLog::default(),
         );
         assert_eq!(again.err(), Some(Failure::DelayChanged));
+        given_back(&rig);
+    }
+
+    // covers: S239
+    #[test]
+    fn measure_again_with_another_microphone_at_the_same_rate_is_refused() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let members = run.members().to_vec();
+        let sheet = run_to_end(&mut rig, &mut run, |_, _| {})
+            .sheet
+            .expect("a sheet");
+        rig.mic = Ok(MicrophoneId {
+            device: "headset".to_owned(),
+            rate: MIC_RATE,
+        });
+        let now = rig.now.get();
+        let again = AllRun::again(
+            &mut rig,
+            &sheet,
+            &members,
+            run.rate(),
+            run.microphone(),
+            1,
+            now,
+            DebugLog::default(),
+        );
+        assert_eq!(again.err(), Some(Failure::MicrophoneChanged));
         given_back(&rig);
     }
 
@@ -2251,7 +2317,17 @@ pub(crate) mod tests {
         rig.lineup.members.clear();
         let refusal = |rig: &mut FakeRig| {
             let now = rig.now.get();
-            AllRun::again(rig, &sheet, &members, MIC_RATE, 1, now, DebugLog::default()).err()
+            AllRun::again(
+                rig,
+                &sheet,
+                &members,
+                run.rate(),
+                run.microphone(),
+                1,
+                now,
+                DebugLog::default(),
+            )
+            .err()
         };
         assert_eq!(
             refusal(&mut rig),

@@ -91,7 +91,7 @@ use audiosync_core::calibrate_all::{
 };
 
 use crate::audio::calibrate_all::{self, AllRun, Finished, Member, Progress, ZoneScope};
-use crate::audio::calibration::{self, CalibrationRun, Failure};
+use crate::audio::calibration::{self, CalibrationRun, Failure, MicrophoneId};
 use crate::audio::capture::{WHOLE_SYSTEM_NAME, describe_pair};
 use crate::audio::outputs::{MicKind, unnumbered};
 use crate::audio::routing::{DirectPath, DirectReason};
@@ -129,6 +129,8 @@ struct KeptSheet {
     members: Vec<Member>,
     /// The microphone's rate the run recorded at.
     rate: u32,
+    /// The input it recorded with; `None` when it recorded nothing.
+    microphone: Option<MicrophoneId>,
     /// The microphone or the capture stopped the run.
     failure: Option<Failure>,
     /// The last Measure Again ended early, so its row stayed.
@@ -1313,14 +1315,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 run.again_row(),
                 run.members().to_vec(),
                 run.rate(),
+                run.microphone().cloned(),
             )
         });
         if !run.holds_outputs() {
             self.calibrate_all.run = None;
             changed = true;
         }
-        if let Some((finished, again, members, rate)) = finished {
-            self.finish_calibrate_all(finished, again, members, rate);
+        if let Some((finished, again, members, rate, microphone)) = finished {
+            self.finish_calibrate_all(finished, again, members, rate, microphone);
             changed = true;
         }
         changed
@@ -1334,6 +1337,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         again: Option<usize>,
         members: Vec<Member>,
         rate: u32,
+        microphone: Option<MicrophoneId>,
     ) {
         let all = &mut self.calibrate_all;
         all.endings += 1;
@@ -1359,6 +1363,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 sheet,
                 members,
                 rate,
+                microphone,
                 failure,
                 again_ended: None,
                 applied: None,
@@ -1452,11 +1457,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
-    /// Results that no longer describe the stored delays go: a measured
-    /// speaker's delay changed before Apply (its new value would undo that
-    /// change) or the reference changed before Apply, or a value Apply wrote
-    /// changed since (Undo would undo it). Returns whether the card changed.
-    fn follow_calibrate_all(&mut self) -> bool {
+    /// Results measured against a reference that changed before Apply go;
+    /// while `applying`, a measured speaker's delay changed since the run
+    /// refuses Apply instead (its new value would undo that change, S238).
+    /// Undo goes once a value Apply wrote changed since (Undo would undo it).
+    /// Returns whether the card changed.
+    fn follow_calibrate_all(&mut self, applying: bool) -> bool {
         if self.calibrate_all.run.is_some() {
             return false;
         }
@@ -1517,10 +1523,21 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if !moved {
             return false;
         }
-        self.log.log(|| {
-            "Calibrate All: a delay or the reference changed before Apply, the results go"
-                .to_owned()
+        let reference_moved = kept.sheet.rows().iter().zip(&kept.members).any(|(row, m)| {
+            row.state == RowState::Reference && reference.as_deref() != Some(m.id.as_str())
         });
+        if !reference_moved {
+            if !applying {
+                return false;
+            }
+            self.log
+                .log(|| "Calibrate All: a delay changed before Apply, Apply refused".to_owned());
+            self.calibrate_all.phase = AllPhase::Stale;
+            self.calibrate_all.endings += 1;
+            return true;
+        }
+        self.log
+            .log(|| "Calibrate All: the reference changed before Apply, the results go".to_owned());
         self.calibrate_all.sheet = None;
         self.calibrate_all.phase = AllPhase::Stale;
         self.calibrate_all.endings += 1;
@@ -4647,6 +4664,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 speaker_id: self.calibration.id.as_deref().map(speaker_key),
                 phase: self.calibration.phase,
                 busy: self.calibration_run.is_some() || self.calibrate_all.run.is_some(),
+                own_run_holds: self.calibration_run.is_some(),
             },
             calibrate_all: self.calibrate_all_state(),
         };
@@ -5421,7 +5439,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         changed |= self.remember_zone_names();
         changed |= self.tick_calibration();
         changed |= self.follow_calibration_context();
-        changed |= self.follow_calibrate_all();
+        changed |= self.follow_calibrate_all(false);
         changed |= self.follow_preset_notice();
         changed |= self.persist();
         changed
@@ -5538,6 +5556,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             &kept.sheet,
             &kept.members,
             kept.rate,
+            kept.microphone.as_ref(),
             row,
             clock::now_ns(),
             self.log.clone(),
@@ -5561,7 +5580,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     }
 
     fn apply_calibrate_all(&mut self) {
-        if self.follow_calibrate_all() {
+        if self.follow_calibrate_all(true) {
             return;
         }
         if self.calibrate_all.run.is_some() {
@@ -5601,6 +5620,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             kept.applied = Some(applied);
             kept.airplay_adjustment = airplay_adjustment;
         }
+        self.calibrate_all.phase = AllPhase::Idle;
         self.calibrate_all.endings += 1;
     }
 
@@ -13010,6 +13030,7 @@ mod tests {
             sheet,
             members,
             rate,
+            microphone: None,
             failure: None,
             again_ended: None,
             applied: None,
@@ -13081,9 +13102,9 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &key("tv")).delay_ms, Some(-20.0));
     }
 
-    // covers: S395
+    // covers: S238, S395
     #[test]
-    fn calibrate_all_results_go_once_a_measured_delay_changes_before_apply() {
+    fn a_measured_delay_changed_before_apply_keeps_the_results_and_apply_writes_nothing() {
         let mut adapter = AudioAdapter::new(
             reference_audio(),
             || "09.41".to_owned(),
@@ -13101,6 +13122,7 @@ mod tests {
             sheet,
             members,
             rate,
+            microphone: None,
             failure: None,
             again_ended: None,
             applied: None,
@@ -13112,9 +13134,21 @@ mod tests {
 
         adapter.set_speaker_delay(&key("bluetooth"), 95.0);
         adapter.poll();
+        let shown = adapter
+            .snapshot()
+            .calibrate_all
+            .sheet
+            .expect("the results stay");
+        assert!(shown.rows[1].can_measure_again);
+
+        adapter.apply_calibrate_all();
         let state = adapter.snapshot().calibrate_all;
-        assert_eq!(state.sheet, None, "Apply would undo the new delay");
-        assert_eq!(state.phase, AllPhase::Stale);
+        assert!(state.sheet.is_some_and(|sheet| !sheet.applied));
+        assert_eq!(
+            state.phase,
+            AllPhase::Stale,
+            "Apply would undo the new delay"
+        );
         assert_eq!(speaker_of(&adapter, &key("bluetooth")).delay_ms, Some(95.0));
     }
 
@@ -13334,6 +13368,7 @@ mod tests {
             sheet,
             members,
             rate,
+            microphone: None,
             failure: None,
             again_ended: None,
             applied: None,
@@ -13427,9 +13462,9 @@ mod tests {
         assert_eq!(adapter.snapshot().airplay_delay_ms, Some(airplay_ms));
     }
 
-    // covers: S395
+    // covers: S238, S395
     #[test]
-    fn an_airplay_delay_changed_while_no_sender_runs_closes_the_results_and_stays() {
+    fn an_airplay_delay_changed_while_no_sender_runs_keeps_the_results_and_apply_writes_nothing() {
         let base = crate::audio::outputs::DEFAULT_SENDER_LATENCY_MS;
         let mut adapter = adapter();
         turn_on(&mut adapter, SPEAKERS);
@@ -13447,10 +13482,16 @@ mod tests {
         assert!(adapter.snapshot().calibrate_all.sheet.is_some());
 
         adapter.set_airplay_delay(base + 120.0);
+        adapter.poll();
+        assert!(adapter.snapshot().calibrate_all.sheet.is_some());
         adapter.apply_calibrate_all();
         let state = adapter.snapshot().calibrate_all;
-        assert_eq!(state.sheet, None, "Apply would undo the new AirPlay delay");
-        assert_eq!(state.phase, AllPhase::Stale);
+        assert!(state.sheet.is_some_and(|sheet| !sheet.applied));
+        assert_eq!(
+            state.phase,
+            AllPhase::Stale,
+            "Apply would undo the new AirPlay delay"
+        );
         assert_eq!(adapter.audio.airplay_adjustment(), 120.0);
     }
 

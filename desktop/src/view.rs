@@ -4992,9 +4992,18 @@ fn calibration_status(
             state.reference_name.is_some(),
             speaker.enabled,
         )
-        .map_or_else(SharedString::default, |failure| {
-            calibration_failure(strings, reference, failure)
-        }),
+        .map_or_else(
+            || {
+                let own = state.calibration.own_run_holds
+                    && state.calibration.speaker_id.as_deref() == Some(speaker.id.as_str());
+                if state.calibration.busy && !own {
+                    strings.get_calibrate_all_busy()
+                } else {
+                    SharedString::default()
+                }
+            },
+            |failure| calibration_failure(strings, reference, failure),
+        ),
         Phase::Running(Step::Preparing) => strings.get_calibration_preparing(),
         Phase::Running(Step::Measuring(Which::Reference)) => {
             strings.invoke_calibration_listening(reference.into())
@@ -6655,6 +6664,40 @@ mod tests {
         assert!(line.contains("412"), "{line}");
     }
 
+    // covers: S232
+    #[test]
+    fn another_calibration_holding_the_outputs_is_named_under_a_rows_button() {
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        backend.set_speaker_enabled("local:desk", true);
+        let app = app_over(backend);
+        let strings = app.strings();
+        let mut state = app.snapshot();
+        state.calibration.speaker_id = Some("local:speakers".into());
+        state.calibration.phase = Phase::Running(Step::Preparing);
+        state.calibration.busy = true;
+        state.calibration.own_run_holds = true;
+        let desk = state.speaker("local:desk").unwrap().clone();
+        assert!(!speaker_item(&state, &desk, false, true, None).calibration_enabled);
+        assert_eq!(
+            calibration_status(&strings, &state, &desk),
+            strings.get_calibrate_all_busy()
+        );
+
+        // Its own cut-off sweep playing out, its line already gone: no other calibration runs.
+        state.calibration.speaker_id = Some("local:desk".into());
+        state.calibration.phase = Phase::Idle;
+        assert!(!speaker_item(&state, &desk, false, true, None).calibration_enabled);
+        assert_eq!(calibration_status(&strings, &state, &desk), "");
+
+        state.calibration.own_run_holds = false;
+        assert_eq!(
+            calibration_status(&strings, &state, &desk),
+            strings.get_calibrate_all_busy(),
+            "Calibrate All holds the outputs"
+        );
+    }
+
     // covers: S362
     #[test]
     fn a_calibration_that_cannot_start_names_only_what_is_off() {
@@ -7058,6 +7101,7 @@ mod tests {
             speaker_id: Some("local:desk".into()),
             phase: Phase::Running(Step::Preparing),
             busy: true,
+            own_run_holds: true,
         };
         assert_eq!(calibration_ended(&mut announced, &calibration), None);
         calibration.phase = Phase::Failed(Failure::MicrophoneSkipped);
