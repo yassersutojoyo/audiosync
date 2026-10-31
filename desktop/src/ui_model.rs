@@ -717,9 +717,10 @@ pub enum NoticeMessage {
     /// could be read again, it was kept aside as `file`, in the app's data
     /// folder, before the first write over it.
     PairingsKeptAside { file: String },
-    /// Windows has no active sound output while an AirPlay speaker is on, so
-    /// apps have nowhere to play and nothing reaches the speaker. Clears
-    /// itself once an output is back or no AirPlay speaker is on.
+    /// Windows has no active sound output while an AirPlay or Cast speaker is
+    /// on, so apps have nowhere to play and nothing reaches the speaker.
+    /// Clears itself once an output is back or no AirPlay or Cast speaker is
+    /// on.
     NoSoundOutput,
     /// The source also plays straight from these outputs, undelayed, so it
     /// is heard twice. `source` names the app, or is `None` for the whole

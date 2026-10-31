@@ -2884,13 +2884,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Posts the notice that Windows has no active sound output while none
-    /// is listed and an AirPlay speaker is on (apps then have nowhere to
-    /// play, so nothing reaches the speaker), once each time that starts,
-    /// and clears it once it ends. Returns whether the notices changed.
+    /// is listed and an AirPlay or Cast speaker is on (apps then have
+    /// nowhere to play, so nothing reaches the speaker), once each time that
+    /// starts, and clears it once it ends. Returns whether the notices
+    /// changed.
     fn check_sound_output(&mut self) -> bool {
         let none = self.outputs_known
             && self.audio.outputs().is_empty()
-            && !self.audio.enabled_airplay().is_empty();
+            && (!self.audio.enabled_airplay().is_empty()
+                || self.audio.cast_speakers().iter().any(|c| c.enabled));
         if none == self.no_output_noticed {
             return false;
         }
@@ -14011,6 +14013,43 @@ mod tests {
         adapter.set_speaker_enabled(&ap(&kitchen), false);
         adapter.poll();
         assert!(messages(&adapter).is_empty());
+    }
+
+    // covers: S393
+    #[test]
+    fn a_cast_speaker_on_while_windows_has_no_output_gets_a_notice() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "Windows has outputs");
+        adapter.audio_mut().disconnect_output(SPEAKERS);
+        adapter.audio_mut().disconnect_output(HEADPHONES);
+        assert!(adapter.poll());
+        assert_eq!(messages(&adapter), [NoticeMessage::NoSoundOutput]);
+        adapter.dismiss_all_notices();
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        adapter.audio_mut().connect_output(SPEAKERS, "Speakers");
+        adapter.poll();
+        adapter.audio_mut().disconnect_output(SPEAKERS);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::NoSoundOutput]);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), false);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        // A Cast speaker that can't play is off, so it stops counting.
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::NoSoundOutput]);
+        fake.report(cast_ended(
+            2,
+            SessionEnd::Failed(CastSessionError::Connect(ConnectError::NoAddress)),
+        ));
+        adapter.poll();
+        assert_eq!(
+            messages(&adapter),
+            [cast_cant_play("Kitchen", UiCastProblem::NotResponding)]
+        );
     }
 
     // covers: S212
