@@ -214,7 +214,8 @@ pub struct SavedSpeaker {
     pub volume: f64,
     /// The delay in milliseconds: for an output its offset relative to the
     /// reference, −2000 to +20 000 (0 to 20 000 in format 1, where it was
-    /// the output's own trim); 0 to 20 000 for an AirPlay speaker's own delay.
+    /// the output's own trim); an AirPlay speaker's is ignored and cleared by
+    /// the next save while the speaker is listed (spec S180).
     #[serde(deserialize_with = "number_or_nan")]
     pub delay_ms: f64,
 }

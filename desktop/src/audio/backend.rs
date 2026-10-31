@@ -1019,7 +1019,9 @@ pub trait AudioBackend {
     fn airplay_play_pause_pressed(&mut self, _app: &str, _playing: bool) {}
 
     /// Sets an AirPlay speaker's own delay d_s in milliseconds, live. A value
-    /// that isn't finite is ignored; others are clamped to 0 to 20 000.
+    /// that isn't finite is ignored; others are clamped to 0 to 20 000. Tests
+    /// only: the app never sets one (spec S180).
+    #[cfg(test)]
     fn set_airplay_delay(&mut self, id: &str, delay_ms: f64);
 
     /// The AirPlay sender's base latency L_s in milliseconds, or `None`

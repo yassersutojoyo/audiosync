@@ -4272,6 +4272,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    #[cfg(test)]
     fn set_airplay_delay(&mut self, id: &str, delay_ms: f64) {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_delay(id, delay_ms);

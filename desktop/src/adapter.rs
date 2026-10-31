@@ -836,7 +836,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         for (id, speaker) in &saved.airplay {
             self.audio.set_airplay_volume(id, speaker.volume);
-            self.audio.set_airplay_delay(id, speaker.delay_ms);
             if speaker.enabled
                 && !self.is_hidden(&airplay_key(id))
                 && !self.auto_connect_skipped
@@ -4902,8 +4901,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.audio.airplay_play_pause_pressed(app, playing);
     }
 
-    /// A local output's delay, an AirPlay speaker's own delay d_s, or a
-    /// Cast speaker's measured offset (never negative).
+    /// A local output's delay or a Cast speaker's measured offset (never
+    /// negative); an AirPlay speaker has no delay of its own (spec S180).
     fn set_speaker_delay(&mut self, id: &str, ms: f64) {
         match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => {
@@ -4920,15 +4919,11 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                     self.calibration = self.calibration.offset_changed(&endpoint_id);
                 }
             }
-            Some(SpeakerKey::AirPlay(airplay_id)) => {
-                self.audio
-                    .set_airplay_delay(&airplay_id, clamp_delay_ms(ms));
-            }
             Some(SpeakerKey::Cast(cast_id)) => {
                 self.audio
                     .set_cast_offset(&cast_id, clamp_delay_ms(ms).max(0.0));
             }
-            None => {}
+            Some(SpeakerKey::AirPlay(_)) | None => {}
         }
     }
 
@@ -13809,6 +13804,44 @@ mod tests {
 
     // covers: S180
     #[test]
+    fn a_stored_airplay_speaker_delay_never_reaches_the_sender() {
+        let dir = test_dir("adapter-settings-airplay-speaker-delay");
+        let path = dir.join(settings::FILE_NAME);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"version": 1, "airplay": {{"{id}": {{"enabled": true, "delay_ms": 300}}}}}}"#
+            ),
+        )
+        .expect("written");
+        let mut audio = launch_audio();
+        let fake = FakeAirPlay::new();
+        audio.set_airplay(fake.link(), None);
+        fake.appear(&kitchen);
+        let mut adapter = launch(audio, &path);
+        adapter.poll();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.poll();
+        let delays: Vec<_> = fake
+            .take_calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::Add {
+                    id: added, delay, ..
+                } if added == id => Some(delay),
+                Call::Delay(speaker, delay) if speaker == id => Some(delay),
+                _ => None,
+            })
+            .collect();
+        assert!(!delays.is_empty(), "Kitchen joins the stream");
+        assert!(delays.iter().all(|delay| delay.is_zero()), "{delays:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S180
+    #[test]
     fn an_older_file_waits_for_an_output_list_before_it_is_migrated() {
         let dir = test_dir("adapter-settings-delay-migration-wait");
         let path = dir.join(settings::FILE_NAME);
@@ -15800,7 +15833,7 @@ mod tests {
         adapter.poll();
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
-        adapter.set_speaker_delay(&ap(&kitchen), 3250.0);
+        adapter.audio.set_airplay_delay(&id_of(&kitchen), 3250.0);
         adapter.set_speaker_delay(&cc(CAST_LIVING), 15_000.0);
         adapter.poll();
         assert!(
@@ -15835,7 +15868,7 @@ mod tests {
         adapter.poll();
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
-        adapter.set_speaker_delay(&ap(&kitchen), 3250.0);
+        adapter.audio.set_airplay_delay(&id_of(&kitchen), 3250.0);
         adapter.set_speaker_delay(&cc(CAST_LIVING), 20_000.0);
         adapter.poll();
         let reconnecting = SessionEvent::Recovering(audiosync_cast::error::EndReason::Silent);
@@ -17019,7 +17052,7 @@ mod tests {
         adapter.rename_speaker(&cc(CAST_LIVING), "Lounge");
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
-        adapter.set_speaker_delay(&ap(&kitchen), 3250.0);
+        adapter.audio.set_airplay_delay(&id_of(&kitchen), 3250.0);
         adapter.set_speaker_delay(&cc(CAST_LIVING), 20_000.0);
         adapter.poll();
         assert_eq!(

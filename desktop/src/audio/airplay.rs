@@ -3107,7 +3107,9 @@ impl AirPlaySpeakers {
         true
     }
 
-    /// Sets a speaker's own delay d_s, live.
+    /// Sets a speaker's own delay d_s, live. Tests only: the app never sets
+    /// one (spec S180).
+    #[cfg(test)]
     pub fn set_delay(&mut self, id: &str, delay_ms: f64) {
         if !delay_ms.is_finite() {
             return;
