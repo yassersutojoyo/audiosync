@@ -13427,6 +13427,10 @@ do {
           "web remote: the .local address comes first, the IP address second")
     check(t.webRemoteCodeLabel("042917") == "Pairing code 0 4 2 9 1 7",
           "web remote: VoiceOver reads the code digit by digit")
+    // covers: S368 (the Mac host)
+    check(RemoteWindowShow.opens(visible: nil) && RemoteWindowShow.opens(visible: false)
+            && !RemoteWindowShow.opens(visible: true),
+          "web remote: only opening a hidden window makes a new code; one already showing keeps its code and lockout")
 
     let hashA = String(repeating: "a1", count: 32), hashB = String(repeating: "0f", count: 32)
     let devicesJSON = { (body: String) in Data(body.utf8) }
