@@ -234,20 +234,26 @@ for src in [AudioSource.system, .app(bundleID: "com.spotify.client"), .input(uid
 check(AudioSource(defaultsValue: nil) == .system, "source: missing value → system")
 check(AudioSource(defaultsValue: "com.apple.Music").bundleID == "com.apple.Music", "source: legacy bundle-ID value → app")
 
+// covers: S12
 check(AudioSource.input(uid: "x").bundleID == nil, "source: input has no bundle ID")
+// covers: S12
 check(AudioSource(defaultsValue: "") == .system && AudioSource.system.defaultsValue == "",
       "source: the whole system is stored as an empty string")
+// covers: S12
 check(AudioSource(defaultsValue: "input:BuiltInMicrophoneDevice") == .input(uid: "BuiltInMicrophoneDevice")
         && AudioSource.input(uid: "BuiltInMicrophoneDevice").defaultsValue == "input:BuiltInMicrophoneDevice",
       "source: an input device is stored as its UID after an input: tag")
 do {
     let usbUID = "AppleUSBAudioEngine:Vendor:Mic:1234:1"
+    // covers: S12
     check(AudioSource(defaultsValue: AudioSource.input(uid: usbUID).defaultsValue) == .input(uid: usbUID),
           "source: an input UID with colons in it comes back whole")
 }
+// covers: S12
 check(AudioSource.app(bundleID: "com.spotify.client").defaultsValue == "com.spotify.client"
         && AudioSource(defaultsValue: "com.spotify.client") == .app(bundleID: "com.spotify.client"),
       "source: an app is stored as its plain bundle ID, as earlier versions stored it")
+// covers: S12
 check(AudioSource.system.bundleID == nil, "source: the whole system has no bundle ID")
 
 // MARK: Several apps as one source
@@ -434,18 +440,26 @@ check(decoded == g, "groups: JSON round-trip")
 // MARK: Group names — a blank name never becomes a group's name
 do {
     let numbered = { (n: Int) in "Group \(n)" }
+    // covers: S150
     check(GroupName.cleaned("  Living room \n") == "Living room", "group name: trimmed")
+    // covers: S150
     check(GroupName.cleaned("   ") == nil && GroupName.cleaned("") == nil && GroupName.cleaned("\t\n") == nil,
           "group name: blank or whitespace-only is no name")
+    // covers: S150
     check(GroupName.forNewGroup(typed: " Office ", existing: [], numbered: numbered) == "Office",
           "group name: a typed name is kept")
+    // covers: S150
     check(GroupName.forNewGroup(typed: "", existing: [], numbered: numbered) == "Group 1",
           "group name: blank first group is Group 1")
+    // covers: S150
     check(GroupName.forNewGroup(typed: "  ", existing: ["Office"], numbered: numbered) == "Group 2",
           "group name: blank second group is Group 2")
+    // covers: S150
     check(GroupName.forNewGroup(typed: "", existing: ["Office", "Group 3"], numbered: numbered) == "Group 4",
           "group name: the default skips names in use")
+    // covers: S150
     check(GroupName.afterRename(typed: "  Kitchen ", current: "Office") == "Kitchen", "group rename: trimmed")
+    // covers: S150
     check(GroupName.afterRename(typed: "   ", current: "Office") == "Office", "group rename: blank keeps the name")
 }
 
@@ -1109,41 +1123,53 @@ do {
 }
 
 // MARK: Equalizer presets (the core runs the filters; core/tests/eq.rs)
+// covers: S33
 check(Equalizer.presets.allSatisfy { $0.gains.count == Equalizer.frequencies.count }, "eq: every preset has 10 bands")
+// covers: S33
 check(Equalizer.presets.map(\.id) == Equalizer.PresetID.allCases, "eq: one preset per id, in menu order")
+// covers: S33
 check(Equalizer.presets.count == asc_eq_preset_count(), "eq: the app names every preset the core has")
 do {
     var reset = Equalizer.Settings(enabled: true, preamp: -4, gains: Equalizer.presets[1].gains)
     reset.reset()
+    // covers: S33
     check(reset.enabled && reset.preamp == 0 && Equalizer.matching(reset.gains, saved: []) == .preset(.flat),
           "eq: Reset reads Flat, zeroes the preamp and keeps the switch")
 
     var gains = Equalizer.Settings().gains
     gains[3] = 2.5
     var curves: [Equalizer.Curve] = []
+    // covers: S270
     check(Equalizer.save("  Desk  ", gains: gains, in: &curves) == 0 && curves[0].name == "Desk",
           "eq curves: a saved curve keeps its trimmed name")
+    // covers: S270
     check(Equalizer.matching(gains, saved: curves) == .saved(0), "eq curves: the gains match the saved curve")
     let model = EqualizerModel(settings: Equalizer.Settings(enabled: false, preamp: -3, gains: gains), curves: curves)
     model.pick(.preset(Equalizer.presets[1].id))
     model.pick(.saved(0))
+    // covers: S33, S270
     check(model.shownCurve == .saved(0) && model.settings.preamp == -3 && model.settings.enabled,
           "eq curves: picking a curve keeps the preamp and turns the equalizer on")
+    // covers: S270
     check(Equalizer.save("Flat-ish", gains: Equalizer.presets[0].gains, in: &curves) == 1
             && Equalizer.matching(Equalizer.presets[0].gains, saved: curves) == .saved(1),
           "eq curves: a saved curve with a preset's gains resolves to the saved curve")
     let flatish = EqualizerModel(settings: Equalizer.Settings(enabled: true, preamp: 0, gains: Equalizer.presets[0].gains),
                                  curves: curves)
+    // covers: S270
     check(flatish.shownSavedIndex == 1,
           "eq curves: a saved curve with a preset's gains keeps Rename and Delete")
     flatish.pick(.preset(.flat))
+    // covers: S270
     check(flatish.shownCurve == .preset(.flat) && flatish.shownSavedIndex == nil,
           "eq curves: a picked preset shows as the preset beside a saved curve with its gains")
     flatish.pick(.saved(1))
+    // covers: S270
     check(flatish.shownSavedIndex == 1, "eq curves: picking that saved curve shows it again")
     var moved = flatish.settings
     moved.gains[0] = 3
     flatish.set(moved)
+    // covers: S270
     check(flatish.shownSavedIndex == nil && flatish.shownCurve == nil,
           "eq curves: moving a band off the picked saved curve shows Custom")
     // covers: S270 (a choice is forgotten once the gains leave it, as on Windows)
@@ -1335,12 +1361,19 @@ do {
 }
 
 // MARK: Speaker rows — a speaker never looks like it plays while streaming is off
+// covers: S122
 check(SpeakerState(enabled: true, streaming: true) == .playing, "speaker: on while streaming plays")
+// covers: S122
 check(SpeakerState(enabled: true, streaming: false) == .willPlay, "speaker: on while off waits")
+// covers: S122
 check(SpeakerState(enabled: false, streaming: true) == .off, "speaker: off while streaming is off")
+// covers: S122
 check(SpeakerState(enabled: false, streaming: false) == .off, "speaker: off while off is off")
+// covers: S122
 check(!SpeakerState.playing.clickTurnsOn, "speaker: click on a playing speaker turns it off")
+// covers: S122
 check(SpeakerState.willPlay.clickTurnsOn, "speaker: click on a waiting speaker turns it on (and starts streaming)")
+// covers: S122
 check(SpeakerState.off.clickTurnsOn, "speaker: click on an off speaker turns it on")
 // covers: S106 (the access kinds that stand)
 check(SpeakerAvailability(.open) == .open, "availability: open")
@@ -1893,10 +1926,15 @@ do {
 }
 
 // MARK: This Mac's own AirPlay Receiver — never listed (S222)
+// covers: S222
 check(NativeReceiver.isThisMac("My Mac", computerName: "My Mac"), "own receiver: the Mac's own receiver is recognized")
+// covers: S222
 check(NativeReceiver.isThisMac("my mac", computerName: "My Mac"), "own receiver: the match ignores case")
+// covers: S222
 check(!NativeReceiver.isThisMac("My Mac mini", computerName: "My Mac"), "own receiver: only an exact name is the Mac")
+// covers: S222
 check(!NativeReceiver.isThisMac("My Mac", computerName: nil), "own receiver: an unknown computer name hides nothing")
+// covers: S222
 check(!NativeReceiver.isThisMac("", computerName: ""), "own receiver: an empty computer name hides nothing")
 
 // MARK: Capture check — "nothing yet" is not an error until the source is known to play
@@ -2727,24 +2765,33 @@ do {
         return (samples, blocks)
     }
 
+    // covers: S2, S16
     check(stereo([(2, [0.1, -0.1, 0.2, -0.2, 0.3, -0.3])]).samples == [0.1, -0.1, 0.2, -0.2, 0.3, -0.3],
           "capture channels: the tap's interleaved stereo passes through unchanged")
+    // covers: S14
     check(stereo([(1, [0.1, 0.2, 0.3])]).samples == [0.1, 0.1, 0.2, 0.2, 0.3, 0.3],
           "capture channels: a one-channel input plays on both sides")
+    // covers: S14
     check(stereo([(4, [1, 2, 3, 4, 5, 6, 7, 8])]).samples == [1, 2, 5, 6],
           "capture channels: an input with four channels gives its first two as L and R")
+    // covers: S14
     check(stereo([(1, [1, 2, 3]), (1, [-1, -2, -3])]).samples == [1, -1, 2, -2, 3, -3],
           "capture channels: one buffer per channel gives L from the first and R from the second")
+    // covers: S14
     check(stereo([(1, [1, 2]), (2, [10, 20, 30, 40])]).samples == [1, 10, 2, 30],
           "capture channels: channels are counted across buffers, in order")
+    // covers: S14
     check(stereo([(0, nil), (2, [1, 2])]).samples == [1, 2],
           "capture channels: a buffer without channels is skipped")
+    // covers: S14
     check(stereo([(1, [1, 2, 3]), (1, [9])]).samples == [1, 9],
           "capture channels: only frames both channels have are delivered")
     let nothing = [stereo([]), stereo([(2, nil)]), stereo([(1, nil), (1, [1, 2])]), stereo([(2, [])])]
+    // covers: S14
     check(nothing.allSatisfy { $0.samples.isEmpty && $0.blocks.isEmpty },
           "capture channels: no buffer, no data or no frames delivers nothing")
     let odd = stereo([(2, [Float.nan, .infinity, -.infinity, 0.5])]).samples
+    // covers: S123
     check(odd.count == 4 && odd[0].isNaN && odd[1] == .infinity && odd[2] == -.infinity && odd[3] == 0.5,
           "capture channels: NaN and infinity pass through untouched (the stages after capture handle them)")
     let long = (0..<10_000).flatMap { [Float($0), -Float($0)] }
@@ -4904,6 +4951,7 @@ do {
     }
 }
 
+// covers: S151
 check(AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeAirPlay), "devices: macOS's own AirPlay output is hidden by default")
 
 // MARK: Native AirPlay targets — stereo pairs and home theater groups as one row (P176 to P181)
@@ -9217,6 +9265,7 @@ do {
         let held = bench.events == asked
         bench.now += 1 * ms
         r.poll()
+        // covers: S186
         check(Set(asked) == ["fade A", "fade B", "fade AirPlay inputs"] && asked.count == 3 && held
                 && bench.events == asked + ["capture stops", "stop A", "stop B", "stopped"],
               "fade: a stop asks every output and the AirPlay input to fade out before capture stops",
@@ -9246,6 +9295,7 @@ do {
                            stopCapture: { silentBench.note("capture stops") })
         silent.finishAll()
         let waited = silentBench.now - start
+        // covers: S186, S189
         check(heldAtOnce && heldTo29 && stoppedAt30 && waited >= 105 * ms && waited <= 107 * ms,
               "fade: with only AirPlay speakers on, a stop keeps capturing until the AirPlay inputs have faded",
               "held \(heldAtOnce)/\(heldTo29), stopped at 30 ms \(stoppedAt30), silent capture waited \(waited / ms) ms")
@@ -9277,6 +9327,7 @@ do {
         stopSession(waitRetirement, waitBench, [FakeFadingOutput("stuck", waitBench, fadesAfterMs: nil)])
         waitRetirement.finishAll()
         let waited = waitBench.now - start
+        // covers: S186
         check(waitedForSlow && stoppedOnceSlowFaded && heldTo499 && cappedAt500 && waitRetirement.isIdle
                 && waited >= 500 * ms && waited <= 502 * ms,
               "fade: a stop waits for the slowest output, never more than 500 ms",
@@ -12536,9 +12587,11 @@ do {
 do {
     let zones = [SpeakerZone(id: "z1", name: "Kitchen", members: ["lc:usb:out", "ap:AA", "cc:tv1"], volume: 50),
                  SpeakerZone(id: "z2", name: "Den", members: ["ap:BB", "ap:AA"], volume: 25)]
+    // covers: S249
     check(SpeakerZone.volume(of: "lc:usb:out", in: zones) == 50 && SpeakerZone.volume(of: "ap:BB", in: zones) == 25
             && SpeakerZone.volume(of: "lc:other", in: zones) == 100,
           "zones: each speaker takes its zone's volume, 100 in no zone")
+    // covers: S249
     check(SpeakerZone.volumes(zones, kind: .airplay) == ["AA": 50, "BB": 25]
             && SpeakerZone.volumes(zones, kind: .local) == ["usb:out": 50]
             && SpeakerZone.volumes(zones, kind: .cast) == ["tv1": 50],
@@ -12553,6 +12606,7 @@ do {
                     == asc_cast_device_level(master / 100, own / 100).bitPattern
         }
     }
+    // covers: S71, S249
     check(identical && asc_zone_output_gain(50, 50, 100) == 0.125 * 0.125 && asc_zone_output_gain(80, 0, 100) == 0,
           "zones: a local speaker's gain goes through its zone, and no zone is the gain of before")
 
@@ -12562,6 +12616,7 @@ do {
     func session(zone: Double, attempt: UInt64) -> CastModel {
         var m = CastModel()
         m.apply(.appeared(CastDevice(id: tv, name: "Living room TV"), offsetMs: nil))
+        // covers: S249, C104
         check(m.setZones([tv: zone]) == nil, "zones: nothing is sent to a Cast speaker while no session runs")
         _ = m.turnOn(tv)
         m.startSent(tv)
@@ -12570,19 +12625,24 @@ do {
     }
 
     var m = session(zone: 50, attempt: 1)
+    // covers: S249, C104
     check(near(m.setVolume(tv, position: 80), 0.4) && approx(m.volume(of: tv), 80, 1e-9),
           "zones: the Cast level is master × zone × own")
+    // covers: S249, C104
     check(near(m.setZones([tv: 25]), 0.2) && m.setZones([tv: 25]) == nil,
           "zones: a zone volume change gives the Cast speaker in a session its new level, once")
     _ = m.apply(.volume(attempt: 1, reported(0.2)))
+    // covers: S250
     check(m.apply(.volume(attempt: 1, reported(0.1))) == .changed && approx(m.volume(of: tv), 40, 1e-9),
           "zones: a Cast report in a zone moves the own level by master times zone")
     _ = m.setZones([tv: 0])
     _ = m.apply(.volume(attempt: 1, reported(0)))
     _ = m.apply(.volume(attempt: 1, reported(0.3)))
+    // covers: S250
     check(approx(m.volume(of: tv), 40, 1e-9), "zones: with the zone at 0 a Cast report leaves the own level")
 
     var fresh = session(zone: 50, attempt: 2)
+    // covers: S250, C105
     check(fresh.apply(.volume(attempt: 2, reported(0.2))) != .setVolume(0.2) && approx(fresh.volume(of: tv), 40, 1e-9),
           "zones: a Cast session's first status divides by master times zone (C105)")
 }
