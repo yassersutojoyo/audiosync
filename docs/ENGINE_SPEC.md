@@ -1339,6 +1339,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | capture watch: an input device that left is opened again each time it is listed again, never giving up | S329 |
 | capture watch: an input device reported lost while still listed is tried at the next tick; a try that fails while it stays listed gets the tries | S329 |
 | capture watch: a try that finds the input unlisted is followed by one at the next tick that lists it | S329 |
+| capture watch: an input that leaves while waiting for its next try keeps the tries it used | S329 |
 | capture watch: an input listed again under a new UID with its name and transport becomes the source and keeps its channel pair | S329 |
 | capture watch: an input that left follows neither of two new UIDs with its name and transport nor a twin listed while it played | S329 |
 | capture watch: a busy try comes again every 3 s outside the 5 tries; another answer counts as one of them | S333 |

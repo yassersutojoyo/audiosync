@@ -326,8 +326,8 @@ struct CaptureFlowWatch {
         var next = 1
         switch phase {
         case .away: return .none
-        case .trial(let number, _): next = number
-        case .watching, .waiting: break
+        case .trial(let number, _), .waiting(let number, _): next = number
+        case .watching: break
         }
         forgetCount()
         phase = .away(next: next)

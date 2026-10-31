@@ -2413,6 +2413,19 @@ do {
           "capture watch: a try that finds the input unlisted is followed by one at the next tick that lists it",
           "\(first) \(unlisted) \(next)")
 }
+// covers: S329 (the Mac: the wait for the input takes none of the tries, so one that leaves between tries keeps its count)
+do {
+    var watch = CaptureFlowWatch()
+    let input = CaptureFlowWatch.source(.input(uid: "line-in"), reading: nil)
+    _ = watch.deviceLeft(at: 10)
+    let first = watch.tick(callbacks: nil, reading: true, source: input, at: 10.5, inputListed: true)
+    let failed = watch.failed(at: 10.5)
+    let left = watch.deviceLeft(at: 11)
+    let next = watch.tick(callbacks: nil, reading: true, source: input, at: 11.5, inputListed: true)
+    check(first == .tryOpen(1) && failed == .none && left == .stopped(.inputLeft) && next == .tryOpen(2),
+          "capture watch: an input that leaves while waiting for its next try keeps the tries it used",
+          "\(first) \(failed) \(left) \(next)")
+}
 // covers: S329 (the Mac: an input that left is followed to the new UID it is listed under)
 do {
     let mic = { (uid: String) in InputListings.Input(uid: uid, name: "USB Mic", transport: kAudioDeviceTransportTypeUSB) }
