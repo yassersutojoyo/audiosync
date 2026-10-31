@@ -151,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// A level set on an AirPlay speaker while its k was 0, by output ID,
     /// which its row shows until s, its zone or the master moves (S290).
     var airplayHeldLevel: [String: Double] = [:]
+    var airPlayVolumeLog = RemoteVolumeLog()
     var groups: [SpeakerGroup] {
         didSet { if groups != oldValue { store.save(groups: groups) } }
     }

@@ -332,16 +332,13 @@ final class WebRemote {
         case .setVolume(let id, let position):
             if let s = speaker(id) {
                 // A step holds an AirPlay row's read-backs as a slider drag does (S291).
-                model.setVolumeDragging(s, true)
+                model.setVolumeDragging(s, true, byPhone: true)
                 model.setVolume(s, position)
                 let n = volumeLog.step(id)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
                     // No handle check: the hold must end even after the remote stops.
                     guard let self, self.volumeLog.isLast(id, n) else { return }
-                    self.model.setVolumeDragging(s, false)
-                    if s.tag == .airplay {
-                        DebugTrace.log("[AudioSync] volume of \(id) set to \(String(format: "%.2f", position))")
-                    }
+                    self.model.setVolumeDragging(s, false, byPhone: true)
                 }
             }
         case .setLocalOffset(let id, let ms): model.actions.setLocalOffset(id, ms)

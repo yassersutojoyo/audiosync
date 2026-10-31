@@ -4330,6 +4330,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
     fn hold_airplay_volume_for_phone(&mut self, id: &str) {
         if let Some(airplay) = self.airplay.as_mut() {
+            // A window drag owns its hold until the mouse lets go (S291).
+            if airplay.volume_dragging(id) && !self.phone_holds.contains_key(id) {
+                return;
+            }
             airplay.set_volume_dragging(id, true);
             self.phone_holds.insert(id.to_owned(), Instant::now());
         }
@@ -10025,6 +10029,17 @@ mod tests {
         backend.move_airplay_row(&id, 40.0);
         backend.log_rested_volumes(Instant::now() + VOLUME_LOG_PAUSE);
         assert!(held(&backend), "a window drag holds until its release");
+
+        backend.set_airplay_volume_dragging(&id, false);
+        backend.set_airplay_volume_dragging(&id, true);
+        backend.hold_airplay_volume_for_phone(&id);
+        backend.log_rested_volumes(Instant::now() + VOLUME_LOG_PAUSE);
+        assert!(
+            held(&backend),
+            "a phone step during a window drag leaves the hold to the mouse"
+        );
+        backend.set_airplay_volume_dragging(&id, false);
+        assert!(!held(&backend), "the mouse release ends it");
     }
 
     #[test]

@@ -2743,7 +2743,6 @@ impl AirPlaySpeakers {
     }
 
     /// Whether speaker `id`'s slider counts as held.
-    #[cfg(test)]
     pub fn volume_dragging(&self, id: &str) -> bool {
         self.added.get(id).is_some_and(|added| added.read.dragging)
     }

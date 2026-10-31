@@ -1138,6 +1138,20 @@ do {
           "volume drag: an AirPlay row's slider drag reaches the dragging hook with its id at the first move and at release",
           "\(den)")
 }
+// covers: S291 (a phone's pause ends only a hold its own steps set; a window drag holds until the mouse lets go)
+do {
+    func run(_ moves: [(held: Bool, phone: Bool)]) -> [Bool] {
+        var holds = AirPlayVolumeHolds()
+        return moves.map { holds.sends("native:den", $0.held, phone: $0.phone) }
+    }
+    let windowFirst = run([(true, false), (true, true), (false, true), (false, false)])
+    let phoneFirst = run([(true, true), (true, false), (false, true), (false, false)])
+    let phoneAlone = run([(true, true), (true, true), (false, true)])
+    check(windowFirst == [true, false, false, true] && phoneFirst == [true, true, false, true]
+            && phoneAlone == [true, true, true],
+          "volume drag: a phone's pause after its last step ends no window drag on the same AirPlay row, in either order",
+          "\(windowFirst) \(phoneFirst) \(phoneAlone)")
+}
 
 // MARK: Equalizer presets (the core runs the filters; core/tests/eq.rs)
 // covers: S33

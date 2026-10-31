@@ -397,6 +397,7 @@ final class AppModel: ObservableObject {
     @Published var panelRoom: CGFloat = 800
     var text = UIStrings()
     var actions = Actions()
+    private var airPlayHolds = AirPlayVolumeHolds()
     /// Runs work once the menu bar panel isn't animating (set by its controller).
     var whenPanelQuiet: (String, @escaping () -> Void) -> Void = { $1() }
     /// Folds or unfolds a zone in the menu bar panel; its controller resizes
@@ -468,7 +469,8 @@ final class AppModel: ObservableObject {
         AccessibilityNotification.Announcement(text.zoneDeleted(zone.name)).post()
     }
 
-    func setVolumeDragging(_ speaker: Speaker, _ dragging: Bool) {
+    func setVolumeDragging(_ speaker: Speaker, _ dragging: Bool, byPhone: Bool = false) {
+        guard speaker.tag != .airplay || airPlayHolds.sends(speaker.id, dragging, phone: byPhone) else { return }
         speaker.tag.volumeDragging(speaker.id, dragging, airPlay: actions.setAirPlayVolumeDragging,
                                    localSettled: actions.localVolumeSettled)
     }

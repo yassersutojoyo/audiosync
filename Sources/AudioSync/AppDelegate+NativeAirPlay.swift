@@ -531,6 +531,12 @@ extension AppDelegate {
             if let receiver = NativeAirPlayID.receiver(id), calibrateAllRun?.silences(airPlay: id) != true {
                 nativeAirPlay?.setDeviceLevel(receiver, own: moved.own, level: moved.level)
             }
+            // A drag, in the window or on the phone, gets one line once it rests (S348).
+            let n = airPlayVolumeLog.step(id)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                guard let self, self.airPlayVolumeLog.isLast(id, n) else { return }
+                DebugTrace.log("[AudioSync] volume of \(id) set to \(String(format: "%.2f", volume))")
+            }
         }
         pushModel()
     }
