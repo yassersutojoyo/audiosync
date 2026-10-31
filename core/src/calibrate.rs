@@ -50,6 +50,12 @@ pub const MIN_ARRIVAL_SHARE: f64 = 0.5;
 /// The lags from this far up to [`GUARD_MS`] before an earlier arrival are
 /// its local noise floor (S234).
 pub const LOOKBACK_MS: f64 = 20.0;
+/// How many times a single-output calibration measures (S232).
+pub const SWEEPS: usize = 3;
+/// The most the measurements' differences may spread, largest minus
+/// smallest, for an offset (S232).
+// Mac runs that measured right spread up to 3.2 ms; a stray one was ~10 ms off.
+pub const MAX_SPREAD_MS: f64 = 5.0;
 
 /// Why a measurement changes nothing (S234, S232).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,6 +297,40 @@ pub fn estimate(
         chosen_ms,
         clamped: offset_ms != wanted,
     })
+}
+
+/// Why [`estimate_agreed`] gives no offset (S232).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum NotMeasured {
+    /// The first measurement refused, in order.
+    Refused(Refused),
+    /// Every measurement was accepted, but their differences spread more
+    /// than [`MAX_SPREAD_MS`].
+    Disagree { spread_ms: f64 },
+}
+
+/// [`estimate`] of each (reference, chosen) pair, accepted only when every
+/// pair is and their differences agree within [`MAX_SPREAD_MS`]; then the
+/// pair with the middle difference.
+pub fn estimate_agreed(
+    signal: &[f32],
+    runs: &[(&[f32], &[f32]); SWEEPS],
+    rate: u32,
+    old_offset_ms: f64,
+) -> Result<Calibration, NotMeasured> {
+    let mut found = Vec::with_capacity(SWEEPS);
+    for (reference, chosen) in runs {
+        found.push(
+            estimate(signal, reference, chosen, rate, old_offset_ms)
+                .map_err(NotMeasured::Refused)?,
+        );
+    }
+    found.sort_by(|a, b| a.difference_ms.total_cmp(&b.difference_ms));
+    let spread_ms = found[SWEEPS - 1].difference_ms - found[0].difference_ms;
+    if spread_ms > MAX_SPREAD_MS {
+        return Err(NotMeasured::Disagree { spread_ms });
+    }
+    Ok(found[SWEEPS / 2])
 }
 
 fn clipped(recording: &[f32]) -> bool {

@@ -3,7 +3,7 @@
 
 use audiosync_core::calibrate::{
     self, Arrival, CLIP_RUN, GUARD_MS, MAX_ECHO_SHARE, MAX_RECORDING_FRAMES, MIN_PEAK_OVER_FLOOR,
-    Recording, Refusal, Refused, SIGNAL_PEAK,
+    NotMeasured, Recording, Refusal, Refused, SIGNAL_PEAK,
 };
 
 const RATE: u32 = 48_000;
@@ -478,4 +478,95 @@ fn the_signal_is_a_quiet_faded_sweep_that_sounds_the_same_at_any_rate() {
         assert_eq!(calibrate::signal(rate), None);
         assert_eq!(calibrate::signal_frames(rate), None);
     }
+}
+
+/// One reference and one chosen recording per measurement, each heard at its
+/// time in ms.
+fn pairs(times_ms: [(f64, f64); calibrate::SWEEPS]) -> Vec<(Vec<f32>, Vec<f32>)> {
+    (1u32..)
+        .zip(times_ms)
+        .map(|(seed, (reference, chosen))| {
+            (heard(RATE, reference, seed), heard(RATE, chosen, seed + 10))
+        })
+        .collect()
+}
+
+fn agreed(runs: &[(Vec<f32>, Vec<f32>)], old_ms: f64) -> Result<f64, NotMeasured> {
+    let signal = calibrate::signal(RATE).expect("a supported rate");
+    let runs = std::array::from_fn(|i| (runs[i].0.as_slice(), runs[i].1.as_slice()));
+    calibrate::estimate_agreed(&signal, &runs, RATE, old_ms).map(|found| found.offset_ms)
+}
+
+// covers: S232
+#[test]
+fn three_measurements_that_agree_give_the_middle_difference() {
+    // The reference is heard at another time in each run; only each run's
+    // difference counts: 250, 250.2 and 252.8 ms, whose mean would give -251.
+    let runs = pairs([(100.0, 350.0), (40.0, 290.2), (220.0, 472.8)]);
+    assert_eq!(agreed(&runs, 0.0), Ok(-250.0));
+}
+
+// covers: S232
+#[test]
+fn a_measurement_off_by_more_than_the_spread_gives_no_offset() {
+    // As on the Mac: one run about 10 ms early, once on the chosen output's
+    // side and once on the reference's.
+    for times in [
+        [(100.0, 350.0), (100.0, 350.5), (100.0, 340.0)],
+        [(100.0, 350.0), (110.0, 350.0), (100.0, 350.5)],
+    ] {
+        match agreed(&pairs(times), 0.0) {
+            Err(NotMeasured::Disagree { spread_ms }) => {
+                assert!((spread_ms - 10.5).abs() < 0.5, "{spread_ms}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    // Both times fall on whole frames, so the spread is the limit exactly and
+    // then one frame more.
+    let at_limit = 350.0 + calibrate::MAX_SPREAD_MS;
+    let beyond = at_limit + 1000.0 / f64::from(RATE);
+    assert_eq!(
+        agreed(
+            &pairs([(100.0, 350.0), (100.0, at_limit), (100.0, 351.0)]),
+            0.0
+        ),
+        Ok(-251.0)
+    );
+    assert!(matches!(
+        agreed(
+            &pairs([(100.0, 350.0), (100.0, beyond), (100.0, 351.0)]),
+            0.0
+        ),
+        Err(NotMeasured::Disagree { .. })
+    ));
+}
+
+// covers: S232
+#[test]
+fn every_measurement_must_be_accepted_and_a_noisy_one_that_is_counts() {
+    let mut runs = pairs([(100.0, 350.0), (100.0, 350.0), (100.0, 350.0)]);
+    // Steady noise about 9 dB over the sweep leaves the second one accepted.
+    runs[1].1 = room(
+        RATE,
+        2.5,
+        &[Path {
+            at_ms: 350.0,
+            gain: 0.4,
+        }],
+        0.1,
+        5,
+    );
+    assert_eq!(agreed(&runs, 0.0), Ok(-250.0));
+    // Noise alone where the third sweep should be refuses the run, though the
+    // other two agree.
+    let mut hiss = Noise(9);
+    runs[2].1 = (0..runs[2].1.len()).map(|_| hiss.sample(0.01)).collect();
+    assert_eq!(
+        agreed(&runs, 0.0),
+        Err(NotMeasured::Refused(Refused {
+            reason: Refusal::TooQuiet,
+            recording: Some(Recording::Chosen),
+        }))
+    );
 }
