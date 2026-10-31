@@ -1504,9 +1504,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .zip(&kept.members)
             .any(|(row, m)| match row.state {
                 RowState::Reference => reference.as_deref() != Some(m.id.as_str()),
-                // Against the L_s the run read, so a new L_s alone is no change.
+                // Against the L_s the run read, so a new L_s alone is no
+                // change, and a sender that stopped still compares.
                 _ if m.class == Class::AirPlay => !holds(
-                    self.audio.airplay_sender_latency_ms().map(|_| {
+                    m.offset_ms.map(|_| {
                         native_airplay_latency_ms(m.sender_ms, self.audio.airplay_adjustment())
                     }),
                     m.offset_ms,
@@ -13235,6 +13236,8 @@ mod tests {
         turn_on(&mut adapter, "builtin");
         assert_eq!(adapter.audio.airplay_sender_latency_ms(), None);
         let base = adapter.audio.airplay_adjustment_base_ms();
+        // The A that gives the measured row's L of 2000 ms.
+        adapter.audio.set_airplay_adjustment(2000.0 - base);
         keep(
             &mut adapter,
             crate::audio::calibrate_all::tests::zone_sheet_with_an_off_airplay_row_first(base),
@@ -13307,6 +13310,8 @@ mod tests {
     fn apply_without_a_sender_stores_the_airplay_delay_for_the_next_one() {
         let mut adapter = adapter();
         turn_on(&mut adapter, SPEAKERS);
+        // The A that gives the row's L of 2000 ms against the default L_s.
+        adapter.audio.set_airplay_adjustment(250.0);
         keep(
             &mut adapter,
             crate::audio::calibrate_all::tests::sheet_of(&[
@@ -13351,6 +13356,33 @@ mod tests {
         adapter.poll();
         assert_eq!(adapter.audio.airplay_sender_latency_ms(), Some(1750.0));
         assert_eq!(adapter.snapshot().airplay_delay_ms, Some(airplay_ms));
+    }
+
+    // covers: S395
+    #[test]
+    fn an_airplay_delay_changed_while_no_sender_runs_closes_the_results_and_stays() {
+        let base = crate::audio::outputs::DEFAULT_SENDER_LATENCY_MS;
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::sheet_of(&[
+                (Class::Local, SPEAKERS, Some(0.0), 2010.0),
+                (Class::Local, HEADPHONES, Some(0.0), 2060.0),
+                (Class::AirPlay, "kitchen", Some(base), base + 50.0),
+            ]),
+        );
+        read_with_sender(&mut adapter, base);
+        adapter.poll();
+        assert_eq!(adapter.audio.airplay_sender_latency_ms(), None);
+        assert!(adapter.snapshot().calibrate_all.sheet.is_some());
+
+        adapter.set_airplay_delay(base + 120.0);
+        adapter.apply_calibrate_all();
+        let state = adapter.snapshot().calibrate_all;
+        assert_eq!(state.sheet, None, "Apply would undo the new AirPlay delay");
+        assert_eq!(state.phase, AllPhase::Stale);
+        assert_eq!(adapter.audio.airplay_adjustment(), 120.0);
     }
 
     /// Applies an AirPlay row against a sender's L_s of 2000 ms, then a
