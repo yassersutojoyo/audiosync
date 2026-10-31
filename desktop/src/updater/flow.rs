@@ -506,6 +506,20 @@ pub fn launch_check(automatic: bool, last: Option<u64>, now: u64) -> LaunchCheck
     }
 }
 
+/// Whether the check while running is due: the launch check's rule, with
+/// no check working, and 24 hours since the last automatic check this
+/// process started, so a failed one isn't repeated at every tick.
+pub fn periodic_check(
+    automatic: bool,
+    last: Option<u64>,
+    started: Option<u64>,
+    idle: bool,
+    now: u64,
+) -> bool {
+    idle && matches!(launch_check(automatic, last, now), LaunchCheck::Due(_))
+        && matches!(launch_check(true, started, now), LaunchCheck::Due(_))
+}
+
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -1238,6 +1252,22 @@ pub mod tests {
         let mut offline = fixture("offline", false, Arc::new(RealFiles), DebugLog::default());
         offline.env.feed = "https://unreachable.invalid/appcast.xml".to_owned();
         assert_eq!(check(&offline.env), Checked::Failed);
+    }
+
+    // covers: S305
+    #[test]
+    fn the_check_while_running_comes_every_24_hours_when_on_and_idle() {
+        let now = 1_800_000_000;
+        let day = 24 * 3600;
+        let due = |last: u64, started| periodic_check(true, Some(last), started, true, now);
+        assert!(due(now - day, None));
+        assert!(!due(now - day + 60, None));
+        assert!(!periodic_check(false, Some(now - day), None, true, now));
+        assert!(!periodic_check(true, Some(now - day), None, false, now));
+        assert!(due(now + 60, Some(now + 60)));
+        // A failed check stores no time; the next try waits a day.
+        assert!(!due(now - 2 * day, Some(now - 60)));
+        assert!(due(now - 2 * day, Some(now - day)));
     }
 
     // covers: S309

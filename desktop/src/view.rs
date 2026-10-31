@@ -3364,7 +3364,7 @@ impl App {
     }
 
     /// Takes the updater worker's news; a check that read the appcast
-    /// stores its time.
+    /// stores its time. Then starts the daily check when due (spec S305).
     fn poll_updater(&self) {
         #[cfg(windows)]
         {
@@ -3385,6 +3385,13 @@ impl App {
             }
             if polled.changed {
                 self.refresh();
+            }
+            let (automatic, last) = {
+                let ui = self.ui.borrow();
+                (ui.check_updates_automatically, ui.last_update_check)
+            };
+            if let Some(updater) = self.updater.borrow_mut().as_mut() {
+                updater.periodic_check(automatic, last, unix_now());
             }
         }
     }
