@@ -2684,33 +2684,39 @@ impl AirPlaySpeakers {
     /// The speaker's row moved to `row` (S290): it gets device level `row`
     /// and stores the own volume row ÷ k, unrounded and above 100 when the
     /// zone and the master are below 100. Nothing changes with either at 0.
-    pub fn move_row(&mut self, id: &str, row: f64) {
+    /// Returns whether it changed; the caller logs it once it rests (S348).
+    pub fn move_row(&mut self, id: &str, row: f64) -> bool {
         let (zone, master) = (self.zone(id), self.master);
         let Some(moved) = row_move(row, zone, master) else {
             // Nothing is sent, but the move still keeps the slider's hold.
             if let Some(added) = self.added.get_mut(id) {
                 added.read.moved(Instant::now());
             }
-            return;
+            return false;
         };
         let entry = self.entry(id);
         entry.volume = moved.own_position;
         entry.held_level = None;
         let volume = self.volume_of(id);
-        self.log.log(|| {
-            format!(
-                "AirPlay speaker {} row: {} (own volume {}, {})",
-                self.label(id),
-                moved.device_level,
-                moved.own_position,
-                describe_volume(volume)
-            )
-        });
         if let Some(added) = self.added.get_mut(id) {
             added.read.set(Instant::now());
             added.set_volume(self.link.as_mut(), volume);
         }
         self.remote.forget(id);
+        true
+    }
+
+    /// Logs speaker `id`'s row, own volume and level as they are now.
+    pub fn log_row(&self, id: &str) {
+        self.log.log(|| {
+            format!(
+                "AirPlay speaker {} row: {} (own volume {}, {})",
+                self.label(id),
+                self.device_level_of(id),
+                self.settings(id).volume,
+                describe_volume(self.volume_of(id))
+            )
+        });
     }
 
     /// The device level D speaker `id` has: min(100, s × k), or with k at 0
@@ -2734,6 +2740,12 @@ impl AirPlaySpeakers {
                 added.read.set_at = Instant::now();
             }
         }
+    }
+
+    /// Whether speaker `id`'s slider counts as held.
+    #[cfg(test)]
+    pub fn volume_dragging(&self, id: &str) -> bool {
+        self.added.get(id).is_some_and(|added| added.read.dragging)
     }
 
     /// Sets the master position, which scales every speaker, live.

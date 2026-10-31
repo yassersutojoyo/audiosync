@@ -13403,6 +13403,11 @@ do {
     // covers: S348
     check(logged == 1 && volumeLog.isLast("usb", nextDrag),
           "web remote: a local volume dragged on the phone is logged once, after its last step", "\(logged) for 5 steps")
+    // covers: S348
+    check(!RemoteVolumeLog.logsPlan([.setVolume(id: "hp", position: 30)])
+            && RemoteVolumeLog.logsPlan([.setEnabled(id: "hp", on: false), .setVolume(id: "hp", position: 10)])
+            && RemoteVolumeLog.logsPlan([]),
+          "web remote: a phone's volume step writes no line per command; a switch or a refused command does")
     // covers: S76 (a phone's volume, before it reaches a speaker, a zone or the master)
     check(RemoteSnapshot.volume(-20) == 0 && RemoteSnapshot.volume(150) == 100 && RemoteSnapshot.volume(.nan) == 0
             && RemoteSnapshot.volume(37) == 37,

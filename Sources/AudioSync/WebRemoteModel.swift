@@ -385,9 +385,19 @@ enum RemoteAction: Equatable {
 }
 
 /// The page sends a step every 100 ms while a slider moves and never says when
-/// it stops, so a local volume is logged once no later step for it came.
+/// it stops, so a local or AirPlay volume is logged once no later step for it
+/// came (S348).
 struct RemoteVolumeLog {
     private var steps: [String: Int] = [:]
+
+    /// A plan of volume steps alone gets no line of its own: its speakers'
+    /// lines come after their last step.
+    static func logsPlan(_ actions: [RemoteAction]) -> Bool {
+        actions.isEmpty || actions.contains { action in
+            if case .setVolume = action { return false }
+            return true
+        }
+    }
 
     /// The step's number, for `isLast` once the pause has passed.
     mutating func step(_ id: String) -> Int {

@@ -4897,6 +4897,12 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         }
     }
 
+    fn hold_speaker_volume_for_phone(&mut self, id: &str) {
+        if let Some(SpeakerKey::AirPlay(airplay_id)) = SpeakerKey::parse(id) {
+            self.audio.hold_airplay_volume_for_phone(&airplay_id);
+        }
+    }
+
     fn play_pause_pressed(&mut self, app: &str, playing: bool) {
         self.audio.airplay_play_pause_pressed(app, playing);
     }

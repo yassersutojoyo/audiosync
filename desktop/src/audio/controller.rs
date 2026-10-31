@@ -114,6 +114,18 @@ const ROUTING_INTERVAL: Duration = Duration::from_secs(3);
 /// came or went: each app is its own loopback in the running mix.
 const MIX_FOLLOW_INTERVAL: Duration = Duration::from_secs(2);
 
+/// How long a volume rests before the log writes it: a slider, the phone's
+/// included, sends a step about every 100 ms and the line is one per drag
+/// (S348).
+const VOLUME_LOG_PAUSE: Duration = Duration::from_secs(1);
+
+/// A row whose volume moved and isn't logged yet.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum VolumeMove {
+    Output(String),
+    AirPlay(String),
+}
+
 /// A capture lost because Windows audio restarted, or its device went away
 /// ([`BackendError::DeviceGone`]), starts again at this poll after the one
 /// that noticed: about a second later at the UI's two polls a second, so
@@ -797,6 +809,11 @@ pub struct Controller<D: Driver> {
     names: BTreeMap<String, String>,
     /// How each output's stream was set up the last time it played.
     setups: BTreeMap<String, StreamSetup>,
+    /// Volumes that moved, with their last move, for the log.
+    volume_moves: BTreeMap<VolumeMove, Instant>,
+    /// AirPlay rows a phone's volume steps hold, with the last step; the
+    /// page never sends a release, so the hold ends once they rest.
+    phone_holds: BTreeMap<String, Instant>,
     /// The last error listing the outputs, and listing the sources: an
     /// error that repeats at every poll is logged once.
     listing_error: Option<BackendError>,
@@ -929,6 +946,8 @@ impl<D: Driver> Controller<D> {
             log: DebugLog::default(),
             names: BTreeMap::new(),
             setups: BTreeMap::new(),
+            volume_moves: BTreeMap::new(),
+            phone_holds: BTreeMap::new(),
             listing_error: None,
             sources_error: None,
             inputs_error: None,
@@ -2335,6 +2354,48 @@ impl<D: Driver> Controller<D> {
                     waited.as_millis()
                 )
             });
+        }
+    }
+
+    /// Logs each volume that moved and has rested [`VOLUME_LOG_PAUSE`], and
+    /// lets go of a phone's hold that rested as long.
+    fn log_rested_volumes(&mut self, now: Instant) {
+        let rested = |at: &Instant| now.saturating_duration_since(*at) >= VOLUME_LOG_PAUSE;
+        let released: Vec<String> = self
+            .phone_holds
+            .iter()
+            .filter(|&(_, at)| rested(at))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in released {
+            self.phone_holds.remove(&id);
+            if let Some(airplay) = self.airplay.as_mut() {
+                airplay.set_volume_dragging(&id, false);
+            }
+        }
+        let rested: Vec<VolumeMove> = self
+            .volume_moves
+            .iter()
+            .filter(|&(_, at)| rested(at))
+            .map(|(moved, _)| moved.clone())
+            .collect();
+        for moved in rested {
+            self.volume_moves.remove(&moved);
+            match moved {
+                VolumeMove::Output(id) => self.log.log(|| {
+                    format!(
+                        "output {} volume: {} (gain {:.3})",
+                        label(&self.names, &id),
+                        self.policy.settings(&id).volume,
+                        self.policy.params(&id).gain,
+                    )
+                }),
+                VolumeMove::AirPlay(id) => {
+                    if let Some(airplay) = self.airplay.as_ref() {
+                        airplay.log_row(&id);
+                    }
+                }
+            }
         }
     }
 
@@ -4032,15 +4093,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
         let before = self.policy.settings(id).volume;
         if self.policy.set_volume(id, position) {
             self.apply_gain(id);
-            let after = self.policy.settings(id).volume;
-            if after != before {
-                self.log.log(|| {
-                    format!(
-                        "output {} volume: {after} (gain {:.3})",
-                        label(&self.names, id),
-                        self.policy.params(id).gain,
-                    )
-                });
+            if self.policy.settings(id).volume != before {
+                self.volume_moves
+                    .insert(VolumeMove::Output(id.to_owned()), Instant::now());
             }
         }
     }
@@ -4258,14 +4313,25 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn move_airplay_row(&mut self, id: &str, row: f64) {
-        if let Some(airplay) = self.airplay.as_mut() {
-            airplay.move_row(id, row);
+        if let Some(airplay) = self.airplay.as_mut()
+            && airplay.move_row(id, row)
+        {
+            self.volume_moves
+                .insert(VolumeMove::AirPlay(id.to_owned()), Instant::now());
         }
     }
 
     fn set_airplay_volume_dragging(&mut self, id: &str, dragging: bool) {
+        self.phone_holds.remove(id);
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_volume_dragging(id, dragging);
+        }
+    }
+
+    fn hold_airplay_volume_for_phone(&mut self, id: &str) {
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_volume_dragging(id, true);
+            self.phone_holds.insert(id.to_owned(), Instant::now());
         }
     }
 
@@ -4511,6 +4577,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
         self.log_session_lead();
         self.log_clock_queues();
+        self.log_rested_volumes(Instant::now());
         // Outputs that faded out stop, and then an ended session's capture;
         // a start that waited for them goes ahead.
         self.reap(false);
@@ -9898,6 +9965,68 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S348
+    #[test]
+    fn a_volume_drag_is_logged_once_after_its_last_step() {
+        let (mut backend, log, dir) = logged_backend("controller-volume-drag");
+        for volume in [40.0, 45.0, 50.0] {
+            backend.set_output_volume(HEADPHONES, volume);
+        }
+        let gain = backend.policy().params(HEADPHONES).gain;
+        let now = Instant::now();
+        backend.log_rested_volumes(now);
+        assert!(logged(&log, &dir).is_empty(), "nothing while it moves");
+        backend.log_rested_volumes(now + VOLUME_LOG_PAUSE);
+        backend.log_rested_volumes(now + 2 * VOLUME_LOG_PAUSE);
+        assert_eq!(
+            logged(&log, &dir),
+            [format!(
+                "output \"Headphones\" (headphones) volume: 50 (gain {gain:.3})"
+            )]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S291
+    #[test]
+    fn a_phone_hold_ends_once_its_steps_rest_and_a_window_drag_holds_on() {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        backend.set_airplay(fake.link(), Some(FeedSlot::new(input)));
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        backend.poll();
+        backend.set_airplay_enabled(&id, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fake.state(&kitchen, SpeakerState::Playing);
+        backend.poll();
+        let held = |backend: &MockBackend| backend.airplay.as_ref().unwrap().volume_dragging(&id);
+
+        // The first step 0.5 s ago, the second now.
+        let first = Instant::now()
+            .checked_sub(Duration::from_millis(500))
+            .expect("the clock runs past a second");
+        backend.hold_airplay_volume_for_phone(&id);
+        backend.phone_holds.insert(id.clone(), first);
+        backend.move_airplay_row(&id, 30.0);
+        backend.hold_airplay_volume_for_phone(&id);
+        backend.move_airplay_row(&id, 35.0);
+        let second = Instant::now();
+        backend.log_rested_volumes(first + Duration::from_millis(1200));
+        assert!(held(&backend), "the second step pushes the release out");
+        backend.log_rested_volumes(second + VOLUME_LOG_PAUSE);
+        assert!(!held(&backend), "let go once they rest");
+
+        backend.hold_airplay_volume_for_phone(&id);
+        backend.set_airplay_volume_dragging(&id, true);
+        backend.move_airplay_row(&id, 40.0);
+        backend.log_rested_volumes(Instant::now() + VOLUME_LOG_PAUSE);
+        assert!(held(&backend), "a window drag holds until its release");
+    }
+
     #[test]
     fn setting_changes_are_logged_when_they_change_something() {
         let (mut backend, log, dir) = logged_backend("controller-settings");
@@ -9905,6 +10034,7 @@ mod tests {
         backend.set_output_delay(SPEAKERS, 120.0);
         backend.set_output_volume(HEADPHONES, 50.0);
         let gain = backend.policy().params(HEADPHONES).gain;
+        backend.log_rested_volumes(Instant::now() + VOLUME_LOG_PAUSE);
         backend.set_master_volume(80.0);
         let mut settings = EqSettings {
             enabled: true,

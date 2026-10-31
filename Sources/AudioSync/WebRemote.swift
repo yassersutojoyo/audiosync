@@ -315,7 +315,9 @@ final class WebRemote {
         }
         let actions = RemoteAction.plan(command, rows: now.rows, zones: now.zones, presets: now.presets,
                                         calibrating: now.calibrating, sources: now.sources)
-        DebugTrace.log("[AudioSync] web remote: \(actions.count) change(s) from a phone")
+        if RemoteVolumeLog.logsPlan(actions) {
+            DebugTrace.log("[AudioSync] web remote: \(actions.count) change(s) from a phone")
+        }
         actions.forEach(apply)
         // Sent even when unchanged: the core streams it so the phone drops a value the app refused.
         lastPublished = ""
@@ -329,12 +331,16 @@ final class WebRemote {
             if let s = speaker(id) { model.setEnabled(s, on, origin: .remote) }
         case .setVolume(let id, let position):
             if let s = speaker(id) {
+                // A step holds an AirPlay row's read-backs as a slider drag does (S291).
+                model.setVolumeDragging(s, true)
                 model.setVolume(s, position)
-                if s.tag != .airplay && s.tag != .cast {
-                    let n = volumeLog.step(id)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-                        guard let self, self.handle != nil, self.volumeLog.isLast(id, n) else { return }
-                        self.model.actions.localVolumeSettled(id)
+                let n = volumeLog.step(id)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                    // No handle check: the hold must end even after the remote stops.
+                    guard let self, self.volumeLog.isLast(id, n) else { return }
+                    self.model.setVolumeDragging(s, false)
+                    if s.tag == .airplay {
+                        DebugTrace.log("[AudioSync] volume of \(id) set to \(String(format: "%.2f", position))")
                     }
                 }
             }

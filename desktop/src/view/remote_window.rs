@@ -483,6 +483,7 @@ impl App {
                                 backend.set_speaker_enabled_from_phone(&id, on);
                             }
                             Action::Volume { id, volume } => {
+                                backend.hold_speaker_volume_for_phone(&id);
                                 backend.set_speaker_volume(&id, volume);
                             }
                             Action::Delay { id, ms } => backend.set_speaker_delay(&id, ms),
@@ -1292,6 +1293,29 @@ mod tests {
         assert!(
             app.snapshot().pin_prompt.is_some(),
             "a recall at the PC still turns it on and asks for the code"
+        );
+    }
+
+    // covers: S291
+    #[test]
+    fn a_phone_volume_step_holds_its_row_as_a_slider_drag_does() {
+        let backend = downstairs();
+        let editing = backend.volume_editing.clone();
+        let app = over_loopback(backend);
+        from_phone(
+            &app,
+            audiosync_remote::Command::Speaker {
+                id: "airplay:kitchen".into(),
+                change: audiosync_remote::SpeakerChange {
+                    volume: Some(30.0),
+                    ..Default::default()
+                },
+            },
+        );
+        assert_eq!(*editing.borrow(), [("airplay:kitchen".to_owned(), true)]);
+        assert_eq!(
+            app.snapshot().speaker("airplay:kitchen").unwrap().volume,
+            30.0
         );
     }
 

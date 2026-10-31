@@ -1546,6 +1546,11 @@ pub trait Backend {
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
     /// The speaker's volume slider is held (true) or let go (false).
     fn set_speaker_volume_editing(&mut self, _id: &str, _on: bool) {}
+    /// A phone's volume step: it holds an AirPlay row as a drag does until
+    /// its steps rest, since the page sends no release (S291).
+    fn hold_speaker_volume_for_phone(&mut self, id: &str) {
+        self.set_speaker_volume_editing(id, true);
+    }
     /// The now-playing card's play-pause went to `app`, which the card shows
     /// playing or paused: the AirPlay speakers may pause with it (P213).
     fn play_pause_pressed(&mut self, _app: &str, _playing: bool) {}
@@ -1927,6 +1932,8 @@ pub struct MockBackend {
     pub play_pauses: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Each AirPlay delay applied, as asked.
     pub airplay_delays: std::rc::Rc<std::cell::RefCell<Vec<f64>>>,
+    /// Each volume slider hold (true) or release (false), by speaker key.
+    pub volume_editing: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Window settings the next poll takes in, as a settings file read
     /// after launch brings them.
     pub late_view: std::rc::Rc<std::cell::RefCell<Option<ViewSettings>>>,
@@ -2113,6 +2120,7 @@ impl MockBackend {
             preset_notice: None,
             play_pauses: std::rc::Rc::default(),
             airplay_delays: std::rc::Rc::default(),
+            volume_editing: std::rc::Rc::default(),
             late_view: std::rc::Rc::default(),
             saved_views: std::rc::Rc::default(),
             input_peak_reads: std::rc::Rc::default(),
@@ -2567,6 +2575,10 @@ impl Backend for MockBackend {
         if let Some(speaker) = self.speaker_mut(id) {
             speaker.volume = volume::clamp_position(position);
         }
+    }
+
+    fn set_speaker_volume_editing(&mut self, id: &str, on: bool) {
+        self.volume_editing.borrow_mut().push((id.to_owned(), on));
     }
 
     fn set_speaker_delay(&mut self, id: &str, ms: f64) {

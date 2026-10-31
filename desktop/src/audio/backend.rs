@@ -1013,6 +1013,10 @@ pub trait AudioBackend {
     /// (false): a level it reads back meanwhile is ignored (S271).
     fn set_airplay_volume_dragging(&mut self, _id: &str, _dragging: bool) {}
 
+    /// A phone's volume step holds the speaker's row as a drag does, until
+    /// its steps rest (S291).
+    fn hold_airplay_volume_for_phone(&mut self, _id: &str) {}
+
     /// The now-playing card's play-pause went to `app`, shown playing or
     /// paused: the AirPlay speakers pause with it when the reading agrees
     /// (P213).
