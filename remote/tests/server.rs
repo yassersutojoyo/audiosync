@@ -387,12 +387,17 @@ fn the_right_code_pairs_once_with_a_strict_cookie() {
 #[test]
 fn a_code_expires() {
     let timing = Timing {
-        code_lifetime: Duration::from_millis(300),
+        code_lifetime: Duration::from_secs(1),
         ..Timing::default()
     };
     let remote = start_with(config("expiry", timing));
-    let code = remote.server.pairing_code().unwrap();
-    thread::sleep(Duration::from_millis(400));
+    // A loaded runner can outlast a short lifetime before any fixed point
+    // in the test, so take the code from rotate_code and wait for its expiry.
+    let code = remote.server.rotate_code().unwrap();
+    let cap = Instant::now() + Duration::from_secs(10);
+    while remote.server.pairing_code().is_some() && Instant::now() < cap {
+        thread::sleep(Duration::from_millis(20));
+    }
     assert_eq!(remote.server.pairing_code(), None);
     let reply = post(
         &remote,
