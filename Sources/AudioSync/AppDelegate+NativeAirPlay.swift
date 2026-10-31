@@ -168,7 +168,7 @@ extension AppDelegate {
             guard let receiver = NativeAirPlayID.receiver(id),
                   nativeAirPlay?.volumeEvents.applies(receiver) == true else { return }
             airplayVolume[id] = position
-            airplayHeldLevel[id] = AirPlayDeviceLevel.held(level: level, zone: airPlayZoneVolume(id), master: masterVolume)
+            airplayHeldLevel[id] = AirPlayDeviceLevel.held(level: level, zone: airPlayZoneVolume(id))
             pushModel()
         case .ptpPortsTaken:
             updatePtpPortNotice { $0.reported() }
@@ -521,10 +521,10 @@ extension AppDelegate {
 
     /// A native speaker's row moved to `volume`, the speaker's own level
     /// (S290): it gets that level, and the own volume behind it is stored.
-    /// With the zone or the master at 0 nothing changes.
+    /// With the zone at 0 nothing changes.
     func setNativeAirPlayVolume(_ id: String, _ volume: Double) {
         let zone = airPlayZoneVolume(id)
-        if let moved = AirPlayDeviceLevel.move(row: volume, zone: zone, master: masterVolume) {
+        if let moved = AirPlayDeviceLevel.move(row: volume, zone: zone) {
             airplayVolume[id] = moved.own
             airplayHeldLevel[id] = nil
             // A speaker Calibrate All Speakers keeps silent gets its volume back when the run ends.
@@ -559,7 +559,7 @@ extension AppDelegate {
     @discardableResult
     func sendNativeRowLevel(_ id: String, afterCalibration: Bool = false) -> Double {
         let own = airplayVolume[id] ?? defaultVolume
-        let (level, held) = AirPlayDeviceLevel.restored(own: own, zone: airPlayZoneVolume(id), master: masterVolume,
+        let (level, held) = AirPlayDeviceLevel.restored(own: own, zone: airPlayZoneVolume(id),
                                                         held: airplayHeldLevel[id], afterCalibration: afterCalibration)
         airplayHeldLevel[id] = held
         if let receiver = NativeAirPlayID.receiver(id) {
@@ -575,7 +575,7 @@ extension AppDelegate {
 
     /// The whole number AirPlay speaker `id`'s row shows (S290).
     func airPlayRowLevel(_ id: String) -> Double {
-        AirPlayDeviceLevel.row(own: airplayVolume[id] ?? defaultVolume, zone: airPlayZoneVolume(id), master: masterVolume,
+        AirPlayDeviceLevel.row(own: airplayVolume[id] ?? defaultVolume, zone: airPlayZoneVolume(id),
                                held: airplayHeldLevel[id])
     }
 

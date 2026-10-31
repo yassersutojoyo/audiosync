@@ -108,7 +108,8 @@ use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
 use crate::volume::{
     NO_ZONE_POSITION, ReadBack, RowMove, device_level, device_level_for_db, device_volume,
-    is_echo_of, level_on_speaker, level_set_on_speaker, row_move, sanitize_own, set_grid_db,
+    gain_for_position, is_echo_of, level_on_speaker, level_set_on_speaker, row_move, sanitize_own,
+    set_grid_db,
 };
 
 /// What a receiver event reports ([`AscAirPlayReceiver::event`]): discovery
@@ -240,8 +241,8 @@ pub const AIRPLAY_EVENT_PAIRING_FAILED: i32 = 8;
 pub const AIRPLAY_EVENT_PAIRED: i32 = 9;
 /// A person changed the speaker's volume on the speaker itself
 /// ([`asc_airplay_read_volumes`], P122, P180): [`AscAirPlayEvent::volume`]
-/// is the slider position that plays at that level with the master as it
-/// is. The sender already took it as the speaker's position and level, so
+/// is the slider position that plays at that level through its zone. The
+/// sender already took it as the speaker's position and level, so
 /// a reconnect or a target member that starts late plays at it too.
 pub const AIRPLAY_EVENT_VOLUME: i32 = 10;
 /// Something about a speaker's session the host may show; the session goes
@@ -492,7 +493,7 @@ struct Added {
     position: f64,
     /// A volume read was asked since the host last set the volume.
     reading: bool,
-    /// When the host last set the volume, its own or the master.
+    /// When the host last set the volume, its own or the zone's.
     volume_set_at: Option<Instant>,
     /// It turned a volume read down: it isn't asked again.
     unreadable: bool,
@@ -722,8 +723,6 @@ pub struct AscAirPlay {
     /// The receivers in `ending` whose pairing the host forgot since: what
     /// their cancelled pairing still reports pairs nothing.
     forgotten_while_ending: HashSet<String>,
-    /// The master position, 0 to 100.
-    master: f64,
     /// The zone position, 0 to 100, of each speaker ID in a zone
     /// ([`asc_airplay_set_zone_volume`]); one not here is in no zone.
     zones: HashMap<String, f64>,
@@ -813,7 +812,7 @@ fn target_options(
     pcm_list: Option<&str>,
 ) -> SpeakerOptions {
     let zone = zone_in(&airplay.zones, id);
-    let mut options = SpeakerOptions::new(speaker_volume(position, zone, airplay.master));
+    let mut options = SpeakerOptions::new(speaker_volume(position, zone));
     options.delay = delay;
     options.pcm = pcm_debug_allows(id, pcm_list);
     options.trace = debug_trace_on();
@@ -943,12 +942,12 @@ fn zone_in(zones: &HashMap<String, f64>, id: &str) -> f64 {
     zones.get(id).copied().unwrap_or(NO_ZONE_POSITION)
 }
 
-/// The volume an AirPlay speaker plays at for its own volume, its zone's
-/// and the master's (P118 leaves the mapping to the host; S249, S290): the
-/// device level min(100, s × k) on the default line. The Windows app maps
-/// its sliders the same way.
-fn speaker_volume(position: f64, zone: f64, master: f64) -> Volume {
-    device_volume(device_level(position, zone, master))
+/// The volume an AirPlay speaker plays at for its own volume and its zone's
+/// (P118 leaves the mapping to the host; S249, S290), never the master's
+/// (S413): the device level min(100, s × k) on the default line. The
+/// Windows app maps its sliders the same way.
+fn speaker_volume(position: f64, zone: f64) -> Volume {
+    device_volume(device_level(position, zone))
 }
 
 /// How long after the host sets a volume a DACP volume on the row sent is
@@ -1281,7 +1280,6 @@ impl AscAirPlay {
         let Some(owner) = self.reporting_for(id) else {
             return;
         };
-        let master = self.master;
         let zone = zone_in(&self.zones, &owner);
         let grid = self.set_grid(id);
         let Some(added) = self.added.get_mut(&owner) else {
@@ -1294,7 +1292,7 @@ impl AscAirPlay {
         let Some(RowMove {
             own_position: position,
             device_level: level,
-        }) = level_set_on_speaker(db, added.position, added.level, zone, master)
+        }) = level_set_on_speaker(db, added.position, added.level, zone)
         else {
             return;
         };
@@ -1388,7 +1386,7 @@ impl AscAirPlay {
         let zone = zone_in(&self.zones, row);
         // With k at 0 the row shows the level set on the speaker, which
         // s × k can't give (S290).
-        let level = device_level(added.position, zone, self.master);
+        let level = device_level(added.position, zone);
         own.level = if level == 0.0 { added.level } else { level };
         own.dragging = added.dragging;
         if let Command::DeviceVolume(db) = command {
@@ -1413,15 +1411,14 @@ impl AscAirPlay {
     /// it without sending it back (S275 to S277). A DeviceVolume is a change
     /// made on the speaker, any other command a row move (S290).
     fn move_level(&mut self, row: &str, to: f64, on_speaker: bool) {
-        let master = self.master;
         let zone = zone_in(&self.zones, row);
         let Some(added) = self.added.get_mut(row) else {
             return;
         };
         let moved = if on_speaker {
-            level_on_speaker(to, added.position, zone, master)
+            level_on_speaker(to, added.position, zone)
         } else {
-            let Some(moved) = row_move(to, zone, master) else {
+            let Some(moved) = row_move(to, zone) else {
                 return;
             };
             moved
@@ -2504,7 +2501,6 @@ fn create_configured(open_browser: OpenBrowser, airplay2_setting: bool) -> *mut 
                 pairing: HashMap::new(),
                 ending: HashMap::new(),
                 forgotten_while_ending: HashSet::new(),
-                master: 100.0,
                 zones: HashMap::new(),
                 hold_back: Duration::ZERO,
                 now_playing: NowPlaying::default(),
@@ -2702,7 +2698,7 @@ pub unsafe extern "C" fn asc_airplay_next_event(
 }
 
 /// Adds the receiver discovery lists under `id` as a speaker, at slider
-/// position `volume` (0 to 100) times the master, held back by the
+/// position `volume` (0 to 100) through its zone, held back by the
 /// hold-back set last ([`asc_airplay_set_hold_back`]): a session starts at
 /// once, and its state, errors and latency come as events. Its sessions
 /// use the password handed over for it ([`asc_airplay_set_password`]) and
@@ -2762,7 +2758,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                         .sender
                         .add_target(target.clone(), options, member_credentials(airplay));
                 let key = DeviceKey::Instance(ServiceKind::AirPlay, id.to_owned());
-                let initial = speaker_volume(position, zone_in(&airplay.zones, id), airplay.master);
+                let initial = speaker_volume(position, zone_in(&airplay.zones, id));
                 let mut added = Added::new(
                     key,
                     position,
@@ -2786,7 +2782,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             let position = sanitize_own(volume);
             let key = device.key.clone();
             let zone = zone_in(&airplay.zones, id);
-            let initial = speaker_volume(position, zone, airplay.master);
+            let initial = speaker_volume(position, zone);
             let mut options = SpeakerOptions::new(initial);
             options.delay = (airplay.hold_back + offset).min(MAX_DELAY);
             options.password = airplay.passwords.get(id).cloned();
@@ -2894,17 +2890,13 @@ pub unsafe extern "C" fn asc_airplay_set_volume(
     // call uses now.
     unsafe {
         live(airplay, false, |airplay| {
-            let master = airplay.master;
             let zone = zone_in(&airplay.zones, id);
             let Some(added) = airplay.added.get_mut(id) else {
                 return false;
             };
             added.position = sanitize_own(volume);
             added.volume_set();
-            added.set_volume(
-                &airplay.sender,
-                speaker_volume(added.position, zone, master),
-            );
+            added.set_volume(&airplay.sender, speaker_volume(added.position, zone));
             airplay.remote.forget(id);
             true
         })
@@ -3025,8 +3017,8 @@ pub unsafe extern "C" fn asc_airplay_set_silenced(
 }
 
 /// Sets the zone position (0 to 100) of speaker `id`, 100 for no zone
-/// (S249): it plays at its own position times the zone's times the master,
-/// live once added, and from its start when added later. False, changing
+/// (S249): it plays at its own position times the zone's, live once added,
+/// and from its start when added later. False, changing
 /// nothing, when the handle or `id` is null or `zone` isn't finite.
 ///
 /// # Safety
@@ -3059,13 +3051,9 @@ pub unsafe extern "C" fn asc_airplay_set_zone_volume(
             } else {
                 airplay.zones.insert(id.to_owned(), zone);
             }
-            let master = airplay.master;
             if let Some(added) = airplay.added.get_mut(id) {
                 added.volume_set();
-                added.set_volume(
-                    &airplay.sender,
-                    speaker_volume(added.position, zone, master),
-                );
+                added.set_volume(&airplay.sender, speaker_volume(added.position, zone));
             }
             true
         })
@@ -3096,9 +3084,9 @@ pub unsafe extern "C" fn asc_airplay_read_volumes(airplay: *mut AscAirPlay) {
     unsafe { live(airplay, (), AscAirPlay::read_volumes) }
 }
 
-/// Sets the master position (0 to 100), which scales every speaker's
-/// volume, live, and the volume of every speaker added later. A master
-/// that isn't finite is ignored.
+/// Sets the master position (0 to 100): the sender scales the stream every
+/// speaker hears by its gain on the S70 curve, live, and sends no speaker a
+/// volume (S413). A master that isn't finite is ignored.
 ///
 /// # Safety
 ///
@@ -3112,14 +3100,7 @@ pub unsafe extern "C" fn asc_airplay_set_master(airplay: *mut AscAirPlay, master
     // call uses now.
     unsafe {
         live(airplay, (), |airplay| {
-            airplay.master = master.clamp(0.0, 100.0);
-            for (id, added) in airplay.added.iter_mut() {
-                added.volume_set();
-                added.set_volume(
-                    &airplay.sender,
-                    speaker_volume(added.position, zone_in(&airplay.zones, id), airplay.master),
-                );
-            }
+            airplay.sender.set_master_gain(gain_for_position(master));
         })
     }
 }
@@ -5199,7 +5180,7 @@ mod tests {
         let own = 80.0 / 0.63;
         // SAFETY: a live handle, used by this thread only; a C string.
         unsafe {
-            asc_airplay_set_master(handle, 63.0);
+            assert!(asc_airplay_set_zone_volume(handle, c_id.as_ptr(), 63.0));
             assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), own));
         }
         assert_eq!(inside(handle).added[id].position, own);
@@ -5284,22 +5265,16 @@ mod tests {
         let latency = events.last().unwrap();
         assert!((latency.latency_ms - 1750.0).abs() < 0.01, "{latency:?}");
         assert_eq!(latency.receiver_latency_frames, 2205);
-        // Its own position times the master: 100 % of 50 % is half way
-        // down the −30 to 0 dB range (P119).
+        // Its own position alone, whatever the master (P119, S413).
         assert!(
             wait_for(|| receiver
                 .bodies(Method::SetParameter)
-                .contains(&"volume: -15.000000\r\n".to_owned())),
+                .contains(&"volume: 0.000000\r\n".to_owned())),
             "{:?}",
             receiver.bodies(Method::SetParameter)
         );
         // SAFETY: a live handle, used by this thread only; a C string.
         unsafe { assert!(asc_airplay_set_volume(handle, c_id.as_ptr(), 80.0)) };
-        assert!(wait_for(|| receiver
-            .bodies(Method::SetParameter)
-            .contains(&"volume: -18.000000\r\n".to_owned())));
-        // SAFETY: a live handle, used by this thread only.
-        unsafe { asc_airplay_set_master(handle, 100.0) };
         assert!(wait_for(|| receiver
             .bodies(Method::SetParameter)
             .contains(&"volume: -6.000000\r\n".to_owned())));
@@ -6080,43 +6055,35 @@ mod tests {
     #[test]
     fn speaker_volume_spreads_the_product_of_both_sliders_over_30_db() {
         let no_zone = NO_ZONE_POSITION;
-        assert_eq!(speaker_volume(100.0, no_zone, 100.0), Volume::Db(0.0));
-        let lowest = speaker_volume(1.0, no_zone, 100.0).wire_db();
+        assert_eq!(speaker_volume(100.0, no_zone), Volume::Db(0.0));
+        let lowest = speaker_volume(1.0, no_zone).wire_db();
         assert!(
             (lowest + 29.7).abs() < 1e-9,
             "level 1 is -29.7 dB: {lowest}"
         );
-        assert_eq!(speaker_volume(50.0, no_zone, 100.0), Volume::Db(-15.0));
-        assert_eq!(speaker_volume(100.0, no_zone, 50.0), Volume::Db(-15.0));
-        assert_eq!(speaker_volume(0.0, no_zone, 100.0), Volume::Muted);
-        assert_eq!(speaker_volume(100.0, no_zone, 0.0), Volume::Muted);
-        assert_eq!(
-            speaker_volume(150.0, no_zone, 200.0),
-            Volume::Db(0.0),
-            "clamped"
-        );
-        assert_eq!(
-            speaker_volume(-5.0, no_zone, 100.0),
-            Volume::Muted,
-            "clamped"
-        );
+        assert_eq!(speaker_volume(50.0, no_zone), Volume::Db(-15.0));
+        assert_eq!(speaker_volume(100.0, 50.0), Volume::Db(-15.0));
+        assert_eq!(speaker_volume(0.0, no_zone), Volume::Muted);
+        assert_eq!(speaker_volume(100.0, 0.0), Volume::Muted);
+        assert_eq!(speaker_volume(150.0, 200.0), Volume::Db(0.0), "clamped");
+        assert_eq!(speaker_volume(-5.0, no_zone), Volume::Muted, "clamped");
     }
 
     // covers: S249
     #[test]
-    fn the_airplay_level_is_own_times_zone_times_master() {
-        assert_eq!(speaker_volume(80.0, 50.0, 100.0), Volume::Db(-18.0));
-        assert_eq!(speaker_volume(100.0, 50.0, 50.0), Volume::Db(-22.5));
-        assert_eq!(speaker_volume(100.0, 0.0, 100.0), Volume::Muted, "zone 0");
-        for (own, master) in [(80.0, 100.0), (37.0, 61.0), (1.0, 1.0), (100.0, 0.0)] {
-            let before = (own / 100.0_f64).clamp(0.0, 1.0) * (master / 100.0_f64).clamp(0.0, 1.0);
+    fn the_airplay_level_is_own_times_zone() {
+        assert_eq!(speaker_volume(80.0, 50.0), Volume::Db(-18.0));
+        assert_eq!(speaker_volume(100.0, 25.0), Volume::Db(-22.5));
+        assert_eq!(speaker_volume(100.0, 0.0), Volume::Muted, "zone 0");
+        for own in [80.0, 37.0, 1.0, 0.0] {
+            let before = (own / 100.0_f64).clamp(0.0, 1.0);
             let expected = if before > 0.0 {
                 Volume::Db(MIN_DB * (1.0 - before))
             } else {
                 Volume::Muted
             };
             assert_eq!(
-                speaker_volume(own, NO_ZONE_POSITION, master),
+                speaker_volume(own, NO_ZONE_POSITION),
                 expected,
                 "no zone: as before zones"
             );
@@ -6148,7 +6115,6 @@ mod tests {
         assert_eq!(events[0].volume, 80.0);
         assert_eq!(inside(handle).added[id].position, 80.0);
         assert_eq!(inside(handle).zones[id], 50.0, "the zone stays");
-        assert_eq!(inside(handle).master, 100.0, "the master stays");
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -6285,11 +6251,11 @@ mod tests {
         let id = "02005E005376";
         let c_id = c_string(id);
         let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x76]));
-        // SAFETY: a live handle, used by this thread only.
-        unsafe { asc_airplay_set_master(handle, 63.0) };
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_zone_volume(handle, c_id.as_ptr(), 63.0)) };
         add_for_volume(handle, id, key.clone(), 50.0);
-        // The row moved to 20 with the master at 63: own 20 ÷ 0.63, level 20 sent.
-        let moved = crate::volume::row_move(20.0, 100.0, 63.0).expect("k above 0");
+        // The row moved to 20 in a zone at 63: own 20 ÷ 0.63, level 20 sent.
+        let moved = crate::volume::row_move(20.0, 63.0).expect("k above 0");
         // SAFETY: as above; a C string.
         unsafe {
             assert!(asc_airplay_set_device_level(
@@ -6318,12 +6284,12 @@ mod tests {
             .collect();
         let own = (-23.6 + 30.0) / 0.3 / 0.63;
         assert_eq!(levels, vec![(nine(own), 21.0)]);
-        // A master move keeps the own volume and sends own × 0.5.
+        // A master move keeps the own volume and sends nothing (S413).
+        let before = inside(handle).added[id].read_back.echo_of();
         // SAFETY: as above.
         unsafe { asc_airplay_set_master(handle, 50.0) };
         assert_eq!(own_of(handle, id), nine(own));
-        let sent = inside(handle).added[id].read_back.echo_of().expect("sent");
-        assert!((sent - (-30.0 + 0.3 * own * 0.5)).abs() < 1e-9, "{sent}");
+        assert_eq!(inside(handle).added[id].read_back.echo_of(), before);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -6378,10 +6344,11 @@ mod tests {
         let (a, b) = ("02005E005372", "02005E005373");
         let key = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x72]));
         let other = DeviceKey::Id(DeviceId([0x02, 0, 0x5E, 0, 0x53, 0x73]));
+        let c_a = c_string(a);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_zone_volume(handle, c_a.as_ptr(), 50.0)) };
         add_for_volume(handle, a, key.clone(), 50.0);
         add_for_volume(handle, b, other, 50.0);
-        // SAFETY: a live handle, used by this thread only.
-        unsafe { asc_airplay_set_master(handle, 50.0) };
         // Sent −22.5 dB (level 0.25), read back as its echo; one press up
         // is −22.2 dB, level 0.26, so 0.26 ÷ 0.5 = 52.
         read_back(handle, &key, -22.5);
@@ -6397,10 +6364,9 @@ mod tests {
         assert_eq!((volumes[0].id.as_str(), nine(volumes[0].volume)), (a, 52.0));
         assert_eq!(own_of(handle, a), 52.0);
         assert_eq!(inside(handle).added[b].position, 50.0);
-        assert_eq!(inside(handle).master, 50.0);
-        // With the master at 0 every position sounds the same: the row stays.
+        // With the zone at 0 every position sounds the same: the row stays.
         // SAFETY: as above.
-        unsafe { asc_airplay_set_master(handle, 0.0) };
+        unsafe { assert!(asc_airplay_set_zone_volume(handle, c_a.as_ptr(), 0.0)) };
         set_ago(handle, a, Duration::from_secs(4));
         read_back(handle, &key, -144.0);
         assert_eq!(own_of(handle, a), 52.0);
@@ -7656,7 +7622,7 @@ mod tests {
         added.playing = true;
         // As a real add sends it: the first read near it is its echo (S291).
         let zone = zone_in(&inside(handle).zones, id);
-        added.sent(speaker_volume(position, zone, inside(handle).master));
+        added.sent(speaker_volume(position, zone));
         inside(handle).added.insert(id.to_owned(), added);
     }
 
@@ -7818,8 +7784,8 @@ mod tests {
         let kitchen = speaker_key(0x02);
         add_for_volume(handle, "02005E005402", kitchen.clone(), 40.0);
         add_for_volume(handle, "02005E005403", speaker_key(0x03), 60.0);
-        inside(handle).master = 80.0;
-        // Own 40 at master 80 is row 32; up 5 is row 37, own 37 ÷ 0.8.
+        inside(handle).zones.insert("02005E005402".to_owned(), 80.0);
+        // Own 40 in a zone at 80 is row 32; up 5 is row 37, own 37 ÷ 0.8.
         remote(handle, &kitchen, None, RemoteCommand::VolumeUp);
         assert_eq!(
             volume_events(handle),
@@ -7828,7 +7794,6 @@ mod tests {
         assert_eq!(own_of(handle, "02005E005402"), 46.25);
         let inner = inside(handle);
         assert_eq!(inner.added["02005E005403"].position, 60.0);
-        assert_eq!(inner.master, 80.0);
         assert!(!just_sent(handle, "02005E005403"));
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
@@ -8095,7 +8060,6 @@ mod tests {
         assert!(just_sent(handle, id), "sent back as after a drag");
         let inner = inside(handle);
         assert_eq!(inner.added["02005E005408"].position, 50.0);
-        assert_eq!(inner.master, 100.0);
         // The level the row already has changes nothing.
         set_ago(handle, id, Duration::from_secs(3));
         remote(
@@ -8117,8 +8081,9 @@ mod tests {
         let id = "02005E005410";
         let key = speaker_key(0x10);
         add_for_volume(handle, id, key.clone(), 50.0);
-        // SAFETY: a live handle, used by this thread only.
-        unsafe { asc_airplay_set_master(handle, 0.0) };
+        let c_id = c_string(id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_set_zone_volume(handle, c_id.as_ptr(), 0.0)) };
         inside(handle).events.clear();
         remote(
             handle,
@@ -8218,14 +8183,13 @@ mod tests {
     // covers: S276, S290
     #[test]
     fn a_device_volume_reports_the_level_it_was_sent() {
-        let no_zone = NO_ZONE_POSITION;
-        for master in [100.0, 50.0, 25.0] {
+        for zone in [NO_ZONE_POSITION, 50.0, 25.0] {
             for position in (1..=100).map(f64::from) {
-                let db = speaker_volume(position, no_zone, master).wire_db();
+                let db = speaker_volume(position, zone).wire_db();
                 let level = device_level_for_db(db).expect("a finite reading");
                 assert!(
-                    (level - device_level(position, no_zone, master)).abs() < 1e-9,
-                    "{position} at {master}: {level}"
+                    (level - device_level(position, zone)).abs() < 1e-9,
+                    "{position} at {zone}: {level}"
                 );
             }
         }
@@ -8827,12 +8791,11 @@ mod tests {
         }
         report_volume(handle, &key, -15.0);
         assert_eq!(inside(handle).added["02005E005361"].position, 70.0);
-        // The master moves every speaker, so a read asked before it is old
-        // too.
+        // The zone moves its speakers, so a read asked before it is old too.
         // SAFETY: as above.
         unsafe {
             asc_airplay_read_volumes(handle);
-            asc_airplay_set_master(handle, 50.0);
+            assert!(asc_airplay_set_zone_volume(handle, id.as_ptr(), 50.0));
         }
         report_volume(handle, &key, -3.0);
         assert!(inside(handle).events.is_empty());

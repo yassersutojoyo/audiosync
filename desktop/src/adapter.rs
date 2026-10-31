@@ -14118,7 +14118,7 @@ mod tests {
             let nearest = |value: f64| (value * 1e6).round() / 1e6;
             (nearest(speaker.volume), speaker.own_volume.map(nearest))
         };
-        assert_eq!(row(&adapter), (20.0, Some(31.746032)));
+        assert_eq!(row(&adapter), (20.0, Some(20.0)), "the master leaves both");
         let preset = adapter
             .capture_preset("preset:1", "Evening")
             .expect("a speaker is on");
@@ -14129,8 +14129,8 @@ mod tests {
             .expect("stored");
         assert_eq!(
             member.volume.map(|volume| (volume * 1e6).round() / 1e6),
-            Some(31.746032),
-            "the own volume, not the row"
+            Some(20.0),
+            "the own volume"
         );
 
         adapter.set_master_volume(100.0);
@@ -14140,7 +14140,7 @@ mod tests {
         adapter
             .recall_preset("preset:1")
             .expect("the preset exists");
-        assert_eq!(row(&adapter), (20.0, Some(31.746032)));
+        assert_eq!(row(&adapter), (20.0, Some(20.0)));
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
     }
 
@@ -15649,8 +15649,8 @@ mod tests {
         adapter.set_master_volume(66.0);
         assert_eq!(
             speaker_of(&adapter, &id).volume,
-            37.0,
-            "40 x 66/70 = 37.71, rounded down"
+            40.0,
+            "the master leaves the row"
         );
         fake.take_calls();
         from_phone(&mut adapter, 37.0);

@@ -835,6 +835,8 @@ pub struct Stream {
     /// The next timeline packet to cut.
     next_cut: u64,
     frames: PacketFrames,
+    /// The host's gain on every packet cut, before any encoding (P80).
+    master_gain: f64,
     /// PCM payloads, which are also the source of own encodings (P121).
     pcm: PayloadStore,
     alac: PayloadStore,
@@ -873,6 +875,7 @@ impl Stream {
             packet_base: 0,
             next_cut: 0,
             frames: silence,
+            master_gain: 1.0,
             pcm: PayloadStore::new(STORE_PACKETS, PCM_PAYLOAD_BYTES),
             alac: PayloadStore::new(STORE_PACKETS, alac::FRAME_BYTES),
             silence_pcm,
@@ -1306,6 +1309,12 @@ impl Stream {
         }
     }
 
+    /// Sets the linear gain every packet cut from now on is scaled by,
+    /// once and before any encoding, so it reaches every speaker (P80).
+    pub fn set_master_gain(&mut self, gain: f64) {
+        self.master_gain = gain;
+    }
+
     /// Sets Lf, clamped to 11 025 to 88 200 frames (P98). While no speaker
     /// has reached its first-sound time a change flushes every speaker:
     /// each goes on with its next packet, flagged as the first, and states
@@ -1659,6 +1668,7 @@ impl Stream {
         let start = (self.next_cut * PACKET_FRAMES) as i64 + self.origin;
 
         let silent = self.input.cut(start, &mut self.frames);
+        audio::apply_gain(&mut self.frames, self.master_gain);
         let number = self.packet_base + self.next_cut;
         encode(Codec::Pcm, &self.frames, &mut self.pcm, number, silent);
         encode(Codec::Alac, &self.frames, &mut self.alac, number, silent);

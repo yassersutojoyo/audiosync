@@ -125,7 +125,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         didSet {
             guard masterVolume != oldValue else { return }
             store.save(master: masterVolume)
-            airplayHeldLevel = [:]   // the rows show min(100, s × k) again (S290)
         }
     }
     /// Slider positions (0…100) of local speakers, by device UID.

@@ -129,10 +129,7 @@ mod airplay_device_level {
             level_set_on_speaker(-24.0, moved.own_position, moved.device_level, 63.0),
             None
         );
-        assert_eq!(
-            level_set_on_speaker(f64::NAN, 32.0, 20.0, 63.0),
-            None
-        );
+        assert_eq!(level_set_on_speaker(f64::NAN, 32.0, 20.0, 63.0), None);
         // A row showing 20.6 moves to 21.
         let moved = level_set_on_speaker(-23.7, 20.6, 20.6, 100.0).expect("changed");
         assert!(near(moved.own_position, 21.0), "{moved:?}");

@@ -207,15 +207,12 @@ pub extern "C" fn asc_zone_output_gain(
 }
 
 /// [`volume::device_level`]: an AirPlay speaker's device level, 0 to 100,
-/// for its own volume through its zone (100 outside one) and the master:
-/// min(100, own × k), the own volume unrounded and possibly above 100 (S290).
+/// for its own volume through its zone (100 outside one), never the master:
+/// min(100, own × k), the own volume unrounded and possibly above 100 (S290,
+/// S413).
 #[unsafe(no_mangle)]
-pub extern "C" fn asc_airplay_device_level(
-    own_position: f64,
-    zone_position: f64,
-    master_position: f64,
-) -> f64 {
-    volume::device_level(own_position, zone_position, master_position)
+pub extern "C" fn asc_airplay_device_level(own_position: f64, zone_position: f64) -> f64 {
+    volume::device_level(own_position, zone_position)
 }
 
 /// [`volume::row_level`]: the whole number an AirPlay row shows for a
@@ -228,7 +225,7 @@ pub extern "C" fn asc_airplay_row_level(device_level: f64) -> f64 {
 /// [`volume::row_move`]: an AirPlay row moved to `row` writes the own
 /// volume to store, row ÷ k unrounded and possibly above 100, and the device
 /// level to send, the row, through `own_position` and `device_level` (S290).
-/// False, writing nothing, when zone × master is 0, `row` isn't finite or a
+/// False, writing nothing, when the zone is 0, `row` isn't finite or a
 /// pointer is null.
 ///
 /// # Safety
@@ -238,14 +235,13 @@ pub extern "C" fn asc_airplay_row_level(device_level: f64) -> f64 {
 pub unsafe extern "C" fn asc_airplay_row_move(
     row: f64,
     zone_position: f64,
-    master_position: f64,
     own_position: *mut f64,
     device_level: *mut f64,
 ) -> bool {
     if own_position.is_null() || device_level.is_null() {
         return false;
     }
-    let Some(moved) = volume::row_move(row, zone_position, master_position) else {
+    let Some(moved) = volume::row_move(row, zone_position) else {
         return false;
     };
     // SAFETY: both checked non-null above; by the caller's contract writable.
