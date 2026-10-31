@@ -341,7 +341,8 @@ enum NativeSpeakerEvent: Equatable {
             line = "\(label(id)): \(state.rawValue)" + (state == .retrying ? ", " + retry(retryMs) : "")
                 + (state == .unannounced ? ", waiting until it is announced again" : "")
         case .error(let id, let problem, let retryMs, let detail):
-            line = "\(label(id)) error: \(problem.rawValue) (\(detail)); \(retry(retryMs))"
+            line = "\(label(id)) error: \(problem.rawValue) (\(detail)); "
+                + (problem.waits && retryMs == nil ? "waiting for the sender to start it" : retry(retryMs))
         case .latency(let id, let ms, let frames, let reportedUs, let sources):
             line = "\(label(id)) latency: L + d_s = \(String(format: "%.0f", ms)) ms, the receiver reports "
                 + (frames.map { "\($0) frames" } ?? "nothing") + "; "

@@ -615,6 +615,12 @@ pub enum BackendEvent {
         /// Whether it is out of view now.
         unannounced: bool,
     },
+    /// An AirPlay speaker that waited for an AirPlay 2 place or for PTP was
+    /// started by the sender again (S285).
+    AirPlayWaitOver {
+        /// The speaker's ID.
+        id: String,
+    },
     /// An AirPlay speaker can't play from AudioSync, so it was turned off.
     AirPlayFailed {
         /// The speaker's ID.

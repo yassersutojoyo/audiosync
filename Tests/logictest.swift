@@ -4110,6 +4110,11 @@ do {
     check(NativeSpeakerEvent.error(id: "Z9", .notResponding, retryMs: nil, detail: "Unreachable").logLine(name: names)
             == "[AudioSync] native AirPlay: Z9 error: not responding (Unreachable); it needs the user",
           "native airplay: an error's log line")
+    // covers: S222
+    check(NativeSpeakerEvent.error(id: "Z9", .tooManyAirPlay2, retryMs: nil, detail: "Unsupported").logLine(name: names)
+            == "[AudioSync] native AirPlay: Z9 error: too many AirPlay 2 speakers (Unsupported); "
+                + "waiting for the sender to start it",
+          "S222 native airplay: a waiting speaker's error line says it waits, as on Windows")
     // covers: S170, S222, S282
     check(NativeSpeakerEvent.latency(id: "A1", ms: 1750, receiverFrames: 2205).logLine(name: names)
             == "[AudioSync] native AirPlay: Kitchen (A1) latency: L + d_s = 1750 ms, the receiver reports 2205 frames; "

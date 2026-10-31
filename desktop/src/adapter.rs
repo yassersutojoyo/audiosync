@@ -4075,6 +4075,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             BackendEvent::CastFailed { id, problem } => self.cast_cant_play(&id, problem),
             BackendEvent::CastMemoryChanged => self.save_cast_memory(),
+            BackendEvent::AirPlayWaitOver { id } => {
+                self.reconnecting.remove(&id);
+                self.clear_if(airplay_subject(&id), |message| {
+                    matches!(message, NoticeMessage::AirPlayRetrying { .. })
+                });
+            }
             BackendEvent::AirPlayPlaying { id } => {
                 self.note_speakers();
                 self.reconnecting.remove(&id);
@@ -10854,6 +10860,62 @@ mod tests {
         fake.state(&kitchen, AirPlayState::Playing);
         adapter.poll();
         assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
+    }
+
+    // covers: S285
+    #[test]
+    fn a_waiting_speaker_drops_its_wait_once_the_sender_starts_it() {
+        use audiosync_airplay::error::UnsupportedReason;
+
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.fail(
+            &kitchen,
+            ErrorKind::Unsupported(UnsupportedReason::TooManyAirPlay2Sessions),
+        );
+        fake.state(&kitchen, AirPlayState::Failed);
+        adapter.poll();
+        assert_eq!(
+            state_of(&adapter, &ap(&kitchen)),
+            SpeakerState::Waiting(ui_model::Waiting::ForAirPlay2Slot)
+        );
+        assert_eq!(messages(&adapter).len(), 1);
+        fake.state(&kitchen, AirPlayState::Connecting);
+        adapter.poll();
+        assert!(
+            !matches!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Waiting(_)),
+            "{:?}",
+            state_of(&adapter, &ap(&kitchen))
+        );
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    // covers: S285, S222
+    #[test]
+    fn a_speaker_lost_after_its_wait_keeps_its_reconnecting_label() {
+        use audiosync_airplay::error::UnsupportedReason;
+
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.fail(
+            &kitchen,
+            ErrorKind::Unsupported(UnsupportedReason::TooManyAirPlay2Sessions),
+        );
+        fake.state(&kitchen, AirPlayState::Failed);
+        adapter.poll();
+        fake.lose(&kitchen, ErrorKind::Unreachable);
+        fake.state(
+            &kitchen,
+            AirPlayState::Retrying {
+                at: std::time::Instant::now(),
+            },
+        );
+        adapter.poll();
+        assert_eq!(
+            state_of(&adapter, &ap(&kitchen)),
+            SpeakerState::Waiting(ui_model::Waiting::Reconnecting)
+        );
+        assert_eq!(messages(&adapter).len(), 1);
     }
 
     /// [`airplay_adapter`] with Kitchen and a second open speaker, Den, on

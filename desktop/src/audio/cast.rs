@@ -1834,7 +1834,7 @@ impl CastSpeakers {
                 self.set_status(CastStatus::Playing);
             }
             SessionEvent::Recovering(reason) => {
-                self.log.log(|| format!("Cast: reconnecting ({reason:?})"));
+                self.log.log(|| format!("Cast: reconnecting ({reason})"));
                 self.set_status(CastStatus::Reconnecting);
             }
             SessionEvent::ConnectFailed { error, retry_in } => {
@@ -2790,6 +2790,29 @@ pub mod tests {
                 "Cast group Attic members: 2 (Garage, unnamed, deviceId porch-7)",
                 "Cast group: CASTING_GROUPS",
             ],
+        );
+    }
+
+    #[test]
+    fn the_reconnect_reason_reaches_the_debug_log_as_text() {
+        let dir = test_dir("cast-reconnect-log");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let fake = FakeCast::default();
+        fake.announce(ATTIC, "Attic", 32_123);
+        let mut cast = CastSpeakers::new(fake.link(), log.clone());
+        cast.poll();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(ATTIC),
+            event: SessionEvent::Recovering(audiosync_cast::error::EndReason::Silent),
+        });
+        cast.poll();
+        assert!(log.flush(TEST_FLUSH));
+        assert_in_order(
+            &read_messages(&dir.join(FILE_NAME)),
+            &["Cast: reconnecting (the device stopped answering)"],
         );
     }
 

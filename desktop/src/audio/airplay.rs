@@ -1025,6 +1025,8 @@ struct Added {
     read: VolumeRead,
     /// Retried errors since it last played or went unannounced.
     retried: u8,
+    /// It waits for an AirPlay 2 place or for PTP (S285).
+    waiting: bool,
 }
 
 impl Added {
@@ -1040,6 +1042,7 @@ impl Added {
             members: BTreeMap::new(),
             read: VolumeRead::new(Instant::now()),
             retried: 0,
+            waiting: false,
         }
     }
 
@@ -3348,6 +3351,7 @@ impl AirPlaySpeakers {
                 .collect(),
             read: VolumeRead::new(Instant::now()),
             retried: 0,
+            waiting: false,
         }
     }
 
@@ -4084,6 +4088,11 @@ impl AirPlaySpeakers {
         let was_playing = added.state == SpeakerState::Playing;
         let was_unannounced = added.state == SpeakerState::Unannounced;
         added.state = state;
+        // The refusal's failed state keeps it waiting; any other state means
+        // the sender started it again.
+        if state != SpeakerState::Failed && std::mem::take(&mut added.waiting) {
+            events.push(BackendEvent::AirPlayWaitOver { id: id.to_owned() });
+        }
         if matches!(state, SpeakerState::Playing | SpeakerState::Unannounced) {
             added.retried = 0;
         }
@@ -4160,6 +4169,7 @@ impl AirPlaySpeakers {
                 if others_on {
                     return Some(self.target_state(target, events));
                 }
+                added.waiting = problem.waits();
                 if let Some(at) = retry_at
                     && problem.retried()
                 {
@@ -4366,6 +4376,7 @@ impl AirPlaySpeakers {
                             "trying again in {:.1} s",
                             at.saturating_duration_since(Instant::now()).as_secs_f64()
                         ),
+                        None if problem.waits() => "waiting for the sender to start it".to_owned(),
                         None => "it is turned off".to_owned(),
                     };
                     format!(
@@ -4396,6 +4407,7 @@ impl AirPlaySpeakers {
                 let Some(added) = self.added.get_mut(id) else {
                     return false;
                 };
+                added.waiting = problem.waits();
                 if let Some(at) = retry_at
                     && problem.retried()
                 {
@@ -7841,6 +7853,40 @@ pub mod tests {
         assert_eq!(fake.take_calls(), []);
         assert_eq!(airplay.speakers().len(), 1);
         assert_eq!(airplay.enabled_ids(), std::slice::from_ref(&id));
+    }
+
+    // covers: S285, S222
+    #[test]
+    fn the_log_says_a_waiting_speaker_waits_not_that_it_is_turned_off() {
+        let path = crate::debug_log::test_dir("airplay-wait-log").join("debug.log");
+        let log = DebugLog::new(Some(path.clone()));
+        let fake = FakeAirPlay::new();
+        let mut airplay =
+            AirPlaySpeakers::new(fake.link(), 100.0, log.clone(), PairingStore::in_memory());
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        airplay.poll();
+        fake.fail(
+            &kitchen,
+            ErrorKind::Unsupported(UnsupportedReason::TooManyAirPlay2Sessions),
+        );
+        airplay.poll();
+        assert!(log.flush(Duration::from_secs(5)));
+        let messages = crate::debug_log::read_messages(&path);
+        crate::debug_log::assert_in_order(
+            &messages,
+            &["(TooManyAirPlay2Sessions)); waiting for the sender to start it"],
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|line| line.contains("it is turned off")),
+            "{messages:?}"
+        );
     }
 
     // covers: S285, S222

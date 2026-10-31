@@ -5178,6 +5178,9 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
                 "is announced again"
             }
         ),
+        BackendEvent::AirPlayWaitOver { id } => {
+            format!("AirPlay speaker ({id}) no longer waits: the sender started it")
+        }
         BackendEvent::AirPlayFailed { id, problem } => {
             format!("AirPlay speaker ({id}) can't play ({problem:?}); it is turned off")
         }
