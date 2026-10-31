@@ -1095,12 +1095,14 @@ mod tests {
                 written += 480;
             }
             let mut played = [Vec::new(), Vec::new()];
-            for _ in 0..300 {
+            // The periods' own clock: on the wall clock, a test thread
+            // descheduled under load reads as a late wake (S324).
+            for period in 0..300u64 {
                 write_ramp(&mut writer, written, 480);
                 written += 480;
                 for ((pipeline, _), played) in outputs.iter_mut().zip(&mut played) {
                     let mut out = vec![0.0f32; pipeline.device_rate() as usize / 100 * 2];
-                    pipeline.render(&mut out);
+                    pipeline.renderer.render_at(&mut out, period * 10_000_000);
                     played.extend(out.as_chunks::<2>().0.iter().map(|frame| frame[0]));
                 }
             }
