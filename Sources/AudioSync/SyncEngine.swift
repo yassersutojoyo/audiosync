@@ -142,6 +142,9 @@ final class StreamEngine {
     /// Some frame a system or app tap captured in this app run was not silent.
     var runHeard: Bool { SourceCapture.runHeard }
 
+    /// The capture's callbacks so far this session; nil while stopped.
+    var captureCallbacks: UInt64? { capture.counts?.callbacks }
+
     /// The rate the running capture delivers at, which the ring's frames are
     /// clocked at (S16).
     var captureRate: Double { capture.sampleRate }
