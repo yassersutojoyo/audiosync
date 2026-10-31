@@ -7834,9 +7834,8 @@ pub mod tests {
     }
 
     #[test]
-    fn airplay2_is_off_unless_the_setting_or_the_variable_turns_it_on() {
-        // P170: with the setting off and the variable unset, nothing of the
-        // AirPlay 2 path starts.
+    fn the_airplay2_switch_is_off_unless_the_setting_or_the_variable_turns_it_on() {
+        // P170: the switch alone, before the build flag; the path is S312's test below.
         assert!(!airplay2_on(false, None));
         assert!(!airplay2_on(false, Some("0")));
         assert!(airplay2_on(true, None));
