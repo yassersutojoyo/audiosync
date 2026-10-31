@@ -500,6 +500,9 @@ struct CastModel {
     /// address ended, by the saved `id`: its changes are left out, and
     /// Remove still takes it back.
     private var stranded: [String: String] = [:]
+    /// The address of a device added by hand that a browse found and then
+    /// lost, for the sender to list again (S341).
+    private var relistDue: CastManualAddress?
     /// The name each device had when it left the list in this run.
     private(set) var goneNames: [String: String] = [:]
     /// Devices another app took over, until the user turns one on again.
@@ -543,6 +546,10 @@ struct CastModel {
         case .gone(let id):
             let removed = devices.removeValue(forKey: id)
             if let name = removed?.name, !name.isEmpty { goneNames[id] = name }
+            if removed?.manual == false, let address = manualAddresses[id] {
+                relistDue = address
+                return .changed
+            }
             // One added by address leaves only when a browse finds it, which moves it to its ID (C18).
             if enabled == id, !isLive(id), removed?.manual != true {
                 enabled = nil
@@ -624,6 +631,20 @@ struct CastModel {
     mutating func takeLevelDue() -> Double? {
         defer { levelDue = nil }
         return levelDue
+    }
+
+    /// The address to give the sender again, once; nil when none is due.
+    mutating func takeRelistDue() -> CastManualAddress? {
+        defer { relistDue = nil }
+        return relistDue
+    }
+
+    /// The sender couldn't list again the address of `id` that a browse
+    /// lost: one still on with no row goes off, as any device gone is (S339).
+    mutating func relistFailed(_ id: String) -> CastOutcome? {
+        guard enabled == id, devices[id] == nil, !isLive(id) else { return nil }
+        enabled = nil
+        return .turnedOff(id, problem: .notResponding)
     }
 
     /// The device whose offset the sender copied from a saved one, to clear

@@ -54,17 +54,26 @@ extension AppDelegate {
     /// The addresses the user added before, given to the sender again: it
     /// keeps nothing added by hand from one launch to the next.
     private func addStoredCastAddresses(_ sender: CastSender) {
-        for address in store.castManualList.addresses {
-            // Not probed: a speaker that is off now still comes back once it answers.
-            sender.addDevice(address, probe: false, offsetFrom: castModel.foundIDs[address.text]) { [weak self] id in
-                guard let self, self.castSender === sender else { return }
-                guard let id else {
-                    DebugTrace.log("[AudioSync] Cast: the stored address \(address.text) could not be added")
-                    return
+        for address in store.castManualList.addresses { addStoredCastAddress(address, to: sender) }
+    }
+
+    /// `relisting`: the device a browse lost at the address, off when the add fails.
+    private func addStoredCastAddress(_ address: CastManualAddress, to sender: CastSender, relisting: String? = nil) {
+        // Not probed: a speaker that is off now still comes back once it answers.
+        sender.addDevice(address, probe: false, offsetFrom: castModel.foundIDs[address.text],
+                         stillWanted: { [weak self] in self?.store.castManualList.addresses.contains(address) == true }
+        ) { [weak self] id in
+            guard let self, self.castSender === sender else { return }
+            guard let id else {
+                DebugTrace.log("[AudioSync] Cast: the stored address \(address.text) could not be added")
+                if let relisting, let outcome = self.castModel.relistFailed(relisting) {
+                    self.castOutcome(outcome)
+                    self.castFollow()
                 }
-                self.castModel.addedManually(id, address: address)
-                self.pushModel()
+                return
             }
+            self.castModel.addedManually(id, address: address)
+            self.pushModel()
         }
     }
 
@@ -79,6 +88,9 @@ extension AppDelegate {
                 postNotice(text.castProblem(problem, name: name), subject: Notice.cast(id))
             }
             if let level = castModel.takeLevelDue() { castSender?.setVolume(level) }
+            if let address = castModel.takeRelistDue(), let sender = castSender {
+                addStoredCastAddress(address, to: sender, relisting: change.id)
+            }
             if case .appeared(let device, _, let former?, _) = change {
                 moveCastNotices(from: former, to: device.id)
                 moveCastSettings(from: former, to: device.id)

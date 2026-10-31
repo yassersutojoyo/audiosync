@@ -13634,6 +13634,31 @@ do {
           "cast model: a playing speaker added by address that a browse finds stays on and playing under its id, "
             + "and Off still stops it")
 
+    var lost = CastModel()
+    lost.addedManually(manualID, address: lounge)
+    lost.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    _ = lost.turnOn(manualID)
+    lost.apply(.gone(id: manualID))
+    if let browsed { lost.apply(browsed) }
+    let lostGone = lost.listed(.gone(id: realID))
+    let lostOutcome = lost.apply(lostGone)
+    let relist = lost.takeRelistDue()
+    var unlisted = lost
+    let unlistedOutcome = unlisted.relistFailed(realID)
+    lost.addedManually(manualID, address: lounge)
+    let lostRelisted = lost.listed(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
+    lost.apply(lostRelisted)
+    // covers: S341
+    check(lostOutcome == .changed && relist == lounge && lost.takeRelistDue() == nil
+            && lost.enabled == realID && lost.rows == [realID] && lost.senderID(of: realID) == manualID && lost.plan(streaming: true) == .start(realID),
+          "cast model: a speaker added by address that a browse found stays on, listed under its id again, "
+            + "when the browse loses it", "\(String(describing: lostOutcome)) \(String(describing: lost.enabled))")
+    // covers: S339
+    check(unlistedOutcome == .turnedOff(realID, problem: .notResponding) && unlisted.enabled == nil
+            && unlisted.relistFailed(realID) == nil,
+          "cast model: a speaker on whose typed address can't be listed again after a browse lost it goes off "
+            + "as not responding", String(describing: unlistedOutcome))
+
     var offsetMoves = CastModel()
     offsetMoves.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))
     _ = offsetMoves.setOffset(manualID, ms: 240)
