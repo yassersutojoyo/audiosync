@@ -148,6 +148,13 @@ for dev in devices {
     check(fadeStates.last == .closed && renderedWhileFading >= Int64(r.fadeFrames) && (playedFirst || beyondCap),
           "\(dev.name): stop fades out before the output stops", fadeDetail)
 
+    // covers: S134 (IO stopped when halt returns)
+    let renderedAtHalt = r.framesRendered.load(ordering: .relaxed)
+    Thread.sleep(forTimeInterval: 0.2)
+    let renderedAfterHalt = r.framesRendered.load(ordering: .relaxed) - renderedAtHalt
+    check(renderedAfterHalt == 0, "\(dev.name): no callback runs once the output has stopped",
+          "\(renderedAfterHalt) frames rendered in the 200 ms after halt")
+
     // covers: S186 (a switch-off the way the session makes it returns once the fade
     // has played, never later than 500 ms after the request)
     do {
@@ -187,6 +194,72 @@ for dev in devices {
 }
 if !ranAt44k {
     print("   SKIP  44.1 kHz output at hold-back 0 never starves after start: no output device runs at 44.1 kHz")
+}
+
+func setDefaultOutput(_ id: AudioDeviceID) -> Bool {
+    var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                                             mScope: kAudioObjectPropertyScopeGlobal,
+                                             mElement: kAudioObjectPropertyElementMain)
+    var value = id
+    return AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil,
+                                      UInt32(MemoryLayout<AudioDeviceID>.size), &value) == noErr
+}
+
+// covers: S145 (the default output moves off a running output's device to a virtual one and back, at gain 0)
+let defaultName = "default output change leaves a running output alone"
+let systemDevices = AudioDevices()
+let home = systemDevices.defaultOutputDevice()
+let others = devices.filter { $0.id != home?.id }
+let virtualAway = others.first { $0.transport == kAudioDeviceTransportTypeVirtual }
+var defaultSkip: String?
+if ProcessInfo.processInfo.environment["AUDIOSYNC_TEST_MOVE_DEFAULT"] != "1" {
+    defaultSkip = "AUDIOSYNC_TEST_MOVE_DEFAULT=1 is not set"
+} else if home == nil {
+    defaultSkip = "no default output"
+} else if others.isEmpty {
+    defaultSkip = "no second output device"
+} else if virtualAway == nil {
+    defaultSkip = "no virtual output device to move the default to"
+}
+if let defaultSkip {
+    print("   SKIP  \(defaultName): \(defaultSkip)")
+} else if let home, let away = virtualAway, let r = parts.makeRenderer(captureRate: rate) {
+    r.setGain(linear: 0)
+    do {
+        try r.start(on: home.id, captureRate: rate, delayMs: 300)
+        Thread.sleep(forTimeInterval: 0.6)
+        let rateBefore = r.renderRate
+        let resyncsBefore = r.counters.resyncs
+        let framesBefore = r.framesRendered.load(ordering: .relaxed)
+        let changed = Date()
+        defer { _ = setDefaultOutput(home.id) }
+        let moved = setDefaultOutput(away.id) && systemDevices.defaultOutputDevice()?.id == away.id
+        var states: [CoreRenderer.FadeState] = [r.fadeState]
+        while moved && Date().timeIntervalSince(changed) < 1 {
+            let state = r.fadeState
+            if states.last != state { states.append(state) }
+            usleep(250)
+        }
+        if moved {
+            let seconds = Date().timeIntervalSince(changed)
+            let frames = r.framesRendered.load(ordering: .relaxed) - framesBefore
+            let resyncs = r.counters.resyncs - resyncsBefore
+            let lagMs = Double(r.lagFrames) / rate * 1000
+            check(states == [.open] && resyncs == 0 && r.renderRate == rateBefore
+                  && Double(frames) > 0.8 * r.renderRate * seconds && abs(lagMs - 300) < 60 && r.stopNote == "running",
+                  defaultName,
+                  "\(home.name) -> \(away.name): \(states), \(resyncs) resyncs, \(frames) frames in "
+                      + String(format: "%.0f ms at %.0f Hz, lag %.0f ms; ", seconds * 1000, r.renderRate, lagMs)
+                      + r.stopNote)
+        } else {
+            print("   SKIP  \(defaultName): macOS refused \(away.name) as the default output")
+        }
+    } catch {
+        check(false, defaultName, "\(home.name): output starts: \(error)")
+    }
+    r.halt()
+} else {
+    print("   SKIP  \(defaultName): the output could not be made")
 }
 
 producing.store(false, ordering: .relaxed)

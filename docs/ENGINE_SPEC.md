@@ -2319,7 +2319,9 @@ Removed on 2026-10-19 with the Swift engine (`Tests/paritytest.swift`): with one
 | \<device\>: delay 3000 ms | S46, S47, S56, S62, S66 |
 | \<device\>: delay 150 ms | S46, S48, S56, S62, S66 |
 | \<device\>: stop fades out before the output stops | S185, S186, S191 |
+| \<device\>: no callback runs once the output has stopped | S134 (IO stopped when halt returns) |
 | \<device\>: stop returns once the fade has played, within 500 ms | S185, S186 |
+| default output change leaves a running output alone | S145 |
 
 ### pipe start (`--hardware`, `Tests/pipestart.swift`)
 
