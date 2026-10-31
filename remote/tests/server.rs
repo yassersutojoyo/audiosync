@@ -1170,6 +1170,125 @@ fn a_source_pick_reaches_the_app_and_a_refused_one_says_why() {
     assert!(remote.received.lock().unwrap().is_empty());
 }
 
+/// Spotify and Chrome run; Zoom is listed only because a mix holds it.
+fn mixable(calibrating: bool) -> String {
+    SAMPLE.replacen(
+        "\"speakers\"",
+        &format!(
+            r#""calibrating": {calibrating}, "mix_apps": [
+        {{"id": "spotify.exe", "name": "Spotify", "running": true}},
+        {{"id": "chrome.exe", "name": "Google Chrome", "running": true}},
+        {{"id": "zoom.exe", "name": "Zoom", "running": false}}
+    ], "speakers""#
+        ),
+        1,
+    )
+}
+
+fn received_json(remote: &Remote) -> Vec<Value> {
+    let received = remote.received.lock().unwrap();
+    received
+        .iter()
+        .map(|command| serde_json::from_str(&command.to_json()).unwrap())
+        .collect()
+}
+
+// covers: S353
+#[test]
+fn a_mix_post_that_is_not_a_list_of_up_to_63_app_ids_answers_400_and_waits_out_a_run() {
+    let remote = start("mix-refused");
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    remote.server.publish_json(&mixable(false)).unwrap();
+    let list = |count: usize| {
+        format!(
+            "{{\"apps\": [{}]}}",
+            vec!["\"spotify.exe\""; count].join(", ")
+        )
+    };
+    let too_many = list(64);
+    for body in [
+        "not json",
+        "[\"spotify.exe\"]",
+        "{}",
+        "{\"apps\": \"spotify.exe\"}",
+        "{\"apps\": []}",
+        "{\"apps\": [3]}",
+        "{\"apps\": [\"spotify.exe\", null]}",
+        too_many.as_str(),
+    ] {
+        let reply = post(&remote, "/api/mix", token, body);
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (400, "bad_request"),
+            "{body}"
+        );
+    }
+    assert!(remote.received.lock().unwrap().is_empty());
+    let reply = post(&remote, "/api/mix", token, &list(63));
+    assert_eq!(reply.status, 202, "{}", reply.body);
+    remote.received.lock().unwrap().clear();
+
+    for method in ["GET", "PUT", "DELETE"] {
+        let reply = send(&remote, method, "/api/mix", token, &list(1));
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (405, "method_not_allowed"),
+            "{method}"
+        );
+        assert_eq!(reply.header("allow"), Some("POST"));
+    }
+    remote.server.publish_json(&mixable(true)).unwrap();
+    for body in [list(1).as_str(), "not json"] {
+        let reply = post(&remote, "/api/mix", token, body);
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (409, "calibrating"),
+            "{body}"
+        );
+    }
+    assert!(remote.received.lock().unwrap().is_empty());
+}
+
+// covers: S353
+#[test]
+fn a_mix_post_passes_on_the_running_apps_once_each_in_the_order_sent() {
+    let remote = start("mix");
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    let early = post(&remote, "/api/mix", token, "{\"apps\": [\"spotify.exe\"]}");
+    assert_eq!(
+        (early.status, early.error().as_str()),
+        (404, "unknown_source")
+    );
+
+    remote.server.publish_json(&mixable(false)).unwrap();
+    let state = get(&remote, "/api/state", token).json();
+    assert_eq!(state["mix_apps"][1]["name"], "Google Chrome");
+    assert_eq!(state["mix_apps"][2]["running"], false);
+    let body = r#"{"apps": ["chrome.exe", "zoom.exe", "gone.exe", "spotify.exe", "chrome.exe"]}"#;
+    let reply = post(&remote, "/api/mix", token, body);
+    assert_eq!(reply.status, 202, "{}", reply.body);
+    assert_eq!(
+        received_json(&remote),
+        [json!({"type": "mix", "apps": ["chrome.exe", "spotify.exe"]})]
+    );
+    remote.received.lock().unwrap().clear();
+
+    for body in [
+        r#"{"apps": ["zoom.exe"]}"#,
+        r#"{"apps": ["gone.exe", "Spotify.exe"]}"#,
+    ] {
+        let reply = post(&remote, "/api/mix", token, body);
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (404, "unknown_source"),
+            "{body}"
+        );
+    }
+    assert!(remote.received.lock().unwrap().is_empty());
+}
+
 // covers: S376
 #[test]
 fn a_speaker_change_needs_a_published_speaker_and_an_id() {

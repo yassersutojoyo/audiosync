@@ -898,6 +898,37 @@ mod tests {
         }
     }
 
+    fn with_mix_apps(list: &str) -> String {
+        SAMPLE.replacen(
+            "\"speakers\"",
+            &format!("\"mix_apps\": {list}, \"speakers\""),
+            1,
+        )
+    }
+
+    // covers: S353
+    #[test]
+    fn the_mix_apps_keep_their_order_and_whether_they_run_and_none_without_the_field() {
+        let apps = json!([
+            {"id": "spotify.exe", "name": "Spotify", "running": true},
+            {"id": "chrome.exe", "name": "Google Chrome", "running": false}
+        ]);
+        let state = State::from_json(&with_mix_apps(&apps.to_string())).unwrap();
+        let written: Value = serde_json::from_str(&state.to_json(2)).unwrap();
+        assert_eq!(written["mix_apps"], apps);
+        let bare: Value =
+            serde_json::from_str(&State::from_json(SAMPLE).unwrap().to_json(1)).unwrap();
+        assert_eq!(bare["mix_apps"], json!([]));
+        for bad in [
+            r#"{}"#,
+            r#"[{"id": "a.exe", "name": "A", "running": 1}]"#,
+            r#"[{"id": "", "name": "A", "running": true}]"#,
+            r#"[{"id": "a.exe", "running": true}]"#,
+        ] {
+            assert!(State::from_json(&with_mix_apps(bad)).is_err(), "{bad}");
+        }
+    }
+
     // covers: S343
     #[test]
     fn a_bad_source_list_is_refused() {
