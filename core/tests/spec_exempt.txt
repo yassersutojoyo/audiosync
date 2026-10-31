@@ -163,3 +163,7 @@ S388 Windows and Linux hosts only: Launch at Sign-In through the Run key and the
 S389 Windows host only: the Windows versions the app runs on; the Windows tests named in the test map check it.
 S390 Windows host only: the web remote's notice on a Public network; the Windows tests named in the test map check it.
 S391 Windows host only: the firewall in the notes that no speaker was found; the Windows tests named in the test map check it.
+S392 Windows host only: the names kept for speakers that left the list; the Windows tests named in the test map check it.
+S393 Windows host only: the AirPlay and Cast search state and the notices for no sound output and a pairing not saved; the Windows tests named in the test map check them.
+S394 Windows host only: Google Cast speakers in the Windows app; the Windows tests named in the test map check it.
+S395 Windows host only: the calibration line through delay steps and Calibrate All results a delay change makes out of date; the Windows tests named in the test map check them.

@@ -8707,6 +8707,7 @@ mod tests {
         assert!(adapter.snapshot().speaker(&ap(&bedroom)).is_none());
     }
 
+    // covers: S392
     #[test]
     fn a_gone_airplay_speaker_keeps_its_name_while_it_asks_for_a_pin() {
         let (mut adapter, fake, loft) = airplay2_adapter(true);
@@ -8724,6 +8725,7 @@ mod tests {
         );
     }
 
+    // covers: S392
     #[test]
     fn a_gone_airplay_speaker_keeps_its_name_only_while_settings_or_a_zone_name_it() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
@@ -11495,6 +11497,7 @@ mod tests {
 
     /// The flyout's empty list says it is looking until the none-found note
     /// takes over, and stops once a speaker is listed.
+    // covers: S393
     #[test]
     fn discovery_without_a_speaker_is_searching_until_the_none_found_hint() {
         let fake = FakeAirPlay::new();
@@ -12699,6 +12702,7 @@ mod tests {
         );
     }
 
+    // covers: S395
     #[test]
     fn a_delay_step_past_the_maximum_keeps_the_calibrations_line() {
         let mut adapter = AudioAdapter::new(
@@ -12719,6 +12723,7 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &earbuds).delay_ms, Some(20_000.0));
     }
 
+    // covers: S395
     #[test]
     fn a_calibrations_line_goes_once_its_speaker_is_turned_off() {
         let mut adapter = AudioAdapter::new(
@@ -12846,6 +12851,7 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &key("tv")).delay_ms, Some(-20.0));
     }
 
+    // covers: S395
     #[test]
     fn calibrate_all_results_go_once_a_measured_delay_changes_before_apply() {
         let mut adapter = AudioAdapter::new(
@@ -13918,6 +13924,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S393
     #[test]
     fn an_airplay_speaker_on_while_windows_has_no_output_gets_a_notice() {
         let (mut adapter, _fake, kitchen, _) = airplay_adapter();
@@ -14102,6 +14109,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S393
     #[test]
     fn a_pairing_that_cant_be_saved_gets_a_notice_until_a_write_works() {
         use crate::audio::pairings::tests::sealer;
@@ -14562,6 +14570,7 @@ mod tests {
         (adapter, fake)
     }
 
+    // covers: S392
     #[test]
     fn a_gone_cast_speaker_keeps_its_name_only_while_settings_name_it() {
         let (mut adapter, fake) = cast_adapter();
@@ -14847,6 +14856,7 @@ mod tests {
         assert!(adapter.current_settings().cast_addresses.is_empty());
     }
 
+    // covers: S394
     #[test]
     fn checking_an_address_leaves_the_wait_to_the_caller() {
         let (mut adapter, _fake) = cast_adapter();
@@ -14871,6 +14881,7 @@ mod tests {
         assert_eq!(adapter.current_settings().cast_addresses, ["192.0.2.20"]);
     }
 
+    // covers: S394
     #[test]
     fn without_a_cast_sender_add_by_address_is_off() {
         let adapter = AudioAdapter::new(launch_audio(), || "09.41".to_owned(), DebugLog::default());
@@ -15323,6 +15334,7 @@ mod tests {
         }
     }
 
+    // covers: S394
     #[test]
     fn cast_speakers_are_connected_speakers_of_their_own_kind() {
         let (adapter, _) = cast_adapter();
@@ -15374,6 +15386,7 @@ mod tests {
         assert_eq!(cast_id(&speaker_key(CAST_KITCHEN)), None);
     }
 
+    // covers: S393
     #[test]
     fn the_cast_list_says_it_searches_then_that_none_was_found() {
         let mut audio = MockBackend::empty();
@@ -15392,6 +15405,7 @@ mod tests {
         assert_eq!(adapter.snapshot().cast_list, CastList::Quiet);
     }
 
+    // covers: S394
     #[test]
     fn airplay_speakers_at_the_sender_delay_limit_say_they_play_ahead_of_the_cast_speaker() {
         let (mut adapter, _airplay, kitchen, _) = airplay_adapter();
@@ -15426,6 +15440,7 @@ mod tests {
         assert!(messages(&adapter).is_empty(), "cleared once they keep up");
     }
 
+    // covers: S394
     #[test]
     fn a_cast_speaker_alone_streams_and_shows_where_it_is() {
         let (mut adapter, fake) = cast_adapter();
@@ -17174,6 +17189,7 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &cc(CAST_LIVING)).name, "Living Room");
     }
 
+    // covers: S394
     #[test]
     fn quitting_keeps_a_cast_offset_set_since_the_last_poll() {
         let (mut adapter, fake) = cast_adapter();
@@ -17366,6 +17382,7 @@ mod tests {
         assert!(state.speaker(&cc(CAST_KITCHEN)).unwrap().enabled);
     }
 
+    // covers: S394
     #[test]
     fn a_late_end_of_an_older_cast_attempt_changes_nothing() {
         let (mut adapter, fake) = cast_adapter();
