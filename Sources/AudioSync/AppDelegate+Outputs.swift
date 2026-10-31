@@ -365,6 +365,7 @@ extension AppDelegate {
         }
         if keepListed { chosen.formUnion(localOrder) }
         let available = AudioDevices.listed(outputs, showVirtual: showVirtualDevices, keep: chosen)
+        followMovedOutputs(available.filter { !localOrder.contains($0.uid) }, listed: Set(outputs.map(\.uid)))
         var known = Set(localOrder)
         var appeared: [String] = []
         for device in available {
@@ -375,6 +376,33 @@ extension AppDelegate {
         syncLocalOutputs(available: available, origin: .automatic)
         autoConnect(appeared.map { SpeakerKey.make(id: $0, airplay: false) })
         pushModel()
+    }
+
+    /// What was set for an output that left goes to the one of its name that
+    /// appeared under a new UID (`SpeakerIDMigration.movedOutputs`, S384).
+    private func followMovedOutputs(_ appeared: [AudioDevices.Device], listed: Set<String>) {
+        var saved = SpeakerIDMigration.Saved(enabledAirPlay: enabledAirPlay, airplayVolumes: airplayVolume,
+                                             groups: groups, autoConnect: autoConnect, zones: zones,
+                                             presets: presets, names: speakerNames, hidden: hiddenSpeakers,
+                                             enabledLocal: enabledLocal, localVolumes: localVolume,
+                                             localOffsets: localOffsetMs)
+        let moves = SpeakerIDMigration.movedOutputs(appeared: appeared, seen: localDevices, listed: listed,
+                                                    saved: saved)
+        guard !moves.isEmpty else { return }
+        for (new, old) in moves {
+            saved = SpeakerIDMigration.localMoved(old, as: new, in: saved)
+            localDevices[old] = nil   // its UID counts as new if the device comes back to that port
+        }
+        groups = saved.groups
+        zones = saved.zones
+        presets = saved.presets
+        autoConnect = saved.autoConnect
+        speakerNames = saved.names
+        hiddenSpeakers = saved.hidden
+        enabledLocal = saved.enabledLocal
+        localVolume = saved.localVolumes
+        localOffsetMs = saved.localOffsets
+        clearNotices(moves.values.map { SpeakerKey.make(id: $0, airplay: false) })
     }
 
     // MARK: - Local renderers (the running engine follows the speakers that are on)

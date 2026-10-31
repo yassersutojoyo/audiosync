@@ -14105,6 +14105,63 @@ do {
           "cast model: a browse that finds an address of a device playing under its id keeps the volume its "
             + "session reported")
 
+    do {
+        func dac(_ uid: String, _ name: String = "USB DAC",
+                 _ transport: UInt32 = kAudioDeviceTransportTypeUSB) -> AudioDevices.Device {
+            AudioDevices.Device(id: 0, name: name, uid: uid, transport: transport)
+        }
+        var hidden = HiddenSpeakers()
+        hidden.hide(key: "lc:portA", name: "USB DAC", kind: "USB")
+        let kept = SpeakerIDMigration.Saved(
+            enabledAirPlay: [], airplayVolumes: [:],
+            groups: [SpeakerGroup(id: "g1", name: "Office", members: ["lc:portA"])], autoConnect: ["lc:portA"],
+            zones: [SpeakerZone(id: "z1", name: "Desk", members: ["lc:built-in", "lc:portA"], volume: 60)],
+            presets: [evening([.init(key: "lc:portA", volume: 40)])],
+            names: SpeakerNames(custom: ["lc:portA": "Desk DAC"]), hidden: hidden,
+            enabledLocal: ["portA"], localVolumes: ["portA": 35], localOffsets: ["portA": 12])
+        let seen = ["built-in": dac("built-in", "MacBook Pro Speakers", kAudioDeviceTransportTypeBuiltIn),
+                    "portA": dac("portA")]
+        let listed: Set = ["built-in", "portB"]
+        let moves = SpeakerIDMigration.movedOutputs(appeared: [dac("portB")], seen: seen, listed: listed, saved: kept)
+        let moved = SpeakerIDMigration.localMoved("portA", as: "portB", in: kept)
+        let keysMoved = moved.names == SpeakerNames(custom: ["lc:portB": "Desk DAC"])
+            && moved.hidden.contains("lc:portB") && !moved.hidden.contains("lc:portA")
+            && moved.zones.map(\.members) == [["lc:built-in", "lc:portB"]] && moved.autoConnect == ["lc:portB"]
+        let entriesMoved = moved.groups.map(\.members) == [["lc:portB"]]
+            && moved.presets == [evening([.init(key: "lc:portB", volume: 40)])]
+        let levelsMoved = moved.localVolumes == ["portB": 35] && moved.localOffsets == ["portB": 12]
+            && moved.enabledLocal == ["portB"]
+        let back = SpeakerIDMigration.movedOutputs(appeared: [dac("portA")], seen: ["portB": dac("portB")],
+                                                   listed: ["portA"], saved: moved)
+        // covers: S384
+        check(moves == ["portB": "portA"] && keysMoved && entriesMoved && levelsMoved && back == ["portA": "portB"],
+              "moved output: a USB DAC plugged into another port keeps its name, hidden mark, volume, delay, zone "
+                + "place, auto-connect mark, switch, group and preset entries under its new uid, and they follow it back")
+
+        var newSet = kept
+        newSet.localVolumes["portB"] = 50
+        let empty = SpeakerIDMigration.Saved(enabledAirPlay: [], airplayVolumes: [:], groups: [], autoConnect: [])
+        func follow(_ appeared: [AudioDevices.Device], seenToo: AudioDevices.Device? = nil,
+                    listed: Set<String>? = nil, saved: SpeakerIDMigration.Saved? = nil) -> [String: String] {
+            var all = seen
+            if let seenToo { all[seenToo.uid] = seenToo }
+            return SpeakerIDMigration.movedOutputs(appeared: appeared, seen: all, listed: listed ?? ["built-in", "portB"],
+                                                   saved: saved ?? kept)
+        }
+        let twoGone = follow([dac("portB")], seenToo: dac("portC"))
+        let twoAppeared = follow([dac("portB"), dac("portC")], listed: ["built-in", "portB", "portC"])
+        let seenBefore = follow([dac("portB")], seenToo: dac("portB"))
+        let otherKind = follow([dac("bt", "USB DAC", kAudioDeviceTransportTypeBluetooth)], listed: ["built-in", "bt"])
+        let nothingSet = follow([dac("portB")], saved: empty)
+        let newHasSome = follow([dac("portB")], saved: newSet)
+        // covers: S384
+        check(twoGone.isEmpty && twoAppeared.isEmpty && seenBefore.isEmpty && otherKind.isEmpty && nothingSet.isEmpty
+                && newHasSome.isEmpty,
+              "moved output: a new uid takes nothing with two of its name and transport gone or appearing, when it "
+                + "was listed before, from another transport, from a gone one with nothing set, or with settings "
+                + "of its own")
+    }
+
     // covers: S339
     var stopped = CastModel()
     stopped.apply(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: nil))

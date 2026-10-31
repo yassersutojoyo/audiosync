@@ -110,6 +110,10 @@ enum SpeakerIDMigration {
         var presets: [SpeakerPreset] = []
         var names = SpeakerNames()
         var hidden = HiddenSpeakers()
+        /// What is saved by local output UID, which a moved output takes along (S384).
+        var enabledLocal: Set<String> = []
+        var localVolumes: [String: Double] = [:]
+        var localOffsets: [String: Double] = [:]
     }
 
     /// The largest device ID: six bytes.
@@ -187,6 +191,52 @@ enum SpeakerIDMigration {
         out.names = saved.names.movingKey(CastID.key(old), to: CastID.key(new))
         out.hidden.move(CastID.app(old), to: CastID.app(new))
         return out
+    }
+
+    /// The gone output whose settings each output of `appeared` takes, by
+    /// its new UID: macOS can list a USB device plugged into another port
+    /// under another UID (S384). The new UID must be missing from `seen`
+    /// (the outputs listed earlier in this run), have nothing set, and be the
+    /// only one of `appeared` with its name and transport; exactly one output
+    /// of `seen` with that name and transport must be missing from `listed`,
+    /// and have something set.
+    static func movedOutputs(appeared: [AudioDevices.Device], seen: [String: AudioDevices.Device],
+                             listed: Set<String>, saved: Saved) -> [String: String] {
+        var moves: [String: String] = [:]
+        for device in appeared where seen[device.uid] == nil && !keepsAnything(local: device.uid, in: saved) {
+            let twin = { (other: AudioDevices.Device) in
+                other.name == device.name && other.transport == device.transport
+            }
+            let gone = seen.values.filter { !listed.contains($0.uid) && twin($0) }
+            if appeared.filter(twin).count == 1, gone.count == 1, keepsAnything(local: gone[0].uid, in: saved) {
+                moves[device.uid] = gone[0].uid
+            }
+        }
+        return moves
+    }
+
+    /// `saved` with what was set for local output `old` moved to `new`, which has nothing set (S384).
+    static func localMoved(_ old: String, as new: String, in saved: Saved) -> Saved {
+        let (oldKey, newKey) = (SpeakerKey.make(id: old, kind: .local), SpeakerKey.make(id: new, kind: .local))
+        var out = movingKeys([oldKey: newKey], in: saved)
+        out.names = saved.names.movingKey(oldKey, to: newKey)
+        out.hidden.move(oldKey, to: newKey)
+        if out.enabledLocal.remove(old) != nil { out.enabledLocal.insert(new) }
+        let volume = out.localVolumes.removeValue(forKey: old)
+        let offset = out.localOffsets.removeValue(forKey: old)
+        out.localVolumes[new] = volume
+        out.localOffsets[new] = offset
+        return out
+    }
+
+    private static func keepsAnything(local uid: String, in saved: Saved) -> Bool {
+        let key = SpeakerKey.make(id: uid, kind: .local)
+        let byUID = saved.enabledLocal.contains(uid) || saved.localVolumes.keys.contains(uid)
+            || saved.localOffsets.keys.contains(uid)
+        let byKey = saved.autoConnect.contains(key) || saved.groups.contains { $0.members.contains(key) }
+            || saved.zones.contains { $0.members.contains(key) }
+            || saved.presets.flatMap(\.members).contains { $0.key == key }
+        return byUID || byKey || saved.names.renamed(key: key) != nil || saved.hidden.contains(key)
     }
 
     /// `saved` with every key in `keys` replaced by its value in
