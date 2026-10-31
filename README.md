@@ -112,7 +112,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 
 A Windows 11 version (x64 and ARM64) is out as a preview since 0.7.1, with the same Rust engine and its own AirPlay sender. The zips are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. CI builds it too, and [desktop/README.md](desktop/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay and Google Cast speakers (AirPlay 2 out of the box, with AirPlay 1 first for a speaker that does both, as on the Mac), it asks for AirPlay PINs and passwords, and it hasn't been tried on a real speaker yet.
 
-Versions after 0.7.1 update themselves. 0.7.1 doesn't, so get the next one from Releases by hand. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, does it at launch, at most once a day. Nothing downloads until you click Download and Install.
+Versions after 0.7.1 update themselves. 0.7.1 doesn't, so get the next one from Releases by hand. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, does it at launch and while the app runs, at most once a day. Nothing downloads until you click Download and Install.
 
 The exe isn't signed, so the first time you open it Windows SmartScreen may say it protected your PC. Click More info, then Run anyway, to open it.
 
