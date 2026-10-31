@@ -3101,23 +3101,29 @@ do {
 // MARK: Native AirPlay sender — its IDs, rows, speaker plan, events and sync rule
 // covers: S222
 do {
+    // covers: S222
     check(NativeAirPlayID.pcmDebugIDs(nil).isEmpty && NativeAirPlayID.pcmDebugIDs(" , ").isEmpty,
           "native airplay: no AUDIOSYNC_AIRPLAY_PCM names no receiver")
+    // covers: S222
     check(NativeAirPlayID.pcmDebugIDs("a1:b2:c3:d4:e5:f6, raop:0011223344AA@Den ,,0011223344aa")
             == ["A1B2C3D4E5F6", "raop:0011223344AA@Den", "0011223344AA"],
           "native airplay: AUDIOSYNC_AIRPLAY_PCM IDs are trimmed and device IDs take the 12-hex form")
     let tv = NativeReceiver(id: "02005E005302", name: "Den TV", model: "AppleTV3,2", availability: .needsPin,
                             reason: nil, hints: ["raop", "apple-tv", "pairing", "pin-pairing"])
+    // covers: S170, S222
     check(NativeReceiverChange.appeared(tv).logLine
           == "[AudioSync] native AirPlay: found Den TV (02005E005302), AppleTV3,2, needs pairing with a PIN, hints: raop apple-tv pairing pin-pairing",
           "native airplay: a found receiver's log line")
     let old = NativeReceiver(id: "raop:Old", name: "Old", model: "", availability: .unsupported,
                              reason: "encryption", hints: ["raop"])
+    // covers: S170, S222
     check(NativeReceiverChange.changed(old).logLine
           == "[AudioSync] native AirPlay: changed Old (raop:Old), not supported (encryption), hints: raop",
           "native airplay: a changed receiver's log line, with its reason")
+    // covers: S170, S222
     check(NativeReceiverChange.gone(id: "02005E005302", name: "Den TV").logLine
           == "[AudioSync] native AirPlay: gone Den TV (02005E005302)", "native airplay: a gone receiver it listed")
+    // covers: S170, S222
     check(NativeReceiverChange.gone(id: "02005E005309", name: nil).logLine
           == "[AudioSync] native AirPlay: gone 02005E005309", "native airplay: a gone receiver it never listed")
 
@@ -3138,27 +3144,34 @@ do {
           AirPlay speaker Gone (02005E005322): added
         """, "native airplay: the status line has the Windows log's fields, a target's summed members, and a speaker the sender dropped",
           status)
+    // covers: S222
     check(NativeAirPlayStatus.logLine(latencyMs: .nan, stream: nil, speakers: [])
           == "[AudioSync] native AirPlay: L = 0 ms", "native airplay: a status line without the stream's counters")
+    // covers: S222
     check(NativeAirPlayStatus.interval == 5, "native airplay: the status line comes every 5 s, as on Windows")
 }
 do {
+    // covers: S149, S222
     check(NativeAirPlayID.app("02005E005301") == "native:02005E005301"
             && NativeAirPlayID.receiver("native:02005E005301") == "02005E005301"
             && NativeAirPlayID.receiver("native:raop:Odd: name") == "raop:Odd: name",
           "native airplay: app IDs round-trip, instance IDs included")
+    // covers: S204, S222
     check(NativeAirPlayID.receiver("123456789012") == nil && NativeAirPlayID.receiver("02005E005301") == nil,
           "native airplay: an ID older versions saved is never taken for a native receiver")
+    // covers: S149, S222
     check(SpeakerKey.parse(SpeakerKey.make(id: NativeAirPlayID.app("raop:A:B"), airplay: true))
             .map { $0.id == "native:raop:A:B" && $0.airplay } == true,
           "native airplay: a native ID survives a speaker key (groups, auto-connect, notices)")
     let saved: Set<String> = ["123456789012", "native:02005E005301"]
+    // covers: S204, S222
     check(NativeAirPlayID.playable(saved) == ["native:02005E005301"],
           "native airplay: a speaker saved as on under an old ID that isn't moved yet neither starts nor holds up streaming")
 
     func receiver(_ id: String, _ name: String, _ availability: NativeReceiver.Availability) -> NativeReceiver {
         NativeReceiver(id: id, name: name, model: "", availability: availability, reason: nil, hints: [])
     }
+    // covers: S222
     check(receiver("x", "x", .available).access == .open
             && receiver("x", "x", .needsPin).access == .code(password: false)
             && receiver("x", "x", .needsPassword).access == .code(password: true)
@@ -3173,9 +3186,11 @@ do {
         model.apply(.appeared(r))
     }
     check(model.rows(enabled: []) == ["native:B2", "native:A1", "native:C3"], "native airplay: rows by name", "\(model.rows(enabled: []))")
+    // covers: S106, S222
     check(model.access("A1") == .open && model.access("B2") == .code(password: false)
             && model.access("C3") == .code(password: true) && model.access("D4") == nil,
           "native airplay: a needs-PIN or password receiver shows as asking for a code")
+    // covers: S176, S222
     check(model.soundingIDs == ["native:A1"], "native airplay: only a receiver able to play holds local outputs back")
     // covers: S222 (auto-connect never pairs or prompts)
     check(model.joinable(model.rows(enabled: []) + ["native:Z9"], after: ["native:C3"], stopped: false) == ["native:A1"]
@@ -3189,6 +3204,7 @@ do {
     var appearing = EveryTimeGuard()
     let firstListing = model.adopt(enabled: ["native:B2"], known: [], stopped: false, everyTime: &appearing)
     let listedAgain = model.adopt(enabled: [], known: firstListing.rows, stopped: false, everyTime: &appearing)
+    // covers: S349
     check(firstListing.asking == [.init(id: "B2", reason: .needsCode), .init(id: "C3", reason: .needsPassword)]
             && listedAgain.asking.isEmpty
             && model.adopt(enabled: [], known: [], stopped: true, everyTime: &appearing).asking.isEmpty,
@@ -3210,6 +3226,7 @@ do {
     func appearedAsking(_ m: NativeAirPlayModel) -> [String] {
         m.appearedAsking(m.rows(enabled: []), after: [], stopped: false).map(\.id)
     }
+    // covers: S349
     check(everyTimeModel.rows(enabled: []) == ["native:H9"] && appearedAsking(everyTimeModel).isEmpty
             && appearedAsking(attempting) == ["C3"] && appearedAsking(passwordGiven) == ["B2"]
             && appearedAsking(pairedByUser) == ["C3"],
@@ -3266,6 +3283,7 @@ do {
           "native airplay: switched off, it is no longer on by hand", "\(onAgain)")
 
     let all: Set<String> = ["native:A1", "native:B2", "native:C3", "native:D4", "123456789012"]
+    // covers: S222
     check(model.plan(streaming: false, enabled: all).isEmpty, "native airplay: nothing joins while not streaming")
     // covers: S222, S223
     check(model.plan(streaming: true, enabled: all)
@@ -3274,11 +3292,14 @@ do {
           "native airplay: while streaming, the able join, the PIN and password ones not turned on by a click go off "
             + "(auto-connect and restored switches never pair or prompt), the rest wait")
     model.added("A1")
+    // covers: S222
     check(model.plan(streaming: true, enabled: ["native:A1"]).isEmpty, "native airplay: an added speaker stays")
+    // covers: S118, S222
     check(model.plan(streaming: false, enabled: ["native:A1"]).remove == ["A1"]
             && model.plan(streaming: true, enabled: []).remove == ["A1"],
           "EC13 native airplay: a speaker leaves when switched off or when streaming stops")
 
+    // covers: S222
     check(model.apply(.state(id: "A1", .connecting, retryMs: nil)) == nil
             && model.apply(.state(id: "A1", .playing, retryMs: nil)) == .playingChanged("native:A1", playing: true),
           "native airplay: playing is reported once")
@@ -3296,13 +3317,17 @@ do {
               "\(String(describing: outcome)), \(note ?? "no note")")
     }
     model.apply(.gone(id: "A1", name: nil))
+    // covers: S167, S222
     check(model.rows(enabled: []).contains("native:A1") && model.access("A1") == .open && model.soundingIDs == ["native:A1"],
           "EC12 native airplay: a speaker that plays on after its announcement lapsed stays listed and chosen")
+    // covers: S222
     check(model.apply(.error(id: "A1", .connectionLost, retryMs: 1000, detail: "Lost")) == nil
             && model.apply(.state(id: "A1", .retrying, retryMs: 1000)) == .playingChanged("native:A1", playing: false),
           "native airplay: a lost speaker the sender retries stays on")
+    // covers: S167, S222
     check(model.rows(enabled: []).contains("native:A1") && model.soundingIDs.isEmpty,
           "EC12 native airplay: gone and not playing, it keeps its row while in the sender and holds nothing back")
+    // covers: S222
     check(model.apply(.error(id: "A1", .notResponding, retryMs: nil, detail: "Unreachable")) == .turnOff("native:A1", .unreachable)
             && model.apply(.error(id: "A1", .pairingRequired, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsCode)
             && model.apply(.error(id: "A1", .wrongPassword, retryMs: nil, detail: "")) == .turnOff("native:A1", .needsPassword)
@@ -3319,6 +3344,7 @@ do {
             && model.apply(.error(id: "A1", .refused, retryMs: nil, detail: "")) == .turnOff("native:A1", .refused),
           "native airplay: a speaker that answered busy or refused is off for that reason, not as unreachable")
     model.removed("A1")
+    // covers: S222
     check(model.apply(.state(id: "A1", .playing, retryMs: nil)) == nil
             && model.apply(.error(id: "A1", .notResponding, retryMs: nil, detail: "")) == nil,
           "native airplay: events of a removed speaker are passed over")
@@ -3335,14 +3361,17 @@ do {
     let beforeGone = withdrawn.plan(streaming: true, enabled: kitchenOn)
     withdrawn.apply(.gone(id: "K1", name: "Kitchen"))
     let afterGone = withdrawn.plan(streaming: true, enabled: kitchenOn)
+    // covers: S222
     check(beforeGone.isEmpty && afterGone.isEmpty && withdrawn.plan(streaming: true, enabled: []).remove == ["K1"],
           "native airplay: a retrying speaker whose receiver is gone stays in the sender until switched off",
           "before \(beforeGone), after \(afterGone)")
     withdrawn.removed("K1")
+    // covers: S222
     check(withdrawn.apply(.state(id: "K1", .retrying, retryMs: 1000)) == nil
             && withdrawn.plan(streaming: true, enabled: kitchenOn).isEmpty,
           "native airplay: a speaker gone from the sender waits, on, while its receiver is unlisted")
     withdrawn.apply(.appeared(receiver("K1", "Kitchen", .available)))
+    // covers: S222
     check(withdrawn.plan(streaming: true, enabled: kitchenOn).add == ["K1"],
           "native airplay: a speaker whose receiver was gone joins again when announced able to play")
 
@@ -3355,6 +3384,7 @@ do {
     _ = lapsed.apply(.error(id: "K1", .connectionLost, retryMs: 1000, detail: "Lost"))
     _ = lapsed.apply(.state(id: "K1", .retrying, retryMs: 1000))
     let lost = lapsed.plan(streaming: true, enabled: kitchenOn)
+    // covers: S222
     check(playingOn.isEmpty && lost.isEmpty,
           "native airplay: a speaker playing on after its announcement lapsed stays in the sender once it is lost",
           "playing \(playingOn), lost \(lost)")
@@ -3377,6 +3407,7 @@ do {
           "native airplay: a speaker whose receiver is gone mid-stream keeps its row and its place in the sender, off the network",
           "lost \(quitLost), unannounced \(quitAway), rows \(quit.rows(enabled: studyOn))")
     quit.apply(.appeared(receiver("Q1", "Study", .available)))
+    // covers: S222
     check(quit.plan(streaming: true, enabled: studyOn).isEmpty
             && quit.apply(.state(id: "Q1", .playing, retryMs: nil)) == .playingChanged("native:Q1", playing: true),
           "native airplay: a speaker off the network plays again once announced, without joining the sender anew")
@@ -3393,18 +3424,22 @@ do {
         return outcome
     }
     let quietFails = [fails(1000), fails(2000)]
+    // covers: S222
     check(quietFails == [nil, nil] && !killed.isReconnecting("R1"),
           "native airplay: a lost speaker and its first retry fail quietly", "\(quietFails)")
     let secondRetry = fails(4000)
+    // covers: S222
     check(secondRetry == .reconnecting("native:R1", .notResponding) && killed.isReconnecting("R1") && fails(8000) == nil,
           "native airplay: from its second failed retry a speaker says it is reconnecting, with a notice once",
           "\(secondRetry)")
+    // covers: S222
     check(killed.apply(.state(id: "R1", .playing, retryMs: nil)) == .playingChanged("native:R1", playing: true)
             && !killed.isReconnecting("R1"),
           "native airplay: the first retry that works ends reconnecting")
     _ = fails(1000)
     _ = killed.apply(.state(id: "R1", .playing, retryMs: nil))
     let afterBlip = [fails(1000), fails(2000)]
+    // covers: S222
     check(afterBlip == [nil, nil] && !killed.isReconnecting("R1"),
           "native airplay: a speaker that played again counts its failed retries anew", "\(afterBlip)")
     _ = fails(4000)
@@ -3420,12 +3455,15 @@ do {
     for retryMs: Int64 in [2000, 4000] {
         _ = dropped.apply(.error(id: "R2", .notResponding, retryMs: retryMs, detail: "Unreachable"))
     }
+    // covers: S222
     check(!quietLeaves && dropped.plan(streaming: true, enabled: []).remove == ["R2"]
             && dropped.plan(streaming: false, enabled: ["native:R2"]).remove == ["R2"] && dropped.clearsNoticeOnRemoval("R2"),
           "native airplay: switch-off after the third error clears the reconnecting notice")
     _ = dropped.apply(.error(id: "R2", .pairingRequired, retryMs: nil, detail: ""))
+    // covers: S222
     check(!dropped.isReconnecting("R2") && !dropped.clearsNoticeOnRemoval("R2"),
           "native airplay: a reconnecting speaker refused for good keeps its turn-off notice when it leaves the sender")
+    // covers: S222
     check(UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, reconnecting: true, unannounced: false, target: nil) == "Reconnecting…",
           "native airplay: a reconnecting speaker's row says so")
     for problem: NativeSpeakerEvent.Problem in [.notResponding, .connectionLost, .busy] {
@@ -3450,11 +3488,14 @@ do {
     check(refused == .waiting("native:G7", .tooManyAirPlay2) && model.apply(.state(id: "G7", .failed, retryMs: nil)) == nil
             && model.isWaiting("G7") && model.plan(streaming: true, enabled: ["native:G7"]).isEmpty,
           "S285 native airplay: a speaker refused an AirPlay 2 place stays on and in the sender", "\(String(describing: refused))")
+    // covers: S285
     check(model.apply(.error(id: "G7", .tooManyAirPlay2, retryMs: nil, detail: "")) == nil && model.isWaiting("G7"),
           "S285 native airplay: refused again while it waits, it posts no second notice")
+    // covers: S285
     check(model.apply(.error(id: "G7", .ptpOtherNetwork, retryMs: nil, detail: "")) == .waiting("native:G7", .ptpOtherNetwork)
             && model.waitReason("G7") == .ptpOtherNetwork,
           "S285 native airplay: a speaker that needs PTP on another network waits and says why")
+    // covers: S285
     check(model.apply(.state(id: "G7", .connecting, retryMs: nil)) == .waiting("native:G7", nil) && !model.isWaiting("G7")
             && model.apply(.state(id: "G7", .playing, retryMs: nil)) == .playingChanged("native:G7", playing: true),
           "S285 native airplay: once the sender lets it, it starts and the row stops saying it waits")
@@ -3467,6 +3508,7 @@ do {
     model.removed("G7")
     // covers: P169
     check(!model.isWaiting("G7"), "P169 native airplay: switched off or streaming stopped, it no longer waits")
+    // covers: S285
     check(UIStrings().nativeAirPlayTooManyAirPlay2(name: "Loft")
             == "AudioSync plays up to \(ASC_AIRPLAY2_SESSIONS) AirPlay 2 speakers at once, so Loft waits. It starts once one of them stops."
             && UIStrings().nativeAirPlayPtpOtherNetwork(name: "Loft")
@@ -3545,6 +3587,7 @@ do {
         // covers: S400
         check(firstTarget == nil, "Gear menu: the next menu that opens releases the one before it")
     }
+    // covers: S285
     check(UIStrings().nativeAirPlayWaitingTitle(name: "Loft") == "Loft waiting"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true, unannounced: false, target: nil) == "Waiting: too many AirPlay 2 speakers"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, waitingForPtp: true, unannounced: false, target: nil)
@@ -3611,6 +3654,7 @@ do {
     // covers: S223
     check(paths.turnedOnByUser("K1") == .startPairing("K1") && paths.apply(.pinNeeded(id: "K1")) == .prompt,
           "native airplay: a click on an AirPlay 2 receiver asking for a PIN pairs and prompts, as for an Apple TV")
+    // covers: S177, S178, S222
     check(model.apply(.timeline(latencyMs: 1750, restarted: false)) == .latencyChanged
             && model.apply(.timeline(latencyMs: 1750, restarted: true)) == nil && model.latencyMs == 1750,
           "native airplay: local outputs line up again only when L changes")
@@ -3618,9 +3662,13 @@ do {
     do {
         var starts = NativeSenderStarts()
         let t0 = Date(timeIntervalSince1970: 1_000_000)
+        // covers: S101, S222
         check(starts.mayStart(at: t0), "native airplay: the first reconcile starts the sender")
+        // covers: S101
         check(starts.restartAt == nil, "native airplay: before any start fails, no restart falls due (S101)")
+        // covers: S101, S222
         check(starts.finished(started: false, at: t0), "EC7 native airplay: a failed start is told once")
+        // covers: S101
         check(!starts.mayStart(at: t0.addingTimeInterval(3))
                 && starts.mayStart(at: t0.addingTimeInterval(NativeSenderStarts.retrySpacing)),
               "EC7 native airplay: after a failed start, a later reconcile starts it again, not a sooner one")
@@ -3629,36 +3677,48 @@ do {
                 && starts.mayStart(at: restart) && !starts.mayStart(at: restart.addingTimeInterval(-0.001)),
               "EC7 native airplay: the restart falls due exactly when a reconcile may start the sender again (S101)",
               "\(String(describing: starts.restartAt))")
+        // covers: S222
         check(!starts.finished(started: false, at: t0.addingTimeInterval(10)),
               "native airplay: another failure in a row posts no second notice")
+        // covers: S222
         check(!starts.finished(started: true, at: t0.addingTimeInterval(20)) && starts.failedAt == nil
                 && starts.mayStart(at: t0.addingTimeInterval(20)) && starts.restartAt == nil,
               "native airplay: a start that works ends the failures")
+        // covers: S222
         check(starts.finished(started: false, at: t0.addingTimeInterval(30)),
               "native airplay: a new failure after a working start is told again")
 
         var stops = NativeSenderStarts()
+        // covers: S222
         check(!stops.stopped, "native airplay: a running sender shows no problem")
         stops.senderFailed()
+        // covers: S101, S222
         check(!stops.mayStart(at: t0.addingTimeInterval(3600)),
               "EC7 native airplay: a sender that stopped after an internal error doesn't restart by itself")
         var failedThenStopped = NativeSenderStarts()
         _ = failedThenStopped.finished(started: false, at: t0)
         failedThenStopped.senderFailed()
+        // covers: S101
         check(failedThenStopped.restartAt == nil,
               "EC7 native airplay: a sender that stopped schedules no restart; only Retry starts one (S101)")
+        // covers: S101, S222
         check(stops.stopped, "EC7 native airplay: it shows as failed, with Retry")
         stops.retry()
+        // covers: S101, S222
         check(stops.mayStart(at: t0) && !stops.stopped, "EC7 native airplay: Retry starts a new sender at once")
 
         var up = NativeSenderStarts()
+        // covers: S154, S222
         check(!up.isUp, "native airplay: before a start works, the sender isn't up for the Local Network hint")
         _ = up.finished(started: true, at: t0)
+        // covers: S154, S222
         check(up.isUp, "native airplay: a start that works brings the sender up for the Local Network hint")
         up.senderFailed()
+        // covers: S154, S222
         check(!up.isUp, "native airplay: a sender that stopped is down for the Local Network hint")
         up.retry()
         _ = up.finished(started: false, at: t0)
+        // covers: S154, S222
         check(!up.isUp, "native airplay: a start that failed leaves the sender down for the Local Network hint")
     }
     do {
@@ -3674,9 +3734,11 @@ do {
               "native airplay: this Mac's own AirPlay Receiver is never listed (S222)", "\(model.rows(enabled: []))")
         model.computerName = "Office Mac"
         model.apply(.changed(mac))
+        // covers: S222
         check(model.rows(enabled: []).count == 2, "native airplay: a receiver named otherwise than this Mac is listed")
         var unnamed = NativeAirPlayModel()
         unnamed.apply(.appeared(mac))
+        // covers: S222
         check(unnamed.rows(enabled: []) == [NativeAirPlayID.app(mac.id)], "native airplay: with no computer name known, nothing is hidden")
         var seenOnly = NativeAirPlayModel()
         seenOnly.computerName = "Studio Mac"
@@ -3699,11 +3761,14 @@ do {
     do {
         var failing = NativeAirPlayModel()
         failing.added("A1")
+        // covers: S101, S222
         check(failing.apply(.failed(detail: "panic at src/ffi/airplay.rs:42")) == .senderFailed,
               "EC7 native airplay: the sender's failure event makes the app drop it and offer Retry")
+        // covers: S170, S222
         check(NativeSpeakerEvent.failed(detail: "").logLine(name: { _ in nil })
                 == "[AudioSync] native AirPlay: the sender stopped after an internal error",
               "native airplay: the failure's log line")
+        // covers: S205, S222
         check(NativeSpeakerEvent.failed(detail: "panic at airplay/src/sender/driver.rs:42").logLine(name: { _ in nil })
                 == "[AudioSync] native AirPlay: the sender stopped after an internal error (panic at airplay/src/sender/driver.rs:42)",
               "native airplay: the failure's log line says where the panic happened (S205)")
@@ -3753,6 +3818,7 @@ do {
                 && m.apply(.pinNeeded(id: "B2")) == .prompt
                 && m.nextPrompt() == NativePrompt(id: "B2", password: false, wrong: true),
               "native pairing: a wrong PIN starts a new pairing (the TV shows a PIN again) and asks again")
+        // covers: S223
         check(m.answered(NativePrompt(id: "B2", password: false, wrong: true), code: "5678") == .submitPin
                 && m.apply(.pinNeeded(id: "B2")) == .prompt
                 && m.stages["B2"] == .askingPin(wrong: true)
@@ -3901,6 +3967,7 @@ do {
         rawFailure.kind = ASC_AIRPLAY_EVENT_PAIRING_FAILED
         rawFailure.error = ASC_AIRPLAY_ERROR_UNSUPPORTED
         rawFailure.unsupported = ASC_AIRPLAY_REASON_AIRPLAY2_ONLY
+        // covers: S223
         check(NativeAirPlay.event(rawFailure) == .pairingFailed(id: "", wrongPin: false, .airPlay2Only, detail: ""),
               "native airplay: a pairing failure keeps its unsupported reason")
 
@@ -3976,6 +4043,7 @@ do {
     }
 
     let names: (String) -> String? = { $0 == "A1" ? "Kitchen" : nil }
+    // covers: S170, S222
     check(NativeSpeakerEvent.state(id: "A1", .retrying, retryMs: 2500).logLine(name: names)
             == "[AudioSync] native AirPlay: Kitchen (A1): retrying, trying again in 2.5 s",
           "native airplay: a retrying state's log line")
@@ -3983,9 +4051,11 @@ do {
     check(NativeSpeakerEvent.state(id: "A1", .unannounced, retryMs: nil).logLine(name: names)
             == "[AudioSync] native AirPlay: Kitchen (A1): unannounced, waiting until it is announced again",
           "P215 native airplay: an unannounced state's log line, as on Windows")
+    // covers: S170, S222
     check(NativeSpeakerEvent.error(id: "Z9", .notResponding, retryMs: nil, detail: "Unreachable").logLine(name: names)
             == "[AudioSync] native AirPlay: Z9 error: not responding (Unreachable); it needs the user",
           "native airplay: an error's log line")
+    // covers: S170, S222, S282
     check(NativeSpeakerEvent.latency(id: "A1", ms: 1750, receiverFrames: 2205).logLine(name: names)
             == "[AudioSync] native AirPlay: Kitchen (A1) latency: L + d_s = 1750 ms, the receiver reports 2205 frames; "
                 + "reports nothing"
@@ -4226,15 +4296,18 @@ do {
 
     var volumes = NativeAirPlayModel()
     volumes.apply(.appeared(receiver("A1", "Kitchen", .available)))
+    // covers: S291
     check(volumes.apply(.volume(id: "A1", position: 80, level: 50.4)) == nil,
           "native airplay: a volume from a speaker the app didn't add moves no slider")
     volumes.added("A1")
+    // covers: S291
     check(volumes.apply(.volume(id: "A1", position: 80, level: 50.4)) == .volumeChanged("native:A1", 80, 50.4),
           "native airplay: a volume changed on the speaker moves its slider")
     // covers: S358
     check(volumes.apply(.warning(id: "A1", ptpPortsTaken: true, detail: "PtpUnavailable")) == .ptpPortsTaken
             && volumes.apply(.warning(id: "A1", ptpPortsTaken: false, detail: "JackDisconnected")) == nil,
           "native airplay: of the warnings, only a PTP port clash becomes a notice")
+    // covers: S222
     check(NativeSpeakerEvent.volume(id: "A1", position: 79.6, level: 50.4).logLine(name: names)
             == "[AudioSync] native AirPlay: Kitchen (A1) volume changed on the speaker: device level 50.4, own volume 80"
             && NativeSpeakerEvent.warning(id: "Z9", ptpPortsTaken: false, detail: "JackDisconnected").logLine(name: names)
@@ -4781,6 +4854,7 @@ do {
             == NativeAirPlayPlan(add: [pair], remove: [], turnOff: [], release: [left]),
           "P176 native airplay: the pair is added as one speaker; a member that was on by itself is switched off for it")
     model.added(left)
+    // covers: P176
     check(model.plan(streaming: true, enabled: on).remove == [left],
           "P176 native airplay: a member playing by itself leaves the sender when its pair is switched on")
     model.removed(left)
@@ -4799,6 +4873,7 @@ do {
             + "is passed over", "\(unlisted.rows(enabled: []))")
     check(!NativeAirPlayPlan(add: ["K3"], remove: [], turnOff: []).changesRows,
           "native airplay: a plan that only adds speakers leaves the rows to the sender's events")
+    // covers: P176
     check(model.holdingTarget(right, on: false) == pair && model.holdingTarget("K3", on: false) == nil,
           "P176 native airplay: a member of a listed pair can't be turned on by itself")
 
@@ -4810,9 +4885,11 @@ do {
     single.apply(.appeared(member(right, "Right", of: pair)))
     single.apply(.appeared(target(pair, "Living Room")))
     let leftOn: Set<String> = [app(left)]
+    // covers: P176
     check(single.rows(enabled: leftOn).contains(app(left)) && single.plan(streaming: true, enabled: leftOn).isEmpty
             && single.holdingTarget(left, on: true) == nil,
           "P176 native airplay: a member left on by itself before its pair was listed keeps playing and keeps its row")
+    // covers: P176
     check(!single.rows(enabled: leftOn).contains(app(right)) && single.rows(enabled: leftOn).contains(app(pair)),
           "P176 native airplay: the member that is off shows as part of the pair")
 
