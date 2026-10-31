@@ -1459,6 +1459,60 @@ pub(crate) mod tests {
         );
     }
 
+    // covers: S257
+    #[test]
+    fn a_stereo_pair_whose_member_asks_for_a_password_is_turned_on_at_the_pc() {
+        use crate::audio::backend::{AirPlayGroup, AirPlayGroupKind};
+
+        let mut state = zoned();
+        // Its member's password not typed this run, the pair asks for a code.
+        let mut pair = speaker("pair:5f0c", SpeakerKind::AirPlay2, None);
+        pair.availability = Availability::NeedsCode;
+        pair.group = Some(AirPlayGroup {
+            kind: AirPlayGroupKind::StereoPair,
+            members: vec!["Left".into(), "Right".into()],
+            missing: Vec::new(),
+            incomplete: false,
+        });
+        state.speakers.push(pair);
+        state.zones[0].members.push("pair:5f0c".into());
+        state.zones[1].members = vec!["pair:5f0c".into()];
+        state.presets[1].members.push("pair:5f0c".into());
+        let on = SpeakerChange {
+            on: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(
+            actions(&speaker_command("pair:5f0c", on), &state, not_virtual),
+            Err(Refusal::Unavailable)
+        );
+        assert_eq!(
+            actions(&zone_command("zone:a", true, None), &state, not_virtual),
+            Ok(vec![Action::ToggleZone {
+                id: "zone:a".into(),
+                keep_off: vec!["tv".into(), "pair:5f0c".into()],
+            }])
+        );
+        assert_eq!(
+            actions(&zone_command("zone:b", true, None), &state, not_virtual),
+            Err(Refusal::Unavailable),
+            "a zone whose only member is the pair"
+        );
+        assert_eq!(
+            actions(
+                &Command::Preset {
+                    id: "preset:b".into()
+                },
+                &state,
+                not_virtual
+            ),
+            Ok(vec![Action::RecallPreset {
+                id: "preset:b".into(),
+                keep_off: vec!["tv".into(), "pair:5f0c".into()],
+            }])
+        );
+    }
+
     // covers: S258
     #[test]
     fn the_host_refuses_a_command_that_arrives_during_a_run() {

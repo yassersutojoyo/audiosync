@@ -3921,6 +3921,7 @@ The checks for S256 to S258, S287, S288, S337, S338 and S343 to S345 and S348 in
 | a_phone_switch_on_whose_password_is_turned_down_opens_no_password_dialog | S257 |
 | a_phone_zone_click_or_recall_leaves_a_code_asking_member_off_with_a_notice | S257 |
 | a_phone_can_switch_off_a_speaker_that_is_on_whatever_its_availability | S257 |
+| a_stereo_pair_whose_member_asks_for_a_password_is_turned_on_at_the_pc | S257 |
 | a_row_click_turns_off_a_will_play_speaker_that_cant_be_switched_on (`desktop/src/ui_model.rs`) | S257 |
 | web remote: a zone lists its listed members in zone order with on, total and waiting; one not listed counts only in all | S256 |
 | web remote: a zone command sets the zone's volume, then flips it; a preset command recalls it | S257 |

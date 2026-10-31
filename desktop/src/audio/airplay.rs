@@ -1899,11 +1899,17 @@ impl AirPlaySpeakers {
     }
 
     /// Whether the speaker `id` plays only as part of its target: the sender
-    /// holds it for one, or it is off and its target is listed (P176). One
-    /// left on by itself before its target was listed still plays alone.
+    /// holds it for one, or it is off and its listing names a target, listed
+    /// yet or not, while targets are listed at all (P176). One left on by
+    /// itself before its listing named a target still plays alone.
     fn held_by_target(&self, id: &str) -> bool {
         self.added_target_of(id).is_some()
-            || (self.target_of(id).is_some() && !self.settings(id).enabled)
+            || (self.link.airplay2()
+                && self
+                    .listed
+                    .get(id)
+                    .is_some_and(|listed| listed.info.target.is_some())
+                && !self.settings(id).enabled)
     }
 
     /// The stereo pair or home theater group that holds the speaker `id`,
@@ -1932,25 +1938,37 @@ impl AirPlaySpeakers {
         self.targets.get(&target.to_string())
     }
 
-    /// Whether the members of `target` in view can play; otherwise why the
-    /// first that can't doesn't. A member that asks for a PIN is paired
-    /// from its own row only, which a target hides; one that asks for a
-    /// password is asked for it by name when the target is switched on.
+    /// Whether `target` can be switched on: a member that asks for a
+    /// password is asked for it by name first; otherwise it can while a
+    /// member in view can play, and one that refuses is handled when it
+    /// connects (P176, P181). With none that can, why the first doesn't; a
+    /// member that asks for a PIN is paired from its own row only, which a
+    /// target hides.
     fn target_availability(&self, target: &Target) -> AirPlayAvailability {
-        target
+        let members: Vec<AirPlayAvailability> = target
             .members
             .iter()
             .map(|member| speaker_id(&member.key))
-            .filter_map(|id| match self.listed_availability(&id)? {
-                AirPlayAvailability::Open => None,
-                AirPlayAvailability::NeedsPassword if self.passwords.contains_key(&id) => None,
-                AirPlayAvailability::NeedsPin | AirPlayAvailability::PairingNotYet => {
-                    Some(AirPlayAvailability::PairingNotYet)
-                }
-                availability => Some(availability),
+            .filter_map(|id| {
+                Some(match self.listed_availability(&id)? {
+                    AirPlayAvailability::NeedsPassword if self.passwords.contains_key(&id) => {
+                        AirPlayAvailability::Open
+                    }
+                    AirPlayAvailability::NeedsPin => AirPlayAvailability::PairingNotYet,
+                    availability => availability,
+                })
             })
-            .next()
-            .unwrap_or(AirPlayAvailability::Open)
+            .collect();
+        if members.contains(&AirPlayAvailability::NeedsPassword) {
+            AirPlayAvailability::NeedsPassword
+        } else if members.contains(&AirPlayAvailability::Open) {
+            AirPlayAvailability::Open
+        } else {
+            members
+                .first()
+                .copied()
+                .unwrap_or(AirPlayAvailability::Open)
+        }
     }
 
     /// The listed home theater group whose Apple TV is `id`.
@@ -10142,7 +10160,7 @@ pub mod tests {
         assert_eq!(ids, [PAIR]);
     }
 
-    // covers: P181
+    // covers: P181, P176
     #[test]
     fn a_member_error_is_the_pairs_only_while_no_other_member_plays() {
         let fake = FakeAirPlay::new();
@@ -10283,6 +10301,9 @@ pub mod tests {
         airplay.set_streaming(true);
         airplay.set_enabled(PAIR, true).expect("the pair can play");
         fake.state(&left, SpeakerState::Playing);
+        // The sender lists the members without the pair before it goes.
+        fake.change(&left);
+        fake.change(&right);
         fake.target_gone(&pair);
         airplay.poll();
         fake.take_calls();
@@ -10333,6 +10354,42 @@ pub mod tests {
             airplay.set_enabled(&id_of(&right), true),
             Err(AirPlayProblem::PlaysInGroup)
         );
+    }
+
+    // covers: P176
+    #[test]
+    fn a_member_that_names_its_pair_is_held_before_the_pair_is_listed() {
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        let (pair, left, _) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        airplay.poll();
+        assert!(
+            airplay.speakers().is_empty(),
+            "auto-connect never sees Left alone"
+        );
+        assert_eq!(
+            airplay.set_enabled(&id_of(&left), true),
+            Err(AirPlayProblem::PlaysInGroup)
+        );
+    }
+
+    // covers: P176, P181
+    #[test]
+    fn a_pair_whose_member_asks_for_a_pin_can_be_switched_on() {
+        let fake = FakeAirPlay::new();
+        let (mut pair, left, _) = stereo_pair();
+        let right = airplay2_device(22, "Right", true);
+        pair.members[1] = member_of(&right);
+        let mut airplay = with_target(&fake, &pair, &[&left, &right]);
+        airplay.set_streaming(true);
+        assert_eq!(
+            airplay.speakers()[0].availability,
+            AirPlayAvailability::Open
+        );
+        airplay.set_enabled(PAIR, true).expect("Left can play");
+        assert!(matches!(&fake.take_calls()[..], [Call::AddTarget { id, .. }] if id == PAIR));
     }
 
     // covers: P176
@@ -10448,6 +10505,8 @@ pub mod tests {
         airplay.set_enabled(PAIR, true).expect("the pair can play");
         airplay.begin_attempt(PAIR);
         fake.state(&left, SpeakerState::Connecting);
+        fake.change(&left);
+        fake.change(&right);
         fake.target_gone(&pair);
         airplay.poll();
         fake.fail(&right, ErrorKind::PasswordRequired);

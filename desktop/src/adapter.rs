@@ -16874,17 +16874,18 @@ mod tests {
 
         let (mut adapter, fake, _) = airplay2_adapter(true);
         let (pair, left, right) = stereo_pair();
-        fake.appear_in(&left, &pair);
-        fake.appear_in(&right, &pair);
+        fake.appear(&left);
         adapter.poll();
-        // Held by its listed pair it has no row, so its row is built here.
+        // Held by its pair it has no row, so its row is built here.
         let listed = adapter
             .audio
             .airplay_speakers()
             .into_iter()
             .find(|speaker| airplay_key(&speaker.id) == ap(&left))
-            .expect("Left is listed until its pair is");
+            .expect("Left is listed until it names its pair");
         let left_id = listed.id.clone();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
         fake.target(&pair);
         adapter.poll();
         adapter.rename_speaker("ap:pair:5f0c", "Lounge");
@@ -16909,15 +16910,16 @@ mod tests {
 
         let (mut adapter, fake, _) = airplay2_adapter(true);
         let (pair, left, right) = stereo_pair();
-        fake.appear_in(&left, &pair);
-        fake.appear_in(&right, &pair);
+        fake.appear(&left);
         adapter.poll();
         let listed = adapter
             .audio
             .airplay_speakers()
             .into_iter()
             .find(|speaker| airplay_key(&speaker.id) == ap(&left))
-            .expect("Left is listed until its pair is");
+            .expect("Left is listed until it names its pair");
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
         fake.target(&pair);
         adapter.audio.poll();
         let row = adapter.airplay_speaker(listed, None);

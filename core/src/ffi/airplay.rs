@@ -10482,6 +10482,7 @@ mod tests {
         })
     }
 
+    // covers: P176
     #[test]
     fn a_pair_member_failing_while_the_other_connects_leaves_the_pair_on() {
         let retry = Instant::now() + Duration::from_secs(1);
@@ -10534,6 +10535,7 @@ mod tests {
         );
     }
 
+    // covers: P176
     #[test]
     fn the_only_playing_pair_member_lost_reports_its_error_for_the_pair() {
         let retry = Instant::now() + Duration::from_secs(1);
