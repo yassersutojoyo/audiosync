@@ -2953,6 +2953,7 @@ pub fn picked_curve(index: i32, saved: usize) -> Option<CurveMatch> {
 mod tests {
     use super::*;
 
+    // covers: S220
     #[test]
     fn a_delay_field_takes_digits_after_one_leading_sign_and_blocks_the_rest() {
         for typed in ["", "+", "-", "150", "+150", "\u{2212}250", "-25"] {
@@ -3117,6 +3118,7 @@ mod tests {
         }
     }
 
+    // covers: S381
     #[test]
     fn this_pc_comes_first_then_the_rest_by_name() {
         let state = MockBackend::new().snapshot();

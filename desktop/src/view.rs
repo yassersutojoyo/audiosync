@@ -6426,6 +6426,7 @@ mod tests {
         assert!(is_draft(Some(""), "0"), "an emptied field");
     }
 
+    // covers: S220
     #[test]
     fn a_speakers_delay_field_marks_typing_until_it_applies_or_reverts() {
         let app = app_over(MockBackend::new());
@@ -6555,6 +6556,7 @@ mod tests {
             .expect("the speaker has a row")
     }
 
+    // covers: S362
     #[test]
     fn only_a_local_output_with_an_offset_offers_calibration_and_says_what_it_needs() {
         let app = app_over(MockBackend::new());
@@ -6596,6 +6598,7 @@ mod tests {
         assert!(line.contains("412"), "{line}");
     }
 
+    // covers: S362
     #[test]
     fn a_calibration_that_cannot_start_names_only_what_is_off() {
         fn switch(state: &mut AppState, streaming: bool, desk: bool, reference: bool) {
@@ -6757,6 +6760,7 @@ mod tests {
         );
     }
 
+    // covers: S362
     #[test]
     fn outputs_left_out_by_kind_show_why_on_the_card_and_in_their_delay_controls() {
         let app = app_over(MockBackend::new());
@@ -6923,6 +6927,7 @@ mod tests {
         );
     }
 
+    // covers: S362
     #[test]
     fn the_calibrate_all_card_says_what_holds_it_and_when_nothing_was_clear() {
         let app = app_over(MockBackend::new());
@@ -7062,6 +7067,7 @@ mod tests {
         );
     }
 
+    // covers: S221
     #[test]
     fn the_delay_button_applies_every_typed_delay_and_closes_only_its_controls() {
         let app = app_over(MockBackend::new());
@@ -7085,6 +7091,7 @@ mod tests {
         assert!(ui.delay_drafts.is_empty());
     }
 
+    // covers: S221
     #[test]
     fn enter_applies_its_rows_typed_delay_and_keeps_every_control_open() {
         let app = app_over(MockBackend::new());
@@ -7106,6 +7113,7 @@ mod tests {
         assert_eq!(delay_of(&app, "local:bt"), Some(-250.0));
     }
 
+    // covers: S221
     #[test]
     fn a_click_on_a_rows_box_toggles_its_controls_and_applies_the_typing_first() {
         let app = app_over(MockBackend::new());
@@ -7157,6 +7165,7 @@ mod tests {
         });
     }
 
+    // covers: S221
     #[test]
     fn ctrl_s_applies_every_typed_delay_wherever_the_focus_is_and_keeps_the_controls_open() {
         let app = app_over(MockBackend::new());
@@ -7224,6 +7233,7 @@ mod tests {
         app
     }
 
+    // covers: S221
     #[test]
     fn a_click_on_the_no_airplay_note_under_a_list_works_like_one_on_the_last_row() {
         let app = app_with_the_no_airplay_note(true);
@@ -7368,6 +7378,7 @@ mod tests {
         assert!(!app.flyout.get_no_speaker_on());
     }
 
+    // covers: S221
     #[test]
     fn a_click_on_the_no_airplay_note_alone_is_outside_every_row() {
         let app = app_with_the_no_airplay_note(false);
@@ -7377,6 +7388,7 @@ mod tests {
         assert!(app.ui.borrow().sync_open.is_empty(), "and opened nothing");
     }
 
+    // covers: S221
     #[test]
     fn a_click_on_the_blank_space_of_open_sync_controls_closes_them_and_applies_the_typing() {
         let app = app_with_the_no_airplay_note(true);
@@ -7417,6 +7429,7 @@ mod tests {
         assert!(!app.main.get_delay_typing(), "dropped");
     }
 
+    // covers: S220
     #[test]
     fn closing_the_window_without_a_tray_quits_and_drops_every_typed_delay() {
         let app = app_over(MockBackend::new());
@@ -7475,6 +7488,7 @@ mod tests {
         );
     }
 
+    // covers: S220
     #[test]
     fn a_delay_field_takes_only_digits_and_marks_a_number_out_of_range() {
         let app = app_over(MockBackend::new());
@@ -7506,6 +7520,7 @@ mod tests {
         );
     }
 
+    // covers: S221
     #[test]
     fn a_click_on_a_control_does_only_what_the_control_does() {
         let app = app_over(MockBackend::new());
@@ -7529,6 +7544,7 @@ mod tests {
         assert_eq!(ui.delay_drafts.len(), 2, "with their typing");
     }
 
+    // covers: S221
     #[test]
     fn a_click_outside_every_control_applies_each_typed_delay_and_closes_every_sync_control() {
         // Between the wordmark and the streaming switch, under the left
@@ -7562,6 +7578,7 @@ mod tests {
         }
     }
 
+    // covers: S221
     #[test]
     fn escape_drops_every_typed_delay_and_closes_every_sync_control() {
         let app = app_over(MockBackend::new());
@@ -7581,6 +7598,7 @@ mod tests {
         assert!(ui.delay_drafts.is_empty() && ui.airplay_delay_draft.draft.is_none());
     }
 
+    // covers: S220, S221
     #[test]
     fn leaving_the_delay_field_applies_nothing_and_enter_and_escape_hand_the_focus_back() {
         let app = app_over(MockBackend::new());
@@ -7654,6 +7672,7 @@ mod tests {
         assert!(app.ui.borrow().sync_open.contains("local:desk"));
     }
 
+    // covers: S220
     #[test]
     fn quitting_drops_every_typed_delay_and_keeps_the_applied_ones() {
         let app = app_over(MockBackend::new());
@@ -7747,6 +7766,7 @@ mod tests {
         assert!(app.ui.borrow().rename.is_none());
     }
 
+    // covers: S220
     #[test]
     fn quitting_with_unreadable_typing_keeps_the_applied_delay() {
         let app = app_over(MockBackend::new());
@@ -7903,6 +7923,7 @@ mod tests {
         assert!(!app.main.get_connected_all_hidden());
     }
 
+    // covers: S228
     #[test]
     fn a_rename_applies_on_enter_and_escape_keeps_the_old_name() {
         let app = app_over(MockBackend::new());
@@ -7958,6 +7979,7 @@ mod tests {
         assert_eq!(row_of(&app, "local:desk").system_name, "");
     }
 
+    // covers: S228
     #[test]
     fn one_rename_at_a_time_and_a_click_outside_applies_it() {
         let app = app_over(MockBackend::new());
@@ -7989,6 +8011,7 @@ mod tests {
         assert!(app.ui.borrow().rename.is_none());
     }
 
+    // covers: S228
     #[test]
     fn a_click_on_the_row_being_renamed_only_applies_the_name() {
         let app = app_over(MockBackend::new());
@@ -8010,6 +8033,7 @@ mod tests {
         assert!(app.ui.borrow().sync_open.is_empty(), "no delay panel");
     }
 
+    // covers: S228
     #[test]
     fn the_name_field_stops_at_sixty_characters_while_typing() {
         let app = app_over(MockBackend::new());
@@ -8030,6 +8054,7 @@ mod tests {
         assert_eq!(name_of(&app, "local:desk"), sixty);
     }
 
+    // covers: S228
     #[test]
     fn a_speaker_gone_mid_rename_closes_its_field() {
         let app = app_over(MockBackend::new());
@@ -8212,6 +8237,7 @@ mod tests {
             .clone()
     }
 
+    // covers: S228, S359
     #[test]
     fn a_double_click_on_a_zone_name_renames_it_in_its_header_and_a_single_one_folds_it() {
         hold_clock();
@@ -8315,6 +8341,7 @@ mod tests {
         );
     }
 
+    // covers: S228
     #[test]
     fn a_renamed_row_shows_its_device_name_in_the_name_tooltip() {
         let app = app_over(MockBackend::new());
@@ -8398,6 +8425,7 @@ mod tests {
         );
     }
 
+    // covers: S228
     #[test]
     fn leaving_the_name_field_for_another_control_applies_the_name() {
         let app = app_over(MockBackend::new());
@@ -8425,6 +8453,7 @@ mod tests {
         assert_eq!(name_of(&app, "local:desk"), "Desk");
     }
 
+    // covers: S228
     #[test]
     fn leaving_the_name_field_for_the_master_volume_or_airplay_delay_applies_the_name() {
         let app = app_over(MockBackend::new());
@@ -8779,6 +8808,7 @@ mod tests {
         }
     }
 
+    // covers: S313
     #[test]
     fn an_airplay_row_names_which_airplay() {
         let app = app_over(MockBackend::new());
@@ -9923,6 +9953,7 @@ mod tests {
         );
     }
 
+    // covers: S359
     #[test]
     fn go_to_zone_with_no_member_found_lands_on_the_arrow_which_folds_it() {
         let mut backend = MockBackend::new();
@@ -9954,6 +9985,7 @@ mod tests {
         assert!(expanded(), "Enter unfolded it");
     }
 
+    // covers: S359
     #[test]
     fn a_zone_header_folds_and_unfolds_through_its_accessibility_actions() {
         use i_slint_backend_testing::ElementHandle;
@@ -10003,6 +10035,7 @@ mod tests {
         assert!(expanded(), "Expand on the zone's toggle unfolded it");
     }
 
+    // covers: S359
     #[test]
     fn a_flyout_zone_header_folds_and_unfolds_through_its_accessibility_actions() {
         use i_slint_backend_testing::ElementHandle;
@@ -10050,6 +10083,7 @@ mod tests {
         assert!(expanded(), "Expand on the flyout zone's toggle unfolded it");
     }
 
+    // covers: S150, S245, S359
     #[test]
     fn speakers_move_between_zones_and_back_from_their_menus() {
         let app = app_over(MockBackend::zones_preview());
@@ -10105,6 +10139,7 @@ mod tests {
         assert_eq!(app.models.zones.row_count(), 3);
     }
 
+    // covers: S150, S228
     #[test]
     fn a_zone_is_renamed_from_its_menu_in_its_header_like_a_speaker() {
         let app = app_over(MockBackend::zones_preview());
@@ -10153,6 +10188,7 @@ mod tests {
         );
     }
 
+    // covers: S150
     #[test]
     fn the_zone_name_field_stops_at_sixty_characters_while_typing() {
         let app = app_over(MockBackend::zones_preview());
@@ -10172,6 +10208,7 @@ mod tests {
         assert_eq!(app.models.zones.row_data(2).unwrap().name.as_str(), sixty);
     }
 
+    // covers: S247
     #[test]
     fn use_target_instead_swaps_the_member_for_its_pair() {
         let app = app_over(MockBackend::zones_preview());
@@ -10425,6 +10462,7 @@ mod tests {
         );
     }
 
+    // covers: S359
     #[test]
     fn folding_a_zone_in_the_flyout_removes_its_member_rows() {
         assert_eq!(listed_members(true, 3), 3);
@@ -10869,6 +10907,7 @@ mod tests {
         assert_eq!(app.snapshot().zones.len(), zones, "no zone was made");
     }
 
+    // covers: S270
     #[test]
     fn curves_are_saved_picked_renamed_and_deleted_and_custom_is_no_entry() {
         let mut mock = MockBackend::new();
@@ -12486,6 +12525,7 @@ mod tests {
 
     /// Only a notice posted after launch is news, once: the newest one when
     /// several arrive together, and again after the list was emptied.
+    // covers: S153
     #[test]
     fn the_announcer_picks_each_new_notice_once() {
         let mut a = NoticeAnnouncer::default();
@@ -12504,6 +12544,7 @@ mod tests {
     /// A notice posted again for the same subject with the same title (an
     /// AirPlay speaker that keeps retrying) is not news; a new title for
     /// that subject is, and so is the same notice after it was dismissed.
+    // covers: S153
     #[test]
     fn a_repost_of_the_same_notice_is_not_announced_again() {
         let mut a = NoticeAnnouncer::default();
@@ -12677,6 +12718,7 @@ mod tests {
 
     /// The tray icon's tooltip names the newest notice on a second line while
     /// there is one, and fits the 127 characters Windows shows.
+    // covers: S153
     #[test]
     fn the_tray_tooltip_follows_the_newest_notice() {
         let mut backend = MockBackend::new();
