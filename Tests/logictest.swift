@@ -12888,11 +12888,48 @@ do {
           "cast+airplay: nothing waits unless both are chosen")
     // covers: P99
     check(NetworkHoldBack.airPlayLimitMs == 20_000
-            && NetworkHoldBack.airPlayAppliedMs(13_000) == 13_000 && NetworkHoldBack.airPlayAheadMs(13_000) == 0
-            && NetworkHoldBack.airPlayAppliedMs(23_000) == 20_000 && NetworkHoldBack.airPlayAheadMs(23_000) == 3000,
+            && NetworkHoldBack.airPlayAppliedMs(13_000) == 13_000 && NetworkHoldBack.airPlayAheadMs(13_000, offsetsMs: [0]) == 0
+            && NetworkHoldBack.airPlayAppliedMs(23_000) == 20_000 && NetworkHoldBack.airPlayAheadMs(23_000, offsetsMs: [0]) == 3000,
           "cast+airplay: the sender holds AirPlay back up to 20 000 ms and past that plays ahead by the rest")
 
     let kitchen = "kitchen-1"
+    // L is 1.75 s and the Cast offset 20 s: 18.25 s of hold-back on top of
+    // Den's receiver offset E - e_s of 3.25 s is 1.5 s past the limit, as on Windows.
+    var offsetAhead = AirPlayAheadNotice()
+    // covers: S401
+    check(NetworkHoldBack.airPlayAheadMs(18_250, offsetsMs: [0, 3250]) == 1500
+            && NetworkHoldBack.airPlayAheadMs(18_250, offsetsMs: [0, 1750]) == 0
+            && NetworkHoldBack.airPlayAheadMs(23_000, offsetsMs: []) == 0
+            && offsetAhead.update(device: kitchen, aheadMs: NetworkHoldBack.airPlayAheadMs(18_250, offsetsMs: [0, 3250]))?
+                .post?.tenths == 15,
+          "cast+airplay: a speaker's receiver offset counts toward the delay limit")
+    do {
+        // A1 at 50 ms, then J9 at 1000 ms moves E; A1 alone moves to 700 ms while B2 at 1000 ms keeps E; A1 leaves.
+        var estimates: [[Double]] = []
+        var moved: [[Double]] = []
+        weak var probe: NativeAirPlay?
+        let sender = NativeAirPlay(onChange: { _ in }, onEvent: { event, _ in
+            if case .estimate = event { estimates.append(probe?.speakerOffsetsMs.sorted() ?? []) }
+        })
+        probe = sender
+        sender.onOffsetsMoved = { moved.append(probe?.speakerOffsetsMs.sorted() ?? []) }
+        for (row, us) in [("A1", 50_000), ("J9", 1_000_000)] as [(String, Int64)] {
+            sender.model.receiverLatency.report(row, us: us)
+            sender.add(row, volume: 50)
+        }
+        sender.model.receiverLatency.report("A1", us: 700_000)
+        sender.model.receiverLatency.report("B2", us: 1_000_000)
+        sender.add("B2", volume: 50)
+        sender.remove("A1")
+        var notice = AirPlayAheadNotice()
+        let tenths = moved.map { notice.update(device: kitchen, aheadMs: NetworkHoldBack.airPlayAheadMs(19_800, offsetsMs: $0))?
+            .post?.tenths }
+        // covers: S401
+        check(estimates == [[0], [0, 950]] && moved == [[0, 950], [0, 0, 300], [0, 0]] && tenths == [8, 1, nil],
+              "cast+airplay: the amount follows a new E, a receiver offset that moves alone and a removed speaker",
+              "estimates \(estimates), moved \(moved), tenths \(tenths)")
+        sender.shutdown()
+    }
     var ahead = AirPlayAheadNotice()
     // covers: S401
     check(ahead.update(device: kitchen, aheadMs: 0) == nil && ahead.update(device: kitchen, aheadMs: 49) == nil,

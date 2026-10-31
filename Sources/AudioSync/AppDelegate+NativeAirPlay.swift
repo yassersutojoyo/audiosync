@@ -40,6 +40,7 @@ extension AppDelegate {
             onChange: { [weak self] change in self?.nativeReceiverChanged(change) },
             onEvent: { [weak self] event, outcome in self?.nativeSpeakerEvent(event, outcome) })
         native.onRemote = { [weak self] command in self?.sendTransport(command) }
+        native.onOffsetsMoved = { [weak self] in self?.syncNetworkHoldBacks() }   // the AirPlay-ahead amount (S401)
         nativeAirPlay = native   // reconciles meanwhile don't start a second one
         sendPlayback()
         native.setZones(nativeZoneVolumes())

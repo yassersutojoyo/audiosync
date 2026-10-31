@@ -1170,8 +1170,11 @@ enum NetworkHoldBack {
     /// The part of the AirPlay hold-back `wantedMs` the sender plays.
     static func airPlayAppliedMs(_ wantedMs: Double) -> Double { min(max(0, wantedMs), airPlayLimitMs) }
 
-    /// How far ahead of the Cast device the AirPlay speakers play.
-    static func airPlayAheadMs(_ wantedMs: Double) -> Double { max(0, wantedMs - airPlayLimitMs) }
+    /// How far ahead of the Cast device the AirPlay speaker furthest past
+    /// the limit plays: the sender caps hold-back plus its offset E - e_s (S283).
+    static func airPlayAheadMs(_ wantedMs: Double, offsetsMs: [Double]) -> Double {
+        offsetsMs.map { wantedMs + $0 - airPlayLimitMs }.reduce(0, max)
+    }
 }
 
 /// The notice that the AirPlay speakers play ahead of the Cast device that

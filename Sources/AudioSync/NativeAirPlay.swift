@@ -139,7 +139,7 @@ final class NativeAirPlay {
     /// Removes the speaker `id` from the sender. Main queue.
     func remove(_ id: String) {
         model.removed(id)
-        sentOffsets.removeValue(forKey: id)
+        let hadOffset = sentOffsets.removeValue(forKey: id) != nil
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
             _ = asc_airplay_remove_speaker(handle, id)
@@ -147,7 +147,7 @@ final class NativeAirPlay {
         }
         if model.states.isEmpty { latencyWarned.removeAll() }
         syncLatency(canChange: model.states.isEmpty)
-        sendOffsets()
+        sendOffsets(moved: hadOffset)
     }
 
     /// The slider position (0 to 100) of the speaker `id`, live.
@@ -465,18 +465,30 @@ final class NativeAirPlay {
             + (each.isEmpty ? "no speaker" : each.joined(separator: "; "))
     }
 
+    /// The offset E - e_s each row in the sender has, in ms (S283), also
+    /// while a new E's `.latencyChanged` runs ahead of `sendOffsets`.
+    var speakerOffsetsMs: [Double] {
+        model.states.keys.map { model.receiverLatency.offsetMs(row: $0, of: model.sessions(of: $0)) }
+    }
+    /// Called when a row's offset E - e_s moved (main queue).
+    var onOffsetsMoved: (() -> Void)?
+
     /// Gives each row in the sender whose offset E - e_s moved its new one
-    /// (S283). Main queue, after the row's add on the queue.
-    private func sendOffsets() {
+    /// (S283). Main queue, after the row's add on the queue. `moved`: a row
+    /// with an offset left the sender.
+    private func sendOffsets(moved: Bool = false) {
+        var moved = moved
         for row in model.states.keys.sorted() {
             let offset = model.receiverLatency.offsetMs(row: row, of: model.sessions(of: row))
             guard offset != (sentOffsets[row] ?? 0) else { continue }
             sentOffsets[row] = offset
+            moved = true
             queue.async { [weak self] in
                 guard let handle = self?.handle else { return }
                 _ = asc_airplay_set_speaker_offset(handle, row, offset)
             }
         }
+        if moved { onOffsetsMoved?() }
     }
 
     /// Tears everything down and waits for it (at most about 2 s): the input

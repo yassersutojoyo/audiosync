@@ -187,7 +187,8 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] Cast: the feed is held back \(Int(castWait.rounded())) ms to meet L")
         }
         let device = cast == nil ? nil : castModel.enabled
-        guard let step = airPlayAheadNotice.update(device: device, aheadMs: NetworkHoldBack.airPlayAheadMs(wanted)) else { return }
+        let aheadMs = NetworkHoldBack.airPlayAheadMs(wanted, offsetsMs: nativeAirPlay?.speakerOffsetsMs ?? [])
+        guard let step = airPlayAheadNotice.update(device: device, aheadMs: aheadMs) else { return }
         if let cleared = step.clear { clearNotices([Notice.airPlayAhead(cleared)]) }
         if let shown = step.post {
             postNotice(text.airPlayAheadOfCast(tenths: shown.tenths, speaker: castName(shown.device)),
