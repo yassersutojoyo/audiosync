@@ -21,7 +21,13 @@ pub fn fitting(typed: &str) -> String {
 pub fn normalized(typed: &str) -> String {
     let one_line: String = typed
         .chars()
-        .map(|c| if c == '\r' || c == '\n' { ' ' } else { c })
+        .map(|c| {
+            if matches!(c, '\n'..='\r' | '\u{85}' | '\u{2028}' | '\u{2029}') {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect();
     let cut = fitting(one_line.trim());
     cut.trim_end().to_owned()
@@ -116,6 +122,16 @@ mod tests {
     fn a_name_is_cut_at_60_unicode_scalars_the_same_count_on_both_hosts() {
         let typed = format!("{}e\u{301}xyz", "a".repeat(59));
         assert_eq!(normalized(&typed), format!("{}e", "a".repeat(59)));
+    }
+
+    // covers: S228
+    #[test]
+    fn every_unicode_line_break_becomes_a_space_as_on_the_mac() {
+        assert_eq!(
+            normalized("Desk\u{2028}Left\u{85}Rear\u{b}Top"),
+            "Desk Left Rear Top"
+        );
+        assert_eq!(normalized("A\u{c}B\u{2029}C"), "A B C");
     }
 
     // covers: S228
