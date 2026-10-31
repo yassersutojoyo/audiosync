@@ -6457,6 +6457,7 @@ pub mod tests {
         assert!(fake.take_calls().contains(&Call::StartPairing(id)));
     }
 
+    // covers: S356
     #[test]
     fn a_session_refused_before_any_pairing_step_names_no_code() {
         let fake = FakeAirPlay::new();
@@ -9633,6 +9634,7 @@ pub mod tests {
         );
     }
 
+    // covers: S358
     #[test]
     fn only_a_ptp_bind_after_the_clash_says_the_ports_are_free() {
         let fake = FakeAirPlay::new();
@@ -9773,6 +9775,7 @@ pub mod tests {
         );
     }
 
+    // covers: S358
     #[test]
     fn only_the_ptp_port_clash_asks_for_a_notice() {
         let fake = FakeAirPlay::new();

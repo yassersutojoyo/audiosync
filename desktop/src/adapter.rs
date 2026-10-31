@@ -5967,6 +5967,7 @@ mod tests {
         }
     }
 
+    // covers: S242, S353 (one app checked is a plain app source)
     #[test]
     fn checking_apps_builds_a_mix_and_unchecking_them_goes_back_to_one_app_or_the_system() {
         let player = Chosen::App {
@@ -6027,6 +6028,7 @@ mod tests {
         assert_eq!(Chosen::WholeSystem.notice_name(), None);
     }
 
+    // covers: S242
     #[test]
     fn all_except_keeps_one_app_as_a_mix_and_switching_mode_carries_the_checked_apps() {
         let except = mix_toggle(
@@ -6194,6 +6196,7 @@ mod tests {
             .collect()
     }
 
+    // covers: S14
     #[test]
     fn an_input_channel_pair_restarts_capture_and_is_kept_per_device() {
         let mut adapter = adapter();
@@ -6549,6 +6552,7 @@ mod tests {
         assert_eq!(messages(&adapter), away, "the same input");
     }
 
+    // covers: S211, S381
     #[test]
     fn the_snapshot_shows_the_sources_and_outputs_listed() {
         let state = adapter().snapshot();
@@ -6662,6 +6666,7 @@ mod tests {
         assert!(playing(&adapter).is_empty());
     }
 
+    // covers: S162
     #[test]
     fn streaming_starts_with_every_speaker_off_and_the_first_one_on_plays() {
         let mut adapter = adapter();
@@ -6685,6 +6690,7 @@ mod tests {
         assert!(!adapter.snapshot().no_speaker_on);
     }
 
+    // covers: S162
     #[test]
     fn a_speaker_that_fails_to_start_leaves_a_session_with_no_speaker_waiting() {
         let mut adapter = adapter();
@@ -6712,6 +6718,7 @@ mod tests {
         assert!(!adapter.snapshot().running);
     }
 
+    // covers: S162
     #[test]
     fn a_session_with_no_speaker_yet_waits_through_a_source_switch() {
         let mut adapter = adapter();
@@ -6817,6 +6824,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S162
     #[test]
     fn a_first_install_turns_the_pc_speakers_on_once() {
         let dir = test_dir("adapter-first-install");
@@ -6854,6 +6862,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S162
     #[test]
     fn a_config_from_before_turns_nothing_on() {
         let dir = test_dir("adapter-existing-config");
@@ -6883,6 +6892,7 @@ mod tests {
         assert_eq!(playing(&adapter), [SPEAKERS]);
     }
 
+    // covers: S71, S175, S176
     #[test]
     fn volumes_delays_and_the_master_reach_the_audio_backend() {
         let mut adapter = adapter();
@@ -7050,6 +7060,7 @@ mod tests {
         assert!(messages(&adapter).contains(&NoticeMessage::CaptureLost));
     }
 
+    // covers: S246
     #[test]
     fn a_zone_switches_its_present_members_together() {
         let mut adapter = adapter();
@@ -7132,6 +7143,7 @@ mod tests {
         assert!(!adapter.audio.cast_on());
     }
 
+    // covers: S150, S245
     #[test]
     fn a_new_zone_needs_a_speaker_that_is_on_and_names_can_change() {
         let mut adapter = adapter();
@@ -7187,6 +7199,7 @@ mod tests {
         assert_eq!(names, [long.as_str(), "Den Study"]);
     }
 
+    // covers: S150, S245
     #[test]
     fn a_speaker_moves_between_zones_from_its_menu() {
         let mut adapter = adapter();
@@ -7394,6 +7407,7 @@ mod tests {
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
 
+    // covers: S163
     #[test]
     fn a_new_source_while_streaming_starts_capture_again() {
         let mut adapter = adapter();
@@ -7415,6 +7429,7 @@ mod tests {
         );
     }
 
+    // covers: S21
     #[test]
     fn capture_that_fails_while_streaming_stops_it_with_a_notice() {
         let mut adapter = adapter();
@@ -7428,6 +7443,7 @@ mod tests {
         assert_eq!(messages(&adapter), [NoticeMessage::CaptureLost]);
     }
 
+    // covers: S329
     #[test]
     fn capture_lost_to_a_windows_audio_restart_comes_back_without_a_notice() {
         let mut adapter = adapter();
@@ -7501,6 +7517,7 @@ mod tests {
         );
     }
 
+    // covers: S69
     #[test]
     fn an_output_that_cant_start_is_turned_off_with_a_notice() {
         let mut adapter = adapter();
@@ -7523,6 +7540,7 @@ mod tests {
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
     }
 
+    // covers: S69
     #[test]
     fn streaming_stops_when_the_only_output_cant_start() {
         let mut adapter = adapter();
@@ -7560,6 +7578,7 @@ mod tests {
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
     }
 
+    // covers: S137
     #[test]
     fn an_output_a_refresh_no_longer_lists_is_reported() {
         let mut adapter = adapter();
@@ -7674,6 +7693,7 @@ mod tests {
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
 
+    // covers: S330, S331
     #[test]
     fn a_stream_that_resets_while_its_device_stays_gets_no_notice() {
         let mut adapter = adapter();
@@ -7696,6 +7716,7 @@ mod tests {
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
 
+    // covers: S68, S331
     #[test]
     fn a_speaker_whose_stream_dies_before_its_device_leaves_the_list_is_reported() {
         let mut adapter = adapter();
@@ -8038,6 +8059,7 @@ mod tests {
         assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1]);
     }
 
+    // covers: S331
     #[test]
     fn a_speaker_another_app_holds_stays_on_with_a_notice_until_it_is_free() {
         let mut adapter = adapter();
@@ -8068,6 +8090,7 @@ mod tests {
         state.speaker_state(state.speaker(id).expect("listed"))
     }
 
+    // covers: S331
     #[test]
     fn a_busy_speaker_row_waits_for_its_device_until_it_plays_or_is_turned_off() {
         let waiting = SpeakerState::Waiting(ui_model::Waiting::ForDevice);
@@ -8106,6 +8129,7 @@ mod tests {
         assert_eq!(state_of(&adapter, &key(HEADPHONES)), SpeakerState::Playing);
     }
 
+    // covers: S331
     #[test]
     fn the_only_speaker_being_busy_keeps_streaming_on() {
         let mut adapter = adapter();
@@ -8241,6 +8265,7 @@ mod tests {
         assert!(notices.iter().all(|n| n.id != old), "{notices:?}");
     }
 
+    // covers: S23
     #[test]
     fn the_equalizer_is_quantized_and_reaches_the_capture() {
         let mut adapter = adapter();
@@ -8268,6 +8293,7 @@ mod tests {
         assert!(!adapter.poll());
     }
 
+    // covers: S355
     #[test]
     fn sources_are_listed_again_every_few_polls_and_on_refresh() {
         let mut adapter = adapter();
@@ -8652,6 +8678,7 @@ mod tests {
             .delay_frames
     }
 
+    // covers: S222
     #[test]
     fn an_airplay_receiver_that_appears_becomes_a_connected_speaker_row() {
         let (mut adapter, fake, kitchen, study) = airplay_adapter();
@@ -8723,6 +8750,7 @@ mod tests {
         assert_eq!(names.get(&id_of(&den)).map(String::as_str), Some("Den"));
     }
 
+    // covers: S176
     #[test]
     fn turning_an_airplay_speaker_on_and_off_lines_local_outputs_up_and_back() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
@@ -8747,6 +8775,7 @@ mod tests {
         assert!(adapter.snapshot().running, "Speakers is still on");
     }
 
+    // covers: S162
     #[test]
     fn an_airplay_speaker_alone_starts_and_stops_streaming() {
         let (mut adapter, _fake, kitchen, _) = airplay_adapter();
@@ -8790,6 +8819,7 @@ mod tests {
         (adapter, fake, tv)
     }
 
+    // covers: S228
     #[test]
     fn the_pin_prompt_names_a_renamed_apple_tv_by_its_new_name() {
         let (mut adapter, fake, tv) = apple_tv_adapter();
@@ -8801,6 +8831,7 @@ mod tests {
         assert_eq!(adapter.snapshot().pin_prompt.unwrap().name, "Den");
     }
 
+    // covers: S223
     #[test]
     fn switching_on_an_apple_tv_pairs_it_and_then_it_streams() {
         let (mut adapter, fake, tv) = apple_tv_adapter();
@@ -8868,6 +8899,7 @@ mod tests {
         assert_eq!(fake.take_calls().last(), Some(&Call::Remove(id_of(&tv))));
     }
 
+    // covers: S223
     #[test]
     fn a_second_apple_tv_waits_to_pair_while_the_first_has_the_prompt() {
         let (mut adapter, fake, first) = apple_tv_adapter();
@@ -8902,6 +8934,7 @@ mod tests {
         assert_eq!(availability(&adapter, &second_id), Availability::Pairing);
     }
 
+    // covers: S223
     #[test]
     fn a_wrong_pin_keeps_the_prompt_and_cancel_leaves_the_speaker_off() {
         let (mut adapter, fake, tv) = apple_tv_adapter();
@@ -8953,6 +8986,7 @@ mod tests {
         (adapter, fake, loft)
     }
 
+    // covers: S223
     #[test]
     fn an_airplay2_speaker_asks_for_a_pin_and_plays_once_paired() {
         use crate::audio::pairings::tests::homekit;
@@ -9007,6 +9041,7 @@ mod tests {
         );
     }
 
+    // covers: S223, P182
     #[test]
     fn a_speaker_that_asks_for_a_code_every_time_never_auto_connects() {
         let (mut adapter, fake, loft) = airplay2_adapter(true);
@@ -9072,6 +9107,7 @@ mod tests {
         (adapter, fake, den)
     }
 
+    // covers: S223, P182
     #[test]
     fn an_every_time_speaker_turned_on_by_hand_stays_on_when_it_appears_again() {
         let (mut adapter, fake, den) = every_time_adapter();
@@ -9498,6 +9534,7 @@ mod tests {
         );
     }
 
+    // covers: S223, P182
     #[test]
     fn an_every_time_speaker_whose_pin_prompt_is_open_keeps_it_when_it_appears_again() {
         let (mut adapter, fake, den) = every_time_adapter();
@@ -9534,6 +9571,7 @@ mod tests {
         assert!(state.running);
     }
 
+    // covers: S223, P182
     #[test]
     fn a_listed_speaker_turned_on_by_hand_keeps_its_session_when_it_starts_asking_every_time() {
         use crate::audio::pairings::tests::homekit;
@@ -9868,6 +9906,7 @@ mod tests {
         (adapter, fake, study)
     }
 
+    // covers: S223, P182
     #[test]
     fn a_listed_speaker_on_by_itself_goes_off_once_it_asks_every_time() {
         let (mut adapter, fake, study) = auto_connected_study();
@@ -9888,6 +9927,7 @@ mod tests {
         );
     }
 
+    // covers: S223, P182
     #[test]
     fn a_listed_speaker_on_by_itself_that_plays_keeps_its_session_when_it_asks_every_time() {
         let (mut adapter, fake, study) = auto_connected_study();
@@ -9926,6 +9966,7 @@ mod tests {
         (adapter, fake, loft)
     }
 
+    // covers: S223
     #[test]
     fn no_session_starts_for_a_speaker_whose_pin_pairing_runs() {
         let (adapter, fake, loft) = auto_connected_while_pairing();
@@ -9946,6 +9987,7 @@ mod tests {
         );
     }
 
+    // covers: S223
     #[test]
     fn a_speaker_switched_on_while_its_pairing_runs_ends_off_when_the_pairing_ends_unpaired() {
         for cancelled in [true, false] {
@@ -9979,6 +10021,7 @@ mod tests {
         }
     }
 
+    // covers: S223, S383
     #[test]
     fn a_speaker_that_asks_for_a_code_once_still_auto_connects() {
         use crate::audio::pairings::tests::homekit;
@@ -10144,6 +10187,7 @@ mod tests {
         assert!(messages(adapter).is_empty(), "a new attempt clears it");
     }
 
+    // covers: S223
     #[test]
     fn an_apple_tv_that_turns_its_stored_key_down_asks_for_a_pin_again() {
         let (mut adapter, fake, tv) = apple_tv_adapter();
@@ -10164,6 +10208,7 @@ mod tests {
         assert_asks_for_its_pin_again(&mut adapter, &fake, &tv, "Den TV");
     }
 
+    // covers: S223
     #[test]
     fn an_airplay2_speaker_that_turns_its_stored_key_down_asks_for_a_pin_again() {
         use crate::audio::pairings::tests::homekit;
@@ -10183,6 +10228,7 @@ mod tests {
         assert_asks_for_its_pin_again(&mut adapter, &fake, &loft, "Loft");
     }
 
+    // covers: S223
     #[test]
     fn a_failed_pairing_closes_the_prompt_with_a_notice() {
         let (mut adapter, fake, tv) = apple_tv_adapter();
@@ -10424,6 +10470,7 @@ mod tests {
         assert!(messages(adapter).is_empty());
     }
 
+    // covers: S228
     #[test]
     fn the_password_prompt_names_a_renamed_speaker_by_its_new_name() {
         let (mut adapter, _fake, _, study) = airplay_adapter();
@@ -10433,6 +10480,7 @@ mod tests {
         assert_eq!(adapter.snapshot().password_prompt.unwrap().name, "Office");
     }
 
+    // covers: S223
     #[test]
     fn a_password_speaker_asks_for_its_password_and_plays_with_it() {
         let (mut adapter, fake, _, study) = airplay_adapter();
@@ -10451,6 +10499,7 @@ mod tests {
         );
     }
 
+    // covers: S223
     #[test]
     fn a_wrong_password_asks_again_and_cancel_leaves_the_speaker_off() {
         let (mut adapter, fake, _, study) = airplay_adapter();
@@ -10470,6 +10519,7 @@ mod tests {
         assert!(messages(&adapter).is_empty(), "no notice for a cancel");
     }
 
+    // covers: S223
     #[test]
     fn a_password_changed_on_the_speaker_prompts_on_the_next_switch_on() {
         let (mut adapter, fake, _, study) = airplay_adapter();
@@ -10487,6 +10537,7 @@ mod tests {
         assert!(messages(&adapter).is_empty());
     }
 
+    // covers: S223
     #[test]
     fn a_password_discovery_didnt_announce_prompts_on_the_first_switch_on() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
@@ -10609,6 +10660,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S222
     #[test]
     fn airplay_errors_become_notices() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
@@ -10643,6 +10695,7 @@ mod tests {
         assert!(!adapter.snapshot().running);
     }
 
+    // covers: S222
     #[test]
     fn a_retrying_airplay_speaker_row_says_reconnecting_until_it_plays() {
         let reconnecting = SpeakerState::Waiting(ui_model::Waiting::Reconnecting);
@@ -10780,6 +10833,7 @@ mod tests {
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
 
+    // covers: S285
     #[test]
     fn a_speaker_waiting_for_the_airplay2_slot_says_so_not_reconnecting() {
         use audiosync_airplay::error::UnsupportedReason;
@@ -10966,6 +11020,7 @@ mod tests {
         assert_eq!(state_of(&adapter, &ap(&kitchen)), SpeakerState::Playing);
     }
 
+    // covers: S222
     #[test]
     fn a_sender_that_stops_running_leaves_a_notice() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
@@ -10987,6 +11042,7 @@ mod tests {
         assert!(messages(&adapter).is_empty());
     }
 
+    // covers: S358
     #[test]
     fn the_ptp_port_clash_leaves_a_notice_until_ptp_binds() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
@@ -11013,6 +11069,7 @@ mod tests {
         assert!(messages(&adapter).is_empty());
     }
 
+    // covers: S358
     #[test]
     fn a_ptp_bind_clears_the_notice_even_if_its_session_never_plays() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
@@ -11043,6 +11100,7 @@ mod tests {
         );
     }
 
+    // covers: S358
     #[test]
     fn the_ptp_port_notice_returns_once_per_speaker_refused_while_the_ports_are_taken() {
         use audiosync_airplay::error::{UnsupportedReason, Warning};
@@ -11095,6 +11153,7 @@ mod tests {
         );
     }
 
+    // covers: S358
     #[test]
     fn a_new_sender_ends_the_ptp_port_episode() {
         use audiosync_airplay::error::{UnsupportedReason, Warning};
@@ -11129,6 +11188,7 @@ mod tests {
         );
     }
 
+    // covers: S222
     #[test]
     fn a_discovery_failure_leaves_a_notice() {
         let (mut adapter, fake, kitchen, study) = airplay_adapter();
@@ -11144,6 +11204,7 @@ mod tests {
         );
     }
 
+    // covers: S101, S222
     #[test]
     fn retry_starts_a_new_sender_and_the_speakers_that_were_on_come_back() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
@@ -11196,6 +11257,7 @@ mod tests {
         );
     }
 
+    // covers: S222
     #[test]
     fn a_retry_whose_sender_cant_start_keeps_the_notice() {
         let (mut adapter, fake, _, _) = airplay_adapter();
@@ -11219,6 +11281,7 @@ mod tests {
         AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default())
     }
 
+    // covers: S222
     #[test]
     fn a_sender_that_cant_start_at_launch_leaves_a_notice_whose_retry_starts_one() {
         let fake = FakeAirPlay::new();
@@ -11372,6 +11435,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S222
     #[test]
     fn a_discovery_that_cant_start_at_launch_leaves_a_notice_whose_retry_starts_a_sender() {
         let first = FakeAirPlay::new();
@@ -11412,6 +11476,7 @@ mod tests {
     /// A sender that browses but finds nothing (a firewall that blocks
     /// discovery, a Public network) must not leave an empty list without a
     /// hint; it is a note in the list, not a notice.
+    // covers: S154 (the hint after 20 s of an empty list)
     #[test]
     fn twenty_seconds_of_discovery_without_an_airplay_speaker_show_a_hint() {
         let fake = FakeAirPlay::new();
@@ -11454,6 +11519,7 @@ mod tests {
         assert!(!adapter.snapshot().airplay_searching, "a speaker was found");
     }
 
+    // covers: S154 (the hint after 20 s of an empty list)
     #[test]
     fn the_none_found_hint_goes_once_a_speaker_appears_and_comes_back_20_seconds_after_all_are_gone()
      {
@@ -11488,6 +11554,7 @@ mod tests {
         );
     }
 
+    // covers: S154 (the hint after 20 s of an empty list)
     #[test]
     fn a_speaker_found_within_20_seconds_keeps_the_none_found_hint_away() {
         let fake = FakeAirPlay::new();
@@ -11501,6 +11568,7 @@ mod tests {
 
     /// While discovery is dead, the AirPlay notice and its Retry say so: the
     /// list never adds the hint, even once that notice is dismissed.
+    // covers: S154 (no hint while the sender is not up)
     #[test]
     fn no_none_found_hint_while_discovery_is_dead() {
         // Without AirPlay at all.
@@ -11538,6 +11606,7 @@ mod tests {
         assert!(!none_found_hint(&adapter), "the sender stopped");
     }
 
+    // covers: S154, S222
     #[test]
     fn the_none_found_hint_goes_when_discovery_stops_and_counts_again_after_retry() {
         let first = FakeAirPlay::new();
@@ -11569,6 +11638,7 @@ mod tests {
         assert!(none_found_hint(&adapter));
     }
 
+    // covers: S141
     #[test]
     fn a_source_switch_keeps_airplay_speakers_in_the_stream() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
@@ -11994,6 +12064,7 @@ mod tests {
         assert_eq!(messages(&adapter), shown);
     }
 
+    // covers: S246, S383
     #[test]
     fn zones_and_auto_connect_hold_airplay_speakers() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
@@ -12088,6 +12159,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S228
     #[test]
     fn a_renamed_speaker_keeps_its_name_across_a_restart_until_it_is_cleared() {
         let dir = test_dir("adapter-speaker-rename");
@@ -12226,6 +12298,7 @@ mod tests {
             .expect("in Hidden Speakers")
     }
 
+    // covers: S360
     #[test]
     fn hiding_a_speaker_that_is_on_turns_it_off_and_lists_it_nowhere() {
         let mut adapter = adapter();
@@ -12303,6 +12376,7 @@ mod tests {
         assert_eq!(names, ["Room 2", "Room 10"]);
     }
 
+    // covers: S360
     #[test]
     fn the_reference_output_cant_be_hidden() {
         let mut adapter = AudioAdapter::new(
@@ -12322,6 +12396,7 @@ mod tests {
         assert!(adapter.snapshot().hidden.is_empty());
     }
 
+    // covers: S360
     #[test]
     fn a_zone_switches_only_its_members_that_arent_hidden() {
         let mut adapter = adapter();
@@ -12337,6 +12412,7 @@ mod tests {
         assert_eq!(playing(&adapter), [SPEAKERS]);
     }
 
+    // covers: S360
     #[test]
     fn a_hidden_auto_connect_speaker_isnt_turned_on_when_it_appears() {
         let mut adapter = adapter();
@@ -12358,6 +12434,7 @@ mod tests {
         assert!(row.auto_connect, "its mark was kept");
     }
 
+    // covers: S360
     #[test]
     fn a_hidden_airplay_speaker_stays_hidden_when_it_appears_again() {
         let (mut adapter, fake, kitchen, _) = airplay_adapter();
@@ -12391,6 +12468,7 @@ mod tests {
         assert!(!adapter.snapshot().running);
     }
 
+    // covers: S360
     #[test]
     fn a_hidden_cast_speaker_stays_hidden_when_it_announces_again() {
         let (mut adapter, fake) = cast_adapter();
@@ -12405,6 +12483,7 @@ mod tests {
         assert_eq!(entry.kind_text, "Google Cast");
     }
 
+    // covers: S360
     #[test]
     fn hidden_speakers_survive_a_restart_with_what_was_set_for_them() {
         let dir = test_dir("adapter-hidden-speakers");
@@ -12438,6 +12517,7 @@ mod tests {
         assert!(saved.hidden_speakers.is_empty());
     }
 
+    // covers: S360
     #[test]
     fn a_speaker_saved_on_and_hidden_isnt_turned_on_at_a_launch() {
         let dir = test_dir("adapter-hidden-saved-on");
@@ -12460,6 +12540,7 @@ mod tests {
         assert!(!adapter.snapshot().running);
     }
 
+    // covers: S228
     #[test]
     fn a_speaker_gone_mid_rename_still_takes_the_typed_name() {
         let dir = test_dir("adapter-speaker-rename-gone");
@@ -12476,6 +12557,7 @@ mod tests {
         assert_eq!(headphones.system_name, "Headphones");
     }
 
+    // covers: S212
     #[test]
     fn the_users_choices_survive_a_restart_without_streaming() {
         let dir = test_dir("adapter-settings-restart");
@@ -12567,6 +12649,7 @@ mod tests {
 
     /// The PC's own speakers (the reference), a Bluetooth speaker and a TV,
     /// as at a launch.
+    // covers: S362
     #[test]
     fn a_calibration_that_cant_run_says_why_and_leaves_the_delay() {
         let mut adapter = AudioAdapter::new(
@@ -12658,6 +12741,7 @@ mod tests {
         );
     }
 
+    // covers: S238
     #[test]
     fn calibrate_all_applies_every_clear_row_at_once_and_one_undo_puts_them_back() {
         let mut adapter = AudioAdapter::new(
@@ -13020,6 +13104,7 @@ mod tests {
         });
     }
 
+    // covers: S238
     #[test]
     fn undo_puts_back_a_cast_speaker_without_a_stored_offset_as_none() {
         let (mut adapter, _) = cast_adapter();
@@ -13051,6 +13136,7 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &key(HEADPHONES)).delay_ms, Some(0.0));
     }
 
+    // covers: S238
     #[test]
     fn apply_without_a_sender_stores_the_airplay_delay_for_the_next_one() {
         let mut adapter = adapter();
@@ -13132,6 +13218,7 @@ mod tests {
         (adapter, new, written)
     }
 
+    // covers: S238
     #[test]
     fn a_new_sender_latency_after_apply_keeps_undo_and_undo_restores_the_adjustment() {
         let (mut adapter, _sender, written) = applied_before_a_new_sender();
@@ -13150,6 +13237,7 @@ mod tests {
         assert_eq!(adapter.audio.airplay_adjustment(), 100.0);
     }
 
+    // covers: S238
     #[test]
     fn an_airplay_delay_changed_after_apply_still_drops_undo() {
         let (mut adapter, _sender, written) = applied_before_a_new_sender();
@@ -13167,6 +13255,7 @@ mod tests {
         );
     }
 
+    // covers: S362
     #[test]
     fn calibrate_all_says_why_it_cant_start() {
         let mut adapter = AudioAdapter::new(
@@ -13198,6 +13287,7 @@ mod tests {
         assert!(!state.calibration.busy);
     }
 
+    // covers: S362
     #[test]
     fn headphones_that_are_on_are_listed_left_out_until_included_anyway() {
         let mut audio = reference_audio();
@@ -13260,6 +13350,7 @@ mod tests {
         audio
     }
 
+    // covers: S228
     #[test]
     fn the_sync_hint_names_a_renamed_reference_by_its_new_name() {
         let mut adapter = AudioAdapter::new(
@@ -13438,6 +13529,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S170 (the launch that skips auto-connect)
     #[test]
     fn a_debug_launch_without_auto_connect_lists_every_speaker_and_switches_none_on() {
         use crate::debug_log::skips_auto_connect;
@@ -13508,6 +13600,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S170 (the launch that skips auto-connect)
     #[test]
     fn a_debug_launch_without_auto_connect_holds_the_speakers_on_off_and_saves_nothing() {
         let dir = test_dir("adapter-settings-no-auto-connect-held");
@@ -13658,6 +13751,7 @@ mod tests {
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
     }
 
+    // covers: S212
     #[test]
     fn airplay_speakers_get_their_settings_back_when_found() {
         let dir = test_dir("adapter-settings-airplay");
@@ -13704,6 +13798,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S385
     #[test]
     fn a_bad_settings_file_is_logged_and_ignored_then_replaced() {
         let dir = test_dir("adapter-settings-log");
@@ -13744,6 +13839,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S212
     #[test]
     fn a_settings_field_that_does_not_read_is_logged_by_name_never_by_value() {
         let launch_with = |name: &str, contents: &str| {
@@ -13848,6 +13944,7 @@ mod tests {
         assert!(messages(&adapter).is_empty());
     }
 
+    // covers: S212
     #[test]
     fn settings_that_cant_be_saved_get_one_notice_until_a_save_works() {
         let dir = test_dir("adapter-settings-unsaved");
@@ -14345,6 +14442,7 @@ mod tests {
         (adapter, fake)
     }
 
+    // covers: S387
     #[test]
     fn damaged_pairings_get_their_notice_at_launch_naming_the_copy() {
         let dir = test_dir("adapter-pairings-damaged-at-launch");
@@ -14368,6 +14466,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S387
     #[test]
     fn pairings_unreadable_at_launch_get_their_notice_once_they_can_be_kept_aside_unchanged() {
         use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
@@ -14404,6 +14503,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S387
     #[test]
     fn pairings_unreadable_at_launch_get_a_notice_once_they_are_kept_aside() {
         use crate::audio::pairings::tests::sealer;
@@ -15363,6 +15463,7 @@ mod tests {
         assert_eq!(fake.state().stops, 1);
     }
 
+    // covers: C99, C101
     #[test]
     fn a_cast_group_is_one_row_that_plays_with_its_own_offset() {
         let (mut adapter, fake) = cast_adapter();
@@ -15425,6 +15526,7 @@ mod tests {
         assert_eq!(fake.state().volumes, [0.5]);
     }
 
+    // covers: C2
     #[test]
     fn a_second_cast_speaker_is_refused_with_a_notice() {
         let (mut adapter, _fake) = cast_adapter();
@@ -17057,6 +17159,7 @@ mod tests {
         Backend::save_preset(&mut adapter, "One more").expect("room again");
     }
 
+    // covers: S228
     #[test]
     fn a_renamed_cast_speaker_shows_and_is_named_by_its_new_name() {
         let (mut adapter, _fake) = cast_adapter();
@@ -17176,6 +17279,7 @@ mod tests {
         assert!(kept.is_empty(), "{} copies kept", kept.len());
     }
 
+    // covers: C2
     #[test]
     fn a_refused_cast_speakers_notice_stays_while_the_other_starts_playing() {
         let (mut adapter, fake) = cast_adapter();
@@ -17204,6 +17308,7 @@ mod tests {
         );
     }
 
+    // covers: C80
     #[test]
     fn a_cast_session_that_ends_badly_turns_its_speaker_off_with_a_notice() {
         let (mut adapter, fake) = cast_adapter();
@@ -17281,6 +17386,7 @@ mod tests {
         );
     }
 
+    // covers: C77
     #[test]
     fn a_cast_delay_is_its_offset_that_local_outputs_wait_for_and_is_saved() {
         let (mut adapter, fake) = cast_adapter();

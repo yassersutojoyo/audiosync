@@ -127,13 +127,13 @@ S351 Hosts only: the end of the user session runs the quit steps; the Windows ho
 S353 Web remote and hosts only: the apps the phone may mix, the mix route and the host building the mix from it; to be checked by the remote crate's and the Windows host's tests and the Mac logic suite.
 S354 Hosts only: each host keeping the last source of several apps and listing it in the picker and on the phone; to be checked by the Windows host's tests and the Mac logic suite.
 S355 Hosts only: the Windows host's input device source (listing, format, privacy, the unplugged input in the picker); the Windows tests named in the test map check it, three rows pending.
-S356 Mac host only: the notices of an AirPlay speaker off for want of a code, busy or declining; the Mac logic suite checks them.
+S356 Mac and Windows hosts only: the notices of an AirPlay speaker off for want of a code, busy or declining; the Mac logic suite and the Windows tests check them.
 S357 Mac host only: the menu bar icon's clicks, the panel's Reduce Motion and its contrast; the Mac logic suite checks them.
-S358 Mac host only: the notice that the PTP ports are taken; the Mac logic suite checks it.
+S358 Mac and Windows hosts only: the notice that the PTP ports are taken; the Mac logic suite and the Windows tests check it.
 S359 Mac host only: zone headers and folding in the main window and the menu bar panel; the Mac logic suite checks them.
 S360 Mac host only: hidden speakers and the panel's count of speakers on; the Mac logic suite checks them.
 S361 Mac and Windows hosts only: when track info and progress go to the AirPlay sender and Cast; the Mac logic suite and the Windows tests check it.
-S362 Mac host only: what a calibrate control that can't start names; the Mac logic suite checks it.
+S362 Mac and Windows hosts only: what a calibrate control that can't start names; the Mac logic suite and the Windows tests check it.
 S363 Mac host only: permission explanations, the setup window and the first install's built-in output; the Mac logic suite checks them.
 S364 Mac host only: the debug log's late output callback and session stop lines; the Mac logic suite checks them.
 S365 Mac host only: the updater's release-build gate; the Mac logic suite checks it.
