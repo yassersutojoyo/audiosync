@@ -52,7 +52,7 @@ use audiosync_cast::discovery::{
 use audiosync_cast::error::ConnectError;
 use audiosync_cast::group::{GroupMember, GroupRecords};
 use audiosync_cast::host::{
-    AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, StartRefused,
+    AttemptId, CastHost, CastTarget, CommandError, DeviceMemory, HostEvent, StartRefused,
 };
 use audiosync_cast::media::{MediaError, Metadata};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
@@ -570,6 +570,9 @@ struct Attempt {
     heard_volume: bool,
     /// Connect failures before the first connect (C80).
     connect_failures: u32,
+    /// The device's own mute while one the user asked for shows, until its
+    /// next status or a level sent, whose refusal can't be told from the mute's.
+    reported_mute: Option<bool>,
     /// The list entry marked in session at the start, cleared at the end
     /// even if a browse has since listed the device under its ID.
     key: DeviceKey,
@@ -1306,6 +1309,7 @@ impl CastSpeakers {
                     codec: None,
                     heard_volume: false,
                     connect_failures: 0,
+                    reported_mute: None,
                     key,
                 });
                 if group {
@@ -1463,6 +1467,9 @@ impl CastSpeakers {
             }
             self.unanswered.push(level);
         }
+        if let Some(attempt) = self.attempt.as_mut() {
+            attempt.reported_mute = None;
+        }
         if let Some(link) = self.link.as_mut() {
             link.set_volume(level);
         }
@@ -1547,6 +1554,9 @@ impl CastSpeakers {
         if let Some(volume) = self.volumes.get_mut(&device)
             && volume.muted != muted
         {
+            if let Some(attempt) = self.attempt.as_mut() {
+                attempt.reported_mute.get_or_insert(volume.muted);
+            }
             volume.muted = muted;
             self.pending.push(BackendEvent::CastChanged);
         }
@@ -1821,8 +1831,17 @@ impl CastSpeakers {
                     None => self.pending.push(BackendEvent::CastChanged),
                 }
             }
-            HostEvent::CommandFailed { error, .. } => {
+            HostEvent::CommandFailed { attempt, error } => {
                 self.log.log(|| format!("Cast: a request failed: {error}"));
+                if matches!(error, CommandError::Volume(_))
+                    && attempt.is_some_and(|attempt| self.is_current(attempt))
+                    && let Some(current) = self.attempt.as_mut()
+                    && let Some(muted) = current.reported_mute.take()
+                    && let Some(volume) = self.volumes.get_mut(&current.device)
+                {
+                    volume.muted = muted;
+                    self.pending.push(BackendEvent::CastChanged);
+                }
             }
             HostEvent::MemoryChanged => self.pending.push(BackendEvent::CastMemoryChanged),
         }
@@ -1831,6 +1850,14 @@ impl CastSpeakers {
     fn session_event(&mut self, device: DeviceId, event: SessionEvent) {
         match event {
             SessionEvent::Playing | SessionEvent::Recovered { .. } | SessionEvent::Reloaded => {
+                self.log.log(|| {
+                    match event {
+                        SessionEvent::Recovered { .. } => "Cast: recovered",
+                        SessionEvent::Reloaded => "Cast: the stream was loaded again",
+                        _ => "Cast: the device reports playing",
+                    }
+                    .to_owned()
+                });
                 self.set_status(CastStatus::Playing);
             }
             SessionEvent::Recovering(reason) => {
@@ -1865,6 +1892,9 @@ impl CastSpeakers {
                 }
             }
             SessionEvent::Volume(volume, answers_mute) => {
+                if let Some(attempt) = self.attempt.as_mut() {
+                    attempt.reported_mute = None;
+                }
                 self.volume_reported(device, volume, answers_mute)
             }
             SessionEvent::Diagnostics(diagnostics) => {
@@ -1980,6 +2010,7 @@ pub mod tests {
 
     use audiosync_cast::client::Fingerprint;
     use audiosync_cast::discovery::{DEVICE_PORT, MAX_DEVICES, ServiceRecord};
+    use audiosync_cast::media::VolumeError;
 
     use super::*;
     use crate::debug_log::{FILE_NAME, TEST_FLUSH, assert_in_order, read_messages, test_dir};
@@ -2816,6 +2847,42 @@ pub mod tests {
         );
     }
 
+    // covers: C81, C86
+    #[test]
+    fn recovered_reloaded_and_every_playing_reach_the_debug_log() {
+        let dir = test_dir("cast-session-log");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let fake = FakeCast::default();
+        fake.announce(ATTIC, "Attic", 32_123);
+        let mut cast = CastSpeakers::new(fake.link(), log.clone());
+        cast.poll();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        for event in [
+            SessionEvent::Playing,
+            SessionEvent::Playing,
+            SessionEvent::Recovered { relaunched: false },
+            SessionEvent::Reloaded,
+        ] {
+            fake.report(HostEvent::Session {
+                attempt: AttemptId(1),
+                device: id(ATTIC),
+                event,
+            });
+        }
+        cast.poll();
+        assert!(log.flush(TEST_FLUSH));
+        assert_in_order(
+            &read_messages(&dir.join(FILE_NAME)),
+            &[
+                "Cast: the device reports playing",
+                "Cast: the device reports playing",
+                "Cast: recovered",
+                "Cast: the stream was loaded again",
+            ],
+        );
+    }
+
     // covers: C21
     #[test]
     fn a_changed_certificate_reaches_the_debug_log() {
@@ -2907,6 +2974,23 @@ pub mod tests {
         assert!(cast.poll().is_empty());
 
         report(&fake, &mut cast, 0.4);
+        assert!(!cast.speakers()[1].muted);
+    }
+
+    // covers: C70
+    #[test]
+    fn a_refused_mute_puts_the_reported_mute_back() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.4);
+        cast.set_muted(KITCHEN, true);
+        cast.poll();
+        fake.report(HostEvent::CommandFailed {
+            attempt: Some(AttemptId(1)),
+            error: CommandError::Volume(VolumeError::NotReady),
+        });
+        assert_eq!(cast.poll(), [BackendEvent::CastChanged]);
         assert!(!cast.speakers()[1].muted);
     }
 
