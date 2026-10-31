@@ -11515,6 +11515,14 @@ do {
     let heldHint = t.calibrationButtonHint(running: false, unavailable: nil, held: true)
     check(heldHint == t.calibrateAllUnavailable(.busy),
           "calibration refusal: while another calibration holds the outputs, the tooltip and hint say so", heldHint)
+    // covers: S232
+    let settling = CalibrationStatus(uid: "usb", phase: .cancelled, holdsOutputs: true)
+    let rows = [settling.heldByAnother("usb", calibrateAllHolds: false),
+                settling.heldByAnother("hdmi", calibrateAllHolds: false),
+                CalibrationStatus().heldByAnother("usb", calibrateAllHolds: true)]
+    check(rows == [false, true, true],
+          "calibration refusal: a speaker's own cancelled run playing out never reads as another calibration",
+          "\(rows)")
 
     let everyone = CalibrateAllFlow.Inputs(
         streaming: true, reference: "mac",

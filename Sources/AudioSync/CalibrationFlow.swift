@@ -125,6 +125,11 @@ struct CalibrationStatus: Equatable {
 
     var isRunning: Bool { phase.isRunning }
 
+    /// Whether `uid`'s row says another calibration holds the outputs.
+    func heldByAnother(_ uid: String, calibrateAllHolds: Bool) -> Bool {
+        ((holdsOutputs && self.uid != uid) || calibrateAllHolds) && !phase(of: uid).isRunning
+    }
+
     /// The status after streaming, the reference or the speaker's switch may
     /// have changed: an ended run's line goes once its context moved; a
     /// running one stays, since the run checks for itself.

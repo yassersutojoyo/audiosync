@@ -31,9 +31,12 @@ struct CalibrationControl: View {
         let unavailable = CalibrationFlow.unavailable(streaming: model.running, hasReference: model.hasLocalReference,
                                                       speakerOn: speakerOn)
         // Another speaker's run, or a cut-off sweep still playing out, holds the outputs.
-        let held = (model.calibration.holdsOutputs || model.calibrateAll.holdsOutputs) && !running
-        let hint = t.calibrationButtonHint(running: running, unavailable: unavailable, held: held)
+        let held = model.calibration.heldByAnother(id, calibrateAllHolds: model.calibrateAll.holdsOutputs)
         let reason = t.calibrationButtonReason(running: running, unavailable: unavailable, held: held)
+        // Its own cut-off sweep playing out holds the outputs too.
+        let settling = model.calibration.holdsOutputs && !running
+        let hint = settling && reason == nil
+            ? "" : t.calibrationButtonHint(running: running, unavailable: unavailable, held: held)
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 if case .running(let step) = phase {
@@ -50,7 +53,7 @@ struct CalibrationControl: View {
                     if running { model.actions.cancelCalibration() } else { model.actions.calibrate(id) }
                 }
                 .controlSize(.small)
-                .disabled(reason != nil)
+                .disabled(reason != nil || settling)
                 .help(hint)
                 .accessibilityLabel(running ? t.calibrationCancelLabel(of: name) : t.calibrateLabel(of: name))
                 .accessibilityHint(hint)
