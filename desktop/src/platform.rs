@@ -1082,6 +1082,32 @@ mod tests {
         }
     }
 
+    // covers: S413
+    #[cfg(windows)]
+    #[test]
+    fn ctrl_c_or_ctrl_break_ends_the_event_loop_as_quit_does_and_keeps_the_process() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_LOGOFF_EVENT};
+
+        static QUITS: AtomicUsize = AtomicUsize::new(0);
+        // Stored without registering the procedure, so a Ctrl-C still stops the test run.
+        CONSOLE_QUIT
+            .set(|| {
+                QUITS.fetch_add(1, Ordering::Relaxed);
+            })
+            .unwrap();
+        for event in [CTRL_C_EVENT, CTRL_BREAK_EVENT] {
+            // SAFETY: the procedure only calls the quit stored above.
+            let handled = unsafe { console_quit_procedure(event) };
+            assert!(handled.as_bool(), "Windows' default would end the process before the fades");
+        }
+        assert_eq!(QUITS.load(Ordering::Relaxed), 2, "each ends the event loop, as Quit does");
+        // SAFETY: as above.
+        let logoff = unsafe { console_quit_procedure(CTRL_LOGOFF_EVENT) };
+        assert!(!logoff.as_bool(), "the session's end has its own handler");
+        assert_eq!(QUITS.load(Ordering::Relaxed), 2);
+    }
+
     #[test]
     fn the_minimum_survives_the_subclass_round_trip() {
         let min = crate::settings::MIN_WINDOW;
