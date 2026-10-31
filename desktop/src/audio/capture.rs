@@ -2425,6 +2425,38 @@ mod tests {
         );
     }
 
+    // covers: S18
+    #[test]
+    fn a_loopback_that_delivers_nothing_past_the_grace_period_writes_only_silence() {
+        use audiosync_core::policy::capture::PLAYING_GRACE;
+        let (ring, writer) = session_ring();
+        let mut converter = new_converter(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
+        let mut gaps = GapFill::new(SESSION_RATE);
+        // 1 s of audio, then no packet for 2 s longer than the grace period
+        // after which the Mac would blame the permission, a wake every 10 ms.
+        let audio_steps = 100_u64;
+        let quiet_steps = (PLAYING_GRACE as u64 + 2) * 100;
+        for step in 0..audio_steps {
+            gaps.packet(step * 10 * HNS_PER_MS, 480, false);
+            converter.push(&f32_bytes(&[0.5; 480 * 2]), 480, false);
+        }
+        let before = ring.frames_written();
+        for step in audio_steps..audio_steps + quiet_steps {
+            let fill = gaps.idle((step + 1) * 10 * HNS_PER_MS);
+            if fill > 0 {
+                converter.push(&[], fill, true);
+            }
+        }
+        let filled = ring.frames_written() - before;
+        let grace = PLAYING_GRACE as u64 * u64::from(SESSION_RATE);
+        assert!(filled > grace, "{filled} frames, the ring keeps pace");
+        let silent = (PLAYING_GRACE as usize + 1) * SESSION_RATE as usize;
+        assert!(
+            newest(&ring, silent).iter().all(|s| *s == 0.0),
+            "no frame of the quiet span carries a sample other than zero"
+        );
+    }
+
     // covers: S16
     #[test]
     fn contiguous_packets_need_no_silence_whatever_their_jitter() {
