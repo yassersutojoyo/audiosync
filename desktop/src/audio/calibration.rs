@@ -1787,6 +1787,7 @@ mod tests {
         assert!(rig.set_offsets.borrow().is_empty());
     }
 
+    // covers: S232
     #[test]
     fn the_first_frame_is_timed_from_the_first_packet_the_device_vouches_for() {
         let rate = 48_000;
@@ -1918,6 +1919,7 @@ mod tests {
         );
     }
 
+    // covers: S232
     #[test]
     fn a_shown_result_goes_once_its_context_moves_or_the_offset_is_set_by_hand() {
         let context = Context {
@@ -1978,6 +1980,7 @@ mod tests {
         assert_eq!(tap.block_cursor(), IDLE);
     }
 
+    // covers: S232
     #[test]
     fn a_play_from_the_ui_thread_mid_block_waits_for_the_next_block() {
         let tap = CalibrationTap::new();

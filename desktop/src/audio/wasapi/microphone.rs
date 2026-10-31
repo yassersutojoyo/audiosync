@@ -389,6 +389,7 @@ mod tests {
 
     use super::*;
 
+    // covers: S232
     #[test]
     fn a_device_held_by_another_app_is_told_apart_from_a_missing_one() {
         assert_eq!(setup_error(E_ACCESSDENIED), MicrophoneError::Denied);
