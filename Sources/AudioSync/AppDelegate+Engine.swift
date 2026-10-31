@@ -429,7 +429,8 @@ extension AppDelegate {
             let playing = sourcePlayingReading()
             let verdict = watch.verdict(at: ProcessInfo.processInfo.systemUptime,
                                         sessionHeard: engine.sessionHeard, runHeard: engine.runHeard,
-                                        reportsPlaying: playing != nil, position: playing?.position)
+                                        reportsPlaying: playing != nil, position: playing?.position,
+                                        callbacks: engine.captureCallbacks)
             switch gate.step(verdict: verdict, session: session, running: engine.isRunning, app: sourceDisplayName()) {
             case .end:
                 return

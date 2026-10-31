@@ -6,7 +6,8 @@ import Foundation
 /// something, so "no frames yet" on its own is normal: the user may simply
 /// start playback after switching streaming on. A missing permission is the
 /// likely cause only when Now Playing shows the source playing (its position
-/// moving on), no sound arrives, and this app run has never captured sound
+/// moving on), the tap keeps calling back (a paused app's tap calls back
+/// nothing), no sound arrives, and this app run has never captured sound
 /// from a tap: a denied tap and a silent source both deliver zeros, so frames
 /// prove nothing, and once a tap has captured sound the permission is there.
 enum CaptureCheck: Equatable {
@@ -50,6 +51,7 @@ struct CaptureWatch {
     private var lastPosition: NowPlayingMonitor.Position?
     /// The position moved on between the last two distinct readings.
     private var live = false
+    private var lastCallbacks: UInt64 = 0
 
     /// - Parameters:
     ///   - uptime: `ProcessInfo.systemUptime` of this check.
@@ -57,8 +59,10 @@ struct CaptureWatch {
     ///   - runHeard: some frame a tap captured in this app run was not silent.
     ///   - reportsPlaying: Now Playing reports the source as playing.
     ///   - position: the latest Now Playing reading's position, if any.
+    ///   - callbacks: the session's capture callbacks so far; nil while stopped.
     mutating func verdict(at uptime: TimeInterval, sessionHeard: Bool, runHeard: Bool,
-                          reportsPlaying: Bool, position: NowPlayingMonitor.Position?) -> CaptureCheck {
+                          reportsPlaying: Bool, position: NowPlayingMonitor.Position?,
+                          callbacks: UInt64?) -> CaptureCheck {
         if reportsPlaying, let position {
             // Checks can outpace the monitor's polls: only a new reading moves the verdict.
             if let last = lastPosition {
@@ -73,7 +77,11 @@ struct CaptureWatch {
             lastPosition = nil
             live = false
         }
-        if live { playingSince = playingSince ?? uptime } else { playingSince = nil }
+        // A paused app's tap calls back nothing (S335) while a denied tap calls back with zeros,
+        // so a source that may only read as playing (played elsewhere, a stale state) blames nothing.
+        let calledBack = (callbacks ?? 0) > lastCallbacks
+        lastCallbacks = callbacks ?? 0
+        if live && calledBack { playingSince = playingSince ?? uptime } else { playingSince = nil }
         return CaptureCheck.verdict(sessionHeard: sessionHeard, runHeard: runHeard,
                                     knownPlayingFor: playingSince.map { uptime - $0 })
     }

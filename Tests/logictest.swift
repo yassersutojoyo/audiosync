@@ -2032,7 +2032,7 @@ do {
         let uptime = 100 + 2 * Double(step)
         let stuck = NowPlayingMonitor.Position(elapsed: 42, length: 200, readAt: uptime - 0.3, playing: true)
         if watch.verdict(at: uptime, sessionHeard: false, runHeard: false,
-                         reportsPlaying: true, position: stuck) == .notWorking { blamed = true }
+                         reportsPlaying: true, position: stuck, callbacks: UInt64(100 * (step + 1))) == .notWorking { blamed = true }
     }
     check(!blamed, "capture: a track reported playing whose position stands still never blames the permission")
 }
@@ -2044,7 +2044,7 @@ do {
         let moving = NowPlayingMonitor.Position(elapsed: 10 + 2 * Double(step), length: 200,
                                                 readAt: uptime - 0.3, playing: true)
         if watch.verdict(at: uptime, sessionHeard: false, runHeard: true,
-                         reportsPlaying: true, position: moving) == .notWorking { blamed = true }
+                         reportsPlaying: true, position: moving, callbacks: UInt64(100 * (step + 1))) == .notWorking { blamed = true }
     }
     check(!blamed, "capture: once this app run heard audio, later silence never blames the permission")
 }
@@ -2054,7 +2054,7 @@ do {
     for step in 0..<15 {
         let uptime = 100 + 2 * Double(step)
         if watch.verdict(at: uptime, sessionHeard: false, runHeard: false,
-                         reportsPlaying: true, position: nil) == .notWorking { blamed = true }
+                         reportsPlaying: true, position: nil, callbacks: UInt64(100 * (step + 1))) == .notWorking { blamed = true }
     }
     check(!blamed, "capture: a playing report with no position to watch never blames the permission")
 }
@@ -2069,14 +2069,15 @@ do {
                                                 readAt: uptime - 0.3, playing: true)
         let heard = block.withUnsafeBufferPointer { CaptureChannels.hasSound($0.baseAddress!, frames: 512) }
         verdicts.append(watch.verdict(at: uptime, sessionHeard: heard, runHeard: false,
-                                      reportsPlaying: true, position: moving))
+                                      reportsPlaying: true, position: moving, callbacks: UInt64(100 * (step + 1))))
     }
     check(verdicts.first == .waiting && verdicts.last == .notWorking,
           "capture: a track that keeps advancing while a tap delivers only zeros blames the permission after the grace period")
     block[300] = 0.25
     let heard = block.withUnsafeBufferPointer { CaptureChannels.hasSound($0.baseAddress!, frames: 512) }
     let moving = NowPlayingMonitor.Position(elapsed: 42, length: 200, readAt: 131.7, playing: true)
-    check(watch.verdict(at: 132, sessionHeard: heard, runHeard: heard, reportsPlaying: true, position: moving) == .flowing,
+    check(watch.verdict(at: 132, sessionHeard: heard, runHeard: heard, reportsPlaying: true, position: moving,
+                        callbacks: 1600) == .flowing,
           "capture: real sound arriving clears the verdict")
 }
 do {
@@ -2087,9 +2088,24 @@ do {
         let uptime = 100 + 2 * Double(step)
         let paused = NowPlayingMonitor.Position(elapsed: 42, length: 200, readAt: uptime - 0.3, playing: false)
         verdicts.append(watch.verdict(at: uptime, sessionHeard: false, runHeard: false,
-                                      reportsPlaying: step.isMultiple(of: 2), position: step < 7 ? nil : paused))
+                                      reportsPlaying: step.isMultiple(of: 2), position: step < 7 ? nil : paused,
+                                      callbacks: UInt64(100 * (step + 1))))
     }
     check(verdicts.allSatisfy { $0 == .waiting }, "capture: silent zeros with nothing live → waiting")
+}
+do {
+    // Mac sitting 2026-10-31: Spotify paused, yet the permission advice showed. A paused
+    // app's tap calls back nothing (S335), while a denied tap calls back with zeros.
+    var watch = CaptureWatch()
+    var blamed = false
+    for step in 0..<15 {
+        let uptime = 100 + 2 * Double(step)
+        let moving = NowPlayingMonitor.Position(elapsed: 10 + 2 * Double(step), length: 200,
+                                                readAt: uptime - 0.3, playing: true)
+        if watch.verdict(at: uptime, sessionHeard: false, runHeard: false, reportsPlaying: true,
+                         position: moving, callbacks: 0) == .notWorking { blamed = true }
+    }
+    check(!blamed, "capture: a tap that calls back nothing never blames the permission, whatever Now Playing reads")
 }
 
 // MARK: Automation consent: one waiting Apple event per player macOS hasn't decided on, off the scripts queue
