@@ -1378,6 +1378,7 @@ mod tests {
         );
     }
 
+    // covers: S14
     #[test]
     fn an_input_device_is_captured_with_the_pair_saved_for_it() {
         let pairs = BTreeMap::from([("interface".to_owned(), 1)]);
@@ -1439,6 +1440,7 @@ mod tests {
         );
     }
 
+    // covers: S14
     #[test]
     fn a_converter_reading_a_pair_plays_its_two_channels() {
         let format = StreamFormat {
@@ -1475,6 +1477,7 @@ mod tests {
         );
     }
 
+    // covers: S10
     #[test]
     fn the_whole_system_needs_no_process_snapshot() {
         let activation = decide_activation(&SourceId::WholeSystem, 7, &ProcessTable::default());
@@ -1487,6 +1490,7 @@ mod tests {
         );
     }
 
+    // covers: S380
     #[test]
     fn an_app_includes_its_own_tree() {
         assert_eq!(
@@ -1498,6 +1502,7 @@ mod tests {
         );
     }
 
+    // covers: S380
     #[test]
     fn audiosync_picked_by_mistake_is_refused() {
         assert_eq!(
@@ -1506,6 +1511,7 @@ mod tests {
         );
     }
 
+    // covers: S380
     #[test]
     fn audiosync_is_refused_even_when_the_snapshot_misses_it() {
         assert_eq!(
@@ -1514,6 +1520,7 @@ mod tests {
         );
     }
 
+    // covers: S380
     #[test]
     fn a_process_audiosync_started_is_refused() {
         assert_eq!(
@@ -1522,6 +1529,7 @@ mod tests {
         );
     }
 
+    // covers: S380
     #[test]
     fn the_app_that_started_audiosync_is_refused() {
         let table = desktop();
@@ -1536,6 +1544,7 @@ mod tests {
         );
     }
 
+    // covers: S380
     #[test]
     fn a_vanished_app_is_gone() {
         assert_eq!(
@@ -1544,6 +1553,7 @@ mod tests {
         );
     }
 
+    // covers: S380
     #[test]
     fn the_idle_and_system_processes_are_not_apps() {
         let table = desktop();
@@ -1654,6 +1664,7 @@ mod tests {
         );
     }
 
+    // covers: S380
     #[test]
     fn no_app_is_captured_while_audiosync_is_missing_from_the_snapshot() {
         let table = ProcessTable::new([entry(200, 100, Some(20), "player.exe")]);
@@ -1665,6 +1676,7 @@ mod tests {
         assert!(decide_activation(&SourceId::WholeSystem, OWN_PID, &table).is_ok());
     }
 
+    // covers: S380
     #[test]
     fn display_names_drop_the_extension_and_capitalize() {
         assert_eq!(display_name("spotify.exe"), "Spotify");
@@ -1690,6 +1702,7 @@ mod tests {
         );
     }
 
+    // covers: S380
     #[test]
     fn an_app_with_several_audio_processes_is_listed_once_by_its_top_process() {
         let sources = source_list(&desktop(), &[202, 201, 200], OWN_PID);
@@ -1699,12 +1712,14 @@ mod tests {
         assert_eq!(sources[1].executable, "browser.exe");
     }
 
+    // covers: S380
     #[test]
     fn audiosync_its_helpers_and_its_ancestors_are_not_offered() {
         let sources = source_list(&desktop(), &[OWN_PID, 401, 300, 100], OWN_PID);
         assert_eq!(sources.len(), 1, "{sources:?}");
     }
 
+    // covers: S380
     #[test]
     fn sessions_of_processes_that_quit_are_skipped() {
         let sources = source_list(&desktop(), &[9999, 0], OWN_PID);
@@ -1728,6 +1743,7 @@ mod tests {
         }
     }
 
+    // covers: S242
     #[test]
     fn several_apps_are_one_loopback_each_and_audiosync_or_a_quit_app_is_skipped() {
         let table = mix_table();
@@ -1773,6 +1789,7 @@ mod tests {
         assert_eq!(activations.len(), MAX_MIX_APPS);
     }
 
+    // covers: S242
     #[test]
     fn an_only_these_mix_takes_in_later_instances_of_its_apps_with_a_session() {
         let table = ProcessTable::new([
@@ -1798,6 +1815,7 @@ mod tests {
         );
     }
 
+    // covers: S242
     #[test]
     fn all_except_mixes_every_other_app_with_a_session_and_never_audiosync() {
         let table = mix_table();
@@ -1825,6 +1843,7 @@ mod tests {
         );
     }
 
+    // covers: S211 (the whole system first, then the apps)
     #[test]
     fn apps_are_sorted_by_name() {
         let table = ProcessTable::new([
@@ -1840,6 +1859,7 @@ mod tests {
         assert_eq!(names, ["All System Audio", "Alpha", "Mid", "Zebra"]);
     }
 
+    // covers: S380
     #[test]
     fn a_running_app_is_found_without_an_audio_session() {
         let browser = SourceInfo {
@@ -1865,6 +1885,7 @@ mod tests {
         );
     }
 
+    // covers: S380
     #[test]
     fn a_process_id_that_another_program_got_is_not_the_app() {
         let table = desktop();
@@ -1872,6 +1893,7 @@ mod tests {
         assert_eq!(running_app(&table, 4242, "player.exe"), None);
     }
 
+    // covers: S355
     #[test]
     fn the_first_capture_attempt_needs_no_conversion() {
         let first = CAPTURE_ATTEMPTS[0];
@@ -1962,6 +1984,7 @@ mod tests {
         out
     }
 
+    // covers: S232
     #[test]
     fn a_calibration_silences_the_music_and_adds_its_signal_from_a_block_start() {
         let (ring, writer) = session_ring_after_lead_in();
@@ -1996,6 +2019,7 @@ mod tests {
         );
     }
 
+    // covers: S232, S241
     #[test]
     fn a_signal_for_a_network_speaker_stays_out_of_the_ring_and_waits_for_silence() {
         let (ring, writer) = session_ring_after_lead_in();
@@ -2084,6 +2108,7 @@ mod tests {
         assert_eq!(newest(&ring, 1500), samples);
     }
 
+    // covers: S355
     #[test]
     fn sixteen_bit_samples_are_scaled_to_float() {
         let (ring, writer) = session_ring_after_lead_in();
@@ -2099,6 +2124,7 @@ mod tests {
         assert_eq!(newest(&ring, 2), [-1.0, 0.5, 0.0, -0.5]);
     }
 
+    // covers: S16
     #[test]
     fn a_silent_packet_writes_silence_whatever_its_data() {
         let (ring, writer) = session_ring_after_lead_in();
@@ -2111,6 +2137,7 @@ mod tests {
         assert_eq!(&out[8..], &[0.0; 8]);
     }
 
+    // covers: S14
     #[test]
     fn a_mono_capture_feeds_both_channels() {
         let (ring, writer) = session_ring_after_lead_in();
@@ -2124,6 +2151,7 @@ mod tests {
         assert_eq!(newest(&ring, 3), [0.1, 0.1, 0.2, 0.2, 0.3, 0.3]);
     }
 
+    // covers: S16
     #[test]
     fn a_short_packet_writes_only_its_whole_frames() {
         let (ring, writer) = session_ring();
@@ -2134,6 +2162,7 @@ mod tests {
         assert_eq!(ring.frames_written(), 2);
     }
 
+    // covers: S16
     #[test]
     fn a_long_packet_is_converted_in_chunks() {
         let (ring, writer) = session_ring_after_lead_in();
@@ -2147,6 +2176,7 @@ mod tests {
         assert_eq!(newest(&ring, frames), samples);
     }
 
+    // covers: S355
     #[test]
     fn a_44_1_khz_capture_is_resampled_to_the_session_rate() {
         let (ring, writer) = session_ring();
@@ -2222,6 +2252,7 @@ mod tests {
         assert_eq!(ring.stamp(), Some(fill));
     }
 
+    // covers: S16
     #[test]
     fn a_rate_outside_the_supported_range_is_refused() {
         let (_ring, writer) = session_ring();
@@ -2263,6 +2294,7 @@ mod tests {
         }
     }
 
+    // covers: S386
     #[test]
     fn a_format_without_channels_is_refused() {
         let (_ring, writer) = session_ring();
@@ -2277,6 +2309,7 @@ mod tests {
         ));
     }
 
+    // covers: S31
     #[test]
     fn the_equalizer_applies_from_the_next_packet() {
         let (ring, writer) = session_ring_after_lead_in();
@@ -2301,6 +2334,7 @@ mod tests {
         }
     }
 
+    // covers: S30
     #[test]
     fn a_resampled_capture_is_equalized_at_the_session_rate() {
         let (ring, writer) = session_ring();
@@ -2327,6 +2361,7 @@ mod tests {
     /// 100 ns units per millisecond, as packet positions count.
     const HNS_PER_MS: u64 = 10_000;
 
+    // covers: S335 (the Windows gap fill the Mac's quiet capture follows)
     #[test]
     fn a_loopback_gap_keeps_the_ring_in_real_time_so_nothing_from_before_it_plays_after_it() {
         let (ring, writer) = session_ring();
@@ -2390,6 +2425,7 @@ mod tests {
         );
     }
 
+    // covers: S16
     #[test]
     fn contiguous_packets_need_no_silence_whatever_their_jitter() {
         let mut gaps = GapFill::new(SESSION_RATE);
@@ -2454,6 +2490,7 @@ mod tests {
         );
     }
 
+    // covers: S229
     #[test]
     fn the_counters_see_each_discontinuity_and_the_silence_a_jump_puts_in() {
         let mut gaps = GapFill::new(SESSION_RATE);
@@ -2485,6 +2522,7 @@ mod tests {
         assert_eq!(counters.glitches().gap_fill_frames, 576);
     }
 
+    // covers: S229
     #[test]
     fn the_silence_up_to_a_packet_after_a_pause_is_not_counted() {
         let mut gaps = GapFill::new(SESSION_RATE);
@@ -2535,6 +2573,7 @@ mod tests {
         );
     }
 
+    // covers: S229 (zero holes)
     #[test]
     fn long_silence_short_gaps_and_leading_silence_are_no_holes() {
         let mut runs = ZeroRuns::new(48_000);
@@ -2554,6 +2593,7 @@ mod tests {
         assert_eq!(silence.holes(), ZeroHoles::default());
     }
 
+    // covers: S229 (zero holes)
     #[test]
     fn a_hole_split_across_packets_and_partly_flagged_counts_once_as_flagged() {
         let mut runs = ZeroRuns::new(48_000);
@@ -2579,6 +2619,7 @@ mod tests {
         );
     }
 
+    // covers: S229 (zero holes)
     #[test]
     fn the_converter_publishes_the_holes_in_what_it_captures() {
         let (_ring, writer) = session_ring();
@@ -2610,6 +2651,7 @@ mod tests {
         );
     }
 
+    // covers: S335 (the Windows gap fill the Mac's quiet capture follows)
     #[test]
     fn a_packet_inside_the_silence_written_skips_the_frames_filled() {
         let mut gaps = GapFill::new(SESSION_RATE);
@@ -2622,6 +2664,7 @@ mod tests {
         assert_eq!(gaps.packet(45 * HNS_PER_MS, 480, false), (0, 0, false));
     }
 
+    // covers: S335 (the Windows gap fill the Mac's quiet capture follows)
     #[test]
     fn late_packets_inside_one_fill_are_never_written_twice() {
         let mut gaps = GapFill::new(SESSION_RATE);
@@ -2636,6 +2679,7 @@ mod tests {
         assert_eq!(gaps.packet(35 * HNS_PER_MS, 480, false), (0, 0, false));
     }
 
+    // covers: S335 (the Windows gap fill the Mac's quiet capture follows)
     #[test]
     fn an_hour_of_gap_fills_exactly_the_frames_of_an_hour() {
         let mut gaps = GapFill::new(SESSION_RATE);
@@ -2656,6 +2700,7 @@ mod tests {
         );
     }
 
+    // covers: S7
     #[test]
     fn the_airplay_sender_gets_the_equalized_audio_at_44_1_khz() {
         let clock = SenderClock::new(std::time::Instant::now());

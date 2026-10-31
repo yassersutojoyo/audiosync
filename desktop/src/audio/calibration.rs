@@ -1458,6 +1458,7 @@ mod tests {
         CalibrationRun::start(rig, "usb", now, DebugLog::default()).expect("it starts")
     }
 
+    // covers: S232
     #[test]
     fn a_recorded_sweep_sets_the_offset_from_the_difference() {
         let mut rig = FakeRig::new();
@@ -1477,6 +1478,7 @@ mod tests {
         );
     }
 
+    // covers: S232
     #[test]
     fn each_run_hears_only_its_own_output() {
         let mut rig = FakeRig::new();
@@ -1495,6 +1497,7 @@ mod tests {
         }));
     }
 
+    // covers: S232, S234
     #[test]
     fn an_uncertain_measurement_changes_nothing() {
         let mut rig = FakeRig::new();
@@ -1510,6 +1513,7 @@ mod tests {
         assert_eq!(rig.solo, None);
     }
 
+    // covers: S232
     #[test]
     fn a_speaker_turned_off_mid_run_cancels_it() {
         let mut rig = FakeRig::new();
@@ -1525,6 +1529,7 @@ mod tests {
         assert!(!rig.tap.engaged.load(Ordering::Relaxed));
     }
 
+    // covers: S232
     #[test]
     fn the_reference_turned_off_mid_run_cancels_it() {
         let mut rig = FakeRig::new();
@@ -1538,6 +1543,7 @@ mod tests {
         assert!(rig.set_offsets.borrow().is_empty());
     }
 
+    // covers: S240
     #[test]
     fn a_source_switched_mid_run_cancels_it() {
         let mut rig = FakeRig::new();
@@ -1551,6 +1557,7 @@ mod tests {
         assert!(rig.set_offsets.borrow().is_empty());
     }
 
+    // covers: S232
     #[test]
     fn a_speaker_added_mid_run_that_re_times_the_two_cancels_it() {
         let mut rig = FakeRig::new();
@@ -1567,6 +1574,7 @@ mod tests {
         assert!(rig.set_offsets.borrow().is_empty());
     }
 
+    // covers: S232
     #[test]
     fn a_third_output_stopping_mid_run_still_ends_done() {
         let mut rig = FakeRig::new();
@@ -1586,6 +1594,7 @@ mod tests {
         );
     }
 
+    // covers: S232
     #[test]
     fn an_offset_typed_during_the_estimate_wins() {
         let mut rig = FakeRig::new();
@@ -1614,6 +1623,7 @@ mod tests {
         assert!(rig.set_offsets.borrow().is_empty());
     }
 
+    // covers: S240
     #[test]
     fn a_cancelled_sweep_fades_and_plays_out_before_the_outputs_return() {
         let mut rig = FakeRig::new();
@@ -1636,6 +1646,7 @@ mod tests {
         assert!(rig.set_offsets.borrow().is_empty());
     }
 
+    // covers: S240
     #[test]
     fn a_cancel_before_the_sweep_gives_the_outputs_back_at_once() {
         let mut rig = FakeRig::new();
@@ -1647,6 +1658,7 @@ mod tests {
         assert!(!rig.tap.engaged.load(Ordering::Relaxed));
     }
 
+    // covers: S232
     #[test]
     fn a_blocked_microphone_refuses_before_the_music_fades() {
         let mut rig = FakeRig::new();
@@ -1692,6 +1704,7 @@ mod tests {
         assert_eq!(rig.solo, None);
     }
 
+    // covers: S240
     #[test]
     fn a_microphone_that_stalls_is_waited_for_until_the_deadline() {
         let mut rig = FakeRig::new();
@@ -1714,6 +1727,7 @@ mod tests {
         assert!(rig.set_offsets.borrow().is_empty());
     }
 
+    // covers: S240
     #[test]
     fn a_microphone_that_never_delivers_a_frame_gives_up_after_the_warm_up_limit() {
         let mut rig = FakeRig::new();
@@ -1732,6 +1746,7 @@ mod tests {
         assert_eq!(rig.solo, None);
     }
 
+    // covers: S240
     #[test]
     fn a_source_that_sends_nothing_fails_as_silent() {
         let mut rig = FakeRig::new();
@@ -1791,6 +1806,7 @@ mod tests {
         assert_eq!(clock.gap_at, Some(1440), "the first gap");
     }
 
+    // covers: S232
     #[test]
     fn a_calibration_needs_streaming_the_speaker_and_the_reference() {
         let mut engine = FakeRig::new().engine;
@@ -1837,6 +1853,7 @@ mod tests {
         assert_eq!(unavailable(true, true, true), None);
     }
 
+    // covers: S232
     #[test]
     fn the_chosen_run_must_use_the_references_microphone_and_a_rate_that_fits() {
         let mic = MicrophoneId {
@@ -1870,6 +1887,7 @@ mod tests {
         );
     }
 
+    // covers: S232
     #[test]
     fn a_recording_starts_where_the_signal_entered_the_ring() {
         assert_eq!(
@@ -1886,6 +1904,7 @@ mod tests {
         assert_eq!(settle_seconds(true, true, 2000.0), 2.5);
     }
 
+    // covers: S236
     #[test]
     fn a_refusal_names_the_recording_it_concerns() {
         let refused = |reason, recording| outcome(&Err(Refused { reason, recording }));
@@ -1930,6 +1949,7 @@ mod tests {
         assert_eq!(running.following(&off), running);
     }
 
+    // covers: S232
     #[test]
     fn the_tap_fades_the_music_out_and_adds_the_signal_from_a_block_start() {
         let tap = CalibrationTap::new();

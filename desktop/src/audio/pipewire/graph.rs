@@ -629,6 +629,7 @@ mod tests {
         assert_eq!(sink_kind(&node(&[])), OutputKind::Virtual);
     }
 
+    // covers: S380
     #[test]
     fn pulse_apps_are_owned_by_the_process_they_name() {
         let processes = ProcessTable::new([
@@ -749,6 +750,7 @@ mod tests {
             .collect()
     }
 
+    // covers: S10
     #[test]
     fn the_whole_system_leaves_out_audiosyncs_own_tree() {
         let (graph, processes) = playing_graph();
@@ -759,6 +761,7 @@ mod tests {
         assert!(links.iter().all(|link| link.input_node == 90));
     }
 
+    // covers: S380
     #[test]
     fn one_app_takes_its_tree_only() {
         let (graph, processes) = playing_graph();
@@ -773,6 +776,7 @@ mod tests {
         assert!(captured(&graph, &processes, &Filter::Trees(vec![70])).is_empty());
     }
 
+    // covers: S16
     #[test]
     fn mono_and_centre_go_to_both_sides_and_lfe_to_none() {
         assert_eq!(input_channels("MONO"), ["FL", "FR"]);
@@ -815,6 +819,7 @@ mod tests {
         assert!(graph.listing().endpoints.is_empty());
     }
 
+    // covers: S62
     #[test]
     fn an_output_plays_at_its_own_format_or_its_properties() {
         let mut graph = Graph::default();
@@ -829,6 +834,7 @@ mod tests {
         assert_eq!(graph.sink_format(9), (48_000, 2));
     }
 
+    // covers: S62
     #[test]
     fn an_output_past_64_channels_plays_on_its_first_64() {
         let mut graph = Graph::default();
@@ -838,6 +844,7 @@ mod tests {
         assert_eq!(graph.sink_format(1), (96_000, 64));
     }
 
+    // covers: S232
     #[test]
     fn the_default_input_is_found_by_name() {
         let mut graph = Graph::default();

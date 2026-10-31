@@ -281,6 +281,7 @@ mod tests {
 
     use super::*;
 
+    // covers: S229
     #[test]
     fn a_wake_counts_as_late_past_half_a_period_and_as_empty_with_nothing_queued() {
         // A 20 ms buffer of two 10 ms periods at 48 kHz.
@@ -761,6 +762,7 @@ mod tests {
         play(s, 1_024, 512);
     }
 
+    // covers: S45, S62
     #[test]
     fn at_the_session_rate_frames_play_at_the_delay() {
         let mut s = setup(SESSION_RATE, 2, 4_000, 1.0);
@@ -781,6 +783,7 @@ mod tests {
         assert_eq!(s.pipeline.shortfall_frames(), 0);
     }
 
+    // covers: S63
     #[test]
     fn stereo_feeds_the_first_two_channels_and_the_rest_stay_silent() {
         let mut s = setup(SESSION_RATE, 6, 4_000, 1.0);
@@ -794,6 +797,7 @@ mod tests {
         assert_eq!(first, [value, -value, 0.0, 0.0, 0.0, 0.0]);
     }
 
+    // covers: S63
     #[test]
     fn a_mono_device_gets_the_average_of_both_channels() {
         let mut s = setup(SESSION_RATE, 1, 4_000, 1.0);
@@ -870,6 +874,7 @@ mod tests {
         assert!(out.iter().all(|&sample| sample == 0.5), "finite again");
     }
 
+    // covers: S45
     #[test]
     fn before_enough_audio_arrived_the_output_plays_silence() {
         let mut s = setup(SESSION_RATE, 2, 96_000, 1.0);
@@ -879,6 +884,7 @@ mod tests {
         assert!(out.iter().all(|&sample| sample == 0.0));
     }
 
+    // covers: S62
     #[test]
     fn a_trailing_partial_frame_stays_silent() {
         let mut s = setup(SESSION_RATE, 2, 1_000, 1.0);
@@ -1067,6 +1073,7 @@ mod tests {
         }
     }
 
+    // covers: S62
     #[test]
     fn a_device_without_channels_or_at_an_unsupported_rate_is_refused() {
         let ring = Ring::for_rate(SESSION_RATE).unwrap();

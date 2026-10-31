@@ -1389,6 +1389,7 @@ mod tests {
         AirPlay::Available { chosen, latency }
     }
 
+    // covers: S178
     #[test]
     fn the_airplay_delay_base_is_the_last_sender_latency_known() {
         let mut policy = OutputPolicy::new(AirPlay::Unavailable);
@@ -1404,6 +1405,7 @@ mod tests {
         );
     }
 
+    // covers: S175
     #[test]
     fn with_airplay_a_new_output_still_starts_with_no_delay() {
         let policy = OutputPolicy::new(sender(true, L));
@@ -1424,6 +1426,7 @@ mod tests {
         assert_eq!(policy.params("a").delay_frames, 0);
     }
 
+    // covers: S175, S176
     #[test]
     fn delays_are_clamped_and_non_finite_ones_ignored() {
         let mut policy = policy_with(&["a", "b"]);
@@ -1442,6 +1445,7 @@ mod tests {
         assert_eq!(policy.params("b").delay_frames, 96_000, "b waits for a");
     }
 
+    // covers: S176
     #[test]
     fn a_lone_output_plays_at_once_whatever_its_offset() {
         let mut policy = policy_with(&["a"]);
@@ -1451,6 +1455,7 @@ mod tests {
         assert_eq!(policy.params("a").delay_frames, 0);
     }
 
+    // covers: S71, S176
     #[test]
     fn each_output_has_its_own_delay_and_volume() {
         let mut policy = policy_with(&["a", "b"]);
@@ -1501,6 +1506,7 @@ mod tests {
         assert_eq!(policy.master(), 0.0);
     }
 
+    // covers: S161
     #[test]
     fn settings_of_a_disconnected_output_are_kept() {
         let mut policy = OutputPolicy::new(AirPlay::Unavailable);
@@ -1512,6 +1518,7 @@ mod tests {
         assert!(!settings.enabled);
     }
 
+    // covers: S176
     #[test]
     fn with_no_airplay_speaker_chosen_outputs_play_at_their_own_delay() {
         let mut policy = policy_with(&["a", "b"]);
@@ -1523,6 +1530,7 @@ mod tests {
         assert_eq!(policy.params("a").delay_frames, 7_200);
     }
 
+    // covers: S176, S178
     #[test]
     fn with_an_airplay_speaker_chosen_outputs_play_at_l_plus_their_offset() {
         // S176: m = −L, so h = L + o.
@@ -1539,6 +1547,7 @@ mod tests {
         assert_eq!(policy.settings("a").delay_ms, 150.0, "the setting is kept");
     }
 
+    // covers: S178
     #[test]
     fn an_offset_is_not_held_to_3000_ms_with_an_airplay_speaker_chosen() {
         // S178 replaces P114's d_local trim: only the hold-back is
@@ -1554,6 +1563,7 @@ mod tests {
         assert_eq!(policy.params("a").delay_frames, 960_000, "capped");
     }
 
+    // covers: S281
     #[test]
     fn a_new_l_re_anchors_the_outputs() {
         let mut policy = policy_with(&["a"]);
@@ -1566,6 +1576,7 @@ mod tests {
         assert!(!policy.set_airplay(sender(false, Duration::from_secs(1))));
     }
 
+    // covers: C77, S281
     #[test]
     fn outputs_wait_for_the_cast_offset_and_for_the_longer_of_it_and_l() {
         let mut policy = policy_with(&["a", "b"]);
@@ -1590,6 +1601,7 @@ mod tests {
         assert_eq!(policy.params("b").delay_frames, 0);
     }
 
+    // covers: C77
     #[test]
     fn airplay_cast_and_local_outputs_play_at_one_latency() {
         let all = ["builtin", "usb", "bluetooth"];
@@ -1628,6 +1640,7 @@ mod tests {
         }
     }
 
+    // covers: S62
     #[test]
     fn a_float_mix_format_is_used_as_it_is() {
         assert_eq!(
@@ -1641,6 +1654,7 @@ mod tests {
         );
     }
 
+    // covers: S62
     #[test]
     fn another_mix_format_gets_float_converted_by_windows_at_its_own_rate() {
         assert_eq!(
@@ -1654,6 +1668,7 @@ mod tests {
         );
     }
 
+    // covers: S62
     #[test]
     fn a_missing_channel_mask_gets_the_usual_one() {
         assert_eq!(
@@ -1670,6 +1685,7 @@ mod tests {
         );
     }
 
+    // covers: S62
     #[test]
     fn unusable_mix_formats_are_refused() {
         assert_eq!(
@@ -1682,6 +1698,7 @@ mod tests {
         );
     }
 
+    // covers: S62
     #[test]
     fn the_render_buffer_holds_two_periods_within_bounds() {
         assert_eq!(render_buffer_hns(100_000), 200_000, "10 ms period");
@@ -1708,6 +1725,7 @@ mod tests {
         assert_eq!(period_frames(i64::MAX, 48_000), 9_600, "at most 200 ms");
     }
 
+    // covers: S235
     #[test]
     fn microphone_calibration_hears_external_speakers_only() {
         let kind = |form: Option<u32>, bus: Option<&str>| mic_kind(form, bus);
@@ -1754,6 +1772,7 @@ mod tests {
         assert_eq!(kind(speakers, None), MicKind::Speaker);
     }
 
+    // covers: S174, S235
     #[test]
     fn the_reference_is_always_an_output_the_microphone_hears() {
         for form in 0..=10 {

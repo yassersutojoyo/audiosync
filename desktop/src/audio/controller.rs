@@ -5267,6 +5267,7 @@ mod tests {
         backend.playing_ids()
     }
 
+    // covers: S10
     #[test]
     fn the_whole_system_is_captured_without_audiosync() {
         let mut backend = backend();
@@ -5281,6 +5282,7 @@ mod tests {
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
     }
 
+    // covers: S380
     #[test]
     fn an_app_is_captured_with_its_tree() {
         let mut backend = backend();
@@ -5309,6 +5311,7 @@ mod tests {
         )
     }
 
+    // covers: S242
     #[test]
     fn an_all_except_mix_takes_in_an_app_that_starts_playing_without_a_new_session() {
         let mut backend = backend();
@@ -5336,6 +5339,7 @@ mod tests {
         assert_eq!(backend.running_source(), Some(source));
     }
 
+    // covers: S242
     #[test]
     fn a_mix_tries_again_an_app_whose_stream_it_lost() {
         let mut backend = backend();
@@ -5360,6 +5364,7 @@ mod tests {
         );
     }
 
+    // covers: S242
     #[test]
     fn an_only_these_mix_takes_in_a_second_instance_of_its_app() {
         let mut backend = backend();
@@ -5425,6 +5430,7 @@ mod tests {
         );
     }
 
+    // covers: S380
     #[test]
     fn audiosync_itself_is_never_captured() {
         let mut backend = backend();
@@ -5437,6 +5443,7 @@ mod tests {
         assert!(playing(&backend).is_empty());
     }
 
+    // covers: S121
     #[test]
     fn an_app_that_quit_before_the_start_is_gone() {
         let mut backend = backend();
@@ -5448,6 +5455,7 @@ mod tests {
         assert_eq!(backend.running_source(), None);
     }
 
+    // covers: S161
     #[test]
     fn a_start_plays_every_enabled_connected_output() {
         let mut backend = backend();
@@ -5513,6 +5521,7 @@ mod tests {
         assert!(backend.driver().renderers_started().is_empty());
     }
 
+    // covers: S119, S161
     #[test]
     fn outputs_turned_on_and_off_while_playing_follow_at_once() {
         let mut backend = backend();
@@ -5525,6 +5534,7 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES]);
     }
 
+    // covers: S186
     #[test]
     fn a_stop_ends_every_output_after_asking_them_to_fade_out() {
         let mut backend = backend();
@@ -5898,6 +5908,7 @@ mod tests {
         );
     }
 
+    // covers: S186
     #[test]
     fn a_source_change_starts_the_new_capture_at_a_poll_once_the_old_outputs_faded() {
         let mut backend = backend();
@@ -5998,6 +6009,7 @@ mod tests {
         assert_eq!(backend.driver().renderers_running(), 1);
     }
 
+    // covers: S71, S176
     #[test]
     fn each_output_plays_at_its_own_delay_and_volume() {
         let mut backend = backend();
@@ -6022,6 +6034,7 @@ mod tests {
         );
     }
 
+    // covers: S232
     #[test]
     fn a_calibration_lets_one_output_be_heard_and_then_all_again() {
         let mut backend = backend();
@@ -6042,6 +6055,7 @@ mod tests {
         assert!(gain(&backend, HEADPHONES) > 0.0);
     }
 
+    // covers: S232
     #[test]
     fn a_calibration_sees_a_restarted_session_as_another() {
         let mut backend = backend();
@@ -6058,6 +6072,7 @@ mod tests {
         assert_ne!(backend.calibration_engine().session, first.session);
     }
 
+    // covers: S71, S175, S177
     #[test]
     fn delay_and_volume_changes_apply_live() {
         let mut backend = backend();
@@ -6132,6 +6147,7 @@ mod tests {
         assert_eq!(backend.playing_params(HEADPHONES), Some(before));
     }
 
+    // covers: S68, S137
     #[test]
     fn an_unplugged_output_whose_stream_never_notices_is_lost_and_comes_back() {
         let mut backend = backend();
@@ -6168,6 +6184,7 @@ mod tests {
         );
     }
 
+    // covers: S68
     #[test]
     fn an_output_the_ui_saw_disappear_is_lost_at_the_next_poll() {
         let mut backend = backend();
@@ -6184,6 +6201,7 @@ mod tests {
         assert_eq!(playing(&backend), [SPEAKERS]);
     }
 
+    // covers: S331, S68
     #[test]
     fn an_output_lost_while_still_listed_is_lost_again_once_the_listing_drops_it() {
         let mut backend = backend();
@@ -6213,6 +6231,7 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
+    // covers: S331, S68
     #[test]
     fn an_output_that_cant_start_for_a_vanishing_device_is_lost_once_the_listing_drops_it() {
         let mut backend = backend();
@@ -6230,6 +6249,7 @@ mod tests {
         assert!(backend.poll().is_empty(), "reported once");
     }
 
+    // covers: S68
     #[test]
     fn an_output_that_plays_again_after_a_reset_is_lost_once_when_unplugged() {
         let mut backend = backend();
@@ -6263,6 +6283,7 @@ mod tests {
         }
     }
 
+    // covers: S381
     #[test]
     fn a_failed_listing_is_tried_again_without_a_device_change() {
         let mut backend = MockBackend::empty();
@@ -6279,6 +6300,7 @@ mod tests {
         assert_eq!(playing(&backend), [SPEAKERS]);
     }
 
+    // covers: S381
     #[test]
     fn a_failed_listing_keeps_the_last_list_and_the_outputs_that_play() {
         let mut backend = backend();
@@ -6303,6 +6325,7 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
+    // covers: S331
     #[test]
     fn a_device_that_vanishes_while_starting_stays_on() {
         let mut backend = backend();
@@ -6316,6 +6339,7 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
+    // covers: S331
     #[test]
     fn an_output_whose_device_another_app_holds_stays_on_and_plays_once_free() {
         let mut backend = backend();
@@ -6349,6 +6373,7 @@ mod tests {
         assert!(backend.poll().is_empty());
     }
 
+    // covers: S331
     #[test]
     fn a_busy_output_is_tried_again_every_few_seconds_not_at_every_poll() {
         let mut backend = backend();
@@ -6375,6 +6400,7 @@ mod tests {
         }
     }
 
+    // covers: S331
     #[test]
     fn an_output_taken_over_by_another_app_while_playing_waits_for_it() {
         let mut backend = backend();
@@ -6427,6 +6453,7 @@ mod tests {
         }
     }
 
+    // covers: S331
     #[test]
     fn turning_on_an_output_whose_device_is_busy_keeps_it_on() {
         let mut backend = backend();
@@ -6454,6 +6481,7 @@ mod tests {
         assert_eq!(playing(&backend), [SPEAKERS]);
     }
 
+    // covers: S117, S331
     #[test]
     fn stopping_ends_the_wait_for_a_busy_output() {
         let mut backend = backend();
@@ -6476,6 +6504,7 @@ mod tests {
         assert_eq!(backend.poll(), [busy]);
     }
 
+    // covers: S117, S331
     #[test]
     fn a_session_that_ends_by_itself_ends_the_wait_for_a_busy_output() {
         let mut backend = backend();
@@ -6502,6 +6531,7 @@ mod tests {
         );
     }
 
+    // covers: S331
     #[test]
     fn an_output_whose_device_doesnt_answer_stays_on_and_is_tried_again_seconds_later() {
         let mut backend = backend();
@@ -6526,6 +6556,7 @@ mod tests {
         assert_eq!(backend.driver().renderer_attempts(SPEAKERS), 2);
     }
 
+    // covers: S331
     #[test]
     fn once_a_start_doesnt_answer_the_other_starts_of_that_pass_wait_their_turn() {
         let mut backend = backend();
@@ -6561,6 +6592,7 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS, USB_OUTPUT]);
     }
 
+    // covers: S331
     #[test]
     fn a_healthy_output_isnt_kept_waiting_behind_one_that_keeps_hanging() {
         let mut backend = backend();
@@ -6574,6 +6606,7 @@ mod tests {
         assert_eq!(backend.driver().renderer_attempts(HEADPHONES), 2);
     }
 
+    // covers: S331
     #[test]
     fn an_output_that_answers_again_isnt_starved_behind_one_that_still_hangs() {
         let mut backend = backend();
@@ -6589,6 +6622,7 @@ mod tests {
         assert_eq!(playing(&backend), [SPEAKERS]);
     }
 
+    // covers: S117, S331
     #[test]
     fn stopping_ends_the_wait_for_an_output_that_didnt_answer() {
         let mut backend = backend();
@@ -6714,6 +6748,7 @@ mod tests {
         assert_eq!(backend.driver().renderer_attempts(HEADPHONES), tries);
     }
 
+    // covers: S331
     #[test]
     fn an_output_refused_for_a_moment_gets_the_whole_wait_again_next_time() {
         let mut backend = backend();
@@ -6736,6 +6771,7 @@ mod tests {
         assert!(backend.policy().settings(HEADPHONES).enabled);
     }
 
+    // covers: S331, S69
     #[test]
     fn a_busy_output_that_then_fails_another_way_is_told_busy_again_later() {
         let mut backend = backend();
@@ -6769,6 +6805,7 @@ mod tests {
         assert_eq!(backend.poll(), [busy]);
     }
 
+    // covers: S331
     #[test]
     fn a_busy_output_whose_device_goes_away_no_longer_waits() {
         let mut backend = backend();
@@ -6798,6 +6835,7 @@ mod tests {
         );
     }
 
+    // covers: S69
     #[test]
     fn an_output_that_cant_start_is_turned_off_and_reported() {
         let mut backend = backend();
@@ -6819,6 +6857,7 @@ mod tests {
         assert!(backend.poll().is_empty(), "not retried");
     }
 
+    // covers: S69
     #[test]
     fn turning_on_an_output_that_cant_start_returns_the_error() {
         let mut backend = backend();
@@ -6836,6 +6875,7 @@ mod tests {
         );
     }
 
+    // covers: S326
     #[test]
     fn an_output_that_stops_while_its_device_stays_plays_again_unreported() {
         let mut backend = backend();
@@ -7111,6 +7151,7 @@ mod tests {
         assert!(playing(&backend).is_empty());
     }
 
+    // covers: S21
     #[test]
     fn the_session_ends_when_capture_fails() {
         let mut backend = backend();
@@ -7353,6 +7394,7 @@ mod tests {
         }
     }
 
+    // covers: S329
     #[test]
     fn a_capture_lost_to_a_windows_audio_restart_starts_again_a_moment_later() {
         let mut backend = backend();
@@ -8580,6 +8622,7 @@ mod tests {
         assert!(may_start_later(&BackendError::InputGone));
     }
 
+    // covers: S329, S21
     #[test]
     fn a_capture_that_cant_start_again_after_windows_audio_restarted_stops_streaming() {
         let mut backend = backend();
@@ -8602,6 +8645,7 @@ mod tests {
         assert_eq!(backend.running_source(), None, "no try once it stopped");
     }
 
+    // covers: S332 (outside a resume window such a try is the last)
     #[test]
     fn a_capture_restart_that_times_out_is_the_last_try() {
         let mut backend = backend();
@@ -8635,6 +8679,7 @@ mod tests {
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
     }
 
+    // covers: S332 (outside a resume window such a try is the last)
     #[test]
     fn a_capture_restart_whose_thread_doesnt_answer_is_the_last_try() {
         let mut backend = backend();
@@ -8654,6 +8699,7 @@ mod tests {
         assert_eq!(backend.running_source(), None);
     }
 
+    // covers: S329
     #[test]
     fn a_capture_that_cant_start_again_at_first_is_tried_again_for_a_few_seconds() {
         let mut backend = backend();
@@ -8684,6 +8730,7 @@ mod tests {
         );
     }
 
+    // covers: S142
     #[test]
     fn an_app_that_quit_while_its_capture_waits_to_start_again_stops_streaming_at_once() {
         let mut backend = backend();
@@ -8705,6 +8752,7 @@ mod tests {
         assert_eq!(backend.running_source(), None);
     }
 
+    // covers: S329
     #[test]
     fn a_restarted_capture_that_fails_again_soon_stops_streaming() {
         let mut backend = backend();
@@ -8724,6 +8772,7 @@ mod tests {
         assert_eq!(backend.running_source(), None);
     }
 
+    // covers: S329
     #[test]
     fn a_restarted_capture_that_ran_a_while_is_restarted_again_after_the_next_loss() {
         let mut backend = backend();
@@ -8737,6 +8786,7 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
+    // covers: S329
     #[test]
     fn a_stop_while_the_capture_waits_to_restart_cancels_the_restart() {
         let mut backend = backend();
@@ -8944,6 +8994,7 @@ mod tests {
         assert_eq!(backend.enabled_airplay(), [id]);
     }
 
+    // covers: S114, S186
     #[test]
     fn a_new_start_replaces_the_running_session() {
         let mut backend = backend();
@@ -9001,6 +9052,7 @@ mod tests {
         assert!(backend.poll().is_empty());
     }
 
+    // covers: S211
     #[test]
     fn sources_list_the_whole_system_then_apps() {
         let mut backend = backend();
@@ -9009,6 +9061,7 @@ mod tests {
         assert_eq!(names, ["All System Audio", "Player"]);
     }
 
+    // covers: S161
     #[test]
     fn settings_made_while_stopped_are_kept_for_the_start() {
         let mut backend = MockBackend::empty();
@@ -9025,6 +9078,7 @@ mod tests {
         assert_eq!(backend.playing_params("later").unwrap().delay_frames, 1_920);
     }
 
+    // covers: S114, S31
     #[test]
     fn the_equalizer_set_while_stopped_applies_at_the_start_then_live() {
         let mut backend = backend();
@@ -9116,6 +9170,7 @@ mod tests {
         assert_eq!(backend.driver().renderers_running(), 8);
     }
 
+    // covers: S161
     #[test]
     fn enabled_outputs_count_the_ones_not_connected() {
         let mut backend = backend();
@@ -10078,6 +10133,7 @@ mod tests {
         }
     }
 
+    // covers: C77
     #[test]
     fn airplay_speakers_wait_for_a_cast_speaker_whose_offset_is_longer_than_l() {
         use crate::audio::cast::tests::{FakeCast, KITCHEN};
@@ -10102,6 +10158,7 @@ mod tests {
         assert_eq!(fake.take_calls(), [Call::Delay(id, Duration::ZERO)]);
     }
 
+    // covers: C104
     #[test]
     fn the_master_reaches_the_cast_speaker_as_its_device_volume() {
         use crate::audio::cast::tests::{FakeCast, KITCHEN};
@@ -10197,6 +10254,7 @@ mod tests {
         assert_eq!(held(&backend), [Some(250), Some(400), Some(0)], "L = 0");
     }
 
+    // covers: S235
     #[test]
     fn an_airplay_speaker_at_l_1750_with_delay_0_gets_a_calibration_window_of_at_least_l() {
         let (mut backend, _fake) = playing_airplay_for_calibration();
@@ -10210,6 +10268,7 @@ mod tests {
         );
     }
 
+    // covers: S235
     #[test]
     fn an_airplay_speaker_joins_calibration_at_the_paths_upper_bound_while_the_sender_reports_no_latency()
      {
@@ -10237,6 +10296,7 @@ mod tests {
             .expect("the speaker plays")
     }
 
+    // covers: S176, S178
     #[test]
     fn an_airplay_speaker_on_moves_local_outputs_to_l_plus_their_delay_and_off_back() {
         let (mut backend, fake, kitchen) = with_airplay();
@@ -10267,6 +10327,7 @@ mod tests {
         assert_eq!(fake.take_calls(), [Call::Remove(id)]);
     }
 
+    // covers: S21
     #[test]
     fn airplay_speakers_join_with_the_capture_and_leave_when_streaming_stops() {
         let mut backend = backend();
@@ -10311,6 +10372,7 @@ mod tests {
             .collect()
     }
 
+    // covers: S218
     #[test]
     fn the_playing_track_reaches_airplay_receivers_while_they_play() {
         let (mut backend, fake, kitchen) = with_airplay();
@@ -10386,6 +10448,7 @@ mod tests {
         );
     }
 
+    // covers: S218
     #[test]
     fn an_input_device_source_names_the_device_to_airplay_receivers() {
         let (mut backend, fake, kitchen) = with_airplay();
@@ -10411,6 +10474,7 @@ mod tests {
         );
     }
 
+    // covers: S218
     #[test]
     fn an_input_device_that_cant_be_named_gets_the_unnamed_source_label() {
         let (mut backend, fake, kitchen) = with_airplay();
@@ -10449,6 +10513,7 @@ mod tests {
         );
     }
 
+    // covers: S329
     #[test]
     fn a_capture_started_while_a_hung_one_holds_the_airplay_feed_takes_it_once_its_back() {
         let mut backend = backend();
@@ -10485,6 +10550,7 @@ mod tests {
         assert!(backend.driver().capture_feeds_airplay(), "it starts once");
     }
 
+    // covers: S329
     #[test]
     fn a_capture_started_while_a_hung_one_holds_the_cast_tap_takes_it_once_its_back() {
         use crate::audio::cast::tests::FakeCast;
@@ -10521,6 +10587,7 @@ mod tests {
         );
     }
 
+    // covers: S281
     #[test]
     fn a_new_l_from_the_sender_re_anchors_the_playing_outputs() {
         let (mut backend, fake, kitchen) = with_airplay();
@@ -10532,6 +10599,7 @@ mod tests {
         assert_eq!(delay_frames(&backend, SPEAKERS), 48_000);
     }
 
+    // covers: S177
     #[test]
     fn an_airplay_speaker_that_needs_a_password_is_turned_off_and_outputs_follow() {
         let (mut backend, fake, kitchen) = with_airplay();
@@ -10609,6 +10677,7 @@ mod tests {
         })
     }
 
+    // covers: S101
     #[test]
     fn an_airplay_sender_that_cant_start_at_launch_is_reported_and_retry_starts_one() {
         let mut backend = backend();
@@ -10684,6 +10753,7 @@ mod tests {
         );
     }
 
+    // covers: S101
     #[test]
     fn an_airplay_sender_whose_discovery_cant_start_is_reported_and_retry_starts_a_new_one() {
         let mut backend = backend();
@@ -10707,6 +10777,7 @@ mod tests {
         assert_eq!(backend.airplay_speakers().len(), 1);
     }
 
+    // covers: S101
     #[test]
     fn a_retry_whose_discovery_still_cant_start_is_reported_again() {
         let mut backend = backend();
@@ -10730,6 +10801,7 @@ mod tests {
         assert!(!backend.poll().contains(&BackendEvent::AirPlayStopped));
     }
 
+    // covers: S101
     #[test]
     fn a_retry_whose_sender_still_cant_start_is_reported_again() {
         let mut backend = backend();
