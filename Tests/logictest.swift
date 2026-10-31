@@ -1277,6 +1277,7 @@ do {
           "AirPlay search: the host looks again when the first look ends, even with access allowed")
     let woke = t0 + 8 * 3600
     let wokeSince = AirPlaySearch.sinceAfterWake(t0, now: woke)
+    // covers: S154
     check(wokeSince == woke && AirPlaySearch.sinceAfterWake(nil, now: woke) == nil
             && searching(.unknown, empty: wokeSince, at: woke + 1) && hint(.unknown, empty: wokeSince, at: woke + 1) == .none
             && CastModel.Discovery.browsing(since: t0).afterWake(now: woke) == .browsing(since: woke)
@@ -6357,6 +6358,7 @@ do {
     let airPlay = read("Sources/AudioSync/AppDelegate+AirPlay.swift")
     check(count(body(airPlay, after: "func setSenderTrackInfo("), "nativeAirPlay?.setTrackInfo(") == 1,
           "track info call site: what the wiring sends reaches the native AirPlay sender")
+    // covers: S361
     check(count(body(airPlay, after: "func syncTrackInfo() {"),
                 "trackInfoModelUpdated(sending: sending, casting: casting)") == 1,
           "track info call site: every model update tells the wiring whether AirPlay and Cast show track info")
@@ -6371,6 +6373,7 @@ do {
                 "self?.sendTrackInfo()") == 1,
           "track info call site: a source change that Now Playing notes sends track info again")
     let cast = body(read("Sources/AudioSync/AppDelegate+Cast.swift"), after: "func sendCastTrackInfo(now: Date) {")
+    // covers: S361
     check(count(cast, "sender.setTrack(fields)") == 1 && count(cast, "sender.setArtwork(") == 1,
           "track info call site: the Cast device gets the track and artwork its feed gives")
 }
@@ -10644,6 +10647,7 @@ do {
     let heldPlan = (try? CalibrateAllFlow.plan(held).get()) ?? []
     held.cast = (id: "cast:tv", name: "TV", offsetMs: 1000, waitMs: 750, format: ASC_CAST_FORMAT_FLAC)
     let measuredPlan = (try? CalibrateAllFlow.plan(held).get()) ?? []
+    // covers: S241
     check(heldPlan.count > 2 && heldPlan[2].latencyMs == 7750 && CalibrateAllFlow.quietSeconds(heldPlan) == 7.75
             && measuredPlan.count > 2 && measuredPlan[2].latencyMs == 2250,
           "calibrate all: a Cast speaker without an offset waits its feed's hold-back plus the FLAC guess, "
@@ -11390,19 +11394,25 @@ do {
     // covers: C2
     check(m.turnOn(kitchen) == nil && m.turnOn(den) == .busy && m.enabled == kitchen,
           "cast: a second speaker stays off while one is on")
+    // covers: S401
     check(m.plan(streaming: false) == .none && m.plan(streaming: true) == .start(kitchen),
           "cast: a session starts only while streaming")
     m.startSent(kitchen)
+    // covers: S401
     check(m.plan(streaming: true) == .none && m.status(of: kitchen) == .connecting,
           "cast: nothing new while a start waits for its attempt number")
+    // covers: S401
     check(m.started(kitchen, attempt: 3, refusal: ASC_CAST_REFUSED_NONE) == .changed
             && m.attempt?.number == 3 && m.status(of: kitchen) == .connecting,
           "cast: the attempt number comes back, connecting")
 
+    // covers: S401
     check(m.apply(.started(attempt: 2, format: ASC_CAST_FORMAT_WAV)) == nil && m.status(of: kitchen) == .connecting,
           "cast: an event of an older attempt is dropped")
+    // covers: S401
     check(m.apply(.ended(attempt: 2, .failed(.connect))) == nil && m.enabled == kitchen,
           "cast: a late end of an older attempt never turns the speaker off")
+    // covers: S401
     check(m.playingFormat == 0 && m.apply(.started(attempt: 3, format: ASC_CAST_FORMAT_WAV)) == .playing(kitchen)
             && m.status(of: kitchen) == .playing && m.playingFormat == ASC_CAST_FORMAT_WAV,
           "cast: the current attempt plays, in the format it reports")
@@ -11479,11 +11489,14 @@ do {
     // covers: S246
     check(offline.cantStartNow(den), "cast: an offline speaker can't start now either")
     var stopped = m
+    // covers: S401
     check(stopped.turnOff(kitchen) && stopped.plan(streaming: true) == .stop, "cast: turning it off stops its session")
     stopped.stopSent()
+    // covers: S401
     check(stopped.apply(.ended(attempt: 3, .stopped)) == nil && stopped.plan(streaming: true) == .none,
           "cast: the end of a stopped session is stale and says nothing")
     let streamingOff = m
+    // covers: S401
     check(streamingOff.plan(streaming: false) == .stop && streamingOff.enabled == kitchen,
           "cast: streaming off stops the session and keeps the speaker chosen")
 
@@ -11614,14 +11627,17 @@ do {
           "cast: the selection is named to the sender once at start and again only when it changes (C108)")
 
     var failed = m
+    // covers: S401
     check(failed.apply(.failed(detail: "")) == .senderFailed(wasOn: kitchen) && failed.enabled == nil && failed.rows.isEmpty
             && failed.listState(now: Date()) == .failed,
           "cast: a sender that stopped working empties the list and says so")
 
+    // covers: S401
     check(CastModel.clampedOffset(-5) == 0 && CastModel.clampedOffset(20_001) == 20_000
             && CastModel.clampedOffset(12.6) == 13 && CastModel.clampedOffset(.infinity) == nil,
           "cast: the offset field takes 0 to 20000 whole ms")
     var offsets = m
+    // covers: S401
     check(offsets.setOffset(kitchen, ms: 250) == nil && offsets.setOffset(kitchen, ms: 30_000) == 20_000
             && offsets.offset(of: kitchen) == 20_000, "cast: an offset is stored clamped, and only when it changes")
 
@@ -11631,20 +11647,24 @@ do {
     check(seeded.offsets["hall"] == 500, "cast: a device's first announcement seeds the offset its memory holds")
     _ = seeded.setOffset("hall", ms: 300)
     seeded.apply(.changed(CastDevice(id: "hall", name: "Hall"), offsetMs: 500))
+    // covers: S401
     check(seeded.offsets["hall"] == 300,
           "cast: a memory offset read before the user's change and delivered after it doesn't overwrite it",
           "\(seeded.offsets)")
 
     let start = Date()
     var listed = CastModel()
+    // covers: S401
     check(listed.listState(now: start) == .quiet, "cast: no note before the search starts")
     listed.discovery = .browsing(since: start)
     // covers: S154
     check(listed.listState(now: start + 5) == .searching && listed.listState(now: start + 20) == .noneFound,
           "cast: searching, then none found after 20 s")
     listed.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
+    // covers: S401
     check(listed.listState(now: start + 30) == .quiet, "cast: no note once a speaker is listed")
     listed.apply(.gone(id: den))
+    // covers: S401
     check(listed.rows.isEmpty && listed.listState(now: start + 30) == .noneFound, "cast: a speaker that goes leaves the list")
 
     var raw = AscCastEvent()
@@ -11652,16 +11672,19 @@ do {
     raw.attempt = 7
     raw.reason = ASC_CAST_END_FAILED
     raw.error = ASC_CAST_ERROR_NO_FETCH
+    // covers: C83
     check(CastEvent(raw) == .ended(attempt: 7, .failed(.noFetch)), "cast: an ended event copies its reason and error")
     raw = AscCastEvent()
     raw.kind = ASC_CAST_EVENT_VOLUME
     raw.attempt = 7
     raw.level = 0.25
     raw.volume_fixed = true
+    // covers: C68, C70
     check(CastEvent(raw) == .volume(attempt: 7, CastVolume(level: 0.25, muted: false, fixed: true))
             && CastEvent(raw)?.attempt == 7, "cast: a volume event copies level, mute and fixed")
     raw.kind = ASC_CAST_EVENT_FORMAT_FALLBACK
     raw.format = ASC_CAST_FORMAT_FLAC
+    // covers: C84
     check(CastEvent(raw) == .formatFallback(attempt: 7, format: ASC_CAST_FORMAT_FLAC),
           "cast: a format fallback event copies the format")
     raw.kind = 999
@@ -11686,6 +11709,7 @@ do {
             _ = CastEvent(event, members: { [] }, underruns: &underruns)
         }
         let first = diagnostics(7, 960)
+        // covers: C78
         check(first == "drift 40 ms, queued 250 ms, underrun silence 960 frames since the previous line",
               "cast diagnostics: the first line shows the underrun silence counted so far", first)
         let quiet = diagnostics(7, 960)
@@ -11721,6 +11745,7 @@ do {
             }
         }
     }
+    // covers: C13, C14, C77
     check(change == .appeared(CastDevice(id: kitchen, name: "Kitchen", model: "Nest Audio", group: true), offsetMs: 40),
           "cast: a discovery report copies its strings, flags and stored offset")
 
@@ -11741,17 +11766,21 @@ do {
     check(Set(castSubjects) == [Notice.cast(den), Notice.cast(kitchen)]
             && cleared && senderGone.items.map(\.subject) == [Notice.source],
           "cast: a sender that stopped clears every speaker's notice, and only those")
+    // covers: S401
     check(t.castSenderStopped(speaker: "Kitchen").contains("Kitchen"), "cast: the sender's notice names the speaker that went off")
     var named = CastModel()
     named.apply(.appeared(CastDevice(id: "kitchen", name: "Kitchen"), offsetMs: nil))
     _ = named.turnOn("kitchen")
     let namedBefore = named.listedOn
     _ = named.apply(.failed(detail: ""))
+    // covers: S401
     check(namedBefore == ["kitchen": "Kitchen"] && named.listedName("kitchen").isEmpty,
           "cast: the speaker that was on is named as listed before the sender's failure empties the list",
           "\(namedBefore)")
     var idleFailure = CastModel()
+    // covers: S401
     check(idleFailure.apply(.failed(detail: "")) == .senderFailed(wasOn: nil), "cast: no speaker named when none was on")
+    // covers: S401
     check(t.castList(.noneFound, localNetworkRefused: true)?.contains("Local Network") == true
             && t.castList(.noneFound)?.contains("Local Network") == false,
           "cast: none found points to Local Network access only once it was refused")
@@ -11759,6 +11788,7 @@ do {
     check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
           "cast: every notice names the speaker, with no em dash")
     let bothNone = t.networkSpeakersNote(airPlayNone: true, cast: .noneFound) ?? ""
+    // covers: S401
     check(bothNone.hasPrefix("No AirPlay or Google Cast speakers found yet.") && bothNone.contains("same network")
             && !bothNone.contains("Local Network") && !t.airPlayNoneFound().contains("Local Network")
             && t.airPlayNoneFound(localNetworkRefused: true).contains("Local Network")
@@ -11833,6 +11863,7 @@ do {
           "cast group: a member stays its own row and waits while the group plays")
     m.startSent(home)
     _ = m.started(home, attempt: 5, refusal: ASC_CAST_REFUSED_NONE)
+    // covers: C94
     check(m.groupMembers(of: home, name: name) == .notReported, "cast group: no member note while it connects")
 
     var silent = m
@@ -11840,10 +11871,13 @@ do {
     check(silent.apply(.started(attempt: 5, format: ASC_CAST_FORMAT_WAV)) == .playing(home) && silent.groupMembers(of: home, name: name) == .unknown,
           "cast group: playing without a member list says the members are unknown")
     _ = silent.apply(.members(attempt: 5, []))
+    // covers: C94
     check(silent.groupMembers(of: home, name: name) == .unknown, "cast group: an empty member list stays unknown")
 
     let list = [CastMember(id: kitchen, name: "Kitchen"), CastMember(id: "", name: "Garage")]
+    // covers: C94
     check(m.apply(.members(attempt: 4, list)) == nil && m.members == nil, "cast group: members of an older attempt are dropped")
+    // covers: C94
     check(m.apply(.members(attempt: 5, list)) == .changed && m.apply(.members(attempt: 5, list)) == nil,
           "cast group: a member list changes the row once")
     _ = m.apply(.started(attempt: 5, format: ASC_CAST_FORMAT_WAV))
@@ -11936,9 +11970,11 @@ do {
             raw.detail = line
             return CastEvent(raw)
         }
+        // covers: C81, C83, C84
         check(kept.map { String(describing: $0) }?.contains("tls alert X") == true,
               "cast: \(name) keeps the core's detail for the debug log")
     }
+    // covers: C80
     check(CastRefusal.problem(ASC_CAST_REFUSED_GROUP) == .notResponding
             && CastEnd.failed(CastError(ASC_CAST_ERROR_GROUP)).problem == .notResponding,
           "cast group: the retired group refusal and error map to nothing group-specific")
@@ -12238,6 +12274,7 @@ do {
     raw.attempt = 9
     raw.level = 0.5
     raw.step = 0.05
+    // covers: C69
     check(CastEvent(raw) == .volume(attempt: 9, CastVolume(level: 0.5, muted: false, fixed: false, step: 0.05)),
           "cast step: a volume event copies the device's step")
 
@@ -12343,6 +12380,7 @@ do {
     // covers: C77
     check(spreads.allSatisfy { $0 < 0.5 }, "cast+airplay: AirPlay, Cast and local outputs are heard together either way",
           "spreads \(spreads)")
+    // covers: C77
     check(NetworkHoldBack.airPlayMs(airPlay: nil, cast: 3000) == 0 && NetworkHoldBack.castMs(airPlay: nil, cast: 0) == 0
             && NetworkHoldBack.airPlayMs(airPlay: 1750, cast: nil) == 0 && NetworkHoldBack.castMs(airPlay: 1750, cast: nil) == 0
             && NetworkHoldBack.airPlayMs(airPlay: 1750, cast: .nan) == 0 && NetworkHoldBack.castMs(airPlay: .nan, cast: 0) == 0,
@@ -12355,23 +12393,30 @@ do {
 
     let kitchen = "kitchen-1"
     var ahead = AirPlayAheadNotice()
+    // covers: S401
     check(ahead.update(device: kitchen, aheadMs: 0) == nil && ahead.update(device: kitchen, aheadMs: 49) == nil,
           "cast+airplay: no notice while AirPlay keeps up within the tolerance")
+    // covers: S401
     check(ahead.update(device: kitchen, aheadMs: 1500)
             == AirPlayAheadNotice.Step(clear: nil, post: AirPlayAheadNotice.Shown(device: kitchen, tenths: 15)),
           "cast+airplay: the notice is posted with how far ahead AirPlay plays")
+    // covers: S401
     check(ahead.update(device: kitchen, aheadMs: 1520) == nil, "cast+airplay: posted once while the amount stays the same")
     var notices = NoticeList()
     notices.post(t.airPlayAheadOfCast(tenths: 15, speaker: "Kitchen"), subject: Notice.airPlayAhead(kitchen))
     notices.clear([Notice.airPlayAhead(kitchen)])
+    // covers: S401
     check(ahead.update(device: kitchen, aheadMs: 1480) == nil && notices.isEmpty,
           "cast+airplay: a dismissed notice stays away while the amount is the same")
+    // covers: S401
     check(ahead.update(device: kitchen, aheadMs: 1600)
             == AirPlayAheadNotice.Step(clear: kitchen, post: AirPlayAheadNotice.Shown(device: kitchen, tenths: 16)),
           "cast+airplay: a dismissed notice comes back when the amount changes")
+    // covers: S401
     check(ahead.update(device: kitchen, aheadMs: 20) == AirPlayAheadNotice.Step(clear: kitchen, post: nil)
             && ahead.shown == nil,
           "cast+airplay: the notice clears once AirPlay keeps up")
+    // covers: S401
     check(ahead.update(device: kitchen, aheadMs: 60)?.post?.tenths == 1
             && ahead.update(device: nil, aheadMs: 60) == AirPlayAheadNotice.Step(clear: kitchen, post: nil),
           "cast+airplay: a small lead reads as 0.1 s, and the notice clears when the Cast speaker goes off")
@@ -12383,6 +12428,7 @@ do {
     var castOnes = NoticeList()
     castOnes.post(t.castProblem(.busy, name: "Kitchen"), subject: Notice.cast(kitchen))
     castOnes.post(text, subject: Notice.airPlayAhead(kitchen))
+    // covers: S401
     check(castOnes.count == 2 && Notice.castSubjects(in: castOnes) == [Notice.cast(kitchen)],
           "cast+airplay: the notice never replaces a problem with the Cast speaker")
 }
@@ -12994,9 +13040,11 @@ do {
 // MARK: Google Cast speakers added by address (C18): what the sheet reads, and the stored list
 do {
     let read = { (typed: String) in CastManualAddress(typed).map { "\($0.host)|\($0.port)" } }
+    // covers: C18
     check(read("192.0.2.5") == "192.0.2.5|8009" && read(" Speaker.Local. ") == "speaker.local|8009"
             && read("living-room") == "living-room|8009",
           "cast address: an IPv4 address or a host name alone gets port 8009; a host name is lowercased and trimmed")
+    // covers: C18
     check(read("192.0.2.5:8010") == "192.0.2.5|8010" && read("speaker.local:9000") == "speaker.local|9000"
             && CastManualAddress("speaker.local:8009")?.text == "speaker.local"
             && CastManualAddress("speaker.local:8010")?.text == "speaker.local:8010",
@@ -13005,6 +13053,7 @@ do {
                    "speaker.local:+80", "192.0.2.256", "192.0.2", "192.0.2.05", "1234", "-speaker.local",
                    "speaker_one.local", "spe aker", "a..b", "::1", "[2001:db8::1]:8009", "192.0.2.5:8009:1"]
     let accepted = refused.filter { CastManualAddress($0) != nil }
+    // covers: C18
     check(accepted.isEmpty, "cast address: empty text, a bad port, a bad IPv4 address, a bad host name and IPv6 are refused",
           "accepted: \(accepted)")
 
@@ -13019,10 +13068,12 @@ do {
     store.save(list)
     let savedText = stored.values[key] as? [String]
     let reread = store.castManualList
+    // covers: C18
     check(key == "castManualAddresses" && firstAdd && secondAdd && !repeated
             && savedText == ["speaker.local", "192.0.2.7:8010"] && reread.addresses == [kitchen, den],
           "cast address list: adds keep their order, the same address twice is stored once, and it reads back")
     stored.values[key] = ["speaker.local", "not valid!", "speaker.local:8009"]
+    // covers: C18
     check(store.castManualList.addresses == [kitchen], "cast address list: a damaged or repeated stored entry is dropped")
     var shrinking = reread
     let removed = shrinking.remove(kitchen), removedAgain = shrinking.remove(kitchen)
@@ -13030,6 +13081,7 @@ do {
     let afterOne = store.castManualList.addresses
     shrinking.remove(den)
     store.save(shrinking)
+    // covers: C18
     check(removed && !removedAgain && afterOne == [den] && stored.values[key] == nil,
           "cast address list: Remove drops one address, and the setting goes once none is left")
 
@@ -13042,6 +13094,7 @@ do {
     let comesBack = m.apply(.changed(CastDevice(id: id, name: "", manual: true), offsetMs: nil))
     m.addedManually(id, address: den)
     let readded = m.apply(.changed(CastDevice(id: id, name: "", manual: true), offsetMs: nil))
+    // covers: C18
     check(replaced == nil && removedAddress == den && comesBack == nil && readded == .changed && m.devices[id] != nil
             && m.removeManual("0123456789abcdef0123456789abcdef") == nil,
           "cast model: a removed manual device stays off the list until it is added again; only a manual one is removed")
@@ -13512,6 +13565,7 @@ do {
     check(unknownVolume == nil && unheard.knownVolume(of: castX).map { approx($0, 40, 1e-9) } == true,
           "presets: a Cast speaker whose volume isn't known yet is saved without a volume")
 
+    // covers: C18
     check(t.castAddProblem(.notFound)
             == "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
             && t.castAddProblem(.unreadable) == t.castAddInvalid
@@ -14446,6 +14500,7 @@ do {
     check(t.volumeLocked(enabled: true, cast: castRow(.idle)) != nil
             && t.volumeLocked(enabled: true, cast: castRow(.idle)) != t.volumeLocked(enabled: false, cast: nil),
           "volume: a Cast speaker with no session says why, apart from a speaker that is off")
+    // covers: C68
     check(t.volumeLocked(enabled: true, cast: castRow(.playing, fixed: true)) == t.castVolumeFixed,
           "volume: a fixed Cast volume keeps its own reason")
 }
