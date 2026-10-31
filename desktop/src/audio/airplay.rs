@@ -5217,6 +5217,7 @@ pub mod tests {
         "pw=true",
     ];
 
+    // covers: S222
     #[test]
     fn a_receiver_that_appears_is_listed_with_whether_it_can_play() {
         let fake = FakeAirPlay::new();
@@ -5356,6 +5357,7 @@ pub mod tests {
         );
     }
 
+    // covers: S223, P54
     #[test]
     fn an_apple_tv_pairs_once_and_its_credentials_come_back_on_every_add() {
         use crate::audio::pairings::tests::{credentials, sealer};
@@ -5427,6 +5429,7 @@ pub mod tests {
         );
     }
 
+    // covers: P170, P150
     #[test]
     fn an_airplay2_speaker_pairs_with_a_pin_only_while_the_switch_is_on() {
         use crate::audio::pairings::tests::homekit;
@@ -5557,6 +5560,7 @@ pub mod tests {
 
     /// A speaker with stored AirPlay 2 credentials shows nothing a RAOP
     /// record says, since any host can publish one under its id (P2).
+    // covers: P2
     #[test]
     fn a_homekit_paired_speaker_never_shows_its_raop_record() {
         use crate::audio::pairings::tests::homekit;
@@ -5589,6 +5593,7 @@ pub mod tests {
     /// Asking for a code every time, by its own flags or by a forged RAOP
     /// `sf`, hides neither the pairing (P182) nor Forget Pairing, the one
     /// way out of the AirPlay 2 pin (P2).
+    // covers: P182, P2, S224
     #[test]
     fn a_pinned_speaker_asking_for_a_code_every_time_keeps_forget_pairing() {
         use crate::audio::pairings::tests::homekit;
@@ -5625,6 +5630,7 @@ pub mod tests {
 
     /// With the switch on and only a RAOP record in view, a pinned speaker
     /// reads as its AirPlay 2 path, whatever the record's flags say (P2).
+    // covers: P2
     #[test]
     fn a_pinned_speaker_with_only_a_raop_record_shows_its_airplay2_view() {
         use crate::audio::pairings::tests::homekit;
@@ -5684,6 +5690,7 @@ pub mod tests {
         airplay
     }
 
+    // covers: S223
     #[test]
     fn an_airplay2_speaker_that_turns_its_key_down_pairs_again_in_the_same_attempt() {
         use crate::audio::pairings::tests::homekit;
@@ -5721,6 +5728,7 @@ pub mod tests {
         );
     }
 
+    // covers: P182, S223
     #[test]
     fn a_tv_that_asks_every_time_plays_after_its_pin_and_stores_nothing() {
         use crate::audio::pairings::tests::homekit;
@@ -5853,6 +5861,7 @@ pub mod tests {
         retried(&mut airplay, Vec::new());
     }
 
+    // covers: S223
     #[test]
     fn a_pairing_in_the_attempt_that_fails_stops_with_the_notice() {
         let tv = airplay2_tv(9, "Loft");
@@ -5873,6 +5882,7 @@ pub mod tests {
         assert!(!airplay.speakers()[0].enabled);
     }
 
+    // covers: S224
     #[test]
     fn forgetting_an_airplay2_pairing_reaches_the_senders_copy_once_the_speaker_is_gone() {
         use crate::audio::pairings::tests::homekit;
@@ -5900,6 +5910,7 @@ pub mod tests {
         );
     }
 
+    // covers: S224
     #[test]
     fn forgetting_a_session_paired_speaker_reaches_only_the_sender_that_paired_it() {
         use crate::audio::pairings::tests::homekit;
@@ -5949,6 +5960,7 @@ pub mod tests {
         );
     }
 
+    // covers: P154
     #[test]
     fn a_receiver_turning_its_airplay2_credentials_down_keeps_the_senders_key() {
         use crate::audio::pairings::tests::homekit;
@@ -5970,6 +5982,7 @@ pub mod tests {
         assert_eq!(airplay.store.homekit(&id), Some(&homekit(0x33)));
     }
 
+    // covers: S224
     #[test]
     fn a_forgotten_airplay2_pairing_the_file_cant_take_is_reported() {
         use crate::audio::pairings::tests::{homekit, sealer};
@@ -6270,6 +6283,7 @@ pub mod tests {
         );
     }
 
+    // covers: P2, S313
     #[test]
     fn a_speaker_airplay1_refuses_follows_the_sender_to_airplay2() {
         let fake = FakeAirPlay::new();
@@ -6308,6 +6322,7 @@ pub mod tests {
         assert!(!airplay.speakers()[0].airplay2);
     }
 
+    // covers: P218, S313
     #[test]
     fn a_stopped_or_new_sender_tries_airplay1_first_again() {
         let fake = FakeAirPlay::new();
@@ -6396,6 +6411,7 @@ pub mod tests {
         assert!(airplay.speakers()[0].airplay2, "Retry ended the session");
     }
 
+    // covers: P177, S313
     #[test]
     fn a_pair_switched_off_forgets_what_its_members_airplay1_said() {
         let fake = FakeAirPlay::new();
@@ -6414,6 +6430,7 @@ pub mod tests {
         assert!(!airplay.over_airplay2(&member), "AirPlay 1 first again");
     }
 
+    // covers: P61, S223
     #[test]
     fn an_airplay2_session_that_asks_for_a_pairing_turns_into_a_pin_request() {
         let fake = FakeAirPlay::new();
@@ -6478,6 +6495,7 @@ pub mod tests {
         );
     }
 
+    // covers: S223, P61
     #[test]
     fn the_same_refusal_in_the_users_attempt_pairs_with_a_pin() {
         let fake = FakeAirPlay::new();
@@ -6538,6 +6556,7 @@ pub mod tests {
         );
     }
 
+    // covers: S224
     #[test]
     fn a_pairing_the_store_cant_write_is_reported_once_until_a_write_works() {
         use crate::audio::pairings::FILE_NAME;
@@ -6593,6 +6612,7 @@ pub mod tests {
         assert!(path.is_file(), "the pairing is written");
     }
 
+    // covers: S223
     #[test]
     fn a_wrong_pin_starts_a_new_pairing_and_keeps_the_prompt() {
         let fake = FakeAirPlay::new();
@@ -6623,6 +6643,7 @@ pub mod tests {
         assert!(airplay.enabled_ids().is_empty(), "off until paired");
     }
 
+    // covers: S223
     #[test]
     fn the_prompt_stays_with_the_apple_tv_that_asked_first() {
         let fake = FakeAirPlay::new();
@@ -6657,6 +6678,7 @@ pub mod tests {
         );
     }
 
+    // covers: S223
     #[test]
     fn cancel_stops_the_pairing_and_leaves_the_speaker_off() {
         let fake = FakeAirPlay::new();
@@ -6746,6 +6768,7 @@ pub mod tests {
         assert_eq!(fake.take_calls(), [Call::SubmitPin(id, "4821".to_owned())]);
     }
 
+    // covers: S223
     #[test]
     fn a_cancelled_pairings_late_failure_leaves_the_next_pairing_alone() {
         let fake = FakeAirPlay::new();
@@ -6763,6 +6786,7 @@ pub mod tests {
         the_new_pairing_goes_on(&fake, &mut airplay, &tv);
     }
 
+    // covers: S223
     #[test]
     fn a_cancelled_pairings_late_pin_request_shows_no_prompt() {
         let fake = FakeAirPlay::new();
@@ -6788,6 +6812,7 @@ pub mod tests {
         the_new_pairing_goes_on(&fake, &mut airplay, &tv);
     }
 
+    // covers: S223
     #[test]
     fn a_cancelled_pairings_late_success_pairs_the_next_pairing_without_a_pin() {
         let fake = FakeAirPlay::new();
@@ -6831,6 +6856,7 @@ pub mod tests {
         assert_eq!(row.availability, AirPlayAvailability::Open);
     }
 
+    // covers: S223
     #[test]
     fn a_cancelled_pairings_late_success_with_nothing_waiting_leaves_the_speaker_off() {
         let fake = FakeAirPlay::new();
@@ -6859,6 +6885,7 @@ pub mod tests {
         assert!(fake.take_calls().is_empty(), "nothing starts");
     }
 
+    // covers: S223
     #[test]
     fn a_cancelled_pairings_late_wrong_pin_starts_nothing_again() {
         let fake = FakeAirPlay::new();
@@ -6877,6 +6904,7 @@ pub mod tests {
         the_new_pairing_goes_on(&fake, &mut airplay, &tv);
     }
 
+    // covers: S223
     #[test]
     fn a_pairing_cancelled_before_it_started_never_starts() {
         let fake = FakeAirPlay::new();
@@ -6901,6 +6929,7 @@ pub mod tests {
         assert_eq!(fake.take_calls(), [Call::StartPairing(id)]);
     }
 
+    // covers: S219
     #[test]
     fn a_new_sender_gets_what_is_playing_from_the_last() {
         let fake = FakeAirPlay::new();
@@ -6925,6 +6954,7 @@ pub mod tests {
         assert!(fake.take_calls().is_empty());
     }
 
+    // covers: S223
     #[test]
     fn a_new_sender_starts_a_pairing_at_once_after_a_cancel() {
         let fake = FakeAirPlay::new();
@@ -6948,6 +6978,7 @@ pub mod tests {
         );
     }
 
+    // covers: S223
     #[test]
     fn a_pairing_starts_at_once_after_the_sender_stopped_during_a_cancel() {
         let fake = FakeAirPlay::new();
@@ -6994,6 +7025,7 @@ pub mod tests {
         );
     }
 
+    // covers: S223
     #[test]
     fn a_failed_pairing_turns_the_speaker_off_with_a_notice() {
         let fake = FakeAirPlay::new();
@@ -7043,6 +7075,7 @@ pub mod tests {
         assert!(airplay.enabled_ids().is_empty());
     }
 
+    // covers: P154, S224
     #[test]
     fn forgetting_a_pairing_turns_the_speaker_off_and_asks_for_a_pin_again() {
         use crate::audio::pairings::FILE_NAME;
@@ -7073,6 +7106,7 @@ pub mod tests {
         assert!(!again.contains(&id), "gone from the file too");
     }
 
+    // covers: P154, S223
     #[test]
     fn credentials_the_apple_tv_turns_down_are_forgotten() {
         let fake = FakeAirPlay::new();
@@ -7102,6 +7136,7 @@ pub mod tests {
 
     // A turn-down proves nothing (a reset receiver and an impostor look the
     // same), so the pairing stays in the file until a new one succeeds.
+    // covers: P154
     #[test]
     fn a_legacy_pairing_turned_down_stays_in_the_file_until_a_new_pairing_replaces_it() {
         use crate::audio::pairings::FILE_NAME;
@@ -7151,6 +7186,7 @@ pub mod tests {
         assert_eq!(on_disk.get(&id), Some(&second), "replaced");
     }
 
+    // covers: P154
     #[test]
     fn airplay2_credentials_turned_down_stay_in_the_file_until_a_new_pairing_replaces_them() {
         use crate::audio::pairings::FILE_NAME;
@@ -7204,6 +7240,7 @@ pub mod tests {
     }
 
     // Playing on them shows that whatever turned them down is gone (P154).
+    // covers: P154
     #[test]
     fn turned_down_credentials_a_session_plays_on_list_as_paired_again() {
         use crate::audio::pairings::FILE_NAME;
@@ -7238,6 +7275,7 @@ pub mod tests {
     // which skip the signature check (P56). AirPlay 2 credentials pin the
     // speaker to AirPlay 2, whose pair-verify proves them, so playing there
     // clears the mark.
+    // covers: P154
     #[test]
     fn a_session_that_proves_nothing_leaves_turned_down_credentials_marked() {
         use crate::audio::pairings::FILE_NAME;
@@ -7288,6 +7326,7 @@ pub mod tests {
         assert!(!airplay.credentials_turned_down.contains(&id_of(&with_key)));
     }
 
+    // covers: P136, S222
     #[test]
     fn a_tv_that_fails_its_signature_check_goes_off_and_keeps_its_credentials() {
         let fake = FakeAirPlay::new();
@@ -7319,6 +7358,7 @@ pub mod tests {
         assert!(airplay.enabled_ids().is_empty());
     }
 
+    // covers: S223
     #[test]
     fn a_paired_tv_reads_as_refusing_only_when_its_pairing_failure_waits_to_retry() {
         let fake = FakeAirPlay::new();
@@ -7410,6 +7450,7 @@ pub mod tests {
         }
     }
 
+    // covers: P45, P46, P59, P2
     #[test]
     fn receivers_that_need_pairing_or_airplay_2_are_not_supported_yet() {
         let pin = device(
@@ -7485,6 +7526,7 @@ pub mod tests {
         assert!(!airplay.chosen());
     }
 
+    // covers: S223
     #[test]
     fn a_speaker_that_cant_play_stays_off_and_is_never_added() {
         let fake = FakeAirPlay::new();
@@ -7501,6 +7543,7 @@ pub mod tests {
         assert!(fake.take_calls().is_empty());
     }
 
+    // covers: S249, P99
     #[test]
     fn volume_and_delay_go_to_the_sender_live() {
         let fake = FakeAirPlay::new();
@@ -7530,6 +7573,7 @@ pub mod tests {
         assert_eq!(airplay.speakers()[0].delay_ms, 20_000.0);
     }
 
+    // covers: P99
     #[test]
     fn a_delay_up_to_twenty_seconds_reaches_the_sender_in_full() {
         // Calibrate All gives an AirPlay row up to the core's 20 s (P99).
@@ -7560,6 +7604,7 @@ pub mod tests {
         assert_eq!(airplay.speakers()[0].delay_ms, 13_000.0);
     }
 
+    // covers: S232
     #[test]
     fn a_calibration_solo_mutes_the_other_speakers_until_it_ends() {
         let fake = FakeAirPlay::new();
@@ -7619,6 +7664,7 @@ pub mod tests {
         assert!(sent_levels(&fake).contains(&(s.clone(), Some(-6.0))));
     }
 
+    // covers: C77, P99
     #[test]
     fn the_cast_hold_back_comes_on_top_of_each_speakers_own_delay() {
         let fake = FakeAirPlay::new();
@@ -7651,6 +7697,7 @@ pub mod tests {
         assert_eq!(airplay.speakers()[0].delay_ms, 200.0, "the user's own d_s");
     }
 
+    // covers: S222
     #[test]
     fn a_lost_speaker_stays_on_and_one_that_needs_the_user_is_turned_off() {
         let fake = FakeAirPlay::new();
@@ -7708,6 +7755,7 @@ pub mod tests {
 
     // A receiver powered off mid-stream: discovery withdraws it about 40 s
     // later, and the sender pauses its retries then (P215).
+    // covers: S222
     #[test]
     fn a_retrying_speaker_whose_receiver_is_gone_stays_in_the_sender_until_switched_off() {
         let fake = FakeAirPlay::new();
@@ -7735,6 +7783,7 @@ pub mod tests {
         assert_eq!(fake.take_calls(), [Call::Remove(id)]);
     }
 
+    // covers: S222
     #[test]
     fn a_speaker_playing_on_after_its_announcement_lapsed_stays_in_the_sender_once_it_is_lost() {
         let fake = FakeAirPlay::new();
@@ -7768,6 +7817,7 @@ pub mod tests {
     // covers: S222
     // The sender restarts a session on its own (an ALAC retry, a path
     // switch) with a state change and no error.
+    // covers: S222
     #[test]
     fn a_speaker_playing_on_after_its_announcement_lapsed_stays_in_the_sender_once_its_session_restarts()
      {
@@ -7792,6 +7842,7 @@ pub mod tests {
         assert_eq!(airplay.enabled_ids(), std::slice::from_ref(&id));
     }
 
+    // covers: S285, S222
     #[test]
     fn a_speaker_waiting_for_the_airplay2_slot_stays_on_and_one_without_ptp_is_off() {
         let fake = FakeAirPlay::new();
@@ -7833,6 +7884,7 @@ pub mod tests {
         assert!(airplay.enabled_ids().is_empty());
     }
 
+    // covers: S312
     #[test]
     fn the_airplay2_switch_is_off_unless_the_setting_or_the_variable_turns_it_on() {
         // P170: the switch alone, before the build flag; the path is S312's test below.
@@ -7849,6 +7901,7 @@ pub mod tests {
         assert_eq!(config.on_driver_thread.is_some(), cfg!(windows));
     }
 
+    // covers: S312
     #[test]
     fn the_airplay2_flag_keeps_the_path_on_and_the_switch_prefers_airplay2() {
         // Spec S312: with the flag off the switch alone sets the path.
@@ -7902,6 +7955,7 @@ pub mod tests {
         assert!(!pcm_debug_devices(Some("A1B2C3D4E5F6")).contains("A1B2C3D4E5F7"));
     }
 
+    // covers: P74
     #[test]
     fn the_pcm_variable_allows_pcm_for_the_named_speaker_only() {
         let fake = FakeAirPlay::new();
@@ -7959,6 +8013,7 @@ pub mod tests {
         ]
     }
 
+    // covers: S223
     #[test]
     fn a_password_typed_switches_the_speaker_on_and_is_kept_until_quit() {
         let fake = FakeAirPlay::new();
@@ -7988,6 +8043,7 @@ pub mod tests {
         assert_eq!(fake.take_calls(), joined_with(&id, "hunter2"));
     }
 
+    // covers: S223
     #[test]
     fn forget_password_drops_the_typed_password_and_turns_the_speaker_off() {
         let fake = FakeAirPlay::new();
@@ -8013,6 +8069,7 @@ pub mod tests {
         );
     }
 
+    // covers: S223
     #[test]
     fn a_wrong_password_asks_again_and_cancel_turns_the_speaker_off() {
         let fake = FakeAirPlay::new();
@@ -8051,6 +8108,7 @@ pub mod tests {
         );
     }
 
+    // covers: S223
     #[test]
     fn a_password_turned_down_after_playing_turns_the_speaker_off() {
         let fake = FakeAirPlay::new();
@@ -8075,6 +8133,7 @@ pub mod tests {
         assert!(airplay.enabled_ids().is_empty());
     }
 
+    // covers: S223
     #[test]
     fn a_password_discovery_didnt_announce_prompts_at_once_on_the_users_switch_on() {
         let fake = FakeAirPlay::new();
@@ -8117,6 +8176,7 @@ pub mod tests {
         );
     }
 
+    // covers: S223
     #[test]
     fn a_sender_that_stops_during_a_password_prompt_turns_the_speaker_off() {
         let fake = FakeAirPlay::new();
@@ -8137,6 +8197,7 @@ pub mod tests {
         assert!(airplay.enabled_ids().is_empty(), "not left on and silent");
     }
 
+    // covers: S223
     #[test]
     fn a_new_sender_drops_the_password_prompt_of_a_pairing() {
         let fake = FakeAirPlay::new();
@@ -8151,6 +8212,7 @@ pub mod tests {
         assert!(airplay.enabled_ids().is_empty());
     }
 
+    // covers: S223
     #[test]
     fn switching_off_closes_the_password_prompt() {
         let fake = FakeAirPlay::new();
@@ -8160,6 +8222,7 @@ pub mod tests {
         assert_eq!(airplay.password_prompt(), None);
     }
 
+    // covers: S223
     #[test]
     fn an_apple_tv_that_asks_for_a_password_pairs_again_with_it() {
         let fake = FakeAirPlay::new();
@@ -8755,6 +8818,7 @@ pub mod tests {
         assert_eq!(sent_levels(&fake), [(id.clone(), None)]);
     }
 
+    // covers: S271, P184
     #[test]
     fn a_read_counts_only_when_asked_after_the_last_set() {
         let t0 = Instant::now();
@@ -9271,6 +9335,7 @@ pub mod tests {
         assert_eq!(held_level(40.0, NO_ZONE_POSITION, 50.0), None);
     }
 
+    // covers: S291, S250
     #[test]
     fn a_volume_changed_on_the_speaker_moves_its_slider_without_an_echo() {
         let fake = FakeAirPlay::new();
@@ -9303,6 +9368,7 @@ pub mod tests {
         assert!(fake.take_calls().is_empty());
     }
 
+    // covers: S291
     #[test]
     fn a_level_set_on_the_speaker_never_goes_back_to_it() {
         // A television that keeps sets on a 0.6 dB grid turns a −26.7 dB
@@ -9324,6 +9390,7 @@ pub mod tests {
         );
     }
 
+    // covers: S290, S291
     #[test]
     fn the_sender_keeps_the_speakers_own_level_whatever_the_master() {
         let fake = FakeAirPlay::new();
@@ -9398,6 +9465,7 @@ pub mod tests {
         );
     }
 
+    // covers: S271, S291
     #[test]
     fn a_retrying_speaker_takes_new_records_with_its_own_level_and_delay() {
         let fake = FakeAirPlay::new();
@@ -9549,6 +9617,7 @@ pub mod tests {
         }
     }
 
+    // covers: S291
     #[test]
     fn a_level_near_the_bottom_moves_the_row_to_0_without_muting() {
         let fake = FakeAirPlay::new();
@@ -9581,6 +9650,7 @@ pub mod tests {
         assert!(airplay.poll().contains(&BackendEvent::AirPlayPtpFree));
     }
 
+    // covers: S291
     #[test]
     fn a_level_past_the_wire_range_is_kept_once_as_its_nearest() {
         let fake = FakeAirPlay::new();
@@ -9599,6 +9669,7 @@ pub mod tests {
         assert!(fake.take_calls().is_empty(), "kept once");
     }
 
+    // covers: P122, P184
     #[test]
     fn a_volume_read_before_the_slider_moved_is_dropped() {
         let fake = FakeAirPlay::new();
@@ -9617,6 +9688,7 @@ pub mod tests {
         assert_eq!(airplay.speakers()[0].volume, 70.0);
     }
 
+    // covers: S271
     #[test]
     fn speakers_that_cant_answer_are_not_asked() {
         let fake = FakeAirPlay::new();
@@ -9741,6 +9813,7 @@ pub mod tests {
         airplay
     }
 
+    // covers: P176
     #[test]
     fn a_stereo_pair_is_one_row_that_names_its_members() {
         let fake = FakeAirPlay::new();
@@ -9767,6 +9840,7 @@ pub mod tests {
         );
     }
 
+    // covers: S246
     #[test]
     fn targets_are_not_listed_with_the_airplay2_switch_off() {
         let fake = FakeAirPlay::new();
@@ -9780,6 +9854,7 @@ pub mod tests {
         assert_eq!(ids, [id_of(&left), id_of(&right)]);
     }
 
+    // covers: P177, P179, P180
     #[test]
     fn the_pair_row_plays_both_members_with_one_switch_volume_and_delay() {
         let fake = FakeAirPlay::new();
@@ -9826,6 +9901,7 @@ pub mod tests {
         assert_eq!(fake.take_calls(), [Call::RemoveTarget(PAIR.to_owned())]);
     }
 
+    // covers: P181
     #[test]
     fn a_member_out_of_view_or_playing_nothing_is_named_missing() {
         let fake = FakeAirPlay::new();
@@ -9873,6 +9949,7 @@ pub mod tests {
         );
     }
 
+    // covers: P176
     #[test]
     fn a_member_on_by_itself_shows_until_the_pair_takes_it_over() {
         let fake = FakeAirPlay::new();
@@ -9907,6 +9984,7 @@ pub mod tests {
         assert_eq!(ids, [PAIR]);
     }
 
+    // covers: P181
     #[test]
     fn a_member_error_is_the_pairs_only_while_no_other_member_plays() {
         let fake = FakeAirPlay::new();
@@ -10002,6 +10080,7 @@ pub mod tests {
         }));
     }
 
+    // covers: S232, P176
     #[test]
     fn calibration_hears_a_playing_pair_as_one_airplay_speaker() {
         let fake = FakeAirPlay::new();
@@ -10037,6 +10116,7 @@ pub mod tests {
         )));
     }
 
+    // covers: S222
     #[test]
     fn a_pair_gone_while_playing_keeps_its_row_and_its_members() {
         let fake = FakeAirPlay::new();
@@ -10070,6 +10150,7 @@ pub mod tests {
         assert!(matches!(&fake.take_calls()[..], [Call::Add { id, .. }] if *id == id_of(&left)));
     }
 
+    // covers: P176
     #[test]
     fn a_member_left_on_before_its_pair_was_listed_still_joins() {
         let fake = FakeAirPlay::new();
@@ -10096,6 +10177,7 @@ pub mod tests {
         );
     }
 
+    // covers: P176
     #[test]
     fn a_member_stays_held_while_its_pair_is_listed_even_with_the_pair_off() {
         let fake = FakeAirPlay::new();
@@ -10124,6 +10206,7 @@ pub mod tests {
         );
     }
 
+    // covers: P176
     #[test]
     fn a_pair_whose_playing_member_drops_waits_on_the_one_connecting() {
         let fake = FakeAirPlay::new();
@@ -10143,6 +10226,7 @@ pub mod tests {
         );
     }
 
+    // covers: S223, P176
     #[test]
     fn a_member_that_wants_a_password_is_asked_for_by_name() {
         let fake = FakeAirPlay::new();
@@ -10196,6 +10280,7 @@ pub mod tests {
         assert_eq!(airplay.password_prompt(), None);
     }
 
+    // covers: P176
     #[test]
     fn a_gone_pair_whose_member_wants_a_password_goes_off_without_a_prompt() {
         let fake = FakeAirPlay::new();
@@ -10298,6 +10383,7 @@ pub mod tests {
         }
     }
 
+    // covers: S222
     #[test]
     fn a_speaker_counts_as_chosen_while_listed_or_playing() {
         let fake = FakeAirPlay::new();
@@ -10350,6 +10436,7 @@ pub mod tests {
         Device::from_records(key, with_raop.then_some(&raop), Some(&airplay)).expect("a device")
     }
 
+    // covers: S167, S222
     #[test]
     fn a_two_service_speaker_that_loses_its_raop_record_first_stays_on() {
         let fake = FakeAirPlay::new();
@@ -10395,6 +10482,7 @@ pub mod tests {
         assert_eq!(airplay.enabled_ids(), [id]);
     }
 
+    // covers: S222
     #[test]
     fn a_listed_speaker_that_cant_play_doesnt_hold_local_outputs_back() {
         let fake = FakeAirPlay::new();
@@ -10414,6 +10502,7 @@ pub mod tests {
         assert!(fake.take_calls().is_empty(), "it doesn't join");
     }
 
+    // covers: S249
     #[test]
     fn the_slider_spreads_over_30_db() {
         assert_eq!(
@@ -10432,6 +10521,7 @@ pub mod tests {
         assert_eq!(airplay_volume(0.0, NO_ZONE_POSITION, 100.0), Volume::Muted);
     }
 
+    // covers: P73
     #[test]
     fn the_feed_hands_44_1_khz_audio_to_the_sender() {
         let clock = SenderClock::new(Instant::now());
@@ -10654,6 +10744,7 @@ pub mod tests {
         false
     }
 
+    // covers: S222, S176
     #[test]
     fn a_loopback_receiver_is_listed_and_plays_through_the_real_sender() {
         let receiver = LoopbackReceiver::start();
