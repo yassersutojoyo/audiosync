@@ -4242,6 +4242,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.cast.as_ref().and_then(CastSpeakers::memory_json)
     }
 
+    fn fill_cast_memory(&mut self, json: &str) {
+        if let Some(cast) = self.cast.as_mut() {
+            cast.fill_memory(json);
+        }
+    }
+
     fn calibration_engine(&self) -> Engine {
         let playing = self.playing_ids();
         Engine {

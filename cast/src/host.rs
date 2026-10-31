@@ -100,6 +100,17 @@ impl DeviceMemory {
         self.offsets.insert(device, offset.min(MAX_OFFSET));
     }
 
+    /// Takes `other`'s format and offset of each device where this memory
+    /// holds none of its own.
+    pub fn fill_from(&mut self, other: &DeviceMemory) {
+        for (device, codec) in &other.formats {
+            self.formats.entry(*device).or_insert(*codec);
+        }
+        for (device, offset) in &other.offsets {
+            self.offsets.entry(*device).or_insert(*offset);
+        }
+    }
+
     fn remember_format(&mut self, device: DeviceId, codec: Codec) -> bool {
         let before = self.format(&device);
         if codec == Codec::Wav {
@@ -584,6 +595,11 @@ impl CastHost {
         lock(&self.shared.memory).set_offset(device, offset);
     }
 
+    /// [`DeviceMemory::fill_from`] on what the host stores.
+    pub fn fill_memory(&self, other: &DeviceMemory) {
+        lock(&self.shared.memory).fill_from(other);
+    }
+
     /// The next event. At most [`MAX_HOST_EVENTS`] wait; beyond that,
     /// routine ones (diagnostics, stream log, failed commands) are dropped,
     /// never `Started`, `Ended`, `MemoryChanged` or the latest volume.
@@ -1058,6 +1074,23 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         panic!("no event of {attempt:?}");
+    }
+
+    #[test]
+    fn filling_a_memory_keeps_its_own_entries_and_takes_the_others_where_it_has_none() {
+        let (live, other) = (DeviceId([1; 16]), DeviceId([2; 16]));
+        let mut memory = DeviceMemory::default();
+        memory.remember_format(live, Codec::Flac);
+        memory.set_offset(live, Duration::from_millis(50));
+        let file = DeviceMemory::from_json(&format!(
+            r#"{{"{live}":{{"format":"wav","offsetMs":90}},"{other}":{{"format":"flac","offsetMs":30}}}}"#
+        ));
+
+        memory.fill_from(&file);
+        assert_eq!(memory.format(&live), Codec::Flac);
+        assert_eq!(memory.offset(&live), Some(Duration::from_millis(50)));
+        assert_eq!(memory.format(&other), Codec::Flac);
+        assert_eq!(memory.offset(&other), Some(Duration::from_millis(30)));
     }
 
     // covers: C107

@@ -2056,7 +2056,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if self.auto_connect_skipped {
             return;
         }
-        let (Some(path), Some(json)) = (self.cast_file.as_ref(), self.audio.cast_memory_json())
+        let (Some(path), Some(mut json)) = (self.cast_file.as_ref(), self.audio.cast_memory_json())
         else {
             return;
         };
@@ -2065,7 +2065,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         if !self.cast_file_checked {
             match keep_unread_cast_file_aside(path, self.cast_unread_at_launch) {
-                Ok(kept) => {
+                Ok((kept, read_late)) => {
                     self.cast_file_checked = true;
                     if let Some(copy) = kept {
                         self.log.log(|| {
@@ -2074,6 +2074,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                                 copy.display()
                             )
                         });
+                    }
+                    // Merged, not refused: the memory started empty, so whatever it holds
+                    // changed since launch and wins over the file.
+                    if let Some(text) = read_late {
+                        self.audio.fill_cast_memory(&text);
+                        json = self.audio.cast_memory_json().unwrap_or(json);
                     }
                 }
                 // It is left alone until it can be read and kept.
@@ -5817,24 +5823,26 @@ const CAST_IGNORED_FILE_NAME: &str = "cast-speakers.ignored.json";
 /// memory didn't come from it: it was `unread_at_launch`, or it isn't a
 /// JSON object ([`DeviceMemory::read_json`](audiosync_cast::host::DeviceMemory::read_json),
 /// read as the launch reads it). An object whose entries are all damaged
-/// reads as an empty memory and is not kept. Returns the copy's path;
-/// `None` when there is no file or nothing to keep. A file that can't be
-/// read is an error, and must not be replaced.
+/// reads as an empty memory and is not kept. Returns the copy's path,
+/// `None` when there is no file or nothing to keep, and the file's text
+/// when it reads now but didn't at launch. A file that can't be read is an
+/// error, and must not be replaced.
 fn keep_unread_cast_file_aside(
     path: &std::path::Path,
     unread_at_launch: bool,
-) -> std::io::Result<Option<PathBuf>> {
+) -> std::io::Result<(Option<PathBuf>, Option<String>)> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((None, None)),
         Err(error) => return Err(error),
     };
-    let reads =
-        audiosync_cast::host::DeviceMemory::read_json(&String::from_utf8_lossy(&bytes)).is_some();
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let reads = audiosync_cast::host::DeviceMemory::read_json(&text).is_some();
     if reads && !unread_at_launch {
-        return Ok(None);
+        return Ok((None, None));
     }
-    data_folder::keep_bytes_aside(path, CAST_IGNORED_FILE_NAME, &bytes).map(Some)
+    let kept = data_folder::keep_bytes_aside(path, CAST_IGNORED_FILE_NAME, &bytes)?;
+    Ok((Some(kept), reads.then_some(text)))
 }
 
 #[cfg(test)]
@@ -17112,11 +17120,15 @@ mod tests {
 
     // covers: S385
     #[test]
-    fn a_cast_speakers_file_unread_at_launch_is_kept_aside_before_it_is_saved_over() {
+    fn a_cast_speakers_file_unread_at_launch_keeps_its_entries_when_it_reads_by_the_first_save() {
         let (mut adapter, _fake) = cast_adapter();
         let folder = test_dir("cast-memory-unread-at-launch");
         let file = folder.join("cast-speakers.json");
-        let earlier = format!(r#"{{"{}":{{"offsetMs":120}}}}"#, cast_device(CAST_LIVING));
+        let earlier = format!(
+            r#"{{"{}":{{"format":"flac","offsetMs":120}},"{}":{{"offsetMs":90}}}}"#,
+            cast_device(CAST_LIVING),
+            cast_device(CAST_KITCHEN)
+        );
         std::fs::write(&file, &earlier).expect("written");
         // Locked at launch, it reads again by the first save.
         adapter.set_cast_file(Some(file.clone()), true);
@@ -17129,11 +17141,20 @@ mod tests {
         adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
         adapter.save_settings();
         assert_eq!(kept(), [earlier.into_bytes()]);
-        let saved = std::fs::read_to_string(&file).expect("the file is written");
+        let ms = std::time::Duration::from_millis;
+        let saved = DeviceMemory::from_json(&std::fs::read_to_string(&file).expect("written"));
+        assert_eq!(saved.offset(&cast_device(CAST_KITCHEN)), Some(ms(250)));
+        assert_eq!(saved.offset(&cast_device(CAST_LIVING)), Some(ms(120)));
         assert_eq!(
-            DeviceMemory::from_json(&saved).offset(&cast_device(CAST_KITCHEN)),
-            Some(std::time::Duration::from_millis(250))
+            saved.format(&cast_device(CAST_LIVING)),
+            audiosync_cast::audio::Codec::Flac
         );
+
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 300.0);
+        adapter.save_settings();
+        let saved = DeviceMemory::from_json(&std::fs::read_to_string(&file).expect("written"));
+        assert_eq!(saved.offset(&cast_device(CAST_LIVING)), Some(ms(120)));
+        assert_eq!(kept().len(), 1, "one copy a run");
     }
 
     // covers: S385

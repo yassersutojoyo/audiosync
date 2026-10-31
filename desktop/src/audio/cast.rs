@@ -409,6 +409,7 @@ pub trait CastLink: Send {
     fn set_track(&mut self, track: CastTrack);
     fn resync(&mut self);
     fn set_offset(&mut self, device: DeviceId, offset: Duration);
+    fn fill_memory(&mut self, other: &DeviceMemory);
     fn memory(&self) -> DeviceMemory;
     fn poll_event(&mut self) -> Option<HostEvent>;
     fn poll_browse(&mut self) -> Option<BrowseEvent>;
@@ -486,6 +487,10 @@ impl CastLink for HostLink {
 
     fn set_offset(&mut self, device: DeviceId, offset: Duration) {
         self.host.set_offset(device, offset);
+    }
+
+    fn fill_memory(&mut self, other: &DeviceMemory) {
+        self.host.fill_memory(other);
     }
 
     fn memory(&self) -> DeviceMemory {
@@ -972,6 +977,15 @@ impl CastSpeakers {
 
     pub fn memory_json(&self) -> Option<String> {
         self.link.as_ref().map(|link| link.memory().to_json())
+    }
+
+    /// Takes the entries of `json`, a speakers' file, for each device
+    /// field this run's memory holds none of.
+    pub fn fill_memory(&mut self, json: &str) {
+        if let Some(link) = self.link.as_mut() {
+            link.fill_memory(&DeviceMemory::from_json(json));
+            self.pending.push(BackendEvent::CastChanged);
+        }
     }
 
     /// The devices listed, by name, with their settings.
@@ -2094,6 +2108,10 @@ pub mod tests {
 
         fn set_offset(&mut self, device: DeviceId, offset: Duration) {
             self.state().memory.set_offset(device, offset);
+        }
+
+        fn fill_memory(&mut self, other: &DeviceMemory) {
+            self.state().memory.fill_from(other);
         }
 
         fn memory(&self) -> DeviceMemory {

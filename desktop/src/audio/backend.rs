@@ -1118,6 +1118,10 @@ pub trait AudioBackend {
         None
     }
 
+    /// Takes the entries of `json`, a Cast speakers' file, for each device
+    /// field the Cast memory holds none of.
+    fn fill_cast_memory(&mut self, _json: &str) {}
+
     /// What a session does when the app it captures quits (spec S227).
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits);
 
