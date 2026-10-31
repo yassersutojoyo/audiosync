@@ -3901,6 +3901,15 @@ do {
         // covers: S223
         check(!forgot.holdsPassword("C3") && forgot.plan(streaming: true, enabled: ["native:C3"]).add.isEmpty,
               "native pairing: after Forget Password the receiver no longer joins with the old password")
+        do {
+            var list = NoticeList()
+            list.post("password", subject: SpeakerKey.make(id: "native:C3", airplay: true))
+            list.post("pin", subject: SpeakerKey.make(id: "native:B2", airplay: true))
+            list.clear(Notice.forgotten(airPlay: "native:C3"))
+            // covers: S223
+            check(list.items.map(\.subject) == [SpeakerKey.make(id: "native:B2", airplay: true)],
+                  "native pairing: Forget Pairing or Forget Password drops that speaker's notices only")
+        }
         let pin = m.nextPrompt()
         // covers: S223
         check(pin == NativePrompt(id: "B2", password: false, wrong: false), "native pairing: then the PIN prompt opens")

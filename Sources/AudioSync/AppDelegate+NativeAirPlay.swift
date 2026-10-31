@@ -509,6 +509,7 @@ extension AppDelegate {
         nativeAirPlay?.forgetPairing(receiver)
         nativeAirPlay?.setPassword(receiver, nil)
         nativeAirPlay?.model.forgetPassword(receiver)
+        clearNotices(Notice.forgotten(airPlay: id))
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) pairing and password forgotten")
         if enabledAirPlay.remove(id) != nil {
             syncNativeSpeakers()
