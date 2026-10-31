@@ -13390,7 +13390,7 @@ do {
             == [.setEnabled(id: "usb", on: true), .setVolume(id: "usb", position: 70)],
           "web remote: turning a speaker on with a volume flips the switch, then moves the slider")
     let willPlay = RemoteRow(Facts(id: "usb", name: "Desk", kind: "USB", on: true, volume: 40, streaming: false), text: t)
-    // covers: S343, S345
+    // covers: S343, S345, S376 (the phone's on maps to the row's switch)
     check(!willPlay.on && RemoteAction.plan(.speaker(id: "usb", on: true, volume: nil, delayMs: nil), rows: [willPlay])
             == [.setEnabled(id: "usb", on: true)],
           "web remote: a speaker that will play shows off, and the phone's switch-on turns it on as the window's button does")
@@ -13575,6 +13575,7 @@ do {
     check(fromPhone?.alertNames == nil && fromPhone?.notices.map(\.uid) == ["usb"] && fromPhone?.enabled == [],
           "remote: a start from the phone shows no alert, only a notice for the failed speaker")
 
+    // covers: S379 (the Mac's port setting takes 1024 to 65535)
     check(RemotePort.parse(" 8080 ") == 8080 && RemotePort.parse("80") == nil && RemotePort.parse("70000") == nil
             && RemotePort.parse("abc") == nil && RemotePort.stored(1e30) == nil && RemotePort.stored(7655.5) == nil,
           "web remote: a port from 1024 to 65535 is taken")
@@ -13603,6 +13604,7 @@ do {
     let kept = AppSettings.load { stored[$0] }
     let damaged: [String: Any] = ["webRemotePort": 1e30]
     let dropsDamaged = AppSettings.load { damaged[$0] }.webRemotePort == RemotePort.default
+    // covers: S379 (the Mac: off by default, and a saved port outside the range reads as 7655)
     check(!fresh.webRemote && fresh.webRemotePort == RemotePort.default && kept.webRemote && kept.webRemotePort == 8080
             && dropsDamaged,
           "web remote: off on port 7655 by default; the stored setting and port are read back, a damaged port is dropped")
@@ -14694,7 +14696,7 @@ do {
     let plist = (try? String(contentsOfFile: "Info.plist", encoding: .utf8)) ?? ""
     check(plist.contains("<key>SUFeedURL</key>\n\t<string>https://github.com/yassersutojoyo/audiosync/releases/latest/download/appcast.xml</string>"),
           "updates: Info.plist points SUFeedURL at the latest release's appcast.xml")
-    // covers: S306
+    // covers: S306, S411
     check(plist.contains("<key>SUAllowsAutomaticUpdates</key>\n\t<false/>"),
           "updates: Info.plist turns off Sparkle's automatic download and install")
     check(!plist.isEmpty && !plist.contains(UpdateGate.releaseBuildInfoKey),

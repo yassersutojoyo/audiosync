@@ -15829,7 +15829,7 @@ mod tests {
         assert_eq!(adapter.snapshot().cast_list, CastList::Quiet);
     }
 
-    // covers: S394
+    // covers: S394, S401 (the amount counts the AirPlay speaker's own receiver offset)
     #[test]
     fn airplay_speakers_at_the_sender_delay_limit_say_they_play_ahead_of_the_cast_speaker() {
         let (mut adapter, _airplay, kitchen, _) = airplay_adapter();
