@@ -2154,6 +2154,78 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | zone folding: the main window and the menu bar panel each keep their own fold state | S359 |
 | zone folding: nothing hands one view's fold state to the other | S359 |
 | main window zone header: a double-click on the name renames the zone, a single click still folds it | S359 |
+| AirPlay 2 switch: its note says AirPlay 2 stops only once turned off from a launch that runs it, as on Windows | S313 |
+| volume: a calibration playing through one output silences every other local speaker | S232 |
+| cast: the slider sets the device's level only while its session runs | C69, C104 |
+| zones: a zone with no member listed says none of its members was found | S340 |
+| zones: a member waiting for the AirPlay 2 place counts as on and is named as waiting | S246 |
+| zones: Move to Zone takes the speaker out of its zone and adds it after the other one's members | S245 |
+| zones: a new zone takes its speakers from their zones, once each, at full volume | S245 |
+| zones: Remove from Zone leaves the emptied zone in place | S245 |
+| zones: Use <target> Instead puts the target where its first member was and drops the others | S247 |
+| zones: a click on a zone whose members all play switches them off | S246 |
+| zones: a click on a zone with a member off switches every member on | S246 |
+| zones: a click while streaming is off starts it with the zone's members | S246 |
+| zones: a zone with no member listed does nothing on a click | S246 |
+| zones: a zone switched off turns its unplugged members off too, so they stay off when plugged back | S246 |
+| cast: rows by name, offsets from the device memory | C77 |
+| cast: a group turns on and off like any speaker | C3 |
+| cast: turning it on with its own switch tries it again | C40 |
+| cast: an offline speaker can't start now either | S246 |
+| cast: attempt 0 means refused, and the speaker goes off | C2 |
+| cast: each way a session ends maps to its notice, or none | C56, C80, C83 |
+| cast: searching, then none found after 20 s | S154 |
+| cast: one notice per speaker, the newest replacing the older one | S153 |
+| cast: a sender that stopped clears every speaker's notice, and only those | S153 |
+| cast step: an arrow key does nothing while no session runs | C69 |
+| cast track info: nothing goes out while no Cast device is on | S361 |
+| cast track info: switching a device on sends everything | S361 |
+| cast track info: the device gets the track and cover AirPlay already had | S361 |
+| cast track info: the same track again gives the sender nothing | S361 |
+| cast+airplay: AirPlay, Cast and local outputs are heard together either way | C77 |
+| cast+airplay: the sender holds AirPlay back up to 20 000 ms and past that plays ahead by the rest | P99 |
+| cast model: a playing speaker added by address that a browse finds stays on and playing under its id, and Off still stops it | S341 |
+| P176 native airplay: a target's ID says its kind; a receiver's never does | P176 |
+| P176 native airplay: a member's log line names its target | S222 |
+| P176 native airplay: a member that names its target is held before the target is listed, so auto-connect never takes it alone | P176 |
+| P176 native airplay: a stereo pair is one row, its members show only as part of it | P176 |
+| P176 native airplay: the pair's row knows its kind and members; a speaker's row has none | P176 |
+| P176 native airplay: the row names the kind and its members, as a Cast group's row does | P176 |
+| P169 native airplay: a target waiting for the AirPlay 2 slot says so first | P169, S285 |
+| P176 native airplay: the pair is added as one speaker; a member that was on by itself is switched off for it | P176 |
+| P176 native airplay: a target in the sender with no listing keeps its row | S222 |
+| P176 native airplay: switched off, an unlisted target's row goes when it is removed, since its Stopped event is passed over | S222 |
+| P176 native airplay: a pair gone while it plays keeps its row until switched off, and its members can't join meanwhile | S222 |
+| P176 native airplay: a gone pair still in the sender keeps its row while it reconnects | S222 |
+| P176 native airplay: switched off, the gone pair's row goes and its members are speakers again | S222 |
+| P215 native airplay: every sender state code has its state, Unannounced included; an unknown one has none | P215 |
+| P215 native airplay: a playing pair whose members lapse stops, keeps its row and reads as off the network | P215, S222 |
+| P215 native airplay: going off the network or coming back without playing refreshes the row once | S222 |
+| P215 native airplay: an unannounced row says it is off the network, also to VoiceOver; the AirPlay 2 wait says so first | S222, S285 |
+| P181 native airplay: a member out of view is named missing | P181 |
+| P181 native airplay: a member out of view is named once, by the sender's name for it | P181 |
+| P181 native airplay: an incomplete target with no member out of view says a speaker is missing | P181 |
+| P181 native airplay: a member in view that plays nothing is named missing, as on Windows | P181 |
+| P177 native airplay: a pair reached over AirPlay 2 through a member is tagged AirPlay 2 | P177 |
+| P177 native airplay: a group whose Apple TV plays, or an Apple TV whose group plays, goes off | P177 |
+| P177 native airplay: the Apple TV, its group and a held member each say why they are off | P177, S247 |
+| input format: the same formats, or none readable, keep the capture running | S14 |
+| input format: a rate change is left to the rate listener | S14 |
+| no speaker on: the power switch starts streaming anyway, with no alert; an automatic start still waits | S162 |
+| no speaker on: a rebuild or switch of a session started with every speaker off carries on | S162 |
+| no speaker on: an automatic rebuild or switch after the last speaker went off doesn't start | S162 |
+| no speaker on: a speaker that is on always starts; a new automatic start waits; the user's starts | S162 |
+| no speaker on: a session started with every speaker off keeps running | S162 |
+| no speaker on: once a speaker played, switching the last one off still stops streaming | S162 |
+| no speaker on: one switched on that fails before it plays keeps the session waiting, and says no speaker is on | S162 |
+| no speaker on: one that played and went off stops streaming | S162 |
+| no speaker on: the speaker list says so only while streaming with every speaker off | S162 |
+| no speaker on: one plain line | S162 |
+| no speaker on: the user's start with every speaker off streams and asks nothing, no modal alert | S153, S162 |
+| no speaker on: a phone's start with every speaker off streams and asks nothing | S162 |
+| no speaker on: an automatic start waits behind a notice, never a modal alert | S153, S162 |
+| no speaker on: only a click at the Mac may raise a modal alert | S153 |
+| no speaker on: after that start the switch stays on and the list says no speaker is on | S162 |
 
 ### core (`Tests/coretest.swift`)
 
