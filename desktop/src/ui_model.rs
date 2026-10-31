@@ -3315,6 +3315,7 @@ mod tests {
         assert!(!NoticeMessage::AirPlayStopped.reports_a_change());
     }
 
+    // covers: S360
     #[test]
     fn a_zone_counts_its_members_but_the_hidden_ones() {
         let state = MockBackend::zones_preview().snapshot();

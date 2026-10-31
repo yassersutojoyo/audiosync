@@ -7839,6 +7839,7 @@ mod tests {
         assert_eq!(help(Availability::Pairing, false, RowState::Off), "");
     }
 
+    // covers: S360
     #[test]
     fn hide_speaker_takes_the_row_out_and_hidden_speakers_brings_it_back() {
         let app = app_over(MockBackend::new());

@@ -1931,6 +1931,7 @@ mod tests {
         assert!(!without.contains("speaker_names"), "no names, no field");
     }
 
+    // covers: S360
     #[test]
     fn hidden_speakers_are_read_leniently_and_left_out_while_none_is() {
         let text = r#"{"version": 2, "master_volume": 40, "hidden_speakers": [
