@@ -105,7 +105,7 @@ final class WebRemote {
         if settings.enabled || debugPort != nil { start() }
     }
 
-    /// The window opened: a code shown earlier stops working (design: a new code each time).
+    /// The hidden window opened: a code shown earlier stops working (S368: a new code each time).
     func windowOpened() {
         refreshAddresses()
         if isRunning { newCode() } else { readDevicesFile() }
