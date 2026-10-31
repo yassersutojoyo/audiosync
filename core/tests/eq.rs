@@ -1,6 +1,7 @@
 //! Equalizer behavior (spec section 3).
 
 use std::f64::consts::PI;
+use std::sync::Arc;
 
 use audiosync_core::eq::{
     BAND_CENTERS_HZ, BAND_COUNT, BAND_Q, Biquad, CurveMatch, DEFAULT_SAMPLE_RATE, EqControl,
@@ -8,7 +9,10 @@ use audiosync_core::eq::{
     UserCurve, cascade_peak_db, delete_curve, design_bands, equalizer, matching_curve, preset,
     quantize_gain_db, rename_curve, sanitized_curves, save_curve,
 };
-use audiosync_core::volume::GainStage;
+use audiosync_core::reader::Reader;
+use audiosync_core::render::{Renderer, RendererControl};
+use audiosync_core::ring::Ring;
+use audiosync_core::volume::{GainStage, SharedGain};
 use proptest::prelude::*;
 
 const BLOCK: usize = 512;
@@ -823,6 +827,71 @@ fn a_local_output_below_unity_gets_the_headroom_cut_back() {
             "at gain {gain}: {level:.3} dB over the gain, expected {expected:.3} dB"
         );
     }
+}
+
+// covers: S26, S71
+#[test]
+fn the_cut_comes_back_when_the_first_equalized_frame_plays() {
+    // A local output held back 2 s, as an AirPlay speaker's delay holds it,
+    // at gain 0.1675; the curve goes on at writer frame `on_at`, and the
+    // output plays that frame 2 s later.
+    const FRAMES: usize = 480;
+    let gains = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+    let gain = 0.1675;
+    let at_1k: f64 = design_bands(&gains, 48_000.0)
+        .iter()
+        .map(|b| response_db(b, 1000.0, 48_000.0))
+        .sum();
+    let ring = Ring::for_rate(48_000).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let reader = Reader::new(Arc::clone(&ring), 48_000);
+    let control = RendererControl::new(&reader);
+    control.set_delay_frames(96_000);
+    let shared = Arc::new(SharedGain::new(gain as f32));
+    let mut renderer =
+        Renderer::new(reader, &control, Arc::clone(&shared), 48_000, 48_000, 2).unwrap();
+    let (mut eq, mut processor) = equalizer();
+    let mut off = enabled(gains, 0.5);
+    off.enabled = false;
+    eq.set_settings(off);
+    eq.give_back(gain, &shared);
+    let on_at = 192_000i64;
+    let (mut before, mut after) = (0, 0);
+    let mut out = vec![0.0f32; FRAMES * 2];
+    for start in (0..8 * 48_000).step_by(FRAMES) {
+        if start as i64 == on_at {
+            eq.set_settings_from(enabled(gains, 0.5), ring.frames_written() as i64);
+            eq.give_back(gain, &shared);
+        }
+        let mut block = sine(start, FRAMES, 1000.0, 48_000.0, 0.25);
+        processor.process(&mut block);
+        writer.write(&block, FRAMES);
+        renderer.render(&mut out);
+        // The output plays from about 2 s in; a second later its fade-in is long over.
+        if start < 3 * 48_000 {
+            continue;
+        }
+        let end = ring.frames_written() as i64 - control.lag_frames();
+        let energy = out.iter().map(|y| f64::from(*y).powi(2)).sum::<f64>();
+        let level = 10.0 * (energy / (FRAMES as f64 * 0.0625)).log10() - 20.0 * gain.log10();
+        let expected = if end <= on_at {
+            before += 1;
+            0.0
+        } else if end - FRAMES as i64 >= on_at + FRAMES as i64 {
+            after += 1;
+            0.5 + at_1k
+        } else {
+            continue;
+        };
+        assert!(
+            (level - expected).abs() < 0.1,
+            "frames up to {end}: {level:.3} dB over the gain, expected {expected:.3} dB"
+        );
+    }
+    assert!(
+        before > 200 && after > 150,
+        "{before} before, {after} after"
+    );
 }
 
 // covers: S27, S28

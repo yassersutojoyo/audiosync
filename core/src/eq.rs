@@ -23,6 +23,8 @@ use std::f64::consts::PI;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
+use crate::volume::SharedGain;
+
 #[cfg(not(target_has_atomic = "64"))]
 compile_error!(
     "audiosync-core shares values with audio threads through lock-free 64-bit atomics (S128)"
@@ -593,6 +595,21 @@ impl EqControl {
         } else {
             (gain, 0.0)
         }
+    }
+
+    /// [`EqControl::set_settings`] for a session whose writer has written
+    /// `from` frames: the new cut starts at that ring frame (S26, S71).
+    pub fn set_settings_from(&mut self, settings: EqSettings, _from: i64) {
+        self.set_settings(settings);
+    }
+
+    /// Sets a local output's `shared` gain to `gain` with each cut given back
+    /// from the ring frame it starts at (S26, S71); returns the dB given back
+    /// to the newest cut.
+    pub fn give_back(&self, gain: f64, shared: &SharedGain) -> f64 {
+        let (played, db) = self.returned_gain(gain);
+        shared.set(played as f32);
+        db
     }
 
     fn publish(&mut self) {
