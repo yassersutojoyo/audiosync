@@ -565,7 +565,7 @@ mod tests {
         assert_eq!(spread, 0.0);
 
         let mut result = AscCalibration::default();
-        let mut spread = 0.0;
+        let mut spread = -1.0;
         let frames = [0; SWEEPS];
         // SAFETY: null lists, which the call refuses.
         let ok = unsafe {
@@ -584,5 +584,6 @@ mod tests {
         };
         assert!(!ok);
         assert_eq!(result, AscCalibration::default());
+        assert_eq!(spread, -1.0);
     }
 }
