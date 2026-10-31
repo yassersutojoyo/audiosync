@@ -1234,6 +1234,38 @@ fn half(sample: i16) -> i16 {
     (f64::from(sample) * 0.5).round() as i16
 }
 
+// covers: P80
+#[test]
+fn the_master_gain_scales_the_shared_payload_for_every_speaker() {
+    let mut rig = Rig::with_host();
+    rig.stream.set_master_gain(0.5);
+    let pcm = rig.add(speaker(1, Codec::Pcm));
+    let alac = rig.add(speaker(2, Codec::Alac));
+    rig.run_for(Duration::from_secs(2));
+    for (id, codec) in [(pcm, Codec::Pcm), (alac, Codec::Alac)] {
+        let audio = rig.audio(id);
+        assert!(!audio.is_empty());
+        for packet in &audio {
+            let n = rig.frame_of(id, packet.header.timestamp) as u64;
+            let expected: Vec<Frame> = (n..n + PACKET)
+                .map(host_frame)
+                .map(|f| [half(f[0]), half(f[1])])
+                .collect();
+            assert_eq!(decode(codec, &packet.payload), expected, "{codec:?}");
+        }
+    }
+    // Back to 1: the packets cut from then on are the input bit for bit.
+    rig.stream.set_master_gain(1.0);
+    let before = rig.audio(pcm).len();
+    rig.run_for(Duration::from_secs(3));
+    let audio = rig.audio(pcm);
+    let last = audio.last().expect("audio");
+    assert!(audio.len() > before);
+    let n = rig.frame_of(pcm, last.header.timestamp) as u64;
+    let expected: Vec<Frame> = (n..n + PACKET).map(host_frame).collect();
+    assert_eq!(decode(Codec::Pcm, &last.payload), expected);
+}
+
 // covers: P143
 #[test]
 fn restart_timeline() {

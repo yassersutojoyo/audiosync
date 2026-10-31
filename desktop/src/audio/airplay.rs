@@ -9440,6 +9440,23 @@ pub mod tests {
         assert_eq!(row_of(&airplay, &id), 0.0);
     }
 
+    // covers: S413
+    #[test]
+    fn a_master_move_scales_the_stream_and_sends_no_volume() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, _, id) = kitchen_playing(&fake, OPEN_TXT);
+        airplay.set_volume(&id, 20.0);
+        fake.take_calls();
+        airplay.set_master(50.0);
+        assert_eq!(fake.take_calls(), [Call::MasterGain(0.125)]);
+        assert_eq!(own(&airplay), 20.0);
+        assert_eq!(row_of(&airplay, &id), 20.0);
+        // A row move sends the row itself whatever the master.
+        airplay.move_row(&id, 30.0);
+        assert_eq!(own(&airplay), 30.0);
+        assert_eq!(sent_levels(&fake), [(id.clone(), Some(-21.0))]);
+    }
+
     // covers: S289
     #[test]
     fn windows_uses_the_cores_device_volume() {

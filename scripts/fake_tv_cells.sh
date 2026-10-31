@@ -70,7 +70,7 @@ cd "$root/core"
 cells_from_tests --lib \
     "$core::k1_at_master_63_the_row_and_the_television_agree_both_ways=K1.m63.echo,K1.m63.tv20,K1.m63.row20" \
     "$core::k1_keep_a_row_at_40_comes_back_at_40_after_a_restart=K1.keep.m63" \
-    "$core::the_s290_vector_cases_land_on_the_television=S290.row100,S290.tv80.m64,S290.row100.m50,S290.tv80.cap,DV.100.m63,DV.80-99.m63,DV.40.m0" \
+    "$core::the_s290_vector_cases_land_on_the_television=S290.row100,S290.tv80.z64,S290.row100.z50,S290.tv80.cap,DV.100.z63,DV.80-99.z63,DV.40.z0,S413.master" \
     "$core::a_withdrawn_receiver_loses_only_its_row_and_comes_back_when_announced=Stale.row"
 
 # Calibrate All and zones live in the Windows host's speaker list, so these cells run there;
