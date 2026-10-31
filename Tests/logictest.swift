@@ -10148,6 +10148,9 @@ do {
           "launch: any other launch is not a login-item launch")
     check(AppLifecycle.opensMainWindow(loginItemLaunch: false) && !AppLifecycle.opensMainWindow(loginItemLaunch: true),
           "launch: the main window opens at launch, but not at login")
+    check(AppLifecycle.asksRunningCopyToShow(loginItemLaunch: false)
+            && !AppLifecycle.asksRunningCopyToShow(loginItemLaunch: true),
+          "second launch: a launch at login leaves the running copy as it is, without asking it to show its window")
     // covers: S101 (the safety net and the next due reconcile)
     check(AppLifecycle.safetyNetInterval == 30,
           "reconcile: with no event, the host reconciles by itself only every 30 s, the safety net (S101)")

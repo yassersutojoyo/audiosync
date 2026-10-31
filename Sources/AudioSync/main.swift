@@ -27,14 +27,9 @@ func processStart(_ pid: pid_t) -> Date? {
 /// Flipped by the reply observer; the run loop below polls it.
 final class ReplyFlag { var received = false }
 
-if let other = otherRunningCopy(),
-   let ownStart = processStart(ProcessInfo.processInfo.processIdentifier),
-   let otherStart = processStart(other.processIdentifier),
-   AppLifecycle.defersToOtherCopy(ownPID: ProcessInfo.processInfo.processIdentifier,
-                                  ownStart: ownStart,
-                                  otherPID: other.processIdentifier,
-                                  otherStart: otherStart,
-                                  otherFinishedLaunching: other.isFinishedLaunching) {
+/// Asks the running copy to show its window and waits for its answer or for
+/// it to go. True when this copy leaves.
+func leavesToRunningCopy() -> Bool {
     let center = DistributedNotificationCenter.default()
     let flag = ReplyFlag()
     let token = center.addObserver(forName: AppDelegate.showReply, object: nil, queue: nil) { _ in
@@ -65,16 +60,31 @@ if let other = otherRunningCopy(),
 
     // Answered, or alive but silent: that copy owns the speakers, so leave
     // without a word. Only a copy that went away lets this one take over.
-    if flag.received || stillThere { exit(0) }
+    if flag.received || stillThere { return true }
     center.removeObserver(token)
+    return false
 }
+
+// A copy that defers asks the running one only from `applicationDidFinishLaunching`,
+// the first place that can tell a launch at login (S215).
+let secondCopy: Bool = {
+    guard let other = otherRunningCopy(),
+          let ownStart = processStart(ProcessInfo.processInfo.processIdentifier),
+          let otherStart = processStart(other.processIdentifier) else { return false }
+    return AppLifecycle.defersToOtherCopy(ownPID: ProcessInfo.processInfo.processIdentifier,
+                                          ownStart: ownStart,
+                                          otherPID: other.processIdentifier,
+                                          otherStart: otherStart,
+                                          otherFinishedLaunching: other.isFinishedLaunching)
+}()
 
 // MARK: - Application
 
 let launchApp = NSApplication.shared
 let launchDelegate = AppDelegate()   // NSApplication holds its delegate weakly
 launchApp.delegate = launchDelegate
-launchApp.setActivationPolicy(.regular)
+launchDelegate.defersToRunningCopy = secondCopy
+launchApp.setActivationPolicy(secondCopy ? .prohibited : .regular)
 
 // MARK: - Signals
 

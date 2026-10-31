@@ -30,6 +30,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// that is quitting no longer answers a second launch, which then waits
     /// for it to go instead of leaving.
     nonisolated static let exiting = Atomic<Bool>(false)
+    /// Set by main.swift when another copy keeps the speakers: this copy
+    /// shows and starts nothing until `applicationDidFinishLaunching` decides.
+    var defersToRunningCopy = false
 
     // MARK: - The engine and its helpers
 
@@ -375,6 +378,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // MARK: - Launch
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        guard !defersToRunningCopy else { return }   // the running copy's debug log stays as it is
         DebugTrace.beginLaunchLog()   // each launch starts a fresh debug log (S170)
         if LaunchAutoConnect.skipped {
             DebugTrace.log("[AudioSync] auto-connect: skipped in this run (\(LaunchAutoConnect.environmentKey)=1 with \(DebugTrace.environmentKey)=1); speakers saved as on stay off, and nothing is saved until the next launch")
@@ -388,6 +392,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let loginItem = Self.launchedAsLoginItem()
+        if defersToRunningCopy {
+            guard AppLifecycle.asksRunningCopyToShow(loginItemLaunch: loginItem), !leavesToRunningCopy()
+            else { exit(0) }
+            // The running copy went away while quitting: this copy takes over.
+            defersToRunningCopy = false
+            NSApp.setActivationPolicy(.regular)
+            applicationWillFinishLaunching(notification)
+        }
         DebugTrace.log("[AudioSync] launched\(loginItem ? " at login" : ""); audio engine: the Rust core")
         store.retiredChoiceNotes(environment: ProcessInfo.processInfo.environment)
             .forEach { DebugTrace.log($0) }
@@ -713,6 +725,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// signal runs the same steps before it exits (S111, `SignalQuit` in
     /// main.swift). Runs once, whichever asks first.
     func runQuitSteps() {
+        guard !defersToRunningCopy else { return }   // this copy set nothing up to quit
         quitOnce.run()
     }
 
