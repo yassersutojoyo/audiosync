@@ -888,6 +888,11 @@ pub struct Controller<D: Driver> {
     /// The poll at which each endpoint listed after the first listing
     /// appeared, until a start of its output uses it up (S325).
     appeared: BTreeMap<String, u64>,
+    /// The poll at which each output's link dropped while its endpoint
+    /// stayed listed (a stall, a runaway or a stream that stopped by
+    /// itself): its next start counts as fresh however late (S325). The mark
+    /// outlives its ID leaving the list, so a device gone and back keeps it.
+    relinked: BTreeMap<String, u64>,
     /// The outputs restarting once because their Bluetooth link was new
     /// when they started (S325).
     fresh_restarts: BTreeMap<String, FreshRestart<D::Renderer>>,
@@ -954,6 +959,7 @@ impl<D: Driver> Controller<D> {
             polls: 0,
             listed_once: false,
             appeared: BTreeMap::new(),
+            relinked: BTreeMap::new(),
             fresh_restarts: BTreeMap::new(),
             left_mid_session: BTreeSet::new(),
             calm_restarts: BTreeMap::new(),
@@ -1833,9 +1839,13 @@ impl<D: Driver> Controller<D> {
                     // its endpoint's appearance (S325).
                     self.fresh_restarts.remove(&endpoint.id);
                     let appeared = self.appeared.remove(&endpoint.id);
+                    let relinked = self.relinked.remove(&endpoint.id);
                     if endpoint.kind == OutputKind::Bluetooth {
-                        let age = appeared.map(|poll| self.polls.saturating_sub(poll));
-                        let fresh = age.is_some_and(|age| age <= FRESH_LINK_POLLS);
+                        let age = relinked
+                            .or(appeared)
+                            .map(|poll| self.polls.saturating_sub(poll));
+                        let fresh =
+                            relinked.is_some() || age.is_some_and(|age| age <= FRESH_LINK_POLLS);
                         if fresh {
                             self.fresh_restarts.insert(
                                 endpoint.id.clone(),
@@ -2659,6 +2669,7 @@ impl<D: Driver> Controller<D> {
             let percent = percents[&id];
             let step = self.runaway.ran_away(&id, self.polls);
             if step == RunawayStep::Reopen {
+                self.relinked.insert(id.clone(), self.polls);
                 if let Some(playing) = session.outputs.remove(&id)
                     && self.policy.settings(&id).enabled
                 {
@@ -4594,9 +4605,20 @@ impl<D: Driver> AudioBackend for Controller<D> {
             // Released before the log says why they ended (S126).
             for (id, _) in &stopped {
                 self.calm_restarts.remove(id);
-                if let Some(playing) = session.outputs.remove(id)
-                    && self.policy.settings(id).enabled
-                {
+                let Some(playing) = session.outputs.remove(id) else {
+                    continue;
+                };
+                // Windows invalidates a stream for a device removal and for a
+                // format change alike; only the removal drops the link (S325).
+                let opened = playing.handle.setup().map(|setup| setup.format);
+                let reformatted = playing.handle.invalidated()
+                    && opened.is_some_and(|opened| {
+                        self.driver.output_format(id).is_ok_and(|now| now != opened)
+                    });
+                if !reformatted {
+                    self.relinked.insert(id.clone(), self.polls);
+                }
+                if self.policy.settings(id).enabled {
                     keep_lead(&mut session.held_leads, id, &playing.control);
                 }
             }
@@ -8396,6 +8418,78 @@ mod tests {
         poll_quietly(&mut backend, 20);
         assert_eq!(starts_of(&backend, BUDS), 2, "it restarted");
         assert_eq!(backend.driver().renderers_faded(), 1);
+    }
+
+    /// Bluetooth earbuds listed at launch, so on a settled link, playing.
+    fn settled_buds() -> MockBackend {
+        let mut backend = MockBackend::empty();
+        backend.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
+        backend.set_output_enabled(BUDS, true).unwrap();
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend
+    }
+
+    // covers: S325, S326, S68
+    #[test]
+    fn a_bluetooth_output_reopened_after_a_stall_or_a_loss_restarts_once_2_s_later() {
+        let stall = |backend: &mut MockBackend| backend.stall_renderer(BUDS, FULL_STALL);
+        let loss = |backend: &mut MockBackend| backend.end_renderer(BUDS);
+        let causes: [&dyn Fn(&mut MockBackend); 2] = [&stall, &loss];
+        for cause in causes {
+            let mut backend = settled_buds();
+            cause(&mut backend);
+            poll_quietly(&mut backend, 1);
+            assert_eq!(starts_of(&backend, BUDS), 2, "reopened at once");
+            poll_quietly(&mut backend, 3);
+            assert_eq!(backend.driver().renderers_faded(), 0, "not before 2 s");
+            poll_quietly(&mut backend, 1);
+            assert_eq!(backend.driver().renderers_faded(), 1, "its restart");
+            poll_quietly(&mut backend, 3);
+            assert_eq!(starts_of(&backend, BUDS), 3, "then it starts again");
+            poll_quietly(&mut backend, 20);
+            assert_eq!(starts_of(&backend, BUDS), 3, "once");
+        }
+    }
+
+    // covers: S325, S332
+    #[test]
+    fn a_sleep_or_a_switch_off_cancels_the_restart_after_a_stall() {
+        let mut slept = settled_buds();
+        slept.stall_renderer(BUDS, FULL_STALL);
+        poll_quietly(&mut slept, 2);
+        sleep_two_hours(&mut slept);
+        poll_quietly(&mut slept, 20);
+        assert_eq!(starts_of(&slept, BUDS), 2, "no restart");
+        assert_eq!(slept.driver().renderers_faded(), 0);
+
+        let mut switched = settled_buds();
+        switched.stall_renderer(BUDS, FULL_STALL);
+        poll_quietly(&mut switched, 2);
+        switched.set_output_enabled(BUDS, false).unwrap();
+        poll_quietly(&mut switched, 20);
+        assert_eq!(starts_of(&switched, BUDS), 2, "no restart");
+        assert_eq!(switched.driver().renderers_faded(), 1, "the switch-off");
+    }
+
+    // covers: S325, S330, S68
+    #[test]
+    fn a_stream_ended_by_a_format_change_is_no_new_link_and_one_by_a_device_removal_is() {
+        // Windows disconnects the session and the render thread ends too.
+        let mut reformatted = settled_buds();
+        reformatted.change_output_format(BUDS, AT_44_1);
+        reformatted.disconnect_session(BUDS);
+        reformatted.end_renderer(BUDS);
+        poll_quietly(&mut reformatted, 20);
+        assert_eq!(starts_of(&reformatted, BUDS), 2, "reopened, no restart");
+        assert_eq!(reformatted.driver().renderers_faded(), 0);
+
+        let mut removed = settled_buds();
+        removed.disconnect_session(BUDS);
+        removed.end_renderer(BUDS);
+        poll_quietly(&mut removed, 20);
+        assert_eq!(starts_of(&removed, BUDS), 3, "reopened, then restarted");
+        assert_eq!(removed.driver().renderers_faded(), 1);
     }
 
     // covers: S325, S68
