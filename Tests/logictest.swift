@@ -10343,6 +10343,29 @@ do {
                                                                       rate: 48_000, oldOffsetMs: 150)) { stored["usb"] = $0 }
         check(refused == .failed(.tooQuiet(.reference)) && stored == ["usb": 50],
               "calibration: a silent reference recording is refused and changes nothing (S234)", "\(refused)")
+
+        let reference = room(arrivalFrame: 4_800)
+        func agreed(_ chosenFrames: [Int]) -> (result: AscCalibration, spreadMs: Double)? {
+            CalibrationFlow.estimateAgreed(signal: signal, runs: chosenFrames.map { (reference, room(arrivalFrame: $0)) },
+                                           rate: 48_000, oldOffsetMs: 150)
+        }
+        let agree = agreed([9_648, 9_600, 9_696])
+        check(agree?.result.status == UInt32(ASC_CALIBRATION_ACCEPTED) && agree?.result.offset_ms == 49
+                && agree?.spreadMs == 0,
+              "calibration: three runs within 5 ms give the middle one's offset (S232)", "\(String(describing: agree))")
+        let apart = agreed([9_600, 9_600, 10_080])
+        check(apart?.result.status == UInt32(ASC_CALIBRATION_DISAGREE) && apart?.result.offset_ms == 150
+                && apart?.spreadMs == 10,
+              "calibration: three runs more than 5 ms apart give no offset (S232)", "\(String(describing: apart))")
+        let silentRun = CalibrationFlow.estimateAgreed(signal: signal,
+                                                       runs: [(reference, room(arrivalFrame: 9_600)), (reference, silent),
+                                                              (reference, room(arrivalFrame: 9_600))],
+                                                       rate: 48_000, oldOffsetMs: 150)
+        check(silentRun?.result.status == UInt32(ASC_CALIBRATION_TOO_QUIET)
+                && silentRun?.result.recording == UInt32(ASC_CALIBRATION_RECORDING_CHOSEN)
+                && silentRun?.result.offset_ms == 150 && agreed([9_600, 9_600]) == nil,
+              "calibration: one refused run of three gives no offset, and a call without three runs is refused (S232)",
+              "\(String(describing: silentRun))")
     } else {
         check(false, "calibration: the core makes the test signal at 48 kHz (S233)")
     }

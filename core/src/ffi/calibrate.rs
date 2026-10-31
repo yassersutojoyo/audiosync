@@ -6,7 +6,7 @@
 //! of ms for recordings of a few seconds.
 
 use super::{host_slice, host_slice_mut};
-use crate::calibrate::{self, Recording, Refusal};
+use crate::calibrate::{self, Calibration, NotMeasured, Recording, Refusal, Refused, SWEEPS};
 use crate::policy::delay;
 
 /// The estimate gave a new offset.
@@ -23,6 +23,10 @@ pub const CALIBRATION_TOO_QUIET: u32 = 4;
 pub const CALIBRATION_AMBIGUOUS_ECHO: u32 = 5;
 /// [`Refusal::Implausible`].
 pub const CALIBRATION_IMPLAUSIBLE: u32 = 6;
+/// [`NotMeasured::Disagree`], from [`asc_calibration_estimate_agreed`] only.
+pub const CALIBRATION_DISAGREE: u32 = 7;
+/// The runs [`asc_calibration_estimate_agreed`] takes.
+pub const CALIBRATION_SWEEPS: usize = SWEEPS;
 
 /// A result about both recordings, or about neither.
 pub const CALIBRATION_RECORDING_NONE: u32 = 0;
@@ -131,29 +135,118 @@ pub unsafe extern "C" fn asc_calibration_estimate(
         return false;
     }
     let found = match calibrate::estimate(signal, reference, chosen, rate, old_offset_ms) {
-        Ok(found) => AscCalibration {
-            status: CALIBRATION_ACCEPTED,
-            recording: CALIBRATION_RECORDING_NONE,
-            offset_ms: found.offset_ms,
-            difference_ms: found.difference_ms,
-            reference_ms: found.reference_ms,
-            chosen_ms: found.chosen_ms,
-            clamped: found.clamped,
-        },
-        Err(refused) => AscCalibration {
-            status: refusal_code(refused.reason),
-            recording: match refused.recording {
-                None => CALIBRATION_RECORDING_NONE,
-                Some(Recording::Reference) => CALIBRATION_RECORDING_REFERENCE,
-                Some(Recording::Chosen) => CALIBRATION_RECORDING_CHOSEN,
-            },
-            offset_ms: delay::offset_ms(Some(old_offset_ms)),
-            ..AscCalibration::default()
-        },
+        Ok(found) => accepted(found),
+        Err(refused) => refusal(refused, old_offset_ms),
     };
     // SAFETY: non-null, and by the caller's contract aligned, writable and
     // not touched by anyone else.
     unsafe { result.write(found) };
+    true
+}
+
+fn accepted(found: Calibration) -> AscCalibration {
+    AscCalibration {
+        status: CALIBRATION_ACCEPTED,
+        recording: CALIBRATION_RECORDING_NONE,
+        offset_ms: found.offset_ms,
+        difference_ms: found.difference_ms,
+        reference_ms: found.reference_ms,
+        chosen_ms: found.chosen_ms,
+        clamped: found.clamped,
+    }
+}
+
+fn refusal(refused: Refused, old_offset_ms: f64) -> AscCalibration {
+    AscCalibration {
+        status: refusal_code(refused.reason),
+        recording: match refused.recording {
+            None => CALIBRATION_RECORDING_NONE,
+            Some(Recording::Reference) => CALIBRATION_RECORDING_REFERENCE,
+            Some(Recording::Chosen) => CALIBRATION_RECORDING_CHOSEN,
+        },
+        offset_ms: delay::offset_ms(Some(old_offset_ms)),
+        ..AscCalibration::default()
+    }
+}
+
+/// [`calibrate::estimate_agreed`] (S232) of [`CALIBRATION_SWEEPS`] runs into
+/// `result` as [`asc_calibration_estimate`] writes one, with
+/// [`CALIBRATION_DISAGREE`] and the old offset on a disagreement, and into
+/// `spread_ms` that disagreement's spread, else 0. False, writing nothing,
+/// for a null array with a nonzero count, a null list or a null out-pointer.
+///
+/// # Safety
+///
+/// `signal` is null or holds `signal_frames` aligned floats; each list is
+/// null or holds [`CALIBRATION_SWEEPS`] aligned entries, each recording null
+/// or holding its count of aligned floats; none of these changes during the
+/// call. `result` and `spread_ms` are null or point to an aligned, writable
+/// value that nothing else touches during the call.
+#[allow(clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_calibration_estimate_agreed(
+    signal: *const f32,
+    signal_frames: usize,
+    references: *const *const f32,
+    reference_frames: *const usize,
+    chosen: *const *const f32,
+    chosen_frames: *const usize,
+    rate: u32,
+    old_offset_ms: f64,
+    result: *mut AscCalibration,
+    spread_ms: *mut f64,
+) -> bool {
+    // SAFETY: by the caller's contract the signal is null or holds its count
+    // of floats, and each list is null or holds SWEEPS entries, unchanged
+    // during the call.
+    let (Some(signal), Some(references), Some(reference_frames), Some(chosen), Some(chosen_frames)) =
+        (unsafe {
+            (
+                host_slice(signal, signal_frames),
+                host_slice(references, SWEEPS),
+                host_slice(reference_frames, SWEEPS),
+                host_slice(chosen, SWEEPS),
+                host_slice(chosen_frames, SWEEPS),
+            )
+        })
+    else {
+        return false;
+    };
+    let mut runs: [(&[f32], &[f32]); SWEEPS] = [(&[], &[]); SWEEPS];
+    for (i, run) in runs.iter_mut().enumerate() {
+        // SAFETY: by the caller's contract each recording is null or holds
+        // its count of floats that nothing writes during the call.
+        let (Some(reference), Some(chosen)) = (unsafe {
+            (
+                host_slice(references[i], reference_frames[i]),
+                host_slice(chosen[i], chosen_frames[i]),
+            )
+        }) else {
+            return false;
+        };
+        *run = (reference, chosen);
+    }
+    if result.is_null() || spread_ms.is_null() {
+        return false;
+    }
+    let (found, spread) = match calibrate::estimate_agreed(signal, &runs, rate, old_offset_ms) {
+        Ok(found) => (accepted(found), 0.0),
+        Err(NotMeasured::Refused(refused)) => (refusal(refused, old_offset_ms), 0.0),
+        Err(NotMeasured::Disagree { spread_ms }) => (
+            AscCalibration {
+                status: CALIBRATION_DISAGREE,
+                offset_ms: delay::offset_ms(Some(old_offset_ms)),
+                ..AscCalibration::default()
+            },
+            spread_ms,
+        ),
+    };
+    // SAFETY: both non-null, and by the caller's contract aligned, writable
+    // and not touched by anyone else.
+    unsafe {
+        result.write(found);
+        spread_ms.write(spread);
+    }
     true
 }
 
@@ -393,5 +486,103 @@ mod tests {
         assert!(ok);
         assert_eq!(result.status, CALIBRATION_TOO_SHORT);
         assert_eq!(result.recording, CALIBRATION_RECORDING_REFERENCE);
+    }
+
+    fn estimate_agreed(
+        signal: &[f32],
+        reference: &[f32],
+        chosen: [&[f32]; SWEEPS],
+    ) -> Option<(AscCalibration, f64)> {
+        let (mut result, mut spread) = (
+            AscCalibration {
+                status: 99,
+                ..AscCalibration::default()
+            },
+            -1.0,
+        );
+        let references = [reference.as_ptr(); SWEEPS];
+        let reference_frames = [reference.len(); SWEEPS];
+        let chosen_frames = chosen.map(<[f32]>::len);
+        let chosen = chosen.map(<[f32]>::as_ptr);
+        // SAFETY: live slices, lists of SWEEPS entries and local results.
+        let ok = unsafe {
+            asc_calibration_estimate_agreed(
+                signal.as_ptr(),
+                signal.len(),
+                references.as_ptr(),
+                reference_frames.as_ptr(),
+                chosen.as_ptr(),
+                chosen_frames.as_ptr(),
+                48_000,
+                100.0,
+                &mut result,
+                &mut spread,
+            )
+        };
+        ok.then_some((result, spread))
+    }
+
+    // covers: S232
+    #[test]
+    fn three_measurements_cross_the_boundary_agreed_or_not() {
+        let signal = calibrate::signal(48_000).expect("48 kHz");
+        let reference = heard_at(48_000, 4800, 0.5);
+        let late = |ms: usize| heard_at(48_000, 4800 + 48 * ms, 0.5);
+        let (at_250, at_251, at_252, at_260) = (late(250), late(251), late(252), late(260));
+
+        let (agreed, spread) =
+            estimate_agreed(&signal, &reference, [&at_252, &at_250, &at_251]).expect("valid");
+        assert_eq!(
+            (agreed.status, agreed.offset_ms, spread),
+            (CALIBRATION_ACCEPTED, -151.0, 0.0)
+        );
+        assert_eq!(agreed.difference_ms, 251.0);
+
+        let (apart, spread) =
+            estimate_agreed(&signal, &reference, [&at_250, &at_250, &at_260]).expect("valid");
+        assert_eq!(
+            apart,
+            AscCalibration {
+                status: CALIBRATION_DISAGREE,
+                offset_ms: 100.0,
+                ..AscCalibration::default()
+            }
+        );
+        assert_eq!(spread, 10.0);
+
+        let silence = vec![0.0; at_250.len()];
+        let (refused, spread) =
+            estimate_agreed(&signal, &reference, [&at_250, &silence, &at_251]).expect("valid");
+        assert_eq!(
+            refused,
+            AscCalibration {
+                status: CALIBRATION_TOO_QUIET,
+                recording: CALIBRATION_RECORDING_CHOSEN,
+                offset_ms: 100.0,
+                ..AscCalibration::default()
+            }
+        );
+        assert_eq!(spread, 0.0);
+
+        let mut result = AscCalibration::default();
+        let mut spread = 0.0;
+        let frames = [0; SWEEPS];
+        // SAFETY: null lists, which the call refuses.
+        let ok = unsafe {
+            asc_calibration_estimate_agreed(
+                signal.as_ptr(),
+                signal.len(),
+                std::ptr::null(),
+                frames.as_ptr(),
+                std::ptr::null(),
+                frames.as_ptr(),
+                48_000,
+                0.0,
+                &mut result,
+                &mut spread,
+            )
+        };
+        assert!(!ok);
+        assert_eq!(result, AscCalibration::default());
     }
 }

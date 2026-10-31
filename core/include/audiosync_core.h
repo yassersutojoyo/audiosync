@@ -290,6 +290,10 @@ extern "C" {
 #define ASC_CALIBRATION_TOO_QUIET 4      /* no peak 12 times over the noise floor */
 #define ASC_CALIBRATION_AMBIGUOUS_ECHO 5 /* a second arrival over 0.7 of the first, 3 ms or more away */
 #define ASC_CALIBRATION_IMPLAUSIBLE 6    /* a difference over 22 000 ms */
+#define ASC_CALIBRATION_DISAGREE 7       /* asc_calibration_estimate_agreed only: all accepted, differences over 5 ms apart */
+
+/* The runs asc_calibration_estimate_agreed takes. */
+#define ASC_CALIBRATION_SWEEPS 3
 
 /* Which recording a refusal concerns (AscCalibration.recording). */
 #define ASC_CALIBRATION_RECORDING_NONE 0      /* accepted, or a refusal about the pair */
@@ -1310,6 +1314,18 @@ typedef struct AscCalibration {
  * array with a nonzero count or a NULL result.
  */
 bool asc_calibration_estimate(const float *signal, size_t signal_frames, const float *reference, size_t reference_frames, const float *chosen, size_t chosen_frames, uint32_t rate, double old_offset_ms, AscCalibration *result);
+
+/*
+ * Three runs, each a reference and a chosen recording as the estimate takes
+ * them, each list ASC_CALIBRATION_SWEEPS long: accepted only when all three
+ * are and their differences lie within 5 ms, largest minus smallest, then
+ * the run with the middle difference. The first refused run in order gives
+ * its refusal; a wider spread gives ASC_CALIBRATION_DISAGREE with the old
+ * offset and the spread in *spread_ms, which is 0 otherwise. False, writing
+ * nothing, for a NULL array with a nonzero count, a NULL list or a NULL
+ * result or spread_ms.
+ */
+bool asc_calibration_estimate_agreed(const float *signal, size_t signal_frames, const float *const *references, const size_t *reference_frames, const float *const *chosen, const size_t *chosen_frames, uint32_t rate, double old_offset_ms, AscCalibration *result, double *spread_ms);
 
 /* Where the signal arrived in one recording and how the peak stands out,
  * before the thresholds that would refuse it: for the debug log. */

@@ -1323,6 +1323,8 @@ mod tests {
                 "ASC_CALIBRATION_IMPLAUSIBLE",
                 CALIBRATION_IMPLAUSIBLE.to_string(),
             ),
+            ("ASC_CALIBRATION_DISAGREE", CALIBRATION_DISAGREE.to_string()),
+            ("ASC_CALIBRATION_SWEEPS", CALIBRATION_SWEEPS.to_string()),
             (
                 "ASC_CALIBRATION_RECORDING_NONE",
                 CALIBRATION_RECORDING_NONE.to_string(),
