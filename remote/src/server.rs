@@ -1601,6 +1601,7 @@ mod tests {
         assert!(not_private_events(&server).is_empty());
     }
 
+    // covers: S378
     #[test]
     fn two_ipv6_hosts_in_one_64_have_a_connection_cap_each() {
         let capacity = Capacity::default();
@@ -1613,6 +1614,7 @@ mod tests {
         assert_eq!(admission(&slots, phone, capacity), Admission::Open);
     }
 
+    // covers: S378
     #[test]
     fn unpaired_connections_leave_the_reserved_slots_to_paired_devices() {
         let capacity = Capacity::default();
@@ -1650,6 +1652,7 @@ mod tests {
         assert_eq!(admission(&full, paired_phone, capacity), Admission::Busy);
     }
 
+    // covers: S378
     #[test]
     fn a_host_with_many_addresses_cannot_hold_every_reserved_slot() {
         let capacity = Capacity::default();
@@ -1676,6 +1679,7 @@ mod tests {
         assert_eq!(admission(&slots, last, capacity), Admission::Busy);
     }
 
+    // covers: S378
     #[test]
     fn paired_connections_leave_the_shared_slots_open() {
         let capacity = Capacity::default();
@@ -1701,6 +1705,7 @@ mod tests {
         batch.into_iter().map(|(revision, _)| revision).collect()
     }
 
+    // covers: S377
     #[test]
     fn a_stream_gets_each_revision_once() {
         let kept = published(3..=6);
@@ -1712,6 +1717,7 @@ mod tests {
         assert!(Published::default().since(0).is_empty());
     }
 
+    // covers: S376
     #[test]
     fn speaker_ids_are_percent_decoded() {
         assert_eq!(percent_decode("den"), Some("den".to_owned()));
@@ -1743,6 +1749,7 @@ mod tests {
     }
 
     // Through route, not sockets: a test can't connect from 127.0.0.2 on macOS.
+    // covers: S368, S369, S373
     #[test]
     fn a_new_local_name_keeps_the_pairing_lockout_and_the_code() {
         let config = Config {
@@ -1780,6 +1787,7 @@ mod tests {
         server.stop();
     }
 
+    // covers: S370
     #[test]
     fn log_lines_never_carry_a_code() {
         let from = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -1791,6 +1799,7 @@ mod tests {
         assert_eq!(line, "remote: pairing from 127.0.0.1 failed: wrong code");
     }
 
+    // covers: S379
     #[test]
     fn a_config_reads_from_json_with_defaults() {
         let config = Config::from_json("{}").unwrap();

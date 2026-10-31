@@ -230,6 +230,7 @@ fn check_head(head: &[u8]) {
     let _ = request.header_count("host");
 }
 
+// covers: S374
 #[test]
 fn request_heads_from_any_bytes_parse_or_refuse() {
     let mut rng = Rng::new(0x5eed_0001);
@@ -262,6 +263,7 @@ fn request_heads_from_any_bytes_parse_or_refuse() {
     }
 }
 
+// covers: S374
 #[test]
 fn requests_read_the_same_however_they_arrive_and_stay_in_limits() {
     let mut rng = Rng::new(0x5eed_0002);
@@ -281,6 +283,7 @@ fn requests_read_the_same_however_they_arrive_and_stay_in_limits() {
     }
 }
 
+// covers: S374
 #[test]
 fn request_edges_get_the_documented_answers() {
     let post = |length: &str, body: &[u8]| {
@@ -334,6 +337,7 @@ fn request_edges_get_the_documented_answers() {
     }
 }
 
+// covers: S374
 #[test]
 fn the_head_limit_holds_wherever_the_bytes_split() {
     for len in MAX_HEAD - 2..=MAX_HEAD + 2 {
@@ -374,6 +378,7 @@ impl Read for Endless {
     }
 }
 
+// covers: S374
 #[test]
 fn an_endless_peer_is_cut_off_at_the_limits() {
     let cases = [
@@ -491,6 +496,7 @@ fn check_host(value: &str) {
     }
 }
 
+// covers: S373, S374
 #[test]
 fn hosts_and_origins_from_any_text_are_judged_without_panic() {
     let mut rng = Rng::new(0x5eed_0004);
@@ -568,6 +574,7 @@ fn check_bodies(body: &[u8]) {
     }
 }
 
+// covers: S374, S376
 #[test]
 fn json_bodies_from_any_bytes_parse_or_refuse() {
     let mut rng = Rng::new(0x5eed_0005);

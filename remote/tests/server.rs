@@ -226,6 +226,7 @@ fn element<'a>(page: &'a str, tag: &str) -> &'a str {
     &page[start..start + end]
 }
 
+// covers: S375
 #[test]
 fn the_page_and_its_assets_carry_the_hash_policy() {
     let remote = start("page");
@@ -266,6 +267,7 @@ fn the_page_and_its_assets_carry_the_hash_policy() {
     assert_eq!(posted.header("allow"), Some("GET"));
 }
 
+// covers: S373, S374
 #[test]
 fn a_foreign_host_gets_403_everywhere() {
     let remote = start("host");
@@ -290,6 +292,7 @@ fn a_foreign_host_gets_403_everywhere() {
     assert_eq!(exchange(port, b"GET / HTTP/2\r\n\r\n").status, 400);
 }
 
+// covers: S373
 #[test]
 fn a_post_needs_a_matching_origin_and_json() {
     let remote = start("origin");
@@ -327,6 +330,7 @@ fn a_post_needs_a_matching_origin_and_json() {
     assert_eq!(post(&remote, "/api/pair", None, &body).status, 200);
 }
 
+// covers: S368, S370
 #[test]
 fn the_right_code_pairs_once_with_a_strict_cookie() {
     let remote = start("pair");
@@ -379,6 +383,7 @@ fn the_right_code_pairs_once_with_a_strict_cookie() {
     );
 }
 
+// covers: S368
 #[test]
 fn a_code_expires() {
     let timing = Timing {
@@ -407,6 +412,7 @@ fn a_code_expires() {
     assert_eq!(reply.status, 200);
 }
 
+// covers: S369
 #[test]
 fn wrong_codes_are_limited_then_refused_for_that_address_only() {
     let window = Duration::from_secs(1);
@@ -466,6 +472,7 @@ fn wrong_codes_are_limited_then_refused_for_that_address_only() {
     assert_eq!(reply.status, 200);
 }
 
+// covers: S370, S375
 #[test]
 fn every_api_route_needs_a_paired_token() {
     let remote = start("tokens");
@@ -495,6 +502,7 @@ fn every_api_route_needs_a_paired_token() {
     assert!(remote.received.lock().unwrap().is_empty());
 }
 
+// covers: S370, S375, S376, S377
 #[test]
 fn each_endpoint_answers_and_hands_over_exactly_what_was_posted() {
     let remote = start("endpoints");
@@ -750,6 +758,7 @@ impl Events {
     }
 }
 
+// covers: S377
 #[test]
 fn the_event_stream_delivers_each_revision_once_and_heartbeats() {
     let timing = Timing {
@@ -808,6 +817,7 @@ fn the_event_stream_delivers_each_revision_once_and_heartbeats() {
     assert!(!late.data.contains("event: replaced"));
 }
 
+// covers: S256, S377
 #[test]
 fn a_snapshot_after_a_command_streams_even_when_nothing_changed() {
     let remote = start("refused-command");
@@ -830,6 +840,7 @@ fn a_snapshot_after_a_command_streams_even_when_nothing_changed() {
     );
 }
 
+// covers: S377
 #[test]
 fn a_device_keeps_two_event_streams_and_a_third_ends_the_oldest() {
     let remote = start("streams");
@@ -861,6 +872,7 @@ fn a_device_keeps_two_event_streams_and_a_third_ends_the_oldest() {
     }
 }
 
+// covers: S377
 #[test]
 fn a_reloaded_page_does_not_end_the_devices_other_live_stream() {
     let remote = start("stream-reload");
@@ -902,6 +914,7 @@ fn read_all(stream: &mut TcpStream) -> String {
     String::from_utf8_lossy(&data).into_owned()
 }
 
+// covers: S378
 #[test]
 fn one_address_holds_eight_connections_at_most() {
     let remote = start("per-peer");
@@ -924,6 +937,7 @@ fn one_address_holds_eight_connections_at_most() {
     }
 }
 
+// covers: S374
 #[test]
 fn a_head_over_8_kib_gets_431() {
     let remote = start("head-too-large");
@@ -937,6 +951,7 @@ fn a_head_over_8_kib_gets_431() {
     assert_security_headers(&reply);
 }
 
+// covers: S374
 #[test]
 fn a_chunked_body_is_refused() {
     let remote = start("chunked");
@@ -949,6 +964,7 @@ fn a_chunked_body_is_refused() {
     assert_eq!(remote.server.device_count(), 0);
 }
 
+// covers: S370, S374
 #[test]
 fn an_unreadable_body_length_gets_a_json_400_and_pairs_nothing() {
     let remote = start("body-length");
@@ -991,6 +1007,7 @@ fn with_sources() -> State {
     State::from_json(&SAMPLE.replacen("\"speakers\"", sources, 1)).unwrap()
 }
 
+// covers: S344, S376
 #[test]
 fn a_source_pick_reaches_the_app_and_a_refused_one_says_why() {
     let remote = start("source");
@@ -1038,6 +1055,7 @@ fn a_source_pick_reaches_the_app_and_a_refused_one_says_why() {
     assert!(remote.received.lock().unwrap().is_empty());
 }
 
+// covers: S376
 #[test]
 fn a_speaker_change_needs_a_published_speaker_and_an_id() {
     let remote = start("no-snapshot");
@@ -1064,6 +1082,7 @@ fn a_speaker_change_needs_a_published_speaker_and_an_id() {
     assert_eq!(remote.received.lock().unwrap().len(), 1);
 }
 
+// covers: S378
 #[test]
 fn reserved_slots_let_in_only_a_paired_device() {
     let remote = start_with(Config {
@@ -1095,6 +1114,7 @@ fn reserved_slots_let_in_only_a_paired_device() {
     }
 }
 
+// covers: S378
 #[test]
 fn a_full_server_makes_room_by_closing_the_oldest_reserved_waiter() {
     let config = config("reserved-evict", Timing::default());
@@ -1131,6 +1151,7 @@ fn a_full_server_makes_room_by_closing_the_oldest_reserved_waiter() {
     }
 }
 
+// covers: S378
 #[test]
 fn a_busy_answer_arrives_after_a_request_the_server_never_read() {
     let timing = Timing {
@@ -1163,6 +1184,7 @@ fn a_busy_answer_arrives_after_a_request_the_server_never_read() {
     }
 }
 
+// covers: S374
 #[test]
 fn a_request_that_takes_too_long_is_closed_unanswered() {
     let timing = Timing {
@@ -1181,6 +1203,7 @@ fn a_request_that_takes_too_long_is_closed_unanswered() {
     assert!(started.elapsed() < Duration::from_secs(3));
 }
 
+// covers: S371, S377
 #[test]
 fn devices_survive_a_restart_and_can_all_be_forgotten() {
     let config = config("restart", Timing::default());
@@ -1219,6 +1242,7 @@ fn devices_survive_a_restart_and_can_all_be_forgotten() {
     assert_eq!(third.server.device_count(), 0);
 }
 
+// covers: S379
 #[test]
 fn after_stop_the_port_is_free_and_no_command_arrives() {
     let remote = start("stop");
@@ -1237,6 +1261,7 @@ fn after_stop_the_port_is_free_and_no_command_arrives() {
     assert!(received.lock().unwrap().is_empty());
 }
 
+// covers: S379
 #[test]
 fn stop_returns_at_once_while_a_stream_is_stuck_sending() {
     let remote = start("stop-stuck");
@@ -1259,6 +1284,7 @@ fn stop_returns_at_once_while_a_stream_is_stuck_sending() {
     );
 }
 
+// covers: S337
 #[test]
 fn a_busy_port_is_reported_as_such() {
     let first = start("busy");
@@ -1337,6 +1363,7 @@ fn debug_mode_logs_each_new_pairing_code_and_a_normal_run_never_does() {
     );
 }
 
+// covers: S287, S379
 #[test]
 fn the_pairing_code_switch_reads_from_json_and_is_off_by_default() {
     assert!(!Config::default().log_pairing_codes);
@@ -1363,6 +1390,7 @@ fn send(remote: &Remote, method: &str, path: &str, token: Option<&str>, body: &s
 }
 
 // The endpoint table: each route answers one method; any other gets 405 and its Allow.
+// covers: S375
 #[test]
 fn every_route_answers_a_wrong_method_with_405_and_its_allow() {
     let remote = start("methods");
@@ -1401,6 +1429,7 @@ fn every_route_answers_a_wrong_method_with_405_and_its_allow() {
 }
 
 // The 4 KiB body limit: a body at it is read, one byte more gets 413 (RFC 9110 §15.5.14).
+// covers: S374
 #[test]
 fn a_body_at_the_limit_is_read_and_one_byte_more_gets_413() {
     use audiosync_remote::http::MAX_BODY;
@@ -1426,6 +1455,7 @@ fn a_body_at_the_limit_is_read_and_one_byte_more_gets_413() {
     assert_eq!(remote.server.device_count(), 1);
 }
 
+// covers: S374
 #[test]
 fn a_declared_length_over_the_limit_is_refused_before_the_body_arrives() {
     let remote = start("declared-length");
@@ -1445,6 +1475,7 @@ fn a_declared_length_over_the_limit_is_refused_before_the_body_arrives() {
 }
 
 // Only the listed paths exist; anything else is 404, paired or not, and runs nothing.
+// covers: S375
 #[test]
 fn unknown_paths_get_a_json_404_with_or_without_a_token() {
     let remote = start("unknown-paths");
@@ -1480,6 +1511,7 @@ fn unknown_paths_get_a_json_404_with_or_without_a_token() {
 
 // DNS rebinding: a foreign Host is refused before any route, method or token
 // check, even when the Origin matches that Host.
+// covers: S373, S375
 #[test]
 fn a_foreign_host_is_refused_first_even_with_a_matching_origin_and_a_token() {
     let remote = start("rebinding");

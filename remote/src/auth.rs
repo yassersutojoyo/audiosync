@@ -608,6 +608,7 @@ mod tests {
         format!("{digit}{}", &code[1..])
     }
 
+    // covers: S368
     #[test]
     fn codes_have_six_digits() {
         for _ in 0..200 {
@@ -617,6 +618,7 @@ mod tests {
         }
     }
 
+    // covers: S368
     #[test]
     fn the_right_code_pairs_once() {
         let now = Instant::now();
@@ -629,6 +631,7 @@ mod tests {
         assert_eq!(pairing.attempt(peer(1), &next, now), PairOutcome::Paired);
     }
 
+    // covers: S368
     #[test]
     fn a_code_expires() {
         let start = Instant::now();
@@ -641,6 +644,7 @@ mod tests {
         assert_eq!(pairing.attempt(peer(1), &fresh, later), PairOutcome::Paired);
     }
 
+    // covers: S369
     #[test]
     fn five_wrong_codes_a_minute_per_address_then_429() {
         let start = Instant::now();
@@ -672,6 +676,7 @@ mod tests {
         }
     }
 
+    // covers: S369
     #[test]
     fn one_peer_out_of_tries_is_refused_while_others_still_pair() {
         let start = Instant::now();
@@ -687,6 +692,7 @@ mod tests {
         assert_eq!(pairing.attempt(peer(1), &fresh, later), PairOutcome::Paired);
     }
 
+    // covers: S369
     #[test]
     fn two_ipv6_hosts_in_one_64_are_separate_peers() {
         // The server admits IPv6 peers only from its own /64, so all of them share it.
@@ -701,6 +707,7 @@ mod tests {
         assert_eq!(pairing.attempt(host(2), &code, later), PairOutcome::Paired);
     }
 
+    // covers: S369
     #[test]
     fn one_peer_alone_never_locks_pairing() {
         let start = Instant::now();
@@ -715,6 +722,7 @@ mod tests {
         assert!(!pairing.locked());
     }
 
+    // covers: S369
     #[test]
     fn forty_wrong_codes_from_several_peers_lock_pairing_until_rotation() {
         let start = Instant::now();
@@ -734,6 +742,7 @@ mod tests {
         assert_eq!(pairing.attempt(peer(1), &fresh, later), PairOutcome::Paired);
     }
 
+    // covers: S369
     #[test]
     fn wrong_tries_while_no_code_works_never_lock_pairing() {
         let start = Instant::now();
@@ -767,6 +776,7 @@ mod tests {
         );
     }
 
+    // covers: S369
     #[test]
     fn wrong_tries_while_a_code_works_still_lock_after_expired_ones() {
         let start = Instant::now();
@@ -796,6 +806,7 @@ mod tests {
         );
     }
 
+    // covers: S369
     #[test]
     fn tries_refused_as_limited_never_count_toward_the_lock() {
         // Otherwise one address could lock pairing for every phone within a minute.
@@ -816,6 +827,7 @@ mod tests {
         assert_eq!(pairing.attempt(peer(2), &code, start), PairOutcome::Paired);
     }
 
+    // covers: S368, S369
     #[test]
     fn rotating_retires_the_old_code_and_clears_the_limit() {
         let start = Instant::now();
@@ -834,6 +846,7 @@ mod tests {
         assert_eq!(pairing.attempt(peer(1), &fresh, start), PairOutcome::Paired);
     }
 
+    // covers: S368
     #[test]
     fn a_code_is_matched_whole_after_trimming() {
         let start = Instant::now();
@@ -859,6 +872,7 @@ mod tests {
         );
     }
 
+    // covers: S369
     #[test]
     fn the_wrong_code_window_slides_with_each_try() {
         let start = Instant::now();
@@ -919,6 +933,7 @@ mod tests {
         dir.join("remote-devices.json")
     }
 
+    // covers: S371
     #[test]
     fn tokens_are_kept_as_hashes_eight_at_most() {
         let path = scratch("auth-tokens");
@@ -964,6 +979,7 @@ mod tests {
         assert!(TokenStore::open(Some(path)).0.is_empty());
     }
 
+    // covers: S372
     #[test]
     fn a_snapshot_saved_late_never_takes_the_file_back() {
         let path = scratch("auth-order");
@@ -988,6 +1004,7 @@ mod tests {
         UNIX_EPOCH + Duration::from_secs(1_800_000_000)
     }
 
+    // covers: S371
     #[test]
     fn a_device_idle_for_ninety_days_is_forgotten() {
         let path = scratch("auth-idle");
@@ -1019,6 +1036,7 @@ mod tests {
         assert!(!reopened.contains(&token, idle + DAY * 91));
     }
 
+    // covers: S371
     #[test]
     fn last_seen_is_written_once_a_day_and_survives_a_restart() {
         let path = scratch("auth-seen");
@@ -1039,6 +1057,7 @@ mod tests {
         assert!(!reopened.contains(&token, start + DAY * 92));
     }
 
+    // covers: S372
     #[test]
     fn a_file_without_last_seen_counts_every_device_as_seen_now() {
         let path = scratch("auth-upgrade");
@@ -1063,6 +1082,7 @@ mod tests {
         assert!(reopened.is_empty());
     }
 
+    // covers: S371
     #[test]
     fn a_clock_that_jumped_ahead_and_back_keeps_no_device_longer() {
         let path = scratch("auth-clock-back");
@@ -1099,6 +1119,7 @@ mod tests {
         assert!(reopened.is_empty());
     }
 
+    // covers: S371
     #[test]
     fn a_clock_that_jumps_ninety_days_ahead_forgets_every_device() {
         let start = day_zero();
@@ -1113,6 +1134,7 @@ mod tests {
         assert!(store.is_empty());
     }
 
+    // covers: S372
     #[test]
     fn a_last_seen_value_that_isnt_a_list_counts_every_device_as_seen_now() {
         let path = scratch("auth-seen-damaged");
@@ -1127,6 +1149,7 @@ mod tests {
         assert!(store.take_rewrite().is_some());
     }
 
+    // covers: S372
     #[test]
     fn a_hash_reads_only_as_two_hex_digits_per_byte() {
         let hash = token_hash("phone");
@@ -1140,6 +1163,7 @@ mod tests {
         assert_eq!((devices.len(), skipped), (1, 1));
     }
 
+    // covers: S372
     #[test]
     fn a_whole_number_written_as_a_float_doesnt_read() {
         let hash = hex(&token_hash("phone"));
@@ -1170,6 +1194,7 @@ mod tests {
         copies.iter().map(|copy| fs::read(copy).unwrap()).collect()
     }
 
+    // covers: S372
     #[test]
     fn opening_a_file_with_an_unreadable_device_without_saving_leaves_no_copy() {
         let path = scratch("auth-bad-device-only-counted");
@@ -1194,6 +1219,7 @@ mod tests {
         assert!(TokenStore::open_at(Some(path), day_zero()).0.is_empty());
     }
 
+    // covers: S372
     #[test]
     fn an_unreadable_device_costs_only_that_device_and_the_file_is_kept_aside_first() {
         let path = scratch("auth-one-bad-device");
@@ -1235,6 +1261,7 @@ mod tests {
         assert!(store.contains(&first, now + DAY * 89));
     }
 
+    // covers: S372
     #[test]
     fn a_damaged_file_starts_empty() {
         let path = scratch("auth-damaged");
@@ -1255,6 +1282,7 @@ mod tests {
         assert!(matches!(problem, Some(LoadProblem::Skipped { skipped: 1 })));
     }
 
+    // covers: S370
     #[test]
     fn only_well_formed_tokens_are_looked_up() {
         let (mut store, _) = TokenStore::open(None);

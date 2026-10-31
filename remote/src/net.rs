@@ -222,6 +222,7 @@ mod tests {
         assert!(!is_private_peer(v4(100, 100, 1, 1)));
     }
 
+    // covers: S369, S378
     #[test]
     fn every_address_is_a_peer_of_its_own() {
         let phone = v6("2001:db8:1:2:aaaa:bbbb:cccc:dddd");
@@ -241,6 +242,7 @@ mod tests {
         assert_eq!(peer_group(mapped), v4(192, 168, 1, 20));
     }
 
+    // covers: S373
     #[test]
     fn host_must_name_this_server_with_its_port() {
         let home = v4(192, 168, 1, 5);
@@ -292,6 +294,7 @@ mod tests {
         assert!(host_allowed(&v4(10, 0, 0, 2).to_string(), web, None));
     }
 
+    // covers: S373
     #[test]
     fn a_blank_local_name_or_a_lookalike_host_never_matches() {
         let local = SocketAddr::new(v4(192, 168, 1, 5), 7655);
@@ -321,6 +324,7 @@ mod tests {
         }
     }
 
+    // covers: S373
     #[test]
     fn an_origin_with_a_path_or_credentials_is_not_the_pages() {
         let host = "kitchen.local:7655";
@@ -337,6 +341,7 @@ mod tests {
         }
     }
 
+    // covers: S373
     #[test]
     fn origin_must_be_the_pages_own() {
         let host = format!("{}:7655", v4(192, 168, 1, 5));

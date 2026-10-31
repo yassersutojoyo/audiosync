@@ -139,3 +139,15 @@ S364 Mac host only: the debug log's late output callback and session stop lines;
 S365 Mac host only: the updater's release-build gate; the Mac logic suite checks it.
 S366 Mac host only: the developer switch for the Bluetooth IO buffer; the Mac logic suite checks it.
 S367 Mac host only: the file that keeps the Cast device memory between runs; the Mac logic suite checks it.
+S368 Web remote only: the pairing code's digits, lifetime, single use and renewal; the remote crate's tests check it.
+S369 Web remote only: the limits on wrong pairing codes per address and for everyone; the remote crate's tests check it.
+S370 Web remote only: the pairing route, the device token cookie and unpairing; the remote crate's tests check it.
+S371 Web remote only: the paired devices kept, their idle limit and last-seen times; the remote crate's tests check it.
+S372 Web remote only: reading and saving the paired-device file; the remote crate's tests check it.
+S373 Web remote only: the Host and Origin checks; the remote crate's tests check it.
+S374 Web remote only: the limits on reading a request; the remote crate's tests check it.
+S375 Web remote only: the routes, their methods and the headers on every answer; the remote crate's tests check it.
+S376 Web remote only: the speaker, master and source routes; the remote crate's tests check it.
+S377 Web remote only: the event stream; the remote crate's tests check it.
+S378 Web remote only: the connection slots per address and for paired devices; the remote crate's tests check it.
+S379 Web remote only: the start settings and stopping; the remote crate's tests check it.

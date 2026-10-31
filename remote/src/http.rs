@@ -265,6 +265,7 @@ pub fn write_response(
 mod tests {
     use super::*;
 
+    // covers: S374
     #[test]
     fn a_head_parses_into_method_path_and_headers() {
         let request = parse_head(
@@ -281,6 +282,7 @@ mod tests {
         assert_eq!(request.cookie("missing"), None);
     }
 
+    // covers: S370
     #[test]
     fn the_token_cookie_is_found_only_by_its_exact_name() {
         let request = parse_head(
@@ -294,6 +296,7 @@ mod tests {
         assert_eq!(request.cookie("as_token"), Some(""));
     }
 
+    // covers: S374
     #[test]
     fn a_bad_head_is_refused() {
         for bad in [
@@ -308,6 +311,7 @@ mod tests {
         }
     }
 
+    // covers: S375
     #[test]
     fn every_response_carries_the_security_headers() {
         let mut out = Vec::new();
