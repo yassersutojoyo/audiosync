@@ -79,18 +79,6 @@ impl Default for EqSettings {
 }
 
 impl EqSettings {
-    /// Sets the band gains of `preset`; the enabled flag and the preamp stay as they are (S33).
-    pub fn apply_preset(&mut self, preset: &Preset) {
-        self.gains_db = preset.gains_db;
-    }
-
-    /// The preset whose ten gains all equal these settings' gains exactly, if any (S33).
-    pub fn matching_preset(&self) -> Option<&'static Preset> {
-        PRESETS
-            .iter()
-            .find(|preset| preset.gains_db == self.gains_db)
-    }
-
     /// Reset: flat gains and a 0 dB preamp, so the picker reads Flat; the
     /// enabled flag stays (S33).
     pub fn reset(&mut self) {

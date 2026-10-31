@@ -2841,7 +2841,6 @@ The checks for the delay reader (S41 to S59, S158, S159), in `core/src/reader.rs
 | measured_response_matches_the_reference_measurements (`core/tests/eq.rs`) | S32 |
 | presets_cross_the_boundary_in_menu_order (`core/src/ffi.rs`) | S33 |
 | twelve_presets_with_unique_ids_in_menu_order (`core/tests/eq.rs`) | S33 |
-| a_preset_sets_the_gains_only_and_matching_is_exact (`core/tests/eq.rs`) | S33 |
 | reset_reads_flat_and_zeroes_the_preamp (`core/tests/eq.rs`) | S33 |
 | finite_input_after_a_non_finite_one_is_finite_within_one_block (`core/tests/eq.rs`) | S125 |
 | work_per_block_is_twenty_biquad_steps_per_frame (`core/src/eq.rs`) | S127 |

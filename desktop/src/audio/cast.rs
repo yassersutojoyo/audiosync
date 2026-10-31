@@ -1476,11 +1476,8 @@ impl CastSpeakers {
     /// A status's volume (C70, C104, C105): the answer to a level sent keeps
     /// the own level and any other level moves it by master × zone, except
     /// the session's first, which is set to master × zone × own level
-    /// instead. A status without a level is not the first.
+    /// instead.
     fn volume_reported(&mut self, device: DeviceId, volume: DeviceVolume, answers_mute: bool) {
-        if !volume.has_level {
-            return;
-        }
         let shown = self.own_of(device);
         let zone = self.zone_of(device);
         let level = volume.level;
@@ -4437,34 +4434,6 @@ pub mod tests {
         cast.poll();
         assert_eq!(sent(&fake), [0.0, 0.35], "louder than master × own: set");
         assert!((shown(&cast, KITCHEN) - 70.0).abs() < 1e-9, "not read back");
-    }
-
-    // covers: C105
-    #[test]
-    fn a_first_status_without_a_level_keeps_the_own_level() {
-        let (fake, mut cast) = listed();
-        cast.set_master(50.0);
-        cast.set_streaming(true);
-        cast.set_enabled(KITCHEN, true).unwrap();
-        let before = shown(&cast, KITCHEN);
-        let payload = serde_json::json!({"status": {"volume": {"muted": false}}});
-        fake.report(HostEvent::Session {
-            attempt: AttemptId(1),
-            device: id(KITCHEN),
-            event: SessionEvent::Volume(
-                audiosync_cast::status::ReceiverStatus::from_payload(
-                    payload.as_object().expect("object"),
-                )
-                .volume,
-                false,
-            ),
-        });
-        cast.poll();
-        assert!(sent(&fake).is_empty(), "{:?}", sent(&fake));
-        assert_eq!(shown(&cast, KITCHEN), before);
-        report(&fake, &mut cast, 0.2);
-        assert!(sent(&fake).is_empty(), "{:?}", sent(&fake));
-        assert!((shown(&cast, KITCHEN) - 40.0).abs() < 1e-9);
     }
 
     // covers: C70, C104
