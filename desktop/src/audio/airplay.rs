@@ -89,7 +89,7 @@ use audiosync_airplay::stream::{
     DEFAULT_LATENCY_FRAMES, MAX_DELAY, SpeakerCounters, StreamCounters,
 };
 use audiosync_airplay::targets::{Target, TargetChange, TargetId, TargetKind};
-use audiosync_airplay::volume::{MIN_DB, MUTED_DB, Volume};
+use audiosync_airplay::volume::{MUTED_DB, Volume};
 use audiosync_core::fade::InputFade;
 use audiosync_core::ffi::airplay::{latest_panic_since, panic_mark};
 use audiosync_core::policy::remote::{
@@ -98,8 +98,8 @@ use audiosync_core::policy::remote::{
 use audiosync_core::resample::Resampler;
 use audiosync_core::volume::{
     DEFAULT_LOCAL_POSITION, NO_ZONE_POSITION, ReadBack, device_level, device_level_for_db,
-    is_echo_of, level_on_speaker, level_set_on_speaker, own_for_device_level, row_move,
-    sanitize_own, sanitize_position, set_grid_db,
+    device_volume, is_echo_of, level_on_speaker, level_set_on_speaker, own_for_device_level,
+    row_move, sanitize_own, sanitize_position, set_grid_db,
 };
 
 use super::SESSION_RATE;
@@ -770,16 +770,6 @@ pub fn problem(reason: UserReason) -> AirPlayProblem {
 #[cfg(test)]
 pub fn airplay_volume(position: f64, zone: f64, master: f64) -> Volume {
     device_volume(device_level(position, zone, master))
-}
-
-/// The volume an AirPlay speaker gets for device level `level`, 0 to 100,
-/// on the default line (S289): −30 + 0.3 × D dB, muted at 0.
-fn device_volume(level: f64) -> Volume {
-    if level > 0.0 {
-        Volume::Db(MIN_DB * (1.0 - level.min(100.0) / 100.0))
-    } else {
-        Volume::Muted
-    }
 }
 
 /// The level a row holds after `level` was set on the speaker: none while k
@@ -4616,7 +4606,7 @@ pub mod tests {
     use audiosync_airplay::rtsp::{Message, Method, Parser, Request, Response};
     use audiosync_airplay::stream::{SpeakerLatency, Stream, StreamConfig};
     use audiosync_airplay::targets::Member;
-    use audiosync_airplay::volume::parse_reported;
+    use audiosync_airplay::volume::{MIN_DB, parse_reported};
 
     use super::*;
     use crate::audio::backend::{AudioBackend, SourceId};
@@ -9355,6 +9345,28 @@ pub mod tests {
         assert!(fake.take_calls().is_empty());
         assert_eq!(own(&airplay), 160.0);
         assert_eq!(row_of(&airplay, &id), 0.0);
+    }
+
+    // covers: S289
+    #[test]
+    fn windows_uses_the_cores_device_volume() {
+        assert_eq!(device_volume(0.0), Volume::Muted);
+        for (level, db) in [
+            (1.0, -29.7),
+            (20.0, -24.0),
+            (50.0, -15.0),
+            (80.0, -6.0),
+            (100.0, 0.0),
+            (150.0, 0.0),
+        ] {
+            let sent = device_volume(level).wire_db();
+            assert!((sent - db).abs() < 1e-9, "level {level} sends {sent}");
+            let read = device_level_for_db(sent).expect("finite");
+            assert!(
+                (read - level.min(100.0)).abs() < 1.0,
+                "level {level} reads {read}"
+            );
+        }
     }
 
     // covers: S290, S291

@@ -8,6 +8,8 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use audiosync_airplay::volume::{MIN_DB, Volume};
+
 /// Lowest slider position: silence (S70).
 pub const MIN_POSITION: f64 = 0.0;
 
@@ -123,6 +125,16 @@ pub fn device_level(own_position: f64, zone_position: f64, master_position: f64)
         level.min(MAX_POSITION)
     } else {
         MIN_POSITION
+    }
+}
+
+/// The volume an AirPlay speaker gets for device level `level`, 0 to 100,
+/// on the default line (S289): −30 + 0.3 × D dB, muted at 0.
+pub fn device_volume(level: f64) -> Volume {
+    if level > 0.0 {
+        Volume::Db(MIN_DB * (1.0 - level.min(100.0) / 100.0))
+    } else {
+        Volume::Muted
     }
 }
 

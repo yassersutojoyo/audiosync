@@ -94,7 +94,7 @@ use audiosync_airplay::stream::{
     SpeakerLatency,
 };
 use audiosync_airplay::targets::{Target, TargetChange, TargetId};
-use audiosync_airplay::volume::{MIN_DB, Volume};
+use audiosync_airplay::volume::Volume;
 
 use super::{host_slice, stereo_samples};
 use crate::airplay_pairings::{Access, Loaded, PairingStore};
@@ -107,8 +107,8 @@ use crate::policy::remote::{
 use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
 use crate::volume::{
-    NO_ZONE_POSITION, ReadBack, RowMove, device_level, device_level_for_db, is_echo_of,
-    level_on_speaker, level_set_on_speaker, row_move, sanitize_own, set_grid_db,
+    NO_ZONE_POSITION, ReadBack, RowMove, device_level, device_level_for_db, device_volume,
+    is_echo_of, level_on_speaker, level_set_on_speaker, row_move, sanitize_own, set_grid_db,
 };
 
 /// What a receiver event reports ([`AscAirPlayReceiver::event`]): discovery
@@ -949,16 +949,6 @@ fn zone_in(zones: &HashMap<String, f64>, id: &str) -> f64 {
 /// its sliders the same way.
 fn speaker_volume(position: f64, zone: f64, master: f64) -> Volume {
     device_volume(device_level(position, zone, master))
-}
-
-/// The volume an AirPlay speaker gets for device level `level`, 0 to 100,
-/// on the default line (S289): −30 + 0.3 × D dB, muted at 0.
-fn device_volume(level: f64) -> Volume {
-    if level > 0.0 {
-        Volume::Db(MIN_DB * (1.0 - level.min(100.0) / 100.0))
-    } else {
-        Volume::Muted
-    }
 }
 
 /// How long after the host sets a volume a DACP volume on the row sent is
@@ -4220,7 +4210,7 @@ mod tests {
     use audiosync_airplay::homekit::HomeKitCredentials;
     use audiosync_airplay::latency::LatencySources;
     use audiosync_airplay::rtsp::{Message, Method, Parser, Response};
-    use audiosync_airplay::volume::parse_reported;
+    use audiosync_airplay::volume::{MIN_DB, parse_reported};
 
     /// A browser that hands over a fixed list of events, one per poll.
     struct Script(Vec<BrowseEvent>);
