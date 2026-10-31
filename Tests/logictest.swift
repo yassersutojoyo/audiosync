@@ -3528,6 +3528,7 @@ do {
             firstTarget = item.target
             firstAction = item.action
         }
+        // covers: S400
         check(firstAction == #selector(MenuAction.choose(_:)), "Gear menu: each item sends its own action to its target",
               firstAction.map(NSStringFromSelector) ?? "none")
         // Its own pool, so the weak load and the call leave nothing autoreleased that holds the target.
@@ -3536,9 +3537,11 @@ do {
                 _ = target.perform(action, with: nil)
             }
         }
+        // covers: S400
         check(chosen == 1,
               "Gear menu: an item chosen after the pop-up call returns still runs its action once nothing else holds the menu")
         autoreleasepool { NSMenu().keepUntilNextPopUp() }
+        // covers: S400
         check(firstTarget == nil, "Gear menu: the next menu that opens releases the one before it")
     }
     check(UIStrings().nativeAirPlayWaitingTitle(name: "Loft") == "Loft waiting"
@@ -3562,6 +3565,7 @@ do {
           "native airplay: the PTP text reads as on Windows")
     var titled = NoticeList()
     titled.post("body", subject: "s", title: "Loft waiting")
+    // covers: S153
     check(titled.newest?.title == "Loft waiting" && titled.newest?.text == "body", "notices: a notice can carry a title")
 
     // A receiver the sender reaches over AirPlay 2 (the core sets this only

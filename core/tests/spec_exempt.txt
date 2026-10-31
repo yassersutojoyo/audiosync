@@ -171,3 +171,4 @@ S396 Windows host only: when the note that no AirPlay speaker was found shows; t
 S397 Windows host only: the notice at launch that names the pairings copy; the Windows tests named in the test map check it.
 S398 Windows host only: the loopback gap fill; the Windows tests named in the test map check it.
 S399 Hosts only: where an AirPlay speaker without a volume of its own starts; the Mac logic check and the Windows test named in the test map check it.
+S400 Mac host only: a menu opened from a button keeps its items until the next one opens; the Mac logic suite checks it.
