@@ -9390,6 +9390,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S381
     #[test]
     fn endpoints_left_out_of_the_listing_are_logged_once() {
         let (mut backend, log, dir) = logged_backend("controller-left-out");
