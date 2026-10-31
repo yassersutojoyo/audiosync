@@ -14468,6 +14468,9 @@ do {
     let plist = (try? String(contentsOfFile: "Info.plist", encoding: .utf8)) ?? ""
     check(plist.contains("<key>SUFeedURL</key>\n\t<string>https://github.com/yassersutojoyo/audiosync/releases/latest/download/appcast.xml</string>"),
           "updates: Info.plist points SUFeedURL at the latest release's appcast.xml")
+    // covers: S306
+    check(plist.contains("<key>SUAllowsAutomaticUpdates</key>\n\t<false/>"),
+          "updates: Info.plist turns off Sparkle's automatic download and install")
     check(!plist.isEmpty && !plist.contains(UpdateGate.releaseBuildInfoKey),
           "updates: the source Info.plist never carries the release flag (only ./build.sh --release adds it to the bundle)")
 }
