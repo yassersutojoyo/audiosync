@@ -90,18 +90,21 @@ extension RemoteRow {
         var note: String?
         var key = ""
         var waiting = false
+        var streaming = true
     }
 
     /// A speaker that would ask for a code when turned on can't be turned on
     /// from the phone: the prompt would open on the Mac with nobody there.
     init(_ f: Facts, text: UIStrings) {
-        let codeBlocked = (f.needsCode && !f.paired && !f.holdsPassword || f.memberAsksPassword) && !f.on
+        let turnsOn = SpeakerState(enabled: f.on, streaming: f.streaming).clickTurnsOn
+        let codeBlocked = (f.needsCode && !f.paired && !f.holdsPassword || f.memberAsksPassword) && turnsOn
         let castStep = f.castVolumeStep > 0 && f.castVolumeStep <= 1 ? f.castVolumeStep : CastModel.fallbackVolumeStep
         let delay: RemoteDelay
         if f.isAirPlay { delay = .airPlay(f.airPlayDelayMs) }
         else if f.castVolumeFixed != nil { delay = f.offsetMs.map(RemoteDelay.cast) ?? .fixed }
         else { delay = f.offsetMs.map(RemoteDelay.offset) ?? .fixed }
-        self.init(id: f.id, name: f.name, kind: f.kind, on: f.on, volume: f.volume, delay: delay,
+        // Like the window's button: a speaker that will play still turns on.
+        self.init(id: f.id, name: f.name, kind: f.kind, on: !turnsOn, volume: f.volume, delay: delay,
                   available: !codeBlocked,
                   notice: codeBlocked ? text.remoteTurnOnInApp : f.note,
                   volumeAdjustable: f.castVolumeFixed != true,

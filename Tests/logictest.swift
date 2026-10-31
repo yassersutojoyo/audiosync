@@ -13148,6 +13148,17 @@ do {
     check(plan("{\"type\":\"speaker\",\"id\":\"usb\",\"on\":true,\"volume\":70}")
             == [.setEnabled(id: "usb", on: true), .setVolume(id: "usb", position: 70)],
           "web remote: turning a speaker on with a volume flips the switch, then moves the slider")
+    let willPlay = RemoteRow(Facts(id: "usb", name: "Desk", kind: "USB", on: true, volume: 40, streaming: false), text: t)
+    // covers: S343, S345
+    check(!willPlay.on && RemoteAction.plan(.speaker(id: "usb", on: true, volume: nil, delayMs: nil), rows: [willPlay])
+            == [.setEnabled(id: "usb", on: true)],
+          "web remote: a speaker that will play shows off, and the phone's switch-on turns it on as the window's button does")
+    let willPlayLocked = RemoteRow(Facts(id: "tv", name: "TV", kind: "AirPlay", on: true, volume: 50, isAirPlay: true,
+                                         needsCode: true, streaming: false), text: t)
+    // covers: S257, S345
+    check(!willPlayLocked.available
+            && RemoteAction.plan(.speaker(id: "tv", on: true, volume: nil, delayMs: nil), rows: [willPlayLocked]).isEmpty,
+          "web remote: a speaker that will play but would ask for a code can't be turned on from the phone")
     // covers: S348
     check(plan("{\"type\":\"speaker\",\"id\":\"usb\",\"volume\":70}") == [.setVolume(id: "usb", position: 70)]
             && plan("{\"type\":\"speaker\",\"id\":\"cast\",\"volume\":70}") == [.setVolume(id: "cast", position: 70)],
