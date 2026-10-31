@@ -3919,6 +3919,7 @@ The checks for S256 to S258, S287, S288, S337, S338 and S343 to S345 and S348 in
 | calibrating_disables_every_write_but_unpair_and_the_policy_takes_the_new_script | S258 |
 | the_snapshot_lists_zones_with_the_listed_members_and_the_presets | S256, S253 |
 | a_zone_counts_on_as_its_switches_show_and_its_absent_members_in_all | S256 |
+| the_web_remote_counts_a_hidden_zone_member_nowhere (`desktop/src/ui_model.rs`) | S256 |
 | zone_and_preset_commands_map_to_the_windows_actions | S257 |
 | the_host_refuses_a_command_that_arrives_during_a_run | S258 |
 | phone_zone_and_preset_commands_apply_without_showing_the_main_window | S257, S266 |
@@ -3932,6 +3933,7 @@ The checks for S256 to S258, S287, S288, S337, S338 and S343 to S345 and S348 in
 | a_stereo_pair_whose_member_asks_for_a_password_is_turned_on_at_the_pc | S257 |
 | a_row_click_turns_off_a_will_play_speaker_that_cant_be_switched_on (`desktop/src/ui_model.rs`) | S257 |
 | web remote: a zone lists its listed members in zone order with on, total and waiting; one not listed counts only in all | S256 |
+| web remote: a hidden member counts nowhere, not in a zone's members, on or all | S256 |
 | web remote: a zone command sets the zone's volume, then flips it; a preset command recalls it | S257 |
 | web remote: a zone or preset from the phone keeps a member that asks for a code off; with no other member it doesn't flip | S257 |
 | web remote: a stereo pair whose member asks for a password can't be turned on from the phone, and says so | S257 |

@@ -40,14 +40,9 @@ extension AppDelegate {
         let saved = AppSettings.load(store.read)
         let remote = WebRemote(model: appModel, store: store, enabled: saved.webRemote, port: saved.webRemotePort)
         remote.onNowPlayingNeedChange = { [weak self] in self?.syncTrackInfo() }
-        // Hidden members left out, so the page counts what the zone header counts.
         remote.host.zones = { [weak self] in
             guard let self else { return [] }
-            return zones.map { zone in
-                var shown = zone
-                shown.members.removeAll(where: self.isHidden)
-                return shown
-            }
+            return SpeakerZone.withoutHidden(zones, isHidden: self.isHidden)
         }
         remote.host.presets = { [weak self] in
             guard let self else { return [] }

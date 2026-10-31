@@ -13409,6 +13409,19 @@ do {
             && zoneObjects.last?["counts"] as? [String: Int] == ["on": 0, "total": 0, "waiting": 0, "all": 1],
           "web remote: a zone lists its listed members in zone order with on, total and waiting; one not listed counts only in all",
           "\(zoneObjects)")
+    var hiddenDesk = HiddenSpeakers()
+    hiddenDesk.hide(key: "lc:usb", name: "Desk", kind: "USB")
+    let shownRows = hiddenDesk.partition(zoneRows, key: \.key).shown
+    let shownZones = SpeakerZone.withoutHidden(storedZones) { hiddenDesk.contains($0) }
+    let hiddenZoned = RemoteSnapshot(computerName: "Mac", master: 100, nowPlaying: nil, rows: shownRows,
+                                     zones: shownZones.map { RemoteZoneRow($0, listed: shownRows) }, presets: presetList)
+    let hiddenObject = (try? JSONSerialization.jsonObject(with: Data(hiddenZoned.json.utf8))) as? [String: Any]
+    let hiddenZone = (hiddenObject?["zones"] as? [[String: Any]])?.first
+    check(hiddenZone?["members"] as? [String] == ["hp", "bt"]
+            && hiddenZone?["counts"] as? [String: Int] == ["on": 1, "total": 2, "waiting": 1, "all": 3]
+            && !hiddenZoned.json.contains("\"usb\""),
+          "web remote: a hidden member counts nowhere, not in a zone's members, on or all",
+          "\(String(describing: hiddenZone))")
     check(presetObjects.map { $0["id"] as? String ?? "" } == ["p1", "p2"]
             && presetObjects.map { $0["current"] as? Bool ?? false } == [true, false]
             && zonedObject?["calibrating"] as? Bool == false,

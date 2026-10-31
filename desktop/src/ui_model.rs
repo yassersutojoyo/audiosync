@@ -3359,6 +3359,32 @@ mod tests {
         assert_eq!(state.zone_counts(office), ZoneCounts::default());
     }
 
+    // covers: S256
+    #[test]
+    fn the_web_remote_counts_a_hidden_zone_member_nowhere() {
+        let mut mock = MockBackend::zones_preview();
+        mock.hide_speaker("airplay:kitchen", "AirPlay");
+        let page = crate::remote::snapshot(
+            &mock.snapshot(),
+            |_| true,
+            None,
+            "Desk PC",
+            &crate::remote::tests::Text,
+        );
+        let living = &page.zones[0];
+        assert_eq!(
+            living.members,
+            ["airplay:pair", "cc:attic", "local:desk"],
+            "Den and Kitchen are hidden; the home theater isn't found yet"
+        );
+        assert_eq!(
+            (living.counts.on, living.counts.total, living.counts.all),
+            (1, 3, 4),
+            "Kitchen was on"
+        );
+        assert!(page.speaker("airplay:kitchen").is_none());
+    }
+
     // covers: S255
     #[test]
     fn calibrate_zone_is_offered_while_a_member_is_here_and_no_calibration_holds_the_outputs() {
