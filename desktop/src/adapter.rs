@@ -602,6 +602,11 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// timing whose refusal raised the port notice: each raises it once, so a
     /// dismissed notice comes back for the next speaker refused.
     ptp_taken: Option<BTreeSet<String>>,
+    /// The listed AirPlay speakers off because they need PTP timing: while
+    /// one is, a speaker that plays leaves the port notice shown (S358).
+    ptp_off: BTreeSet<String>,
+    /// A speaker played since the latest port clash report.
+    ptp_played: bool,
     /// The windows' own settings.
     view: ViewSettings,
     /// The AirPlay 2 flag of this launch (spec S312): the AirPlay 2 path is
@@ -745,6 +750,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             busy: BTreeSet::new(),
             reconnecting: BTreeMap::new(),
             ptp_taken: None,
+            ptp_off: BTreeSet::new(),
+            ptp_played: false,
             view: ViewSettings::default(),
             airplay2_auto: crate::audio::airplay::airplay2_auto_on(),
             airplay2_at_launch: false,
@@ -3161,6 +3168,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
             listed.insert(speaker.id);
         }
         self.airplay_listed = listed;
+        self.ptp_off.retain(|id| self.airplay_listed.contains(id));
+        self.ptp_rows_changed();
         // One whose row went has left the sender (S222): nothing retries it.
         let gone: Vec<String> = self
             .reconnecting
@@ -3639,6 +3648,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    /// Once a speaker played since the clash report, the port notice goes
+    /// with the last row off for PTP timing (S358).
+    fn ptp_rows_changed(&mut self) {
+        if self.ptp_played && self.ptp_off.is_empty() {
+            self.notices.clear(&[NoticeSubject::AirPlayPtp]);
+        }
+    }
+
     /// An AirPlay speaker can't play from AudioSync, so it is off: tells the
     /// user, and stops streaming when nothing else is on (S136).
     fn airplay_cant_play(&mut self, id: &str, problem: AirPlayProblem) {
@@ -4086,6 +4103,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::AirPlayPlaying { id } => {
                 self.note_speakers();
                 self.reconnecting.remove(&id);
+                self.ptp_off.remove(&id);
+                self.ptp_played = true;
+                self.ptp_rows_changed();
                 self.clear_if(airplay_subject(&id), |message| {
                     matches!(message, NoticeMessage::AirPlayRetrying { .. })
                 });
@@ -4128,7 +4148,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 {
                     self.airplay_refused.insert(id.clone(), problem);
                 }
-                let raises = problem == AirPlayProblem::TimingUnavailable
+                let timing = problem == AirPlayProblem::TimingUnavailable;
+                if timing {
+                    self.ptp_off.insert(id.clone());
+                } else {
+                    self.ptp_off.remove(&id);
+                    self.ptp_rows_changed();
+                }
+                let raises = timing
                     && self
                         .ptp_taken
                         .as_mut()
@@ -4171,6 +4198,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             // between, so each report starts a new episode.
             BackendEvent::AirPlayPtpPortsTaken => {
                 self.ptp_taken = Some(BTreeSet::new());
+                self.ptp_played = false;
                 self.post(
                     NoticeSubject::AirPlayPtp,
                     NoticeMessage::AirPlayPtpPortsTaken,
@@ -5280,6 +5308,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             .log(|| "the user asked to start AirPlay again (Retry)".to_owned());
         // A new sender binds the PTP ports anew and reports a clash itself.
         self.ptp_taken = None;
+        self.ptp_off.clear();
+        self.ptp_played = false;
         self.notices
             .clear(&[NoticeSubject::AirPlay, NoticeSubject::AirPlayPtp]);
         self.audio.retry_airplay();
@@ -11121,11 +11151,6 @@ mod tests {
         });
         adapter.poll();
         assert_eq!(messages(&adapter), [NoticeMessage::AirPlayPtpPortsTaken]);
-        // A speaker on AirPlay 1, or one that didn't bind PTP, says nothing
-        // about the ports.
-        fake.state(&kitchen, AirPlayState::Playing);
-        adapter.poll();
-        assert_eq!(messages(&adapter), [NoticeMessage::AirPlayPtpPortsTaken]);
         fake.state(&kitchen, AirPlayState::Connecting);
         fake.push(SenderEvent::Speaker {
             key: kitchen.key.clone(),
@@ -11251,6 +11276,77 @@ mod tests {
         assert!(
             !messages(&adapter).contains(&NoticeMessage::AirPlayPtpPortsTaken),
             "a refusal the new sender reported no clash for names none"
+        );
+    }
+
+    // covers: S358
+    #[test]
+    fn a_speaker_playing_with_no_row_off_for_ptp_clears_the_port_notice() {
+        use audiosync_airplay::error::{UnsupportedReason, Warning};
+
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let den = device(3, "Den", OPEN_TXT);
+        fake.appear(&den);
+        adapter.poll();
+        let shown = |adapter: &AudioAdapter<MockBackend>| {
+            messages(adapter).contains(&NoticeMessage::AirPlayPtpPortsTaken)
+        };
+        let replay = |adapter: &mut AudioAdapter<MockBackend>| {
+            fake.state(&kitchen, AirPlayState::Connecting);
+            fake.state(&kitchen, AirPlayState::Playing);
+            adapter.poll();
+        };
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::Warning(Warning::PtpUnavailable),
+        });
+        adapter.set_speaker_enabled(&ap(&den), true);
+        fake.fail(&den, ErrorKind::Unsupported(UnsupportedReason::Timing));
+        adapter.poll();
+        replay(&mut adapter);
+        assert!(shown(&adapter), "Den is still off for PTP timing");
+        adapter.set_speaker_enabled(&ap(&den), true);
+        fake.state(&den, AirPlayState::Playing);
+        adapter.poll();
+        assert!(
+            !shown(&adapter),
+            "a speaker plays and no row is off for PTP"
+        );
+
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::Warning(Warning::PtpUnavailable),
+        });
+        fake.fail(&den, ErrorKind::Unsupported(UnsupportedReason::Timing));
+        adapter.poll();
+        replay(&mut adapter);
+        assert!(shown(&adapter), "Den is off for PTP timing again");
+        adapter.set_speaker_enabled(&ap(&den), true);
+        fake.fail(
+            &den,
+            ErrorKind::Unsupported(UnsupportedReason::PlaysThroughSpeakers),
+        );
+        adapter.poll();
+        assert!(
+            !shown(&adapter),
+            "the last row off for PTP went off for another reason after a speaker played"
+        );
+
+        fake.push(SenderEvent::Speaker {
+            key: kitchen.key.clone(),
+            event: audiosync_airplay::sender::SpeakerEvent::Warning(Warning::PtpUnavailable),
+        });
+        adapter.set_speaker_enabled(&ap(&den), true);
+        fake.fail(&den, ErrorKind::Unsupported(UnsupportedReason::Timing));
+        adapter.poll();
+        replay(&mut adapter);
+        assert!(shown(&adapter), "Den is off for PTP timing once more");
+        fake.gone(&den);
+        adapter.poll();
+        assert!(
+            !shown(&adapter),
+            "a row that left the list takes its reason"
         );
     }
 
