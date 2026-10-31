@@ -387,7 +387,7 @@ struct SettingsStore {
     /// before the mark runs again to the same presets; once marked, nothing
     /// changes.
     func migratePresets() {
-        guard read(Keys.presetsMigrated) as? Bool != true else { return }
+        guard !isMarked(Keys.presetsMigrated) else { return }
         let local = AppSettings.levels(read(Keys.localVolumes), AppSettings.volume)
         let airplay = AppSettings.levels(read(Keys.airplayVolumes), AppSettings.airPlayOwn)
         let volume: (String) -> Double? = { key in
@@ -414,11 +414,17 @@ struct SettingsStore {
     /// from the same groups, to the same zones; once marked, nothing changes.
     /// Zones made this way leave the notice due.
     func migrateZones() {
-        guard read(Keys.zonesMigrated) as? Bool != true else { return }
+        guard !isMarked(Keys.zonesMigrated) else { return }
         let zones = ZoneMigration.zones(from: AppSettings.decodeGroups(read(Keys.groups) as? Data))
         save(zones: zones)
         if !zones.isEmpty { write(true, Keys.zonesNoticeDue) }
         write(true, Keys.zonesMigrated)
+    }
+
+    /// Set unless missing or a stored boolean false (`as? Bool` alone reads a number 0 as false too) (S248, S254).
+    private func isMarked(_ key: String) -> Bool {
+        guard let value = read(key) else { return false }
+        return CFGetTypeID(value as CFTypeRef) != CFBooleanGetTypeID() || value as? Bool != false
     }
 
     /// The groups-became-zones notice was shown.
@@ -521,7 +527,7 @@ struct SettingsStore {
     /// short before the mark runs again from the same old values.
     @discardableResult
     func migrateLocalDelays(listed: [String], reference: String?) -> LocalDelay.Migration? {
-        guard read(Keys.localDelaysMigrated) as? Bool != true else { return nil }
+        guard !isMarked(Keys.localDelaysMigrated) else { return nil }
         guard let migration = LocalDelay.migrate(
             storedDelays: AppSettings.levels(read(Keys.localDelays), AppSettings.delay),
             legacyDelayMs: read(Keys.legacyDelayMs).flatMap(AppSettings.number),

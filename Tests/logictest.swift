@@ -602,6 +602,13 @@ do {
     stored.order = []
     check(store.load().zones == expected && stored.order.isEmpty,
           "zones: migrating twice changes nothing: once marked, a launch writes nothing")
+    // covers: S248 (a mark stored as anything but a bool counts as set)
+    for mark in ["1", NSNumber(value: 0)] as [Any] {
+        stored.values[Keys.zonesMigrated] = mark
+        check(store.load().zones == expected && stored.order.isEmpty,
+              "zones: a migrated mark that isn't a bool, a number 0 included, counts as set", "\(mark) \(stored.order)")
+    }
+    stored.values[Keys.zonesMigrated] = true
     // covers: S248
     check(first.zonesNoticeDue, "zones: groups moved to zones leave the notice due for the next window")
     store.zonesNoticeShown()
@@ -741,6 +748,11 @@ do {
     stored.order = []
     check(store.load().presets == expected && stored.order.isEmpty,
           "presets: migrating presets twice changes nothing: once marked, a launch writes nothing")
+    // covers: S254 (a mark stored as anything but a bool counts as set)
+    stored.values[Keys.presetsMigrated] = "yes"
+    check(store.load().presets == expected && stored.order.isEmpty,
+          "presets: a migrated mark that isn't a bool counts as set, so the presets stay as they are", "\(stored.order)")
+    stored.values[Keys.presetsMigrated] = true
 
     let edited = [SpeakerPreset(id: "p1", name: "Evening",
                                 members: [.init(key: "lc:usb:out", volume: 35.5), .init(key: "cc:Group-7", volume: nil)],
@@ -8152,6 +8164,10 @@ do {
             && loaded.localDelaysMigrated,
           "migration: runs once and leaves the old values in place",
           "first \(String(describing: first)), second \(String(describing: second))")
+    stored.values[Keys.localDelaysMigrated] = "yes"
+    let markedWrites = stored.writes
+    check(store.migrateLocalDelays(listed: [r, usb], reference: r) == nil && stored.writes == markedWrites,
+          "migration: a mark that isn't a bool counts as set, so the delays don't migrate again")
     stored.values = [Keys.localOffsets: [usb: 25_000.0, bt: -9000.0, "x": Double.nan, "y": "loud"] as [String: Any],
                      Keys.airPlayDelay: -5.0, Keys.nativeAirPlayAdjustment: 30_000.0]
     let damaged = store.load()
