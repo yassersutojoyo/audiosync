@@ -539,6 +539,9 @@ struct NativeAirPlayModel {
     /// A speaker of the stream reached its first-sound time, as the last
     /// poll found.
     var sounding = false
+    /// From the Mac's sleep notice until its wake, a retried error doesn't
+    /// count toward reconnecting (S412).
+    var asleep = false
 
     /// The sessions a row in the sender plays: a target's members as last
     /// listed, or the speaker itself.
@@ -1152,6 +1155,7 @@ struct NativeAirPlayModel {
             waiting.removeValue(forKey: id)
             if retryMs != nil && problem.retried {
                 // A retrying state event follows.
+                guard !asleep else { return nil }
                 retriedErrors[id, default: 0] += 1
                 return retriedErrors[id] == 3 ? .reconnecting(NativeAirPlayID.app(id), problem) : nil
             }

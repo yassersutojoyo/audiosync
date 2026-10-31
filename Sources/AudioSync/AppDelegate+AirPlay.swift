@@ -179,6 +179,7 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] going to sleep")
             guard let self else { return }
             self.macAsleep = true
+            self.nativeAirPlay?.model.asleep = true
             self.engine.macWillSleep()
             for uid in self.freshLinks.sleeping() {
                 DebugTrace.log("[AudioSync] fresh link: restart of Bluetooth output \(uid) cancelled: the Mac slept")
@@ -198,6 +199,7 @@ extension AppDelegate {
     private func wokeFromSleep() {
         DebugTrace.log("[AudioSync] woke from sleep")
         macAsleep = false
+        nativeAirPlay?.model.asleep = false
         engine.macWoke()
         let now = Date()
         airplayEmptySince = AirPlaySearch.sinceAfterWake(airplayEmptySince, now: now)

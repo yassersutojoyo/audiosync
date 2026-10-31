@@ -3579,6 +3579,22 @@ do {
               "native airplay: a speaker not responding, lost or busy says reconnecting from its second failed retry",
               "\(problem): \(outcomes)")
     }
+    var slept = NativeAirPlayModel()
+    slept.apply(.appeared(receiver("R4", "Porch", .available)))
+    slept.added("R4")
+    slept.asleep = true
+    let asleepFails = [1000, 2000, 4000].map { (retryMs: Int64) -> NativeAirPlayOutcome? in
+        slept.apply(.error(id: "R4", .notResponding, retryMs: retryMs, detail: "Unreachable"))
+    }
+    slept.asleep = false
+    let wokeFails = [1000, 2000, 4000].map { (retryMs: Int64) -> NativeAirPlayOutcome? in
+        slept.apply(.error(id: "R4", .notResponding, retryMs: retryMs, detail: "Unreachable"))
+    }
+    // covers: S412
+    check(asleepFails == [nil, nil, nil] && wokeFails == [nil, nil, .reconnecting("native:R4", .notResponding)]
+            && slept.isReconnecting("R4"),
+          "native airplay: a retried error while the Mac sleeps counts nothing toward reconnecting",
+          "\(asleepFails) \(wokeFails)")
 
     // P169, S285: a 17th AirPlay 2 speaker waits for a place, switched on,
     // and the sender starts it once one of the others stops.
