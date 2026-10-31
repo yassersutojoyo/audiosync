@@ -1935,6 +1935,8 @@ pub struct MockBackend {
     /// While `Some`, an input device is captured, and it counts the level
     /// meter's reads of its peak.
     pub input_peak_reads: std::rc::Rc<std::cell::Cell<Option<u32>>>,
+    /// Runs at each save, to look at the app as the save happens.
+    pub on_save: std::rc::Rc<std::cell::OnceCell<Box<dyn Fn()>>>,
     view_restored: bool,
     /// The speaker that asks for its password once it is turned on.
     password_on: Option<String>,
@@ -2114,6 +2116,7 @@ impl MockBackend {
             late_view: std::rc::Rc::default(),
             saved_views: std::rc::Rc::default(),
             input_peak_reads: std::rc::Rc::default(),
+            on_save: std::rc::Rc::default(),
             view_restored: false,
             password_on: None,
         }
@@ -2463,6 +2466,9 @@ impl Backend for MockBackend {
     }
 
     fn save_settings(&mut self) -> bool {
+        if let Some(look) = self.on_save.get() {
+            look();
+        }
         self.saved_views.borrow_mut().push(self.view.clone());
         true
     }

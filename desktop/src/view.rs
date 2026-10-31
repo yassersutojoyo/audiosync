@@ -3342,10 +3342,21 @@ impl App {
         }
     }
 
+    /// Once the event loop has ended.
+    pub fn at_quit(&self) {
+        // The updater's step can wait 2 s, long enough for a phone to pair
+        // and get commands accepted that would never apply.
+        self.stop_remote_at_exit();
+        self.updater_at_exit();
+        // Changes since the last poll, and where the main window is.
+        self.save_settings();
+    }
+
     /// When Windows ends the session, which may end the process before the
     /// event loop does. Returns whether no change is left unsaved.
     #[cfg(windows)]
     pub fn at_session_end(&self) -> bool {
+        self.stop_remote_at_exit();
         self.updater_at_exit();
         let saved = self.save_settings();
         self.backend.borrow_mut().shut_down();

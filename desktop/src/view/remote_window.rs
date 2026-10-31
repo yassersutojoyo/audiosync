@@ -769,6 +769,66 @@ mod tests {
         );
     }
 
+    // covers: S379
+    #[test]
+    fn quit_stops_the_remote_before_the_settings_are_saved() {
+        let backend = MockBackend::new();
+        let on_save = backend.on_save.clone();
+        let app = over_loopback(backend);
+        app.ui.borrow_mut().remote.port = free_port();
+        app.remote_window.invoke_remote_toggled(true);
+        assert!(app.remote_listening());
+        let listening_at_save = std::rc::Rc::new(std::cell::Cell::new(None));
+        let set = on_save.set(Box::new({
+            let app = std::rc::Rc::downgrade(&app);
+            let listening = listening_at_save.clone();
+            move || listening.set(app.upgrade().map(|app| app.remote_listening()))
+        }));
+        assert!(set.is_ok());
+        app.at_quit();
+        assert_eq!(
+            listening_at_save.get(),
+            Some(false),
+            "no phone pairs or sends a command while the rest winds down"
+        );
+        assert!(!app.remote_listening());
+    }
+
+    // covers: S379
+    #[cfg(windows)]
+    #[test]
+    fn the_end_of_a_windows_session_stops_the_remote_before_the_settings_are_saved() {
+        let backend = MockBackend::new();
+        let on_save = backend.on_save.clone();
+        let app = over_loopback(backend);
+        app.ui.borrow_mut().remote.port = free_port();
+        app.remote_window.invoke_remote_toggled(true);
+        assert!(app.remote_listening());
+        let listening_at_save = std::rc::Rc::new(std::cell::Cell::new(None));
+        let set = on_save.set(Box::new({
+            let app = std::rc::Rc::downgrade(&app);
+            let listening = listening_at_save.clone();
+            move || listening.set(app.upgrade().map(|app| app.remote_listening()))
+        }));
+        assert!(set.is_ok());
+        app.at_session_end();
+        assert_eq!(listening_at_save.get(), Some(false));
+        assert!(!app.remote_listening());
+    }
+
+    // covers: S368
+    #[test]
+    fn web_remote_chosen_again_while_its_window_shows_keeps_the_code() {
+        let app = over_loopback(MockBackend::new());
+        app.ui.borrow_mut().remote.port = free_port();
+        app.remote_window.invoke_remote_toggled(true);
+        app.main.invoke_remote_requested();
+        assert!(app.remote_window.window().is_visible());
+        let code = current_code(&app);
+        app.main.invoke_remote_requested();
+        assert_eq!(current_code(&app), code);
+    }
+
     // covers: S212
     #[test]
     fn a_remote_setting_read_after_launch_starts_or_stops_the_remote() {
