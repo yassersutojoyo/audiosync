@@ -173,3 +173,8 @@ S398 Windows host only: the loopback gap fill; the Windows tests named in the te
 S399 Hosts only: where an AirPlay speaker without a volume of its own starts; the Mac logic check and the Windows test named in the test map check it.
 S400 Mac host only: the gear menu runs the item chosen in it; the Mac logic suite checks it.
 S401 Mac host only: Google Cast speakers in the Mac app; the Mac logic suite checks it.
+S402 Mac host only: the main window's scrolling columns fade at their edges; the Mac logic suite checks it.
+S403 Mac host only: the menu bar panel's size and where it sits; the Mac logic suite checks them.
+S404 Mac host only: zone members in the main window's lists; the Mac logic suite checks them.
+S405 Mac host only: how the menu bar panel opens and closes, with its shadow and background; the Mac logic suite checks them.
+S406 Mac host only: work deferred until the menu bar panel is still, and the room it keeps; the Mac logic suite checks them.

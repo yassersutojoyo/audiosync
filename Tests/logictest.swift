@@ -6708,11 +6708,13 @@ do {
     func zoneCount(on: Int, waiting: Int = 0, present: Int, total: Int) -> String {
         ZoneLayout.count(on: on, waiting: waiting, present: present, total: total, text: zoneText)
     }
+    // covers: S359
     check(zoneCount(on: 0, present: 0, total: 0) == "No speakers",
-          "zones: a zone whose members are all hidden or gone says it has no speakers")
+          "zones: a zone whose members are all hidden says it has no speakers")
     // covers: S340 (the Mac's zone header)
     check(zoneCount(on: 0, present: 0, total: 3) == "None of 3 found",
           "zones: a zone with no member listed says none of its members was found")
+    // covers: S359
     check(zoneCount(on: 2, present: 3, total: 3) == "2 of 3 on",
           "zones: the header counts the members that are on out of every shown member")
     // covers: S246
@@ -6720,23 +6722,30 @@ do {
           "zones: a member waiting for the AirPlay 2 place counts as on and is named as waiting")
 
     let zoned: Set<String> = ["lc:usb", "ap:native:den"]
+    // covers: S404
     check(ZoneLayout.zoneless(["lc:built-in", "lc:usb", "ap:native:den", "cc:kitchen"], key: { $0 }, zoned: zoned)
             == ["lc:built-in", "cc:kitchen"],
           "zones: the speaker lists keep only the speakers in no zone, in their order")
+    // covers: S404
     check(ZoneLayout.zoneless(["lc:usb"], key: { $0 }, zoned: zoned).isEmpty,
           "zones: a list whose speakers are all in zones is empty")
+    // covers: S404
     check(ZoneLayout.zoned(["lc:built-in", "lc:usb", "ap:native:den", "cc:kitchen"], key: { $0 }, zoned: zoned)
             == ["lc:usb", "ap:native:den"],
           "zones: a zone member keeps a compact row in its own section, in the section's order")
     let hideRows = ["lc:a", "lc:usb", "lc:c"]
+    // covers: S404
     check(ZoneLayout.focusAfterHiding("lc:a", in: hideRows, key: { $0 }, zoned: zoned) == "lc:c",
           "zones: hiding a speaker moves the focus to the next row the window shows, past a zone member")
+    // covers: S404
     check(ZoneLayout.focusAfterHiding("lc:c", in: hideRows, key: { $0 }, zoned: zoned) == "lc:a",
           "zones: hiding the last row moves the focus to the previous row the window shows, past a zone member")
     let roomZoned: Set<String> = ["cc:den", "cc:kitchen", "cc:office"]
+    // covers: S404
     check(ZoneLayout.focusAfterHiding("cc:den", in: ["cc:den", "cc:kitchen", "cc:office"], zone: ["cc:den", "cc:office"],
                                       key: { $0 }, zoned: roomZoned) == "cc:office",
           "zones: hiding a zone member moves the focus to the next member of its own zone")
+    // covers: S404
     check(ZoneLayout.focusAfterHiding("cc:den", in: ["cc:bath", "cc:den", "cc:kitchen"], zone: ["cc:den"],
                                       key: { $0 }, zoned: roomZoned) == "cc:bath",
           "zones: hiding a zone's only shown member moves the focus to a row in no zone")
@@ -6752,16 +6761,21 @@ do {
     let memberHall = ZoneLayout.Member(key: "cc:hall", listed: true, on: false, cast: true)
     check(onlyThis("lc:usb", [memberUSB, memberDen, memberGone]) == ["lc:usb on", "ap:native:den off"],
           "zones: Only This Speaker turns it on first, then the other present members off")
+    // covers: S246
     check(onlyThis("ap:native:den", [memberUSB, memberDen, memberAttic]) == ["cc:attic off"],
           "zones: Only This Speaker on a member that plays only turns the others off")
+    // covers: S246
     check(onlyThis("cc:hall", [memberHall, memberDen, memberAttic]) == ["cc:attic off", "cc:hall on", "ap:native:den off"],
           "zones: Only This Speaker frees the Cast place before a Cast member comes on")
+    // covers: S246
     check(onlyThis("ap:native:gone", [memberGone, memberDen]).isEmpty,
           "zones: Only This Speaker does nothing for a member that isn't listed")
     let hallBusy = ZoneLayout.Member(key: "cc:hall", listed: true, on: false, cast: true, busy: true)
+    // covers: S246
     check(onlyThis("cc:hall", [hallBusy, memberDen, memberAttic]).isEmpty,
           "zones: Only This Speaker switches nothing for a Cast member that can't start now")
     let atticBusy = ZoneLayout.Member(key: "cc:attic", listed: true, on: true, cast: true, busy: true)
+    // covers: S246
     check(onlyThis("cc:attic", [atticBusy, memberDen]) == ["ap:native:den off"],
           "zones: Only This Speaker on a Cast member already playing still turns the others off")
 
@@ -7055,21 +7069,30 @@ do {
     func fades(content: CGFloat, top: CGFloat, height: CGFloat = 400) -> ScrollEdgeFades {
         ScrollEdgeFades.of(contentHeight: content, visibleTop: top, visibleHeight: height, fade: 12)
     }
+    // covers: S402
     check(fades(content: 400, top: 0) == .none, "scroll fades: a column that fits fades at neither edge")
+    // covers: S402
     check(fades(content: 300, top: 0) == .none, "scroll fades: a short column fades at neither edge")
+    // covers: S402
     check(fades(content: 1000, top: 0) == ScrollEdgeFades(top: 0, bottom: 1),
           "scroll fades: a long column at its top fades only at the bottom")
+    // covers: S402
     check(fades(content: 1000, top: 300) == ScrollEdgeFades(top: 1, bottom: 1),
           "scroll fades: a long column scrolled halfway fades at both edges")
+    // covers: S402
     check(fades(content: 1000, top: 600) == ScrollEdgeFades(top: 1, bottom: 0),
           "scroll fades: a long column scrolled to its end fades only at the top")
+    // covers: S402
     check(fades(content: 1000, top: 6) == ScrollEdgeFades(top: 0.5, bottom: 1),
           "scroll fades: the top fade grows with the first points scrolled")
+    // covers: S402
     check(fades(content: 1000, top: -20) == ScrollEdgeFades(top: 0, bottom: 1)
             && fades(content: 1000, top: 620) == ScrollEdgeFades(top: 1, bottom: 0),
           "scroll fades: an elastic overscroll past either end adds no fade there")
+    // covers: S402
     check(fades(content: 401, top: 0) == ScrollEdgeFades(top: 0, bottom: 1.0 / 12),
           "scroll fades: one point past the bottom fades a twelfth of the way")
+    // covers: S402
     check(ScrollEdgeFades.of(contentHeight: 1000, visibleTop: 300, visibleHeight: 400, fade: 0) == .none,
           "scroll fades: no fade height gives no fade")
 
@@ -7132,8 +7155,10 @@ do {
           "menu bar icon: VoiceOver hears streaming on/off, then the notice count",
           UIStrings().statusItemValue(running: true, notices: 2))
     let addRow = CastAddRow.state
+    // covers: S406
     check(addRow(true, .searching) == .reserved && addRow(true, .noneFound) == .shown,
           "menu bar panel: the Add by Address row keeps its room while the Cast search runs, so the panel never grows when it ends")
+    // covers: S406
     check(addRow(true, .failed) == .shown && addRow(true, .quiet) == .none && addRow(false, .searching) == .none
             && addRow(false, .noneFound) == .none,
           "menu bar panel: no Add by Address row once speakers are listed or when adding isn't possible")
@@ -7149,18 +7174,22 @@ do {
 
     let window = CGRect(x: 1000, y: 543, width: 306, height: 386)
     let grown = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 280, height: 428))
+    // covers: S403
     check(grown == CGRect(x: 1000, y: 474, width: 306, height: 455),
           "menu bar panel: a taller panel grows its window downward, its top edge under the icon where it was")
     let wider = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359), to: CGSize(width: 300, height: 300))
+    // covers: S403
     check(wider.maxY == window.maxY && wider.midX == window.midX && wider.size == CGSize(width: 326, height: 327),
           "menu bar panel: a resize keeps the window's top edge and middle, so the arrow stays on the icon")
     var rest = PanelRest(frame: window, content: CGSize(width: 280, height: 359))
     let unfolded = rest.move(to: CGSize(width: 280, height: 428))
     let folded = rest.move(to: CGSize(width: 280, height: 359))
+    // covers: S403
     check(unfolded == grown && folded == window && rest.frame == window,
           "menu bar panel: a fold that starts while the unfold still runs aims from the rest frame, back to the exact frame")
     var many = PanelRest(frame: window, content: CGSize(width: 280, height: 359))
     let tops = (0..<50).map { many.move(to: CGSize(width: 280, height: 359 + CGFloat($0 % 7) * 28.5)).maxY }
+    // covers: S403
     check(tops.allSatisfy { $0 == window.maxY },
           "menu bar panel: no run of folds and unfolds moves the top edge under the icon")
     let fold = PanelFold(reduceMotion: false), stillFold = PanelFold(reduceMotion: true)
@@ -7171,55 +7200,67 @@ do {
     // The panel's own shadow while it grows in or shrinks away (PanelShadow).
     let body = CGRect(x: 0, y: 0, width: 306, height: 400), tip = CGPoint(x: 153, y: 412)
     let outline = PanelShadow.outline(body: body, tip: tip)
+    // covers: S405
     check(outline.contains(CGPoint(x: 153, y: 200)) && outline.contains(CGPoint(x: 153, y: 410))
             && !outline.contains(CGPoint(x: 0.5, y: 399.5)) && !outline.contains(CGPoint(x: 100, y: 405)),
           "menu bar panel shadow: its shape is the rounded body with the arrow up to the icon, not the window's rectangle")
     let room = body.insetBy(dx: -30, dy: -30)
     let outside = PanelShadow.outside(outline, in: room)
+    // covers: S405
     check(!outside.contains(CGPoint(x: 153, y: 200), using: .evenOdd) && !outside.contains(CGPoint(x: 153, y: 410), using: .evenOdd)
             && outside.contains(CGPoint(x: -10, y: 200), using: .evenOdd)
             && outside.contains(CGPoint(x: 0.5, y: 399.5), using: .evenOdd),
           "menu bar panel shadow: it shows only outside the panel, never darkening the translucent panel")
     let light = PanelShadow.style(dark: false), dark = PanelShadow.style(dark: true)
+    // covers: S405
     check(dark.opacity > light.opacity && light.opacity > 0 && dark.opacity <= 1 && light.offsetY < 0
             && light.margin >= light.radius * 2 + abs(light.offsetY) && dark.margin >= dark.radius * 2 + abs(dark.offsetY),
           "menu bar panel shadow: darker in the dark theme, falling downward, with room to spread in")
     let barSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    // covers: S405
     check(barSource.components(separatedBy: ".invalidateShadow()").count - 1 == 1
             && barSource.components(separatedBy: "hasShadow = on").count - 1 == 1,
           "menu bar panel source: the system shadow is switched in one place and recomputed once, never per frame")
+    // covers: S405
     check(barSource.contains("grow(own.panel, about: tip)") && barSource.contains("shrink(own.panel, about: tip)")
             && barSource.contains("window.addChildWindow(shadow, ordered: .below)"),
           "menu bar panel source: the own shadow scales with the panel, in a window under it")
     let resizeBody = barSource.components(separatedBy: "private func animateResize(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
+    // covers: S405
     check(resizeBody.contains("dropOwnShadow()") && resizeBody.contains("setShadow(window, true)"),
           "menu bar panel source: a resize hands the shadow back to the system, so the own one never keeps an old size")
     let ownBody = barSource.components(separatedBy: "private func ownShadow(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
+    // covers: S405
     check(ownBody.contains("window.effectiveAppearance.bestMatch") && !ownBody.contains("NSApp.effectiveAppearance"),
           "menu bar panel source: the own shadow takes the panel window's theme")
     let bar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
     let foldBody = bar.components(separatedBy: "private func fold(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
+    // covers: S403
     check(foldBody.contains("animateResize(") && !foldBody.contains("resizeLater(")
             && foldBody.contains(".easeInOut(duration: motion.duration)") && foldBody.contains("name: .easeInEaseOut"),
           "menu bar panel source: fold() starts the resize itself, not through the gathered step, on the rows' ease-in-out curve")
     let rowsSource = bar.components(separatedBy: "private var speakerRows: some View {").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
+    // covers: S403
     check(rowsSource.contains(".transition(.opacity)") && !bar.contains(".opacity.animation("),
           "menu bar panel source: a zone's rows fade only inside the fold's animation, so a speaker joining or leaving a zone, or a Reduce Motion fold, shows at once")
     let zoneArea = CGRect(x: 0, y: 0, width: 294, height: 84)
+    // covers: S403
     check(PanelFold.clip(zoneArea, moving: true) == zoneArea
             && PanelFold.clip(zoneArea, moving: false).contains(zoneArea.insetBy(dx: -6, dy: -6)),
           "menu bar panel: while a fold moves, a zone's rows stay inside its own edge; at rest nothing is cut, focus rings included")
     let mainSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    // covers: S403
     check(rowsSource.contains(".clipShape(FoldClip(moving: zoneDisclosure.moving))") && mainSource.contains("moving = true"),
           "menu bar panel source: a fold clips each zone to its own moving edge, so the rows and the footer below never slide over its fading rows")
     let ownShadowBody = bar.components(separatedBy: "private func ownShadow(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
     let dropBody = bar.components(separatedBy: "private func dropOwnShadow(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
+    // covers: S405
     check(ownShadowBody.contains("standInBackground(") && dropBody.contains("restoreBackground("),
           "menu bar panel source: while the panel scales, its background is a stand-in that scales with it, handed back to the system's with the shadow")
     final class Pane {
@@ -7234,15 +7275,18 @@ do {
                                           Pane("stand-in", background: true)])])
     let hidden = PanelBackdrop.hidden(in: tree, children: { $0.children }, isContent: { $0 === content },
                                       isStandIn: { $0.name == "stand-in" }, isBackground: { $0.background })
+    // covers: S405
     check(hidden.map(\.name) == ["blur"],
           "menu bar panel: the stand-in hides only background views beside the content, never one holding it, its own rows or itself",
           "\(hidden.map(\.name))")
     let blurLayer = NSObject(), contentLayer = NSObject(), standInLayer = NSObject()
     let material = PanelBackdrop.material(in: [blurLayer, contentLayer, standInLayer], keeping: [contentLayer, standInLayer])
+    // covers: S405
     check(material.count == 1 && material.first === blurLayer,
           "menu bar panel: in a background view that holds the content, only the layers no subview owns are its material")
     let openBody = bar.components(separatedBy: "private func animateOpen(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
+    // covers: S405
     check(!bar.contains("panel resize layers") && openBody.contains("ownShadow(window)")
             && (openBody.range(of: "ownShadow(window)")?.lowerBound ?? openBody.endIndex)
                 < (openBody.range(of: "grow(layer")?.lowerBound ?? openBody.startIndex),
@@ -7251,47 +7295,60 @@ do {
     // The open panel moved by AppKit (another display, a status item shifting).
     let shifted = window.offsetBy(dx: -40, dy: -24)
     let afresh = PanelRest.next(rest, stepRunning: false, window: shifted, content: CGSize(width: 280, height: 359))
+    // covers: S403
     check(afresh == PanelRest(frame: shifted, content: CGSize(width: 280, height: 359)),
           "menu bar panel: with no resize running, a fold aims from where the window is now, so it never snaps back")
     let midStep = PanelRest.next(rest, stepRunning: true, window: shifted, content: CGSize(width: 280, height: 428))
+    // covers: S403
     check(midStep == rest && PanelRest.next(nil, stepRunning: true, window: shifted, content: CGSize(width: 280, height: 359)) == afresh,
           "menu bar panel: while a resize runs, a fold aims from the rest frame, not the half-grown window")
     // The icon moved since the open (its badge widened it, or an item beside it changed width).
     let unfoldedSize = CGSize(width: 280, height: 428), restSize = CGSize(width: 280, height: 359)
     var centered = PanelRest(frame: window, content: restSize, icon: window.midX)
     let reanchored = centered.move(to: unfoldedSize, icon: window.midX - 2)
+    // covers: S403
     check(reanchored.midX == window.midX - 2 && reanchored.maxY == window.maxY && reanchored.size == grown.size,
           "menu bar panel: a resize ends where the popover re-anchors on the icon, so learning the size never shifts it sideways",
           "\(reanchored)")
+    // covers: S403
     check(centered.move(to: restSize, icon: window.midX - 2) == window.offsetBy(dx: -2, dy: 0),
           "menu bar panel: the next resize aims from the re-anchored frame")
     var edgeHeld = PanelRest(frame: window, content: restSize, icon: window.midX + 60)
+    // covers: S403
     check(edgeHeld.move(to: unfoldedSize, icon: window.midX + 58).minX == window.minX,
           "menu bar panel: a panel the screen edge holds off the icon's middle stays where it is")
     var leftHeld = PanelRest(frame: window, content: restSize, icon: window.midX - 60)
+    // covers: S403
     check(edgeHeld.move(to: restSize, icon: window.midX - 10).midX == window.midX - 10
             && leftHeld.move(to: unfoldedSize, icon: window.midX + 10).midX == window.midX + 10,
           "menu bar panel: once the icon moves in from the screen edge, a resize centers the panel on it again",
           "\(edgeHeld.frame) \(leftHeld.frame)")
+    // covers: S403
     check(PanelRest.next(nil, stepRunning: false, window: shifted, content: restSize, icon: 900)
             == PanelRest(frame: shifted, content: restSize, icon: 900),
           "menu bar panel: a resize with no step running aims from the icon where it is now")
     let closeAsked = PopoverCloseRequest.answer
+    // covers: S405
     check(closeAsked(false, true, 30, nil) == .closeOurWay && closeAsked(true, true, 30, nil) == .allow,
           "menu bar panel: an open panel the popover wants closed shrinks away its own way")
     // A press on the icon mid-grow starts the close, and the popover asks
     // again about 40 ms later as its window loses key.
+    // covers: S405
     check(closeAsked(false, false, 30.04, 30 + shrink) == .wait,
           "menu bar panel: the popover asking again while the panel fades out waits for the fade, so it doesn't vanish at once")
+    // covers: S405
     check(closeAsked(false, false, 30 + shrink + 0.01, 30 + shrink) == .allow && closeAsked(false, false, 30, nil) == .allow
             && closeAsked(true, false, 30.04, 30 + shrink) == .allow,
           "menu bar panel: once the fade is over, or with the popover's own animation, the popover may close")
 
     let grow = PanelMotion.open(reduceMotion: false), shrinkBack = PanelMotion.close(reduceMotion: false)
+    // covers: S405
     check(grow.scale >= 0.9 && grow.scale < 1 && grow.settles >= 0.25 && grow.settles <= 0.3,
           "menu bar panel: it grows out of the icon and settles in about a quarter second")
+    // covers: S405
     check(grow.dampingRatio >= 0.85 && grow.dampingRatio <= 1 && grow.overshoot * (1 - grow.scale) * 400 < 0.5,
           "menu bar panel: the growth never bounces by half a point, even on a tall panel")
+    // covers: S405
     check(shrinkBack.scale > grow.scale && shrinkBack.scale < 1 && shrinkBack.duration >= 0.12 && shrinkBack.duration <= 0.15,
           "menu bar panel: the close is a quick, small shrink")
     // covers: S357
@@ -7299,26 +7356,34 @@ do {
             && PanelMotion.open(reduceMotion: true).duration > 0,
           "menu bar panel: with Reduce Motion it only fades")
     let pinned = PanelMotion.pin(CGPoint(x: 140, y: 420), scale: grow.scale)
+    // covers: S405
     check(abs(140 * grow.scale + Double(pinned.x) - 140) < 1e-9 && abs(420 * grow.scale + Double(pinned.y) - 420) < 1e-9,
           "menu bar panel: the point under the icon stays put while the panel grows")
+    // covers: S406
     check(PanelQuiet.duration(.open, system: false) == grow.settles && shrink == shrinkBack.duration,
           "menu bar panel: deferred work waits exactly for the panel's own motion")
+    // covers: S405
     check(PanelMotion.tail * (1 - grow.scale) * 600 < 0.5,
           "menu bar panel: ending the spring at its settle time moves even a 600 pt panel's far edge under half a point")
 
     var resize = PanelResize()
     let tall = CGSize(width: 306, height: 455), taller = CGSize(width: 306, height: 478)
+    // covers: S403
     check(near(resize.changed(to: CGSize(width: 306, height: 420), at: 50, settled: 40), 50.1)
             && near(resize.changed(to: tall, at: 50.05, settled: 40), 50.1) && resize.take(at: 50.08) == nil,
           "menu bar panel: size changes within a tenth of a second wait for one step")
+    // covers: S403
     check(resize.take(at: 50.1) == tall && resize.take(at: 50.2) == nil,
           "menu bar panel: the step goes to the latest size, once")
+    // covers: S403
     check(near(resize.changed(to: taller, at: 60, settled: 60.28), 60.28),
           "menu bar panel: a size change while the panel grows in waits until it has settled")
     var growing = PanelResize()
     let short = CGSize(width: 306, height: 420)
+    // covers: S403
     check(near(growing.changed(to: tall, at: 80, settled: 60, from: short), 80) && growing.take(at: 80) == tall,
           "menu bar panel: content that grew starts its step at once, so its bottom is never cut off while a step gathers")
+    // covers: S403
     check(near(growing.changed(to: short, at: 90, settled: 60, from: tall), 90.1)
             && near(growing.changed(to: taller, at: 90.02, settled: 60, from: tall), 90.02) && growing.take(at: 90.02) == taller,
           "menu bar panel: a shrink waits for the gather, but content that grows meanwhile brings the step forward")
@@ -7326,21 +7391,28 @@ do {
     func sizing(_ events: [PanelSizing.Event]) -> PanelSizing {
         events.reduce(PanelSizing.closed) { $0.after($1) }
     }
+    // covers: S403
     check(!sizing([]).followsContent && !sizing([.show]).followsContent,
           "menu bar panel: the size holds while the popover opens")
+    // covers: S403
     check(sizing([.show, .didShow]).followsContent, "menu bar panel: the size follows the content once fully shown")
+    // covers: S403
     check(!sizing([.show, .didShow, .willClose]).followsContent
             && !sizing([.show, .didShow, .willClose, .didClose]).followsContent,
           "menu bar panel: the size holds from the moment the popover starts to close")
+    // covers: S403
     check(!sizing([.show, .willClose, .didShow]).followsContent,
           "menu bar panel: a show notice arriving after the close began keeps the size held")
+    // covers: S403
     check(sizing([.show, .didShow, .willClose, .show]) == .opening
             && !sizing([.show, .didShow, .willClose, .show, .didClose]).followsContent
             && sizing([.show, .didShow, .willClose, .show, .didClose, .didShow]).followsContent,
           "menu bar panel: reopened mid-close, the old close's notice doesn't end the new open")
     var fading = sizing([.show, .didShow, .willClose])
+    // covers: S403
     check(fading.show(onScreen: true) && fading.finishOpen() && fading == .shown,
           "menu bar panel: reopened while its close fade still shows it, the open finishes now though AppKit sends no new didShow")
+    // covers: S403
     check(!fading.finishOpen() && fading == .shown,
           "menu bar panel: a late didShow after the reopen finished brings no second refresh")
     // The panel's show() finishes a reopen itself, since AppKit sends no didShow then.
@@ -7348,51 +7420,66 @@ do {
     let showBody = menuBar.components(separatedBy: "    func show() {").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
     func inShow(_ needle: String) -> Int { showBody.components(separatedBy: needle).count - 1 }
+    // covers: S403
     check(!showBody.isEmpty && inShow("let finishNow = host.sizing.show(onScreen: popover.isShown)") == 1
           && inShow("if finishNow { finishOpenWhenQuiet() }") == 1,
           "menu bar panel: show() finishes the open at once when it reopens a panel still on screen")
     var first = PanelSizing.closed
+    // covers: S403
     check(!first.show(onScreen: false) && first == .opening && first.finishOpen() && first == .shown,
           "menu bar panel: a first open waits for AppKit's didShow to finish")
     var closingAgain = sizing([.show, .didShow, .willClose])
+    // covers: S403
     check(!closingAgain.finishOpen() && closingAgain == .closing,
           "menu bar panel: a didShow left from an earlier open doesn't end a close")
 
     var own = PanelQuiet()
     own.began(.open, at: 40)
+    // covers: S406
     check(near(own.wait(at: 40.1), grow.settles - 0.1) && own.wait(at: 40 + grow.settles) == 0 && grow.settles < 0.6,
           "menu bar panel: with the panel's own grow, work after an open waits less than for the system's bounce")
     own.began(.close, at: 41)
+    // covers: S406
     check(near(own.wait(at: 41), shrinkBack.duration) && own.wait(at: 41 + shrinkBack.duration) == 0,
           "menu bar panel: work after the panel's own close waits only for its shrink")
 
     var quiet = PanelQuiet(system: true)
+    // covers: S406
     check(quiet.wait(at: 5) == 0, "menu bar panel: with no animation, deferred work runs at once")
     quiet.began(.open, at: 10)
+    // covers: S406
     check(near(quiet.wait(at: 10.2), 0.4) && quiet.wait(at: 10.6) == 0,
           "menu bar panel: work after an open waits until its bounce has settled")
     quiet.began(.close, at: 10.1)
+    // covers: S406
     check(near(quiet.wait(at: 10.3), 0.3), "menu bar panel: a close during the open's bounce never shortens the wait")
     quiet.began(.close, at: 11)
+    // covers: S406
     check(near(quiet.wait(at: 11.1), 0.15) && quiet.wait(at: 11.25) == 0,
           "menu bar panel: work after a close waits until it has faded out")
     quiet.began(.open, at: 11.2)
+    // covers: S406
     check(near(quiet.wait(at: 11.3), 0.5), "menu bar panel: a quick reopen pushes waiting work past its own bounce")
 
     var queue = QuietQueue()
     queue.quiet = PanelQuiet(system: true)
     queue.quiet.began(.open, at: 20)
+    // covers: S406
     check(queue.enqueue("refresh") && !queue.enqueue("refresh") && queue.enqueue("rebuild"),
           "menu bar panel: a second request under a label already waiting is dropped")
     var firstWait: TimeInterval = 0
     if case .wait(let wait) = queue.step("refresh", at: 20.2) { firstWait = wait }
+    // covers: S406
     check(near(firstWait, 0.4), "menu bar panel: waiting work waits out the open's bounce", "\(firstWait)")
     queue.quiet.began(.close, at: 20.5)
     var secondWait: TimeInterval = 0
     if case .wait(let wait) = queue.step("refresh", at: 20.6) { secondWait = wait }
+    // covers: S406
     check(near(secondWait, 0.15), "menu bar panel: a close begun meanwhile makes waiting work wait again", "\(secondWait)")
+    // covers: S406
     check(queue.step("refresh", at: 20.75) == .run && queue.waiting == ["rebuild"],
           "menu bar panel: once quiet, the waiting work runs and leaves the queue")
+    // covers: S406
     check(queue.enqueue("refresh") && !queue.enqueue("rebuild"),
           "menu bar panel: a label can wait again once its work ran; one still waiting stays deduplicated")
 }
@@ -7403,14 +7490,17 @@ do {
     let revealTip = CGPoint(x: 150.5, y: 410)
     let revealStart = PanelReveal.body(revealBody, scale: 0.92, about: revealTip, pixel: 0.5)
     let revealEdges = [revealStart.minX, revealStart.minY, revealStart.maxX, revealStart.maxY]
+    // covers: S405
     check(revealEdges.allSatisfy { ($0 * 2).rounded() == $0 * 2 } && abs(revealStart.width - 276) <= 0.5
             && abs(revealStart.maxY - 400.8) <= 0.25 && abs(revealStart.midX - 150.5) <= 0.25,
           "menu bar panel: each step of the open's reveal is the body scaled about the arrow's tip with every edge on the pixel grid, so edges never blur",
           "\(revealStart)")
+    // covers: S405
     check(PanelReveal.body(revealBody, scale: 1, about: revealTip, pixel: 0.5) == revealBody,
           "menu bar panel: the reveal ends at the panel's full body")
     let revealMotion = PanelMotion.open(reduceMotion: false)
     let revealSteps = PanelReveal.scales(revealMotion, step: 1.0 / 120)
+    // covers: S405
     check(revealSteps.count == Int((revealMotion.settles * 120).rounded(.up)) + 1 && revealSteps.first == 0.92
             && revealSteps.last == 1 && revealSteps.allSatisfy { $0 <= 1 + 0.08 * revealMotion.overshoot + 1e-9 }
             && abs(revealSteps[12] - 1) < abs(revealSteps[6] - 1),
@@ -7419,6 +7509,7 @@ do {
     let revealSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
     let revealOpen = revealSource.components(separatedBy: "private func animateOpen(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
+    // covers: S405
     check(revealOpen.contains("reveal(") && revealOpen.contains("if PanelSwitches.scaleContent")
             && revealSource.contains("calculationMode = .discrete") && !revealSource.contains("shouldRasterize"),
           "menu bar panel source: the open reveals the content at its own size instead of scaling it, so its hairlines stay on the pixel grid")
@@ -7434,6 +7525,7 @@ do {
         frameHosted = FrameSublayer("NSViewBackingLayer")
     let frameMaterial = PanelBackdrop.material(in: [frameBackdrop, frameHosted, frameRing], keeping: [frameHosted],
                                                name: { $0.name })
+    // covers: S405
     check(frameMaterial.count == 1 && frameMaterial.first === frameBackdrop,
           "menu bar panel: the popover frame's focus ring is no part of its material, so the stand-in never hides it and handing the background back never shows a stale ring",
           "\(frameMaterial.map { $0.name ?? "nil" })")
@@ -7442,6 +7534,7 @@ do {
         .components(separatedBy: "\n    }\n").first ?? ""
     let drawPass = standInBody.range(of: "displayIfNeeded()")?.lowerBound
     let fadeOnly = standInBody.range(of: "no part of it can be hidden")?.lowerBound
+    // covers: S405
     check(drawPass != nil && fadeOnly != nil && drawPass! < fadeOnly!,
           "menu bar panel source: before the panel settles for a fade, the popover draws once, so the first open after launch finds the frame's material too")
 }
@@ -8088,6 +8181,7 @@ do {
     check(longNew[2].name == String(repeating: "a", count: SpeakerNames.maxLength) && brokenNew[2].name == "Den Study",
           "zone name: a new zone's long name is cut to 60 characters and line breaks become spaces, as a rename's",
           "\(longNew[2].name.count) \(brokenNew[2].name.debugDescription)")
+    // covers: S228
     check(UIStrings().renameZone == "Rename…" && UIStrings().renameZone == UIStrings().renameSpeaker,
           "zone rename: the zone menu item reads like the speaker's",
           UIStrings().renameZone)
@@ -14472,6 +14566,7 @@ do {
             && count(card, ".exclusively(before: TapGesture().onEnded { hit(.name) })") == 1,
           "main window zone header: a double-click on the name renames the zone, a single click still folds it")
     let zonesCode = read("Sources/AudioSync/AppDelegate+Zones.swift")
+    // covers: S228
     check(count(card, "InlineNameField(") == 1 && count(card, "Button(t.renameZone) { model.startRename(zone) }") == 1
             && count(card, ".accessibilityAction(named: t.renameZone) { model.startRename(zone) }") == 2
             && !zonesCode.isEmpty && count(zonesCode, "promptRenameZone") == 0 && count(zonesCode, "renameZoneTitle") == 0,
@@ -14479,12 +14574,14 @@ do {
 
     let compact = window.components(separatedBy: "private struct ZoneMemberCompactRow").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
+    // covers: S228
     check(count(compact, "TapGesture(count: 2).onEnded { model.startRename(speaker, in: .inZones) }") == 1
             && count(compact, "InlineNameField(") == 1
             && count(compact, ".accessibilityAction(named: t.renameSpeaker) { model.startRename(speaker, in: .inZones) }") == 1,
           "In zones row: a double-click on the name renames the speaker in place, VoiceOver has the Rename action")
     let row = window.components(separatedBy: "struct SpeakerRow: View").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
+    // covers: S228
     check(count(row, "InlineNameField(") == 1 && count(row, "TapGesture(count: 2).onEnded { model.startRename(speaker) }") == 1,
           "speaker row: a zone's member rows and every other row rename through the same field")
 }
@@ -14507,11 +14604,13 @@ do {
           "zone look: the zone chip is an 18 pt teal 12% capsule with 7 pt sides")
 
     let groups = ZoneLayout.byZone(["a", "b", "c", "d", "gone"]) { ["a": "z2", "b": "z1", "c": "z2", "d": "z1"][$0] }
+    // covers: S404
     check(groups.map(\.zone) == ["z2", "z1"] && groups.map(\.rows) == [["a", "c"], ["b", "d"]],
           "zone look: In zones rows box by zone, zones in first-row order, a row without a zone left out",
           "\(groups.map { ($0.zone, $0.rows) })")
 
     let zoned = part(window, after: "private func zonedRows(")
+    // covers: S404
     check(count(zoned, "model.text.inZones.uppercased()") == 1 && count(zoned, ".accessibilityLabel(model.text.inZones)") == 1
             && count(zoned, ".padding(.leading, ZoneLook.nameColumn)\n            .padding(.trailing") == 1
             && count(zoned, "if divided { Divider() }") == 0
@@ -14520,11 +14619,13 @@ do {
     check(count(window, "padding(.leading, 52)") == 0 && count(window, "Divider().padding(.leading, ZoneLook.nameColumn)") == 4,
           "zone look: every row separator starts at the name column")
     let compact = part(window, after: "private struct ZoneMemberCompactRow")
+    // covers: S404
     check(count(compact, "opacity(0.08)") == 0 && count(compact, ".padding(.vertical, ZoneLook.compactPaddingY)") == 1
             && count(compact, "Capsule().fill(accent.opacity(ZoneLook.chipFill))") == 1
             && count(compact, ".accessibilityLabel(t.goToZoneLabel(zone.name))") == 1,
           "In zones row: no box of its own, and its Go to Zone chip keeps its VoiceOver label")
     let card = part(window, after: "private struct ZoneCard")
+    // covers: S404
     check(count(card, "ZoneMemberGroup {") == 1 && count(card, "grouped: true") == 1,
           "zone card: its member rows sit in one zone box instead of a box each")
 
@@ -14555,6 +14656,7 @@ do {
             worstSecondary = min(worstSecondary, ratio(secondary, box))
         }
     }
+    // covers: S404
     check(worstChip >= 4.5 && worstSecondary >= 4.5,
           "zone look: the chip's text and a member's secondary text keep 4.5:1 in the zone box, both themes",
           String(format: "chip %.2f, secondary %.2f", worstChip, worstSecondary))
@@ -14669,10 +14771,12 @@ do {
     let bare = PanelChrome.height(notices: 0)
     let oneNotice = PanelChrome.height(notices: 1)
     let twoNotices = PanelChrome.height(notices: 2)
+    // covers: S406
     check(oneNotice > bare && twoNotices - oneNotice <= 30 && PanelChrome.height(notices: 5) == twoNotices,
           "panel chrome: one banner however many notices wait, plus its footer line",
           "\(bare) \(oneNotice) \(twoNotices)")
     let card = PanelChrome.height(notices: 0, permissionCard: true) - bare
+    // covers: S406
     check(card >= 120, "panel chrome: the permission card's room is kept", "\(card)")
 }
 
