@@ -8326,6 +8326,11 @@ do {
     // covers: S228
     check(renameAt != nil && stopAt != nil && renameAt!.lowerBound < stopAt!.lowerBound,
           "speaker rename: quit applies an open rename before the session stops")
+    let quitOrder = ["webRemote?.shutdown()", "stopEngine(", "engine.finishStopping()", "nativeAirPlay?.shutdown()"]
+        .compactMap { quitBody.range(of: $0)?.lowerBound }
+    // covers: S379 (the Mac's quit order)
+    check(quitOrder.count == 4 && quitOrder == quitOrder.sorted(),
+          "web remote: quit stops the remote before the outputs fade and the AirPlay sender tears down")
     var quitting = InlineRename()
     _ = quitting.start(livingTarget, name: "Living")
     quitting.text = "Lounge"
@@ -13384,6 +13389,11 @@ do {
     // covers: S257 (a speaker that would ask for a code stays off)
     check(leftAlone && pairedOn && groupOn,
           "web remote: a speaker that can't be driven or isn't listed is left alone; a paired one and a Cast group turn on")
+    // covers: S376 (an on the row already shows changes nothing)
+    check(plan("{\"type\":\"speaker\",\"id\":\"hp\",\"on\":true}").isEmpty
+            && plan("{\"type\":\"speaker\",\"id\":\"usb\",\"on\":false}").isEmpty
+            && plan("{\"type\":\"speaker\",\"id\":\"hp\",\"on\":true,\"volume\":20}") == [.setVolume(id: "hp", position: 20)],
+          "web remote: a phone's on equal to the row's switch leaves the switch alone")
     let offFirst = plan("{\"type\":\"speaker\",\"id\":\"hp\",\"on\":false,\"volume\":10}")
         == [.setEnabled(id: "hp", on: false), .setVolume(id: "hp", position: 10)]
     let masterClamped = plan("{\"type\":\"master\",\"volume\":150}") == [.setMaster(position: 100)]
