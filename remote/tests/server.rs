@@ -145,7 +145,7 @@ fn host(remote: &Remote) -> String {
 
 fn get(remote: &Remote, path: &str, token: Option<&str>) -> Reply {
     let cookie = token.map_or(String::new(), |token| {
-        format!("Cookie: as_token={token}\r\n")
+        format!("Cookie: as_token_{}={token}\r\n", remote.server.port())
     });
     let raw = format!(
         "GET {path} HTTP/1.1\r\nHost: {}\r\n{cookie}\r\n",
@@ -175,7 +175,7 @@ fn post_with(
     content_type: &str,
 ) -> Reply {
     let cookie = token.map_or(String::new(), |token| {
-        format!("Cookie: as_token={token}\r\n")
+        format!("Cookie: as_token_{}={token}\r\n", remote.server.port())
     });
     let raw = format!(
         "POST {path} HTTP/1.1\r\nHost: {}\r\nOrigin: {origin}\r\nContent-Type: {content_type}\r\n{cookie}Content-Length: {}\r\n\r\n{body}",
@@ -192,7 +192,7 @@ fn wrong(code: &str) -> String {
 
 fn token_of(reply: &Reply) -> String {
     let cookie = reply.header("set-cookie").expect("a cookie");
-    let value = cookie.strip_prefix("as_token=").unwrap();
+    let (_, value) = cookie.split_once('=').unwrap();
     value.split(';').next().unwrap().to_owned()
 }
 
@@ -502,6 +502,111 @@ fn every_api_route_needs_a_paired_token() {
     assert!(remote.received.lock().unwrap().is_empty());
 }
 
+fn get_with_cookie(remote: &Remote, path: &str, cookie: &str) -> Reply {
+    let raw = format!(
+        "GET {path} HTTP/1.1\r\nHost: {}\r\nCookie: {cookie}\r\n\r\n",
+        host(remote)
+    );
+    exchange(remote.server.port(), raw.as_bytes())
+}
+
+fn set_cookies(head: &str) -> Vec<&str> {
+    head.lines()
+        .filter_map(|line| line.split_once(':'))
+        .filter(|(key, _)| key.eq_ignore_ascii_case("set-cookie"))
+        .map(|(_, value)| value.trim())
+        .collect()
+}
+
+fn post_with_cookie(remote: &Remote, path: &str, cookie: &str) -> Reply {
+    let host = host(remote);
+    let raw = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json\r\nCookie: {cookie}\r\nContent-Length: 2\r\n\r\n{{}}"
+    );
+    exchange(remote.server.port(), raw.as_bytes())
+}
+
+// covers: S370
+#[test]
+fn the_token_cookie_is_named_for_the_port_and_another_ports_cookie_is_refused() {
+    let remote = start("port-cookie");
+    remote.server.publish(sample());
+    let port = remote.server.port();
+    let code = remote.server.pairing_code().unwrap();
+    let reply = post(
+        &remote,
+        "/api/pair",
+        None,
+        &json!({ "code": code }).to_string(),
+    );
+    let cookie = reply.header("set-cookie").unwrap();
+    let name = format!("as_token_{port}=");
+    let token = cookie.strip_prefix(&name).expect(cookie).split(';').next();
+    let token = token.unwrap();
+    let other = format!("as_token_{}={token}", port.wrapping_add(1));
+    let refused = get_with_cookie(&remote, "/api/state", &other);
+    assert_eq!(refused.status, 401);
+    assert_eq!(refused.error(), "not_paired");
+    let own = format!("{name}{token}");
+    assert_eq!(get_with_cookie(&remote, "/api/state", &own).status, 200);
+}
+
+// covers: S370
+#[test]
+fn a_device_paired_under_the_old_cookie_name_moves_to_the_port_cookie() {
+    let remote = start("old-cookie");
+    remote.server.publish(sample());
+    let port = remote.server.port();
+    let token = pair(&remote);
+    let reply = get_with_cookie(&remote, "/api/state", &format!("as_token={token}"));
+    assert_eq!(reply.status, 200);
+    let cookies = set_cookies(&reply.head);
+    assert!(
+        cookies
+            .iter()
+            .any(|cookie| cookie.starts_with("as_token=;") && cookie.contains("Max-Age=0")),
+        "{cookies:?}"
+    );
+    let moved = format!("as_token_{port}={token}; Max-Age=34560000;");
+    assert!(
+        cookies.iter().any(|cookie| cookie.starts_with(&moved)),
+        "{cookies:?}"
+    );
+
+    let unpaired = post_with_cookie(&remote, "/api/unpair", &format!("as_token={token}"));
+    assert_eq!(unpaired.status, 200);
+    let cookies = set_cookies(&unpaired.head);
+    assert_eq!(cookies.len(), 2, "{cookies:?}");
+    assert!(
+        cookies.iter().all(|cookie| cookie.contains("Max-Age=0")),
+        "{cookies:?}"
+    );
+    assert_eq!(remote.server.device_count(), 0);
+}
+
+// covers: S370
+#[test]
+fn an_event_stream_let_in_by_the_old_cookie_name_moves_it_to_the_port_cookie() {
+    let remote = start("old-cookie-events");
+    remote.server.publish(sample());
+    let port = remote.server.port();
+    let token = pair(&remote);
+    let mut events = Events::open_with_cookie(&remote, &format!("as_token={token}"));
+    events.read_until(|events| events.data.contains("\r\n\r\n"));
+    let cookies = set_cookies(events.head());
+    assert!(
+        cookies
+            .iter()
+            .any(|cookie| cookie.starts_with("as_token=;") && cookie.contains("Max-Age=0")),
+        "{cookies:?}"
+    );
+    let moved = format!("as_token_{port}={token}; Max-Age=34560000;");
+    assert!(
+        cookies.iter().any(|cookie| cookie.starts_with(&moved)),
+        "{cookies:?}"
+    );
+}
+
 // covers: S370, S375, S376, S377
 #[test]
 fn each_endpoint_answers_and_hands_over_exactly_what_was_posted() {
@@ -673,12 +778,17 @@ struct Events {
 
 impl Events {
     fn open(remote: &Remote, token: &str) -> Events {
+        let cookie = format!("as_token_{}={token}", remote.server.port());
+        Events::open_with_cookie(remote, &cookie)
+    }
+
+    fn open_with_cookie(remote: &Remote, cookie: &str) -> Events {
         let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, remote.server.port())).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_millis(50)))
             .unwrap();
         let raw = format!(
-            "GET /api/events HTTP/1.1\r\nHost: {}\r\nCookie: as_token={token}\r\nAccept: text/event-stream\r\n\r\n",
+            "GET /api/events HTTP/1.1\r\nHost: {}\r\nCookie: {cookie}\r\nAccept: text/event-stream\r\n\r\n",
             host(remote)
         );
         stream.write_all(raw.as_bytes()).unwrap();
@@ -1380,7 +1490,7 @@ fn the_pairing_code_switch_reads_from_json_and_is_off_by_default() {
 fn send(remote: &Remote, method: &str, path: &str, token: Option<&str>, body: &str) -> Reply {
     let host = host(remote);
     let cookie = token.map_or(String::new(), |token| {
-        format!("Cookie: as_token={token}\r\n")
+        format!("Cookie: as_token_{}={token}\r\n", remote.server.port())
     });
     let raw = format!(
         "{method} {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json\r\n{cookie}Content-Length: {}\r\n\r\n{body}",
@@ -1522,7 +1632,7 @@ fn a_foreign_host_is_refused_first_even_with_a_matching_origin_and_a_token() {
     let foreign = format!("evil.example:{port}");
     let ask = |method: &str, path: &str, body: &str| {
         let raw = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {foreign}\r\nOrigin: http://{foreign}\r\nContent-Type: application/json\r\nCookie: as_token={token}\r\nContent-Length: {}\r\n\r\n{body}",
+            "{method} {path} HTTP/1.1\r\nHost: {foreign}\r\nOrigin: http://{foreign}\r\nContent-Type: application/json\r\nCookie: as_token_{port}={token}\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         );
         exchange(port, raw.as_bytes())
