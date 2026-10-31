@@ -13634,7 +13634,7 @@ do {
     let savedListed = copiedOffset.listed(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: 240))
     copiedOffset.apply(savedListed)
     let otherAnswers = copiedOffset.listed(.appeared(CastDevice(id: otherID, name: "Den"), offsetMs: 240,
-                                                     former: manualID))
+                                                     former: manualID, offsetMoved: true))
     copiedOffset.apply(otherAnswers)
     let clearedInSender = copiedOffset.takeCopiedOffset()
     // covers: S341
@@ -13655,6 +13655,16 @@ do {
     check(ownOffset.offset(of: otherID) == 240 && ownOffset.takeCopiedOffset() == nil,
           "cast: another speaker at a saved id's address keeps an offset the user gave it, even one equal to the "
             + "saved one's")
+    var memoryOffset = CastModel()
+    memoryOffset.foundIDs = [lounge.text: realID]
+    memoryOffset.addedManually(manualID, address: lounge)
+    memoryOffset.apply(memoryOffset.listed(.appeared(CastDevice(id: manualID, name: "", manual: true), offsetMs: 240)))
+    memoryOffset.apply(memoryOffset.listed(.appeared(CastDevice(id: otherID, name: "Den"), offsetMs: 240,
+                                                     former: manualID)))
+    // covers: S341
+    check(memoryOffset.offset(of: otherID) == 240 && memoryOffset.takeCopiedOffset() == nil,
+          "cast: another speaker at a saved id's address keeps an offset only the sender's memory held, "
+            + "even one equal to the saved one's, when the sender says its re-key moved none")
     // covers: S341
     check(nextRun.offsetIDs(of: realID) == [realID, manualID] && sameRun.offsetIDs(of: realID) == [realID]
             && nextRun.manualSenderIDs(of: realID) == [manualID] && sameRun.manualSenderIDs(of: realID).isEmpty

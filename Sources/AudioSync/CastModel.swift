@@ -68,14 +68,15 @@ struct CastDevice: Equatable {
 enum CastDeviceChange: Equatable {
     /// `offsetMs`: what the device memory holds for it, nil when nothing.
     /// `former`: the `manual:` ID it was listed under until a browse found
-    /// it (C18), nil otherwise.
-    case appeared(CastDevice, offsetMs: Double?, former: String? = nil)
+    /// it (C18), nil otherwise. `offsetMoved`: that re-key moved the
+    /// address's offset to the ID.
+    case appeared(CastDevice, offsetMs: Double?, former: String? = nil, offsetMoved: Bool = false)
     case changed(CastDevice, offsetMs: Double?)
     case gone(id: String)
 
     var id: String {
         switch self {
-        case .appeared(let device, _, _), .changed(let device, _): return device.id
+        case .appeared(let device, _, _, _), .changed(let device, _): return device.id
         case .gone(let id): return id
         }
     }
@@ -309,7 +310,8 @@ extension CastDeviceChange {
         switch raw.event {
         case ASC_CAST_APPEARED:
             let former = raw.former.map { String(cString: $0) } ?? ""
-            self = .appeared(device, offsetMs: offsetMs(id), former: former.isEmpty ? nil : former)
+            self = .appeared(device, offsetMs: offsetMs(id), former: former.isEmpty ? nil : former,
+                             offsetMoved: raw.flags & UInt32(ASC_CAST_FLAG_OFFSET_MOVED) != 0)
         case ASC_CAST_CHANGED: self = .changed(device, offsetMs: offsetMs(id))
         case ASC_CAST_GONE: self = .gone(id: id)
         default: return nil
@@ -322,7 +324,7 @@ extension CastDeviceChange {
                 + (d.offline ? ", offline" : "") + (offset.map { ", offset \(Int($0)) ms" } ?? "")
         }
         switch self {
-        case .appeared(let d, let offset, let former):
+        case .appeared(let d, let offset, let former, _):
             return "appeared: " + describe(d, offset) + (former.map { ", was \($0)" } ?? "")
         case .changed(let d, let offset): return "changed: " + describe(d, offset)
         case .gone(let id): return "gone: \(id)"
@@ -525,10 +527,10 @@ struct CastModel {
     @discardableResult
     mutating func apply(_ change: CastDeviceChange, now: Date = Date()) -> CastOutcome? {
         switch change {
-        case .appeared(let device, let offset, _), .changed(let device, let offset):
+        case .appeared(let device, let offset, _, _), .changed(let device, let offset):
             leftOn = nil
             if removedManual.contains(device.id) { return nil }
-            if case .appeared(_, _, let former?) = change { levelDue = identified(former, as: device.id) }
+            if case .appeared(_, _, let former?, _) = change { levelDue = identified(former, as: device.id) }
             if savedOn == device.id && !device.offline {
                 savedOn = nil
                 if enabled == nil { enabled = device.id }
@@ -660,7 +662,7 @@ struct CastModel {
     /// speaker found at the address is listed as a new one.
     mutating func listed(_ change: CastDeviceChange) -> CastDeviceChange {
         switch change {
-        case .appeared(let device, let offset, let former):
+        case .appeared(let device, let offset, let former, let offsetMoved):
             if let former, let saved = listedUnder[former] {
                 endListing(former)
                 if saved != device.id, let address = manualAddresses.removeValue(forKey: saved) {
@@ -670,13 +672,12 @@ struct CastModel {
                     if enabled == saved { (enabled, savedOn) = (nil, saved) }
                 }
                 // The sender's re-key copied the saved one's offset to the other speaker.
-                let copied = saved != device.id && offset != nil && offset == offsets[saved]
-                    && offsets[device.id] == nil && !offsetsWritten.contains(device.id)
+                let copied = saved != device.id && offsetMoved
                 if copied { offsetCopiedTo = device.id }
                 return .appeared(device, offsetMs: copied ? nil : offset, former: nil)
             }
             strandListing(of: device.id)
-            return .appeared(relisted(device), offsetMs: offset, former: former)
+            return .appeared(relisted(device), offsetMs: offset, former: former, offsetMoved: offsetMoved)
         case .changed(let device, let offset):
             strandListing(of: device.id)
             return .changed(relisted(device), offsetMs: offset)

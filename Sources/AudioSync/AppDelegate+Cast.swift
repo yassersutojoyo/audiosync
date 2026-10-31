@@ -79,7 +79,7 @@ extension AppDelegate {
                 postNotice(text.castProblem(problem, name: name), subject: Notice.cast(id))
             }
             if let level = castModel.takeLevelDue() { castSender?.setVolume(level) }
-            if case .appeared(let device, _, let former?) = change {
+            if case .appeared(let device, _, let former?, _) = change {
                 moveCastNotices(from: former, to: device.id)
                 moveCastSettings(from: former, to: device.id)
             }

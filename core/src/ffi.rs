@@ -1498,6 +1498,10 @@ mod tests {
             ("ASC_CAST_FLAG_GROUP", CAST_FLAG_GROUP.to_string()),
             ("ASC_CAST_FLAG_OFFLINE", CAST_FLAG_OFFLINE.to_string()),
             ("ASC_CAST_FLAG_MANUAL", CAST_FLAG_MANUAL.to_string()),
+            (
+                "ASC_CAST_FLAG_OFFSET_MOVED",
+                CAST_FLAG_OFFSET_MOVED.to_string(),
+            ),
             ("ASC_CAST_REFUSED_NONE", CAST_REFUSED_NONE.to_string()),
             ("ASC_CAST_REFUSED_BUSY", CAST_REFUSED_BUSY.to_string()),
             ("ASC_CAST_REFUSED_UNKNOWN", CAST_REFUSED_UNKNOWN.to_string()),

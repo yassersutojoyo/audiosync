@@ -81,6 +81,9 @@ pub const CAST_FLAG_GROUP: u32 = 1;
 pub const CAST_FLAG_OFFLINE: u32 = 2;
 /// Added by address; no browse has found its `id` yet (C18).
 pub const CAST_FLAG_MANUAL: u32 = 4;
+/// On the [`CAST_APPEARED`] that ends a listing by address, set when the
+/// re-key moved the address's offset to the device's `id` (C18).
+pub const CAST_FLAG_OFFSET_MOVED: u32 = 8;
 
 /// Why [`asc_cast_start`] refused: it didn't.
 pub const CAST_REFUSED_NONE: i32 = 0;
@@ -766,17 +769,21 @@ impl AscCast {
                 // 0 ms counts as none: the sender can't forget an offset, so Undo leaves 0.
                 let memory = self.host.memory();
                 let stored = |device| memory.offset(device).filter(|offset| !offset.is_zero());
-                if let (Some(offset), None) =
+                let moved = if let (Some(offset), None) =
                     (stored(&memory_id(DeviceKey::Manual(from))), stored(&id))
                 {
                     self.host.set_offset(id, offset);
                     self.events
                         .push_back(Pending::new(CAST_EVENT_MEMORY_CHANGED));
-                }
+                    CAST_FLAG_OFFSET_MOVED
+                } else {
+                    0
+                };
                 self.change(CAST_GONE, DeviceKey::Manual(from));
                 self.change(CAST_APPEARED, DeviceKey::Id(id));
                 if let Some(appeared) = self.changes.back_mut() {
                     appeared.former = device_id_text(DeviceKey::Manual(from));
+                    appeared.flags |= moved;
                 }
                 self.log_group(DeviceKey::Id(id));
             }
@@ -2911,6 +2918,16 @@ mod tests {
             seen.iter()
                 .any(|change| change.id == KITCHEN && change.former == kitchen_manual),
             "{seen:?}"
+        );
+        let moved = |id: &str| {
+            seen.iter()
+                .find(|change| change.id == id && change.event == CAST_APPEARED)
+                .is_some_and(|change| change.flags & CAST_FLAG_OFFSET_MOVED != 0)
+        };
+        assert_eq!(
+            [moved(KITCHEN), moved(LIVING), moved(PORCH)],
+            [true, false, true],
+            "the host hears which offsets the re-key moved"
         );
         assert_eq!(offset(KITCHEN), 240.0, "moved to the ID");
         assert_eq!(offset(LIVING), 100.0, "the ID's own offset stays");

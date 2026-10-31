@@ -221,6 +221,7 @@ extern "C" {
 #define ASC_CAST_FLAG_GROUP 1   /* a Cast group: plays as one device, with its own volume and offset */
 #define ASC_CAST_FLAG_OFFLINE 2 /* its records went away while a session with it runs */
 #define ASC_CAST_FLAG_MANUAL 4  /* added by address; no browse has found its id yet */
+#define ASC_CAST_FLAG_OFFSET_MOVED 8 /* on the APPEARED with a former id: the re-key moved its offset here */
 
 /* Why asc_cast_start refused (its *refused). */
 #define ASC_CAST_REFUSED_NONE 0    /* it didn't */
