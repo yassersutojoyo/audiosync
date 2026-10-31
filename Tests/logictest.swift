@@ -11767,6 +11767,20 @@ do {
             && refusedMute.apply(.commandFailed(attempt: 3, error: .volume)) == .changed
             && refusedMute.volumes[kitchen]?.muted == false,
           "cast: a mute the device refuses is undone")
+    var refusedUnmute = m
+    _ = refusedUnmute.apply(.volume(attempt: 3, CastVolume(level: 0.4, muted: true, fixed: false)))
+    // covers: C70
+    check(refusedUnmute.setMuted(kitchen, false)
+            && refusedUnmute.apply(.commandFailed(attempt: 3, error: .volume)) == .changed
+            && refusedUnmute.volumes[kitchen]?.muted == true,
+          "cast: an unmute the device refuses is undone")
+    var staleRefusal = m
+    _ = staleRefusal.apply(.volume(attempt: 3, CastVolume(level: 0.4, muted: false, fixed: false)))
+    // covers: C70
+    check(staleRefusal.setMuted(kitchen, true)
+            && staleRefusal.apply(.commandFailed(attempt: 2, error: .volume)) == nil
+            && staleRefusal.volumes[kitchen]?.muted == true,
+          "cast: a refusal from an earlier attempt leaves the mute shown")
     var refusedLevel = m
     _ = refusedLevel.apply(.volume(attempt: 3, CastVolume(level: 0.4, muted: false, fixed: false)))
     // covers: C70

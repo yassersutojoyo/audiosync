@@ -2996,6 +2996,67 @@ pub mod tests {
 
     // covers: C70
     #[test]
+    fn a_refused_unmute_puts_the_reported_mute_back() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        let muted = DeviceVolume {
+            level: 0.4,
+            muted: true,
+            has_level: true,
+            ..DeviceVolume::default()
+        };
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(muted, false),
+        });
+        cast.poll();
+        cast.set_muted(KITCHEN, false);
+        cast.poll();
+        assert!(!cast.speakers()[1].muted);
+        fake.report(HostEvent::CommandFailed {
+            attempt: Some(AttemptId(1)),
+            error: CommandError::Volume(VolumeError::NotReady),
+        });
+        assert_eq!(cast.poll(), [BackendEvent::CastChanged]);
+        assert!(cast.speakers()[1].muted);
+    }
+
+    // covers: C70
+    #[test]
+    fn a_refusal_from_an_older_attempt_leaves_the_mute_shown() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_enabled(KITCHEN, false).unwrap();
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.poll();
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(2),
+            device: id(KITCHEN),
+            event: SessionEvent::Volume(
+                DeviceVolume {
+                    level: 0.4,
+                    has_level: true,
+                    ..DeviceVolume::default()
+                },
+                false,
+            ),
+        });
+        cast.poll();
+        cast.set_muted(KITCHEN, true);
+        cast.poll();
+        fake.report(HostEvent::CommandFailed {
+            attempt: Some(AttemptId(1)),
+            error: CommandError::Volume(VolumeError::NotReady),
+        });
+        assert!(cast.poll().is_empty());
+        assert!(cast.speakers()[1].muted);
+    }
+
+    // covers: C70
+    #[test]
     fn an_ignored_mute_leaves_a_level_still_awaited_on_the_slider() {
         let (fake, mut cast) = listed();
         cast.set_streaming(true);
