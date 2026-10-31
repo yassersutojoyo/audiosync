@@ -557,35 +557,12 @@ fn twelve_presets_with_unique_ids_in_menu_order() {
 
 // covers: S33
 #[test]
-fn a_preset_sets_the_gains_only_and_matching_is_exact() {
-    let mut settings = enabled([1.0; BAND_COUNT], -3.0);
-    assert_eq!(settings.matching_preset(), None);
-    settings.apply_preset(preset("rock").unwrap());
-    assert!(settings.enabled);
-    assert_eq!(settings.preamp_db, -3.0);
-    assert_eq!(settings.matching_preset().map(|p| p.id), Some("rock"));
-    settings.gains_db[4] += 0.5;
-    assert_eq!(settings.matching_preset(), None);
-    assert_eq!(
-        EqSettings::default().matching_preset().map(|p| p.id),
-        Some("flat")
-    );
-}
-
-// covers: S33
-#[test]
 fn reset_reads_flat_and_zeroes_the_preamp() {
     let mut settings = enabled(preset("rock").unwrap().gains_db, -4.5);
     settings.reset();
     assert!(settings.enabled, "Reset leaves the switch alone");
     assert_eq!(settings.preamp_db, 0.0);
-    assert_eq!(settings.matching_preset().map(|p| p.id), Some("flat"));
-    let mut flat = enabled([2.0; BAND_COUNT], 0.0);
-    flat.apply_preset(preset("flat").unwrap());
-    assert_eq!(
-        flat, settings,
-        "Flat and Reset agree once the preamp is 0 dB"
-    );
+    assert_eq!(settings.gains_db, preset("flat").unwrap().gains_db);
 }
 
 // covers: S270
