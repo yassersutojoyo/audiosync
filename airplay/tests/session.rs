@@ -505,6 +505,7 @@ fn an_audio_latency_that_is_not_a_non_negative_number_is_unknown() {
     }
 }
 
+// covers: P60
 #[test]
 fn a_failed_auth_setup_is_a_warning_and_the_session_goes_on() {
     let mut config = config();
@@ -517,6 +518,7 @@ fn a_failed_auth_setup_is_a_warning_and_the_session_goes_on() {
     assert_eq!(warnings(&link), [Warning::AuthSetupFailed { status: 403 }]);
 }
 
+// covers: P58
 #[test]
 fn a_rejected_verification_reports_pairing_required() {
     let mut config = config();
@@ -705,6 +707,7 @@ fn announce_carries_the_sdp_for_the_chosen_codec() {
 }
 
 // Part of P31 (sockets open and answering before SETUP need P82, transport stage).
+// covers: P31, P82
 #[test]
 fn rtsp_setup_transport_announces_the_local_ports_and_reads_the_receivers() {
     let link = playing();
@@ -801,6 +804,7 @@ fn server_and_audio_jack_status_are_reported_and_a_disconnected_jack_warns() {
     assert_eq!(warnings(&link), [Warning::JackDisconnected]);
 }
 
+// covers: P25
 #[test]
 fn a_session_header_with_a_timeout_is_sent_back_without_it() {
     let mut receiver = FakeReceiver::new();
@@ -831,6 +835,7 @@ fn every_request_after_setup_carries_the_session() {
     }
 }
 
+// covers: P34
 #[test]
 fn flush_names_the_next_packet_and_reports_the_answer() {
     let mut link = playing();
@@ -1585,6 +1590,7 @@ fn volume_coalescing_and_priority_over_metadata() {
 }
 
 // Part of P121: the sample scaling itself comes with the audio stage.
+// covers: P121
 #[test]
 fn software_volume_receivers_get_no_volume_requests() {
     let mut config = config();

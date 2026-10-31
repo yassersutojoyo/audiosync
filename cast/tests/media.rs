@@ -220,6 +220,7 @@ fn one_load_at_a_time_its_media_session_and_rebuffers_are_tracked() {
     }
 }
 
+// covers: C49
 #[test]
 fn no_reply_or_no_playing_in_20_s_fails_the_load() {
     let start = Instant::now();
@@ -354,6 +355,7 @@ fn device_reasons_are_cut_short_and_printable() {
     );
 }
 
+// covers: C86
 #[test]
 fn idle_while_playing_says_why_and_a_replacement_ends_the_channel() {
     let start = Instant::now();

@@ -205,6 +205,7 @@ fn a_device_that_never_fetches_ends_the_attempt_with_the_firewall_message() {
     device.join();
 }
 
+// covers: C83
 #[test]
 fn a_load_error_ends_the_start_with_its_reason() {
     let device = FakeDevice::start(Behavior {

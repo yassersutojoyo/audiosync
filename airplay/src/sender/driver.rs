@@ -2768,6 +2768,7 @@ mod tests {
     // A thread that outlives its session's close, such as an RTSP writer
     // blocked in a send that a socket shutdown doesn't wake (Windows) and
     // only its own timeout ends, doesn't hold up shutdown (P129).
+    // covers: P129
     #[test]
     fn shutdown_does_not_wait_for_a_thread_stuck_after_its_close() {
         let now = Instant::now();
@@ -2904,6 +2905,7 @@ mod tests {
 
     // A on PTP, B waiting for PTP on another network, C on NTP: once A
     // ends, the service closes and B starts; C never holds it open (P205).
+    // covers: P205
     #[test]
     fn a_ptp_waiter_starts_once_the_last_ptp_session_ends_whatever_ntp_sessions_run() {
         for _ in 0..5 {
@@ -3015,6 +3017,7 @@ mod tests {
     // A plays on a PTP service bound over IPv6. B speaks both, has no IPv6
     // address and remembers PTP, and only the preference sends it to
     // AirPlay 2: AirPlay 1 plays it instead of a wait for PTP (P214).
+    // covers: P214
     #[test]
     fn a_dual_speaker_only_the_preference_sends_to_airplay2_plays_airplay1_rather_than_wait_for_ptp()
      {
@@ -3705,6 +3708,7 @@ mod tests {
 
     // Every instance a renamed device left behind goes with the stop, so
     // none comes back as a ghost under its old name (P18).
+    // covers: P18
     #[test]
     fn stopping_discovery_forgets_every_instance_of_a_device() {
         use crate::discovery::{ScopedAddr, ServiceKind, ServiceRecord};

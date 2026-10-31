@@ -223,6 +223,7 @@ fn header<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
 
 // Part of P149: the request lines and headers; the AirPlay 2 session that
 // sends them on its connection comes in a later stage.
+// covers: P149
 #[test]
 fn pairing_requests_carry_their_paths_and_headers() {
     let mut entropy = TestEntropy::new();

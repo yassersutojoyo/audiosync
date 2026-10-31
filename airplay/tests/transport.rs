@@ -307,6 +307,7 @@ fn session_sockets_answer_before_setup_on_the_connection_address() {
     sockets_before_setup(LOOPBACK);
 }
 
+// covers: P82
 #[test]
 fn session_sockets_follow_an_ipv6_connection() {
     let _serial = serial();
@@ -580,6 +581,7 @@ fn a_lost_speaker_is_retried_after_one_then_two_seconds_and_the_schedule_resets(
     sender.shutdown();
 }
 
+// covers: P142
 #[test]
 fn password_errors_wait_for_the_user_and_are_not_retried() {
     let _serial = serial();
@@ -632,6 +634,7 @@ fn password_errors_wait_for_the_user_and_are_not_retried() {
     sender.shutdown();
 }
 
+// covers: P138, P142
 #[test]
 fn a_refused_announce_is_retried_and_plays_once_accepted() {
     let _serial = serial();
@@ -667,6 +670,7 @@ fn a_refused_announce_is_retried_and_plays_once_accepted() {
     sender.shutdown();
 }
 
+// covers: P133
 #[test]
 fn an_unreachable_speaker_is_reported_and_retried() {
     let _serial = serial();
@@ -694,6 +698,7 @@ fn an_unreachable_speaker_is_reported_and_retried() {
     sender.shutdown();
 }
 
+// covers: P59, P142
 #[test]
 fn an_unsupported_speaker_fails_without_connecting() {
     let _serial = serial();
@@ -780,6 +785,7 @@ fn shutdown_tears_every_speaker_down_in_parallel_within_two_seconds() {
 // keeps its bound (P129). Whether the upload also blocks the writer depends
 // on the socket buffers (loopback on Windows takes megabytes); the driver's
 // own test covers a writer stuck in its send.
+// covers: P129
 #[test]
 fn shutdown_keeps_its_bound_when_a_receiver_stops_reading() {
     let _serial = serial();
@@ -820,6 +826,7 @@ fn shutdown_keeps_its_bound_when_a_receiver_stops_reading() {
 // Windows reports an ICMP port unreachable as a reset on the next receive
 // call, not on the send that caused it; the sender still counts it against
 // its sends, so a speaker whose UDP ports are gone is lost (P141).
+// covers: P141
 #[cfg(windows)]
 #[test]
 fn closed_udp_ports_make_a_speaker_lost() {
@@ -876,6 +883,7 @@ fn shutdown_with_answering_speakers_is_quick() {
     assert!(took < Duration::from_millis(1500), "took {took:?}");
 }
 
+// covers: P98
 #[test]
 fn the_host_reads_latency_and_first_sound_and_restarts_the_timeline() {
     let _serial = serial();
@@ -980,6 +988,7 @@ fn record(kind: ServiceKind, instance: &str, txt: &[&str]) -> ServiceRecord {
     }
 }
 
+// covers: P19
 #[test]
 fn discovery_reports_receivers_appearing_changing_and_going() {
     let _serial = serial();
@@ -1066,6 +1075,7 @@ fn the_host_can_move_the_sender_and_the_input_to_its_own_threads() {
     movable::<SenderEvent>();
 }
 
+// covers: P78
 #[test]
 fn rtp_header_of_received_audio_carries_the_marker_first() {
     let _serial = serial();

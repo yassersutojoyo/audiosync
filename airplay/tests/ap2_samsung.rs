@@ -528,6 +528,7 @@ fn flush_point(server: &Ap2Server, nth: usize) -> (u16, u32) {
 // Part of P213 on the AirPlay 2 path, over loopback: every pause sends the
 // television one FLUSH naming the first packet not sent and stops the
 // audio; every resume continues from that packet with no request.
+// covers: P213
 #[test]
 fn each_pause_flushes_once_at_the_first_unsent_packet_and_its_resume_continues() {
     let _serial = serial();

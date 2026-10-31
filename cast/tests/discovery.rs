@@ -700,6 +700,7 @@ fn adding_the_address_of_a_listed_device_names_that_device() {
 
 // Partly C16 and C18: a manual address that a found device already has
 // stays that device's one row.
+// covers: C16
 #[test]
 fn a_manual_address_of_a_listed_device_names_that_device() {
     let mut list = DeviceList::new();

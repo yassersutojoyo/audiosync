@@ -163,6 +163,7 @@ fn alac_frames_decode_back_with_a_decoder_set_up_from_the_fmtp_line() {
 }
 
 // Part of P121 (the per-speaker encoding is tested with the stream).
+// covers: P121
 #[test]
 fn software_gain_is_ten_to_the_db_over_twenty() {
     use audiosync_airplay::volume::Volume;

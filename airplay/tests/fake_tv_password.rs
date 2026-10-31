@@ -148,6 +148,7 @@ fn without_a_password_the_sender_stops_before_pair_setup() {
     sender.shutdown();
 }
 
+// covers: P151
 #[test]
 fn a_wrong_password_fails_once_and_never_reaches_m5() {
     let _serial = serial();

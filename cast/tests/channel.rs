@@ -711,6 +711,7 @@ fn stop_sends_receiver_stop_with_the_session_then_closes_both_endpoints() {
     assert!(events(&mut channel).contains(&Event::Ended(EndReason::Stopped)));
 }
 
+// covers: C87
 #[test]
 fn a_silent_stop_reply_holds_the_teardown_at_most_two_seconds() {
     let start = Instant::now();
@@ -728,6 +729,7 @@ fn a_silent_stop_reply_holds_the_teardown_at_most_two_seconds() {
     assert_eq!(closes, 2);
 }
 
+// covers: C87
 #[test]
 fn stop_never_stops_an_app_the_sender_did_not_launch_or_reuse() {
     let start = Instant::now();
@@ -739,6 +741,7 @@ fn stop_never_stops_an_app_the_sender_did_not_launch_or_reuse() {
     assert_eq!(out[0].0, PLATFORM);
 }
 
+// covers: C82
 #[test]
 fn a_close_from_the_app_checks_the_status_and_reconnects_once() {
     let start = Instant::now();
@@ -768,6 +771,7 @@ fn a_close_from_the_app_checks_the_status_and_reconnects_once() {
     assert!(events(&mut channel).contains(&Event::Ended(EndReason::AppClosed)));
 }
 
+// covers: C32
 #[test]
 fn a_close_from_the_platform_ends_the_channel() {
     let start = Instant::now();

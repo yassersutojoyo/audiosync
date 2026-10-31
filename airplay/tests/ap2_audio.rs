@@ -952,6 +952,7 @@ fn ap2_a_pair_sends_every_member_the_same_full_stereo_audio() {
 // Part of P213 on the AirPlay 2 path: the pause sends the realtime FLUSH,
 // whose answer releases the resume while the answer to a delay FLUSH still
 // in flight does not, and POST /feedback goes on while paused.
+// covers: P213
 #[test]
 fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     const ANSWER: Duration = Duration::from_millis(800);
