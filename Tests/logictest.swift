@@ -4943,6 +4943,7 @@ do {
             app.syncNativeSpeakers()
             if t >= launch.flagAt, app.model.states["TV"] != nil { inSenderAfterFlag.append(t) }
         }
+        // covers: S223
         check(app.sessions.count == launch.sessions && app.sessions.allSatisfy { $0 < launch.flagAt }
                 && inSenderAfterFlag.isEmpty && !app.enabled.contains("native:TV")
                 && app.model.plan(streaming: true, enabled: app.enabled).add.isEmpty,
@@ -5902,6 +5903,7 @@ do {
     let spotifyPaused = track(spotify, "Song", playing: false)
     played.note(shown: spotifyPlays, last: nil, dropped: false)
     played.note(shown: spotifyPaused, last: spotifyPlays, dropped: false)
+    // covers: S218
     check(shows(spotifyPaused).fields.title == "Song" && shows(spotifyPaused).artwork == .track,
           "receiver info: system source, paused Spotify, no other player: its track and cover stay")
     let musicPaused = track(music, "Old", playing: false)
@@ -6681,6 +6683,7 @@ do {
         read(track(playing: true), at: start)
         read(track(playing: false), at: start + poll)
         for n in 0..<emptyReadings { read(nil, at: start + poll * Double(n + 2)) }
+        // covers: S218
         check(fallbackAt.isEmpty && last?.title == "Song" && empty.dropped == nil
                 && feed.sent?.fields == TrackMetadata.Fields(title: "Song", artist: "Band", album: "Record"),
               "track info (\(sourceName)): Spotify paused and read as empty every 2 s for 11 minutes keeps its track and cover, never the fallback",
@@ -7853,8 +7856,10 @@ do {
                              airPlayChosen: airPlay, latencyMs: l)
     }
 
+    // covers: S176
     check(holds([r, usb]) == [r: 0, usb: 150],
           "local delay: with only local outputs, a speaker's delay is applied", "\(holds([r, usb]))")
+    // covers: S176
     check(holds([r, bt]) == [r: 250, bt: 0] && holds([r, usb, bt]) == [r: 250, usb: 400, bt: 0],
           "local delay: a Bluetooth speaker at −250 ms makes the built-in speakers wait 250 ms",
           "\(holds([r, bt])), \(holds([r, usb, bt]))")
@@ -13072,6 +13077,7 @@ do {
     let rows = [reference, usb, homePod, castIdle, castGroup, locked, pairedTV]
     let heldPassword = RemoteRow(Facts(id: "tv3", name: "TV 3", kind: "AirPlay", on: false, volume: 50,
                                        isAirPlay: true, needsCode: true, paired: false, holdsPassword: true), text: t)
+    // covers: S257
     check(heldPassword.available && heldPassword.notice == nil && !heldPassword.asksForCode,
           "web remote: a password speaker whose password this run holds can be turned on from the phone")
     let castStepped = RemoteRow(Facts(id: "cast2", name: "Den", kind: "Google Cast", on: true, volume: 50,
@@ -14234,15 +14240,19 @@ do {
 // MARK: The live input note while an AirPlay speaker is on (InputLevel.swift)
 do {
     let mic = AudioSource.input(uid: "BuiltInMicrophoneDevice")
+    // covers: S244
     check(LiveInputAirPlayHint.tenths(source: mic, airPlayOn: true, airPlayDelayMs: 1750) == 18,
           "live input note: shows the AirPlay delay, rounded to a tenth")
+    // covers: S244
     check(LiveInputAirPlayHint.tenths(source: mic, airPlayOn: false, airPlayDelayMs: 1750) == nil,
           "live input note: hidden with no AirPlay speaker on")
+    // covers: S244
     check(LiveInputAirPlayHint.tenths(source: .system, airPlayOn: true, airPlayDelayMs: 1750) == nil
             && LiveInputAirPlayHint.tenths(source: .app(bundleID: "com.apple.Music"), airPlayOn: true,
                                            airPlayDelayMs: 1750) == nil,
           "live input note: hidden for any source but an input device")
     let note = UIStrings(locale: Locale(identifier: "en_US")).liveInputAirPlayHint(tenths: 18)
+    // covers: S244
     check(note.hasPrefix("AirPlay adds a 1.8 s delay") && !note.contains("\u{2014}"), "live input note: \(note)")
 }
 
@@ -14630,19 +14640,23 @@ do {
     let notes: [String?] = [t.airPlayNoneFound(), t.castList(.noneFound),
                             t.networkSpeakersNote(airPlayNone: true, cast: .noneFound),
                             t.networkSpeakersNote(airPlayNone: true, cast: .quiet)]
+    // covers: S154
     check(notes.allSatisfy { $0?.contains("Local Network") == false && $0?.contains("same network") == true },
           "local network: before it was asked, the notes give only the same-network advice")
+    // covers: S154
     check(t.airPlayNoneFound(localNetworkRefused: true).contains("Local Network")
             && t.airPlayNoneFound(hint: .denied, localNetworkRefused: true) == "No AirPlay speakers found yet.",
           "local network: once refused, the advice names it, unless the hint on screen already does")
     // The soft hint comes from an empty list alone, before macOS has asked for Local Network.
     let hidden = LocalNetworkHint.possible.shown(airPlayProblem: true)
+    // covers: S154
     check(t.networkSpeakersNote(airPlayNone: true, cast: .noneFound, hint: hidden,
                                 localNetworkRefused: LocalNetworkHint.possible.accessRefused)?
             .contains("Local Network") == false
             && !t.airPlayNoneFound(hint: hidden, localNetworkRefused: LocalNetworkHint.possible.accessRefused)
             .contains("Local Network"),
           "local network: a maybe-denied hint never puts Local Network in the advice")
+    // covers: S154
     check(LocalNetworkHint.denied.accessRefused && !LocalNetworkHint.none.accessRefused,
           "local network: only denied access counts as refused")
 }
@@ -14954,18 +14968,24 @@ do {
         let l = ZoneLayout.linesBelowRows(zoneBox: box, note: note, castAdd: cast)
         return "\(l.note) \(l.castAdd)"
     }
+    // covers: S404
     check(lines(box: true, note: true, cast: false) == "false false",
           "zone box separators: the note right under a zone box gets no line", lines(box: true, note: true, cast: false))
+    // covers: S404
     check(lines(box: true, note: false, cast: true) == "false false",
           "zone box separators: Add by address right under a zone box gets no line", lines(box: true, note: false, cast: true))
+    // covers: S404
     check(lines(box: true, note: true, cast: true) == "false true",
           "zone box separators: under a zone box, only the line between the note and Add by address stays",
           lines(box: true, note: true, cast: true))
+    // covers: S404
     check(lines(box: false, note: true, cast: true) == "true true",
           "zone box separators: without a zone box, the note and Add by address keep their lines",
           lines(box: false, note: true, cast: true))
+    // covers: S404
     check(lines(box: false, note: true, cast: false) == "true false",
           "zone box separators: without a zone box, a lone note keeps its line", lines(box: false, note: true, cast: false))
+    // covers: S404
     check(lines(box: false, note: false, cast: true) == "false true",
           "zone box separators: without a zone box, a lone Add by address keeps its line",
           lines(box: false, note: false, cast: true))
