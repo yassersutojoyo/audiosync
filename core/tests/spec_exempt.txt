@@ -178,3 +178,4 @@ S403 Mac host only: the menu bar panel's size and where it sits; the Mac logic s
 S404 Mac host only: zone members in the main window's lists; the Mac logic suite checks them.
 S405 Mac host only: how the menu bar panel opens and closes, with its shadow and background; the Mac logic suite checks them.
 S406 Mac host only: work deferred until the menu bar panel is still, and the room it keeps; the Mac logic suite checks them.
+S407 Mac host only: the in-app guide's text, layout and illustrations; the Mac logic suite checks them.

@@ -583,8 +583,10 @@ do {
     stored.order = []
     check(store.load().zones == expected && stored.order.isEmpty,
           "zones: migrating twice changes nothing: once marked, a launch writes nothing")
+    // covers: S248
     check(first.zonesNoticeDue, "zones: groups moved to zones leave the notice due for the next window")
     store.zonesNoticeShown()
+    // covers: S248
     check(!store.load().zonesNoticeDue, "zones: the groups-became-zones notice shows once")
 
     let edited = [SpeakerZone(id: "z1", name: "Kitchen", members: ["lc:usb:out", "cc:Group-7"], volume: 35.5),
@@ -2842,33 +2844,41 @@ do {
     check(InputChannelPair.offered(channels: 1).isEmpty && InputChannelPair.offered(channels: 2).isEmpty,
           "channel pairs: a mono or stereo device offers no choice")
     let four = InputChannelPair.offered(channels: 4)
+    // covers: S14
     check(four.map { [$0.index, $0.left, $0.right] } == [[0, 0, 1], [1, 2, 3]],
           "channel pairs: four channels offer 1-2 and 3-4", "\(four)")
     let five = InputChannelPair.offered(channels: 5)
+    // covers: S14
     check(five.map { [$0.left, $0.right] } == [[0, 1], [2, 3], [4, 4]] && five[2].isMono && !five[1].isMono,
           "channel pairs: an odd last channel is a pair of its own", "\(five)")
     func resolves(_ saved: Int, on channels: Int, to pair: InputChannelPair, fellBack: Bool) -> Bool {
         let found = InputChannelPair.resolve(saved: saved, channels: channels)
         return found.pair == pair && found.fellBack == fellBack
     }
+    // covers: S14
     check(resolves(0, on: 8, to: .first, fellBack: false) && resolves(0, on: 1, to: .first, fellBack: false),
           "channel pairs: nothing saved reads channels 1-2, on a mono device too")
+    // covers: S14
     check(resolves(1, on: 4, to: four[1], fellBack: false) && resolves(2, on: 5, to: five[2], fellBack: false),
           "channel pairs: a saved pair the device has is read")
+    // covers: S14
     check(resolves(2, on: 4, to: .first, fellBack: true) && resolves(1, on: 2, to: .first, fellBack: true)
             && resolves(-1, on: 8, to: .first, fellBack: true),
           "channel pairs: a saved pair the device no longer has falls back to 1-2 and says so")
+    // covers: S14
     check(InputChannelPair.change(from: 0, to: 1, streaming: true) == .restart
             && InputChannelPair.change(from: 0, to: 1, streaming: false) == .remember
             && InputChannelPair.change(from: 1, to: 1, streaming: true) == .none
             && InputChannelPair.change(from: 1, to: -1, streaming: true) == .none,
           "channel pairs: choosing another pair restarts a running session, the same one does nothing")
+    // covers: S14
     check(InputChannelPair.change(from: 3, to: 0, channels: 4, streaming: true) == .none
             && InputChannelPair.change(from: 3, to: 1, channels: 4, streaming: true) == .restart
             && InputChannelPair.change(from: 1, to: 0, channels: 4, streaming: true) == .restart
             && InputChannelPair.stores(0, over: 3) && !InputChannelPair.stores(1, over: 1)
             && !InputChannelPair.stores(-1, over: 3),
           "channel pairs: picking the pair a saved pair fell back to restarts nothing and keeps the pick")
+    // covers: S14
     check(UIStrings().inputChannelPair(four[1]) == "Channels 3-4" && UIStrings().inputChannelPair(five[2]) == "Channel 5",
           "channel pairs: shown as the device counts its channels")
 
@@ -2876,18 +2886,24 @@ do {
     func pairLayout(_ pair: InputChannelPair) -> CaptureChannels.Layout {
         CaptureChannels.Layout(left: pair.left, right: pair.right, leftSample: .float32, rightSample: .float32)
     }
+    // covers: S14
     check(stereo([(4, [1, 2, 3, 4, 5, 6, 7, 8])], layout: pairLayout(four[1])).samples == [3, 4, 7, 8],
           "channel pairs: pair 3-4 of an interleaved input plays its channels 3 and 4")
+    // covers: S14
     check(stereo([(1, [1, 2]), (1, [3, 4]), (1, [5, 6]), (1, [7, 8])], layout: pairLayout(four[1])).samples == [5, 7, 6, 8],
           "channel pairs: pair 3-4 of one buffer per channel plays the third and fourth buffers")
+    // covers: S14
     check(stereo([(2, [1, 2, 3, 4]), (3, [10, 20, 30, 40, 50, 60])], layout: pairLayout(five[2])).samples == [30, 30, 60, 60],
           "channel pairs: a lone fifth channel plays on both sides")
+    // covers: S14
     check(stereo([(1, [1, 2, 3])], layout: pairLayout(.first)).samples == [1, 1, 2, 2, 3, 3],
           "channel pairs: a mono device on 1-2 still plays its channel on both sides")
     let twoStreams = [format(flags: float32), format(flags: signed, bits: 16)]
+    // covers: S14
     check(CaptureInputFormat.check(twoStreams, pair: four[1])
             == .usable(CaptureChannels.Layout(left: 2, right: 3, leftSample: .int16, rightSample: .int16)),
           "channel pairs: the pair's stream decides its sample type")
+    // covers: S14
     check(CaptureInputFormat.check([format(flags: float32), format(flags: kAudioFormatFlagIsPacked, bits: 16)]) == .usable(.stereoFloat)
             && CaptureInputFormat.check([format(flags: float32), format(flags: kAudioFormatFlagIsPacked, bits: 16)],
                                         pair: four[1]) == .unsupported,
@@ -2901,6 +2917,7 @@ do {
         withUnsafePointer(to: &list) { CaptureChannels($0, layout: int16Pair).copy(from: 0, frames: 2, into: &out) }
         return out
     }
+    // covers: S14
     check(int16Stereo == [-1, 0.5, Float(32_767) / 32_768, Float(-1) / 32_768],
           "channel pairs: a 16-bit input's pair 3-4 is converted to float", "\(int16Stereo)")
 
@@ -2922,16 +2939,19 @@ do {
 
     let storedPairs: [String: Any] = ["a": 1, "b": 2.0, "c": 0, "d": -1, "e": 1.5, "f": "x", "g": Double.nan,
                                       "h": 511, "i": 512]
+    // covers: S14
     check(AppSettings.channelPairs(storedPairs) == ["a": 1, "b": 2, "h": 511] && AppSettings.channelPairs("x").isEmpty
             && InputChannelPair.maxStored == 511,
           "channel pairs: only whole stored pairs from 1 to 511 are read back, as on Windows")
     final class PairStore { var values: [String: Any] = [:] }
     let pairStore = PairStore()
     let pairSettings = SettingsStore(read: { pairStore.values[$0] }, write: { value, key in pairStore.values[key] = value })
+    // covers: S14
     check(pairSettings.load().inputPairs.isEmpty, "channel pairs: a new install reads every device on 1-2")
     pairSettings.save(inputPairs: ["mic-uid": 1])
     let pairsBack = pairSettings.load().inputPairs
     pairSettings.save(inputPairs: [:])
+    // covers: S14
     check(pairsBack == ["mic-uid": 1] && pairStore.values[AppSettings.Keys.inputChannelPairs] == nil,
           "channel pairs: a pair is kept per device UID, and the key goes once all are on 1-2")
 
@@ -4488,6 +4508,7 @@ do {
     var restored = EveryTimeGuard()
     let lateOff = restored.turnsOff(late.askingEveryTime(late.rows(enabled: ["native:T1"])),
                                     enabled: ["native:T1"])
+    // covers: S223
     check(lateOff == ["native:T1"],
           "every time: a speaker on from the last run goes off once it asks for a code every time, also when listed before that",
           "\(lateOff)")
@@ -4498,6 +4519,7 @@ do {
     playing.added("T2")
     _ = playing.apply(.state(id: "T2", .playing, retryMs: nil))
     playing.apply(.changed(tv("T2", .available, everyTime: true)))
+    // covers: S223
     check(playing.askingEveryTime(playing.rows(enabled: ["native:T2"])).isEmpty,
           "every time: a speaker that plays when it starts asking for a code every time keeps playing")
 
@@ -4527,21 +4549,25 @@ do {
     let started = pin.turnedOnByUser("P1")
     let asked = pin.apply(.pinNeeded(id: "P1"))
     let prompt = pin.nextPrompt()
+    // covers: S223
     check(started == .startPairing("P1") && asked == .prompt && prompt != nil,
           "every time: switched on by hand, it pairs and asks for the PIN")
     // Neither a reconcile nor the 30 s safety net starts a session for it
     // while the prompt is open, even when it is listed as able to play.
     pin.apply(.changed(tv("P1", .available, everyTime: true)))
     let during = pin.plan(streaming: true, enabled: ["native:P1"])
+    // covers: S223
     check(during.add.isEmpty, "every time: no session starts for a speaker whose PIN prompt is open", "\(during)")
     // A session that was in the sender anyway and is refused starts no
     // second pairing: a new /pair-pin-start makes the TV show a new code.
     pin.added("P1")
     let refused = pin.apply(.error(id: "P1", .pairingRequired, retryMs: nil, detail: ""))
+    // covers: S223
     check(refused == nil && pin.withdrawPrompt() == nil,
           "every time: a refusal while the PIN prompt is open starts no second pairing and keeps the prompt",
           "\(String(describing: refused))")
     let retried = pin.apply(.error(id: "P1", .pairingRequired, retryMs: 1000, detail: ""))
+    // covers: S223
     check(retried == nil && pin.withdrawPrompt() == nil,
           "every time: a refusal the sender retries while the PIN prompt is open starts no second pairing and keeps the prompt",
           "\(String(describing: retried))")
@@ -4565,10 +4591,12 @@ do {
     let restart = session.plan(streaming: true, enabled: enabledAfter)
     let reopened = session.nextPrompt()
     let relisted = hand.turnsOff(session.askingEveryTime(session.rows(enabled: enabledAfter)), enabled: enabledAfter)
+    // covers: S223
     check(ended == [NativeAirPlayPlan.TurnOff(id: "native:S1", reason: .needsCode)]
             && restart.add.isEmpty && reopened == nil && relisted.isEmpty,
           "every time: stop then start: row off + notice",
           "ended \(ended), restart \(restart), prompt \(String(describing: reopened)), relisted \(relisted)")
+    // covers: S223
     check(session.turnedOnByUser("S1") == .startPairing("S1"),
           "every time: after the stream ended, the next click on it pairs again")
 
@@ -4584,6 +4612,7 @@ do {
     let lost = again.apply(.error(id: "S2", .connectionLost, retryMs: 1000, detail: ""))
     let keptOn = kept.turnsOff(again.askingEveryTime(again.rows(enabled: ["native:S2"])), enabled: ["native:S2"])
     let refusedAgain = again.apply(.error(id: "S2", .pairingRequired, retryMs: nil, detail: ""))
+    // covers: S223
     check(lost == nil && keptOn.isEmpty && refusedAgain == .turnOff("native:S2", .needsCode) && again.nextPrompt() == nil,
           "every time: a reconnect inside the stream that the receiver refuses: row off + notice, no prompt",
           "lost \(String(describing: lost)), kept \(keptOn), refused \(String(describing: refusedAgain))")
@@ -4599,6 +4628,7 @@ do {
         var marked = EveryTimeGuard()
         marked.turnedOnByHand(["native:S1"])
         let off = marked.streamEnded(cause, streaming: true, everyTime: ["native:S1"], enabled: enabled)
+        // covers: S223
         check(off == expected && marked.byHand.isEmpty,
               "every time: \(what) ends the stream: the by-hand mark is gone", "\(off), \(marked.byHand)")
     }
@@ -4611,6 +4641,7 @@ do {
     asleep.added("S3")
     _ = asleep.apply(.state(id: "S3", .playing, retryMs: nil))
     let sleepOff = sleeper.streamEnded(.sleep, streaming: true, model: asleep, enabled: ["native:S3"])
+    // covers: S223
     check(sleepOff == [.init(id: "native:S3", reason: .needsCode)] && sleeper.byHand.isEmpty,
           "every time: the Mac sleeping while it plays ends the stream: row off + notice", "\(sleepOff)")
     // A rebuild (a source change, say) stops the engine before it starts it
@@ -4619,6 +4650,7 @@ do {
     rebuilt.turnedOnByHand(["native:S1"])
     let failedRebuild = rebuilt.streamEnded(.stopped(.startFailed), streaming: false, midRebuild: true,
                                             everyTime: ["native:S1"], enabled: ["native:S1"])
+    // covers: S223
     check(failedRebuild == [.init(id: "native:S1", reason: .needsCode)] && rebuilt.byHand.isEmpty,
           "every time: a rebuild after a source change that fails to start ends the stream: the by-hand mark is gone",
           "\(failedRebuild), \(rebuilt.byHand)")
@@ -4626,6 +4658,7 @@ do {
     quitMidRebuild.turnedOnByHand(["native:S1"])
     let quitOff = quitMidRebuild.streamEnded(.stopped(.quitting), streaming: false, midRebuild: true,
                                              everyTime: ["native:S1"], enabled: ["native:S1"])
+    // covers: S223
     check(quitOff.isEmpty && quitMidRebuild.byHand == ["native:S1"],
           "every time: quitting during a rebuild keeps the by-hand mark", "\(quitOff)")
     // A source change rebuilds inside the stream, and quitting leaves the
@@ -4636,6 +4669,7 @@ do {
         var marked = EveryTimeGuard()
         marked.turnedOnByHand(["native:S1"])
         let off = marked.streamEnded(cause, streaming: streaming, everyTime: ["native:S1"], enabled: ["native:S1"])
+        // covers: S223
         check(off.isEmpty && marked.byHand == ["native:S1"],
               "every time: \(cause) with streaming \(streaming) keeps the by-hand mark", "\(off)")
     }
@@ -4658,6 +4692,7 @@ do {
     }
     for promptOpen in [false, true] {
         let (_, hand, off) = outlivingStream(promptOpen: promptOpen)
+        // covers: S223
         check(off.isEmpty && hand.byHand == ["native:E1"],
               "every time: a stream that ends while its \(promptOpen ? "PIN prompt is open" : "pairing runs") keeps the by-hand mark",
               "\(off), \(hand.byHand)")
@@ -4669,6 +4704,7 @@ do {
     if case .paired(let id)? = pairedOutcome { pairedHand.paired(id) }
     let afterPairing = pairedHand.turnsOff(paired.askingEveryTime(paired.rows(enabled: ["native:E1"])),
                                            enabled: ["native:E1"])
+    // covers: S223
     check(submitted == .submitPin && pairedOutcome == .paired("native:E1") && afterPairing.isEmpty,
           "every time: a PIN typed after the stream ended pairs it, and it stays on",
           "\(String(describing: submitted)), \(String(describing: pairedOutcome)), \(afterPairing)")
@@ -4676,6 +4712,7 @@ do {
     let failed = failing.apply(.pairingFailed(id: "E1", wrongPin: false, .refused, detail: ""))
     let failedReason = failed == .turnOff("native:E1", .pairingFailed)
         ? failingHand.turnedOff("native:E1", reason: .pairingFailed) : nil
+    // covers: S223
     check(failedReason == .needsCode && failingHand.byHand.isEmpty,
           "every time: a pairing that fails after the stream ended: mark gone, the needs-a-PIN notice",
           "\(String(describing: failed)), \(String(describing: failedReason)), \(failingHand.byHand)")
@@ -4683,11 +4720,13 @@ do {
     let closedPrompt = closing.nextPrompt()
     let closed = closedPrompt.map { closing.answered($0, code: nil) }
     let closedReason = closed == .turnOff(.cancelled) ? closingHand.turnedOff("native:E1", reason: .cancelled) : nil
+    // covers: S223
     check(closedReason == .cancelled && closingHand.byHand.isEmpty,
           "every time: closing the PIN prompt after the stream ended cancels: mark gone",
           "\(String(describing: closed)), \(String(describing: closedReason)), \(closingHand.byHand)")
     var streamingHand = EveryTimeGuard()
     streamingHand.turnedOnByHand(["native:E1"])
+    // covers: S223
     check(streamingHand.turnedOff("native:E1", reason: .pairingFailed) == .pairingFailed && streamingHand.byHand.isEmpty,
           "every time: a pairing that fails while the stream runs says it failed, as before")
     // A failed sender takes its pairings and prompts with it: nothing is left to finish.
@@ -4695,6 +4734,7 @@ do {
     failedSender.turnedOnByHand(["native:E1"])
     let senderOff = failedSender.streamEnded(.senderFailed, streaming: true, everyTime: ["native:E1"],
                                              enabled: ["native:E1"], awaitingUser: ["native:E1"])
+    // covers: S223
     check(senderOff == [.init(id: "native:E1", reason: .needsCode)] && failedSender.byHand.isEmpty,
           "every time: a sender failure during the pairing ends the mark", "\(senderOff)")
     // The sender fails after the stream ended, its pairing with it: the
@@ -4703,6 +4743,7 @@ do {
     let lateSenderOff = failedAfterEnd.streamEnded(.senderFailed, streaming: false, everyTime: ["native:E1"],
                                                    enabled: ["native:E1"])
     let relistedAfterFailure = failedAfterEnd.turnsOff(["native:E1"], enabled: ["native:E1"])
+    // covers: S223
     check(lateSenderOff == [.init(id: "native:E1", reason: .needsCode)] && failedAfterEnd.byHand.isEmpty
             && relistedAfterFailure == ["native:E1"],
           "every time: a sender failure after the stream ended, with the pairing still open, turns it off with the needs-a-PIN notice",
@@ -4710,6 +4751,7 @@ do {
     // A new stream starts while that pairing runs: its failure is the new stream's, as before.
     var (_, restarted, _) = outlivingStream(promptOpen: false)
     restarted.streamStarted()
+    // covers: S223
     check(restarted.turnedOff("native:E1", reason: .pairingFailed) == .pairingFailed,
           "every time: a pairing that outlived one stream and fails in the next says it failed")
 }
@@ -5719,13 +5761,17 @@ do {
     var empty = NowPlayingMonitor.EmptyReadings()
     var shown = empty.next(reading: paused, last: nil, lastPlayerRuns: true)
     shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true)
+    // covers: S218
     check(shows(shown).fields.title == "Song" && shows(shown).artwork == .track,
           "now playing: one empty reading of a paused player keeps its track and cover, not the fallback")
     for _ in 0..<300 { shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true) }
+    // covers: S218
     check(shows(shown).fields.title == "Song" && shows(shown).artwork == .track,
           "now playing: a paused player that still runs keeps its track and cover through 300 unreadable readings")
+    // covers: S218
     check(empty.dropped == nil, "now playing: keeping a paused track through unreadable readings logs no drop")
     shown = empty.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .stopped)
+    // covers: S218
     check(shown == nil && shows(shown).fields == untitled && empty.dropped == .stopped,
           "now playing: an explicit stopped reading drops a paused track at once")
     let playing = NowPlayingMonitor.Track(bundleID: spotify, appName: "Spotify", title: "Tune", artist: "Band",
@@ -5737,14 +5783,17 @@ do {
     shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true)
     shown = stalled.next(reading: playing, last: shown, lastPlayerRuns: true)
     for _ in 1..<dropAfter { shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true) }
+    // covers: S218
     check(shows(shown).fields.title == "Tune",
           "now playing: a real reading in between starts the count of empty readings after a playing track again")
     shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true)
+    // covers: S218
     check(shown == nil && shows(shown).fields == untitled && shows(shown).artwork == .neutral
             && stalled.dropped == .unreadable(dropAfter),
           "now playing: \(dropAfter) empty readings in a row after a playing track send the fallback")
     var quit = NowPlayingMonitor.EmptyReadings()
     shown = quit.next(reading: nil, last: paused, lastPlayerRuns: false)
+    // covers: S218
     check(shown == nil && shows(shown).fields == untitled && quit.dropped == .quit,
           "now playing: a player that quit sends the fallback at the first empty reading")
     var nameless = NowPlayingMonitor.EmptyReadings()
@@ -5754,13 +5803,16 @@ do {
     for _ in 2..<dropAfter {
         shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless)
     }
+    // covers: S218
     check(shows(shown).fields.title == "Song",
           "now playing: a paused track stays through fewer than \(dropAfter) readings that play without a name")
     shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless)
+    // covers: S218
     check(shown == nil && shows(shown).fields == untitled && nameless.dropped == .playingNameless(dropAfter),
           "now playing: \(dropAfter) readings that play something without a name drop a paused track")
     var denied = NowPlayingMonitor.EmptyReadings()
     shown = denied.next(reading: nil, last: paused, lastPlayerRuns: true, lastPlayer: .denied)
+    // covers: S218
     check(shown == nil && shows(shown).fields == untitled && denied.dropped == .denied,
           "now playing: a player that refuses Apple Events drops a paused track at once")
 }
@@ -5788,6 +5840,7 @@ do {
     check(shows(spotifyPaused).fields.title == "Song" && shows(spotifyPaused).artwork == .track,
           "receiver info: system source, paused Spotify, no other player: its track and cover stay")
     let musicPaused = track(music, "Old", playing: false)
+    // covers: S218
     check(NowPlayingMonitor.pausedPick([musicPaused, spotifyPaused], lastPlayed: played.bundleID) == spotifyPaused
             && NowPlayingMonitor.pausedPick([musicPaused, spotifyPaused], lastPlayed: nil) == musicPaused,
           "now playing: with no player playing, the paused player that played last is followed")
@@ -6477,12 +6530,14 @@ do {
     let native = read("Sources/AudioSync/AppDelegate+NativeAirPlay.swift")
 
     let setUp = body(windows, after: "func setUpMenuBar() {")
+    // covers: S361
     check(count(setUp, "nowPlaying.onChange = { [weak self] track in self?.nowPlayingChanged(track) }") == 1
             && count(app, "nowPlaying.onChange =") == 1,
           "track info call site: Now Playing's change callback runs nowPlayingChanged, set once at setup",
           "setUpMenuBar \(setUp.isEmpty ? "not found" : "found"), \(count(app, "nowPlaying.onChange =")) assignments")
     let started = body(body(native, after: "func nativeStartFinished("), after: "if started {",
                        until: "\n        } else")
+    // covers: S361
     check(count(started, "resendTrackInfo()") == 1,
           "track info call site: a native sender that started gets the track info again through resendTrackInfo",
           started.isEmpty ? "the started branch of nativeStartFinished not found" : "no resendTrackInfo() in it")
@@ -6493,19 +6548,24 @@ do {
           "track info call site: AppDelegate takes the tested TrackInfoHost wiring and shadows none of it")
 
     let airPlay = read("Sources/AudioSync/AppDelegate+AirPlay.swift")
+    // covers: S361
     check(count(body(airPlay, after: "func setSenderTrackInfo("), "nativeAirPlay?.setTrackInfo(") == 1,
           "track info call site: what the wiring sends reaches the native AirPlay sender")
     // covers: S361
     check(count(body(airPlay, after: "func syncTrackInfo() {"),
                 "trackInfoModelUpdated(sending: sending, casting: casting)") == 1,
           "track info call site: every model update tells the wiring whether AirPlay and Cast show track info")
+    // covers: S361
     check(count(body(airPlay, after: "func recheckTrackInfo(at date: Date) {"), "trackInfoRecheckFired(at: date)") == 1,
           "track info call site: a scheduled wait that ends runs the wiring's look again")
+    // covers: S361
     check(count(body(windows, after: "func pushModel() {"), "syncTrackInfo()") == 1,
           "track info call site: every model push syncs track info")
+    // covers: S361
     check(count(windows, "remote.onNowPlayingNeedChange = { [weak self] in self?.syncTrackInfo() }") == 1,
           "track info call site: a paired phone that starts or stops showing Now Playing syncs track info")
     let source = body(read("Sources/AudioSync/AppDelegate+Outputs.swift"), after: "func updateNowPlayingTarget() {")
+    // covers: S361
     check(count(body(source, after: "if nowPlaying.noteSource(audioSource) {", until: "nowPlaying.refresh()"),
                 "self?.sendTrackInfo()") == 1,
           "track info call site: a source change that Now Playing notes sends track info again")
@@ -12761,20 +12821,25 @@ do {
     let t = UIStrings()
     let pieces = GuideLayout.pieces(of: t.helpText, anchor: t.guideArtAnchor)
     let guideWords = t.helpText.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    // covers: S407
     check(guideWords.contains("the button with its zone's name goes to the zone")
             && !guideWords.contains("after its own goes to the zone"),
           "guide, zones: a zoned speaker's short row names the button that goes to its zone")
+    // covers: S407
     check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
             && pieces.map(\.text).joined() == t.helpText,
           "guide: every illustration has its anchor line, in order, and the text is kept whole",
           "\(pieces.map(\.art))")
     let starts = pieces.dropFirst().map { piece in piece.text.drop { $0 == " " } }
+    // covers: S407
     check(zip(starts, GuideArt.allCases).allSatisfy { $0.hasPrefix(t.guideArtAnchor($1)) },
           "guide: each illustration sits just before its anchor line")
 
     let made = GuideLayout.pieces(of: "a\n  - B x\nc", anchor: { $0 == .delay ? "- B" : "missing" })
+    // covers: S407
     check(made == [.init(text: "a\n", art: .delay), .init(text: "  - B x\nc", art: nil)],
           "guide: a missing anchor leaves its illustration out; leading spaces are ignored", "\(made)")
+    // covers: S407
     check(GuideArt.allCases.allSatisfy { !$0.lightSVG.contains("<text") && !$0.darkSVG.contains("<text")
                                          && $0.lightSVG != $0.darkSVG },
           "guide: the illustrations carry no text and differ between light and dark")
@@ -12789,13 +12854,16 @@ do {
     let topics = ["First Steps", "More Controls", "Calibration", "Speaker Notes", "AirPlay", "Google Cast",
                   "Notices", "Web Remote", "Tips", "Volume", "Notes"]
     let unfinished = texts.filter { text in !text.isEmpty && !(text.last.map { ".:!?".contains($0) } ?? false) }
+    // covers: S407
     check(unfinished == titles + topics,
           "guide: only the title and topic headings end without punctuation, so no paragraph breaks inside a sentence",
           unfinished.joined(separator: " | "))
+    // covers: S407
     check(!texts.contains { $0.contains("\n") || $0.contains("  ") }
             && texts.joined(separator: " ").split(separator: " ") == t.helpText.split { $0 == " " || $0 == "\n" },
           "guide: no paragraph keeps a hard break or a wrap's indent, and every word stays in order")
     let steps = paragraphs.filter { $0.text.first?.isNumber == true }
+    // covers: S407
     check(steps.map(\.hang) == ["1. ", "2. ", "3. ", "4. ", "5. "]
             && paragraphs.filter { $0.text.hasPrefix("- ") }.allSatisfy { $0.hang == "- " }
             && texts.filter(\.isEmpty).count == t.helpText.components(separatedBy: "\n").filter(\.isEmpty).count,
@@ -12804,15 +12872,18 @@ do {
 
     let roles = GuideLayout.roles(of: paragraphs)
     let headings = zip(paragraphs, roles).filter { $0.1 == .heading }.map { $0.0.text }
+    // covers: S407
     check(roles.first == .title && roles.filter { $0 == .title }.count == 1 && headings == topics
             && roles.count > 1 && roles[1] == .body,
           "guide: the title and the topic headings are set apart, and the byline stays body text",
           headings.joined(separator: " | "))
+    // covers: S407
     check(GuideLayout.roles(of: [.init(text: "Notices", hang: ""), .init(text: "Text.", hang: "")], opensText: false)
             == [.heading, .body],
           "guide: a piece after an illustration that opens with a topic sets it as a heading")
 
     let made = GuideLayout.paragraphs(of: "Topic\nOne two\nthree.\n\n1. Step one\n   wraps\n- Item\n  goes on\nAfter")
+    // covers: S407
     check(made == [.init(text: "Topic", hang: ""), .init(text: "One two three.", hang: ""), .init(text: "", hang: ""),
                    .init(text: "1. Step one wraps", hang: "1. "), .init(text: "- Item goes on", hang: "- "),
                    .init(text: "After", hang: "")],
@@ -12828,9 +12899,11 @@ do {
     let topic = start.flatMap { s in end.map { e in s < e ? lines[s..<e].joined(separator: "\n") : "" } } ?? ""
     let named = [t.calibrateWithMicrophone, t.calibrateAll, t.includeAnyway, t.measureAgain,
                  t.calibrateAllApply, t.calibrateAllUndo]
+    // covers: S407
     check(!topic.isEmpty && named.allSatisfy(topic.contains),
           "guide: a Calibration topic before Speaker Notes names Calibrate All Speakers, Include Anyway and the rest",
           named.filter { !topic.contains($0) }.joined(separator: ", "))
+    // covers: S407
     check(topic.contains("Headphones") && topic.contains("virtual outputs")
             && topic.contains("Bluetooth speakers take part"),
           "guide: the Calibration topic says headphones and virtual outputs are left out and Bluetooth speakers stay in")
