@@ -140,8 +140,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
     /// The delays were migrated to offsets (S179), in this launch or before.
     private var localDelaysMigrated: Bool
-    /// Each AirPlay speaker's own volume s, by output ID (S73): unrounded,
-    /// above 100 when the zone or the master is below 100 (S290).
+    /// Each AirPlay speaker's own volume s, by output ID (S290): unrounded,
+    /// above 100 when the zone or the master is below 100.
     var airplayVolume: [String: Double] {
         didSet { if airplayVolume != oldValue { store.save(levels: airplayVolume, forKey: Keys.airplayVolumes) } }
     }
@@ -206,7 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
     var inputListings = InputListings()
 
-    /// Where a speaker without a volume of its own starts (S71, S105).
+    /// Where a speaker without a volume of its own starts (S71, S399).
     let defaultVolume = AppSettings.defaultVolume
 
     // MARK: - AirPlay speakers (`+AirPlay`)

@@ -574,7 +574,7 @@ mod tests {
             assert!(big.supports_rate(rate), "{rate}");
         }
         assert!(!big.supports_rate(384_000));
-        // The cap that leaves room for the 20 s maximum delay (S77) plus margin and a block.
+        // The cap that leaves room for the 20 s maximum delay (S176) plus margin and a block.
         assert!(capacity_for_rate(48_000) - MIN_MARGIN_FRAMES - 8192 >= 20 * 48_000);
     }
 

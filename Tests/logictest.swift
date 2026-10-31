@@ -40,7 +40,7 @@ do {
     }
     let g = VolumeCurve.gain(position:)
     check(AppSettings.defaultVolume == 60 && approx(gain("new", master: 70), g(60) * g(70), 1e-12),
-          "volume: a local speaker with no stored volume plays at 60, in no zone at zone volume 100", "\(gain("new", master: 70))")
+          "volume: a local speaker with no stored volume plays at 60, in no zone at zone volume 100 (S399)", "\(gain("new", master: 70))")
     // covers: S71
     check(approx(gain("usb", master: 70), g(80) * g(50) * g(70), 1e-12),
           "volume: a local speaker's gain is its own volume times its zone's times the master's", "\(gain("usb", master: 70))")
@@ -1881,7 +1881,7 @@ do {
     }
 }
 
-// MARK: This Mac's own AirPlay Receiver — never listed (S100)
+// MARK: This Mac's own AirPlay Receiver — never listed (S222)
 check(NativeReceiver.isThisMac("My Mac", computerName: "My Mac"), "own receiver: the Mac's own receiver is recognized")
 check(NativeReceiver.isThisMac("my mac", computerName: "My Mac"), "own receiver: the match ignores case")
 check(!NativeReceiver.isThisMac("My Mac mini", computerName: "My Mac"), "own receiver: only an exact name is the Mac")
@@ -3662,7 +3662,7 @@ do {
         model.apply(.appeared(mac))
         model.apply(.appeared(tv))
         check(model.rows(enabled: []) == [NativeAirPlayID.app(tv.id)] && model.soundingIDs == [NativeAirPlayID.app(tv.id)],
-              "native airplay: this Mac's own AirPlay Receiver is never listed (S100)", "\(model.rows(enabled: []))")
+              "native airplay: this Mac's own AirPlay Receiver is never listed (S222)", "\(model.rows(enabled: []))")
         model.computerName = "Office Mac"
         model.apply(.changed(mac))
         check(model.rows(enabled: []).count == 2, "native airplay: a receiver named otherwise than this Mac is listed")

@@ -844,7 +844,7 @@ const IDLE_AFTER_HNS: u64 = 250_000;
 /// already.
 pub(crate) const IDLE_LAG_HNS: u64 = 100_000;
 
-/// The most silence one gap writes, 21 s: more than the longest delay (S77),
+/// The most silence one gap writes, 21 s: more than the longest delay (S176),
 /// so after a longer stall (a PC that slept) every reader finds silence.
 const MAX_FILL_SECONDS: u64 = 21;
 

@@ -33,7 +33,7 @@ struct AppSettings: Equatable {
         /// before the local delay model (S77). Read once by the migration
         /// (S179), never written; left in place for older builds.
         static let localDelays = "localDelayMsByUID"
-        /// Each AirPlay speaker's own slider position (0…100), by output ID (S73).
+        /// Each AirPlay speaker's own volume s, unrounded, by output ID (S290).
         static let airplayVolumes = "airPlayVolumeByID"
         /// `[SpeakerGroup]` as JSON (S149). Left as it is when the groups
         /// become zones, for older builds (S248).
@@ -111,7 +111,7 @@ struct AppSettings: Equatable {
         static let speakerOnAtInstall = "thisMacOnAtInstall"
     }
 
-    /// Where a speaker without a volume of its own starts (S71, S105).
+    /// Where a speaker without a volume of its own starts (S71, S399).
     static let defaultVolume: Double = 60
     static let defaultMaster: Double = 100
     /// Where a local speaker without a delay of its own started before the

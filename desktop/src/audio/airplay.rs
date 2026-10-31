@@ -7498,7 +7498,7 @@ pub mod tests {
         );
     }
 
-    // covers: S79
+    // covers: S79, S399
     #[test]
     fn a_speaker_joins_the_stream_while_on_and_streaming() {
         let fake = FakeAirPlay::new();

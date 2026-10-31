@@ -557,7 +557,7 @@ struct NativeAirPlayModel {
     /// The last name of every receiver seen, for rows and notices.
     private(set) var names: [String: String] = [:]
     /// This Mac's computer name: a receiver announced under it is this Mac's
-    /// own AirPlay Receiver, which is never listed (S100,
+    /// own AirPlay Receiver, which is never listed (S222,
     /// `NativeReceiver.isThisMac`). Nil hides nothing.
     var computerName: String?
     /// The target each member was last listed in (P176), kept while that
