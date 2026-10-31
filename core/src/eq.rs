@@ -581,6 +581,12 @@ impl EqControl {
         self.shared.nan_resets.load(Ordering::Relaxed)
     }
 
+    /// A local output's linear `gain` with the headroom cut of S26 given back
+    /// as far as unity allows (S71): the gain to play and the dB given back.
+    pub fn returned_gain(&self, gain: f64) -> (f64, f64) {
+        (gain, 0.0)
+    }
+
     fn publish(&mut self) {
         let snapshot = Snapshot::design(&self.settings, self.sample_rate, self.epoch);
         self.publish_snapshot(&snapshot);

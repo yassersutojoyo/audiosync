@@ -8,6 +8,7 @@ use audiosync_core::eq::{
     UserCurve, cascade_peak_db, delete_curve, design_bands, equalizer, matching_curve, preset,
     quantize_gain_db, rename_curve, sanitized_curves, save_curve,
 };
+use audiosync_core::volume::GainStage;
 use proptest::prelude::*;
 
 const BLOCK: usize = 512;
@@ -786,6 +787,42 @@ fn the_engine_takes_the_cascade_peak_off_the_user_preamp() {
         (measured - expected).abs() < 0.05,
         "measured {measured:.3} dB, expected {expected:.3} dB"
     );
+}
+
+// covers: S26, S71
+#[test]
+fn a_local_output_below_unity_gets_the_headroom_cut_back() {
+    // A user's curve whose cut P is 5.8 dB at about 33 Hz; 0.7.1 played it
+    // with no cut, at its +0.5 dB preamp.
+    let gains = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+    let settings = enabled(gains, 0.5);
+    let peak = headroom_db(&settings, 48_000.0);
+    assert!((peak - 5.8).abs() < 0.01, "P is {peak:.3} dB");
+    let at_1k: f64 = design_bands(&gains, 48_000.0)
+        .iter()
+        .map(|b| response_db(b, 1000.0, 48_000.0))
+        .sum();
+    for (gain, expected) in [(0.1675, 0.5 + at_1k), (1.0, 0.5 - peak + at_1k)] {
+        let (control, mut processor) = configured(48_000.0, settings);
+        let played = control.returned_gain(gain).0 as f32;
+        let mut stage = GainStage::new();
+        let (mut energy_in, mut energy_out) = (0.0f64, 0.0f64);
+        for start in (0..48_000).step_by(BLOCK) {
+            let input = sine(start, BLOCK, 1000.0, 48_000.0, 0.25);
+            let mut block = input.clone();
+            processor.process(&mut block);
+            stage.apply(&mut block, 2, played);
+            if start >= 24_000 {
+                energy_in += input.iter().map(|x| f64::from(*x).powi(2)).sum::<f64>();
+                energy_out += block.iter().map(|y| f64::from(*y).powi(2)).sum::<f64>();
+            }
+        }
+        let level = 10.0 * (energy_out / energy_in).log10() - 20.0 * gain.log10();
+        assert!(
+            (level - expected).abs() < 0.1,
+            "at gain {gain}: {level:.3} dB over the gain, expected {expected:.3} dB"
+        );
+    }
 }
 
 // covers: S27, S28
