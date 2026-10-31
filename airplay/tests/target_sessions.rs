@@ -287,7 +287,7 @@ fn a_pair_plays_on_every_member_in_step_with_the_same_audio_and_never_on_the_con
     sender.shutdown();
 }
 
-// covers: P177
+// covers: P177, P181
 #[test]
 fn the_control_device_and_its_group_refuse_each_other() {
     let _serial = serial();
@@ -320,6 +320,12 @@ fn the_control_device_and_its_group_refuse_each_other() {
         assert_eq!(errors(&events, key), vec![reason]);
     }
     assert!(a.log().connections.is_empty() && b.log().connections.is_empty());
+    // A refused run still clears a list an earlier run of the target left.
+    assert!(wait_until(LONG, || {
+        events.drain(&sender);
+        !missing_reports(&events, &id).is_empty()
+    }));
+    assert_eq!(missing_reports(&events, &id), vec![Vec::new()]);
     sender.remove_target(&id);
     sender.remove_speaker(&dc.key);
     assert!(
@@ -1771,6 +1777,69 @@ fn one_volume_reaches_every_member_and_a_missing_member_joins_when_it_comes_back
         missing_reports(&events, &id).last() == Some(&Vec::new())
     }));
     assert!(a.log().audio.len() > packets);
+    sender.shutdown();
+}
+
+// covers: P181
+#[test]
+fn a_new_run_with_every_member_in_view_reports_an_empty_missing_list() {
+    let _serial = serial();
+    let a = NetReceiver::start(Behavior::default());
+    let b = NetReceiver::start(Behavior::default());
+    let (sender, _host) = start(false);
+    let mut events = Events::default();
+    let (da, db) = (a.device(1, PCM_TXT), b.device(2, PCM_TXT));
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    let id = target.id.clone();
+    sender.add_target(target, options(), |_, _| {});
+    assert!(playing(&mut events, &sender, &da.key, 1));
+    assert!(playing(&mut events, &sender, &db.key, 1));
+    // A host may still hold an earlier run's list until this one arrives.
+    assert!(wait_until(LONG, || {
+        events.drain(&sender);
+        !missing_reports(&events, &id).is_empty()
+    }));
+    assert_eq!(missing_reports(&events, &id), vec![Vec::new()]);
+    sender.shutdown();
+}
+
+// covers: P181
+#[test]
+fn a_pair_turned_off_and_on_again_reports_nothing_missing_once_both_play() {
+    let _serial = serial();
+    let a = NetReceiver::start(Behavior::default());
+    let b = NetReceiver::start(Behavior::default());
+    let (sender, _host) = start(false);
+    let mut events = Events::default();
+    let script = Script::default();
+    sender.start_discovery_with(Box::new(script.clone()));
+    let da = a.device(1, PCM_TXT);
+    let db_key = DeviceKey::Id(device_id(2));
+    script.push(BrowseEvent::Resolved(a.record(1, PCM_TXT)));
+    let target = pair(vec![member(Some(&da), 1), member(None, 2)], None);
+    let id = target.id.clone();
+    sender.add_target(target, options(), |_, _| {});
+    assert!(wait_until(LONG, || {
+        events.drain(&sender);
+        missing_reports(&events, &id).last() == Some(&vec![db_key.clone()])
+    }));
+    let first_run = missing_reports(&events, &id).len();
+
+    sender.remove_target(&id);
+    script.push(BrowseEvent::Resolved(b.record(2, PCM_TXT)));
+    let db = b.device(2, PCM_TXT);
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    sender.add_target(target, options(), |_, _| {});
+    assert!(
+        playing(&mut events, &sender, &db_key, 1),
+        "{:?}",
+        events.of(&db_key)
+    );
+    assert!(wait_until(LONG, || {
+        events.drain(&sender);
+        let reports = missing_reports(&events, &id);
+        reports.len() > first_run && reports.last() == Some(&Vec::new())
+    }));
     sender.shutdown();
 }
 

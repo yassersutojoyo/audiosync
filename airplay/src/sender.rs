@@ -642,7 +642,8 @@ pub enum SenderEvent {
     DiscoveryFailed,
     /// The members of a target the host added that play nothing now: out
     /// of view at the start, or lost and waiting for a retry (P181). Sent
-    /// whenever the list changes, empty once every member plays again.
+    /// whenever the list changes and once when the target is added, empty
+    /// when every member plays.
     TargetMissing {
         id: TargetId,
         missing: Vec<DeviceKey>,
