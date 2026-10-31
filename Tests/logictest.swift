@@ -408,6 +408,7 @@ check(AppAppearance.light.appearanceName == .aqua && AppAppearance.dark.appearan
       "appearance: light → aqua, dark → darkAqua")
 
 // MARK: Speaker keys
+// covers: S149
 check(SpeakerKey.make(id: "123", airplay: true) == "ap:123", "speaker key: AirPlay prefix")
 check(SpeakerKey.parse("lc:58-18:output").map { $0.id == "58-18:output" && !$0.airplay } == true, "speaker key: local parse keeps colons")
 check(SpeakerKey.parse("zz:1") == nil, "speaker key: unknown prefix rejected")
@@ -784,6 +785,7 @@ do {
                dev("usb", kAudioDeviceTransportTypeUSB), dev("multi", kAudioDeviceTransportTypeAggregate),
                dev("auto", kAudioDeviceTransportTypeAutoAggregate), dev("meeting", kAudioDeviceTransportTypeVirtual)]
     let uids = { (d: [AudioDevices.Device]) in d.map(\.uid) }
+    // covers: S151
     check(uids(AudioDevices.listed(all, showVirtual: false, keep: [])) == ["builtin", "usb"],
           "devices: virtual and aggregate hidden by default")
     check(uids(AudioDevices.listed(all, showVirtual: false, keep: ["meeting", "usb"])) == ["builtin", "usb", "meeting"],
@@ -1013,6 +1015,7 @@ do {
 }
 
 // MARK: Speaker layout — This Mac, then connected speakers by name with a tag
+// covers: S152
 do {
     check(SpeakerTag(transport: kAudioDeviceTransportTypeBuiltIn) == .builtIn
           && SpeakerTag(transport: kAudioDeviceTransportTypeBluetooth) == .bluetooth
@@ -1303,6 +1306,7 @@ do {
             && LocalNetworkProbe.recheckDate(running: true, access: .allowed, startedAt: t0) == nil
             && LocalNetworkProbe.recheckDate(running: false, access: .denied, startedAt: t0) == nil,
           "local network probe: only a running probe's denied answer is asked again (S101)")
+    // covers: S352
     check(DiscoveryRestart.due(access: .allowed, found: false) && DiscoveryRestart.afterAllowed == 3,
           "local network: a sender that found nothing 3 s after access turned allowed browses afresh (S352)")
     check(!DiscoveryRestart.due(access: .allowed, found: true) && !DiscoveryRestart.due(access: .unknown, found: false)
@@ -1522,7 +1526,7 @@ do {
     let builtIn: AudioDeviceID = 41
     let uid = "BuiltInSpeakerDevice"
 
-    // covers: S192, S193, S195, S198, S199, S200, S202 (through a fake Core Audio volume and mute)
+    // covers: S192, S193, S195, S197, S198, S199, S200, S202 (through a fake Core Audio volume and mute)
     // The quiet MacBook speakers: AudioSync at 100, the device at 13 %.
     do {
         let host = Host()
@@ -3675,6 +3679,7 @@ do {
         var pairing = NativeAirPlayModel()
         pairing.apply(.appeared(NativeReceiver(id: "02005E005342", name: "Hall", model: "AppleTV5,3",
                                                availability: .needsPairing, reason: nil, hints: ["airplay"])))
+        // covers: S352
         check(!DiscoveryRestart.due(access: .allowed, found: !seenOnly.names.isEmpty)
                 && !DiscoveryRestart.due(access: .allowed, found: !pairing.names.isEmpty),
               "local network: this Mac's own receiver or one needing pairing counts as found, so the browse stays (S352)")
@@ -5471,6 +5476,7 @@ do {
     let many: [S] = (1...8).map { ("Speaker \($0)", SpeakerTag.usb) } + [("MacBook Pro Speakers", .builtIn)]
     let manyAirPlay: [S] = (1...8).reversed().map { ("Room \($0)", SpeakerTag.airplay) }
     let big = SpeakerLayout.split(local: many, airplay: manyAirPlay, tag: { $0.tag }, name: { $0.name })
+    // covers: S165
     check(big.thisMac.count == 1 && big.connected.count == 16
           && big.connected.prefix(8).map(\.name) == (1...8).map { "Room \($0)" },
           "EC10 many speakers: sixteen speakers all listed, in name order")
@@ -9042,6 +9048,47 @@ do {
         }
     }
 
+    // covers: S208 (through the core's renderers on one ring)
+    do {
+        let name = "session lead: none is read until every local output on the ring has published its start lead, "
+            + "then the larger of their leads"
+        // At hold-back 0, a renderer alone on its ring gives its own start lead as the session lead.
+        func leadAlone(deviceRate: Double, frames: Int) -> Int64? {
+            guard let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
+                  let renderer = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: deviceRate,
+                                              channels: 2, gain: 1) else { return nil }
+            var out = [Float](repeating: 0, count: frames * 2)
+            out.withUnsafeMutableBufferPointer {
+                renderer.render(into: $0.baseAddress!, frames: frames, outputTimeNs: 5_000_000_000)
+            }
+            return ring.publishedSessionLeadFrames
+        }
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
+           let wired = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 48_000, channels: 2, gain: 1),
+           let usb = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 44_100, channels: 2, gain: 1) {
+            var out = [Float](repeating: 0, count: 512 * 2)
+            let before = ring.publishedSessionLeadFrames
+            out.withUnsafeMutableBufferPointer {
+                wired.render(into: $0.baseAddress!, frames: 512, outputTimeNs: 5_000_000_000)
+            }
+            let oneOfTwo = ring.publishedSessionLeadFrames
+            let usbWaiting = !usb.publishedLead
+            out.withUnsafeMutableBufferPointer {
+                usb.render(into: $0.baseAddress!, frames: 470, outputTimeNs: 5_000_000_000)
+            }
+            let both = ring.publishedSessionLeadFrames
+            let wiredLead = leadAlone(deviceRate: 48_000, frames: 512)
+            let usbLead = leadAlone(deviceRate: 44_100, frames: 470)
+            check(before == nil && wired.publishedLead && usbWaiting && oneOfTwo == nil && usb.publishedLead
+                    && wiredLead != nil && usbLead != nil && both == max(wiredLead ?? 0, usbLead ?? 0), name,
+                  "before \(String(describing: before)), one of two \(String(describing: oneOfTwo)), "
+                    + "both \(String(describing: both)), alone \(String(describing: wiredLead)) "
+                    + "and \(String(describing: usbLead))")
+        } else {
+            check(false, name, "the core's renderer could not be made")
+        }
+    }
+
     // covers: S226, S207
     // The Windows twin is each_callback_reads_on_the_stamps_clock_so_the_trim_follows_the_capture.
     // The ring stamps each write on the core's clock and the timed render reads on it; the output
@@ -9486,6 +9533,19 @@ do {
     check(leads.keptLead == ["usb": true, "bt": false],
           "S328 restart: an output restarted on a new device ID keeps its start lead, one switched off lets it go",
           "kept lead \(leads.keptLead)")
+
+    // covers: S137 (the host side: the speaker stays on while unplugged; the anchor at W − De is the core's)
+    let replugged = RefusingEngine(active: [], refusing: [])
+    let whileOut = LocalOutputSync.apply(enabled: ["usb"], listing: [bt], to: replugged,
+                                         holdBacks: ["usb": 120], gain: { _ in 0.4 })
+    let triedWhileOut = replugged.tried
+    let back = LocalOutputSync.apply(enabled: ["usb"], listing: [bt, usb], to: replugged,
+                                     holdBacks: ["usb": 120], gain: { _ in 0.4 })
+    check(whileOut == LocalOutputSync.Applied() && triedWhileOut.isEmpty
+            && back.attached == ["usb": 120] && replugged.deviceIDs["usb"] == 52
+            && replugged.delays["usb"] == 120 && replugged.gains["usb"] == 0.4,
+          "S137 replug: an unplugged speaker stays on, and the sync after its replug starts it with its own delay and gain",
+          "while out \(whileOut), tried while out \(triedWhileOut), back \(back)")
 }
 
 // MARK: The engine's control interface (S112) and the thread it is used on (S113)
@@ -9621,6 +9681,7 @@ do {
               "reconcile: with nothing due, no reconcile is scheduled beyond the safety net (S101)")
         check(next([t0 + 20, nil, t0 + 10]) == t0 + 10,
               "reconcile: the earliest due time is the one scheduled (S101)")
+        // covers: S139 (nothing is scheduled while the Mac sleeps)
         check(next([t0 + 10], asleep: true) == nil,
               "reconcile: nothing is scheduled while the Mac sleeps; its wake reconciles (S101)")
         check(next([t0 - 5], last: t0) == t0 + AppLifecycle.dueSpacing

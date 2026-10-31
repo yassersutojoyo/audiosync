@@ -1644,6 +1644,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | EC1 new ID: a sync stops the renderer bound to the old ID and starts it on the new one | S161 |
 | EC1 new ID: the next sync leaves the restarted speaker alone | S161 |
 | EC1 new ID: a restart that won't start is reported and switched off, with no device left bound | S69, S161 |
+| S137 replug: an unplugged speaker stays on, and the sync after its replug starts it with its own delay and gain | S137 |
 | S36 start failure: a refused capture rate comes back with the failure, any other failure without one | S36 |
 | S36 start failure: the text names the capture rate, the 192 kHz limit and Audio MIDI Setup | S36 |
 | S36 start failure: the alert lists the speakers as the rest of the app does | S36 |
@@ -1749,6 +1750,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | output stall: a start failing for good after a stall ends the stall and is switched off with its notice; a refusal retries | S331 |
 | bluetooth lead: a Bluetooth output's start lead counts a capture block more | S230 |
 | bluetooth latency: a report outside the window gives way, any other output's stays | S231 |
+| session lead: none is read until every local output on the ring has published its start lead, then the larger of their leads | S208 |
 | source quit: a switch to the whole system whose every attempt fails ends the stream: the by-hand mark is gone (S223) | S223 |
 | source quit: when the whole system couldn't start, the notice says to turn streaming on again | S227 |
 | calibration preflight: a microphone at a rate the signal isn't made at is an unsupported rate, not no microphone | S232 |
