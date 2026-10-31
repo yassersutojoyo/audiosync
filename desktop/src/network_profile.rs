@@ -210,6 +210,7 @@ mod tests {
         }
     }
 
+    // covers: S390
     #[test]
     fn any_connected_public_network_warns() {
         let mut warning = PublicNetworkWarning::default();
@@ -229,6 +230,7 @@ mod tests {
         assert!(!warning.public() && !warning.notice());
     }
 
+    // covers: S391
     #[test]
     fn only_a_public_network_names_the_firewall() {
         assert!(names_firewall(&[Private, Public]));
@@ -236,6 +238,7 @@ mod tests {
         assert!(!names_firewall(&[]));
     }
 
+    // covers: S390
     #[test]
     fn a_reading_windows_didnt_answer_keeps_the_last() {
         let mut warning = PublicNetworkWarning::default();
@@ -244,6 +247,7 @@ mod tests {
         assert!(warning.notice());
     }
 
+    // covers: S390
     #[test]
     fn a_dismissed_notice_comes_back_only_after_a_non_public_reading() {
         let mut warning = PublicNetworkWarning::default();
@@ -270,6 +274,7 @@ mod tests {
         assert!(warning.notice());
     }
 
+    // covers: S390
     #[test]
     fn the_watch_reads_at_once_and_again_until_dropped() {
         let fake = Arc::new(Fake(Mutex::new(Some(vec![Private]))));
@@ -298,6 +303,7 @@ mod tests {
         }
     }
 
+    // covers: S390
     #[cfg(windows)]
     #[test]
     fn windows_answers_with_the_connected_networks() {

@@ -563,6 +563,7 @@ mod tests {
         "09.40".to_owned()
     }
 
+    // covers: S388
     #[test]
     fn the_command_quotes_the_path_and_asks_for_the_background() {
         assert_eq!(
@@ -572,6 +573,7 @@ mod tests {
         assert_eq!(command_exe(&run_command(&exe())), Some(exe()));
     }
 
+    // covers: S388
     #[test]
     fn a_command_without_quotes_names_what_comes_before_the_first_space() {
         assert_eq!(
@@ -582,6 +584,7 @@ mod tests {
         assert_eq!(command_exe(r#""""#), None);
     }
 
+    // covers: S388
     #[test]
     fn no_run_value_reads_as_off() {
         let (_, login) = setup(|_| {});
@@ -589,6 +592,7 @@ mod tests {
         assert!(!login.is_on());
     }
 
+    // covers: S388
     #[test]
     fn a_run_value_for_this_exe_reads_as_on_whatever_its_case_or_flags() {
         let (_, login) = setup(|e| {
@@ -598,6 +602,7 @@ mod tests {
         assert!(login.is_on());
     }
 
+    // covers: S388
     #[test]
     fn an_entry_turned_off_in_task_manager_reads_as_off() {
         let (_, login) = setup(|e| {
@@ -608,6 +613,7 @@ mod tests {
         assert!(!login.is_on());
     }
 
+    // covers: S388
     #[test]
     fn an_entry_approved_in_task_manager_reads_as_on() {
         let (_, login) = setup(|e| {
@@ -617,6 +623,7 @@ mod tests {
         assert_eq!(login.status(), Status::On);
     }
 
+    // covers: S388
     #[test]
     fn turning_it_on_writes_the_command_and_turning_it_off_removes_it() {
         let (store, mut login) = setup(|_| {});
@@ -635,6 +642,7 @@ mod tests {
         assert_eq!(login.set(false, time), Outcome::default());
     }
 
+    // covers: S388
     #[test]
     fn a_moved_exe_shows_on_and_a_toggle_rewrites_or_removes_it() {
         let (store, mut login) = setup(|e| {
@@ -659,6 +667,7 @@ mod tests {
         assert_eq!(login.status(), Status::On);
     }
 
+    // covers: S388
     #[test]
     fn a_run_value_whose_exe_is_gone_shows_off_and_is_left_as_it_is() {
         // Only a path absolute on the host can be gone; a drive letter isn't on Linux.
@@ -684,6 +693,7 @@ mod tests {
         assert_eq!(login.status(), Status::On);
     }
 
+    // covers: S388
     #[test]
     fn a_relative_exe_name_reads_as_elsewhere_not_gone() {
         let (_, login) = setup(|e| {
@@ -693,6 +703,7 @@ mod tests {
         assert_eq!(login.status(), Status::Elsewhere);
     }
 
+    // covers: S388
     #[test]
     fn a_refused_write_posts_a_notice_and_stays_off() {
         let (_, mut login) = setup(|e| e.refuse_writes = true);
@@ -706,6 +717,7 @@ mod tests {
         assert_eq!(notice.time, "09.40");
     }
 
+    // covers: S388
     #[test]
     fn a_refused_removal_posts_its_own_notice_and_stays_on() {
         let (_, mut login) = setup(|e| {
@@ -720,6 +732,7 @@ mod tests {
         );
     }
 
+    // covers: S388
     #[test]
     fn the_refused_removal_notice_goes_once_settings_turns_it_off() {
         let (store, mut login) = setup(|e| {
@@ -734,6 +747,7 @@ mod tests {
         assert!(login.notice().is_none());
     }
 
+    // covers: S388
     #[test]
     fn turning_it_on_while_settings_has_it_off_asks_to_finish_there() {
         let (store, mut login) = setup(|e| e.approval = Some(vec![3; 12]));
@@ -759,6 +773,7 @@ mod tests {
         assert!(login.notice().is_none());
     }
 
+    // covers: S388
     #[test]
     fn a_change_in_task_manager_shows_on_the_next_reading() {
         let (store, mut login) = setup(|e| e.run = Some(run_command(&exe())));
@@ -769,6 +784,7 @@ mod tests {
         assert!(!login.is_on());
     }
 
+    // covers: S388
     #[test]
     fn a_new_attempt_and_a_dismissal_clear_the_notice() {
         let (store, mut login) = setup(|e| e.refuse_writes = true);
@@ -782,6 +798,7 @@ mod tests {
         assert!(login.notice().is_none());
     }
 
+    // covers: S388
     #[test]
     fn a_command_over_the_run_keys_limit_is_not_written() {
         let store = MemoryStore::default();
@@ -796,6 +813,7 @@ mod tests {
         );
     }
 
+    // covers: S388
     #[test]
     fn without_its_own_path_it_cant_turn_on() {
         let store = MemoryStore::default();
@@ -817,12 +835,14 @@ mod tests {
         assert!(opens_main_window(false, false));
     }
 
+    // covers: S388
     #[test]
     fn a_second_launch_in_the_background_leaves_the_running_copy_alone() {
         assert!(!hands_over_to_running_copy(true));
         assert!(hands_over_to_running_copy(false));
     }
 
+    // covers: S388
     #[test]
     fn the_appimage_is_named_only_when_this_exe_runs_from_its_mount() {
         // Absolute on the system the test runs on.

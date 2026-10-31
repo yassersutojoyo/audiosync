@@ -118,6 +118,7 @@ mod tests {
         "09.40".to_owned()
     }
 
+    // covers: S388
     #[test]
     fn turning_it_on_writes_an_entry_that_reads_back_as_on() {
         let dir = test_dir("autostart-on");
@@ -162,6 +163,7 @@ mod tests {
         assert_eq!(login.status(), Status::Off);
     }
 
+    // covers: S388
     #[test]
     fn an_entry_the_desktop_turned_off_reads_as_off_until_turned_on_here() {
         let dir = test_dir("autostart-hidden");
@@ -185,6 +187,7 @@ mod tests {
         }
     }
 
+    // covers: S388
     #[test]
     fn the_users_entry_is_named_after_the_app_id() {
         if let Some(path) = AutostartStore::system().path {
@@ -193,6 +196,7 @@ mod tests {
         }
     }
 
+    // covers: S388
     #[test]
     fn a_path_an_exec_key_cant_hold_is_not_written() {
         let dir = test_dir("autostart-refused");

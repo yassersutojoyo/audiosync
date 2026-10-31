@@ -39,36 +39,43 @@ mod tests {
         }
     }
 
+    // covers: S389
     #[test]
     fn windows_10_22h2_is_refused() {
         assert!(!is_supported(version(10, 0, 19045)));
     }
 
+    // covers: S389
     #[test]
     fn the_build_before_windows_11_is_refused() {
         assert!(!is_supported(version(10, 0, FIRST_WINDOWS_11_BUILD - 1)));
     }
 
+    // covers: S389
     #[test]
     fn the_first_windows_11_build_runs() {
         assert!(is_supported(version(10, 0, 22000)));
     }
 
+    // covers: S389
     #[test]
     fn windows_11_24h2_runs() {
         assert!(is_supported(version(10, 0, 26100)));
     }
 
+    // covers: S389
     #[test]
     fn windows_7_is_refused() {
         assert!(!is_supported(version(6, 1, 7601)));
     }
 
+    // covers: S389
     #[test]
     fn an_older_major_version_is_refused_whatever_its_build() {
         assert!(!is_supported(version(6, 3, 26100)));
     }
 
+    // covers: S389
     #[test]
     fn a_later_major_version_runs() {
         assert!(is_supported(version(11, 0, 0)));

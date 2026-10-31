@@ -622,6 +622,7 @@ mod tests {
         mixed
     }
 
+    // covers: S386
     #[test]
     fn lanes_are_summed_as_far_as_all_reach() {
         let mut mixer = StreamMixer::new(2);
@@ -634,6 +635,7 @@ mod tests {
         assert_eq!((mixer.waiting(0), mixer.waiting(1)), (0, 0));
     }
 
+    // covers: S386
     #[test]
     fn one_stream_passes_straight_through() {
         let mut mixer = StreamMixer::new(1);
@@ -641,6 +643,7 @@ mod tests {
         assert_eq!(mixer.waiting(0), 0);
     }
 
+    // covers: S386
     #[test]
     fn a_stalled_lane_never_holds_the_mix_back_more_than_the_lag_bound() {
         let mut mixer = StreamMixer::new(2);
@@ -658,6 +661,7 @@ mod tests {
         assert_eq!((mixer.waiting(0), mixer.waiting(1)), (0, 0));
     }
 
+    // covers: S386
     #[test]
     fn drift_between_clocks_stays_bounded_and_the_mix_keeps_real_time() {
         // Lane 0 runs 1% fast: 485 frames for every 480 of lane 1, for 60 s.
@@ -681,6 +685,7 @@ mod tests {
         );
     }
 
+    // covers: S386
     #[test]
     fn a_lane_that_never_delivers_keeps_pace_from_its_start_without_bursts() {
         // Lane 1 is a paused app: its loopback never sends a packet, and its
@@ -703,6 +708,7 @@ mod tests {
         }
     }
 
+    // covers: S386
     #[test]
     fn lanes_join_level_with_the_slowest_and_a_closed_lane_no_longer_sets_the_pace() {
         let mut mixer = StreamMixer::new(3);
@@ -830,6 +836,7 @@ mod tests {
         ((tick - 1) * 100_000, 480, 0.25)
     }
 
+    // covers: S386
     #[test]
     fn a_mix_takes_apps_in_and_a_failing_stream_only_silences_its_lane() {
         let scripts: Vec<Rc<RefCell<Script>>> = (0..3).map(|_| Rc::default()).collect();
@@ -871,6 +878,7 @@ mod tests {
         assert!(bench.held().is_empty());
     }
 
+    // covers: S386
     #[test]
     fn a_stall_of_the_capture_thread_adds_no_delay() {
         let scripts: Vec<Rc<RefCell<Script>>> = (0..2).map(|_| Rc::default()).collect();
@@ -899,6 +907,7 @@ mod tests {
         }
     }
 
+    // covers: S386
     #[test]
     fn a_free_lane_is_reused_only_once_it_handed_on_the_last_apps_audio() {
         let scripts: Vec<Rc<RefCell<Script>>> = (0..4).map(|_| Rc::default()).collect();
@@ -921,6 +930,7 @@ mod tests {
         );
     }
 
+    // covers: S386
     #[test]
     fn a_mix_of_no_app_writes_silence_in_real_time() {
         let mut bench = Bench::new();
@@ -930,6 +940,7 @@ mod tests {
         assert_eq!(bench.mixed, 99 * 480, "10 ms behind now, the fill's lag");
     }
 
+    // covers: S386
     #[test]
     fn a_plan_is_read_once_per_change() {
         let plan = MixPlan::default();
@@ -946,6 +957,7 @@ mod tests {
         );
     }
 
+    // covers: S386
     #[test]
     fn a_lane_input_converts_to_stereo_at_the_session_rate() {
         let format = StreamFormat {

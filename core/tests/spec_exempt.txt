@@ -157,3 +157,9 @@ S382 Hosts only: the Windows and Linux double-audio check and its notice; the Wi
 S383 Windows host only: auto-connect speakers switching on and starting streaming; the Windows tests named in the test map check it.
 S384 Windows host only: a local output's settings following it to a new endpoint ID; the Windows tests named in the test map check it.
 S385 Hosts only: the Windows and Linux settings and Cast speakers files kept aside and written whole; the Windows tests named in the test map check them.
+S386 Windows host only: how one source's app loopbacks are mixed; the Windows tests named in the test map check it.
+S387 Windows and Linux hosts only: the pairing files' encryption on Windows and owner-only mode on Linux; the desktop tests named in the test map check them.
+S388 Windows and Linux hosts only: Launch at Sign-In through the Run key and the Linux autostart entry; the desktop tests named in the test map check it.
+S389 Windows host only: the Windows versions the app runs on; the Windows tests named in the test map check it.
+S390 Windows host only: the web remote's notice on a Public network; the Windows tests named in the test map check it.
+S391 Windows host only: the firewall in the notes that no speaker was found; the Windows tests named in the test map check it.

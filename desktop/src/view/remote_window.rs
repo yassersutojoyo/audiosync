@@ -1441,6 +1441,7 @@ mod tests {
         }
     }
 
+    // covers: S390
     #[test]
     fn a_public_network_shows_in_the_window_and_as_a_notice_until_dismissed() {
         let app = over_loopback(MockBackend::new());

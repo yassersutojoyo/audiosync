@@ -5938,6 +5938,7 @@ mod tests {
         App::new(Box::new(backend), log).expect("the windows build headless")
     }
 
+    // covers: S388
     #[test]
     fn launch_at_sign_in_follows_the_file_menu_and_its_notice_is_dismissed_here() {
         let app = app_over(MockBackend::new());
@@ -7301,6 +7302,7 @@ mod tests {
 
     /// The notes that no speaker was found name Windows Firewall only once
     /// Windows reports a Public network; until then they name the network.
+    // covers: S391
     #[test]
     fn the_none_found_notes_leave_the_firewall_out_off_a_public_network() {
         let app = app_over(MockBackend::new());
@@ -7323,6 +7325,7 @@ mod tests {
     /// A Public reading reaches the note that no speaker was found on a poll
     /// that changes nothing else, and the note leaves the firewall out again
     /// once it goes.
+    // covers: S391
     #[test]
     fn the_none_found_note_takes_a_public_reading_on_a_quiet_poll() {
         use crate::network_profile::{Category, ProfileSource};

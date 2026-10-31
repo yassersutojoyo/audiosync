@@ -861,6 +861,7 @@ pub mod tests {
         }
     }
 
+    // covers: S387
     #[test]
     fn credentials_survive_a_restart_and_are_encrypted_on_disk() {
         let path = test_dir("pairings-roundtrip").join(FILE_NAME);
@@ -902,6 +903,7 @@ pub mod tests {
         HomeKitCredentials::from_bytes(&blob).expect("a credential blob")
     }
 
+    // covers: S387
     #[test]
     fn the_airplay2_identity_survives_a_restart_sealed_and_only_once_asked_for() {
         let folder = test_dir("pairings-airplay2");
@@ -936,6 +938,7 @@ pub mod tests {
         );
     }
 
+    // covers: S387
     #[test]
     fn an_airplay2_identity_that_cant_be_opened_is_kept_aside_and_replaced() {
         let folder = test_dir("pairings-airplay2-ignored");
@@ -1282,6 +1285,7 @@ pub mod tests {
         );
     }
 
+    // covers: S387
     #[test]
     fn a_file_that_cant_be_decrypted_is_kept_aside_before_the_next_pairing() {
         let dir = test_dir("pairings-kept");
@@ -1297,6 +1301,7 @@ pub mod tests {
         );
     }
 
+    // covers: S387
     #[test]
     fn the_plaintext_is_checked_field_by_field() {
         let mut entries = BTreeMap::new();
@@ -1317,6 +1322,7 @@ pub mod tests {
         );
     }
 
+    // covers: S387
     #[test]
     fn the_load_summary_never_holds_a_secret() {
         assert_eq!(
@@ -1335,6 +1341,7 @@ pub mod tests {
         assert!(!store_debug.contains("a5") && !store_debug.contains("165"));
     }
 
+    // covers: S387
     #[cfg(target_os = "linux")]
     #[test]
     fn a_file_others_may_read_is_made_owner_only_and_still_loaded() {
