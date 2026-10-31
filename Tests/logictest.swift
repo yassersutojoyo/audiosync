@@ -4107,7 +4107,7 @@ do {
               "S284 airplay latency: the next values come once E may change")
     }
 
-    // covers: S283, S141 (the Mac host: a capture switch reaches the sender as nativeCaptureStarted)
+    // covers: S283, S141, P143 (the Mac host: a capture switch reaches the sender as nativeCaptureStarted)
     do {
         var estimates: [String] = []
         let sender = NativeAirPlay(onChange: { _ in }, onEvent: { event, _ in

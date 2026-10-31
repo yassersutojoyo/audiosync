@@ -2758,6 +2758,7 @@ pub mod tests {
         assert_eq!(cast.anchor(), Some(Duration::from_millis(240)));
     }
 
+    // covers: C13, C89
     #[test]
     fn group_lines_reach_the_debug_log() {
         let dir = test_dir("cast-group-log");
