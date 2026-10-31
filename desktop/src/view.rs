@@ -7871,6 +7871,39 @@ mod tests {
         assert_eq!(cast.state().shutdowns, 1, "the Cast host shut down");
     }
 
+    // covers: S186 (Quit from the tray or a window)
+    #[test]
+    fn quitting_drops_the_app_so_the_backend_runs_its_shut_down() {
+        use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, id_of};
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let mut audio = crate::audio::mock::MockBackend::empty();
+        audio.connect_output("speakers", "Speakers");
+        let airplay = FakeAirPlay::new();
+        audio.set_airplay(airplay.link(), None);
+        let den = device(1, "Den", OPEN_TXT);
+        airplay.appear(&den);
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        audio.set_cast(cast.link());
+        let mut adapter =
+            crate::adapter::AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.poll();
+        adapter.set_speaker_enabled(&format!("ap:{}", id_of(&den)), true);
+        adapter.set_speaker_enabled(&format!("cc:{KITCHEN}"), true);
+        adapter.set_running(true);
+        assert!(adapter.snapshot().running);
+        let calls = airplay.take_calls();
+        assert!(calls.iter().any(|call| matches!(call, Call::Add { .. })));
+        let app = app_over(adapter);
+
+        // What main does once the event loop ends; the shut-down's fades are
+        // checked in the controller's tests.
+        app.at_quit();
+        drop(app);
+        assert!(airplay.links_dropped(), "the AirPlay sender tore down");
+        assert_eq!(cast.state().shutdowns, 1, "the Cast host shut down");
+    }
+
     // covers: S351
     #[cfg(windows)]
     #[test]
