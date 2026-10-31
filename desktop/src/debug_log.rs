@@ -502,6 +502,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    // covers: S170
     #[test]
     fn lines_are_appended_in_order_each_with_a_time_stamp() {
         let dir = test_dir("log-order");
@@ -614,6 +615,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    // covers: S170
     #[test]
     fn a_second_launch_adds_to_the_running_copys_log() {
         let dir = test_dir("log-second-launch");
@@ -668,6 +670,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    // covers: S170
     #[test]
     fn the_log_stops_growing_at_its_limit() {
         let dir = test_dir("log-limit");
@@ -722,6 +725,7 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    // covers: S170
     #[test]
     fn the_log_file_is_private_to_this_user_and_a_symlink_is_refused() {
         use std::os::unix::fs::PermissionsExt;
@@ -747,6 +751,7 @@ mod tests {
         assert!(!DebugLog::new(Some(hard)).enabled());
     }
 
+    // covers: S170
     #[test]
     fn a_log_whose_file_cant_be_made_is_off() {
         let dir = test_dir("log-no-folder");
@@ -755,6 +760,7 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    // covers: S170
     #[test]
     fn times_are_utc_to_the_millisecond() {
         let at = |seconds: u64, millis: u64| {
@@ -773,6 +779,7 @@ mod tests {
         assert_eq!(utc_timestamp(before), "1970-01-01T00:00:00.000Z");
     }
 
+    // covers: S170
     #[test]
     fn every_day_follows_the_one_before() {
         let leap = |year: u64| {

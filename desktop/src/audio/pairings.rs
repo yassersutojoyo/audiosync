@@ -1109,6 +1109,7 @@ pub mod tests {
         assert!(!reopened.contains("02005E005301"));
     }
 
+    // covers: S387
     #[test]
     fn forgetting_the_last_pairing_removes_the_file() {
         let path = test_dir("pairings-forget").join(FILE_NAME);
@@ -1128,6 +1129,7 @@ pub mod tests {
         assert!(!path.exists(), "nothing paired, no file");
     }
 
+    // covers: S387
     #[test]
     fn a_corrupted_or_foreign_file_is_ignored_and_replaced_by_the_next_pairing() {
         let dir = test_dir("pairings-corrupt");
@@ -1166,6 +1168,7 @@ pub mod tests {
         framed
     }
 
+    // covers: S224
     #[test]
     fn an_unreadable_entry_costs_only_its_own_pairing_and_the_file_is_kept_aside_first() {
         let dir = test_dir("pairings-one-bad-entry");
@@ -1216,6 +1219,7 @@ pub mod tests {
         fs::read(&path).expect("written")
     }
 
+    // covers: S224
     #[test]
     fn a_file_that_cant_be_read_at_launch_is_never_saved_over() {
         let dir = test_dir("pairings-unreadable");
@@ -1253,6 +1257,7 @@ pub mod tests {
         assert_eq!(kept(), [good]);
     }
 
+    // covers: S224
     #[test]
     fn pairings_unreadable_at_two_launches_in_a_row_are_never_lost() {
         let dir = test_dir("pairings-unreadable-twice");

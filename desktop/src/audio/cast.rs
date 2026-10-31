@@ -2196,6 +2196,7 @@ pub mod tests {
         assert!(fake.state().browse.is_empty());
     }
 
+    // covers: C108
     #[test]
     fn the_selected_speaker_stays_listed_through_a_flood_of_devices() {
         let fake = FakeCast::default();
@@ -2213,6 +2214,7 @@ pub mod tests {
         assert!(speakers.iter().any(|speaker| speaker.id == selected));
     }
 
+    // covers: C56, C83
     #[test]
     fn a_stream_the_speaker_couldnt_fetch_reads_as_blocked() {
         let blocked = SessionEnd::Failed(SessionError::Media(MediaError::NoFetch));
@@ -2221,12 +2223,14 @@ pub mod tests {
         assert_eq!(problem_of(&refused), Some(CastProblem::Refused));
     }
 
+    // covers: C107
     #[test]
     fn a_fault_inside_the_sender_reads_as_a_lost_connection() {
         let internal = SessionEnd::Failed(SessionError::Internal);
         assert_eq!(problem_of(&internal), Some(CastProblem::ConnectionLost));
     }
 
+    // covers: C14
     #[test]
     fn devices_are_listed_by_name_and_a_group_says_so() {
         let (_fake, cast) = listed();
@@ -2244,6 +2248,7 @@ pub mod tests {
         assert_eq!(cast.discovery(), CastDiscovery::Browsing);
     }
 
+    // covers: C112
     #[test]
     fn a_session_runs_only_while_on_and_streaming() {
         let (fake, mut cast) = listed();
@@ -2343,6 +2348,7 @@ pub mod tests {
         );
     }
 
+    // covers: C112
     #[test]
     fn a_failed_session_turns_its_speaker_off_with_the_reason() {
         let (fake, mut cast) = listed();
@@ -2441,6 +2447,7 @@ pub mod tests {
         assert_eq!(status(&cast, ATTIC), CastStatus::Playing);
     }
 
+    // covers: C2
     #[test]
     fn a_second_speaker_is_refused_and_a_group_starts_like_one() {
         let (fake, mut cast) = listed();
@@ -2559,6 +2566,7 @@ pub mod tests {
             .members
     }
 
+    // covers: C111
     #[test]
     fn a_single_device_session_follows_its_announced_address() {
         let (fake, mut cast) = listed();
@@ -2577,6 +2585,7 @@ pub mod tests {
         );
     }
 
+    // covers: C3, C94, C95
     #[test]
     fn a_group_plays_as_one_speaker_and_lists_its_members_once_named() {
         let (fake, mut cast) = listed();
@@ -2644,6 +2653,7 @@ pub mod tests {
         assert_eq!(fake.state().volumes, [0.3]);
     }
 
+    // covers: C108
     #[test]
     fn a_member_of_the_playing_group_stays_listed_through_a_flood_of_devices() {
         let (fake, mut cast) = listed();
@@ -2664,6 +2674,7 @@ pub mod tests {
         );
     }
 
+    // covers: C94
     #[test]
     fn a_new_group_session_starts_with_its_members_unknown() {
         let (fake, mut cast) = listed();
@@ -2682,6 +2693,7 @@ pub mod tests {
         assert_eq!(group_members(&cast), CastMembers::NotReported);
     }
 
+    // covers: C94
     #[test]
     fn a_group_that_plays_without_a_member_list_has_its_members_unknown() {
         let (fake, mut cast) = listed();
@@ -2696,6 +2708,7 @@ pub mod tests {
         assert_eq!(group_members(&cast), CastMembers::NotReported, "off");
     }
 
+    // covers: C94, C95
     #[test]
     fn members_nobody_names_are_left_out_and_none_named_is_unknown() {
         let (fake, mut cast) = listed();
@@ -2731,6 +2744,7 @@ pub mod tests {
         assert_eq!(group_members(&cast), CastMembers::Unknown);
     }
 
+    // covers: C101
     #[test]
     fn a_group_keeps_its_own_offset_under_its_id() {
         let (fake, mut cast) = listed();
@@ -2806,6 +2820,7 @@ pub mod tests {
         );
     }
 
+    // covers: C77
     #[test]
     fn the_offset_is_clamped_kept_and_held_by_local_outputs() {
         let (fake, mut cast) = listed();
@@ -2831,6 +2846,7 @@ pub mod tests {
         assert_eq!(cast.anchor(), None);
     }
 
+    // covers: C105
     #[test]
     fn volume_mute_and_resync_reach_only_the_speaker_in_a_session() {
         let (fake, mut cast) = listed();
@@ -2909,6 +2925,7 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 40.0);
     }
 
+    // covers: C70
     #[test]
     fn an_unanswered_volume_is_forgotten_when_the_session_ends() {
         let (fake, mut cast) = listed();
@@ -3110,6 +3127,7 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 30.0);
     }
 
+    // covers: C8
     #[test]
     fn the_capture_feeds_the_current_session() {
         let (fake, mut cast) = listed();
@@ -3123,6 +3141,7 @@ pub mod tests {
         assert!(cast.lease().is_some());
     }
 
+    // covers: C77
     #[test]
     fn the_session_hears_the_capture_held_back() {
         let (fake, mut cast) = listed();
@@ -3144,6 +3163,7 @@ pub mod tests {
         out
     }
 
+    // covers: C77
     #[test]
     fn the_delay_line_passes_audio_on_unchanged_or_late_by_its_hold_back() {
         let ramp: Vec<f32> = (0..2000).map(|i| i as f32 / 4000.0).collect();
@@ -3173,6 +3193,7 @@ pub mod tests {
         );
     }
 
+    // covers: C77
     #[test]
     fn a_new_hold_back_fades_out_and_in_without_a_jump() {
         let step = std::f32::consts::TAU * 440.0 / SESSION_RATE as f32;
@@ -3199,6 +3220,7 @@ pub mod tests {
         );
     }
 
+    // covers: C8
     #[test]
     fn a_writer_the_full_handoff_refused_reaches_the_capture_after_the_next_poll() {
         let mut feed = CastFeed::new();
@@ -3217,6 +3239,7 @@ pub mod tests {
         assert_eq!(readers[HANDOFF - 1].available(), 4);
     }
 
+    // covers: C8
     #[test]
     fn old_writers_go_back_to_the_ui_thread_even_while_its_outbox_is_full() {
         let feed = CastFeed::with_handoff(1);
@@ -3235,6 +3258,7 @@ pub mod tests {
         assert_eq!(feed.from_tap.try_iter().count(), 1);
     }
 
+    // covers: C88
     #[test]
     fn shutting_down_tears_the_sender_down_once() {
         let (fake, mut cast) = listed();
@@ -3873,6 +3897,7 @@ pub mod tests {
         assert_eq!(cast.speakers().len(), 1);
     }
 
+    // covers: C18
     #[test]
     fn a_host_name_that_doesnt_resolve_stays_listed_until_removed() {
         let fake = FakeCast::default();
@@ -3989,6 +4014,7 @@ pub mod tests {
         }
     }
 
+    // covers: C54
     #[test]
     fn a_start_waits_for_the_track_and_gives_it_to_the_first_load() {
         let (fake, mut cast) = listed();
@@ -4005,6 +4031,7 @@ pub mod tests {
         assert!(fake.state().tracks.is_empty(), "the start already had it");
     }
 
+    // covers: C54
     #[test]
     fn a_new_track_goes_to_the_session_once_and_an_unchanged_one_never() {
         let (fake, mut cast) = listed();
@@ -4029,6 +4056,7 @@ pub mod tests {
         assert_eq!(fake.state().tracks, [second, third]);
     }
 
+    // covers: C69
     #[test]
     fn the_volume_keys_move_by_the_device_step_or_1_without_one() {
         assert_eq!(volume_step(None), 1.0);
@@ -4099,6 +4127,7 @@ pub mod tests {
         fake.state().volumes.clone()
     }
 
+    // covers: C104
     #[test]
     fn the_master_scales_the_level_sent_and_a_master_change_resends_it() {
         let (fake, mut cast) = listed();
@@ -4120,6 +4149,7 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 80.0);
     }
 
+    // covers: C104
     #[test]
     fn a_zone_scales_the_level_sent_and_a_zone_change_resends_it() {
         let (fake, mut cast) = listed();
@@ -4139,6 +4169,7 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 80.0);
     }
 
+    // covers: C104, C105
     #[test]
     fn a_cast_report_in_a_zone_moves_the_slider_by_master_times_zone() {
         let (fake, mut cast) = listed();
@@ -4162,6 +4193,7 @@ pub mod tests {
         );
     }
 
+    // covers: C70, C104
     #[test]
     fn a_level_from_elsewhere_moves_the_slider_by_the_master() {
         let (fake, mut cast) = listed();
@@ -4183,6 +4215,7 @@ pub mod tests {
         assert_eq!(sent(&fake), [0.0], "a change from elsewhere isn't fought");
     }
 
+    // covers: C105
     #[test]
     fn a_session_starts_no_louder_than_the_master_allows() {
         let (fake, mut cast) = listed();
@@ -4216,6 +4249,7 @@ pub mod tests {
         assert!((shown(&cast, KITCHEN) - 70.0).abs() < 1e-9, "not read back");
     }
 
+    // covers: C105
     #[test]
     fn a_first_status_without_a_level_keeps_the_own_level() {
         let (fake, mut cast) = listed();
@@ -4243,6 +4277,7 @@ pub mod tests {
         assert!((shown(&cast, KITCHEN) - 40.0).abs() < 1e-9);
     }
 
+    // covers: C70, C104
     #[test]
     fn a_level_the_device_already_has_is_not_waited_for() {
         let (fake, mut cast) = listed();
@@ -4265,6 +4300,7 @@ pub mod tests {
         );
     }
 
+    // covers: C105
     #[test]
     fn a_session_starts_at_master_times_the_own_level_even_when_the_device_is_quieter() {
         let (fake, mut cast) = listed();
@@ -4294,6 +4330,7 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 80.0, "not read back");
     }
 
+    // covers: C68, C100, C104
     #[test]
     fn a_group_follows_the_master_and_a_fixed_volume_gets_nothing() {
         let (fake, mut cast) = listed();

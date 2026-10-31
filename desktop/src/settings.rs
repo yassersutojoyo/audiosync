@@ -1863,6 +1863,7 @@ mod tests {
         }
     }
 
+    // covers: S228
     #[test]
     fn speaker_names_are_kept_cleared_and_unusable_entries_skipped() {
         let file = SettingsFile::at(test_dir("settings-speaker-names").join(FILE_NAME));
@@ -2366,6 +2367,7 @@ mod tests {
         );
     }
 
+    // covers: C18
     #[test]
     fn cast_addresses_are_kept_normalized_and_once() {
         let text = r#"{
@@ -2408,6 +2410,7 @@ mod tests {
         assert!(!read.other_fields.contains_key("future_256"));
     }
 
+    // covers: S212
     #[test]
     fn a_field_that_does_not_read_is_named_and_falls_back_alone() {
         let (read, found) = Settings::from_json(
@@ -2431,6 +2434,7 @@ mod tests {
         );
     }
 
+    // covers: S212
     #[test]
     fn every_stored_field_is_named_when_it_does_not_read() {
         // The fields left out of the file while empty are set too, so each
@@ -2466,6 +2470,7 @@ mod tests {
         }
     }
 
+    // covers: S379
     #[test]
     fn the_web_remote_is_off_by_default_and_keeps_a_usable_port() {
         let read = |json: &str| Settings::from_json(json).expect("read");
@@ -2492,6 +2497,7 @@ mod tests {
         assert!(matches!(found, Loaded::Read { adjusted: true, .. }));
     }
 
+    // covers: S312
     #[test]
     fn airplay2_is_off_in_a_file_that_does_not_name_it() {
         let read = |json: &str| Settings::from_json(json).expect("read").0;
@@ -2561,6 +2567,7 @@ mod tests {
         assert!(json.contains(r#""appearance": "light""#), "{json}");
     }
 
+    // covers: S385
     #[test]
     fn a_corrupted_file_is_ignored_and_replaced_by_the_next_save() {
         let path = test_dir("settings-corrupted").join(FILE_NAME);
@@ -2626,6 +2633,7 @@ mod tests {
         assert_eq!(loaded.source, SavedSource::System);
     }
 
+    // covers: S212
     #[test]
     fn a_mix_of_apps_survives_a_round_trip_and_an_old_single_app_source_loads_unchanged() {
         let app = |executable: &str| SavedMixApp {
@@ -2732,6 +2740,7 @@ mod tests {
         assert!(!Settings::default().to_json().contains("input_device"));
     }
 
+    // covers: S212
     #[test]
     fn input_channel_pairs_survive_a_round_trip_and_odd_entries_are_skipped() {
         let path = test_dir("settings-input-pairs").join(FILE_NAME);
@@ -3032,6 +3041,7 @@ mod tests {
         assert_eq!(held(Some(latency)), [2000.0, 1750.0, 1870.0]);
     }
 
+    // covers: S212
     #[test]
     fn a_huge_file_is_cut_to_the_limits() {
         let mut settings = Settings::default();
@@ -3081,6 +3091,7 @@ mod tests {
         assert_eq!(file.load().0, Settings::default());
     }
 
+    // covers: S385
     #[test]
     fn a_save_that_fails_keeps_the_last_file_whole() {
         let path = test_dir("settings-failed-save").join(FILE_NAME);
@@ -3091,6 +3102,7 @@ mod tests {
         assert_eq!(file.load().0, sample());
     }
 
+    // covers: S212
     #[test]
     fn a_maximized_window_is_kept_with_its_last_normal_frame() {
         let window = r#""window": {"x": 10, "y": 20, "width": 1000.0, "height": 700.0"#;

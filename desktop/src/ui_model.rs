@@ -3215,6 +3215,7 @@ mod tests {
         }
     }
 
+    // covers: S119
     #[test]
     fn turning_a_speaker_on_starts_streaming() {
         let mut backend = MockBackend::new();
@@ -3227,6 +3228,7 @@ mod tests {
         );
     }
 
+    // covers: S246
     #[test]
     fn a_zone_is_on_when_all_its_present_members_are() {
         let mut backend = MockBackend::new();
@@ -3245,6 +3247,7 @@ mod tests {
         assert!(state.zone_members(&zone).all(|s| !s.enabled));
     }
 
+    // covers: S246
     #[test]
     fn a_zone_waits_when_all_its_present_members_wait() {
         let mut backend = MockBackend::new();
@@ -3372,6 +3375,7 @@ mod tests {
         );
     }
 
+    // covers: S246
     #[test]
     fn a_zone_with_a_cast_member_is_on_with_one_cast_speaker() {
         let mut backend = MockBackend::new();
@@ -3459,6 +3463,7 @@ mod tests {
         );
     }
 
+    // covers: S245
     #[test]
     fn a_new_zone_needs_a_speaker_that_is_on_and_takes_it_from_its_zone() {
         let mut backend = MockBackend::new();
@@ -3500,6 +3505,7 @@ mod tests {
         assert_eq!(zoned[0].0.id, "airplay:bedroom");
     }
 
+    // covers: S246
     #[test]
     fn only_this_speaker_turns_the_zones_others_off_and_keeps_them_in_it() {
         let mut backend = MockBackend::new();
@@ -3527,6 +3533,7 @@ mod tests {
         );
     }
 
+    // covers: S246
     #[test]
     fn only_this_speaker_leaves_hidden_members_alone() {
         let mut backend = MockBackend::new();
@@ -3546,6 +3553,7 @@ mod tests {
         assert!(state.only_this_steps("local:speakers").is_empty());
     }
 
+    // covers: S246
     #[test]
     fn only_this_speaker_frees_the_cast_place_before_a_cast_member_comes_on() {
         let mut backend = MockBackend::new();
@@ -3655,6 +3663,7 @@ mod tests {
         assert_eq!(clamp_delay_ms(25_000.0), 20_000.0);
     }
 
+    // covers: S153
     #[test]
     fn a_newer_notice_about_the_same_subject_replaces_the_older_one() {
         let quit = |source: &str| NoticeMessage::SourceQuit {

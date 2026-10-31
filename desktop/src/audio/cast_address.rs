@@ -199,6 +199,7 @@ mod tests {
         CastAddress::parse(text).map(|address| (address.host().to_owned(), address.port()))
     }
 
+    // covers: C15, C18
     #[test]
     fn a_host_name_or_ipv4_address_takes_port_8009_unless_one_is_given() {
         assert_eq!(
@@ -225,6 +226,7 @@ mod tests {
         );
     }
 
+    // covers: C18
     #[test]
     fn a_bad_port_or_host_or_an_empty_field_is_refused() {
         for text in [
@@ -262,6 +264,7 @@ mod tests {
         assert_eq!(CastAddress::parse(&long_name), None);
     }
 
+    // covers: C18
     #[test]
     fn an_ipv4_address_needs_no_lookup_and_a_name_does() {
         let ip = CastAddress::parse("192.0.2.10:8010").unwrap();
@@ -277,6 +280,7 @@ mod tests {
         );
     }
 
+    // covers: C18
     #[test]
     fn the_text_names_the_port_only_when_it_isnt_8009() {
         let text = |input: &str| CastAddress::parse(input).unwrap().text();
@@ -285,6 +289,7 @@ mod tests {
         assert_eq!(text("192.0.2.10"), "192.0.2.10");
     }
 
+    // covers: C18
     #[test]
     fn the_device_id_follows_the_address_and_lasts() {
         let id = |input: &str| CastAddress::parse(input).unwrap().device_id();
@@ -298,6 +303,7 @@ mod tests {
         );
     }
 
+    // covers: C18
     #[test]
     fn an_address_answers_only_where_a_port_takes_a_connection() {
         let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
@@ -308,6 +314,7 @@ mod tests {
         assert!(!answers(&open), "closed now");
     }
 
+    // covers: C18
     #[test]
     fn the_kept_list_adds_once_and_removes() {
         let address = |input: &str| CastAddress::parse(input).unwrap();
@@ -321,6 +328,7 @@ mod tests {
         assert_eq!(list, ["192.0.2.10:8010"]);
     }
 
+    // covers: C18
     #[test]
     fn a_list_from_the_file_keeps_what_parses_once_and_at_most_the_limit() {
         let list = vec![

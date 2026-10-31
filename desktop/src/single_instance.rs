@@ -348,17 +348,20 @@ mod tests {
     use super::*;
     use std::cell::Cell;
 
+    // covers: S215
     #[test]
     fn a_launch_runs_unless_another_copy_holds_the_mutex() {
         assert_eq!(Startup::decide(MutexState::Created), Startup::Run);
         assert_eq!(Startup::decide(MutexState::Existed), Startup::HandOver);
     }
 
+    // covers: S215
     #[test]
     fn a_mutex_held_by_an_elevated_copy_hands_over_instead_of_running_twice() {
         assert_eq!(Startup::decide(MutexState::AccessDenied), Startup::HandOver);
     }
 
+    // covers: S215
     #[test]
     fn any_other_mutex_failure_still_runs_the_app() {
         assert_eq!(Startup::decide(MutexState::Failed), Startup::Run);
@@ -421,6 +424,7 @@ mod tests {
 
     /// Exit, then a launch at once: the old copy holds the mutex through the
     /// updater's quit waits and the session's quit budget.
+    // covers: S215
     #[cfg(windows)]
     #[test]
     fn a_launch_waits_out_the_longest_teardown_of_a_quitting_copy() {
@@ -430,6 +434,7 @@ mod tests {
         assert!(first.is_some(), "gave up before the old copy was gone");
     }
 
+    // covers: S215
     #[test]
     fn a_request_that_cannot_be_sent_also_waits_for_the_old_copy() {
         let gone = Duration::from_millis(1000);
@@ -437,6 +442,7 @@ mod tests {
         assert_eq!(first, Some(gone));
     }
 
+    // covers: S215
     #[test]
     fn a_copy_that_never_goes_away_ends_the_launch_after_the_relaunch_wait() {
         let (_, first, tries, ended) = run_second_launch(HandOver::NoAnswer, ANSWER_WAIT, None);
@@ -446,6 +452,7 @@ mod tests {
         assert_eq!(tries, 33);
     }
 
+    // covers: S215
     #[test]
     fn the_relaunch_poll_matches_the_mac() {
         assert_eq!(RELAUNCH_POLL, Duration::from_millis(250));
@@ -466,11 +473,13 @@ mod tests {
         assert_eq!(waited.get(), Some(ANSWER_WAIT));
     }
 
+    // covers: S215
     #[test]
     fn a_hung_copy_leaves_the_request_unanswered_and_the_launch_still_ends() {
         assert_eq!(HandOver::run(|| true, |_| false), HandOver::NoAnswer);
     }
 
+    // covers: S215
     #[test]
     fn a_request_that_cannot_be_sent_is_not_waited_for() {
         let waited = Cell::new(false);
@@ -485,11 +494,13 @@ mod tests {
         assert!(!waited.get());
     }
 
+    // covers: S215
     #[test]
     fn the_answer_wait_is_about_two_seconds() {
         assert_eq!(ANSWER_WAIT, Duration::from_secs(2));
     }
 
+    // covers: S215
     #[test]
     fn the_second_copy_logs_one_line_per_outcome() {
         for (outcome, says) in [
@@ -508,6 +519,7 @@ mod tests {
         }
     }
 
+    // covers: S215
     #[test]
     fn the_listener_shows_the_window_once_per_request_until_waiting_fails() {
         let requests = Cell::new(3_u32);
@@ -523,6 +535,7 @@ mod tests {
         assert_eq!(shown.get(), 3);
     }
 
+    // covers: S170, S215
     #[test]
     fn the_check_comes_before_the_log_and_the_app_start() {
         let main = include_str!("main.rs");

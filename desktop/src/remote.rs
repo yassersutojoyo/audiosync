@@ -858,6 +858,7 @@ pub(crate) mod tests {
         }
     }
 
+    // covers: S379
     #[test]
     fn use_port_takes_only_a_valid_port_that_changes_or_retries() {
         assert!(!use_port_enabled("", 8080, true));
@@ -933,6 +934,7 @@ pub(crate) mod tests {
         }
     }
 
+    // covers: S343, S376
     #[test]
     fn a_speaker_that_will_play_shows_off_and_turning_it_on_is_an_action() {
         let mut state = state();
@@ -982,6 +984,7 @@ pub(crate) mod tests {
         );
     }
 
+    // covers: S376
     #[test]
     fn switching_maps_to_the_rows_switch_and_a_repeat_does_nothing() {
         let state = state();
@@ -1002,6 +1005,7 @@ pub(crate) mod tests {
         );
     }
 
+    // covers: S376
     #[test]
     fn volume_and_master_volume_take_0_to_100() {
         let state = state();
@@ -1064,6 +1068,7 @@ pub(crate) mod tests {
         );
     }
 
+    // covers: S376
     #[test]
     fn a_delay_must_stay_in_the_speakers_range() {
         let state = state();
@@ -1103,6 +1108,7 @@ pub(crate) mod tests {
         state
     }
 
+    // covers: S257, S376
     #[test]
     fn a_speaker_that_asks_for_a_code_is_turned_on_at_the_pc_not_from_the_page() {
         let state = with_apple_tv(Availability::NeedsCode);
@@ -1214,6 +1220,7 @@ pub(crate) mod tests {
         }
     }
 
+    // covers: S343, S376
     #[test]
     fn an_airplay_speaker_carries_the_shared_airplay_delay_and_sets_it() {
         let state = with_apple_tv(Availability::Open);
@@ -1453,6 +1460,7 @@ pub(crate) mod tests {
         }
     }
 
+    // covers: S348, S376
     #[test]
     fn an_unknown_hidden_or_unavailable_speaker_is_refused() {
         let state = state();
@@ -1487,6 +1495,7 @@ pub(crate) mod tests {
         );
     }
 
+    // covers: S379
     #[test]
     fn the_setting_keeps_a_usable_port() {
         assert_eq!(

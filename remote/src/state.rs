@@ -812,6 +812,7 @@ mod tests {
         ]
     }"#;
 
+    // covers: S343
     #[test]
     fn a_snapshot_reads_and_writes_back_with_its_revision() {
         let state = State::from_json(SAMPLE).unwrap();
@@ -864,6 +865,7 @@ mod tests {
         )
     }
 
+    // covers: S344
     #[test]
     fn sources_keep_their_order_kind_and_the_current_one() {
         let state = State::from_json(&with_sources("\"app:music\"")).unwrap();
@@ -881,6 +883,7 @@ mod tests {
         assert_eq!(State::from_json(&state.to_json(3)).unwrap(), state);
     }
 
+    // covers: S344
     #[test]
     fn a_snapshot_without_sources_or_with_an_unlisted_current_one_has_none() {
         let bare = State::from_json(SAMPLE).unwrap();
@@ -895,6 +898,7 @@ mod tests {
         }
     }
 
+    // covers: S343
     #[test]
     fn a_bad_source_list_is_refused() {
         for bad in [
@@ -909,6 +913,7 @@ mod tests {
         }
     }
 
+    // covers: S343
     #[test]
     fn the_volume_step_defaults_to_1_and_takes_above_0_up_to_100() {
         let state = State::from_json(SAMPLE).unwrap();
@@ -927,6 +932,7 @@ mod tests {
         }
     }
 
+    // covers: S343
     #[test]
     fn the_computer_name_is_optional_text_and_never_quoted_in_an_error() {
         let unnamed = State::from_json(r#"{"master": {"volume": 50}, "speakers": []}"#).unwrap();
@@ -943,6 +949,7 @@ mod tests {
         assert!(!error.to_string().contains("Den Mac"), "{error}");
     }
 
+    // covers: S343
     #[test]
     fn a_bad_snapshot_is_refused() {
         for bad in [
@@ -960,6 +967,7 @@ mod tests {
         assert!(State::from_json(&upside_down).is_err());
     }
 
+    // covers: S376
     #[test]
     fn bodies_read_only_the_fields_they_know() {
         assert_eq!(
@@ -1003,6 +1011,7 @@ mod tests {
         );
     }
 
+    // covers: S376
     #[test]
     fn ranges_include_both_ends() {
         let state = State::from_json(SAMPLE).unwrap();
@@ -1029,6 +1038,7 @@ mod tests {
         assert_eq!(check_master_volume(-0.1), Err(RangeError::Volume));
     }
 
+    // covers: S376
     #[test]
     fn a_command_carries_only_what_was_posted() {
         let command = Command::Speaker {

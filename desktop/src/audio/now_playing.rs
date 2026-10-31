@@ -1032,6 +1032,7 @@ mod tests {
         assert!(!app_matches("Chrome", ""));
     }
 
+    // covers: S218
     #[test]
     fn a_playing_session_wins_over_a_paused_one_listed_first() {
         let sessions = [
@@ -1050,6 +1051,7 @@ mod tests {
         assert_eq!(pick(&sessions, &Follow::AnyApp), Some(0));
     }
 
+    // covers: S218
     #[test]
     fn an_app_source_only_follows_its_own_session() {
         let sessions = [
@@ -1075,6 +1077,7 @@ mod tests {
         assert_eq!(pick(&[], &Follow::AnyApp), None);
     }
 
+    // covers: S218
     #[test]
     fn a_paused_track_counts_only_when_its_app_is_the_source() {
         let paused = track("Spotify.exe", "Song", false, Some(COVER));
@@ -1280,6 +1283,7 @@ mod tests {
         assert_eq!(reader.played_last(), None);
     }
 
+    // covers: S218
     #[test]
     fn with_no_track_the_source_name_stands_in_for_the_artist() {
         let shown = decide(None, &app("player.exe", "Player"), &labels(), None);
@@ -1376,6 +1380,7 @@ mod tests {
         assert_eq!(large_of(&sent), Some(ICON));
     }
 
+    // covers: C53
     #[test]
     fn a_cast_device_gets_the_track_and_its_cover_once_read() {
         let reader = FakeReader::with_icon(ICON);
@@ -1400,6 +1405,7 @@ mod tests {
         assert_eq!(info.cast_track(start), None, "reading stopped");
     }
 
+    // covers: C53
     #[test]
     fn a_cast_device_gets_no_labels_or_icon_without_a_track() {
         let reader = FakeReader::with_icon(ICON);
@@ -1417,6 +1423,7 @@ mod tests {
         assert_eq!(other.cast_track(later), Some(CastTrack::default()));
     }
 
+    // covers: S218
     #[test]
     fn with_no_reading_at_all_the_labels_go_out_after_the_reading_wait() {
         let reader = FakeReader::with_icon(ICON);
@@ -1434,6 +1441,7 @@ mod tests {
         );
     }
 
+    // covers: S218, S219
     #[test]
     fn missing_artwork_waits_then_the_icon_takes_its_place() {
         let reader = FakeReader::with_icon(ICON);
@@ -1456,6 +1464,7 @@ mod tests {
         assert_eq!(large_of(&sent), Some(ICON));
     }
 
+    // covers: S219
     #[test]
     fn artwork_that_arrives_during_the_wait_goes_out() {
         let reader = FakeReader::with_icon(ICON);
@@ -1471,6 +1480,7 @@ mod tests {
         assert_eq!(large_of(&sent), Some(COVER));
     }
 
+    // covers: S219
     #[test]
     fn without_an_icon_no_artwork_goes_in_its_place() {
         let reader = FakeReader::default();
@@ -1503,6 +1513,7 @@ mod tests {
         );
     }
 
+    // covers: S218
     #[test]
     fn a_new_source_waits_for_its_own_reading() {
         let reader = FakeReader::with_icon(ICON);
@@ -1592,6 +1603,7 @@ mod tests {
         assert_eq!(large_of(&sent), Some(COVER), "with its artwork");
     }
 
+    // covers: S219
     #[test]
     fn a_restart_on_a_track_without_artwork_waits_for_it_again() {
         let reader = FakeReader::with_icon(ICON);
@@ -1670,6 +1682,7 @@ mod tests {
         })
     }
 
+    // covers: S361
     #[test]
     fn a_timeline_gives_the_elapsed_time_and_length_as_of_its_update() {
         let read_at = Instant::now() + secs(60);
@@ -1690,6 +1703,7 @@ mod tests {
         );
     }
 
+    // covers: S361
     #[test]
     fn without_an_update_time_the_position_is_current_when_read() {
         let read_at = Instant::now();
@@ -1703,6 +1717,7 @@ mod tests {
         );
     }
 
+    // covers: S361
     #[test]
     fn an_unknown_or_zero_length_gives_no_timeline() {
         let now = Instant::now();
@@ -1711,6 +1726,7 @@ mod tests {
         assert_eq!(Timeline::read(raw(10, 5, 7, 0), 0, now), None);
     }
 
+    // covers: S361
     #[test]
     fn a_position_outside_the_track_is_held_to_its_bounds() {
         let now = Instant::now();
@@ -1720,6 +1736,7 @@ mod tests {
         assert_eq!(after.elapsed, secs(100));
     }
 
+    // covers: S361
     #[test]
     fn wall_ticks_count_from_1601() {
         assert_eq!(wall_ticks(UNIX_EPOCH), UNIX_EPOCH_TICKS);
@@ -1729,6 +1746,7 @@ mod tests {
         );
     }
 
+    // covers: S361
     #[test]
     fn a_playing_track_with_a_length_goes_out_with_its_progress() {
         let reader = FakeReader::with_icon(ICON);
@@ -1743,6 +1761,7 @@ mod tests {
         assert_eq!(sent.track, fields("Song", "Song artist", "Song album"));
     }
 
+    // covers: S361
     #[test]
     fn progress_that_runs_on_as_sent_is_not_sent_again() {
         let reader = FakeReader::with_icon(ICON);
@@ -1764,6 +1783,7 @@ mod tests {
         );
     }
 
+    // covers: S361
     #[test]
     fn a_seek_sends_the_new_position() {
         let reader = FakeReader::with_icon(ICON);
@@ -1781,6 +1801,7 @@ mod tests {
         assert_eq!(sent.progress, progress(120, 180));
     }
 
+    // covers: S361
     #[test]
     fn a_live_or_paused_track_or_the_labels_go_out_without_progress() {
         let reader = FakeReader::with_icon(ICON);
@@ -1809,6 +1830,7 @@ mod tests {
         assert_eq!(labels.progress, None);
     }
 
+    // covers: S361
     #[test]
     fn a_track_change_drops_the_previous_tracks_timeline() {
         let reader = FakeReader::with_icon(ICON);
@@ -1845,6 +1867,7 @@ mod tests {
         assert_eq!(sent.progress, progress(2, 240));
     }
 
+    // covers: S361
     #[test]
     fn a_track_change_after_a_pause_still_drops_the_previous_tracks_timeline() {
         let reader = FakeReader::with_icon(ICON);
@@ -1873,6 +1896,7 @@ mod tests {
         );
     }
 
+    // covers: S361
     #[test]
     fn an_old_timeline_with_a_fresh_update_time_is_still_the_old_one() {
         let reader = FakeReader::with_icon(ICON);
@@ -1898,6 +1922,7 @@ mod tests {
         assert_eq!(sent.progress, None);
     }
 
+    // covers: S361
     #[test]
     fn stopping_clears_the_progress_with_the_rest() {
         let reader = FakeReader::with_icon(ICON);

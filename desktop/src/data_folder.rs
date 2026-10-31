@@ -255,6 +255,7 @@ mod tests {
         assert!(!temporary_path(&path).exists());
     }
 
+    // covers: S385
     #[test]
     fn a_failed_write_keeps_the_old_file_whole() {
         let path = test_dir("data-folder-failed").join("file.json");

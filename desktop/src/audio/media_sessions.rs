@@ -795,6 +795,7 @@ mod tests {
         (track, card)
     }
 
+    // covers: S218
     #[test]
     fn one_listing_and_one_thumbnail_serve_both_readers() {
         let (fake, counts) = fake(Thumbnail::Image);
@@ -871,6 +872,7 @@ mod tests {
         assert_eq!(read(Some("Vlc.exe")), None, "it quit");
     }
 
+    // covers: S274
     #[test]
     fn a_button_goes_to_the_session_that_counts() {
         let (mut fake, counts) = fake(Thumbnail::Image);

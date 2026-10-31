@@ -132,7 +132,7 @@ S357 Mac host only: the menu bar icon's clicks, the panel's Reduce Motion and it
 S358 Mac host only: the notice that the PTP ports are taken; the Mac logic suite checks it.
 S359 Mac host only: zone headers and folding in the main window and the menu bar panel; the Mac logic suite checks them.
 S360 Mac host only: hidden speakers and the panel's count of speakers on; the Mac logic suite checks them.
-S361 Mac host only: when track info and progress go to the AirPlay sender and Cast; the Mac logic suite checks it.
+S361 Mac and Windows hosts only: when track info and progress go to the AirPlay sender and Cast; the Mac logic suite and the Windows tests check it.
 S362 Mac host only: what a calibrate control that can't start names; the Mac logic suite checks it.
 S363 Mac host only: permission explanations, the setup window and the first install's built-in output; the Mac logic suite checks them.
 S364 Mac host only: the debug log's late output callback and session stop lines; the Mac logic suite checks them.

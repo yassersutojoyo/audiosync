@@ -271,6 +271,7 @@ mod tests {
         }
     }
 
+    // covers: S215
     #[test]
     fn a_held_lock_makes_every_other_launch_the_second_copy() {
         let dir = TestDir::new("instance-held");
@@ -292,6 +293,7 @@ mod tests {
         drop(first(acquire_in(&dir.0)));
     }
 
+    // covers: S215
     #[test]
     fn a_socket_left_by_a_crash_is_replaced_by_the_next_first_copy() {
         let dir = TestDir::new("instance-stale");
@@ -301,6 +303,7 @@ mod tests {
         assert_eq!(hand_over_in(&dir.0, None), HandOver::NoAnswer);
     }
 
+    // covers: S215
     #[test]
     fn a_second_launch_gets_the_window_shown_and_passes_its_token() {
         let dir = TestDir::new("instance-shown");
@@ -315,6 +318,7 @@ mod tests {
         assert_eq!(received.try_iter().count(), 2);
     }
 
+    // covers: S215
     #[test]
     fn a_copy_that_never_answers_or_isnt_listening_ends_the_hand_over() {
         let dir = TestDir::new("instance-silent");
@@ -324,6 +328,7 @@ mod tests {
         assert_eq!(hand_over_in(&dir.0, None), HandOver::NoAnswer);
     }
 
+    // covers: S215
     #[test]
     fn a_socket_path_too_long_to_bind_still_runs_the_app() {
         let dir = TestDir::new("instance-long");
@@ -332,6 +337,7 @@ mod tests {
         assert!(matches!(acquire_in(&deep), Acquired::First(Err(_))));
     }
 
+    // covers: S215
     #[test]
     fn only_show_is_a_request_and_a_token_rides_along_as_one_word() {
         assert!(is_show_request("show\n"));
