@@ -499,6 +499,7 @@ impl App {
                                 backend.recall_preset_from_phone(&id, &keep_off);
                             }
                             Action::Source { id } => backend.select_source(&id),
+                            Action::Mix { apps } => backend.select_mix(&apps),
                         }
                     }
                 }

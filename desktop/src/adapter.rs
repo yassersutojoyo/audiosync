@@ -410,6 +410,33 @@ fn mix_toggle(chosen: &Chosen, mode: MixMode, app: SavedMixApp) -> Chosen {
     mix_choice(mode, apps)
 }
 
+/// Whether `a` and `b` capture the same app, or the same apps in "only these"
+/// mode in any order, without case.
+fn same_apps(a: &Chosen, b: &Chosen) -> bool {
+    match (a, b) {
+        (Chosen::App { executable: a, .. }, Chosen::App { executable: b, .. }) => {
+            a.eq_ignore_ascii_case(b)
+        }
+        (
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps: a,
+            },
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps: b,
+            },
+        ) => {
+            a.len() == b.len()
+                && a.iter().all(|app| {
+                    b.iter()
+                        .any(|other| other.executable.eq_ignore_ascii_case(&app.executable))
+                })
+        }
+        _ => false,
+    }
+}
+
 /// A notice as it was posted.
 #[derive(Clone, Debug)]
 struct Posted {
@@ -1962,6 +1989,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     id: source.executable.clone(),
                     name: source.name.clone(),
                     checked: is_checked(&source.executable),
+                    running: true,
                 });
             }
         }
@@ -1978,6 +2006,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                         app.name.clone()
                     },
                     checked: true,
+                    running: false,
                 });
             }
         }
@@ -4723,6 +4752,29 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 name: app.name,
             },
         );
+        self.pick(picked);
+    }
+
+    fn select_mix(&mut self, executables: &[String]) {
+        let listed = self.mix_apps();
+        let apps: Vec<SavedMixApp> = executables
+            .iter()
+            .filter_map(|id| listed.iter().find(|app| app.id.eq_ignore_ascii_case(id)))
+            .map(|app| SavedMixApp {
+                executable: app.id.clone(),
+                name: app.name.clone(),
+            })
+            .collect();
+        if apps.is_empty() {
+            return;
+        }
+        let picked = mix_choice(MixMode::Only, apps);
+        // The same apps in another order are the source in use (S344).
+        let picked = if same_apps(&picked, &self.chosen) {
+            self.chosen.clone()
+        } else {
+            picked
+        };
         self.pick(picked);
     }
 
