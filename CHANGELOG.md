@@ -9,7 +9,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Several AirPlay 2 speakers play at once, up to 16. A speaker past that limit stays on, and its row says "Waiting: too many AirPlay 2 speakers" until another one stops. On the Mac and on Windows.
 - A speaker that needs PTP timing while AudioSync plays to AirPlay 2 speakers on another network stays on, its row says "Waiting: AirPlay 2 speakers on another network", and it starts once those speakers are off. On the Mac and on Windows.
 - An AirPlay speaker that's on but has left the network waits for it to come back instead of retrying, and its row says "Not on the network right now, plays once it's back". A stereo pair keeps a member that left and names it as missing. On the Mac and on Windows.
-- On Windows, AudioSync updates itself. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, checks at launch, at most once a day after a check that worked. Download and Install fetches the update, checks that it was signed with AudioSync's release key and installs it, and Restart Now opens the new version. If the new version doesn't start within 15 seconds, or Windows security blocks the file, AudioSync puts the old version back and offers the release page, and that version isn't offered again at launch. Builds you make yourself never check. AudioSync 0.7.1 on Windows can't update itself, so get this release from the release page by hand once.
+- On Windows, AudioSync updates itself. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, checks at launch and every 24 hours while AudioSync runs, at most once a day after a check that worked. Download and Install fetches the update, checks that it was signed with AudioSync's release key and installs it, and Restart Now opens the new version. If the new version doesn't start within 15 seconds, or Windows security blocks the file, AudioSync puts the old version back and offers the release page, and that version isn't offered again at launch. Builds you make yourself never check. AudioSync 0.7.1 on Windows can't update itself, so get this release from the release page by hand once.
 - AudioSync remembers per AirPlay 2 speaker whether it plays with PTP or NTP timing, so the next launch starts with the timing that worked. It's forgotten when the speaker's software changes, when the speaker turns that timing down, and with Forget Pairing. If that saved record is damaged for one speaker, only that speaker loses it and works it out again on its next connect. On the Mac and on Windows.
 - A speaker's dimmed volume slider says why it's dimmed: the speaker is off, or a Google Cast speaker isn't playing yet. VoiceOver or Narrator reads the reason, and it shows when you hover over the slider in the main window. On the Mac and on Windows.
 - A Google Cast speaker you turned on is on again after you quit and reopen AudioSync, once it shows up on the network, as AirPlay and local speakers already were. A hidden speaker stays off. On the Mac and on Windows.
@@ -35,6 +35,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, while a calibration is running, the calibrate button's hint says another calibration is still running.
 - The web remote can turn on an AirPlay speaker that asks for a password once you've typed its password in AudioSync since it started. Before, the phone left it off. On the Mac and on Windows.
 - On the Mac, an update's signature is checked before the update is unpacked.
+- On the Mac, the update prompt no longer offers to install updates automatically. Every update waits for your click.
+- On Windows, an AirPlay speaker's own delay saved by an older version is no longer applied, as on the Mac, since no window shows it or lets you reset it. Such a speaker now plays by the AirPlay delay alone.
 
 ### Fixed
 
@@ -244,6 +246,44 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, an AirPlay speaker set to connect automatically that turns AudioSync down because it wants a pairing stays off until you turn it on, as on the Mac. Before, it was turned on again, turned down again and showed the same notice each time it dropped off the network and came back.
 - On Windows, an AirPlay speaker that turned AudioSync down because it wants a pairing stays off when the web remote switches it on, by its own switch, its zone or a preset, and the notice says why, as on the Mac. Before, the phone turned it on and AudioSync tried to connect to it again.
 - On Windows, AudioSync now keeps handling speaker and network changes while the error box for a window that failed to open is up. Before, they waited until the box closed.
+- On Windows, a Google Cast speaker that refuses a Mute no longer shows as muted, as on the Mac.
+- The web remote shows an unplugged input you stream from greyed, under its plain name. On the Mac and on Windows.
+- On the Mac, the web remote shows only the reason under a calibrate button that can't be pressed.
+- On Windows, a Google Cast speakers file that couldn't be read at launch but reads by the first save is merged in instead of saved over, so its delays and formats stay. A change you made since launch wins.
+- On Windows, an AirPlay speaker that was waiting clears its waiting label and notice once AudioSync starts it again, and stops waiting on any error that isn't a wait, as on the Mac.
+- The web remote's sign-in cookie is named for its port, so remotes on two ports no longer overwrite each other's pairing on a phone. A phone paired before keeps working. On the Mac and on Windows.
+- On Windows, the notice that Windows has no sound output also shows while a Google Cast speaker is on, as it does for AirPlay.
+- A stereo pair you switched off stays whole when a late note about a missing member arrives. On Windows, a speaker forgotten while the pairings file couldn't be read also stays out of that file's kept-aside copies. On the Mac and on Windows.
+- On Windows, the notice that the PTP ports are taken goes away once a speaker plays and no row is off for PTP timing, as on the Mac.
+- A Google Cast speaker's mute state is no longer lost when a newer volume report replaces one still waiting, and AudioSync remembers at most 256 Google Cast devices. On the Mac and on Windows. On the Mac, a Cast memory file written by a newer AudioSync is kept aside before it's saved over.
+- On the Mac, a speaker's own cancelled calibration no longer reads as another calibration on its row while its test sound plays out. The button stays off with no hint until the outputs come back.
+- On Windows, an off virtual output set to connect automatically or in a zone keeps its row after a restart with Show Virtual Devices off, as on the Mac.
+- On Windows, Calibrate All results not yet applied close when the AirPlay delay changes while AirPlay isn't running, as on the Mac.
+- On Windows, a Bluetooth speaker that came back mid-session restarts once more, quietly, about 5 minutes later, as on the Mac. That restart is cancelled when you turn the speaker off or its stream is lost.
+- On the Mac, an input that drops out again while AudioSync waits for its next try no longer uses up one of the tries.
+- On the Mac, when a Google Cast speaker added by address is found on the network, the offset of another speaker at that address is no longer cleared.
+- On the Mac, the web remote shows a speaker that will play once streaming starts as off, as on Windows, and switching it on from the phone starts streaming like the button in the window.
+- On Windows, a saved Google Cast speaker's offset no longer moves to another device that answers at its address.
+- On Windows, the web remote keeps your app pick when that app starts again, and two copies of one app show as one entry.
+- A stereo pair or home theater group turned off and on again no longer names a member as missing because the earlier run did. On the Mac and on Windows.
+- On the Mac, Forget Pairing and Forget Password clear that AirPlay speaker's notices, as on Windows.
+- On the Mac, a Google Cast speaker added by address stays on and listed when the network search loses the device it found there, and turns off as not responding when its address can't be reached again.
+- On Windows, the input level meter reads the input only while the main window shows, and starts empty when the window shows again instead of holding an old peak.
+- On the Mac, choosing Web Remote again while its window shows keeps the code a phone is typing, and a lockout. A new code is made only when the window opens from hidden, as on Windows.
+- On the Mac, the screen recording notice waits while the app you capture sends nothing, so a paused app, or one playing on another device, is no longer blamed on the permission.
+- On Windows, a Bluetooth speaker opened again after a stall, a runaway or a lost stream gets the restart about 2 seconds in that a newly connected one gets, as on the Mac.
+- On Windows, an input device you stream from that stops delivering for 2 seconds is opened again, as on the Mac, and capturing the whole system or an app never stops because it's silent.
+- On Windows, calibration records from the microphone of its first recording, keeps its results after you change a delay by hand, and says another calibration is running only when one is, as on the Mac.
+- On Windows, quitting or signing out turns the web remote off before the settings are saved.
+- On Windows, a speaker in a stereo pair or home theater isn't shown or switched on alone before the pair shows up, and a pair plays while any of its speakers can, one whose speaker asks for a PIN included, as on the Mac.
+- On Windows, the notice that AirPlay plays ahead of Google Cast no longer replaces other notices, an AirPlay speaker that plays clears all its notices, and pairing failures read as on the Mac.
+- On the Mac, AudioSync keeps trying to capture for up to a minute after a wake, as on Windows, also when the session is rebuilt.
+- On Windows, no AirPlay speaker starts while the PC sleeps, and failures then don't count toward the Reconnecting… notice.
+- On the Mac, an AirPlay error AudioSync retries while the Mac sleeps no longer counts toward the Reconnecting… notice, as on Windows.
+- On the Mac, the notice that AirPlay plays ahead of a Google Cast speaker counts each AirPlay speaker's own receiver delay, as on Windows.
+- On Windows, a web remote command with one bad part still applies the rest, and its volumes and delays are clamped to their range, as on the Mac.
+- On the Mac, opening AudioSync a second time shows the running copy's window only once that launch has finished, and a launch at login leaves the window as it is.
+- Dragging an AirPlay speaker's volume on the web remote no longer makes its row jump back: readings from the speaker wait until 1 second after your last step. On the Mac and on Windows.
 
 ## [0.7.1] - 2026-10-27
 
