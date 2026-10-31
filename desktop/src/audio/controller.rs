@@ -247,6 +247,12 @@ pub trait CaptureHandle {
     fn watch_refused(&self) -> Option<i32> {
         None
     }
+
+    /// Whether it failed because its input device delivered no packet for
+    /// 2 s after its first (S329).
+    fn went_quiet(&self) -> bool {
+        false
+    }
 }
 
 /// A running output. Dropping it stops the output at once and waits for its
@@ -2890,6 +2896,10 @@ impl<D: Driver> Controller<D> {
         let Some(session) = self.session.as_mut() else {
             return;
         };
+        let quiet = session
+            .capture
+            .as_ref()
+            .is_some_and(|capture| capture.went_quiet());
         drop(session.capture.take());
         session.unwatched = None;
         session.reopen = Some(CaptureReopen {
@@ -2898,6 +2908,12 @@ impl<D: Driver> Controller<D> {
             busy_since: None,
             away: false,
         });
+        if quiet {
+            self.log.log(|| {
+                "the input device delivered no packet for 2 s, so its capture counts as lost"
+                    .to_owned()
+            });
+        }
         self.log.log(|| {
             "the capture was lost: Windows audio restarted or its device went away; it opens \
              again in a moment while the outputs play on"
