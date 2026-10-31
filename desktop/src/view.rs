@@ -140,11 +140,11 @@ struct UiState {
 }
 
 /// The virtual outputs the speaker lists have shown this session. With Show
-/// Virtual Devices off, a virtual output is listed while it is on; once
-/// listed, it stays listed for the rest of the session (until the app
-/// restarts or Show Virtual Devices changes), so turning it off doesn't
-/// remove its row from under the keyboard focus, and the lists never change
-/// shape later on their own.
+/// Virtual Devices off, a virtual output is listed while it is on, set to
+/// auto-connect or in a zone; once listed, it stays listed for the rest of
+/// the session (until the app restarts or Show Virtual Devices changes), so
+/// turning it off doesn't remove its row from under the keyboard focus, and
+/// the lists never change shape later on their own.
 #[derive(Default)]
 struct ListedVirtual {
     ids: HashSet<String>,
@@ -152,9 +152,12 @@ struct ListedVirtual {
 
 impl ListedVirtual {
     /// Remembers the virtual outputs listed now.
-    fn note(&mut self, speakers: &[ui_model::Speaker], show_virtual: bool) {
-        for speaker in speakers {
-            if speaker.kind == ui_model::SpeakerKind::Virtual && speaker.is_listed(show_virtual) {
+    fn note(&mut self, state: &ui_model::AppState, show_virtual: bool) {
+        for speaker in &state.speakers {
+            let chosen = speaker.is_listed(show_virtual)
+                || speaker.auto_connect
+                || state.zone_of(&speaker.id).is_some();
+            if speaker.kind == ui_model::SpeakerKind::Virtual && chosen {
                 self.ids.insert(speaker.id.clone());
             }
         }
@@ -1733,7 +1736,7 @@ impl App {
             let became_mix = is_mix && !ui.source_was_mix;
             ui.source_was_mix = is_mix;
             let show_virtual = ui.show_virtual;
-            ui.listed_virtual.note(&state.speakers, show_virtual);
+            ui.listed_virtual.note(&state, show_virtual);
             // A speaker that went takes what was typed for it along: back,
             // it shows its saved delay.
             ui.delay_drafts
@@ -9466,16 +9469,18 @@ mod tests {
 
     #[test]
     fn a_listed_virtual_output_stays_listed_after_it_is_turned_off() {
-        let state = MockBackend::new().snapshot();
+        let mut state = MockBackend::new().snapshot();
         let mut cable = state.speaker("local:desk").unwrap().clone();
         cable.kind = ui_model::SpeakerKind::Virtual;
         cable.enabled = true;
         let mut listed = ListedVirtual::default();
-        listed.note(std::slice::from_ref(&cable), false);
+        state.speakers = vec![cable.clone()];
+        listed.note(&state, false);
         assert!(listed.lists(&cable, false), "on, it is listed");
 
         cable.enabled = false;
-        listed.note(std::slice::from_ref(&cable), false);
+        state.speakers = vec![cable.clone()];
+        listed.note(&state, false);
         assert!(
             listed.lists(&cable, false),
             "turned off, its row stays under the focus"
@@ -9492,6 +9497,25 @@ mod tests {
             !listed.lists(&other, false),
             "a virtual output that was never listed stays hidden"
         );
+    }
+
+    // covers: S151
+    #[test]
+    fn a_virtual_output_set_to_auto_connect_or_in_a_zone_is_listed_after_a_restart() {
+        let mut backend = MockBackend::new();
+        backend.new_zone_with("local:desk", "Desk");
+        let mut state = backend.snapshot();
+        let mut zoned = state.speaker("local:desk").unwrap().clone();
+        zoned.kind = ui_model::SpeakerKind::Virtual;
+        zoned.enabled = false;
+        let mut auto = zoned.clone();
+        auto.id = "local:cable".into();
+        auto.auto_connect = true;
+        state.speakers = vec![zoned.clone(), auto.clone()];
+        let mut listed = ListedVirtual::default();
+        listed.note(&state, false);
+        assert!(listed.lists(&zoned, false), "a zone member keeps its row");
+        assert!(listed.lists(&auto, false), "auto-connect keeps its row");
     }
 
     #[test]
