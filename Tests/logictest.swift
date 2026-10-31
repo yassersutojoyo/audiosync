@@ -3781,39 +3781,53 @@ do {
             for (id, availability) in entries { m.apply(.appeared(receiver(id, id, availability))) }
             return m
         }
+        // covers: S223
         check(NativeAirPlayModel.isPin("0123") && !NativeAirPlayModel.isPin("")
                 && !NativeAirPlayModel.isPin("12a4") && !NativeAirPlayModel.isPin("12 34")
                 && !NativeAirPlayModel.isPin("\u{FF11}\u{FF12}"),
               "native pairing: a PIN is ASCII digits only")
 
         var m = listed([("A1", .available), ("B2", .needsPin), ("C3", .needsPassword)])
+        // covers: S223
         check(m.turnedOnByUser("A1") == nil, "native pairing: a click on a receiver able to play just joins")
+        // covers: S223
         check(m.turnedOnByUser("B2") == .startPairing("B2"), "native pairing: a click on an Apple TV asking for a PIN pairs")
+        // covers: S223
         check(m.turnedOnByUser("C3") == .prompt, "native pairing: a click on a receiver with a password asks for it")
+        // covers: S223
         check(m.plan(streaming: true, enabled: ["native:B2", "native:C3"]).isEmpty,
               "native pairing: while pairing or prompting, the speaker waits instead of going off")
 
         // The PIN: shown on the TV, typed, checked.
+        // covers: S223
         check(m.apply(.pinNeeded(id: "B2")) == .prompt, "native pairing: the TV shows a PIN, a prompt is queued")
         let password = m.nextPrompt()
+        // covers: S223
         check(password == NativePrompt(id: "C3", password: true, wrong: false) && m.nextPrompt() == nil,
               "native pairing: prompts come oldest first, one at a time")
+        // covers: S223
         check(m.answered(password!, code: "secret") == .sendPassword(pair: false)
                 && m.plan(streaming: true, enabled: ["native:C3"]).add == ["C3"],
               "native pairing: with its password, a receiver joins")
+        // covers: S223
         check(m.holdsPassword("C3") && !m.isPaired("C3") && !m.holdsPassword("A1"),
               "native pairing: a receiver whose password was typed offers Forget Password in its row menu")
         var forgot = m
         forgot.forgetPassword("C3")
+        // covers: S223
         check(!forgot.holdsPassword("C3") && forgot.plan(streaming: true, enabled: ["native:C3"]).add.isEmpty,
               "native pairing: after Forget Password the receiver no longer joins with the old password")
         let pin = m.nextPrompt()
+        // covers: S223
         check(pin == NativePrompt(id: "B2", password: false, wrong: false), "native pairing: then the PIN prompt opens")
+        // covers: S223
         check(m.answered(pin!, code: "12a4") == .askAgain && m.nextPrompt() == NativePrompt(id: "B2", password: false, wrong: true),
               "native pairing: something that isn't a PIN asks again")
+        // covers: S223
         check(m.answered(NativePrompt(id: "B2", password: false, wrong: true), code: "1234") == .submitPin
                 && m.stages["B2"] == .checkingPin,
               "native pairing: a PIN goes to the pairing")
+        // covers: S223
         check(m.apply(.pairingFailed(id: "B2", wrongPin: true, .refused, detail: "")) == .startPairing("B2")
                 && m.apply(.pinNeeded(id: "B2")) == .prompt
                 && m.nextPrompt() == NativePrompt(id: "B2", password: false, wrong: true),
@@ -3824,14 +3838,18 @@ do {
                 && m.stages["B2"] == .askingPin(wrong: true)
                 && m.nextPrompt() == NativePrompt(id: "B2", password: false, wrong: true),
               "native pairing: an AirPlay 2 receiver that turns the PIN down asks again in the same pairing")
+        // covers: S223
         check(m.answered(NativePrompt(id: "B2", password: false, wrong: true), code: "4821") == .submitPin
                 && m.apply(.paired(id: "B2", storeNote: "")) == .paired("native:B2"),
               "native pairing: once paired, the speaker joins")
+        // covers: S223
         check(m.plan(streaming: true, enabled: ["native:B2"]).isEmpty,
               "native pairing: just paired, it waits for the sender's new listing instead of going off")
         m.apply(.changed(receiver("B2", "B2", .available)))
+        // covers: S223
         check(m.plan(streaming: true, enabled: ["native:B2"]).add == ["B2"], "native pairing: listed as able to play, it joins")
         m.added("B2")
+        // covers: S223
         check(m.apply(.error(id: "B2", .pairingRequired, retryMs: nil, detail: "")) == .turnOff("native:B2", .stillNeedsCode),
               "native pairing: refused again right after pairing, it goes off instead of pairing in a loop")
         _ = m.turnedOff("B2")
@@ -3839,12 +3857,15 @@ do {
 
         // A password the receiver turns down is asked for again within the attempt.
         m.added("C3")
+        // covers: S223
         check(m.apply(.error(id: "C3", .wrongPassword, retryMs: nil, detail: "")) == .prompt
                 && m.nextPrompt() == NativePrompt(id: "C3", password: true, wrong: true),
               "native pairing: a wrong password asks again while the user's attempt runs")
+        // covers: S223
         check(m.answered(NativePrompt(id: "C3", password: true, wrong: true), code: "") == .turnOff(.cancelled)
                 && !m.turnedOff("C3"),
               "native pairing: an empty password counts as Cancel; no pairing runs to cancel")
+        // covers: S223
         check(m.plan(streaming: true, enabled: ["native:C3"]).turnOff.isEmpty
                 && m.plan(streaming: true, enabled: []).remove == ["C3"],
               "native pairing: switched off, the speaker leaves the sender")
@@ -3853,6 +3874,7 @@ do {
         _ = typed.turnedOnByUser("C3")
         _ = typed.answered(typed.nextPrompt()!, code: "secret")
         typed.added("C3")
+        // covers: S223
         check(typed.apply(.error(id: "C3", .passwordRequired, retryMs: nil, detail: "")) == .prompt
                 && typed.nextPrompt() == NativePrompt(id: "C3", password: true, wrong: true),
               "native pairing: asked again for the password typed this run, the prompt says it was turned down")
@@ -3865,6 +3887,7 @@ do {
         m.added("S1")
         let off = m.apply(.error(id: "S1", .pairingRequired, retryMs: nil, detail: ""))
         let words = UIStrings().nativeAirPlayNotAccepted(name: "Samsung")
+        // covers: S223, S356
         check(off == .turnOff("native:S1", .needsCode) && m.refusedUnasked("S1") && m.nextPrompt() == nil
                 && !words.contains("PIN") && !words.contains("code") && !words.contains("password"),
               "native pairing: a refusal before any pairing step turns the speaker off with neutral text and no code prompt")
@@ -3873,6 +3896,7 @@ do {
         var stored = receiver("P1", "Loft", .available)
         stored.credentialsKept = true
         asking.apply(.appeared(stored))
+        // covers: S356
         check(!asking.refusedUnasked("T1") && !asking.refusedUnasked("P1") && !asking.refusedUnasked("gone"),
               "native pairing: a receiver that asks for a PIN, or holds a pairing, keeps its code text")
         var user = NativeAirPlayModel()
@@ -3890,42 +3914,52 @@ do {
         var m = NativeAirPlayModel()
         m.apply(.appeared(receiver("B2", "B2", .available)))
         m.added("B2")
+        // covers: S223
         check(m.apply(.error(id: "B2", .pairingRequired, retryMs: nil, detail: "")) == .turnOff("native:B2", .needsCode),
               "native pairing: a stored pairing refused without the user's click goes off with a notice")
+        // covers: S223
         check(m.apply(.pinNeeded(id: "B2")) == .cancelPairing("B2"),
               "native pairing: a PIN request nobody waits for cancels its pairing")
 
         m.removed("B2")
+        // covers: S223
         check(m.refusedOff == ["B2"]
                 && m.joinable(["native:B2"], after: [], stopped: false).isEmpty
                 && m.plan(streaming: true, enabled: ["native:B2"]).add.isEmpty,
               "native pairing: turned off for a refused pairing, neither auto-connect nor the plan adds it again")
         let recalled = m.plan(streaming: true, enabled: ["native:B2"])
+        // covers: S223
         check(recalled.add.isEmpty && recalled.turnOff == [.init(id: "B2", reason: .needsCode)],
               "native pairing: a refused speaker switched on without a new attempt (a recalled preset) goes off again with a notice")
 
         // A refused stored pairing pairs again, once per attempt; it stays stored
         // until the new pairing replaces it (P154).
+        // covers: S223
         check(m.turnedOnByUser("B2") == nil && m.refusedOff.isEmpty, "native pairing: a paired Apple TV just joins")
         m.added("B2")
+        // covers: S223
         check(m.apply(.error(id: "B2", .pairingRequired, retryMs: nil, detail: "")) == .startPairing("B2")
                 && m.stages["B2"] == .pairing(afterWrongPin: false),
               "native pairing: within the user's attempt, a refused stored pairing pairs again without being forgotten first, though still listed as paired")
         var turnedDown = receiver("B2", "B2", .needsPin)   // the core lists the turned-down pairing as needing its PIN
         turnedDown.credentialsKept = true
         m.apply(.changed(turnedDown))
+        // covers: P154
         check(!m.isPaired("B2") && m.keepsCredentials("B2"),
               "native pairing: a stored pairing it turned down still offers Forget Pairing")
         m.removed("B2")   // it leaves the sender while it pairs
         // covers: S223
         check(m.plan(streaming: true, enabled: ["native:B2"]).isEmpty,
               "native pairing: while it pairs again, the speaker waits instead of going off")
+        // covers: S223
         check(m.apply(.paired(id: "B2", storeNote: "")) == .paired("native:B2"), "native pairing: paired again")
         m.apply(.changed(receiver("B2", "B2", .available)))
         m.added("B2")
+        // covers: S223
         check(m.apply(.state(id: "B2", .playing, retryMs: nil)) == .playingChanged("native:B2", playing: true)
                 && m.attempts.isEmpty,
               "native pairing: once it plays, the user's attempt is over")
+        // covers: S223
         check(m.apply(.error(id: "B2", .pairingRequired, retryMs: nil, detail: "")) == .turnOff("native:B2", .needsCode),
               "native pairing: refused later on, it goes off with a notice instead of prompting uninvited")
 
@@ -3935,28 +3969,37 @@ do {
         _ = c.turnedOnByUser("B2")
         _ = c.apply(.pinNeeded(id: "B2"))
         let prompt = c.nextPrompt()!
+        // covers: S223
         check(c.answered(prompt, code: nil) == .turnOff(.cancelled) && c.stages["B2"] == .askingPin(wrong: false),
               "native pairing: Cancel turns the speaker off and keeps the stage for the turn-off")
+        // covers: S223
         check(c.turnedOff("B2") && !c.turnedOff("B2"),
               "native pairing: the turn-off after Cancel says the pairing runs, so the app cancels it (once)")
+        // covers: S223
         check(c.apply(.paired(id: "B2", storeNote: "")) == nil && c.apply(.pinNeeded(id: "B2")) == .cancelPairing("B2"),
               "native pairing: a pairing that ends after the speaker went off is passed over or cancelled")
+        // covers: S223
         check(c.answered(prompt, code: "1234") == .ignore, "native pairing: an answer for a speaker turned off meanwhile is ignored")
 
         _ = c.turnedOnByUser("B2")
+        // covers: S223
         check(c.pairingNotStarted("B2") == .turnOff("native:B2", .unreachable),
               "native pairing: a pairing that can't start turns the speaker off")
         _ = c.apply(.pinNeeded(id: "B2"))
         let again = c.nextPrompt()!
         _ = c.answered(again, code: "1234")
+        // covers: S223
         check(c.pinNotTaken("B2") == .turnOff("native:B2", .pairingFailed),
               "native pairing: a PIN the pairing didn't take turns the speaker off")
+        // covers: S223
         check(c.turnedOff("B2"), "native pairing: turning it off cancels the pairing that waits for the PIN")
         _ = c.turnedOnByUser("B2")
+        // covers: S223
         check(c.apply(.pairingFailed(id: "B2", wrongPin: false, .notResponding, detail: "")) == .turnOff("native:B2", .unreachable)
                 && !c.turnedOff("B2"),
               "native pairing: a pairing that failed for another reason turns the speaker off, with nothing left to cancel")
         _ = c.turnedOnByUser("B2")
+        // covers: S223
         check(c.apply(.pairingFailed(id: "B2", wrongPin: false, .busy, detail: "")) == .turnOff("native:B2", .pairingFailed),
               "native pairing: a pairing turned down turns the speaker off")
         _ = c.turnedOnByUser("B2")
@@ -3975,6 +4018,7 @@ do {
         _ = c.turnedOnByUser("B2")
         let asked = c.apply(.passwordNeeded(id: "B2", wrong: false))
         let passwordPrompt = c.nextPrompt()
+        // covers: S223
         check(asked == .prompt && passwordPrompt == NativePrompt(id: "B2", password: true, wrong: false)
                 && c.answered(passwordPrompt!, code: "pw") == .sendPassword(pair: true)
                 && c.stages["B2"] == .pairing(afterWrongPin: false),
@@ -3989,10 +4033,13 @@ do {
         _ = w.apply(.pinNeeded(id: "B2"))
         let shown = w.nextPrompt()!
         _ = w.apply(.timeline(latencyMs: 1800, restarted: false))
+        // covers: S223
         check(w.withdrawPrompt() == nil, "native pairing: a prompt its pairing waits for stays open")
+        // covers: S223
         check(w.apply(.pairingFailed(id: "B2", wrongPin: false, .notResponding, detail: "")) == .turnOff("native:B2", .unreachable)
                 && w.withdrawPrompt() == shown && w.withdrawPrompt() == nil,
               "native pairing: a pairing that fails under its open PIN prompt takes the prompt back, once")
+        // covers: S223
         check(w.answered(shown, code: nil) == .ignore && w.answered(shown, code: "1234") == .ignore,
               "native pairing: a prompt taken back is no answer, and a PIN typed into it goes nowhere")
         // The receiver quit under the open prompt and came back before its closed connection ended the pairing.
@@ -4003,6 +4050,7 @@ do {
         let quitPrompt = quitTV.nextPrompt()!
         quitTV.apply(.gone(id: "B2", name: nil))
         quitTV.apply(.appeared(receiver("B2", "B2", .needsPin)))
+        // covers: S223
         check(quitTV.withdrawPrompt() == nil
                 && quitTV.apply(.pairingFailed(id: "B2", wrongPin: false, .pairingRequired,
                                                detail: "connection closed while waiting for the PIN")) == .turnOff("native:B2", .pairingFailed)
@@ -4013,16 +4061,20 @@ do {
         _ = w.apply(.pinNeeded(id: "B2"))
         let first = w.nextPrompt()!
         _ = w.turnedOff("B2")
+        // covers: S223
         check(w.withdrawPrompt() == first, "native pairing: a speaker switched off under its open prompt takes the prompt back")
         _ = w.turnedOnByUser("B2")
         _ = w.apply(.pinNeeded(id: "B2"))
+        // covers: S223
         check(w.answered(first, code: nil) == .ignore && w.stages["B2"] == .askingPin(wrong: false),
               "native pairing: the closed prompt's answer never counts for the attempt that asks again")
         let second = w.nextPrompt()
+        // covers: S223
         check(second == NativePrompt(id: "B2", password: false, wrong: false),
               "native pairing: the new attempt's prompt opens next")
         w.apply(.changed(receiver("B2", "B2", .available)))
         w.added("B2")
+        // covers: S223
         check(w.apply(.state(id: "B2", .playing, retryMs: nil)) == .playingChanged("native:B2", playing: true)
                 && w.withdrawPrompt() == second,
               "native pairing: a speaker that plays under its open PIN prompt (stored credentials) takes the prompt back")
@@ -4030,11 +4082,14 @@ do {
 
         _ = w.turnedOnByUser("C3")
         let password = w.nextPrompt()
+        // covers: S223
         check(password == NativePrompt(id: "C3", password: true, wrong: false) && w.withdrawPrompt() == nil,
               "native pairing: a password prompt stays open while its speaker waits for it")
         _ = w.turnedOff("C3")
+        // covers: S223
         check(w.withdrawPrompt() == password, "native pairing: switched off, its password prompt is taken back")
 
+        // covers: S170, S223
         check(NativeSpeakerEvent.pairingFailed(id: "B2", wrongPin: true, .refused, detail: "turned down").logLine(name: { _ in "Den TV" })
                 == "[AudioSync] native AirPlay: Den TV (B2): pairing failed: wrong PIN (turned down)"
                 && NativeSpeakerEvent.paired(id: "B2", storeNote: "").logLine(name: { _ in nil })
