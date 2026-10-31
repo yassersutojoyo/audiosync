@@ -390,8 +390,6 @@ pub enum Refusal {
     UnknownSource,
     /// The speaker can't be driven now, or not that way.
     Unavailable,
-    /// A volume or delay outside what the control takes.
-    OutOfRange,
     /// No zone or preset has that ID (any more).
     Unknown,
     /// A microphone run holds the outputs; a command can arrive before the
@@ -400,15 +398,15 @@ pub enum Refusal {
 }
 
 /// The actions `command` takes on `state`, among the speakers the window
-/// lists (`shown`); none when a part of it can't be applied. A switch already
-/// in the asked state takes none, so a repeat doesn't restart a stream; a
-/// volume or delay acts even when unchanged.
+/// lists (`shown`): a part that can't apply is skipped and the rest applies,
+/// a volume or delay clamped to its control's range (S257). A switch or delay
+/// already in the asked state takes none, so a repeat doesn't restart a
+/// stream; a volume acts even when unchanged (S348).
 pub fn actions(
     command: &Command,
     state: &AppState,
     shown: impl Fn(&Speaker) -> bool,
 ) -> Result<Vec<Action>, Refusal> {
-    let in_range = |value: f64| value.is_finite() && (0.0..=100.0).contains(&value);
     if calibrating(state) {
         return Err(Refusal::Calibrating);
     }
@@ -420,24 +418,18 @@ pub fn actions(
                 .find(|zone| &zone.id == id)
                 .ok_or(Refusal::Unknown)?;
             let mut actions = Vec::new();
-            if let Some(volume) = change.volume {
-                if !in_range(volume) {
-                    return Err(Refusal::OutOfRange);
-                }
+            if let Some(position) = change.volume {
                 actions.push(Action::ZoneVolume {
                     id: zone.id.clone(),
-                    volume,
+                    volume: volume(position),
                 });
             }
-            if change.toggle {
-                let can_play = zone.members.iter().any(|key| {
-                    state
-                        .speaker(key)
-                        .is_some_and(|speaker| shown(speaker) && can_drive(state, speaker))
-                });
-                if !can_play {
-                    return Err(Refusal::Unavailable);
-                }
+            let can_play = zone.members.iter().any(|key| {
+                state
+                    .speaker(key)
+                    .is_some_and(|speaker| shown(speaker) && can_drive(state, speaker))
+            });
+            if change.toggle && can_play {
                 actions.push(Action::ToggleZone {
                     id: zone.id.clone(),
                     keep_off: keep_off(state, &zone.members),
@@ -456,12 +448,9 @@ pub fn actions(
                 keep_off: keep_off(state, &preset.members),
             }])
         }
-        Command::Master { volume } => {
-            if !in_range(*volume) {
-                return Err(Refusal::OutOfRange);
-            }
-            Ok(vec![Action::Master { volume: *volume }])
-        }
+        Command::Master { volume: position } => Ok(vec![Action::Master {
+            volume: volume(*position),
+        }]),
         Command::Source { id } => {
             let picked = || {
                 state
@@ -493,33 +482,24 @@ pub fn actions(
                     actions.push(Action::Enable { id: id.clone(), on });
                 }
             }
-            if let Some(volume) = change.volume {
-                if !in_range(volume) {
-                    return Err(Refusal::OutOfRange);
-                }
-                if speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed) {
-                    return Err(Refusal::Unavailable);
-                }
+            if let Some(position) = change.volume
+                && !speaker.cast.as_ref().is_some_and(|cast| cast.volume_fixed)
+            {
                 actions.push(Action::Volume {
                     id: id.clone(),
-                    volume,
+                    volume: volume(position),
                 });
             }
-            if let Some(ms) = change.delay_ms {
-                match delay_field(state, speaker) {
-                    Some((_, min, max)) if (min..=max).contains(&ms) => {
-                        actions.push(if is_airplay(speaker) {
-                            Action::AirPlayDelay { ms: ms as f64 }
-                        } else {
-                            Action::Delay {
-                                id: id.clone(),
-                                ms: ms as f64,
-                            }
-                        });
-                    }
-                    None if ms == 0 => {}
-                    _ => return Err(Refusal::OutOfRange),
-                }
+            if let Some(ms) = change.delay_ms
+                && let Some((current, min, max)) = delay_field(state, speaker)
+                && ms.clamp(min, max) as f64 != current
+            {
+                let ms = ms.clamp(min, max) as f64;
+                actions.push(if is_airplay(speaker) {
+                    Action::AirPlayDelay { ms }
+                } else {
+                    Action::Delay { id: id.clone(), ms }
+                });
             }
             Ok(actions)
         }
@@ -1050,19 +1030,14 @@ pub(crate) mod tests {
         );
         assert_eq!(
             actions(&speaker_command("desk", change(101.0)), &state, not_virtual),
-            Err(Refusal::OutOfRange)
+            Ok(vec![Action::Volume {
+                id: "desk".to_owned(),
+                volume: 100.0
+            }])
         );
         assert_eq!(
             actions(&Command::Master { volume: 0.0 }, &state, not_virtual),
             Ok(vec![Action::Master { volume: 0.0 }])
-        );
-        assert_eq!(
-            actions(&Command::Master { volume: -1.0 }, &state, not_virtual),
-            Err(Refusal::OutOfRange)
-        );
-        assert_eq!(
-            actions(&Command::Master { volume: f64::NAN }, &state, not_virtual),
-            Err(Refusal::OutOfRange)
         );
     }
 
@@ -1091,7 +1066,7 @@ pub(crate) mod tests {
         state.speakers[2].cast.as_mut().unwrap().volume_fixed = true;
         assert_eq!(
             actions(&speaker_command("kitchen", change()), &state, not_virtual),
-            Err(Refusal::Unavailable),
+            Ok(Vec::new()),
             "a Cast speaker whose volume is fixed"
         );
     }
@@ -1112,19 +1087,26 @@ pub(crate) mod tests {
                 ms: -2000.0
             }])
         );
-        assert_eq!(delay("desk", -2001), Err(Refusal::OutOfRange));
-        assert_eq!(delay("desk", 20_001), Err(Refusal::OutOfRange));
+        assert_eq!(
+            delay("desk", -2001),
+            Ok(vec![Action::Delay {
+                id: "desk".to_owned(),
+                ms: -2000.0
+            }])
+        );
         assert_eq!(
             delay("kitchen", -10),
-            Err(Refusal::OutOfRange),
+            Ok(vec![Action::Delay {
+                id: "kitchen".to_owned(),
+                ms: 0.0
+            }]),
             "Cast starts at 0"
         );
         assert_eq!(
-            delay("pc", 0),
+            delay("pc", 10),
             Ok(Vec::new()),
             "the reference has no offset"
         );
-        assert_eq!(delay("pc", 10), Err(Refusal::OutOfRange));
     }
 
     fn with_apple_tv(availability: Availability) -> AppState {
@@ -1264,13 +1246,15 @@ pub(crate) mod tests {
         };
         let delay = |ms| actions(&speaker_command("tv", change(ms)), &state, not_virtual);
         assert_eq!(delay(2100), Ok(vec![Action::AirPlayDelay { ms: 2100.0 }]));
-        assert_eq!(delay(-1), Err(Refusal::OutOfRange));
-        assert_eq!(delay(20_001), Err(Refusal::OutOfRange));
+        assert_eq!(
+            delay(20_001),
+            Ok(vec![Action::AirPlayDelay { ms: 20_000.0 }])
+        );
         let mut no_sender = state.clone();
         no_sender.airplay_delay_ms = None;
         assert_eq!(
             actions(&speaker_command("tv", change(10)), &no_sender, not_virtual),
-            Err(Refusal::OutOfRange),
+            Ok(Vec::new()),
             "no AirPlay sender, no delay field"
         );
     }
@@ -1439,24 +1423,122 @@ pub(crate) mod tests {
         );
         assert_eq!(
             actions(&zone_command("zone:b", true, None), &state, not_virtual),
-            Err(Refusal::Unavailable),
+            Ok(Vec::new()),
             "a zone whose only member the window hides"
         );
         let mut only_tv = state.clone();
         only_tv.zones[1].members = vec!["tv".into()];
         assert_eq!(
             actions(&zone_command("zone:b", true, None), &only_tv, not_virtual),
-            Err(Refusal::Unavailable),
+            Ok(Vec::new()),
             "a zone whose only member asks for a code"
         );
+    }
+
+    // covers: S257
+    #[test]
+    fn a_phone_zone_volume_applies_when_its_toggle_cannot() {
         assert_eq!(
             actions(
-                &zone_command("zone:a", false, Some(101.0)),
-                &state,
+                &zone_command("zone:b", true, Some(140.0)),
+                &zoned(),
                 not_virtual
             ),
-            Err(Refusal::OutOfRange)
+            Ok(vec![Action::ZoneVolume {
+                id: "zone:b".into(),
+                volume: 100.0
+            }])
         );
+    }
+
+    // covers: S257
+    #[test]
+    fn a_phone_speaker_command_applies_its_valid_parts_and_clamps_the_rest() {
+        let mut state = state();
+        let change = SpeakerChange {
+            on: Some(false),
+            volume: Some(120.0),
+            delay_ms: Some(20_001),
+        };
+        assert_eq!(
+            actions(&speaker_command("desk", change), &state, not_virtual),
+            Ok(vec![
+                Action::Enable {
+                    id: "desk".into(),
+                    on: false
+                },
+                Action::Volume {
+                    id: "desk".into(),
+                    volume: 100.0
+                },
+                Action::Delay {
+                    id: "desk".into(),
+                    ms: 20_000.0
+                },
+            ])
+        );
+        state.speakers[2].cast.as_mut().unwrap().volume_fixed = true;
+        let change = SpeakerChange {
+            on: Some(true),
+            volume: Some(35.0),
+            delay_ms: Some(-10),
+        };
+        assert_eq!(
+            actions(&speaker_command("kitchen", change), &state, not_virtual),
+            Ok(vec![
+                Action::Enable {
+                    id: "kitchen".into(),
+                    on: true
+                },
+                Action::Delay {
+                    id: "kitchen".into(),
+                    ms: 0.0
+                },
+            ]),
+            "a fixed volume is skipped and a Cast delay starts at 0"
+        );
+    }
+
+    // covers: S257
+    #[test]
+    fn a_phone_delay_equal_to_the_speakers_own_changes_nothing() {
+        let mut state = with_apple_tv(Availability::Open);
+        state.speakers[0].delay_ms = Some(20_000.0);
+        let delay = |state: &AppState, id: &str, ms| {
+            let change = SpeakerChange {
+                delay_ms: Some(ms),
+                ..Default::default()
+            };
+            actions(&speaker_command(id, change), state, not_virtual)
+        };
+        assert_eq!(
+            delay(&state, "desk", 20_001),
+            Ok(Vec::new()),
+            "clamped to its own"
+        );
+        assert_eq!(
+            delay(&state, "tv", 1750),
+            Ok(Vec::new()),
+            "the AirPlay delay"
+        );
+        state.speakers[0].delay_ms = Some(120.4);
+        assert_eq!(
+            delay(&state, "desk", 120),
+            Ok(vec![Action::Delay {
+                id: "desk".into(),
+                ms: 120.0
+            }]),
+            "equal only once rounded"
+        );
+    }
+
+    // covers: S257
+    #[test]
+    fn a_phone_master_volume_outside_0_to_100_is_clamped() {
+        let master = |volume| actions(&Command::Master { volume }, &state(), not_virtual);
+        assert_eq!(master(150.0), Ok(vec![Action::Master { volume: 100.0 }]));
+        assert_eq!(master(-1.0), Ok(vec![Action::Master { volume: 0.0 }]));
+        assert_eq!(master(f64::NAN), Ok(vec![Action::Master { volume: 0.0 }]));
     }
 
     // covers: S257
@@ -1495,7 +1577,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             actions(&zone_command("zone:b", true, None), &state, not_virtual),
-            Err(Refusal::Unavailable),
+            Ok(Vec::new()),
             "a zone whose only member is the pair"
         );
         assert_eq!(
@@ -1562,18 +1644,6 @@ pub(crate) mod tests {
         assert_eq!(
             actions(&speaker_command("den", on.clone()), &state, not_virtual),
             Err(Refusal::Unavailable)
-        );
-        let mut fixed = state.clone();
-        fixed.speakers[2].cast.as_mut().unwrap().volume_fixed = true;
-        let louder = SpeakerChange {
-            volume: Some(80.0),
-            on: Some(true),
-            ..Default::default()
-        };
-        assert_eq!(
-            actions(&speaker_command("kitchen", louder), &fixed, not_virtual),
-            Err(Refusal::Unavailable),
-            "a Cast speaker whose volume can't be set"
         );
     }
 
