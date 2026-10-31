@@ -181,3 +181,4 @@ S406 Mac host only: work deferred until the menu bar panel is still, and the roo
 S407 Mac host only: the in-app guide's text, layout and illustrations; the Mac logic suite checks them.
 S409 Mac host only: why a volume slider in the main window is dimmed; the Mac logic suite checks it.
 S410 Mac host only: the About panel's version and license lines; the Mac logic suite checks it.
+S411 Mac host only: Sparkle itself runs the check schedule, the permission prompt, skipped versions and the install at quit; the Mac logic suite checks the Info.plist key that turns off its automatic download and install ("updates: Info.plist turns off Sparkle's automatic download and install").
