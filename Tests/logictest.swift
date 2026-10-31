@@ -9160,6 +9160,53 @@ do {
     check(stop == .stopped(.serviceRestarted) && held.allSatisfy { $0 == .none } && early == .none && first == .tryOpen(1),
           "capture watch: a service restart during the sleep still closes the capture, and its first try comes 1 s after the wake",
           "\(stop) \(held.filter { $0 != .none }) \(early) \(first)")
+
+    // covers: S332, S335 (the 60 s after a wake take none of the 5 tries)
+    func afterWake(opensAt: Double) -> [(at: Double, step: CaptureFlowWatch.Step)] {
+        var watch = CaptureFlowWatch()
+        var seen: [(at: Double, step: CaptureFlowWatch.Step)] = []
+        _ = watch.tick(callbacks: 10, reading: true, source: moving(0), at: 0)
+        watch.pause()
+        _ = watch.report(.serviceRestarted, at: 0.5)
+        watch.resume(at: 10)
+        var count: UInt64 = 0
+        for n in 21...200 {
+            let now = 0.5 * Double(n)
+            let opens = now >= opensAt
+            if opens { count += 10 }
+            let step = watch.tick(callbacks: opens ? count : nil, reading: opens, source: moving(now), at: now)
+            if step != .none { seen.append((now, step)) }
+            if case .tryOpen = step, !opens { seen.append((now, watch.failed(at: now))) }
+        }
+        return seen.filter { $0.step != .none }
+    }
+    let slowTap = afterWake(opensAt: 25).map { $0.step }
+    check(!slowTap.contains(.giveUp) && slowTap.contains { if case .kept = $0 { return true } else { return false } },
+          "capture watch: a capture failing for 15 s after a wake keeps being tried and is kept once it opens",
+          "\(slowTap)")
+    let neverBack = afterWake(opensAt: .infinity)
+    let triesAfter = neverBack.compactMap { entry -> Int? in
+        if entry.at >= 70, case .tryOpen(let n) = entry.step { return n } else { return nil }
+    }
+    check(neverBack.filter({ $0.step == .giveUp }).map({ $0.at }) == [74] && triesAfter == [1, 2, 3, 4, 5],
+          "capture watch: a capture still failing 60 s after a wake gets its 5 tries, then the session stops",
+          "\(neverBack)")
+    // A rate rebuild 3 s after the wake hands the window to the new session's watch.
+    var beforeRebuild = CaptureFlowWatch()
+    beforeRebuild.pause()
+    beforeRebuild.resume(at: 10)
+    var rebuilt = CaptureFlowWatch(wakeWindowEnds: beforeRebuild.wakeWindowEnds)
+    _ = rebuilt.tick(callbacks: 10, reading: true, source: moving(13), at: 13)
+    var rebuiltSteps = [rebuilt.report(.aggregateDied, at: 13.5)]
+    for n in 28...80 {
+        let now = 0.5 * Double(n)
+        let step = rebuilt.tick(callbacks: nil, reading: false, source: moving(now), at: now)
+        rebuiltSteps.append(step)
+        if case .tryOpen = step { rebuiltSteps.append(rebuilt.failed(at: now)) }
+    }
+    check(!rebuiltSteps.contains(.giveUp) && rebuilt.inWakeWindow(at: 69.5) && !rebuilt.inWakeWindow(at: 70),
+          "capture watch: a session rebuilt inside a wake's window keeps it, so its failing tries take none of the 5",
+          "\(rebuiltSteps.filter { $0 != .none })")
 }
 
 // MARK: Output format: a device whose rate or channels change under a running output (OutputFormatWatch.swift, S330)

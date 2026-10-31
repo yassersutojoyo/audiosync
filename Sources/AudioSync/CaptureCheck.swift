@@ -136,6 +136,8 @@ struct CaptureFlowWatch {
     /// Seconds a reopened capture delivers before its try is kept.
     static let trialSpan: TimeInterval = 5
     static let tries = 5
+    /// Seconds after a wake whose failed tries take none of the `tries` (S332): a tap can come back slowly.
+    static let wakeWindow: TimeInterval = 60
 
     enum Sign: Equatable {
         case noCallback(TimeInterval)
@@ -212,6 +214,18 @@ struct CaptureFlowWatch {
     private var paused = false
     /// The waiting try is one after a busy answer, so a wake spaces it `busySpacing`.
     private var busyWait = false
+    /// Uptime the latest wake's window ends at.
+    private(set) var wakeWindowEnds: TimeInterval
+
+    /// `wakeWindowEnds` carries a wake's window into the watch of a session
+    /// restarted inside it, as Windows keeps its window across a restart (S332).
+    init(wakeWindowEnds: TimeInterval = -.infinity) {
+        self.wakeWindowEnds = wakeWindowEnds
+    }
+
+    func inWakeWindow(at uptime: TimeInterval) -> Bool {
+        uptime < wakeWindowEnds
+    }
 
     /// `callbacks` is nil while the capture has no IOProc; `reading` is false
     /// while an app tap waits for an audio process, which is no stop. A tap of
@@ -318,6 +332,7 @@ struct CaptureFlowWatch {
     /// at `uptime`, and the 6 s grace with Now Playing's next readings.
     mutating func resume(at uptime: TimeInterval) {
         paused = false
+        wakeWindowEnds = uptime + Self.wakeWindow
         if movedAt != nil { movedAt = uptime }
         lastPosition = nil
         movingSince = nil
@@ -371,7 +386,7 @@ struct CaptureFlowWatch {
 
     private mutating func stop(_ sign: Sign, at uptime: TimeInterval) -> Step {
         var next = 1
-        if case .trial(let number, _) = phase { next = number + 1 }
+        if case .trial(let number, _) = phase { next = inWakeWindow(at: uptime) ? number : number + 1 }
         forgetCount()
         guard next <= Self.tries else {
             phase = .watching

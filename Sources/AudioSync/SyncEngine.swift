@@ -106,6 +106,8 @@ final class StreamEngine {
     /// The running session's capture watch (S335), its 0.5 s timer, what a
     /// reopen opens and the last try's error.
     private var flowWatch = CaptureFlowWatch()
+    /// Kept here so a session restarted inside the latest wake's window keeps it (S332).
+    private var wakeWindowEnds = -TimeInterval.infinity
     private var flowTimer: DispatchSourceTimer?
     private var opened: (source: AudioSource, inputPair: Int)?
     private var reopenError: SourceCapture.CaptureError?
@@ -272,6 +274,7 @@ final class StreamEngine {
         let now = ProcessInfo.processInfo.systemUptime
         stallWatch.resume(nowS: now)
         flowWatch.resume(at: now)
+        wakeWindowEnds = flowWatch.wakeWindowEnds
     }
 
     private func stopStallWatch() {
@@ -468,7 +471,7 @@ final class StreamEngine {
 
     private func startFlowWatch(source: AudioSource, inputPair: Int) {
         stopFlowWatch()
-        flowWatch = CaptureFlowWatch()
+        flowWatch = CaptureFlowWatch(wakeWindowEnds: wakeWindowEnds)
         if asleep { flowWatch.pause() }
         opened = (source, inputPair)
         reopenError = nil
@@ -514,6 +517,13 @@ final class StreamEngine {
         }
     }
 
+    private func reopenTry(_ number: Int) -> String {
+        guard !flowWatch.inWakeWindow(at: ProcessInfo.processInfo.systemUptime) else {
+            return "after-wake try, outside the \(CaptureFlowWatch.tries) tries"
+        }
+        return "try \(number) of \(CaptureFlowWatch.tries)"
+    }
+
     /// Opens only the capture again, into the session's parts: every output
     /// keeps its renderer and hold-back and the senders stay fed (S335).
     private func reopenCapture(try number: Int) {
@@ -534,7 +544,7 @@ final class StreamEngine {
                 flowWatch.busy(at: now)
                 return
             }
-            DebugTrace.log("[AudioSync] capture reopen try \(number) of \(CaptureFlowWatch.tries) failed: \(failure)")
+            DebugTrace.log("[AudioSync] capture reopen \(reopenTry(number)) failed: \(failure)")
             reopenError = failure
             var listed = false
             if case .input(let uid) = opened.source { listed = SourceCapture.inputListed(uid: uid) }
@@ -553,7 +563,7 @@ final class StreamEngine {
             follow(flowWatch.failed(at: ProcessInfo.processInfo.systemUptime))
             return
         }
-        DebugTrace.log("[AudioSync] capture reopen try \(number) of \(CaptureFlowWatch.tries): "
+        DebugTrace.log("[AudioSync] capture reopen \(reopenTry(number)): "
                        + "open at \(capture.sampleRate) Hz")
         reopenError = nil
         if let since = busySince {
