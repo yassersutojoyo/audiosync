@@ -8527,7 +8527,7 @@ mod tests {
         // from S289 (-30 + 0.3 x D, -144 at D = 0) rather than through the
         // code under test; every case starts with an add at own volume 0.
         // The first of each is its dry-run cell.
-        let wire: [(&str, &str, &[f64]); 8] = [
+        let wire: [(&str, &str, &[f64]); 9] = [
             ("S290.row100", "row 100 in a zone at 63 sends 100", &[0.0]),
             (
                 "S290.tv80.z64",
@@ -8558,6 +8558,11 @@ mod tests {
                 "DV.40.z0",
                 "DeviceVolume 40 in a zone at 0 keeps own and shows 40 until the zone moves",
                 &[-144.0, -18.0, -15.0],
+            ),
+            (
+                "S413.held.z0",
+                "TV at 40 in a zone at 0 stays 40 when the master moves",
+                &[-144.0, -18.0, -18.0],
             ),
             (
                 "S413.master",

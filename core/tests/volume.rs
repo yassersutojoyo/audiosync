@@ -71,7 +71,7 @@ mod airplay_device_level {
 
     // covers: S290
     #[test]
-    fn the_master_and_the_zone_are_no_ceiling_for_a_row_move() {
+    fn the_zone_is_no_ceiling_for_a_row_move() {
         let moved = row_move(80.0, 63.0).expect("k above 0");
         assert!(near(moved.own_position, 80.0 / 0.63), "{moved:?}");
         assert_eq!(moved.device_level, 80.0);
@@ -94,7 +94,7 @@ mod airplay_device_level {
 
     // covers: S290
     #[test]
-    fn a_master_move_keeps_the_own_volume_and_caps_the_level_at_100() {
+    fn a_zone_move_keeps_the_own_volume_and_caps_the_level_at_100() {
         let moved = row_move(20.0, 63.0).expect("k above 0");
         assert_eq!(row(moved.own_position, 63.0), 20.0);
         assert_eq!(row(moved.own_position, 100.0), 31.0);

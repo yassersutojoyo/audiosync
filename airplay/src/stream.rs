@@ -837,6 +837,8 @@ pub struct Stream {
     frames: PacketFrames,
     /// The host's gain on every packet cut, before any encoding (P80).
     master_gain: f64,
+    /// The gain the last packet cut ended at, so a change fades in (P80).
+    cut_gain: f64,
     /// PCM payloads, which are also the source of own encodings (P121).
     pcm: PayloadStore,
     alac: PayloadStore,
@@ -876,6 +878,7 @@ impl Stream {
             next_cut: 0,
             frames: silence,
             master_gain: 1.0,
+            cut_gain: 1.0,
             pcm: PayloadStore::new(STORE_PACKETS, PCM_PAYLOAD_BYTES),
             alac: PayloadStore::new(STORE_PACKETS, alac::FRAME_BYTES),
             silence_pcm,
@@ -1668,7 +1671,12 @@ impl Stream {
         let start = (self.next_cut * PACKET_FRAMES) as i64 + self.origin;
 
         let silent = self.input.cut(start, &mut self.frames);
-        audio::apply_gain(&mut self.frames, self.master_gain);
+        if self.cut_gain == self.master_gain {
+            audio::apply_gain(&mut self.frames, self.master_gain);
+        } else {
+            audio::ramp_gain(&mut self.frames, self.cut_gain, self.master_gain);
+            self.cut_gain = self.master_gain;
+        }
         let number = self.packet_base + self.next_cut;
         encode(Codec::Pcm, &self.frames, &mut self.pcm, number, silent);
         encode(Codec::Alac, &self.frames, &mut self.alac, number, silent);

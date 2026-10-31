@@ -178,6 +178,30 @@
       ]
     },
     {
+      "name": "TV at 40 in a zone at 0 stays 40 when the master moves",
+      "zone": 0,
+      "steps": [
+        {
+          "own": 50,
+          "level": 0.0,
+          "row": 0.0,
+          "own_after": 50
+        },
+        {
+          "tv_level": 40,
+          "level": 40.0,
+          "row": 40.0,
+          "own_after": 50
+        },
+        {
+          "master": 50,
+          "level": 40.0,
+          "row": 40.0,
+          "own_after": 50
+        }
+      ]
+    },
+    {
       "name": "TV at 20 stays 20 whatever the master",
       "zone": 100,
       "steps": [

@@ -1244,8 +1244,9 @@ fn the_master_gain_scales_the_shared_payload_for_every_speaker() {
     rig.run_for(Duration::from_secs(2));
     for (id, codec) in [(pcm, Codec::Pcm), (alac, Codec::Alac)] {
         let audio = rig.audio(id);
-        assert!(!audio.is_empty());
-        for packet in &audio {
+        assert!(audio.len() > 1);
+        // The first packet fades from 1 to 0.5.
+        for packet in &audio[1..] {
             let n = rig.frame_of(id, packet.header.timestamp) as u64;
             let expected: Vec<Frame> = (n..n + PACKET)
                 .map(host_frame)
