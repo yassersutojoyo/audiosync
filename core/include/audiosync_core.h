@@ -476,6 +476,14 @@ void asc_eq_destroy(AscEqualizer *eq);
 bool asc_eq_set_settings(AscEqualizer *eq, bool enabled, double preamp_db, const double *gains_db);
 
 /*
+ * asc_eq_set_settings in a session whose ring writer has written `from`
+ * frames: the headroom cut asc_eq_give_back gives back changes from that
+ * ring frame on (S26, S71).
+ */
+bool asc_eq_set_settings_from(AscEqualizer *eq, bool enabled, double preamp_db, const double *gains_db,
+                              int64_t from);
+
+/*
  * Control thread, while capture is stopped: sets the design rate (Hz),
  * recomputing the filters and clearing their state; the same rate again does
  * nothing. Returns false for a NULL handle or a rate that isn't finite and positive.
@@ -825,6 +833,14 @@ void asc_renderer_set_gain(AscRenderer *renderer, float gain);
 
 /* Any thread: the gain last set. */
 float asc_renderer_gain(const AscRenderer *renderer);
+
+/*
+ * Control thread: sets the renderer's linear gain with each headroom cut of
+ * eq given back from the ring frame it starts at, so the gain changes with
+ * the first frame equalized with that cut (S26, S71). Returns the dB given
+ * back to the newest cut. A NULL eq sets gain as is.
+ */
+double asc_eq_give_back(const AscEqualizer *eq, AscRenderer *renderer, double gain);
 
 /*
  * Any thread: a new delay in capture-rate frames. A renderer that plays

@@ -23,7 +23,7 @@ use std::f64::consts::PI;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-use crate::volume::SharedGain;
+use crate::volume::{GAIN_STEPS, SharedGain};
 
 #[cfg(not(target_has_atomic = "64"))]
 compile_error!(
@@ -497,13 +497,14 @@ pub fn equalizer() -> (EqControl, EqProcessor) {
         version: AtomicU64::new(0),
         nan_resets: AtomicU64::new(0),
     });
-    let control = EqControl {
+    let mut control = EqControl {
         shared: Arc::clone(&shared),
         settings,
         sample_rate: DEFAULT_SAMPLE_RATE,
         epoch: 0,
-        cut_db: 0.0,
+        cuts: Vec::with_capacity(GAIN_STEPS),
     };
+    control.cuts.push((i64::MIN, 0.0));
     let processor = EqProcessor {
         shared,
         current: snapshot,
@@ -526,8 +527,10 @@ pub struct EqControl {
     settings: EqSettings,
     sample_rate: f64,
     epoch: u64,
-    /// The headroom cut of S26 the processor applies: 0 while disabled.
-    cut_db: f64,
+    /// The headroom cut of S26 in dB (0 while disabled) by the ring frame it
+    /// starts at, oldest first, at most [`GAIN_STEPS`]; the first also
+    /// covers every frame before it. Allocated once, so control calls don't.
+    cuts: Vec<(i64, f64)>,
 }
 
 impl EqControl {
@@ -551,6 +554,13 @@ impl EqControl {
     /// kept (S31). Any finite gain is applied as given (S23); a non-finite gain
     /// or preamp counts as 0 dB.
     pub fn set_settings(&mut self, settings: EqSettings) {
+        self.set_settings_from(settings, i64::MIN);
+    }
+
+    /// [`EqControl::set_settings`] for a session whose writer has written
+    /// `from` frames: the new cut is given back from that ring frame on
+    /// ([`EqControl::give_back`], S26, S71).
+    pub fn set_settings_from(&mut self, settings: EqSettings, from: i64) {
         let settings = EqSettings {
             enabled: settings.enabled,
             preamp_db: finite_or_zero(settings.preamp_db),
@@ -560,7 +570,7 @@ impl EqControl {
             return;
         }
         self.settings = settings;
-        self.publish();
+        self.publish(from);
     }
 
     /// Sets the design rate, called only while capture is stopped (S30, S114):
@@ -576,7 +586,7 @@ impl EqControl {
         }
         self.sample_rate = sample_rate;
         self.epoch += 1;
-        self.publish();
+        self.publish(i64::MIN);
         true
     }
 
@@ -589,35 +599,41 @@ impl EqControl {
     /// A local output's linear `gain` with the headroom cut of S26 given back
     /// as far as unity allows (S71): the gain to play and the dB given back.
     pub fn returned_gain(&self, gain: f64) -> (f64, f64) {
-        let db = self.cut_db.min(-20.0 * gain.log10()).max(0.0);
-        if db > 0.0 && gain > 0.0 {
-            ((gain * 10f64.powf(db / 20.0)).min(1.0), db)
-        } else {
-            (gain, 0.0)
-        }
-    }
-
-    /// [`EqControl::set_settings`] for a session whose writer has written
-    /// `from` frames: the new cut starts at that ring frame (S26, S71).
-    pub fn set_settings_from(&mut self, settings: EqSettings, _from: i64) {
-        self.set_settings(settings);
+        returned(gain, self.cuts.last().map_or(0.0, |&(_, cut)| cut))
     }
 
     /// Sets a local output's `shared` gain to `gain` with each cut given back
-    /// from the ring frame it starts at (S26, S71); returns the dB given back
-    /// to the newest cut.
+    /// from the ring frame it starts at, so the renderer changes it with the
+    /// first frame equalized with that cut (S26, S71); returns the dB given
+    /// back to the newest cut.
     pub fn give_back(&self, gain: f64, shared: &SharedGain) -> f64 {
-        let (played, db) = self.returned_gain(gain);
-        shared.set(played as f32);
-        db
+        let mut steps = [(i64::MIN, 0.0f32); GAIN_STEPS];
+        for (step, &(from, cut)) in steps.iter_mut().zip(&self.cuts) {
+            *step = (from, returned(gain, cut).0 as f32);
+        }
+        shared.set_steps(&steps[..self.cuts.len()]);
+        self.returned_gain(gain).1
     }
 
-    fn publish(&mut self) {
-        self.cut_db = if self.settings.enabled {
+    fn publish(&mut self, from: i64) {
+        let cut = if self.settings.enabled {
             cascade_peak_db(&self.settings.gains_db, self.sample_rate).max(0.0)
         } else {
             0.0
         };
+        let newest = self.cuts.last().map_or(i64::MIN, |&(start, _)| start);
+        if from == i64::MIN {
+            self.cuts.clear();
+            self.cuts.push((i64::MIN, cut));
+        } else if let Some(last) = self.cuts.last_mut().filter(|_| from <= newest) {
+            last.1 = cut;
+        } else {
+            if self.cuts.len() == GAIN_STEPS {
+                self.cuts.remove(0);
+                self.cuts[0].0 = i64::MIN;
+            }
+            self.cuts.push((from, cut));
+        }
         let snapshot = Snapshot::design(&self.settings, self.sample_rate, self.epoch);
         self.publish_snapshot(&snapshot);
     }
@@ -633,6 +649,16 @@ impl EqControl {
         shared.sets[idle].store(snapshot);
         shared.active.store(idle, Ordering::SeqCst);
         shared.version.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// `gain` with `cut_db` given back as far as unity allows, and the dB given back.
+fn returned(gain: f64, cut_db: f64) -> (f64, f64) {
+    let db = cut_db.min(-20.0 * gain.log10()).max(0.0);
+    if db > 0.0 && gain > 0.0 {
+        ((gain * 10f64.powf(db / 20.0)).min(1.0), db)
+    } else {
+        (gain, 0.0)
     }
 }
 

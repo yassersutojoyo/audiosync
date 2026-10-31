@@ -1789,11 +1789,9 @@ impl<D: Driver> Controller<D> {
             let control = RendererControl::new(&reader);
             control.set_bluetooth(endpoint.kind == OutputKind::Bluetooth);
             let (played, _) = returned_gain(&session.equalizer, params.gain);
-            let gain = Arc::new(SharedGain::new(solo_gain(
-                self.calibration_solo.as_deref(),
-                &endpoint.id,
-                played,
-            )));
+            let solo = solo_gain(self.calibration_solo.as_deref(), &endpoint.id, params.gain);
+            let gain = Arc::new(SharedGain::new(solo));
+            session.equalizer.give_back(f64::from(solo), &gain);
             let started =
                 self.driver
                     .start_renderer(&endpoint, reader, control.clone(), Arc::clone(&gain));
@@ -2567,13 +2565,16 @@ impl<D: Driver> Controller<D> {
 
     /// Gives a playing output its current gain.
     fn apply_gain(&self, id: &str) {
-        if let Some(playing) = self.session.as_ref().and_then(|s| s.outputs.get(id)) {
-            playing.gain.set(self.gain_of(id));
+        if let Some(session) = self.session.as_ref()
+            && let Some(playing) = session.outputs.get(id)
+        {
+            let gain = solo_gain(
+                self.calibration_solo.as_deref(),
+                id,
+                self.policy.params(id).gain,
+            );
+            session.equalizer.give_back(f64::from(gain), &playing.gain);
         }
-    }
-
-    fn gain_of(&self, id: &str) -> f32 {
-        solo_gain(self.calibration_solo.as_deref(), id, self.played_gain(id).0)
     }
 
     /// Output `id`'s gain with the session equalizer's headroom cut given
@@ -4201,7 +4202,8 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
         self.equalizer = settings;
         if let Some(session) = self.session.as_mut() {
-            session.equalizer.set_settings(settings);
+            let from = session.ring.frames_written() as i64;
+            session.equalizer.set_settings_from(settings, from);
         }
         for id in self.playing_ids() {
             self.apply_gain(&id);

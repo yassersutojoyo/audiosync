@@ -364,6 +364,25 @@ pub unsafe extern "C" fn asc_eq_set_settings(
     preamp_db: f64,
     gains_db: *const f64,
 ) -> bool {
+    // SAFETY: the caller's contract is this function's.
+    unsafe { asc_eq_set_settings_from(eq, enabled, preamp_db, gains_db, i64::MIN) }
+}
+
+/// Control thread: publishes new settings (S31) in a session whose ring
+/// writer has written `from` frames, so the headroom cut given back
+/// ([`asc_eq_give_back`]) changes from that frame on (S26, S71).
+///
+/// # Safety
+///
+/// As [`asc_eq_set_settings`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_eq_set_settings_from(
+    eq: *mut AscEqualizer,
+    enabled: bool,
+    preamp_db: f64,
+    gains_db: *const f64,
+    from: i64,
+) -> bool {
     if eq.is_null() || gains_db.is_null() {
         return false;
     }
@@ -379,7 +398,7 @@ pub unsafe extern "C" fn asc_eq_set_settings(
     // SAFETY: the handle is live; control calls run on one thread at a time and
     // borrow only the `control` field, which the capture thread never touches.
     let control = unsafe { &mut (*eq).control };
-    control.set_settings(settings);
+    control.set_settings_from(settings, from);
     true
 }
 
@@ -1772,6 +1791,18 @@ mod tests {
             assert_eq!(asc_eq_nan_resets(std::ptr::null()), 0);
             let returned = asc_eq_returned_gain(std::ptr::null(), 0.5, std::ptr::null_mut());
             assert_eq!(returned, 0.5);
+            assert_eq!(
+                asc_eq_give_back(std::ptr::null(), std::ptr::null_mut(), 0.5),
+                0.0
+            );
+            let null = std::ptr::null_mut();
+            assert!(!asc_eq_set_settings_from(
+                null,
+                true,
+                0.0,
+                gains.as_ptr(),
+                0
+            ));
             asc_apply_gain(std::ptr::null_mut(), 4, 0.5);
         }
         assert_eq!(block, copy);
@@ -2376,6 +2407,14 @@ mod realtime {
                                     -1.0,
                                     gains.as_ptr(),
                                 );
+                                asc_eq_set_settings_from(
+                                    eq_h.get(),
+                                    true,
+                                    -1.0,
+                                    gains.as_ptr(),
+                                    round as i64 * 512,
+                                );
+                                asc_eq_give_back(eq_h.get(), renderer_h.get(), 0.5);
                             }
                             if round % 777 == 0 {
                                 asc_reader_reset_prime(far_h.get());

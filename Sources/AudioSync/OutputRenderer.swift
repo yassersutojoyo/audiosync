@@ -137,6 +137,8 @@ final class OutputRenderer: FadingOutput {
     /// so the counters stay readable.
     private var target: RenderTarget?
     private var gain: Double = 1
+    /// The equalizer whose headroom cut the gain gives back (S71).
+    private var equalizer: CoreEqualizer?
     /// The device's and its output stream's latency plus the unit's own,
     /// added to a fade's last output time (S185), a Bluetooth device's
     /// within S231's window.
@@ -179,11 +181,13 @@ final class OutputRenderer: FadingOutput {
     }
 
     /// Linear gain; set before `start` it applies from the first callback,
-    /// later from the next one (S64). A non-finite gain is ignored.
-    func setGain(linear g: Double) {
+    /// later from the next one (S64), each cut of `equalizer` given back from
+    /// the frame it starts at (S71). A non-finite gain is ignored.
+    func setGain(linear g: Double, givingBack equalizer: CoreEqualizer? = nil) {
         guard g.isFinite else { return }
         gain = g
-        target?.renderer.setGain(g)
+        self.equalizer = equalizer
+        target?.renderer.setGain(g, givingBack: equalizer)
     }
 
     /// How far this output's reader trails the newest captured frame after
@@ -442,6 +446,7 @@ final class OutputRenderer: FadingOutput {
         }
         // Before the first callback, which publishes the start lead (S208).
         renderer.setBluetooth(bluetooth)
+        renderer.setGain(gain, givingBack: equalizer)
         // Closed until its first audio, so the reader takes the delay at once
         // and primes on it (S45, S187).
         renderer.setDelay(ms: delayMs)

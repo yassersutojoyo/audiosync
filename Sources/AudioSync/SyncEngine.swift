@@ -178,7 +178,8 @@ final class StreamEngine {
     /// block (S31), and every later session starts with them.
     func updateEqualizer(_ settings: Equalizer.Settings) {
         equalizerSettings = settings
-        parts?.equalizer.update(settings)
+        guard let parts else { return }
+        parts.equalizer.update(settings, fromFrame: parts.ring.framesWritten)
     }
 
     // MARK: - Session
@@ -626,7 +627,7 @@ final class StreamEngine {
             throw OutputRenderer.StartFailure.coreUnavailable
         }
         let (played, returnedDb) = parts.equalizer.returnedGain(gain)
-        renderer.setGain(linear: played)
+        renderer.setGain(linear: gain, givingBack: parts.equalizer)
         renderer.onDeviceGone = { [weak self, weak renderer] in
             guard let self, let renderer else { return }
             self.handleOutputLost(uid, renderer, .deviceGone)
@@ -722,7 +723,7 @@ final class StreamEngine {
     /// A new linear gain for output `uid`, with the equalizer's headroom cut
     /// given back (S26, S71), applied from its next callback (S64).
     func setGain(uid: String, g: Double) {
-        renderers[uid]?.setGain(linear: parts?.equalizer.returnedGain(g).gain ?? g)
+        renderers[uid]?.setGain(linear: g, givingBack: parts?.equalizer)
     }
 
     /// The device of output `uid` is gone (S68), its render callback stopped
