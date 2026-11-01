@@ -592,6 +592,15 @@ do {
             == [.init(key: "ap:\(tvNew)", volume: 35), .init(key: "lc:usb:out", volume: 50), .init(key: "ap:\(denNew)", volume: 55)],
           "speaker IDs: speaker ID migration renames preset members, and a preset already holding the new key keeps it",
           "\(Migration.migrate(presetted, receivers: receivers).presets)")
+    var renamedOnly = Migration.Saved(enabledAirPlay: [], airplayVolumes: [:], groups: [], autoConnect: [],
+                                      names: SpeakerNames(custom: ["ap:\(tvOld)": "Living TV", "ap:\(denOld)": "Old den",
+                                                                   "ap:\(denNew)": "Den", "lc:usb:out": "Desk"]))
+    renamedOnly.hidden.hide(key: "ap:\(denOld)", name: "Den", kind: "AirPlay")
+    let movedOnly = Migration.migrate(renamedOnly, receivers: receivers)
+    check(movedOnly.names == SpeakerNames(custom: ["ap:\(tvNew)": "Living TV", "ap:\(denNew)": "Den", "lc:usb:out": "Desk"])
+            && movedOnly.hidden.contains("ap:\(denNew)") && !movedOnly.hidden.contains("ap:\(denOld)"),
+          "speaker IDs: a name and a hidden entry kept alone move too, and a name already under the new ID wins",
+          "\(movedOnly.names.custom) \(movedOnly.hidden.stored)")
 }
 
 // MARK: Zones — the groups become zones once (Zones.swift, AppSettings.swift, S245, S248)

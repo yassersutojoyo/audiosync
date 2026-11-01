@@ -100,20 +100,22 @@ extension AppDelegate {
     }
 
     /// What was saved under the bundled engine's output ID of `receiver`
-    /// (switched on, its volume, its groups, zones and presets, auto-connect) moves to its
-    /// native ID, before its row appears (S204). Nothing is left to move
-    /// afterwards, so this runs for every receiver discovery reports.
+    /// (switched on, its volume, its groups, zones and presets, auto-connect,
+    /// its name and hidden entry) moves to its native ID, before its row
+    /// appears (S204). Nothing is left to move afterwards, so this runs for
+    /// every receiver discovery reports.
     private func migrateSavedSpeakerIDs(to receiver: NativeReceiver) {
         let saved = SpeakerIDMigration.Saved(enabledAirPlay: enabledAirPlay, airplayVolumes: airplayVolume,
                                              groups: groups, autoConnect: autoConnect, zones: zones,
-                                             presets: presets)
+                                             presets: presets, names: speakerNames, hidden: hiddenSpeakers)
         let renames = SpeakerIDMigration.renames(saved, receivers: [receiver.id])
         guard !renames.isEmpty else { return }
         for old in renames.keys.sorted() {
             DebugTrace.log("[AudioSync] native AirPlay: settings saved under the bundled engine's ID \(old) now belong to \(receiver.name) (\(receiver.id))")
         }
         let migrated = SpeakerIDMigration.apply(renames, to: saved)
-        hiddenSpeakers.migrate(airPlay: renames)
+        hiddenSpeakers = migrated.hidden
+        speakerNames = migrated.names
         airplayVolume = migrated.airplayVolumes
         groups = migrated.groups
         zones = migrated.zones
