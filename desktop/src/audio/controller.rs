@@ -3070,7 +3070,7 @@ impl<D: Driver> Controller<D> {
         // didn't answer, and the next may work.
         let mut writer_held = false;
         let opened = match self.capture_target(&source, app_executable.as_deref()) {
-            Ok(target) => match ring.writer() {
+            Ok((target, _)) => match ring.writer() {
                 Some(writer) => self
                     .open_capture(&target, writer)
                     .map(|opened| (target, opened)),
@@ -3444,28 +3444,30 @@ impl<D: Driver> Controller<D> {
     /// What capturing `source` opens, from the running processes where it
     /// names apps, and for "all except" from the apps with audio sessions.
     /// A single app's top process must run `app_executable` when one is
-    /// given.
+    /// given, and the executable it runs comes back with the capture.
     fn capture_target(
         &mut self,
         source: &SourceId,
         app_executable: Option<&str>,
-    ) -> Result<CaptureTarget, BackendError> {
+    ) -> Result<(CaptureTarget, Option<String>), BackendError> {
         let own_pid = self.driver.own_pid();
-        match source {
+        let target = match source {
             SourceId::WholeSystem | SourceId::Input { .. } => {
                 decide_capture(source, own_pid, &ProcessTable::default(), &self.input_pairs)
             }
             SourceId::App { root_pid } => {
                 let processes = self.driver.processes()?;
+                let runs = processes
+                    .get(*root_pid)
+                    .map(|entry| entry.executable.clone());
                 // The app's process ID may have gone to another app since.
-                if let Some(executable) = app_executable
-                    && processes
-                        .get(*root_pid)
-                        .is_some_and(|entry| !entry.executable.eq_ignore_ascii_case(executable))
+                if let (Some(expected), Some(executable)) = (app_executable, &runs)
+                    && !expected.eq_ignore_ascii_case(executable)
                 {
                     return Err(BackendError::SourceGone);
                 }
-                decide_capture(source, own_pid, &processes, &self.input_pairs)
+                return decide_capture(source, own_pid, &processes, &self.input_pairs)
+                    .map(|target| (target, runs));
             }
             SourceId::Apps {
                 root_pids,
@@ -3486,7 +3488,8 @@ impl<D: Driver> Controller<D> {
                     executables,
                 ))
             }
-        }
+        };
+        target.map(|target| (target, None))
     }
 
     /// The capture a mix's follow moves to. A mix whose top processes all
@@ -3498,7 +3501,7 @@ impl<D: Driver> Controller<D> {
             executables,
         } = source
         else {
-            return self.capture_target(source, None);
+            return self.capture_target(source, None).map(|(target, _)| target);
         };
         let processes = self.driver.processes()?;
         let sessions = self.driver.session_pids();
@@ -3522,19 +3525,11 @@ impl<D: Driver> Controller<D> {
         {
             self.note_inputs(&listed_inputs(&readings));
         }
-        let target = self.capture_target(source, None)?;
+        let (target, app_executable) = self.capture_target(source, None)?;
         let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
         let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
         let (capture, equalizer, waits_for_feed) = self.open_capture(&target, writer)?;
         let unwatched = self.unwatched_app(&target, &capture);
-        let app_executable = match source {
-            SourceId::App { root_pid } => self.driver.processes().ok().and_then(|processes| {
-                processes
-                    .get(*root_pid)
-                    .map(|entry| entry.executable.clone())
-            }),
-            _ => None,
-        };
         self.log.log(|| self.policy.describe_lead());
         self.policy.end_brief_losses();
         self.session = Some(Session {
