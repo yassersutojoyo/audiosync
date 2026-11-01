@@ -599,7 +599,7 @@ export global Strings {
         return @tr("{} (not connected)", name);
     }
 
-    // The status under the wordmark (and the tray icon's tooltip).
+    // The status under the wordmark.
     public pure function status(running: bool, speakers: int) -> string {
         if !running {
             return root.status-off;
@@ -610,14 +610,33 @@ export global Strings {
         return @tr("Streaming to {n} speaker" | "Streaming to {n} speakers" % speakers);
     }
 
-    public pure function tray-tooltip(running: bool, speakers: int) -> string {
-        return @tr("{} – {}", root.app-name, root.status(running, speakers));
+    // The tray icon's tooltip, with the facts VoiceOver reads on the Mac's
+    // menu bar icon: streaming on or off, the speakers on, the notices.
+    public pure function tray-tooltip(running: bool, speakers: int, notices: int) -> string {
+        if notices == 0 {
+            return @tr("{} – {}", root.app-name, root.tray-streaming(running, speakers));
+        }
+        return @tr("{} – {}, {}", root.app-name, root.tray-streaming(running, speakers), root.tray-notices(notices));
+    }
+
+    pure function tray-streaming(running: bool, speakers: int) -> string {
+        if speakers == 0 {
+            return running ? @tr("Streaming on, no speaker on") : @tr("Streaming off, no speaker on");
+        }
+        if running {
+            return @tr("Streaming on, {n} speaker on" | "Streaming on, {n} speakers on" % speakers);
+        }
+        return @tr("Streaming off, {n} speaker on" | "Streaming off, {n} speakers on" % speakers);
+    }
+
+    pure function tray-notices(count: int) -> string {
+        return @tr("{n} notice" | "{n} notices" % count);
     }
 
     // The tray icon's tooltip while there are notices: the usual tooltip,
     // then the newest notice's title (`notice-title`) on a second line.
-    public pure function tray-tooltip-notice(running: bool, speakers: int, title: string) -> string {
-        return @tr("{}\nNotice: {}", root.tray-tooltip(running, speakers), title);
+    public pure function tray-tooltip-notice(running: bool, speakers: int, notices: int, title: string) -> string {
+        return @tr("{}\nNotice: {}", root.tray-tooltip(running, speakers, notices), title);
     }
 
     // What Narrator says when a new notice appears, without the focus

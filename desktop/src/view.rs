@@ -4580,14 +4580,16 @@ fn clear_announcement(main: &slint::Weak<MainWindow>, flyout: &slint::Weak<TrayF
     }
 }
 
-/// The tray icon's tooltip: AudioSync and its status, then the newest
-/// notice's title on a second line while there is a notice, so Narrator
+/// The tray icon's tooltip: AudioSync, streaming on or off, the speakers on
+/// and the notices, then the newest notice's title on a second line while
+/// there is a notice, so Narrator
 /// reads it on the tray icon even with every window closed. `posted` is
 /// [`App::notices_posted`]; notices missing from it rank below listed
 /// ones, by id.
 #[cfg(any(windows, target_os = "linux", test))]
 pub fn tray_tooltip(strings: &Strings<'_>, state: &AppState, posted: &[u64]) -> String {
     let speakers = count(state.active_speakers());
+    let notices = count(state.notices.len());
     let newest = state
         .notices
         .iter()
@@ -4596,9 +4598,10 @@ pub fn tray_tooltip(strings: &Strings<'_>, state: &AppState, posted: &[u64]) -> 
         Some(notice) => strings.invoke_tray_tooltip_notice(
             state.running,
             speakers,
+            notices,
             notice_title(strings, &notice.message),
         ),
-        None => strings.invoke_tray_tooltip(state.running, speakers),
+        None => strings.invoke_tray_tooltip(state.running, speakers, notices),
     };
     fit_tooltip(&text)
 }
@@ -14082,15 +14085,18 @@ mod tests {
         let mut backend = MockBackend::new();
         let app = app_over(MockBackend::new());
         let strings = app.strings();
-        let plain = strings.invoke_tray_tooltip(false, 0).to_string();
+        let on = count(backend.snapshot().active_speakers());
+        let plain = strings.invoke_tray_tooltip(false, on, 0).to_string();
         assert_eq!(tray_tooltip(&strings, &backend.snapshot(), &[]), plain);
+        let one = strings.invoke_tray_tooltip(false, on, 1).to_string();
+        let two = strings.invoke_tray_tooltip(false, on, 2).to_string();
 
         backend.post("source", NoticeMessage::CaptureLost, "09.40");
         backend.post("start", NoticeMessage::NoSpeaker, "09.41");
         let title = notice_title(&strings, &NoticeMessage::NoSpeaker);
         assert_eq!(
             tray_tooltip(&strings, &backend.snapshot(), &[]),
-            format!("{plain}\nNotice: {title}")
+            format!("{two}\nNotice: {title}")
         );
 
         backend.dismiss_all_notices();
@@ -14106,11 +14112,44 @@ mod tests {
         let long = tray_tooltip(&strings, &backend.snapshot(), &[]);
         assert!(long.encode_utf16().count() <= 127, "{long}");
         assert!(long.ends_with('…'), "{long}");
-        assert!(long.starts_with(&format!("{plain}\nNotice: Kitchen")));
+        assert!(long.starts_with(&format!("{one}\nNotice: Kitchen")));
 
         // The tray shows this tooltip, not the plain one.
         let tray = include_str!("tray.rs");
         assert!(!tray.contains("invoke_tray_tooltip("));
         assert_eq!(tray.matches("view::tray_tooltip(").count(), 2);
+    }
+
+    /// The tray icon's tooltip reads what VoiceOver reads on the Mac's menu
+    /// bar icon: streaming on or off, the speakers on, then the notices.
+    #[test]
+    fn the_tray_tooltip_reads_streaming_speakers_and_notices_as_on_the_mac() {
+        let mut backend = MockBackend::new();
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let tooltip = |state: &AppState| tray_tooltip(&strings, state, &[]);
+        let mut state = backend.snapshot();
+        for speaker in &mut state.speakers {
+            speaker.enabled = false;
+        }
+        assert_eq!(tooltip(&state), "AudioSync – Streaming off, no speaker on");
+        state.speakers[0].enabled = true;
+        assert_eq!(tooltip(&state), "AudioSync – Streaming off, 1 speaker on");
+        state.running = true;
+        state.speakers[1].enabled = true;
+        assert_eq!(tooltip(&state), "AudioSync – Streaming on, 2 speakers on");
+
+        backend.post("source", NoticeMessage::CaptureLost, "09.40");
+        state.notices = backend.snapshot().notices;
+        let title = notice_title(&strings, &NoticeMessage::CaptureLost);
+        assert_eq!(
+            tooltip(&state),
+            format!("AudioSync – Streaming on, 2 speakers on, 1 notice\nNotice: {title}")
+        );
+        backend.post("start", NoticeMessage::NoSpeaker, "09.41");
+        state.notices = backend.snapshot().notices;
+        assert!(
+            tooltip(&state).starts_with("AudioSync – Streaming on, 2 speakers on, 2 notices\n")
+        );
     }
 }
