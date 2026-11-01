@@ -56,6 +56,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
+use audiosync_core::fade::FADE_MS;
 use audiosync_core::lead::HeldLead;
 use audiosync_core::policy::delay::{BRIEF_LOSS_HOLD, native_airplay_latency_ms};
 use audiosync_core::policy::source::AudioSource;
@@ -789,7 +790,15 @@ struct Retiring<D: Driver> {
     session: Option<(Option<D::Capture>, Arc<Ring>)>,
     /// When the fade-outs were asked for.
     since: Instant,
+    /// The capture feeds a network sender and no output fades meanwhile:
+    /// the sender's input fades out only on the audio pushed after the
+    /// request, so the capture runs on for [`FEED_FADE`]. An output's fade
+    /// plays in real time for at least as long.
+    feeds: bool,
 }
+
+/// F plus one 10 ms capture packet (S189).
+pub(crate) const FEED_FADE: Duration = Duration::from_millis(FADE_MS as u64 + 10);
 
 /// The double-audio check of the running session.
 #[derive(Default)]
@@ -1748,6 +1757,7 @@ impl<D: Driver> Controller<D> {
                 outputs: switched_off,
                 session: None,
                 since: Instant::now(),
+                feeds: false,
             });
         }
 
@@ -2237,6 +2247,7 @@ impl<D: Driver> Controller<D> {
                 outputs: vec![playing],
                 session: None,
                 since,
+                feeds: false,
             });
         }
         self.log.log(|| {
@@ -2308,10 +2319,14 @@ impl<D: Driver> Controller<D> {
         if let Some(cast) = &self.cast {
             cast.request_fade_out();
         }
+        let feeds = outputs.is_empty()
+            && (self.feed.as_ref().is_some_and(|feed| !feed.is_free())
+                || self.cast.as_ref().is_some_and(|cast| !cast.is_free()));
         self.retiring.push(Retiring {
             outputs,
             session: Some((capture, ring)),
             since: Instant::now(),
+            feeds,
         });
         self.last_status = None;
         self.reap(false);
@@ -2335,11 +2350,12 @@ impl<D: Driver> Controller<D> {
             let mut index = 0;
             while index < self.retiring.len() {
                 let entry = &self.retiring[index];
+                let waited = now.saturating_duration_since(entry.since);
                 let faded = entry
                     .outputs
                     .iter()
-                    .all(|playing| playing.handle.is_faded() || playing.handle.has_ended());
-                let waited = now.saturating_duration_since(entry.since);
+                    .all(|playing| playing.handle.is_faded() || playing.handle.has_ended())
+                    && (!entry.feeds || waited >= FEED_FADE);
                 if faded || waited >= STOP_FADE_CAP {
                     let entry = self.retiring.remove(index);
                     self.retire(entry, faded, waited);
@@ -6286,7 +6302,7 @@ mod tests {
             "the old capture feeds the fade-out"
         );
         assert!(backend.driver().capture_feeds_cast());
-        thread::sleep(STOP_FADE_CAP);
+        thread::sleep(FEED_FADE);
         backend.poll();
         assert_eq!(backend.driver().captures_started().len(), 2);
         assert!(backend.driver().capture_feeds_cast());
@@ -6319,7 +6335,7 @@ mod tests {
             "the old capture feeds the fade-out"
         );
         assert!(feed.fading_out() && !feed.is_free());
-        thread::sleep(STOP_FADE_CAP);
+        thread::sleep(FEED_FADE);
         backend.poll();
         assert_eq!(backend.driver().captures_started().len(), 2);
         assert!(backend.driver().capture_feeds_airplay());

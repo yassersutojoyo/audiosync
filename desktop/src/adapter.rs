@@ -14631,6 +14631,8 @@ mod tests {
         assert!(messages(&adapter).is_empty());
         // A Cast speaker that can't play is off, so it stops counting.
         adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        // The stopped capture ran on while the Cast tap faded (S189).
+        std::thread::sleep(crate::audio::controller::FEED_FADE);
         adapter.poll();
         assert_eq!(messages(&adapter), [NoticeMessage::NoSoundOutput]);
         fake.report(cast_ended(
