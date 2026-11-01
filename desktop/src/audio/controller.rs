@@ -6404,6 +6404,40 @@ mod tests {
         assert_eq!(gain(&backend, SPEAKERS), 0.125);
     }
 
+    // covers: S26, S413
+    #[test]
+    fn the_airplay_stream_gets_the_equalizer_cut_back_under_the_master() {
+        let mut backend = backend();
+        let gains_db = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+        let on = EqSettings {
+            enabled: true,
+            preamp_db: 0.5,
+            gains_db,
+        };
+        backend.set_equalizer(on);
+        backend.set_master_volume(50.0);
+        let fake = FakeAirPlay::new();
+        backend.set_airplay(fake.link(), None);
+        let last_gain = |fake: &FakeAirPlay| {
+            let calls = fake.take_calls();
+            calls.iter().rev().find_map(|call| match call {
+                Call::MasterGain(gain) => Some(*gain),
+                _ => None,
+            })
+        };
+        let back = 10f64.powf(eq::cascade_peak_db(&gains_db, 48_000.0) / 20.0);
+        let returned = last_gain(&fake).expect("a new sender gets the gain");
+        assert!((returned - 0.125 * back).abs() < 1e-9, "{returned}");
+        backend.set_equalizer(EqSettings {
+            enabled: false,
+            ..on
+        });
+        assert_eq!(last_gain(&fake), Some(0.125));
+        backend.set_equalizer(on);
+        backend.set_master_volume(100.0);
+        assert_eq!(last_gain(&fake), Some(1.0), "unity keeps the cut");
+    }
+
     // covers: S232
     #[test]
     fn a_calibration_lets_one_output_be_heard_and_then_all_again() {
