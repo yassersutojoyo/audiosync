@@ -402,6 +402,9 @@ fn the_echo_of_a_level_sent_on_the_grid_is_never_a_change_made_on_the_tv() {
     tv.sender.shutdown();
 }
 
+/// How long a loaded host can go without asking for the level.
+const HOST_STALL: Duration = Duration::from_millis(1700);
+
 // Part of P184 with S291: the television's remote moves its level in
 // 0.3 dB steps, so one press from the echo of a set lands off the 0.6 dB
 // grid of its sets. That reading is reported as read, within about 1 s,
@@ -432,9 +435,11 @@ fn one_remote_step_off_the_grid_of_sets_is_reported_as_read() {
 
     let presses = Instant::now();
     for (pressed_to, read_as) in [(-26.7, -26.700001), (-27.0, -27.0), (-27.3, -27.299999)] {
-        tv.run(Duration::from_millis(410), true);
+        // No read asked for before the press is still due.
+        tv.run(Duration::from_millis(1500), false);
         let pressed = Instant::now();
         server.fake().set_on_tv(pressed_to);
+        tv.run(HOST_STALL, false);
         tv.run(Duration::from_millis(2500), true);
         let seen = tv
             .reported_after(pressed)
