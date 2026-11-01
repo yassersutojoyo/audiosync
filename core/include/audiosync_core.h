@@ -271,6 +271,7 @@ extern "C" {
 #define ASC_CAST_ERROR_ARTWORK 9      /* artwork that is not PNG or JPEG, or over 1280 by 720 */
 #define ASC_CAST_ERROR_GROUP 10       /* no longer reported: a Cast group plays like a device */
 #define ASC_CAST_ERROR_INTERNAL 11    /* a fault inside the sender; the next start runs (C107) */
+#define ASC_CAST_ERROR_NO_ADDRESS 12  /* no address to try: a group whose records list none yet (C81) */
 
 /* A Cast stream's format (AscCastEvent.format). */
 #define ASC_CAST_FORMAT_WAV 1

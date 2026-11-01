@@ -1807,7 +1807,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | cast: a lost channel reconnects and plays again | C81 |
 | cast: local outputs wait the longer of the AirPlay delay and the Cast offset | S281 |
 | cast: a speaker that never answers goes off at its third connect failure while connecting (C80) | C80 |
-| cast: a group keeps trying while connecting, as one with no address yet must (C80, C81) | C80, C81 |
+| cast: a group with no address yet keeps trying while connecting (C80, C81) | C80, C81 |
+| cast: a group that never answers goes off at its third connect failure, as on Windows (C80) | C80 |
 | cast: the speaker that is on is saved for the next launch, unless auto-connect is skipped (C112) | C112 |
 | cast: the speaker saved as on streams nothing before it is found (C112) | C112 |
 | cast: the speaker saved as on turns on once it is found (C112) | C112 |
