@@ -11368,6 +11368,51 @@ mod tests {
         assert!(app.snapshot().speaker("cc:192.0.2.20").is_none());
     }
 
+    /// A tray flyout row gives the note its main window row gives, for a
+    /// speaker that asks for a code every time and for a Google Cast speaker
+    /// added by address: Narrator hears it on the row's toggle, whose name
+    /// starts with the speaker's. The note's own text is hidden from Narrator.
+    #[test]
+    fn a_flyout_row_reads_the_main_windows_availability_and_cast_notes() {
+        use i_slint_backend_testing::ElementQuery;
+        let mut backend = MockBackend::new();
+        backend.set_code_every_time("airplay:bedroom");
+        let app = app_over(backend);
+        app.update(|b| {
+            b.add_cast_address("192.0.2.20").expect("added");
+        });
+        app.main.show().unwrap();
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let state = app.snapshot();
+        for (id, note) in [
+            ("airplay:bedroom", "Asks for a code every time"),
+            ("cc:192.0.2.20", "Added by address"),
+        ] {
+            let name = state.speaker(id).expect("listed").name.clone();
+            let reads = |root: ElementQuery| {
+                let name = name.clone();
+                !root
+                    .match_predicate(move |e| {
+                        let label = e.accessible_label().unwrap_or_default();
+                        let description = e.accessible_description().unwrap_or_default();
+                        label.starts_with(name.as_str())
+                            && (label.contains(note) || description.contains(note))
+                    })
+                    .find_all()
+                    .is_empty()
+            };
+            assert!(
+                reads(ElementQuery::from_root(&app.main)),
+                "the main window's {name} row reads {note}"
+            );
+            assert!(
+                reads(ElementQuery::from_root(&app.flyout)),
+                "the flyout's {name} row reads {note}"
+            );
+        }
+    }
+
     #[test]
     fn escape_on_the_zone_dialog_buttons_cancels() {
         let app = app_over(MockBackend::new());

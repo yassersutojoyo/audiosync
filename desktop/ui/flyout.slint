@@ -118,6 +118,8 @@ component FlyoutRow inherits HorizontalLayout {
     // A zone's count, before the note; and what Narrator reads as the
     // toggle's value instead of its state.
     in property <string> caption;
+    // The note the main window row gives (Strings.speaker-note).
+    in property <string> note;
     in property <string> value-text;
     // A renamed speaker's own name, shown in the name's tooltip; else empty.
     in property <string> system-name;
@@ -139,7 +141,8 @@ component FlyoutRow inherits HorizontalLayout {
         enabled: root.enabled;
         name: root.name;
         label: root.label;
-        description: root.description;
+        // The value already reads a state note; any other note leads.
+        description: Strings.flyout-speaker-description(root.description, root.note == Strings.row-note(root.state, root.name) ? "" : root.note);
         value-text: root.value-text;
         toggled => {
             root.toggled();
@@ -211,8 +214,8 @@ component FlyoutRow inherits HorizontalLayout {
             horizontal-stretch: 1;
         }
 
-        if Strings.speaker-caption(root.caption, Strings.row-note(root.state, root.name)) != "": QuietText {
-            text: Strings.speaker-caption(root.caption, Strings.row-note(root.state, root.name));
+        if Strings.speaker-caption(root.caption, root.note) != "": QuietText {
+            text: Strings.speaker-caption(root.caption, root.note);
             horizontal-stretch: 1;
             horizontal-alignment: right;
             vertical-alignment: center;
@@ -660,6 +663,7 @@ export component TrayFlyout inherits Window {
                                     name: speaker.name;
                                     label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
                                     description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
+                                    note: Strings.speaker-note(speaker);
                                     system-name: speaker.system-name;
                                     state: speaker.state;
                                     device-volume: speaker.device-volume;
@@ -723,6 +727,7 @@ export component TrayFlyout inherits Window {
                                     label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
                                     description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
                                     caption: speaker.zone-note;
+                                    note: Strings.speaker-note(speaker);
                                     system-name: speaker.system-name;
                                     kind: speaker.kind;
                                     show-kind: speaker.show-kind && !speaker.cast-group;
@@ -743,6 +748,7 @@ export component TrayFlyout inherits Window {
                                 name: speaker.name;
                                 label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
                                 description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
+                                note: Strings.speaker-note(speaker);
                                 system-name: speaker.system-name;
                                 kind: speaker.kind;
                                 show-kind: speaker.show-kind && !speaker.cast-group;

@@ -1363,16 +1363,20 @@ fn a_flyout_row_shows_the_speakers_note() {
     let note = lines
         .iter()
         .position(|line| {
-            *line
-                == "if Strings.speaker-caption(root.caption, Strings.row-note(root.state, root.name)) != \"\": QuietText {"
+            *line == "if Strings.speaker-caption(root.caption, root.note) != \"\": QuietText {"
         })
         .expect("FlyoutRow shows a QuietText while its state has a note");
     assert_eq!(
         lines.get(note + 1).copied(),
-        Some(
-            "text: Strings.speaker-caption(root.caption, Strings.row-note(root.state, root.name));"
-        ),
+        Some("text: Strings.speaker-caption(root.caption, root.note);"),
         "the QuietText shows the note"
+    );
+    assert_eq!(
+        include_str!("../ui/flyout.slint")
+            .matches("note: Strings.speaker-note(speaker);")
+            .count(),
+        3,
+        "every speaker row takes the main window's note"
     );
 }
 
