@@ -29,7 +29,9 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::volume::Volume;
 use plist::Value;
 
-use common::ap2::{Ap2Server, FakeAp2, dict, int, open_packet, plist, stream_key};
+use common::ap2::{
+    Ap2Server, DATA_PORT, FakeAp2, RECEIVER_CONTROL_PORT, dict, int, open_packet, plist, stream_key,
+};
 use common::net::{Events, HostAudio, host_frame_of, recv_queued, serial, wait_until};
 use common::rig::decode;
 
@@ -458,6 +460,13 @@ struct Datagram {
     rtptime: u32,
     marker: bool,
     bytes: Vec<u8>,
+}
+
+#[test]
+fn the_fake_default_stream_ports_lie_below_every_ephemeral_range() {
+    for port in [DATA_PORT, RECEIVER_CONTROL_PORT] {
+        assert!(port < 32_768, "{port} is in an ephemeral range");
+    }
 }
 
 /// A data port that keeps the RTP header of every audio datagram.
