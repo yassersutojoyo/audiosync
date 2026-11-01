@@ -591,6 +591,67 @@ The crate's tests run against a fake receiver in the same process: an RTSP serve
 | a_password_only_member_over_airplay2_that_answers_pairing_required_is_asked_by_name, a_member_asked_again_for_a_password_typed_this_run_gets_the_turned_down_prompt (`desktop/src/audio/airplay.rs`) | P176 | Windows: a stereo pair member reached over AirPlay 2 whose flags ask for a password and no pairing answers PairingRequired: within the user's attempt the prompt asks for its password by its name, outside it the pair goes off with the notice naming it; a member asked again, by PasswordRequired or PairingRequired, after its password was typed this run gets the prompt that says the password was turned down |
 | a_receiver_that_asks_every_time_with_credentials_turned_down_never_reads_as_paired (`core/src/ffi/airplay.rs`), a_session_paired_with_a_pin_that_plays_leaves_turned_down_credentials_marked (`desktop/src/audio/airplay.rs`), a_legacy_pairing_turned_down_stays_in_the_file_until_a_new_pairing_replaces_it, a_receiver_turning_its_airplay2_credentials_down_keeps_the_senders_key, a_session_that_proves_nothing_leaves_turned_down_credentials_marked, airplay2_credentials_turned_down_stay_in_the_file_until_a_new_pairing_replaces_them, credentials_the_apple_tv_turns_down_are_forgotten, forgetting_a_pairing_turns_the_speaker_off_and_asks_for_a_pin_again, turned_down_credentials_a_session_plays_on_list_as_paired_again (`desktop/src/audio/airplay.rs`), a_refused_verify_ends_the_attempt_once, rejected_homekit_credentials_stay_and_the_next_start_pairs_with_the_password | P154 | a receiver that asks every time, its stored credentials turned down, paired with a PIN for one session and playing: the credentials stay marked as turned down and the row does not read as paired |
 
+### Mac (the logic suite, `Tests/logictest.swift`)
+
+| Check | Clauses |
+|---|---|
+| native airplay: a connecting state adds no wait or row note | P224 |
+| P169 native airplay: a waiting speaker that then can't get PTP timing goes off and no longer waits | P169 |
+| P169 native airplay: switched off or streaming stopped, it no longer waits | P169 |
+| P56 native airplay: a receiver that fails its signature check goes off with its own notice, as on Windows | P56 |
+| native pairing: a stored pairing it turned down still offers Forget Pairing | P154 |
+| P215 native airplay: an unannounced state's log line, as on Windows | P215 |
+| airplay latency: a capture switch keeps a held E (220 ms while a joiner at 300 ms waits) | P143 |
+| every time: a speaker with stored credentials no answer turned down stays on from the last run | P182 |
+| every time: auto-connect turns on a speaker with stored credentials no answer turned down | P182 |
+| P176 native airplay: a target's ID says its kind; a receiver's never does | P176 |
+| P176 native airplay: a member that names its target is held before the target is listed, so auto-connect never takes it alone | P176 |
+| P176 native airplay: a stereo pair is one row, its members show only as part of it | P176 |
+| P176 native airplay: the pair's row knows its kind and members; a speaker's row has none | P176 |
+| P176 native airplay: the row names the kind and its members, as a Cast group's row does | P176 |
+| P169 native airplay: a target waiting for the AirPlay 2 slot says so first | P169 |
+| P176 native airplay: the pair is added as one speaker; a member that was on by itself is switched off for it | P176 |
+| P176 native airplay: a member playing by itself leaves the sender when its pair is switched on | P176 |
+| P176 native airplay: a member of a listed pair can't be turned on by itself | P176 |
+| P176 native airplay: a member left on by itself before its pair was listed keeps playing and keeps its row | P176 |
+| P176 native airplay: the member that is off shows as part of the pair | P176 |
+| P215 native airplay: every sender state code has its state, Unannounced included; an unknown one has none | P215 |
+| P215 native airplay: a playing pair whose members lapse stops, keeps its row and reads as off the network | P215 |
+| P181 native airplay: a member out of view is named missing | P181 |
+| P181 native airplay: a member out of view is named once, by the sender's name for it | P181 |
+| P181 native airplay: an incomplete target with no member out of view says a speaker is missing | P181 |
+| P181 native airplay: a member in view that plays nothing is named missing, as on Windows | P181 |
+| P177 native airplay: a pair reached over AirPlay 2 through a member is tagged AirPlay 2 | P177 |
+| P177 native airplay: a group whose Apple TV plays, or an Apple TV whose group plays, goes off | P177 |
+| P177 native airplay: the Apple TV, its group and a held member each say why they are off | P177 |
+| P229 native airplay: an Apple TV or its home theater group stays off while the other side is on, streaming or not | P229 |
+| P176 native airplay: a pair with no playable member reads its first member's reason, so it has no row and auto-connect leaves it off; one member that can play is enough | P176, P181 |
+| P176 native airplay: a pair with no playable member left on from the last run starts no session and holds no local output back | P176, P181 |
+| P229 native airplay: a home theater group left on whose speakers can't play doesn't keep its Apple TV off | P229 |
+| P176 native airplay: the pair's row knows a member asks for a password | P176 |
+| P176 native airplay: switched on, a pair asks for its member's password by the member's name and waits for it | P176 |
+| P176 native airplay: once the member's password is in, the pair starts | P176 |
+| P176 native airplay: once the member's password is in, the pair's row asks for nothing | P176 |
+| P176 native airplay: a member that turns the password down is asked again by name, not the pair | P176 |
+| P176 native airplay: cancelling the member's password turns the pair off and drops the prompt | P176 |
+| P176 native airplay: a pair auto-connect turned on goes off when a member asks for a password, naming the member | P176 |
+| P176 native airplay: target member PairingRequired within the attempt turns the pair off as needing pairing, not unreachable, and starts no pairing, which the sender holds only for listed receivers | P176 |
+| P176 native airplay: a pair whose member asks for pairing gets a notice that promises no pairing, listed or not | P176 |
+| P176 native airplay: a member over AirPlay 2 that asks only for a password and answers PairingRequired is asked for its password by name, or names itself in the notice outside the attempt | P176 |
+| P176 native airplay: a member asked again for a password typed this run says it was turned down | P176 |
+| P176 native airplay: a member's first password prompt, with none typed this run, does not say it was turned down | P176 |
+| P176 native airplay: Left plays, then Right refuses its password: the pair goes off, naming Right, and asks again when turned on | P176 |
+| P176 native airplay: turned on again, the pair asks for the member's password | P176 |
+| P176 native airplay: the notice names the member and its pair | P176 |
+| P170 native airplay: with the AirPlay 2 switch off no target or member link is listed, and nothing changes | P170 |
+| settings: AirPlay 2 is off when nothing is stored (P2) | P2 |
+| settings: the AirPlay 2 switch is stored as a Bool | P2 |
+| settings: AirPlay 2 switched off again reads back off | P2 |
+| settings: an AirPlay 2 value that isn't a Bool reads as off | P2 |
+| settings: AirPlay 2 stays off with the switch off and no AUDIOSYNC_AIRPLAY2=1 (P170) | P170 |
+| settings: the switch or AUDIOSYNC_AIRPLAY2=1 turns AirPlay 2 on | P2 |
+| cast+airplay: the sender holds AirPlay back up to 20 000 ms and past that plays ahead by the rest | P99 |
+
 ## Sources
 
 The clauses rest on public protocol write-ups, project documentation pages, Apple's public documentation, the observed behavior of open-source receivers and senders (restated as behavior, no code taken), and the RFCs below. A clause that cites none of these is AudioSync's own design. The detailed list of sources is kept with the project's clean-room records.
