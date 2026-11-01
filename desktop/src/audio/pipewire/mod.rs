@@ -171,7 +171,7 @@ mod driver {
             let (plan, setup) = match &target {
                 CaptureTarget::Input { endpoint_id, pair } => {
                     let graph = self.registry.graph()?;
-                    let (_, node) = graph.named(endpoint_id).ok_or(BackendError::DeviceGone)?;
+                    let node = graph.capture_input(endpoint_id)?;
                     let serial = node.prop("object.serial").ok_or(BackendError::DeviceGone)?;
                     let channels = node.prop_channels().unwrap_or(2);
                     let plan = stream::Plan {

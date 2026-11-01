@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::audio::backend::OutputKind;
+use crate::audio::backend::{BackendError, OutputKind};
 use crate::audio::outputs::{
     DeviceTraits, Endpoint, EndpointProperties, EndpointReading, Listing, ListingNote,
 };
@@ -268,6 +268,12 @@ impl Graph {
             .iter()
             .find(|(_, node)| node.name() == name)
             .map(|(&id, node)| (id, node))
+    }
+
+    /// The input node named `name`, to capture as the source.
+    pub fn capture_input(&self, name: &str) -> Result<&Node, BackendError> {
+        let (_, node) = self.named(name).ok_or(BackendError::DeviceGone)?;
+        Ok(node)
     }
 
     /// The rate and channels to play to output `id` at: its own format,
@@ -889,6 +895,34 @@ mod tests {
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].id.as_deref(), Ok("mic"));
         assert_eq!(inputs[0].properties.as_ref().unwrap().channels, Some(4));
+    }
+
+    #[test]
+    fn a_saved_hands_free_input_is_refused_as_not_connected() {
+        let mut graph = Graph::default();
+        graph.add(
+            1,
+            Kind::Node,
+            props(&[("media.class", "Audio/Source"), ("node.name", "mic")]),
+        );
+        graph.add(
+            2,
+            Kind::Node,
+            props(&[
+                ("media.class", "Audio/Source"),
+                ("node.name", "sco"),
+                ("factory.name", "api.bluez5.sco.source"),
+            ]),
+        );
+        assert!(graph.capture_input("mic").is_ok());
+        assert_eq!(
+            graph.capture_input("sco").err(),
+            Some(BackendError::InputGone)
+        );
+        assert_eq!(
+            graph.capture_input("gone").err(),
+            Some(BackendError::DeviceGone)
+        );
     }
 
     // covers: S14
