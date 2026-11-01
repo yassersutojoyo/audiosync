@@ -697,6 +697,7 @@ extension AppDelegate {
                                     paired: receiver.map { native?.isPaired($0) == true } ?? false,
                                     holdsCredentials: receiver.map { native?.keepsCredentials($0) == true } ?? false,
                                     holdsPassword: receiver.map { native?.holdsPassword($0) == true } ?? false,
+                                    refusedForCode: receiver.map { native?.refusedOff.contains($0) == true } ?? false,
                                     airPlayTarget: receiver.flatMap { native?.targetRow($0) })
         }
     }

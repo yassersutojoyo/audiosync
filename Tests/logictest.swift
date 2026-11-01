@@ -13605,6 +13605,11 @@ do {
     // covers: S257
     check(heldPassword.available && heldPassword.notice == nil && !heldPassword.asksForCode,
           "web remote: a password speaker whose password this run holds can be turned on from the phone")
+    let refused = RemoteRow(Facts(id: "tv4", name: "TV 4", kind: "AirPlay", on: false, volume: 50,
+                                  isAirPlay: true, paired: true, refusedForCode: true), text: t)
+    // covers: S223, S257
+    check(refused.asksForCode && !refused.available && refused.notice == t.remoteTurnOnInApp,
+          "a speaker refused for a code shows as code-blocked on the phone")
     let castStepped = RemoteRow(Facts(id: "cast2", name: "Den", kind: "Google Cast", on: true, volume: 50,
                                       castVolumeFixed: false, castVolumeStep: 0.07, offsetMs: 0), text: t)
     let castOddStep = RemoteRow(Facts(id: "cast3", name: "Hall", kind: "Google Cast", on: true, volume: 50,
