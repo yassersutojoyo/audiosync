@@ -1724,6 +1724,7 @@ export component MainWindow inherits Window {
             spacing: 10px;
             min-height: 36px;
             max-width: root.content-max-width;
+            padding-right: root.scroll-gutter;
             vertical-stretch: 0;
 
             VerticalLayout {
@@ -1775,6 +1776,7 @@ export component MainWindow inherits Window {
 
         if root.notices.length > 0: NoticeStack {
             max-width: root.content-max-width;
+            padding-right: root.scroll-gutter;
             notices: root.notices;
             focus-index <=> root.focus-notice-index;
             notice-focus-changed(id, focused) => {
