@@ -52,6 +52,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On Windows, Narrator reads the button that stops a calibration run as "Cancel", as VoiceOver does on the Mac. Before, it read "Cancel calibrating all speakers", also while calibrating a zone.
 - In the Linux preview, the notice about saved settings or AirPlay pairings that couldn't be read says the old file is in ~/.local/share/audiosync. Before, it said to type %LOCALAPPDATA% in File Explorer.
 - On Windows, while you capture several apps and none of them plays a track, a TV playing through AirPlay shows the source's name from the source menu, as on the Mac. Before, it said "All System Audio", or kept showing a paused track. Now only a playing track shows, on AirPlay and on Google Cast speakers.
 - On Windows, when an app other than Spotify plays a track without a cover, a TV playing through AirPlay shows AudioSync's icon at once, as on the Mac. Before, it waited 5 seconds and could keep the last track's cover meanwhile.

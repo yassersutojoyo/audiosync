@@ -843,7 +843,7 @@ component CalibrationCard inherits Card {
                 // After a zone run it runs that zone again.
                 text: root.running ? Strings.calibration-cancel : root.zone != "" ? Strings.calibrate-zone : Strings.calibrate-all;
                 enabled: root.running || root.can-start;
-                accessible-label: root.running ? Strings.calibrate-all-cancel-label : root.zone != "" ? Strings.calibrate-zone : Strings.calibrate-all;
+                accessible-label: root.running ? Strings.calibration-cancel : root.zone != "" ? Strings.calibrate-zone : Strings.calibrate-all;
                 accessible-description: root.status;
                 clicked => {
                     if root.running {
