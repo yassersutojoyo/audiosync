@@ -1896,7 +1896,8 @@ struct MenuBarView: View {
                                 speakerRow(speaker, note: member.note)
                             } else {
                                 CompactRow(name: member.name, symbol: member.symbol, state: .off, text: t,
-                                           height: rowHeight, hint: member.note) {}
+                                           height: rowHeight, hint: member.note,
+                                           shownNote: t.panelRowNote(member.note)) {}
                                     .disabled(true)
                             }
                         }
@@ -1922,7 +1923,7 @@ struct MenuBarView: View {
                              unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? note
         return CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
                           text: t, height: rowHeight, hint: hint,
-                          shownNote: t.panelRowNote(hint, cast: speaker.cast),
+                          shownNote: t.panelRowNote(hint),
                           renamedFrom: speaker.renamedFrom,
                           value: t.rowValue(model.state(of: speaker), offline: speaker.unannounced),
                           kind: speaker.tag, airPlay2: speaker.airPlay2,
@@ -1951,7 +1952,7 @@ private struct CompactRow: View {
     /// Read after the name by VoiceOver: what a Google Cast speaker is
     /// doing, or why a zone member doesn't play with its zone.
     var hint: String? = nil
-    /// The part of `hint` shown in the row, in place of the availability note.
+    /// The part of `hint` shown in the row, before its availability note.
     var shownNote: String? = nil
     /// A renamed speaker's system name, read by VoiceOver after its name.
     var renamedFrom: String? = nil
@@ -1996,10 +1997,9 @@ private struct CompactRow: View {
                         // Read in the row's hint, or its value when off the network.
                         .accessibilityHidden(true)
                         .layoutPriority(1)
-                } else {
-                    AvailabilityNote(availability: availability, text: text, givesWay: true)
-                        .layoutPriority(1)
                 }
+                AvailabilityNote(availability: availability, text: text, givesWay: true)
+                    .layoutPriority(1)
                 if let deviceVolume { DeviceVolumeBadge(glyph: deviceVolume) }
             }
             .padding(.horizontal, 6)

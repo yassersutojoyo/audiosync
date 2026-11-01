@@ -1387,10 +1387,9 @@ struct UIStrings {
         if unannounced { return notOnNetwork }
         return target.map(airPlayTargetNote)
     }
-    /// The `rowNote` a menu bar panel row shows next to the name; the others
-    /// reach VoiceOver only.
-    func panelRowNote(_ note: String?, cast: CastRow?) -> String? {
-        note == reconnecting || note == notOnNetwork || cast?.status == .connecting ? note : nil
+    /// The `rowNote` a menu bar panel row shows next to the name.
+    func panelRowNote(_ note: String?) -> String? {
+        note
     }
     /// A stereo pair or home theater group: its kind and members, or the
     /// members that are missing (P176, P181).
