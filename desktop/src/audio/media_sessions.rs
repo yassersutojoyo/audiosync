@@ -1001,6 +1001,39 @@ mod tests {
     }
 
     #[test]
+    fn a_reported_change_wakes_the_card_with_its_reading_long_before_the_poll() {
+        let (fake, counts) = fake(Thumbnail::Image);
+        let (_track, mut card) = spawn(
+            move || Ok(fake),
+            Duration::from_secs(10),
+            DebugLog::default(),
+        );
+        let (woken, wakes) = std::sync::mpsc::channel();
+        card.on_reading(Arc::new(move || {
+            let _ = woken.send(());
+        }));
+        card.follow(Some(CardSource::AnyApp));
+        let shows = |card: &mut MediaCardReader, playing: bool| {
+            card.take_reading()
+                .flatten()
+                .is_some_and(|read| read.playing == playing)
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !shows(&mut card, true) {
+            assert!(Instant::now() < deadline, "no first reading");
+            thread::sleep(Duration::from_millis(5));
+        }
+        while wakes.try_recv().is_ok() {}
+        counts.paused.store(true, Ordering::SeqCst);
+        let changed = counts.changed.lock().unwrap().clone();
+        changed.expect("the thread watches the sessions").notify();
+        wakes
+            .recv_timeout(Duration::from_millis(100))
+            .expect("the card was woken for the pause");
+        assert!(shows(&mut card, false), "the wake came before the reading");
+    }
+
+    #[test]
     fn a_burst_of_changes_is_read_once_until_the_gap_passes() {
         let (fake, counts) = fake(Thumbnail::Image);
         let (mut track, _card) = spawn(

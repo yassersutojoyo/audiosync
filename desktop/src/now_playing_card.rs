@@ -186,6 +186,10 @@ pub trait MediaControls {
     /// that counts, or `None` when no session does.
     fn take_reading(&mut self) -> Option<Option<CardTrack>>;
 
+    /// Has `wake` called, on any thread, whenever a reading is ready to
+    /// take, so the card can show it before the window's next poll.
+    fn on_reading(&mut self, _wake: std::sync::Arc<dyn Fn() + Send + Sync>) {}
+
     /// Sends `command` to the session that counts, then reads again soon.
     fn send(&mut self, command: Transport);
 }
