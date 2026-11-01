@@ -51,6 +51,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On Windows, the speaker list says AudioSync can't look for Google Cast speakers only while it lists none, as on the Mac. Before, the note also showed under Cast speakers already listed.
 - On the Mac, a Google Cast speaker that announces no name of its own is listed under its network service name, as on Windows. Before, it read "Unknown device".
 - On Windows, while you capture several apps and none of them plays a track, a TV playing through AirPlay shows the source's name from the source menu, as on the Mac. Before, it said "All System Audio", or kept showing a paused track. Now only a playing track shows, on AirPlay and on Google Cast speakers.
 - On Windows, when an app other than Spotify plays a track without a cover, a TV playing through AirPlay shows AudioSync's icon at once, as on the Mac. Before, it waited 5 seconds and could keep the last track's cover meanwhile.
