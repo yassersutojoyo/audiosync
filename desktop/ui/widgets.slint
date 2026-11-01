@@ -2142,10 +2142,50 @@ export component SpeakerRow inherits Rectangle {
 
                                 // A stereo pair or home theater group names its members
                                 // on a line of its own, under the name.
-                                if root.item.group-note != "": QuietText {
-                                    text: root.item.group-note;
-                                    wrap: no-wrap;
-                                    overflow: elide;
+                                if root.item.group-note != "": Rectangle {
+                                    min-width: 0px;
+                                    preferred-width: group-line.preferred-width;
+                                    height: group-line.preferred-height;
+
+                                    group-line := QuietText {
+                                        width: 100%;
+                                        height: 100%;
+                                        text: root.item.group-note;
+                                        wrap: no-wrap;
+                                        overflow: elide;
+                                    }
+
+                                    TouchArea {
+                                        clicked => {
+                                            root.box-clicked();
+                                        }
+
+                                        Tooltip {
+                                            Rectangle {
+                                                width: min(group-tip.preferred-width + 16px, root.width);
+                                                height: group-tip.preferred-height + 10px;
+                                                border-radius: Fluent.radius-control;
+                                                border-width: 1px;
+                                                border-color: Fluent.stroke;
+                                                background: Tokens.surface;
+                                                drop-shadow-blur: 8px;
+                                                drop-shadow-offset-y: 2px;
+                                                drop-shadow-color: Tokens.text.with-alpha(0.18);
+                                                accessible-role: none;
+
+                                                group-tip := Text {
+                                                    x: 8px;
+                                                    width: parent.width - 16px;
+                                                    text: root.item.group-note;
+                                                    font-size: Tokens.font-size-caption;
+                                                    color: Tokens.text;
+                                                    vertical-alignment: center;
+                                                    wrap: word-wrap;
+                                                    accessible-role: none;
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
@@ -2514,6 +2554,9 @@ export component ZoneMemberRow inherits Rectangle {
         root.focus-changed(self.focused-part);
     }
 
+    // A press on the name hides its tooltip until the pointer leaves the name.
+    property <bool> tip-allowed: true;
+
     // Two clicks on the name within the system's double-click time rename.
     click-wait := Timer {
         interval: NameField.double-click;
@@ -2611,6 +2654,42 @@ export component ZoneMemberRow inherits Rectangle {
                             }
 
                             TouchArea {
+                                changed has-hover => {
+                                    if !self.has-hover {
+                                        root.tip-allowed = true;
+                                    }
+                                }
+                                pointer-event(event) => {
+                                    if event.kind == PointerEventKind.down {
+                                        root.tip-allowed = false;
+                                    }
+                                }
+
+                                if root.tip-allowed: Tooltip {
+                                    Rectangle {
+                                        width: min(tip-text.preferred-width + 16px, root.width);
+                                        height: tip-text.preferred-height + 10px;
+                                        border-radius: Fluent.radius-control;
+                                        border-width: 1px;
+                                        border-color: Fluent.stroke;
+                                        background: Tokens.surface;
+                                        drop-shadow-blur: 8px;
+                                        drop-shadow-offset-y: 2px;
+                                        drop-shadow-color: Tokens.text.with-alpha(0.18);
+                                        accessible-role: none;
+
+                                        tip-text := Text {
+                                            x: 8px;
+                                            width: parent.width - 16px;
+                                            text: Strings.speaker-name-tooltip(root.item.name, root.item.system-name);
+                                            font-size: Tokens.font-size-caption;
+                                            color: Tokens.text;
+                                            vertical-alignment: center;
+                                            wrap: word-wrap;
+                                            accessible-role: none;
+                                        }
+                                    }
+                                }
                                 clicked => {
                                     if click-wait.running {
                                         click-wait.running = false;
@@ -2745,6 +2824,9 @@ export component ZoneHeader inherits Rectangle {
     changed focused-part => {
         root.focus-changed(self.focused-part);
     }
+
+    // A press on the name hides its tooltip until the pointer leaves the name.
+    property <bool> tip-allowed: true;
 
     // A click on the name waits for a second one: two within the system's
     // double-click time rename, and one alone shows or hides the speakers.
@@ -2945,6 +3027,42 @@ export component ZoneHeader inherits Rectangle {
                                     }
 
                                     TouchArea {
+                                        changed has-hover => {
+                                            if !self.has-hover {
+                                                root.tip-allowed = true;
+                                            }
+                                        }
+                                        pointer-event(event) => {
+                                            if event.kind == PointerEventKind.down {
+                                                root.tip-allowed = false;
+                                            }
+                                        }
+
+                                        if root.tip-allowed: Tooltip {
+                                            Rectangle {
+                                                width: min(name-tip.preferred-width + 16px, root.width);
+                                                height: name-tip.preferred-height + 10px;
+                                                border-radius: Fluent.radius-control;
+                                                border-width: 1px;
+                                                border-color: Fluent.stroke;
+                                                background: Tokens.surface;
+                                                drop-shadow-blur: 8px;
+                                                drop-shadow-offset-y: 2px;
+                                                drop-shadow-color: Tokens.text.with-alpha(0.18);
+                                                accessible-role: none;
+
+                                                name-tip := Text {
+                                                    x: 8px;
+                                                    width: parent.width - 16px;
+                                                    text: root.item.name;
+                                                    font-size: Tokens.font-size-caption;
+                                                    color: Tokens.text;
+                                                    vertical-alignment: center;
+                                                    wrap: word-wrap;
+                                                    accessible-role: none;
+                                                }
+                                            }
+                                        }
                                         clicked => {
                                             if click-wait.running {
                                                 click-wait.running = false;
@@ -2984,10 +3102,50 @@ export component ZoneHeader inherits Rectangle {
 
                             // The count, and the note of a zone whose members all
                             // wait ("In use by another app", "Reconnecting…").
-                            count-text := QuietText {
-                                text: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state, root.item.waiting-name));
-                                wrap: no-wrap;
-                                overflow: elide;
+                            Rectangle {
+                                min-width: 0px;
+                                preferred-width: count-text.preferred-width;
+                                height: count-text.preferred-height;
+
+                                count-text := QuietText {
+                                    width: 100%;
+                                    height: 100%;
+                                    text: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state, root.item.waiting-name));
+                                    wrap: no-wrap;
+                                    overflow: elide;
+                                }
+
+                                TouchArea {
+                                    clicked => {
+                                        root.expanded-changed(!root.item.expanded);
+                                    }
+
+                                    Tooltip {
+                                        Rectangle {
+                                            width: min(count-tip.preferred-width + 16px, root.width);
+                                            height: count-tip.preferred-height + 10px;
+                                            border-radius: Fluent.radius-control;
+                                            border-width: 1px;
+                                            border-color: Fluent.stroke;
+                                            background: Tokens.surface;
+                                            drop-shadow-blur: 8px;
+                                            drop-shadow-offset-y: 2px;
+                                            drop-shadow-color: Tokens.text.with-alpha(0.18);
+                                            accessible-role: none;
+
+                                            count-tip := Text {
+                                                x: 8px;
+                                                width: parent.width - 16px;
+                                                text: count-text.text;
+                                                font-size: Tokens.font-size-caption;
+                                                color: Tokens.text;
+                                                vertical-alignment: center;
+                                                wrap: word-wrap;
+                                                accessible-role: none;
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 
