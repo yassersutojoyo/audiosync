@@ -7036,8 +7036,8 @@ do {
           "capture: a saved source that is a hands-free input has its own reason", handsFreeStart)
 
     let zoneText = UIStrings()
-    func zoneCount(on: Int, waiting: Int = 0, present: Int, total: Int) -> String {
-        ZoneLayout.count(on: on, waiting: waiting, present: present, total: total, text: zoneText)
+    func zoneCount(on: Int, waiting: Int = 0, present: Int, total: Int, inPair: Int = 0) -> String {
+        ZoneLayout.count(on: on, waiting: waiting, present: present, total: total, inPair: inPair, text: zoneText)
     }
     // covers: S359
     check(zoneCount(on: 0, present: 0, total: 0) == "No speakers",
@@ -7045,6 +7045,10 @@ do {
     // covers: S340 (the Mac's zone header)
     check(zoneCount(on: 0, present: 0, total: 3) == "None of 3 found",
           "zones: a zone with no member listed says none of its members was found")
+    // covers: S247
+    check(zoneCount(on: 0, present: 0, total: 2, inPair: 2) == "2 playing in a pair",
+          "zones: a zone whose members play as a stereo pair says N playing in a pair",
+          zoneCount(on: 0, present: 0, total: 2, inPair: 2))
     // covers: S359
     check(zoneCount(on: 2, present: 3, total: 3) == "2 of 3 on",
           "zones: the header counts the members that are on out of every shown member")
