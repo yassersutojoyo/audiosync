@@ -15877,6 +15877,35 @@ mod tests {
         assert!(kitchen(&adapter).is_some());
     }
 
+    #[test]
+    fn a_cast_own_level_above_100_is_saved_and_recalled_whole() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![cc(CAST_KITCHEN)])],
+            speaker_presets: vec![saved_preset(&[(cc(CAST_KITCHEN), Some(125.0))])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        cast_first_status(&mut adapter, &fake, 0.4);
+        let last = |fake: &FakeCast| *fake.state().volumes.last().expect("a Cast volume");
+        // The row at 100 in a zone at 80: own 1.25.
+        adapter.set_speaker_volume(&cc(CAST_KITCHEN), 100.0);
+        assert!((last(&fake) - 1.0).abs() < 1e-9, "{}", last(&fake));
+        let preset = adapter.capture_preset("preset:2", "Loud").unwrap();
+        let volume = preset
+            .members
+            .iter()
+            .find(|member| member.key == cc(CAST_KITCHEN))
+            .and_then(|member| member.volume)
+            .expect("saved");
+        assert!((volume - 125.0).abs() < 1e-9, "saved {volume}");
+
+        // Own 1.25 × zone 0.45.
+        adapter.recall_preset("preset:1");
+        assert!((last(&fake) - 0.5625).abs() < 1e-9, "{}", last(&fake));
+    }
+
     fn cast_first_status(adapter: &mut AudioAdapter<MockBackend>, fake: &FakeCast, level: f64) {
         fake.report(HostEvent::Session {
             attempt: AttemptId(1),

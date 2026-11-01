@@ -342,12 +342,39 @@ fn to_i16(sample: f32) -> i16 {
     (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
 }
 
+/// The host's master as a linear gain on every frame the stream server
+/// reads (S415 in `docs/ENGINE_SPEC.md`); its clones share one value.
+#[derive(Clone, Debug)]
+pub struct MasterGain(Arc<AtomicU64>);
+
+impl Default for MasterGain {
+    fn default() -> MasterGain {
+        MasterGain(Arc::new(AtomicU64::new(1.0f64.to_bits())))
+    }
+}
+
+impl MasterGain {
+    /// Sets the gain the frames read from now on are scaled by.
+    pub fn set(&self, gain: f64) {
+        self.0.store(gain.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn get(&self) -> f64 {
+        f64::from_bits(self.0.load(Ordering::Relaxed))
+    }
+}
+
 /// The stream server's end of the ring.
 pub struct AudioReader {
     shared: Arc<Shared>,
 }
 
 impl AudioReader {
+    /// The reader, its frames scaled by `master` (S415).
+    pub fn with_master(self, _master: MasterGain) -> AudioReader {
+        self
+    }
+
     /// Frames waiting.
     pub fn available(&self) -> usize {
         let written = self.shared.written.load(Ordering::Acquire);

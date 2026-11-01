@@ -1058,6 +1058,7 @@ impl CastSpeakers {
             offline: !self.entry(id).is_some_and(|entry| entry.online),
             enabled: self.enabled == Some(id),
             volume: (level.unwrap_or(1.0) * 100.0).clamp(0.0, 100.0),
+            device_level: (level.unwrap_or(1.0) * 100.0).clamp(0.0, 100.0),
             volume_known: level.is_some(),
             muted: reported.is_some_and(|volume| volume.muted),
             volume_fixed: reported.is_some_and(|volume| volume.control_type == ControlType::Fixed),
@@ -1384,6 +1385,11 @@ impl CastSpeakers {
         }
         self.requested = Some((device, own));
         self.send_level(device, own);
+    }
+
+    /// The speaker's row moved to `row`, 0 to 100 (S415).
+    pub fn move_row(&mut self, id: &str, row: f64) {
+        self.set_volume(id, row);
     }
 
     /// The master position, 0 to 100 (C104): a change reaches the device in
@@ -4354,6 +4360,97 @@ pub mod tests {
         cast.set_zones(BTreeMap::new());
         assert_eq!(sent(&fake), [0.2, 0.0, 0.4], "out of the zone");
         assert_eq!(shown(&cast, KITCHEN), 80.0);
+    }
+
+    /// The whole number the row shows (S415).
+    fn row(cast: &CastSpeakers) -> f64 {
+        cast.speakers()
+            .into_iter()
+            .find(|info| info.id == KITCHEN)
+            .map(|info| audiosync_core::volume::row_level(info.device_level))
+            .expect("listed")
+    }
+
+    fn sends(fake: &FakeCast, cast: &mut CastSpeakers, level: f64) {
+        let last = *sent(fake).last().expect("a level sent");
+        assert!((last - level).abs() < 1e-9, "sent {last}, not {level}");
+        report(fake, cast, level);
+    }
+
+    #[test]
+    fn a_cast_row_shows_the_level_the_tv_gets_and_a_master_move_changes_neither() {
+        let (fake, mut cast) = listed();
+        cast.set_master(50.0);
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.4);
+        assert_eq!(row(&cast), 40.0, "the first status");
+        cast.set_master(100.0);
+        assert!(sent(&fake).is_empty(), "a master move sends nothing");
+        assert_eq!(row(&cast), 40.0);
+
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 50.0)]));
+        sends(&fake, &mut cast, 0.2);
+        assert_eq!(row(&cast), 20.0, "a zone move");
+        cast.move_row(KITCHEN, 30.0);
+        sends(&fake, &mut cast, 0.3);
+        assert_eq!(row(&cast), 30.0, "a row move");
+        let count = sent(&fake).len();
+        cast.set_master(20.0);
+        assert_eq!(sent(&fake).len(), count, "a master move sends nothing");
+        assert_eq!(row(&cast), 30.0);
+        cast.set_zones(BTreeMap::new());
+        sends(&fake, &mut cast, 0.6);
+        assert_eq!(row(&cast), 60.0, "out of the zone");
+
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 0.0)]));
+        sends(&fake, &mut cast, 0.0);
+        report(&fake, &mut cast, 0.3);
+        assert_eq!(
+            row(&cast),
+            30.0,
+            "a level set on the TV while the zone is 0"
+        );
+        let count = sent(&fake).len();
+        cast.move_row(KITCHEN, 50.0);
+        assert_eq!(
+            sent(&fake).len(),
+            count,
+            "at zone 0 a row move sends nothing"
+        );
+        assert_eq!(row(&cast), 30.0);
+        cast.set_zones(BTreeMap::new());
+        sends(&fake, &mut cast, 0.6);
+        assert_eq!(row(&cast), 60.0, "the own level stayed");
+    }
+
+    #[test]
+    fn the_master_scales_the_audio_the_session_hears() {
+        let (fake, mut cast) = listed();
+        let mut lease = cast.lease().expect("the tap");
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_volume(KITCHEN, 80.0);
+        let first_sample = |fake: &FakeCast| {
+            let mut bytes = Vec::new();
+            fake.state().readers[0].read_into(&mut bytes, 32);
+            f64::from(i16::from_le_bytes([bytes[0], bytes[1]]))
+        };
+        lease.push(&[0.5; 64], 32);
+        let whole = first_sample(&fake);
+        let before = sent(&fake);
+        cast.set_master(50.0);
+        assert_eq!(sent(&fake), before, "the TV's level stays");
+        // The first read after the change fades into the new gain.
+        lease.push(&[0.5; 64], 32);
+        first_sample(&fake);
+        lease.push(&[0.5; 64], 32);
+        let scaled = first_sample(&fake);
+        let gain = audiosync_core::volume::gain_for_position(50.0);
+        assert!(
+            (scaled - (whole * gain).round()).abs() <= 1.0,
+            "{scaled} at master 50, {whole} at 100"
+        );
     }
 
     // covers: C104, C105
