@@ -4197,11 +4197,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     );
                 }
             }
-            BackendEvent::AirPlayMemberNeedsPassword { id, member } => {
+            BackendEvent::AirPlayMemberNeedsPassword { id, member_id } => {
                 self.reconnecting.remove(&id);
+                let system = self.audio.airplay_listed_name(&member_id);
                 let message = NoticeMessage::AirPlayMemberNeedsPassword {
                     target: self.airplay_name(&id),
-                    member,
+                    member: self.custom_names.shown(
+                        &airplay_key(&member_id),
+                        system.as_deref().unwrap_or(&member_id),
+                    ),
                 };
                 self.airplay_off(&id, AirPlayProblem::NeedsPassword, message);
             }
@@ -17344,6 +17348,36 @@ mod tests {
         assert_eq!(
             row.in_target.map(|target| target.name),
             Some("Living Room".to_owned())
+        );
+    }
+
+    // covers: S228
+    #[test]
+    fn the_member_password_notice_names_a_renamed_member_by_its_new_name() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let (pair, left, right) = stereo_pair();
+        fake.appear(&right);
+        adapter.poll();
+        adapter.rename_speaker(&ap(&right), "Bedroom");
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        adapter.poll();
+        adapter.set_speaker_enabled("ap:pair:5f0c", true);
+        fake.fail(&right, ErrorKind::PasswordRequired);
+        adapter.poll();
+        adapter.submit_password(&ap(&right), "hunter2");
+        fake.state(&left, AirPlayState::Playing);
+        adapter.poll();
+
+        fake.fail(&right, ErrorKind::WrongPassword);
+        adapter.poll();
+        let notices = messages(&adapter);
+        assert!(
+            matches!(&notices[..], [NoticeMessage::AirPlayMemberNeedsPassword { member, .. }] if member == "Bedroom"),
+            "{notices:?}"
         );
     }
 

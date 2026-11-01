@@ -641,9 +641,9 @@ pub enum BackendEvent {
     AirPlayMemberNeedsPassword {
         /// The target's ID.
         id: String,
-        /// The member's name, which the notice gives: a member that is part
-        /// of its target has no row of its own.
-        member: String,
+        /// The member's ID; the notice gives its name, as a member that is
+        /// part of its target has no row of its own.
+        member_id: String,
     },
     /// An Apple TV the user switched on was paired, and is on now.
     AirPlayPaired {
