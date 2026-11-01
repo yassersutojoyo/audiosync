@@ -10280,6 +10280,27 @@ mod tests {
 
     // covers: S224
     #[test]
+    fn an_unreadable_pairings_file_is_told_apart_from_one_in_the_wrong_format() {
+        // A folder in the file's place can't be read, as a permission or disk
+        // error would: it is left as it is, so pairings made now aren't saved.
+        let folder = scratch("ffi-pairings-unreadable");
+        let path = folder.join("airplay-pairings.dat");
+        std::fs::create_dir_all(&path).expect("a folder");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let mut handle = asc_airplay_create();
+        // SAFETY: a live handle, used by this thread only; a local C string.
+        unsafe {
+            assert_ne!(
+                asc_airplay_open_pairings(handle, c_path.as_ptr()),
+                AIRPLAY_PAIRINGS_IGNORED
+            );
+            asc_airplay_destroy(&mut handle);
+        }
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    // covers: S224
+    #[test]
     fn forget_deletes_a_kept_aside_copy_that_holds_a_receiver_the_store_no_longer_pairs() {
         let folder = scratch("ffi-forget-copy");
         std::fs::create_dir_all(&folder).expect("folder");
