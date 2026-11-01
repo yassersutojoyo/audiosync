@@ -192,18 +192,27 @@ impl RowText for StringsText<'_> {
                 return note.into();
             }
         }
-        let note = self
-            .0
-            .invoke_availability(availability(speaker.availability));
+        let row_state = row_state(state.speaker_state(speaker));
+        let note = self.0.invoke_speaker_availability(
+            availability(speaker.availability),
+            speaker.code_every_time,
+            row_state,
+        );
         if !note.is_empty() {
             return note.into();
         }
-        self.0
-            .invoke_row_note(
-                row_state(state.speaker_state(speaker)),
-                speaker.name.as_str().into(),
-            )
-            .into()
+        let note = self
+            .0
+            .invoke_row_note(row_state, speaker.name.as_str().into());
+        if note.is_empty()
+            && speaker
+                .cast
+                .as_ref()
+                .is_some_and(|cast| cast.added_by_address)
+        {
+            return self.0.get_cast_added_by_address().into();
+        }
+        note.into()
     }
 }
 
@@ -1200,6 +1209,48 @@ mod tests {
         let state = app.snapshot();
         assert_eq!(state.airplay_delay_ms, Some(2100.0));
         assert!(!state.speaker(&asks).expect("listed").enabled);
+    }
+
+    #[test]
+    fn the_phone_row_note_of_a_code_asking_speaker_is_the_windows_note() {
+        use crate::remote::RowText;
+        use crate::ui_model::{Availability, Waiting};
+        let app = over_loopback(MockBackend::new());
+        let text = super::StringsText(app.strings());
+        let mut state = app.snapshot();
+        state.running = true;
+        let mut speaker = state
+            .speakers
+            .iter()
+            .find(|speaker| speaker.availability == Availability::NeedsCode)
+            .expect("a speaker that asks for a code")
+            .clone();
+        speaker.name = "Den TV".into();
+        assert_eq!(text.note(&state, &speaker), "Asks for a code");
+        speaker.code_every_time = true;
+        assert_eq!(text.note(&state, &speaker), "Asks for a code every time");
+        speaker.enabled = true;
+        speaker.waiting = Some(Waiting::ForPassword);
+        assert_eq!(text.note(&state, &speaker), "Waiting for the password");
+        speaker.availability = Availability::Pairing;
+        speaker.waiting = Some(Waiting::ForPin);
+        assert_eq!(
+            text.note(&state, &speaker),
+            "Enter the code shown on Den TV"
+        );
+    }
+
+    #[test]
+    fn the_phone_row_note_of_a_cast_speaker_added_by_address_says_so() {
+        use crate::remote::RowText;
+        let app = over_loopback(MockBackend::new());
+        app.update(|b| {
+            b.add_cast_address("192.0.2.20").expect("added");
+        });
+        let state = app.snapshot();
+        let speaker = state.speaker("cc:192.0.2.20").expect("listed");
+        let text = super::StringsText(app.strings());
+        assert_eq!(text.note(&state, speaker), "Added by address");
     }
 
     /// The mock with a zone of the kitchen and living room speakers and a
