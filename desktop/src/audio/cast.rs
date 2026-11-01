@@ -3379,6 +3379,111 @@ pub mod tests {
         }
     }
 
+    /// Runs the host's volume asks through the sender's own channel (C70):
+    /// each ask reaches the channel at its moment in ms, what the channel
+    /// reports unanswered reaches the host, and the device, at 0.5, answers
+    /// each level sent that changes its own. Returns the row after each answer.
+    fn through_the_channel(asks: &[(u64, f64)]) -> (FakeCast, CastSpeakers, Vec<f64>) {
+        use audiosync_cast::channel::{Channel, Event, VOLUME_INTERVAL};
+        use audiosync_cast::ids::RequestIds;
+        use audiosync_cast::message::{CastMessage, Namespace, PLATFORM, SENDER};
+
+        fn status(id: u64, level: f64) -> CastMessage {
+            let mut message = CastMessage::json(
+                SENDER,
+                Namespace::Receiver,
+                &serde_json::json!({"type": "RECEIVER_STATUS", "requestId": id, "status": {"volume": {"level": level}}}),
+            );
+            message.source_id = PLATFORM.to_owned();
+            message
+        }
+        fn forward(channel: &mut Channel, fake: &FakeCast, cast: &mut CastSpeakers) {
+            while let Some(event) = channel.poll_event() {
+                if let Event::VolumeUnanswered { level } = event {
+                    unanswered(fake, cast, &[level]);
+                }
+            }
+        }
+        fn set_volumes(channel: &mut Channel) -> Vec<(u64, f64)> {
+            std::iter::from_fn(|| channel.poll_outbound())
+                .filter_map(|message| message.json_payload().ok())
+                .filter(|payload| payload["type"] == "SET_VOLUME")
+                .filter_map(|payload| {
+                    Some((
+                        payload["requestId"].as_u64()?,
+                        payload["volume"]["level"].as_f64()?,
+                    ))
+                })
+                .collect()
+        }
+
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        let start = Instant::now();
+        let mut channel = Channel::open(start, RequestIds::starting_at(100));
+        channel.handle(start, status(100, 0.5));
+        assert!(channel.is_ready());
+        let mut forwarded = sent(&fake).len();
+        let mut wire = Vec::new();
+        let mut last = start;
+        for &(ms, position) in asks {
+            last = start + Duration::from_millis(ms);
+            channel.tick(last);
+            cast.set_volume(KITCHEN, position);
+            for level in sent(&fake)[forwarded..].to_vec() {
+                channel.set_volume(last, level).expect("ready");
+            }
+            forwarded = sent(&fake).len();
+            forward(&mut channel, &fake, &mut cast);
+            wire.extend(set_volumes(&mut channel));
+        }
+        let end = last + VOLUME_INTERVAL;
+        channel.tick(end);
+        forward(&mut channel, &fake, &mut cast);
+        wire.extend(set_volumes(&mut channel));
+        let mut device = 0.5;
+        let mut rows = Vec::new();
+        for (id, level) in wire {
+            if level != device {
+                device = level;
+                channel.handle(end, status(id, level));
+                forward(&mut channel, &fake, &mut cast);
+                report(&fake, &mut cast, level);
+                rows.push(shown(&cast, KITCHEN).round());
+            }
+        }
+        (fake, cast, rows)
+    }
+
+    // covers: C70, C104 (0.98 and 1.0 go out, 1.0 asked again waits and 0.9 replaces it)
+    #[test]
+    fn a_level_asked_again_while_it_waits_is_awaited_again() {
+        let asks = [(0, 98.0), (100, 100.0), (150, 100.0), (180, 90.0)];
+        let (_, cast, rows) = through_the_channel(&asks);
+        assert_eq!(rows.last(), Some(&90.0), "{rows:?}");
+        assert_eq!(shown(&cast, KITCHEN).round(), 90.0);
+    }
+
+    // covers: C70, C104
+    #[test]
+    fn a_drag_through_the_senders_channel_never_holds_or_flickers_the_slider() {
+        let wobble = [
+            (0, 55.0),
+            (100, 60.0),
+            (200, 55.0),
+            (250, 60.0),
+            (280, 55.0),
+        ];
+        assert_eq!(through_the_channel(&wobble).2, [55.0, 55.0, 55.0]);
+        let one_interval = [(0, 55.0), (10, 60.0), (20, 55.0), (30, 60.0), (40, 55.0)];
+        let (fake, mut cast, rows) = through_the_channel(&one_interval);
+        assert_eq!(rows, [55.0]);
+        report(&fake, &mut cast, 0.6);
+        assert_eq!(shown(&cast, KITCHEN), 60.0, "the TV's remote");
+    }
+
     // covers: C70, C104 (0.3, 0.6 and 0.3 went out, 0.35 was replaced, then 0.3 went out again)
     #[test]
     fn a_repeat_of_a_level_sent_earlier_never_strands_the_slider_on_another() {
