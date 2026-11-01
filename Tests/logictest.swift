@@ -13722,6 +13722,49 @@ do {
             == [RemoteAction.selectSource(pickerID: except.defaultsValue)],
           "web remote: a pick of the several-apps source selects it")
 
+    let spotify = "com.spotify.client", chrome = "com.google.Chrome"
+    let offeredMix = SourceList.mixApps([(bundleID: spotify, name: "Spotify")], checked: [chrome],
+                                        chosenAppName: { _ in "Chrome" })
+    let phoneApps = offeredMix.map { RemoteMixApp(id: $0.id, name: $0.name, running: $0.available) }
+    let mixSnapshot = RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows,
+                                     mixApps: phoneApps)
+    let mixObject = (try? JSONSerialization.jsonObject(with: Data(mixSnapshot.json.utf8))) as? [String: Any]
+    let mixList = mixObject?["mix_apps"] as? [[String: Any]] ?? []
+    // covers: S353
+    check(mixList.compactMap { $0["id"] as? String } == [chrome, spotify]
+            && mixList.compactMap { $0["name"] as? String } == ["Chrome", "Spotify"]
+            && mixList.compactMap { $0["running"] as? Bool } == [false, true]
+            && snapshot.json.contains("\"mix_apps\":[]"),
+          "web remote: the snapshot offers the several-apps list in its order, a checked app that isn't running as not running",
+          mixSnapshot.json)
+    func phoneMix(_ apps: String, inUse: AudioSource = .system) -> [RemoteAction] {
+        RemoteCommand(json: "{\"type\":\"mix\",\"apps\":\(apps)}").map {
+            RemoteAction.plan($0, rows: rows, mixApps: phoneApps, inUse: inUse)
+        } ?? []
+    }
+    let pair = AudioSource.mixed(.only, bundleIDs: [spotify, chrome])
+    // covers: S353
+    check(phoneMix("[\"\(spotify)\"]") == [.selectSource(pickerID: spotify)]
+            && phoneMix("[\"com.gone\",\"\(spotify)\",\"\(spotify)\"]") == [.selectSource(pickerID: spotify)]
+            && phoneMix("[\"\(chrome)\",\"\(spotify)\"]")
+                == [.selectSource(pickerID: AudioSource.mixed(.only, bundleIDs: [chrome, spotify]).defaultsValue)],
+          "web remote: a phone mix is the several-apps list's only-these mix, one app a plain app source")
+    // covers: S353
+    check(phoneMix("[\"com.gone\"]").isEmpty
+            && RemoteCommand(json: "{\"type\":\"mix\",\"apps\":[1]}") == nil
+            && RemoteCommand(json: "{\"type\":\"mix\"}") == nil,
+          "web remote: a phone mix of apps the list no longer offers changes nothing; one that doesn't read is dropped")
+    let inUseSwitches = [[spotify, chrome], [chrome, spotify]].map { ids in
+        phoneMix("[" + ids.map { "\"\($0)\"" }.joined(separator: ",") + "]", inUse: pair).compactMap { action -> SourceSwitch.Step? in
+            guard case .selectSource(let id) = action else { return nil }
+            return SourceSwitch.decide(from: pair, to: AudioSource(defaultsValue: id), streaming: true)
+        }
+    }
+    // covers: S353, S344
+    check(inUseSwitches == [[.none], [.none]],
+          "web remote: a phone mix of the apps in use, in any order, is a pick of the source in use: no capture restarts",
+          "\(inUseSwitches)")
+
     // The core's own parser takes the snapshot.
     let noCommand: AscRemoteCommand = { _, _ in }
     var error: Int32 = 0
@@ -13730,6 +13773,11 @@ do {
     check(remote != nil && asc_remote_publish(remote, snapshot.json) && asc_remote_publish(remote, playing)
             && asc_remote_publish(remote, sourced.json),
           "web remote: the core accepts the snapshots", "start error \(error)")
+    let repeated = RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows,
+                                  mixApps: phoneApps + phoneApps.prefix(1))
+    // covers: S343, S353
+    check(asc_remote_publish(remote, mixSnapshot.json) && !asc_remote_publish(remote, repeated.json),
+          "web remote: the core takes the several-apps list and refuses one that repeats an app")
     asc_remote_stop(&remote)
 
     let fullCommand = RemoteCommand(json: "{\"type\":\"speaker\",\"id\":\"usb\",\"on\":true,\"volume\":55.5,\"delay_ms\":-40}")

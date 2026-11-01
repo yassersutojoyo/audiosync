@@ -639,7 +639,8 @@ extension AppDelegate {
         publish(\.mixChecked, checked)
         publish(\.mixApps, mixApps.map { entry in
             AppModel.Source(id: entry.id, name: entry.name,
-                            icon: (icons[entry.id] ?? SourceApps.icon(for: entry.id)).map(Self.menuSized), isInput: false)
+                            icon: (icons[entry.id] ?? SourceApps.icon(for: entry.id)).map(Self.menuSized), isInput: false,
+                            available: entry.available)
         })
     }
 
