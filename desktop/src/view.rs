@@ -2701,6 +2701,19 @@ impl App {
         let w = weak.clone();
         self.guide
             .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
+        macro_rules! forward_menu_keys {
+            ($($window:expr),+) => {$(
+                let w = weak.clone();
+                $window.on_help_requested(move || with_app(&w, App::show_help));
+                let w = weak.clone();
+                $window.on_new_zone_requested(move || with_app(&w, App::ask_new_zone));
+                let w = weak.clone();
+                $window.on_refresh_devices(move || {
+                    with_app(&w, |app| app.update(|b| b.refresh_devices()))
+                });
+            )+};
+        }
+        forward_menu_keys!(self.equalizer, self.help, self.remote_window, self.guide);
         let w = weak.clone();
         main.on_speaker_move_to_zone_requested(move |id, zone| {
             with_app(&w, |app| app.move_to_zone(&id, &zone))
@@ -12728,6 +12741,55 @@ mod tests {
         assert_eq!(preset_rows(&app)[0], ("Evening".into(), true));
         app.remote_window.invoke_preset_shortcut(2);
         assert_eq!(preset_rows(&app)[1], ("Party".into(), true));
+    }
+
+    #[test]
+    fn f1_ctrl_n_and_f5_work_in_the_equalizer_the_guides_and_the_web_remote() {
+        let backend = MockBackend::new();
+        let refreshes = backend.refreshes.clone();
+        let app = app_over(backend);
+        type Open = fn(&App) -> &slint::Window;
+        let windows: [(&str, Open); 4] = [
+            ("equalizer", |app| {
+                app.show_equalizer();
+                app.equalizer.window()
+            }),
+            ("Guide", |app| {
+                app.show_help();
+                app.help.window()
+            }),
+            ("notice guide", |app| {
+                app.guide.show().expect("the guide shows headless");
+                app.guide.invoke_take_focus();
+                app.guide.window()
+            }),
+            ("web remote", |app| {
+                app.show_remote();
+                app.remote_window.window()
+            }),
+        ];
+        for (name, open) in windows {
+            let _ = app.help.hide();
+            let window = open(&app);
+            draw_frames();
+            press(window, Key::F1);
+            assert!(app.help.window().is_visible(), "F1 in the {name}");
+            ctrl(window, "n");
+            assert!(
+                app.zone_dialog.window().is_visible(),
+                "Ctrl+N in the {name}"
+            );
+            let _ = app.zone_dialog.hide();
+            let before = refreshes.get();
+            press(window, Key::F5);
+            assert_eq!(refreshes.get(), before + 1, "F5 in the {name}");
+        }
+
+        // T33: an open name dialog comes to the front as it is.
+        app.ask_save_preset();
+        let heading = app.zone_dialog.get_heading();
+        ctrl(app.equalizer.window(), "n");
+        assert_eq!(app.zone_dialog.get_heading(), heading);
     }
 
     // covers: S260, S266
