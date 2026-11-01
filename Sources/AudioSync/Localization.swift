@@ -755,6 +755,9 @@ struct UIStrings {
     /// Under the name of a speaker switched on whose password prompt is
     /// queued or open (S223).
     let waitingForPassword = "Waiting for the password"
+    /// Under the name of a speaker switched on whose PIN prompt is queued or
+    /// open: the speaker's name, as not every one is a TV (S223).
+    func enterCodeShown(on name: String) -> String { "Enter the code shown on \(name)" }
     /// Under the name of an AirPlay speaker that is not announced on the
     /// network right now; it starts by itself once it is again (P215).
     let notOnNetwork = "Not on the network right now, plays once it's back"
@@ -1313,8 +1316,8 @@ struct UIStrings {
     // MARK: Google Cast speakers
 
     /// The note under a speaker's name, also read in its VoiceOver hint:
-    /// what a Cast speaker does, what an AirPlay speaker's PIN pairing or
-    /// password prompt waits for, that an AirPlay 2 speaker waits, that an
+    /// what a Cast speaker does, what an AirPlay speaker's PIN or password
+    /// prompt waits for, that an AirPlay 2 speaker waits, that an
     /// AirPlay speaker is off the network, or what a stereo pair or home
     /// theater group is made of.
     func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, waitingForPtp: Bool = false, reconnecting: Bool = false,
@@ -1323,7 +1326,7 @@ struct UIStrings {
         if let cast { return castNote(cast) }
         switch codeWait {
         case .password?: return waitingForPassword
-        case .pin?: return "Enter the code shown on \(name)"
+        case .pin?: return enterCodeShown(on: name)
         case nil: break
         }
         if waitingForPtp { return self.waitingForPtp }

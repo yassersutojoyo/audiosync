@@ -1097,7 +1097,9 @@ struct SpeakerRow: View {
                         if showTag {
                             SpeakerTypeIcon(kind: speaker.tag, state: state, text: t, airPlay2: speaker.airPlay2)
                         }
-                        AvailabilityNote(availability: speaker.availability, text: t)
+                        if speaker.codeWait == nil {
+                            AvailabilityNote(availability: speaker.availability, text: t)
+                        }
                         if let note {
                             // Read in the speaker's hint.
                             Text(note)

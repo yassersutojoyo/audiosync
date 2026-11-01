@@ -442,8 +442,8 @@ struct NativePrompt: Equatable {
     let wrong: Bool
 }
 
-/// What a speaker's row waits for while the user's attempt runs: its PIN
-/// pairing, or its password prompt, queued or open (S223).
+/// What a speaker's row waits for while the user's attempt runs: its PIN or
+/// password prompt, queued or open (S223).
 enum NativeCodeWait: Equatable { case pin, password }
 
 /// What the app does with the user's answer to a `NativePrompt`.
@@ -816,8 +816,8 @@ struct NativeAirPlayModel {
         if promptTargets.values.contains(id) { return .password }
         switch stages[id] {
         case .askingPassword?: return .password
-        case .pairing?, .askingPin?, .checkingPin?: return .pin
-        case nil: return nil
+        case .askingPin?: return .pin
+        case .pairing?, .checkingPin?, nil: return nil
         }
     }
 

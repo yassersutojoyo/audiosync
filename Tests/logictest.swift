@@ -3949,14 +3949,18 @@ do {
                                 unannounced: false, target: nil)
         }
         // covers: S223
-        check(rowWait("B2", "Den") == "Enter the code shown on Den" && rowWait("C3", "Kitchen") == "Waiting for the password"
+        check(rowWait("C3", "Kitchen") == "Waiting for the password" && rowWait("B2", "Den") == nil
                 && rowWait("A1", "Hall") == nil,
-              "native pairing: while its PIN pairing or password prompt runs, the row says what it waits for, by the speaker's name",
+              "native pairing: while its password prompt runs, the row says so; a pairing before its PIN shows says nothing",
               "\(String(describing: rowWait("B2", "Den"))) \(String(describing: rowWait("C3", "Kitchen")))")
 
         // The PIN: shown on the TV, typed, checked.
         // covers: S223
         check(m.apply(.pinNeeded(id: "B2")) == .prompt, "native pairing: the TV shows a PIN, a prompt is queued")
+        // covers: S223
+        check(rowWait("B2", "Den") == "Enter the code shown on Den",
+              "native pairing: while its PIN prompt runs, the row asks for the code shown on the speaker, by its name",
+              "\(String(describing: rowWait("B2", "Den")))")
         let password = m.nextPrompt()
         // covers: S223
         check(password == NativePrompt(id: "C3", password: true, wrong: false) && m.nextPrompt() == nil,
@@ -3992,6 +3996,8 @@ do {
         check(m.answered(NativePrompt(id: "B2", password: false, wrong: true), code: "1234") == .submitPin
                 && m.stages["B2"] == .checkingPin,
               "native pairing: a PIN goes to the pairing")
+        // covers: S223
+        check(rowWait("B2", "Den") == nil, "native pairing: while its PIN is checked, the row says nothing of a code")
         // covers: S223
         check(m.apply(.pairingFailed(id: "B2", wrongPin: true, .refused, detail: "")) == .startPairing("B2")
                 && m.apply(.pinNeeded(id: "B2")) == .prompt

@@ -38,8 +38,8 @@ final class AppModel: ObservableObject {
         var waitingForPtp = false
         /// An AirPlay speaker the sender keeps trying to reach (S222).
         var reconnecting = false
-        /// An AirPlay speaker switched on whose PIN pairing runs or whose
-        /// password prompt is queued or open (S223).
+        /// An AirPlay speaker switched on whose PIN or password prompt is
+        /// queued or open (S223).
         var codeWait: NativeCodeWait? = nil
         /// An AirPlay speaker in the sender that is out of view on the
         /// network, waiting to be announced again (P215).
@@ -1829,7 +1829,8 @@ struct MenuBarView: View {
                           renamedFrom: speaker.renamedFrom,
                           value: t.rowValue(model.state(of: speaker), offline: speaker.unannounced),
                           kind: speaker.tag, airPlay2: speaker.airPlay2,
-                          availability: speaker.availability,
+                          // The row's note says what its prompt waits for instead.
+                          availability: speaker.codeWait == nil ? speaker.availability : .open,
                           deviceVolume: model.deviceVolume(of: speaker).map { DeviceVolumeGlyph($0, text: t) }) {
             model.setEnabled(speaker, model.state(of: speaker).clickTurnsOn)
         }
