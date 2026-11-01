@@ -494,8 +494,9 @@ extension AppDelegate {
         guard let receiver = NativeAirPlayID.receiver(id),
               nativeAirPlay?.model.homeTheaterConflict(receiver, enabled: enabledAirPlay) == true else { return false }
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) stays off: its home theater group and Apple TV can't play at once")
-        notify(nativeTurnOffText(id, .playsThroughSpeakers, onThisMac: false), origin: origin,
-               subject: SpeakerKey.make(id: id, airplay: true))
+        if let words = nativeTurnOffText(id, .playsThroughSpeakers, onThisMac: false) {
+            notify(words, origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
+        }
         pushModel()
         return true
     }
@@ -607,7 +608,9 @@ extension AppDelegate {
         guard enabledAirPlay.contains(id) else { return }
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) turned off (\(reason))")
         enabledAirPlay.remove(id)
-        notify(nativeTurnOffText(id, reason, onThisMac: onThisMac), origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
+        if let words = nativeTurnOffText(id, reason, onThisMac: onThisMac) {
+            notify(words, origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
+        }
         let timing = reason == .timingUnavailable
         updatePtpPortNotice { $0.turnedOff(id, timing: timing) }
         syncNativeSpeakers()
@@ -615,7 +618,8 @@ extension AppDelegate {
         pushModel()
     }
 
-    private func nativeTurnOffText(_ id: String, _ reason: NativeTurnOff, onThisMac: Bool) -> String {
+    /// Nil for the user's own Cancel, which says nothing (S223).
+    private func nativeTurnOffText(_ id: String, _ reason: NativeTurnOff, onThisMac: Bool) -> String? {
         let name = shownName(airPlay: id)
         let unasked = NativeAirPlayID.receiver(id).map { nativeAirPlay?.model.refusedUnasked($0) == true } ?? false
         switch reason {
@@ -642,7 +646,7 @@ extension AppDelegate {
             let memberName = speakerNames.renamed(key: SpeakerKey.make(id: memberID, airplay: true))
                 ?? nativeAirPlay?.model.names[member] ?? member
             return text.nativeAirPlayMemberNeedsPassword(member: memberName, target: name)
-        case .cancelled: return text.airPlayTurnedOff(name: name, reason: .cancelled)
+        case .cancelled: return nil
         case .pairingFailed: return text.nativeAirPlayPairingFailed(name: name)
         case .stillNeedsCode: return text.airPlayTurnedOff(name: name, reason: .stillNeedsCode)
         }

@@ -3931,6 +3931,9 @@ do {
                 && !NativeAirPlayModel.isPin("12a4") && !NativeAirPlayModel.isPin("12 34")
                 && !NativeAirPlayModel.isPin("\u{FF11}\u{FF12}"),
               "native pairing: a PIN is ASCII digits only")
+        // covers: S223
+        check(!NativeAirPlayModel.isPin("123") && !NativeAirPlayModel.isPin("12345"),
+              "native pairing: a PIN has exactly four digits")
 
         var m = listed([("A1", .available), ("B2", .needsPin), ("C3", .needsPassword)])
         // covers: S223
@@ -3976,7 +3979,7 @@ do {
         check(pin == NativePrompt(id: "B2", password: false, wrong: false), "native pairing: then the PIN prompt opens")
         // covers: S223
         check(m.answered(pin!, code: "12a4") == .askAgain && m.nextPrompt() == NativePrompt(id: "B2", password: false, wrong: true),
-              "native pairing: something that isn't a PIN asks again")
+              "native pairing: a code past the prompt that isn't a PIN asks again")
         // covers: S223
         check(m.answered(NativePrompt(id: "B2", password: false, wrong: true), code: "1234") == .submitPin
                 && m.stages["B2"] == .checkingPin,
@@ -4018,7 +4021,7 @@ do {
         // covers: S223
         check(m.answered(NativePrompt(id: "C3", password: true, wrong: true), code: "") == .turnOff(.cancelled)
                 && !m.turnedOff("C3"),
-              "native pairing: an empty password counts as Cancel; no pairing runs to cancel")
+              "native pairing: an empty password past the prompt counts as Cancel; no pairing runs to cancel")
         // covers: S223
         check(m.plan(streaming: true, enabled: ["native:C3"]).turnOff.isEmpty
                 && m.plan(streaming: true, enabled: []).remove == ["C3"],

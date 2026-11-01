@@ -807,9 +807,9 @@ struct NativeAirPlayModel {
             .union(promptTargets.values.map(NativeAirPlayID.app))
     }
 
-    /// A PIN as the sender takes it: ASCII digits, at least one.
+    /// A PIN as the Apple TV shows it: four ASCII digits.
     static func isPin(_ code: String) -> Bool {
-        !code.isEmpty && code.unicodeScalars.allSatisfy { ("0"..."9").contains($0) }
+        code.unicodeScalars.count == 4 && code.unicodeScalars.allSatisfy { ("0"..."9").contains($0) }
     }
 
     /// The user turned the receiver `id` on: a new attempt. One that asks
@@ -906,7 +906,7 @@ struct NativeAirPlayModel {
         return prompt
     }
 
-    /// The user answered `prompt` with `code`, nil or empty for Cancel.
+    /// The user answered `prompt` with `code`, nil for Cancel.
     /// A prompt that isn't the open one (taken back meanwhile) is ignored.
     mutating func answered(_ prompt: NativePrompt, code: String?) -> NativePromptAnswer {
         guard openPrompt == prompt else { return .ignore }
