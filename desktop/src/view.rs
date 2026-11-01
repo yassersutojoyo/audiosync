@@ -6490,6 +6490,32 @@ mod tests {
         assert_eq!(list_width(1400.0), 644.0, "a wide window");
     }
 
+    /// Past the speaker list's widest, the header's switch stays above the
+    /// list's right edge instead of at the far side of a wide window.
+    #[test]
+    fn the_header_ends_where_the_speaker_list_stops_growing() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        let right_edge = |id: &str| {
+            let element = ElementHandle::find_by_element_id(&app.main, id)
+                .next()
+                .unwrap_or_else(|| panic!("{id}"));
+            element.absolute_position().x + element.size().width
+        };
+        for width in [776.0, 1400.0] {
+            app.main
+                .window()
+                .set_size(slint::LogicalSize::new(width, 680.0));
+            let switch = right_edge("MainWindow::power");
+            let list = right_edge("MainWindow::scroll");
+            assert!(
+                (switch - list).abs() < 1.0,
+                "at {width} px the switch ends at {switch}, the list at {list}"
+            );
+        }
+    }
+
     #[test]
     fn the_main_window_keeps_a_virtual_output_listed_after_it_is_turned_off() {
         let mut backend = MockBackend::new();
