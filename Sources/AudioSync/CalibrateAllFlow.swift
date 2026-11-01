@@ -276,6 +276,18 @@ enum CalibrateAllRestore: Equatable {
     case airPlay(AirPlayDelay)
 }
 
+/// The main window's two sheets; SwiftUI shows one at a time.
+enum MainWindowSheet {
+    case calibrate, castAdd
+
+    func mayOpen(calibrateShown: Bool, castAddShown: Bool) -> Bool {
+        switch self {
+        case .calibrate: return !castAddShown
+        case .castAdd: return !calibrateShown
+        }
+    }
+}
+
 enum CalibrateAllFlow {
     /// Allowance for an output's own latency on top of what the host knows,
     /// as the single-speaker calibration allows (`CalibrationFlow`).
