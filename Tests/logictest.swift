@@ -15958,5 +15958,10 @@ do {
           "delay step: the label is the step, the unit, then what it does")
 }
 
+do {
+    check(UIStrings().dismissNotice("X") == "Dismiss: X",
+          "notices: a close button names the notice it dismisses, as on Windows")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

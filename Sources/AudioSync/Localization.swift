@@ -58,6 +58,8 @@ struct UIStrings {
     /// VoiceOver hint of the gear, a plain button that opens an AppKit menu.
     let moreOptionsHint = "Opens a menu of options"
     let dismissNotice = "Dismiss Notice"
+    /// VoiceOver name of a notice's close button: several notices can show at once.
+    func dismissNotice(_ title: String) -> String { "Dismiss: \(title)" }
     let dismissAllNotices = "Dismiss All"
     let previousTrack = "Previous Track"
     let nextTrack = "Next Track"
