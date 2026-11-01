@@ -14,7 +14,7 @@ use crate::error::Warning;
 /// images.
 pub const MAX_ARTWORK_BYTES: usize = 512 * 1024;
 
-/// Track title, artist and album, as UTF-8 text (P124).
+/// Track title and artist, sent as UTF-8 text (P124); the album stays with the host and is not sent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TrackInfo {
     pub title: String,
@@ -295,11 +295,10 @@ pub fn dmap_chunk(code: &[u8; 4], data: &[u8]) -> Vec<u8> {
     chunk
 }
 
-/// Track information as DMAP: an `mlit` container holding `minm` (title),
-/// `asar` (artist) and `asal` (album) (P124).
+/// Track information as DMAP: an `mlit` container holding `minm` (title)
+/// and `asar` (artist); the album is left out (P124).
 pub fn dmap_track(info: &TrackInfo) -> Vec<u8> {
     let mut items = dmap_chunk(b"minm", info.title.as_bytes());
     items.extend(dmap_chunk(b"asar", info.artist.as_bytes()));
-    items.extend(dmap_chunk(b"asal", info.album.as_bytes()));
     dmap_chunk(b"mlit", &items)
 }

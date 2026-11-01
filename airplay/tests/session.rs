@@ -1653,10 +1653,9 @@ fn metadata_requests_follow_the_listed_types() {
         Some("application/x-dmap-tagged")
     );
     assert_eq!(track.headers.get("RTP-Info"), Some("rtptime=2000000352"));
-    let mut expected = b"mlit\x00\x00\x00\x26".to_vec();
+    let mut expected = b"mlit\x00\x00\x00\x18".to_vec();
     expected.extend(b"minm\x00\x00\x00\x04Song");
     expected.extend(b"asar\x00\x00\x00\x04Band");
-    expected.extend(b"asal\x00\x00\x00\x06Record");
     assert_eq!(track.body, expected);
 
     let jpeg = [&[0xFF, 0xD8, 0xFF, 0xE0][..], &[0u8; 60]].concat();
