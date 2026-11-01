@@ -5,7 +5,7 @@
 // waits for its device (another app holds it), is reconnecting (AirPlay),
 // waits for an AirPlay 2 place or for PTP, or isn't announced on the
 // network; a zone waits when every member it switches on does.
-export enum RowState { off, will-play, playing, waiting-for-device, reconnecting, waiting-for-airplay2, waiting-for-ptp, not-on-network }
+export enum RowState { off, will-play, playing, waiting-for-device, reconnecting, waiting-for-airplay2, waiting-for-ptp, not-on-network, waiting-for-password, waiting-for-pin }
 
 // The part of a speaker row or zone header that has, or is to take, the keyboard
 // focus: its toggle, delay button, volume, sync controls, options or name
@@ -216,6 +216,8 @@ export struct ZoneItem {
     on: int,
     total: int,
     waiting: int,
+    // The member a waiting zone's note names.
+    waiting-name: string,
     present: int,
     volume: float,
     expanded: bool,

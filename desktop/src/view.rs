@@ -1884,6 +1884,7 @@ impl App {
                         on: count(counts.on),
                         total: count(counts.total),
                         waiting: count(counts.waiting),
+                        waiting_name: state.zone_waiter(zone).unwrap_or_default().into(),
                         present: count(counts.present),
                         volume: zone.volume as f32,
                         expanded: !ui.collapsed.contains(&zone.id),
@@ -4624,6 +4625,8 @@ pub fn row_state(state: SpeakerState) -> RowState {
         SpeakerState::Waiting(ui_model::Waiting::ForAirPlay2Slot) => RowState::WaitingForAirplay2,
         SpeakerState::Waiting(ui_model::Waiting::ForPtp) => RowState::WaitingForPtp,
         SpeakerState::Waiting(ui_model::Waiting::NotOnNetwork) => RowState::NotOnNetwork,
+        SpeakerState::Waiting(ui_model::Waiting::ForPassword) => RowState::WaitingForPassword,
+        SpeakerState::Waiting(ui_model::Waiting::ForPin) => RowState::WaitingForPin,
     }
 }
 
@@ -6441,7 +6444,7 @@ mod tests {
         );
     }
 
-    // covers: P215
+    // covers: P215, S223
     #[test]
     fn a_speaker_that_cant_play_right_now_shows_waiting_not_playing() {
         let mut backend = MockBackend::new();
@@ -6478,9 +6481,9 @@ mod tests {
         let strings = app.strings();
         let read = |state: RowState| {
             (
-                strings.invoke_value(state).to_string(),
+                strings.invoke_value(state, "Kitchen".into()).to_string(),
                 strings.invoke_help(state).to_string(),
-                strings.invoke_row_note(state).to_string(),
+                strings.invoke_row_note(state, "Kitchen".into()).to_string(),
             )
         };
         let turn_off = strings.get_turn_off().to_string();
@@ -6509,6 +6512,17 @@ mod tests {
         assert_eq!(
             read(RowState::NotOnNetwork),
             (away.clone(), turn_off.clone(), away)
+        );
+        // The Mac row's words, naming the speaker whose code is asked for.
+        let password = "Waiting for the password".to_owned();
+        assert_eq!(
+            read(RowState::WaitingForPassword),
+            (password.clone(), turn_off.clone(), password)
+        );
+        let pin = "Enter the code shown on Kitchen".to_owned();
+        assert_eq!(
+            read(RowState::WaitingForPin),
+            (pin.clone(), turn_off.clone(), pin)
         );
         assert_eq!(
             read(RowState::Playing),
@@ -10153,6 +10167,38 @@ mod tests {
             strings.invoke_zone_label("Living Room".into()),
             "Living Room, zone"
         );
+    }
+
+    // covers: S223
+    #[test]
+    fn a_zone_whose_speaker_waits_for_a_pin_names_the_speaker_not_the_zone() {
+        use i_slint_backend_testing::ElementHandle;
+        fn header_notes(window: &impl ComponentHandle) -> Vec<String> {
+            ElementHandle::find_by_accessible_label(window, "Living Room, zone")
+                .filter_map(|header| header.accessible_description())
+                .map(|note| note.to_string())
+                .collect()
+        }
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let mut tv = backend
+            .snapshot()
+            .speaker("airplay:kitchen")
+            .unwrap()
+            .clone();
+        tv.id = "airplay:tv".into();
+        tv.name = "Den TV".into();
+        tv.enabled = true;
+        tv.waiting = Some(ui_model::Waiting::ForPin);
+        backend.add_speaker(tv);
+        backend.add_zone("zone:living", "Living Room", &["airplay:tv"]);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let pin = "Enter the code shown on Den TV".to_owned();
+        assert_eq!(header_notes(&app.main), vec![pin.clone()]);
+        assert_eq!(header_notes(&app.flyout), vec![pin]);
     }
 
     // covers: S359

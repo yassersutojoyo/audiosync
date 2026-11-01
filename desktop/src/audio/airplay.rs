@@ -1413,6 +1413,17 @@ impl AirPlaySpeakers {
         self.target_missing.clear();
         self.gone_targets.clear();
         self.homekit_keys.clear();
+        let pairing: Vec<String> = self
+            .pairings
+            .keys()
+            .chain(
+                self.password_asks
+                    .iter()
+                    .filter(|(_, ask)| ask.pair)
+                    .map(|(id, _)| id),
+            )
+            .cloned()
+            .collect();
         self.pairings.clear();
         self.ending.clear();
         self.forgotten_while_ending.clear();
@@ -1420,8 +1431,11 @@ impl AirPlaySpeakers {
         self.session_paths.clear();
         // A password prompt still waiting (discovery stopped, the sessions
         // didn't) stays, as the speaker joins with it once listed again;
-        // one for a pairing goes with the pairing, and the speaker stays off.
+        // one for a pairing goes with the pairing, and the speaker goes off.
         self.password_asks.retain(|_, ask| !ask.pair);
+        for id in pairing {
+            self.entry(&id).enabled = false;
+        }
         self.latency = self.link.latency();
         self.reported_us.clear();
         self.latency_frames = DEFAULT_LATENCY_FRAMES;
@@ -1474,7 +1488,9 @@ impl AirPlaySpeakers {
         self.target_missing.clear();
         self.gone_targets.clear();
         self.homekit_keys.clear();
-        self.pairings.clear();
+        for id in std::mem::take(&mut self.pairings).into_keys() {
+            self.entry(&id).enabled = false;
+        }
         self.ending.clear();
         self.forgotten_while_ending.clear();
         self.password_attempts.clear();
@@ -2239,7 +2255,7 @@ impl AirPlaySpeakers {
     /// cancelled just before that hasn't reported its end yet goes first,
     /// and this one starts on the sender once it has, or, when that one
     /// paired after all, ends there as paired with no PIN (see `ending`).
-    /// Paired, the speaker is turned on ([`BackendEvent::AirPlayPaired`]).
+    /// Paired, it plays ([`BackendEvent::AirPlayPaired`]).
     pub fn start_pairing(&mut self, id: &str) -> Result<(), AirPlayProblem> {
         let Some(listed) = self.listed.get(id) else {
             self.log.log(|| {
@@ -2286,6 +2302,7 @@ impl AirPlaySpeakers {
                 outlived_stream: false,
             },
         );
+        self.entry(id).enabled = true;
         Ok(())
     }
 
@@ -2488,8 +2505,8 @@ impl AirPlaySpeakers {
     }
 
     /// Asks the user for the password of a speaker they switched on that
-    /// asks for one AudioSync doesn't have. It stays off until the password
-    /// is typed ([`AirPlaySpeakers::submit_password`]).
+    /// asks for one AudioSync doesn't have. It plays once the password is
+    /// typed ([`AirPlaySpeakers::submit_password`]).
     pub fn ask_password(&mut self, id: &str) -> Result<(), AirPlayProblem> {
         // A target asks for its member's password by the member's name.
         if let Some(target) = self.targets.get(id) {
@@ -2517,6 +2534,7 @@ impl AirPlaySpeakers {
             return Err(AirPlayProblem::Unsupported);
         }
         self.queue_password_ask(id, false, false, None);
+        self.entry(id).enabled = true;
         Ok(())
     }
 
@@ -5789,7 +5807,7 @@ pub mod tests {
             calls.contains(&Call::StartPairing(id.clone())),
             "{calls:?} {events:?}"
         );
-        assert!(!airplay.speakers()[0].enabled, "off while it pairs");
+        assert!(airplay.speakers()[0].enabled, "on while it pairs");
         fake.pairing(tv, PairingEvent::PinRequested);
         airplay.poll();
         assert_eq!(airplay.pin_prompt().unwrap().id, id);
@@ -6776,7 +6794,7 @@ pub mod tests {
         assert!(prompt.wrong_pin, "the message stays until the next try");
         assert!(airplay.submit_pin(&id, "2222"));
         assert!(!airplay.pin_prompt().unwrap().wrong_pin);
-        assert!(airplay.enabled_ids().is_empty(), "off until paired");
+        assert_eq!(airplay.enabled_ids(), [id], "on while it pairs");
     }
 
     // covers: S223
@@ -6918,7 +6936,7 @@ pub mod tests {
             airplay.poll().is_empty(),
             "no notice for a pairing the user cancelled"
         );
-        assert!(airplay.enabled_ids().is_empty(), "off until paired");
+        assert_eq!(airplay.enabled_ids(), [id_of(&tv)], "on while it pairs");
         the_new_pairing_goes_on(&fake, &mut airplay, &tv);
     }
 
@@ -7139,6 +7157,7 @@ pub mod tests {
         );
         assert!(fake.take_calls().is_empty(), "nothing starts on a stop");
         assert_eq!(airplay.pin_prompt(), None);
+        assert!(airplay.enabled_ids().is_empty(), "off with its pairing");
 
         // On the same link, with no `replace_link` to clear it as well,
         // nothing of the cancelled pairing is left waiting.

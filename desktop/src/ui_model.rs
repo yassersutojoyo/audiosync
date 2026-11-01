@@ -438,6 +438,10 @@ pub enum Waiting {
     /// An AirPlay speaker that stopped announcing itself on the network; it
     /// plays once it is announced again (P215).
     NotOnNetwork,
+    /// Its password prompt is open or queued (S223).
+    ForPassword,
+    /// Its PIN pairing runs (S223).
+    ForPin,
 }
 
 /// Where a pairing's PIN prompt is.
@@ -1296,13 +1300,6 @@ impl AppState {
     /// (spec S246), so a Cast member the click leaves off counts toward
     /// neither. Playing, it waits when each member it counts waits.
     pub fn zone_state(&self, zone: &Zone) -> SpeakerState {
-        let switched: Vec<&Speaker> = self
-            .zone_members(zone)
-            .filter(|s| s.in_target.is_none())
-            .collect();
-        let (cast, others): (Vec<&Speaker>, Vec<&Speaker>) =
-            switched.iter().partition(|s| s.kind == SpeakerKind::Cast);
-        let cast_on: Vec<&Speaker> = cast.iter().copied().filter(|s| s.enabled).collect();
         let members: Vec<zones::Member> = self
             .zone_members(zone)
             .map(|s| zones::Member {
@@ -1333,17 +1330,30 @@ impl AppState {
         let on = zones::click_plan(&members, situation).action == ClickAction::TurnOff;
         match SpeakerState::new(on, self.running) {
             SpeakerState::Playing => {
-                let waiting: Option<Vec<Waiting>> = others
-                    .iter()
-                    .chain(cast_on.iter().take(1))
-                    .map(|s| s.waiting)
-                    .collect();
+                let waiting: Option<Vec<Waiting>> =
+                    self.zone_counted(zone).iter().map(|s| s.waiting).collect();
                 waiting
                     .and_then(|w| w.first().copied())
                     .map_or(SpeakerState::Playing, SpeakerState::Waiting)
             }
             state => state,
         }
+    }
+
+    /// The members a playing zone waits on: every switched member but Cast,
+    /// and the first Cast member on.
+    fn zone_counted<'a>(&'a self, zone: &'a Zone) -> Vec<&'a Speaker> {
+        let (cast, mut others): (Vec<&Speaker>, Vec<&Speaker>) = self
+            .zone_members(zone)
+            .filter(|s| s.in_target.is_none())
+            .partition(|s| s.kind == SpeakerKind::Cast);
+        others.extend(cast.into_iter().filter(|s| s.enabled).take(1));
+        others
+    }
+
+    /// The member whose wait a waiting zone shows, named in its note.
+    pub fn zone_waiter<'a>(&'a self, zone: &'a Zone) -> Option<&'a str> {
+        self.zone_counted(zone).first().map(|s| s.name.as_str())
     }
 
     /// Whether a hidden speaker that is present belongs under This PC

@@ -1302,12 +1302,14 @@ fn a_flyout_row_shows_the_speakers_note() {
         .iter()
         .position(|line| {
             *line
-                == "if Strings.speaker-caption(root.caption, Strings.row-note(root.state)) != \"\": QuietText {"
+                == "if Strings.speaker-caption(root.caption, Strings.row-note(root.state, root.name)) != \"\": QuietText {"
         })
         .expect("FlyoutRow shows a QuietText while its state has a note");
     assert_eq!(
         lines.get(note + 1).copied(),
-        Some("text: Strings.speaker-caption(root.caption, Strings.row-note(root.state));"),
+        Some(
+            "text: Strings.speaker-caption(root.caption, Strings.row-note(root.state, root.name));"
+        ),
         "the QuietText shows the note"
     );
 }

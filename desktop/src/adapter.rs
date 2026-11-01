@@ -3772,10 +3772,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         Ok(())
     }
 
-    /// An AirPlay speaker the user switched on didn't turn on: an Apple TV
-    /// that asks for a PIN is paired (it turns on once paired), one that asks
-    /// for a password prompts for it (it turns on once typed); any other
-    /// stays off with a notice.
+    /// An AirPlay speaker the user switched on can't play yet: an Apple TV
+    /// that asks for a PIN is paired and one that asks for a password prompts
+    /// for it; any other stays off with a notice.
     fn airplay_switch_failed(&mut self, id: &str, problem: AirPlayProblem) {
         if problem == AirPlayProblem::NeedsPassword {
             self.log.log(|| {
@@ -4452,9 +4451,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
             // An AirPlay speaker's volume is its own slider (S192).
             device_volume: None,
             waiting: self
-                .reconnecting
-                .get(&speaker.id)
-                .copied()
+                .audio
+                .airplay_waiting_for_user()
+                .contains(&speaker.id)
+                .then_some(if speaker.pairing {
+                    Waiting::ForPin
+                } else {
+                    Waiting::ForPassword
+                })
+                .or_else(|| self.reconnecting.get(&speaker.id).copied())
                 .filter(|_| speaker.enabled),
             cast: None,
             group: speaker.group,
@@ -5374,6 +5379,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         });
         self.airplay_on_by_hand.remove(&airplay_id);
         self.audio.cancel_airplay_pairing(&airplay_id);
+        self.stop_if_idle();
         self.take_events();
     }
 
@@ -10700,7 +10706,7 @@ mod tests {
                 wrong: false,
             })
         );
-        assert!(!state.speaker(&ap(study)).unwrap().enabled);
+        assert!(state.speaker(&ap(study)).unwrap().enabled);
         assert!(!state.running);
         assert!(fake.take_calls().is_empty(), "nothing connects before it");
         assert!(messages(adapter).is_empty());
@@ -10783,6 +10789,117 @@ mod tests {
         let prompt = adapter.snapshot().password_prompt.expect("asked at once");
         assert!(!prompt.wrong);
         assert!(messages(&adapter).is_empty());
+    }
+
+    fn shown(adapter: &AudioAdapter<MockBackend>, device: &Device) -> String {
+        format!("{:?}", state_of(adapter, &ap(device)))
+    }
+
+    // covers: S223, S285
+    #[test]
+    fn a_password_speaker_switched_on_stays_on_and_waits_while_its_prompt_is_open() {
+        let (mut adapter, fake, kitchen, study) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+
+        adapter.set_speaker_enabled(&ap(&study), true);
+        assert!(adapter.snapshot().password_prompt.is_some());
+        assert_eq!(shown(&adapter, &study), "Waiting(ForPassword)");
+        assert_eq!(shown(&adapter, &kitchen), "Playing");
+        adapter.cancel_password(&ap(&study));
+        assert_eq!(shown(&adapter, &study), "Off");
+        assert_eq!(shown(&adapter, &kitchen), "Playing");
+
+        adapter.set_speaker_enabled(&ap(&study), true);
+        adapter.submit_password(&ap(&study), "hunter1");
+        fake.fail(&study, ErrorKind::WrongPassword);
+        adapter.poll();
+        assert!(
+            adapter
+                .snapshot()
+                .password_prompt
+                .expect("asked again")
+                .wrong
+        );
+        assert_eq!(shown(&adapter, &study), "Waiting(ForPassword)");
+        adapter.cancel_password(&ap(&study));
+        assert_eq!(shown(&adapter, &study), "Off");
+        assert_eq!(shown(&adapter, &kitchen), "Playing");
+
+        adapter.set_speaker_enabled(&ap(&study), true);
+        adapter.submit_password(&ap(&study), "hunter2");
+        fake.state(&study, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(adapter.snapshot().password_prompt, None);
+        assert_eq!(shown(&adapter, &study), "Playing");
+        assert!(
+            fake.take_calls()
+                .contains(&Call::Password(id_of(&study), "hunter2".to_owned()))
+        );
+        assert!(messages(&adapter).is_empty());
+    }
+
+    // covers: S223, S285
+    #[test]
+    fn an_apple_tv_switched_on_stays_on_and_waits_while_its_pin_prompt_is_open() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        fake.appear(&tv);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+
+        adapter.set_speaker_enabled(&ap(&tv), true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        assert!(adapter.snapshot().pin_prompt.is_some());
+        assert_eq!(shown(&adapter, &tv), "Waiting(ForPin)");
+        assert_eq!(shown(&adapter, &kitchen), "Playing");
+        adapter.cancel_pairing(&ap(&tv));
+        fake.pairing(&tv, PairingEvent::Stopped);
+        adapter.poll();
+        assert_eq!(shown(&adapter, &tv), "Off");
+        assert_eq!(shown(&adapter, &kitchen), "Playing");
+
+        adapter.set_speaker_enabled(&ap(&tv), true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        assert_eq!(shown(&adapter, &tv), "Waiting(ForPin)");
+        adapter.submit_pin(&ap(&tv), "4821");
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 0x11)),
+        );
+        adapter.poll();
+        fake.state(&tv, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(adapter.snapshot().pin_prompt, None);
+        assert_eq!(shown(&adapter, &tv), "Playing");
+        assert_eq!(shown(&adapter, &kitchen), "Playing");
+        assert!(messages(&adapter).is_empty());
+    }
+
+    // covers: S223
+    #[test]
+    fn cancelling_the_pin_prompt_of_the_only_speaker_left_stops_streaming() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        fake.appear(&tv);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        adapter.set_speaker_enabled(&ap(&tv), true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        assert!(adapter.snapshot().running, "the waiting TV still counts");
+
+        adapter.cancel_pairing(&ap(&tv));
+        fake.pairing(&tv, PairingEvent::Stopped);
+        adapter.poll();
+        assert_eq!(shown(&adapter, &tv), "Off");
+        assert!(!adapter.snapshot().running);
     }
 
     // covers: S349
