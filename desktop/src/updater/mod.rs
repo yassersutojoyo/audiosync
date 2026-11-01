@@ -1197,6 +1197,60 @@ pub mod tests {
         assert_eq!(updater.notice().cloned(), available("0.9.1"));
     }
 
+    // covers: S297, S316
+    #[test]
+    fn a_skipped_version_is_quiet_at_launch_offered_on_a_manual_check_and_a_newer_one_is_offered() {
+        use crate::updater::flow::tests::FEED;
+        let (mut updater, fetch) = updater("skip");
+        updater.check(Trigger::Launch);
+        updater.wait();
+        assert!(matches!(
+            updater.notice(),
+            Some(UpdaterNotice::Available { .. })
+        ));
+        updater.press(UpdaterButton::SkipThisVersion);
+        assert_eq!(updater.notice(), None);
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::Skipped).as_ref()
+        );
+        updater.check(Trigger::Launch);
+        assert!(updater.wait().checked, "the appcast was read");
+        assert_eq!(updater.notice(), None, "the launch check offers nothing");
+        updater.check(Trigger::Manual);
+        updater.wait();
+        assert!(matches!(
+            updater.notice(),
+            Some(UpdaterNotice::Available { new, .. }) if new == "0.9.0"
+        ));
+
+        let feed = String::from_utf8(fetch.files[FEED].clone()).unwrap();
+        let mut newer = MemoryFetch::default();
+        newer
+            .files
+            .insert(FEED.to_owned(), feed.replace("0.9.0", "0.9.1").into_bytes());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while Arc::strong_count(&updater.env) > 1 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the check worker still holds its env"
+            );
+            std::thread::yield_now();
+        }
+        Arc::get_mut(&mut updater.env).unwrap().fetch = Arc::new(newer);
+        updater.check(Trigger::Launch);
+        assert!(updater.wait().record_changed);
+        assert_eq!(updater.record(), None, "a higher version clears it");
+        assert_eq!(
+            updater.notice(),
+            Some(&UpdaterNotice::Available {
+                new: "0.9.1".to_owned(),
+                running: "0.8.0".to_owned(),
+                last: None,
+            })
+        );
+    }
+
     // covers: S305
     #[test]
     fn turning_the_switch_off_stops_the_launch_check_not_the_manual_one() {

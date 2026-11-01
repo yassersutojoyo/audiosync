@@ -2557,6 +2557,14 @@ mod tests {
         });
         assert_eq!(blocked.update_record, record);
         assert_eq!(read(&blocked.to_json()).update_record, record);
+        let skipped =
+            read(r#"{"version": 2, "update_record": {"version": "0.9.0", "reason": "skipped"}}"#);
+        let record = Some(crate::ui_model::UpdateRecord {
+            version: "0.9.0".to_owned(),
+            reason: crate::ui_model::UpdateRecordReason::Skipped,
+        });
+        assert_eq!(skipped.update_record, record);
+        assert_eq!(read(&skipped.to_json()).update_record, record);
         let odd = read(r#"{"version": 2, "update_record": {"version": 9}}"#);
         assert_eq!(
             odd.update_record, None,
