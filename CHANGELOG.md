@@ -48,6 +48,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On the Mac, an arrow key pressed on a Google Cast speaker's slider right after a drag now steps the TV from where the drag ended, and the slider follows the TV when you later set it with its remote to where the drag was heading. Before, the step started from an older level and the slider could stay on a number the TV no longer played.
 - On the Mac, the menu bar panel's link to add a Google Cast device by address only brings the main window forward while the calibration sheet is open, and calibration doesn't start while the address sheet is open. Before, the other sheet could pop up later, or the link did nothing the next time it was clicked.
 - On Windows, switching the source or channel pair while a Google Cast speaker plays now fades the old source out and the new one in on that speaker, as on the Mac. Before, the sound jumped from one to the other, which could click.
 - On the Mac, a Google Cast speaker now fades out as smoothly as the others when you stop or switch the source. Before, its fade-out could be steeper than intended when it played with little or no delay.
