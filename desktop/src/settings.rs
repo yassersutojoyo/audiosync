@@ -2234,6 +2234,30 @@ mod tests {
         assert_eq!(gains(&format!("{long:?}")), kept);
     }
 
+    // covers: S24
+    #[test]
+    fn the_equalizer_starts_off_flat_at_0_db_and_comes_back_from_the_saved_json() {
+        let off_and_flat = EqSettings {
+            enabled: false,
+            preamp_db: 0.0,
+            gains_db: [0.0; BAND_COUNT],
+        };
+        assert_eq!(Settings::default().equalizer.settings(), off_and_flat);
+        let (unsaved, _) = Settings::from_json(r#"{"version": 2}"#).expect("read");
+        assert_eq!(unsaved.equalizer.settings(), off_and_flat);
+
+        let settings = Settings {
+            equalizer: SavedEqualizer {
+                enabled: true,
+                preamp_db: -4.5,
+                gains_db: vec![3.0, -2.5, 1.0, 0.0, 6.0, -6.0, 0.5, 12.0, -12.0, 2.0],
+            },
+            ..Settings::default()
+        };
+        let (read, _) = Settings::from_json(&settings.to_json()).expect("read");
+        assert_eq!(read.equalizer, settings.equalizer);
+    }
+
     // covers: S270
     #[test]
     fn equalizer_curves_are_read_leniently_and_left_out_while_none_is() {

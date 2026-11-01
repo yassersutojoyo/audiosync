@@ -4610,6 +4610,7 @@ The release side:
 | inputs_offer_every_channel_and_skip_hands_free (`desktop/src/audio/pipewire/graph.rs`) | S14 |
 | inputs_offer_at_most_64_channels (`desktop/src/audio/pipewire/graph.rs`) | S14 |
 | an_equalizer_with_another_band_count_loads_missing_bands_flat_and_drops_extra_ones (`desktop/src/settings.rs`) | S23, S24 |
+| the_equalizer_starts_off_flat_at_0_db_and_comes_back_from_the_saved_json (`desktop/src/settings.rs`) | S24 |
 | the_equalizer_is_quantized_and_matches_presets (`desktop/src/ui_model.rs`) | S33 |
 | turning_the_equalizer_off_ramps_to_the_dry_signal_over_10_ms_across_blocks (`desktop/src/audio/controller.rs`) | S27 |
 | each_source_kind_comes_back_from_the_settings_file_and_none_saved_is_the_whole_system (`desktop/src/adapter.rs`; Windows form differs: kind JSON plus input_device; round trip and missing = system) | S12 |
