@@ -1447,6 +1447,8 @@ export component MainWindow inherits Window {
     default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
 
+    property <length> content-max-width: left-column.width + Fluent.gap + scroll.max-width;
+
     // Rust sets these; a user's click or drag replaces the controls' bindings,
     // so each control's handler also sets it back to the state after its
     // callback (a change the engine refused doesn't fire these).
@@ -1715,9 +1717,11 @@ export component MainWindow inherits Window {
         spacing: Fluent.gap;
 
         // Header: the brand and the state on the left, the switch on the right.
+        // It and the notices end where the speaker list stops growing.
         HorizontalLayout {
             spacing: 10px;
             min-height: 36px;
+            max-width: root.content-max-width;
             vertical-stretch: 0;
 
             VerticalLayout {
@@ -1768,6 +1772,7 @@ export component MainWindow inherits Window {
         }
 
         if root.notices.length > 0: NoticeStack {
+            max-width: root.content-max-width;
             notices: root.notices;
             focus-index <=> root.focus-notice-index;
             notice-focus-changed(id, focused) => {
