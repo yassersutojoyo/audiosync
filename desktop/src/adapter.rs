@@ -16853,6 +16853,24 @@ mod tests {
         );
     }
 
+    // covers: S257, S265
+    #[test]
+    fn a_phone_recall_whose_every_member_asks_for_a_code_posts_no_preset_notice() {
+        let (mut adapter, _fake, tv) = apple_tv_adapter();
+        let tv_id = ap(&tv);
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[(tv_id.clone(), Some(20.0))])],
+            ..Settings::default()
+        });
+        adapter.poll();
+
+        adapter.recall_preset_from_phone("preset:1", std::slice::from_ref(&tv_id));
+        assert_eq!(preset_notices(&adapter), Vec::new());
+        assert!(messages(&adapter).contains(&NoticeMessage::PairFirst {
+            speaker: "Den TV".to_owned(),
+        }));
+    }
+
     // covers: S257
     #[test]
     fn a_phone_command_that_panics_midway_still_ends_the_phone_mark() {

@@ -941,7 +941,7 @@ pub fn preset_notice(
     left_off: Vec<(String, PresetLeftOff)>,
     nothing_changed: bool,
 ) -> Option<NoticeMessage> {
-    (nothing_changed || !left_off.is_empty()).then(|| NoticeMessage::PresetLeftOff {
+    (!left_off.is_empty()).then(|| NoticeMessage::PresetLeftOff {
         preset: preset.to_owned(),
         left_off,
         nothing_changed,
