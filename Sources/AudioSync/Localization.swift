@@ -286,7 +286,7 @@ struct UIStrings {
                 + "would switch the headset to call mode. Choose another input in System Settings → Sound, "
                 + "and try again."
         case .unsupportedRate:
-            return "The audio source runs at a sample rate calibration can't use."
+            return "The microphone runs at a sample rate calibration can't use."
         case .sourceSilent:
             return "The test sound couldn't start because streaming stalled. "
                 + "Turn streaming off and on, and try again."
