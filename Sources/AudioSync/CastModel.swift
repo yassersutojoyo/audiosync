@@ -1089,7 +1089,12 @@ struct CastModel {
         requested = (id, own)
         attempt?.reportedMute = nil
         // The device's own step moves its level, which is the own level only at zone 1 (C104).
-        if deviceStep > 0, zone(of: id) == 1 { return .device(up: up) }
+        if deviceStep > 0, zone(of: id) == 1 {
+            // The sender drops a drag level still waiting for its interval, so
+            // that level, and any it replaced, never gets an answer.
+            unanswered = []
+            return .device(up: up)
+        }
         return levelToSend(id, own: own).map { .level($0) }
     }
 
