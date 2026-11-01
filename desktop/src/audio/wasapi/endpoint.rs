@@ -996,9 +996,9 @@ mod tests {
         assert!(waited < TIMEOUT + SLACK, "the poll waited {waited:?}");
         assert_eq!(first, Err(BackendError::NotResponding));
         assert_eq!(second, Err(BackendError::NotResponding));
-        assert_eq!(calls.load(Ordering::Acquire), 1, "one read hangs at a time");
         assert!(STUCK.any(), "the read counts as stuck");
         assert!(STUCK.none_within(HANG * 2), "the read ends once it answers");
+        assert_eq!(calls.load(Ordering::Acquire), 1, "one read hangs at a time");
         let answered = reads.read_within("speakers", SLACK, &STUCK, |_| Ok(FORMAT));
         assert_eq!(answered, Ok(FORMAT));
     }
@@ -1026,7 +1026,7 @@ mod tests {
         assert!(waited < SLACK, "the other output waited {waited:?}");
         assert_eq!(first, Err(BackendError::NotResponding));
         assert_eq!(other, Err(BackendError::NotResponding));
-        assert_eq!(calls.load(Ordering::Acquire), 1, "no read starts meanwhile");
         assert!(STUCK.none_within(HANG * 2), "the read ends once it answers");
+        assert_eq!(calls.load(Ordering::Acquire), 1, "no read starts meanwhile");
     }
 }
