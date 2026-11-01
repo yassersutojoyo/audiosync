@@ -513,19 +513,18 @@ fn data_port() -> (UdpSocket, Arc<Mutex<Vec<Datagram>>>) {
         let mut buffer = [0u8; 4096];
         loop {
             match recv_queued(&reader, &mut buffer) {
-                Ok((n, _)) if n >= 12 => {
-                    let datagram = Datagram {
+                // Stamped once the log is free: a test that holds it stalls
+                // this thread as load would.
+                Ok((n, _)) if n >= 12 => match shared.lock() {
+                    Ok(mut log) => log.push(Datagram {
                         at: Instant::now(),
                         seq: u16::from_be_bytes([buffer[2], buffer[3]]),
                         rtptime: u32::from_be_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]),
                         marker: buffer[1] & 0x80 != 0,
                         bytes: buffer[..n].to_vec(),
-                    };
-                    match shared.lock() {
-                        Ok(mut log) => log.push(datagram),
-                        Err(_) => return,
-                    }
-                }
+                    }),
+                    Err(_) => return,
+                },
                 Ok(_) => {}
                 Err(error)
                     if matches!(
@@ -1125,10 +1124,13 @@ fn progress_stays_on_the_track_time_across_a_pause_and_a_seek() {
     tv.sender.pause();
     tv.run(Duration::from_secs(2), false);
     let played = paused.duration_since(first_at);
+    // The receiving thread falls behind from the resume on, as under load.
+    let behind = audio.lock().expect("audio");
     tv.sender.resume();
     let after_pause = Duration::from_secs(10) + played;
     let (resumed, resumed_at) = set(&mut tv, after_pause);
     tv.run(Duration::from_secs(1), false);
+    drop(behind);
     let (seek, seek_at) = set(&mut tv, Duration::from_secs(120));
     tv.assert_no_error();
     tv.sender.shutdown();
