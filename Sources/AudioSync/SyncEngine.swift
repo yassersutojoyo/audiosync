@@ -646,6 +646,19 @@ final class StreamEngine {
                 DebugTrace.log("[AudioSync] output at 1 minute: \(uid), "
                     + renderer.statusText(bluetoothOutputs: self.bluetoothOutputs))
             }
+            logLevel(uid, renderer)
+        }
+    }
+
+    /// Logs the level output `uid` got every 10 s while `renderer` plays it.
+    private func logLevel(_ uid: String, _ renderer: OutputRenderer) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self, weak renderer] in
+            guard let self, let renderer, self.renderers[uid] === renderer else { return }
+            if let level = renderer.takeLevel() {
+                DebugTrace.log("[AudioSync] output level: \(uid), peak "
+                    + String(format: "%.1f dBFS, RMS %.1f dBFS", level.peakDb, level.rmsDb))
+            }
+            self.logLevel(uid, renderer)
         }
     }
 
@@ -723,6 +736,15 @@ final class StreamEngine {
     /// given back (S26, S71), applied from its next callback (S64).
     func setGain(uid: String, g: Double) {
         renderers[uid]?.setGain(linear: g, givingBack: parts?.equalizer)
+    }
+
+    /// Logs the gain output `uid` plays linear gain `g` at, the equalizer's
+    /// headroom cut given back; nothing when it isn't playing.
+    func logGain(uid: String, g: Double) {
+        guard DebugTrace.enabled, renderers[uid] != nil, let parts else { return }
+        let (played, returnedDb) = parts.equalizer.returnedGain(g)
+        DebugTrace.log("[AudioSync] output gain: \(uid), gain \(String(format: "%.3f", played)), "
+            + "EQ headroom returned \(String(format: "%.2f", returnedDb)) dB")
     }
 
     /// The device of output `uid` is gone (S68), its render callback stopped

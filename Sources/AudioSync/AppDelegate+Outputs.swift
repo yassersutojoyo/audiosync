@@ -89,6 +89,7 @@ extension AppDelegate {
     func logLocalVolume(_ uid: String) {
         guard let v = localVolume[uid] else { return }
         DebugTrace.log("[AudioSync] volume of \(uid) set to \(String(format: "%.2f", v))")
+        engine.logGain(uid: uid, g: effectiveGain(uid))
     }
 
     /// The master scales every speaker AudioSync plays: a local speaker's
@@ -101,6 +102,16 @@ extension AppDelegate {
         nativeAirPlay?.setMaster(masterVolume)
         castSender?.setMaster(masterVolume)
         pushModel()
+        if DebugTrace.enabled {
+            // Per drag, not per step: logged once the master rests.
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(logMasterGains), object: nil)
+            perform(#selector(logMasterGains), with: nil, afterDelay: 0.5)
+        }
+    }
+
+    @objc private func logMasterGains() {
+        DebugTrace.log("[AudioSync] master volume set to \(String(format: "%.2f", masterVolume))")
+        for uid in engine.activeOutputUIDs { engine.logGain(uid: uid, g: effectiveGain(uid)) }
     }
 
     // MARK: - Local delays (the local delay model, LocalDelay.swift, S172 to S181)
