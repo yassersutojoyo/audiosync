@@ -144,9 +144,8 @@ pub const CAST_EVENT_GROUP_LOG: i32 = 18;
 /// The device's certificate changed since its last connect, for the debug
 /// log: `detail` is "<before> to <after>" (C21).
 pub const CAST_EVENT_CERTIFICATE_CHANGED: i32 = 19;
-/// A level sent that no status will answer, in `level` (C70, C104):
-/// `detail` is "repeated" when the level sent before it is the same and
-/// still unanswered, else empty, as the device already reports it.
+/// A level asked for that no status will answer, in `level`, once per ask
+/// (C70, C104).
 pub const CAST_EVENT_VOLUME_UNANSWERED: i32 = 20;
 
 /// How an attempt ended ([`AscCastEvent::reason`]): the sender's own
@@ -1088,12 +1087,9 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             pending.step = volume.step_interval.unwrap_or(0.0);
             pending
         }
-        SessionEvent::VolumeUnanswered { level, repeated } => {
+        SessionEvent::VolumeUnanswered { level } => {
             let mut pending = Pending::new(CAST_EVENT_VOLUME_UNANSWERED);
             pending.level = level;
-            if repeated {
-                pending.detail = "repeated".to_owned();
-            }
             pending
         }
         SessionEvent::ConnectFailed { error, retry_in } => {
@@ -1590,8 +1586,9 @@ unsafe fn with_session(cast: *mut AscCast, send: impl FnOnce(&CastHost)) -> bool
 }
 
 /// Sets the device's volume, 0 to 1, clamped (C65, C67). The level shown is
-/// the one volume events report (C69, C70); a host dragging a slider sends
-/// at most one every 100 ms. False, sending nothing, for a null or dead
+/// the one volume events report (C69, C70); the sender sends at most one
+/// every 100 ms and reports each level it won't get an answer for, so a
+/// host passes every level asked for. False, sending nothing, for a null or dead
 /// handle, a level that isn't finite, or when no session runs; a refusal
 /// (a locked volume, C68) comes as a command-failed event.
 ///
