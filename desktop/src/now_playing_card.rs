@@ -341,6 +341,11 @@ mod tests {
         };
         assert_eq!(source("system"), Some(CardSource::AnyApp));
         assert_eq!(source("app:2000:player.exe"), player());
+        assert_eq!(
+            source("mix:only:player.exe,browser.exe"),
+            Some(CardSource::AnyApp)
+        );
+        assert_eq!(source("mix:except:game.exe"), Some(CardSource::AnyApp));
         assert_eq!(source("input:{0.0.1.00000000}.{mic}"), None);
     }
 
