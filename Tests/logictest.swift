@@ -5475,6 +5475,35 @@ do {
           "EC1 unplug: a lost speaker stays on and waits while its device is missing")
     check(!StreamingPolicy.isIdle(streaming: true, enabledAirPlay: [], enabledLocal: ["usb"]),
           "EC1 unplug: streaming keeps running while the only speaker is unplugged")
+    // covers: S68 (the disconnected notice waits for the list: a device listed again at once gets none)
+    do {
+        var goneNotices = OutputGoneNotices()
+        goneNotices.deviceGone("usb")
+        goneNotices.deviceGone("hdmi")
+        goneNotices.deviceGone("bt")
+        let goneDue = goneNotices.settle(enabled: ["usb", "hdmi"], listed: ["hdmi", "builtin"])
+        let goneAgain = goneNotices.settle(enabled: ["usb", "hdmi"], listed: [])
+        check(goneDue.post == ["usb"] && goneAgain.post.isEmpty,
+              "EC1 unplug: a speaker whose device left the list gets the disconnected notice once; one listed again or switched off gets none",
+              "\(goneDue) \(goneAgain)")
+    }
+    // covers: S68, S331 (the disconnected notice ends with a switch-off or a stop, as on Windows)
+    do {
+        var endingNotices = OutputGoneNotices()
+        endingNotices.deviceGone("usb")
+        endingNotices.deviceGone("hdmi")
+        _ = endingNotices.settle(enabled: ["usb", "hdmi", "bt"], listed: [])
+        endingNotices.refusedLost("bt")
+        endingNotices.started("hdmi")
+        let switchedOff = endingNotices.settle(enabled: ["hdmi", "bt"], listed: ["hdmi", "bt"])
+        endingNotices.deviceGone("tv")
+        let stopped = endingNotices.stop()
+        let afterStop = endingNotices.settle(enabled: ["tv", "bt"], listed: [])
+        check(switchedOff.clear == ["usb"] && switchedOff.post.isEmpty && stopped == ["bt"]
+                && afterStop.post.isEmpty && afterStop.clear.isEmpty,
+              "EC1 unplug: the disconnected notice ends when the speaker is switched off or streaming stops; one that played again keeps none",
+              "\(switchedOff) \(stopped) \(afterStop)")
+    }
     check(LocalOutputSync.plan(enabled: ["usb"], active: [], available: ["usb", "builtin"]) == P(attach: ["usb"], detach: []),
           "EC1 replug: the speaker is attached again once its device is listed")
     check(LocalOutputSync.plan(enabled: [], active: ["usb"], available: ["usb"]) == P(attach: [], detach: ["usb"]),

@@ -429,6 +429,12 @@ extension AppDelegate {
         refusalRetry.settle(enabled: enabledLocal, listed: listed)
         clearNotices(runawayRetry.settle(enabled: enabledLocal, listed: listed)
             .map { SpeakerKey.make(id: $0, airplay: false) })
+        let gone = goneNotices.settle(enabled: enabledLocal, listed: listed)   // after the stall settle, which would clear it
+        clearNotices(gone.clear.map { SpeakerKey.make(id: $0, airplay: false) })
+        for uid in gone.post {
+            postNotice(text.outputLost(name: shownName(local: uid, system: localDevices[uid]?.name ?? "")),
+                       subject: SpeakerKey.make(id: uid, airplay: false))
+        }
         let afterStall = stallRetry.afterStall(formatReopens: formatReopens)
         let applied = LocalOutputSync.apply(enabled: enabledLocal.subtracting(freshLinks.held)
                                                 .subtracting(stallRetry.held(nowS: now))
@@ -438,6 +444,7 @@ extension AppDelegate {
                                             holdBacks: localHoldBackTargets(), gain: { effectiveGain($0) })
         for (uid, holdBack) in applied.attached {
             localHoldBacks[uid] = holdBack
+            goneNotices.started(uid)
             // A disconnected notice stays until the reopened stream has played 5 s (S334).
             if !stallRetry.lost.contains(uid), !runawayRetry.struggling.contains(uid) {
                 clearNotices([SpeakerKey.make(id: uid, airplay: false)])
@@ -538,8 +545,8 @@ extension AppDelegate {
     }
 
     /// The listed device of output `uid` refused its start (S331): the speaker
-    /// stays on and is tried again every 3 s. Like a speaker whose device left
-    /// the list (S68), it gets no notice on the Mac, even past 30 s.
+    /// stays on and is tried again every 3 s; past 30 s it gets the notice of
+    /// a speaker whose device left the list (S68).
     private func outputRefused(_ uid: String, _ refusal: String, nowS: Double) {
         let step = refusalRetry.refused(uid, nowS: nowS)
         let number = engine.outputNumber(uid)
@@ -548,6 +555,9 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] output \(number) refused by its device (\(refusal)); "
                 + "trying again every \(Int(OutputRefusalRetry.retryEveryS)) s")
         case .lost?:
+            goneNotices.refusedLost(uid)
+            postNotice(text.outputLost(name: shownName(local: uid, system: localDevices[uid]?.name ?? "")),
+                       subject: SpeakerKey.make(id: uid, airplay: false))
             DebugTrace.log("[AudioSync] output \(number) still refused after \(Int(OutputRefusalRetry.lostAfterS)) s; "
                 + "counted as lost, still trying every \(Int(OutputRefusalRetry.retryEveryS)) s")
         case nil:
