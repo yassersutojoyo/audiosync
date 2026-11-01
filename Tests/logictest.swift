@@ -12885,14 +12885,14 @@ do {
           "cast master: the answer to the first level of a 60-level drag is not read as a change")
 
     // covers: C70, C104 (the TV answered 0.55 before the sender sent it again)
-    var resent = session(attempt: 8)
-    _ = resent.apply(.volume(attempt: 8, reported(0.5)))
-    for position in [55.0, 60.0, 55.0] { _ = resent.setVolume(tv, position: position) }
-    _ = resent.apply(.volumeUnanswered(attempt: 8, level: 0.6))
-    _ = resent.apply(.volume(attempt: 8, reported(0.55)))
-    _ = resent.apply(.volumeUnanswered(attempt: 8, level: 0.55))
-    _ = resent.apply(.volume(attempt: 8, reported(0.6)))
-    check(approx(resent.volume(of: tv), 60, 1e-9),
+    var dragBack = session(attempt: 8)
+    _ = dragBack.apply(.volume(attempt: 8, reported(0.5)))
+    for position in [55.0, 60.0, 55.0] { _ = dragBack.setVolume(tv, position: position) }
+    _ = dragBack.apply(.volumeUnanswered(attempt: 8, level: 0.6))
+    _ = dragBack.apply(.volume(attempt: 8, reported(0.55)))
+    _ = dragBack.apply(.volumeUnanswered(attempt: 8, level: 0.55))
+    _ = dragBack.apply(.volume(attempt: 8, reported(0.6)))
+    check(approx(dragBack.volume(of: tv), 60, 1e-9),
           "cast master: after a drag back to the level the TV reports, the TV's remote moves the slider")
 
     // covers: C70, C104 (the sender sent 0.55 twice, 0.6 never went out)
