@@ -15618,5 +15618,18 @@ do {
     check(card >= 120, "panel chrome: the permission card's room is kept", "\(card)")
 }
 
+// MARK: Main window opens one sheet at a time (MainWindowSheet.mayOpen)
+do {
+    check(!MainWindowSheet.castAdd.mayOpen(calibrateShown: true, castAddShown: false),
+          "main window sheets: the Cast address link does nothing while calibration shows")
+    check(!MainWindowSheet.calibrate.mayOpen(calibrateShown: false, castAddShown: true),
+          "main window sheets: calibrate refuses while the Cast address sheet is open")
+    check(MainWindowSheet.castAdd.mayOpen(calibrateShown: false, castAddShown: false)
+          && MainWindowSheet.calibrate.mayOpen(calibrateShown: false, castAddShown: false),
+          "main window sheets: either opens when none shows")
+    check(MainWindowSheet.calibrate.mayOpen(calibrateShown: true, castAddShown: false),
+          "main window sheets: a run starts in the calibration sheet already shown")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
