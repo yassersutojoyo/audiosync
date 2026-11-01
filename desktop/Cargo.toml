@@ -2,7 +2,7 @@
 name = "audiosync-desktop"
 version = "0.7.1"
 edition = "2024"
-rust-version = "1.92"
+rust-version = "1.99"
 license = "GPL-3.0-or-later"
 description = "AudioSync for Windows 11 (in development)."
 repository = "https://github.com/yassersutojoyo/audiosync"
