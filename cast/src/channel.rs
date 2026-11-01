@@ -674,7 +674,7 @@ impl Channel {
                     self.events
                         .push_back(Event::LaunchFailed(LaunchError::Timeout));
                 }
-                Request::AppCheck => self.end(EndReason::AppClosed),
+                Request::AppCheck => self.end(EndReason::Silent),
                 Request::Stop => self.finish_stop(),
                 Request::Load | Request::Playing => {
                     self.pending.retain(|pending| {
