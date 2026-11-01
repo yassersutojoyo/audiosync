@@ -64,6 +64,8 @@ export component HelpWindow inherits Window {
     in property <bool> show-how-shown;
     // The AirPlay 2 flag (spec S312): the AirPlay section names Prefer AirPlay 2.
     in property <bool> airplay2-auto;
+    // A release build that updates itself: More Controls says how.
+    in property <bool> updater-available;
     private property <string> airplay-body: Platform.os == OperatingSystemType.linux ? Strings.help-airplay-linux : Strings.help-airplay;
     private property <string> airplay-prefer-body: Platform.os == OperatingSystemType.linux ? Strings.help-airplay-linux-prefer : Strings.help-airplay-prefer;
     callback show-how-requested();
@@ -234,7 +236,7 @@ export component HelpWindow inherits Window {
 
                         HelpSection {
                             title: Strings.help-more-title;
-                            body: Platform.os == OperatingSystemType.linux ? Strings.help-more-linux : Strings.help-more;
+                            body: Platform.os == OperatingSystemType.linux ? Strings.help-more-linux : root.updater-available ? Strings.help-more + "\n\n" + Strings.help-more-updates : Strings.help-more;
                         }
 
                         HelpSection {
