@@ -1749,8 +1749,9 @@ struct UIStrings {
           Speaker” from its ⋯ button. A speaker that is on turns off first.
           Hidden Speakers in the gear menu lists what you hid; choose one to
           show it again, off, with its volume and delay as you left them.
-        - Equalizer: click Equalizer in the window for 10 bands, a preamp and
-          presets. It shapes the sound on every speaker at once.
+        - Equalizer: click Equalizer in the window for 10 bands, a preamp,
+          preset curves and curves you save yourself. It shapes the sound on
+          every speaker at once.
         - Now Playing: while Spotify or Music is open with a track, the window
           shows it with play/pause and skip, and AirPlay speakers with a
           screen, such as a TV, show its title and artwork. Other apps aren't

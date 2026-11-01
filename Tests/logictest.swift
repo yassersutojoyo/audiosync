@@ -13615,6 +13615,8 @@ do {
     check(guideWords.contains("the button with its zone's name goes to the zone")
             && !guideWords.contains("after its own goes to the zone"),
           "guide, zones: a zoned speaker's short row names the button that goes to its zone")
+    check(guideWords.contains("a preamp, preset curves and curves you save yourself"),
+          "guide, equalizer: the line names the curves you save yourself, as on Windows")
     // covers: S407
     check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
             && pieces.map(\.text).joined() == t.helpText,
