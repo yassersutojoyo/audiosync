@@ -273,7 +273,10 @@ impl Graph {
     /// The input node named `name`, to capture as the source.
     pub fn capture_input(&self, name: &str) -> Result<&Node, BackendError> {
         let (_, node) = self.named(name).ok_or(BackendError::DeviceGone)?;
-        Ok(node)
+        // The listing leaves a hands-free node out, so one saved anyway counts as not connected.
+        (!node.hands_free())
+            .then_some(node)
+            .ok_or(BackendError::InputGone)
     }
 
     /// The rate and channels to play to output `id` at: its own format,
