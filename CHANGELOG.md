@@ -47,6 +47,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On the Mac, a Google Cast speaker's volume follows the TV again after a quick drag that ends on a level the slider passed a moment before. Before, a later change with the TV's remote to a level from that drag could leave the slider on the old value for good.
 - On Windows, a Google Cast speaker's volume follows the TV again after a quick drag that ends on a level the slider passed a moment before. Before, a later change with the TV's remote to a level from that drag could leave the slider on the old value for good.
 - On Windows, a Google Cast speaker with a fixed volume in a zone shows the level the speaker reports. Before, its dimmed slider moved with the zone volume although the speaker's own volume never changed.
 - On the Mac, the menu bar panel's link to add a Google Cast device by address only brings the main window forward while the calibration sheet is open, and calibration doesn't start while the address sheet is open. Before, the other sheet could pop up later, or the link did nothing the next time it was clicked.

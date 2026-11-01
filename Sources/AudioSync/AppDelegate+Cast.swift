@@ -421,6 +421,9 @@ extension AppDelegate {
         case .volume(let a, let v, _):
             return "attempt \(a): volume \(Int((v.level * 100).rounded()))" + (v.muted ? ", muted" : "")
                 + (v.fixed ? ", fixed" : "")
+        case .volumeUnanswered(let a, let level, let repeated):
+            return "attempt \(a): volume \(Int((level * 100).rounded())) sent, no answer to come"
+                + (repeated ? ", repeated" : "")
         case .commandFailed(let a, let error): return "attempt \(a): a request failed (\(String(describing: error)))"
         case .ended(let a, .failed(_, let detail)): return "attempt \(a) ended: failed: \(detail)"
         case .ended(let a, let end): return "attempt \(a) ended: \(end)"
