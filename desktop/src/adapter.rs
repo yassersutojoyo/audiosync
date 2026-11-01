@@ -2076,6 +2076,14 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn cast_list(&self) -> CastList {
         match self.audio.cast_discovery() {
             CastDiscovery::Off => CastList::Quiet,
+            // A dead browser leaves browsed rows listed; the Mac keeps only these two (S339).
+            CastDiscovery::Failed
+                if self.audio.cast_speakers().iter().any(|speaker| {
+                    speaker.address.is_some() || speaker.status != CastStatus::Idle
+                }) =>
+            {
+                CastList::Quiet
+            }
             CastDiscovery::Failed => CastList::Failed,
             CastDiscovery::Browsing if !self.audio.cast_speakers().is_empty() => CastList::Quiet,
             CastDiscovery::Browsing if self.cast_quiet_polls >= NONE_FOUND_POLLS => {
@@ -2207,10 +2215,24 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .any(|zone| zone.members.iter().any(|member| member == key))
     }
 
-    /// The name a Cast speaker shows: the user's, else the one last listed.
+    /// The name a Cast speaker shows: the user's, else its system name.
     fn cast_name(&self, id: &str) -> String {
-        let system = self.cast_names.get(id).map_or(id, String::as_str);
-        self.custom_names.shown(&cast_key(id), system)
+        let system = self.cast_system_name(id);
+        self.custom_names
+            .shown(&cast_key(id), system.as_deref().unwrap_or(id))
+    }
+
+    /// A Cast speaker's own name: its row's while listed, else the one last listed.
+    fn cast_system_name(&self, id: &str) -> Option<String> {
+        // Its row's name can change with no list change: leaving its zone drops the kept name (S286).
+        let listed = self
+            .audio
+            .cast_speakers()
+            .into_iter()
+            .find(|speaker| speaker.id == id);
+        listed
+            .map(|speaker| self.cast_own_name(&speaker))
+            .or_else(|| self.cast_names.get(id).cloned())
     }
 
     /// The user switched a Cast speaker on or off. One that can't play
@@ -5138,7 +5160,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let system = match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => self.names.get(&endpoint_id).cloned(),
             Some(SpeakerKey::AirPlay(airplay_id)) => self.airplay_names.get(&airplay_id).cloned(),
-            Some(SpeakerKey::Cast(cast_id)) => self.cast_names.get(&cast_id).cloned(),
+            Some(SpeakerKey::Cast(cast_id)) => self.cast_system_name(&cast_id),
             None => None,
         };
         // A speaker never listed has no system name to come back to.
@@ -15813,6 +15835,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S286
+    #[test]
+    fn a_cast_speaker_listed_under_its_address_that_leaves_its_zone_is_named_alike_in_row_notices_and_renames()
+     {
+        let dir = test_dir("adapter-cast-zone-left-name");
+        let path = dir.join(settings::FILE_NAME);
+        let (mut adapter, fake) = cast_launch(&path, &[], false);
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        fake.announce_at(
+            DEN,
+            "Living TV",
+            DEVICE_PORT,
+            std::net::Ipv4Addr::new(192, 0, 2, 31),
+        );
+        fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
+        adapter.poll();
+        adapter.new_zone_with(&cc(DEN), "Lounge");
+        adapter.poll();
+        fake.withdraw(DEN, "Living TV");
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.poll();
+        adapter.remove_from_zone(&cc(DEN));
+        adapter.poll();
+        assert_eq!(speaker_of(&adapter, &cc(DEN)).name, "192.0.2.31");
+        adapter.set_speaker_enabled(&cc(DEN), true);
+        assert!(
+            messages(&adapter).contains(&cast_cant_play("192.0.2.31", UiCastProblem::Busy)),
+            "{:?}",
+            messages(&adapter)
+        );
+        adapter.rename_speaker(&cc(DEN), "Den");
+        adapter.rename_speaker(&cc(DEN), "192.0.2.31");
+        assert!(
+            !adapter
+                .current_settings()
+                .speaker_names
+                .contains_key(&cc(DEN)),
+            "typing the name its row shows clears the rename"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// The UI's ID of a Google Cast speaker.
     fn cc(id: &str) -> String {
         format!("cc:{id}")
@@ -16441,6 +16506,38 @@ mod tests {
         fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
         assert!(adapter.poll());
         assert_eq!(adapter.snapshot().cast_list, CastList::Quiet);
+    }
+
+    // covers: S393
+    #[test]
+    fn the_cast_list_says_the_search_failed_unless_a_speaker_added_by_address_or_in_a_session_is_listed()
+     {
+        let (mut adapter, fake) = cast_adapter();
+        fake.state().discovery_stopped = true;
+        adapter.poll();
+        assert_eq!(
+            adapter.snapshot().cast_list,
+            CastList::Failed,
+            "browsed rows outlive a dead browser"
+        );
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.poll();
+        assert_eq!(
+            adapter.snapshot().cast_list,
+            CastList::Quiet,
+            "in a session"
+        );
+
+        let (mut adapter, fake) = cast_adapter();
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        fake.state().discovery_stopped = true;
+        adapter.poll();
+        assert_eq!(
+            adapter.snapshot().cast_list,
+            CastList::Quiet,
+            "added by address"
+        );
     }
 
     // covers: S394, S401 (the amount counts the AirPlay speaker's own receiver offset)

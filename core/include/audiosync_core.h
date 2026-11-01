@@ -2136,7 +2136,7 @@ typedef struct AscCastInput AscCastInput;
 typedef struct AscCastDevice {
     int32_t event;     /* ASC_CAST_APPEARED, _CHANGED or _GONE */
     const char *id;    /* 32 hex digits, or "manual:<ip:port>" */
-    const char *name;  /* the name it announces, "" when none */
+    const char *name;  /* the name it announces, else its full service name; "" when none */
     const char *model; /* its model, "" when none */
     uint32_t flags;    /* ASC_CAST_FLAG_* bits */
     const char *former; /* on the APPEARED of a device a browse found that was added by address:

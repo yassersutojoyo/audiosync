@@ -218,7 +218,8 @@ pub struct AscCastDevice {
     pub event: i32,
     /// 32 hex digits, or `manual:<address>`.
     pub id: *const c_char,
-    /// The `fn` TXT value; "" when it has none.
+    /// The `fn` TXT value, else the full service name (C13); "" for a gone
+    /// device or an address no browse found.
     pub name: *const c_char,
     /// The `md` TXT value; "" when it has none.
     pub model: *const c_char,
@@ -725,7 +726,10 @@ impl AscCast {
         };
         if let Some(entry) = entry {
             if let Some(device) = &entry.device {
-                change.name = device.name.clone().unwrap_or_default();
+                change.name = device
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| device.instance.clone());
                 change.model = device.model.clone().unwrap_or_default();
                 if device.kind == DeviceKind::Group {
                     change.flags |= CAST_FLAG_GROUP;
@@ -2849,6 +2853,22 @@ mod tests {
         assert_eq!(refused, CAST_REFUSED_NONE);
         // SAFETY: a live handle.
         unsafe { asc_cast_stop(handle) };
+        destroy(handle);
+    }
+
+    // CAST_SPEC: C13
+    #[test]
+    fn a_device_without_a_friendly_name_is_listed_under_its_instance_name() {
+        let handle = create();
+        let mut kitchen = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));
+        kitchen.txt.retain(|entry| !entry.starts_with(b"fn="));
+        let instance = kitchen.fullname.clone();
+        browse(handle, vec![BrowseEvent::Resolved(kitchen)], false);
+        let names: Vec<String> = devices(handle)
+            .into_iter()
+            .map(|found| found.name)
+            .collect();
+        assert_eq!(names, [instance]);
         destroy(handle);
     }
 
