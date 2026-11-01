@@ -576,6 +576,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// once until a save works again. They are tried again after a change,
     /// every [`SAVE_RETRY_POLLS`] polls and at quit.
     unsaved: Option<Settings>,
+    /// The Cast speakers file's last write failed, so its notice stays
+    /// after a settings save that works.
+    cast_unsaved: bool,
     /// Polls left until [`AudioAdapter::unsaved`] is tried again.
     save_retry_wait: u32,
     /// An output listing worked at least once, so an empty list means
@@ -745,6 +748,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             airplay_unrestored: BTreeSet::new(),
             cast_unrestored: None,
             unsaved: None,
+            cast_unsaved: false,
             save_retry_wait: 0,
             outputs_known: false,
             no_output_noticed: false,
@@ -1201,7 +1205,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let current = self.current_settings();
         if current == self.saved && !self.must_save {
             if self.unsaved.take().is_some() {
-                self.notices.clear(&[NoticeSubject::SettingsFile]);
+                if !self.cast_unsaved {
+                    self.notices.clear(&[NoticeSubject::SettingsFile]);
+                }
                 return true;
             }
             return false;
@@ -1219,7 +1225,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             return self.restore_read_late(*read);
         }
         let mut notices_changed = saved.is_ok() == self.unsaved.is_some();
-        if saved.is_ok() && self.unsaved.is_some() {
+        if saved.is_ok() && self.unsaved.is_some() && !self.cast_unsaved {
             self.notices.clear(&[NoticeSubject::SettingsFile]);
         }
         let failed = saved.is_err();
@@ -2072,17 +2078,22 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Writes the Cast speakers' offsets and formats to their file when they
     /// changed since the last write. One that can't be written gets the
-    /// settings' notice: the change lasts until AudioSync quits.
-    fn save_cast_memory(&mut self) {
+    /// settings' notice: the change lasts until AudioSync quits. Returns
+    /// false only when the file couldn't be kept aside or written.
+    fn save_cast_memory(&mut self) -> bool {
         if self.auto_connect_skipped {
-            return;
+            return true;
         }
         let (Some(path), Some(mut json)) = (self.cast_file.as_ref(), self.audio.cast_memory_json())
         else {
-            return;
+            return true;
         };
         if self.cast_saved.as_ref() == Some(&json) {
-            return;
+            // Set back to what the file holds after a failed write.
+            if std::mem::take(&mut self.cast_unsaved) && self.unsaved.is_none() {
+                self.notices.clear(&[NoticeSubject::SettingsFile]);
+            }
+            return true;
         }
         if !self.cast_file_checked {
             match keep_unread_cast_file_aside(path, self.cast_unread_at_launch) {
@@ -2108,16 +2119,27 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     self.log
                         .log(|| format!("Cast: the speakers' file couldn't be kept: {error}"));
                     self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
-                    return;
+                    self.cast_unsaved = true;
+                    return false;
                 }
             }
         }
         match data_folder::write_atomically(path, json.as_bytes()) {
-            Ok(()) => self.cast_saved = Some(json),
+            Ok(()) => {
+                self.cast_saved = Some(json);
+                self.cast_unsaved = false;
+                // The notice stays while the settings file is the one that can't be saved.
+                if self.unsaved.is_none() {
+                    self.notices.clear(&[NoticeSubject::SettingsFile]);
+                }
+                true
+            }
             Err(error) => {
                 self.log
                     .log(|| format!("Cast: the speakers' file couldn't be written: {error}"));
                 self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
+                self.cast_unsaved = true;
+                false
             }
         }
     }
@@ -4121,7 +4143,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.note_speakers();
             }
             BackendEvent::CastFailed { id, problem } => self.cast_cant_play(&id, problem),
-            BackendEvent::CastMemoryChanged => self.save_cast_memory(),
+            BackendEvent::CastMemoryChanged => {
+                self.save_cast_memory();
+            }
             BackendEvent::AirPlayWaitOver { id } => {
                 self.reconnecting.remove(&id);
                 self.clear_if(airplay_subject(&id), |message| {
@@ -5728,9 +5752,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let _ = self.persist();
         // Before the backend drops and the Cast host shuts down, so the last
         // offset change is kept even when its event was never polled.
-        self.save_cast_memory();
+        let cast_saved = self.save_cast_memory();
         // A run that writes nothing (no file, delays to migrate, no auto-connect) keeps changes unsaved.
-        self.settings_file.path().is_some() && self.current_settings() == self.saved
+        cast_saved && self.settings_file.path().is_some() && self.current_settings() == self.saved
     }
 
     fn shut_down(&mut self) {
@@ -18193,6 +18217,99 @@ mod tests {
         adapter.save_settings();
         let kept = crate::data_folder::copies_kept_aside(&folder, "cast-speakers.ignored");
         assert!(kept.is_empty(), "{} copies kept", kept.len());
+    }
+
+    /// A Cast adapter launched over the settings in `dir`, with the Cast
+    /// speakers file there too.
+    fn cast_adapter_saving_to(dir: &std::path::Path) -> (AudioAdapter<MockBackend>, FakeCast) {
+        let mut audio = launch_audio();
+        let fake = FakeCast::default();
+        fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
+        audio.set_cast(fake.link());
+        let mut adapter = launch(audio, &dir.join(settings::FILE_NAME));
+        adapter.set_cast_file(Some(dir.join("cast-speakers.json")), false);
+        adapter.poll();
+        (adapter, fake)
+    }
+
+    // covers: S394
+    #[test]
+    fn a_cast_speakers_file_written_again_clears_the_not_saved_notice_the_settings_dont_hold() {
+        let dir = test_dir("cast-memory-unsaved");
+        let (mut adapter, _fake) = cast_adapter_saving_to(&dir);
+        let cast_blocked = crate::data_folder::temporary_path(&dir.join("cast-speakers.json"));
+        std::fs::create_dir(&cast_blocked).expect("blocked");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        std::fs::remove_dir(&cast_blocked).expect("unblocked");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 300.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+
+        // A settings file that still can't be saved keeps its notice.
+        let blocked = crate::data_folder::temporary_path(&dir.join(settings::FILE_NAME));
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_master_volume(64.0);
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 350.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S394
+    #[test]
+    fn a_settings_save_that_works_keeps_the_notice_while_the_cast_file_cant_be_written() {
+        let dir = test_dir("cast-memory-unsaved-settings-saved");
+        let (mut adapter, _fake) = cast_adapter_saving_to(&dir);
+        let cast_blocked = crate::data_folder::temporary_path(&dir.join("cast-speakers.json"));
+        std::fs::create_dir(&cast_blocked).expect("blocked");
+        let path = dir.join(settings::FILE_NAME);
+        let blocked = crate::data_folder::temporary_path(&path);
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_master_volume(64.0);
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert_eq!(SettingsFile::at(path).load().0.master_volume, 65.0);
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S394
+    #[test]
+    fn a_cast_offset_set_back_to_the_one_in_its_file_clears_the_not_saved_notice() {
+        let dir = test_dir("cast-memory-unsaved-set-back");
+        let (mut adapter, _fake) = cast_adapter_saving_to(&dir);
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 100.0);
+        adapter.poll();
+        let blocked = crate::data_folder::temporary_path(&dir.join("cast-speakers.json"));
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 100.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S394
+    #[test]
+    fn the_last_save_tells_a_cast_offset_is_unsaved_when_its_file_cant_be_written() {
+        let dir = test_dir("cast-memory-last-save");
+        let (mut adapter, _fake) = cast_adapter_saving_to(&dir);
+        let blocked = crate::data_folder::temporary_path(&dir.join("cast-speakers.json"));
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        assert!(!adapter.save_settings(), "the Cast file is still blocked");
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        assert!(adapter.save_settings());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     // covers: C2
