@@ -2033,7 +2033,8 @@ impl Feed {
             return 0;
         }
         if closing {
-            self.fade.fade_out();
+            // Only the line's output fades out: fading its input as well
+            // would multiply the two curves into a steeper one (S191).
             self.delay.close();
         }
         let mut taken = 0;
@@ -3388,6 +3389,74 @@ mod tests {
             at_once + 2400,
             "a capture start never replays the end of the last one"
         );
+        inside(handle).shared.attach(None);
+        destroy(handle);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_cast_input_destroy(&mut input) };
+    }
+
+    // covers: S189, S191
+    #[test]
+    fn a_stop_fades_the_cast_feed_out_once_whatever_the_hold_back() {
+        let fade = crate::fade::fade_frames(CAST_RATE);
+        let handle = create();
+        // SAFETY: a live handle, used by this thread only.
+        let mut input = unsafe { asc_cast_take_input(handle) };
+        let block = vec![0.5f32; 480 * 2];
+        let full = f64::from(i16::MAX) * 0.5;
+        let bound = full * std::f64::consts::PI / (2.0 * fade as f64) + 1.0;
+        // Under, near and over the fade length: under it, the input's fade
+        // and the line's would overlap.
+        for hold_back_ms in [0.0, 10.0, 30.0] {
+            let (writer, mut reader) = audio_ring(RING_FRAMES);
+            inside(handle).shared.attach(Some(writer));
+            // SAFETY: a live handle and input, used by this thread only;
+            // `block` holds 480 stereo frames.
+            unsafe {
+                asc_cast_set_hold_back(handle, hold_back_ms);
+                assert!(asc_cast_input_set_rate(input, 48_000.0));
+                for _ in 0..20 {
+                    asc_cast_input_write(input, block.as_ptr(), 480);
+                }
+                asc_cast_input_request_fade_out(input);
+                for _ in 0..20 {
+                    asc_cast_input_write(input, block.as_ptr(), 480);
+                }
+            }
+            let mut bytes = Vec::new();
+            reader.read_into(&mut bytes, RING_FRAMES);
+            let left: Vec<f64> = bytes
+                .chunks_exact(4)
+                .map(|frame| f64::from(i16::from_le_bytes([frame[0], frame[1]])))
+                .collect();
+            let steepest = left
+                .windows(2)
+                .map(|pair| (pair[1] - pair[0]).abs())
+                .fold(0.0, f64::max);
+            assert!(
+                steepest <= bound,
+                "{hold_back_ms} ms: a step of {steepest}, over {bound}"
+            );
+            // Frame F/2 − 1 of a single fade-out is exactly half the level.
+            let held = left
+                .iter()
+                .rposition(|sample| *sample >= full - 1.0)
+                .unwrap();
+            let half = held
+                + left[held..]
+                    .iter()
+                    .position(|s| *s <= full / 2.0 + 1.0)
+                    .unwrap();
+            let start = half + 1 - fade / 2;
+            for (i, sample) in left[start..start + fade].iter().enumerate() {
+                let expected = full * f64::from(crate::fade::fade_out_gain(i, fade));
+                assert!(
+                    (sample - expected).abs() <= 1.0,
+                    "{hold_back_ms} ms: frame {i} of the fade is {sample}, not {expected}"
+                );
+            }
+            assert!(left[start + fade..].iter().all(|sample| *sample == 0.0));
+        }
         inside(handle).shared.attach(None);
         destroy(handle);
         // SAFETY: destroyed once, by this thread.
