@@ -576,6 +576,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// once until a save works again. They are tried again after a change,
     /// every [`SAVE_RETRY_POLLS`] polls and at quit.
     unsaved: Option<Settings>,
+    /// The Cast speakers file's last write failed, so its notice stays
+    /// after a settings save that works.
+    cast_unsaved: bool,
     /// Polls left until [`AudioAdapter::unsaved`] is tried again.
     save_retry_wait: u32,
     /// An output listing worked at least once, so an empty list means
@@ -745,6 +748,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             airplay_unrestored: BTreeSet::new(),
             cast_unrestored: None,
             unsaved: None,
+            cast_unsaved: false,
             save_retry_wait: 0,
             outputs_known: false,
             no_output_noticed: false,
@@ -1201,7 +1205,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let current = self.current_settings();
         if current == self.saved && !self.must_save {
             if self.unsaved.take().is_some() {
-                self.notices.clear(&[NoticeSubject::SettingsFile]);
+                if !self.cast_unsaved {
+                    self.notices.clear(&[NoticeSubject::SettingsFile]);
+                }
                 return true;
             }
             return false;
@@ -1219,7 +1225,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             return self.restore_read_late(*read);
         }
         let mut notices_changed = saved.is_ok() == self.unsaved.is_some();
-        if saved.is_ok() && self.unsaved.is_some() {
+        if saved.is_ok() && self.unsaved.is_some() && !self.cast_unsaved {
             self.notices.clear(&[NoticeSubject::SettingsFile]);
         }
         let failed = saved.is_err();
@@ -2111,6 +2117,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     self.log
                         .log(|| format!("Cast: the speakers' file couldn't be kept: {error}"));
                     self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
+                    self.cast_unsaved = true;
                     return false;
                 }
             }
@@ -2118,6 +2125,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         match data_folder::write_atomically(path, json.as_bytes()) {
             Ok(()) => {
                 self.cast_saved = Some(json);
+                self.cast_unsaved = false;
                 // The notice stays while the settings file is the one that can't be saved.
                 if self.unsaved.is_none() {
                     self.notices.clear(&[NoticeSubject::SettingsFile]);
@@ -2128,6 +2136,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.log
                     .log(|| format!("Cast: the speakers' file couldn't be written: {error}"));
                 self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
+                self.cast_unsaved = true;
                 false
             }
         }
