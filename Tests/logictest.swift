@@ -12207,7 +12207,7 @@ do {
             && refused.enabled == nil && refused.status(of: den) == .idle,
           "cast: attempt 0 means refused, and the speaker goes off")
 
-    // covers: C80 (the third failure turns a speaker off; on the Mac no group counts)
+    // covers: C80 (the third failure turns a speaker off; a group with no address yet doesn't count)
     var tvOff = CastModel()
     tvOff.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
     tvOff.apply(.appeared(CastDevice(id: "group1", name: "Everywhere", group: true), offsetMs: nil))
@@ -12224,10 +12224,15 @@ do {
     _ = tvOff.turnOn("group1")
     tvOff.startSent("group1")
     _ = tvOff.started("group1", attempt: 5, refusal: ASC_CAST_REFUSED_NONE)
-    let groupFailed = CastEvent.connectFailed(attempt: 5, error: .connect, retryMs: 1000)
+    let noAddress = CastEvent.connectFailed(attempt: 5, error: CastError(ASC_CAST_ERROR_NO_ADDRESS), retryMs: 1000)
     // covers: C80, C81
-    check((1...4).allSatisfy { _ in tvOff.apply(groupFailed) == nil } && tvOff.enabled == "group1",
-          "cast: a group keeps trying while connecting, as one with no address yet must (C80, C81)")
+    check((1...4).allSatisfy { _ in tvOff.apply(noAddress) == nil } && tvOff.enabled == "group1",
+          "cast: a group with no address yet keeps trying while connecting (C80, C81)")
+    let groupFailed = CastEvent.connectFailed(attempt: 5, error: .connect, retryMs: 1000)
+    // covers: C80
+    check(tvOff.apply(groupFailed) == nil && tvOff.apply(groupFailed) == nil
+            && tvOff.apply(groupFailed) == .turnedOff("group1", problem: .notResponding) && tvOff.enabled == nil,
+          "cast: a group that never answers goes off at its third connect failure, as on Windows (C80)")
 
     // covers: C56, C80, C83
     check(CastEnd.failed(.connect).problem == .notResponding && CastEnd.failed(.launch).problem == .refused

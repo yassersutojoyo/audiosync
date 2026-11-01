@@ -2566,6 +2566,17 @@ mod tests {
         assert!(pending.detail.starts_with("AB:AB:") && pending.detail.ends_with(":CD:CD"));
     }
 
+    // CAST_SPEC: C80, C81
+    #[test]
+    fn a_connect_failure_with_no_address_has_its_own_code() {
+        let code = |error| {
+            let retry_in = Duration::from_secs(1);
+            session_event(SessionEvent::ConnectFailed { error, retry_in }, |_| {}).error
+        };
+        assert_eq!(code(ConnectError::NoAddress), CAST_ERROR_NO_ADDRESS);
+        assert_eq!(code(ConnectError::NoStatus), CAST_ERROR_CONNECT);
+    }
+
     #[test]
     fn null_handles_and_bad_arguments_are_harmless() {
         let mut device = blank_device();
