@@ -4275,6 +4275,9 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | a_restarted_sender_gets_the_track_and_its_artwork_again | S219 |
 | a_busy_cover_takes_a_lower_quality_before_a_smaller_side | S217, S272 |
 | a_larger_picture_gets_a_large_and_a_small_image (`desktop/src/audio/now_playing.rs`) | S272 |
+| a_cast_device_gets_a_cover_of_up_to_720_px_and_256_kib (`desktop/src/audio/now_playing.rs`) | C53 |
+| a_cast_cover_takes_the_large_bytes_only_when_they_are_full_size (`desktop/src/audio/now_playing.rs`) | C53 |
+| a_failed_cast_encode_falls_back_to_the_small_image (`desktop/src/audio/now_playing.rs`) | C53 |
 | an_image_within_the_small_limits_is_one_encoding_for_both (`desktop/src/audio/now_playing.rs`) | S272 |
 | the_large_image_is_at_most_1024_px_a_side_and_128_kib (`desktop/src/audio/now_playing.rs`) | S272 |
 | the_small_image_is_at_most_600_px_a_side_and_40_kib (`desktop/src/audio/now_playing.rs`) | S272 |
