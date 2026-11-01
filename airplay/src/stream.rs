@@ -1316,6 +1316,10 @@ impl Stream {
     /// once and before any encoding, so it reaches every speaker (P80).
     pub fn set_master_gain(&mut self, gain: f64) {
         self.master_gain = gain;
+        // Nothing was played at the old gain, so there is nothing to fade from.
+        if self.packet_base == 0 && self.next_cut == 0 {
+            self.cut_gain = gain;
+        }
     }
 
     /// Sets Lf, clamped to 11 025 to 88 200 frames (P98). While no speaker
