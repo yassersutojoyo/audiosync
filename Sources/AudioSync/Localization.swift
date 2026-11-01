@@ -1581,7 +1581,7 @@ struct UIStrings {
             return "\(name) couldn't reach the stream on this Mac, so it's off. If the macOS firewall is on, "
                 + "allow incoming connections for AudioSync in System Settings → Network → Firewall, then turn it on again."
         case .takenOver:
-            return "Another app started casting to \(name), so it's off in AudioSync."
+            return "\(name) stopped AudioSync's stream, so it's off."
         case .connectionLost:
             return "\(name) lost its connection, so it's off. Turn it on again to reconnect."
         case .searchStopped:

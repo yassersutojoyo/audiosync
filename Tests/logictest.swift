@@ -12720,6 +12720,9 @@ do {
     let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost, .searchStopped]
     check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
           "cast: every notice names the speaker, with no em dash")
+    // covers: C43
+    check(t.castProblem(.takenOver, name: "Den") == "Den stopped AudioSync's stream, so it's off.",
+          "cast: a stream the TV's own controls or another app stopped reads as stopped, naming no other app")
     let bothNone = t.networkSpeakersNote(airPlayNone: true, cast: .noneFound) ?? ""
     // covers: S401
     check(bothNone.hasPrefix("No AirPlay or Google Cast speakers found yet.") && bothNone.contains("same network")

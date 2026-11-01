@@ -365,6 +365,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, Refresh Devices (F5) starts AirPlay again after it stopped because of an error, as the notice's Retry does. Before, once that notice was dismissed, AirPlay stayed off until you quit AudioSync.
 - On Windows, a USB speaker you only renamed, or only saved in a preset, keeps its name and its place in the preset when you plug it into another USB port. Before, it came back under its system name and the preset still pointed at the old port.
 - On the Mac, a zone whose speakers all play as part of a stereo pair now says "2 playing in a pair" instead of "None of 2 found".
+- On the Mac, when a Google Cast speaker ends AudioSync's stream, by another app or by its own controls, the notice says "<name> stopped AudioSync's stream, so it's off." instead of blaming another app.
 
 ## [0.7.1] - 2026-10-27
 
