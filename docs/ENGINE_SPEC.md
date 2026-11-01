@@ -4824,7 +4824,7 @@ The release side:
 | a_speaker_playing_with_no_row_off_for_ptp_clears_the_port_notice (`desktop/src/adapter.rs`) | S358 |
 | a_session_refused_before_any_pairing_step_names_no_code (`desktop/src/audio/airplay.rs`) | S356 |
 | an_airplay_row_names_which_airplay (`desktop/src/view.rs`) | S313 |
-| a_pair_switched_off_forgets_what_its_members_airplay1_said (`desktop/src/audio/airplay.rs`) | S313 |
+| a_pair_switched_off_keeps_what_its_members_airplay1_said (`desktop/src/audio/airplay.rs`) | S313 |
 | a_speaker_airplay1_refuses_follows_the_sender_to_airplay2 (`desktop/src/audio/airplay.rs`) | S313 |
 | a_stopped_or_new_sender_tries_airplay1_first_again (`desktop/src/audio/airplay.rs`) | S313 |
 

@@ -31,6 +31,7 @@ impl Driver {
         self.emit(SenderEvent::PathLog {
             key: key.clone(),
             line: format!("AirPlay 1 outcome {kind:?} remembered ({reason}): AirPlay 2 path"),
+            remembered: Some(kind),
         });
     }
 
@@ -39,6 +40,7 @@ impl Driver {
             self.emit(SenderEvent::PathLog {
                 key: key.clone(),
                 line: format!("AirPlay 1 outcome {kind:?} forgotten ({reason})"),
+                remembered: None,
             });
         }
     }

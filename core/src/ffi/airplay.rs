@@ -684,8 +684,9 @@ pub struct AscAirPlay {
     target_states: HashMap<String, SpeakerState>,
     /// The members of each added target that play nothing now (P181).
     target_missing: HashMap<String, Vec<String>>,
-    /// How the AirPlay 1 attempt ended of each added speaker the sender
-    /// then moved to AirPlay 2 (P2), by ID: its listing follows the path.
+    /// How the AirPlay 1 attempt ended of each speaker the sender then
+    /// moved to AirPlay 2 (P2), by ID, until the sender forgets it (P218):
+    /// its listing follows the path.
     airplay1_outcome: HashMap<String, ErrorKind>,
     /// The path each running session takes, as the sender reported it: the
     /// listing names that path until the session ends (P214, S313).
@@ -1104,7 +1105,6 @@ impl AscAirPlay {
                     error.reason = UserReason::Refused;
                 }
                 if let SpeakerEvent::Error(error) = &event {
-                    self.note_path_switch(&id, error);
                     let turned_down = self.speaker_failed(&id, error);
                     if self.paired_for_session.remove(&id) || turned_down {
                         self.relist(&id);
@@ -1200,10 +1200,22 @@ impl AscAirPlay {
                     self.queue_event(Pending::Speaker(String::new(), event));
                 }
             }
-            SenderEvent::PathLog { key, line } => {
+            SenderEvent::PathLog {
+                key,
+                line,
+                remembered,
+            } => {
+                let id = receiver_id(&key);
+                let before = match remembered {
+                    Some(kind) => self.airplay1_outcome.insert(id.clone(), kind),
+                    None => self.airplay1_outcome.remove(&id),
+                };
+                if before != remembered {
+                    self.relist(&id);
+                }
                 if debug_trace_on() {
                     let event = SpeakerEvent::Trace(line);
-                    self.queue_event(Pending::Speaker(receiver_id(&key), event));
+                    self.queue_event(Pending::Speaker(id, event));
                 }
             }
             // The listing turns incomplete; the members' own events say
@@ -1742,6 +1754,19 @@ impl AscAirPlay {
         self.events.push_back((self.receivers_queued, pending));
     }
 
+    /// Tells the debug log how early the speaker `id` plays when `wanted`
+    /// passes the delay cap the sender holds it at (P99).
+    fn trace_capped_delay(&mut self, id: &str, wanted: Duration) {
+        let short_ms = millis(wanted) - millis(MAX_DELAY);
+        if short_ms > 0.5 && debug_trace_on() {
+            let line = format!(
+                "plays {short_ms:.0} ms early: its delay stops at {} ms",
+                MAX_DELAY.as_millis()
+            );
+            self.queue_event(Pending::Speaker(id.to_owned(), SpeakerEvent::Trace(line)));
+        }
+    }
+
     /// Whether a session of `id` that plays proved the receiver holds the
     /// stored credentials, so whatever turned them down is gone (P154):
     /// AirPlay 2 verifies its signature with them, AirPlay 1 only when they
@@ -1790,25 +1815,6 @@ impl AscAirPlay {
             None => self.session_paths.remove(id),
         };
         if before != over(self) {
-            self.relist(id);
-        }
-    }
-
-    /// Keeps how an AirPlay 1 attempt ended when, with the switch on, the
-    /// sender moves the speaker to AirPlay 2 because of it (an Unsupported
-    /// or Refused it retries, P2), and lists the receiver again on that path.
-    fn note_path_switch(&mut self, id: &str, error: &SpeakerError) {
-        let kind = error.error.kind;
-        let moved = error.retry_at.is_some()
-            && self.airplay2
-            && matches!(kind, ErrorKind::Unsupported(_) | ErrorKind::Refused)
-            && self.listed.get(id).is_some_and(|info| {
-                let device = &info.device;
-                device.choose_path_preferring(true, self.airplay2_preferred, None, false)
-                    == Ok(ProtocolPath::AirPlay1)
-                    && device.choose_path(true, Some(kind)) == Ok(ProtocolPath::AirPlay2)
-            });
-        if moved && self.airplay1_outcome.insert(id.to_owned(), kind).is_none() {
             self.relist(id);
         }
     }
@@ -2820,6 +2826,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                 added.offset = offset;
                 added.silenced = silenced;
                 airplay.added.insert(id.to_owned(), added);
+                airplay.trace_capped_delay(id, airplay.hold_back + offset);
                 airplay.remote.forget(id);
                 return true;
             }
@@ -2856,6 +2863,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             added.offset = offset;
             added.silenced = silenced;
             airplay.added.insert(id.to_owned(), added);
+            airplay.trace_capped_delay(id, airplay.hold_back + offset);
             airplay.remote.forget(id);
             true
         })
@@ -2900,12 +2908,6 @@ pub unsafe extern "C" fn asc_airplay_remove_speaker(
             }
             for member in &added.members {
                 airplay.member_states.remove(member);
-            }
-            // Added again, it starts over on AirPlay 1 first, as the sender does.
-            for id in std::iter::once(id).chain(added.members.iter().map(String::as_str)) {
-                if airplay.airplay1_outcome.remove(id).is_some() {
-                    airplay.relist(id);
-                }
             }
             true
         })
@@ -3219,8 +3221,13 @@ pub unsafe extern "C" fn asc_airplay_set_hold_back(
         live(airplay, 0.0, |airplay| {
             if hold_back != airplay.hold_back {
                 airplay.hold_back = hold_back;
-                for added in airplay.added.values() {
+                let mut wanted = Vec::new();
+                for (id, added) in &airplay.added {
                     added.set_delay(&airplay.sender, (hold_back + added.offset).min(MAX_DELAY));
+                    wanted.push((id.clone(), hold_back + added.offset));
+                }
+                for (id, delay) in wanted {
+                    airplay.trace_capped_delay(&id, delay);
                 }
             }
             millis(hold_back)
@@ -3265,6 +3272,7 @@ pub unsafe extern "C" fn asc_airplay_set_speaker_offset(
             if offset != added.offset {
                 added.offset = offset;
                 added.set_delay(&airplay.sender, (hold_back + offset).min(MAX_DELAY));
+                airplay.trace_capped_delay(id, hold_back + offset);
             }
             millis(offset)
         })
@@ -4767,6 +4775,87 @@ mod tests {
         inside(handle).take_in(speaker(SpeakerEvent::Path(ProtocolPath::AirPlay1)));
         inside(handle).take_in(speaker(SpeakerEvent::Path(ProtocolPath::AirPlay2)));
         assert!(over_airplay2(handle), "a later session got the place");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // A refusal the sender didn't remember, as an AirPlay 2 session's,
+    // moves nothing: only the sender's PathLog records an outcome (P218).
+    // covers: P218
+    #[test]
+    fn a_refusal_the_sender_didnt_remember_keeps_no_outcome() {
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        let airplay = airplay2_only();
+        let own = raop("02005E005305", "Living Room", OPEN);
+        let both = Device::from_records(airplay.device_key(), Some(&own), Some(&airplay))
+            .expect("a device");
+        let key = both.key.clone();
+        let info = ReceiverInfo::new(both);
+        inside(handle).take_in(SenderEvent::Receiver(ReceiverEvent::Appeared(Box::new(
+            info.clone(),
+        ))));
+        inside(handle).take_in(SenderEvent::Speaker {
+            key,
+            event: SpeakerEvent::Error(SpeakerError {
+                error: audiosync_airplay::error::SessionError::new(ErrorKind::Refused),
+                reason: UserReason::Refused,
+                retry_at: Some(Instant::now()),
+            }),
+        });
+        let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info)));
+        assert_eq!(report.flags & AIRPLAY_FLAG_OVER_AIRPLAY2, 0);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: P218
+    #[test]
+    fn a_remembered_airplay1_outcome_survives_the_hosts_removal() {
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        let airplay = airplay2_only();
+        let own = raop("02005E005305", "Living Room", OPEN);
+        let both = Device::from_records(airplay.device_key(), Some(&own), Some(&airplay))
+            .expect("a device");
+        let key = both.key.clone();
+        let id = receiver_id(&key);
+        let info = ReceiverInfo::new(both);
+        inside(handle).take_in(SenderEvent::Receiver(ReceiverEvent::Appeared(Box::new(
+            info.clone(),
+        ))));
+        let over_airplay2 = |handle: *mut AscAirPlay| {
+            let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info.clone())));
+            report.flags & AIRPLAY_FLAG_OVER_AIRPLAY2 != 0
+        };
+        assert!(!over_airplay2(handle), "AirPlay 1 first");
+        let added = Added::new(key.clone(), 50.0, None, Vec::new(), Vec::new());
+        inside(handle).added.insert(id.clone(), added);
+        inside(handle).take_in(SenderEvent::Speaker {
+            key: key.clone(),
+            event: SpeakerEvent::Error(SpeakerError {
+                error: audiosync_airplay::error::SessionError::new(ErrorKind::Refused),
+                reason: UserReason::Refused,
+                retry_at: Some(Instant::now()),
+            }),
+        });
+        inside(handle).take_in(SenderEvent::PathLog {
+            key: key.clone(),
+            line: "AirPlay 1 outcome Refused remembered".to_owned(),
+            remembered: Some(ErrorKind::Refused),
+        });
+        assert!(over_airplay2(handle), "the refusal moved it");
+
+        let c_id = c_string(&id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        assert!(unsafe { asc_airplay_remove_speaker(handle, c_id.as_ptr()) });
+        assert!(over_airplay2(handle), "the sender still remembers it");
+        inside(handle).take_in(SenderEvent::PathLog {
+            key,
+            line: "AirPlay 1 outcome Refused forgotten".to_owned(),
+            remembered: None,
+        });
+        assert!(!over_airplay2(handle), "the sender forgot it");
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }

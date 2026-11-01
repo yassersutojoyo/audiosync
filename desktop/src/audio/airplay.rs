@@ -1203,7 +1203,7 @@ pub struct AirPlaySpeakers {
     /// them at the wake (P142, S412).
     changed_asleep: BTreeSet<String>,
     /// How the last AirPlay 1 attempt of a speaker ended when that moved it
-    /// to AirPlay 2, as the sender keeps it while the speaker stays added.
+    /// to AirPlay 2, until the sender forgets it (P218).
     airplay1_outcome: BTreeMap<String, ErrorKind>,
     /// The path each running session takes, as the sender reported it: the
     /// row names that path until the session ends (P214, spec S313).
@@ -3365,7 +3365,7 @@ impl AirPlaySpeakers {
             if let Some(added) = self.added.remove(&id) {
                 added.remove(self.link.as_mut());
                 self.paired_for_session.remove(&id);
-                self.forget_outcomes(&id, &added);
+                self.forget_reported(&id, &added);
                 self.target_missing.remove(&id);
                 if self.gone_targets.remove(&id) {
                     self.targets.remove(&id);
@@ -3628,8 +3628,17 @@ impl AirPlaySpeakers {
                     command,
                 } => changed |= self.remote_command(&key, target.as_ref(), command, Instant::now()),
                 SenderEvent::RemoteLog(line) => self.log.log(|| line),
-                SenderEvent::PathLog { key, line } => {
+                SenderEvent::PathLog {
+                    key,
+                    line,
+                    remembered,
+                } => {
                     let id = speaker_id(&key);
+                    let before = match remembered {
+                        Some(kind) => self.airplay1_outcome.insert(id.clone(), kind),
+                        None => self.airplay1_outcome.remove(&id),
+                    };
+                    changed |= before != remembered;
                     self.log
                         .log(|| format!("AirPlay {}: {line}", self.label(&id)));
                 }
@@ -3952,36 +3961,6 @@ impl AirPlaySpeakers {
         }
     }
 
-    /// Keeps what the sender learns from an AirPlay 1 attempt that ended in
-    /// Unsupported or Refused with a retry: with the switch on, it moves the
-    /// speaker to AirPlay 2 at once (P2).
-    fn note_path_switch(&mut self, id: &str, kind: ErrorKind, retrying: bool) {
-        let moved = retrying
-            && self.link.airplay2()
-            && matches!(kind, ErrorKind::Unsupported(_) | ErrorKind::Refused)
-            && self.listed.get(id).is_some_and(|listed| {
-                let device = &listed.info.device;
-                device.choose_path_preferring(true, self.link.airplay2_preferred(), None, false)
-                    == Ok(ProtocolPath::AirPlay1)
-                    && device.choose_path(true, Some(kind)) == Ok(ProtocolPath::AirPlay2)
-            });
-        if moved {
-            self.airplay1_outcome.insert(id.to_owned(), kind);
-        }
-    }
-
-    /// Forgets what AirPlay 1 said to the row `id` that left the sender,
-    /// and to its members that didn't join on their own.
-    fn forget_outcomes(&mut self, id: &str, added: &Added) {
-        self.airplay1_outcome.remove(id);
-        for member in added.members.keys() {
-            if !self.added.contains_key(member) {
-                self.airplay1_outcome.remove(member);
-            }
-        }
-        self.forget_reported(id, added);
-    }
-
     /// Drops the R_s of the row `id` that left the sender, and of its
     /// members, once discovery doesn't list them either (S280).
     fn forget_reported(&mut self, id: &str, added: &Added) {
@@ -4279,7 +4258,6 @@ impl AirPlaySpeakers {
                 reason,
                 retry_at,
             }) => {
-                self.note_path_switch(member, error.kind, retry_at.is_some());
                 self.log.log(|| {
                     format!(
                         "AirPlay speaker {} of {} error: {error} ({reason:?})",
@@ -4372,7 +4350,7 @@ impl AirPlaySpeakers {
             && let Some(added) = self.added.remove(target)
         {
             added.remove(self.link.as_mut());
-            self.forget_outcomes(target, &added);
+            self.forget_reported(target, &added);
             self.target_missing.remove(target);
             self.queue_password_ask(member, turned_down, false, Some(target));
             return true;
@@ -4471,7 +4449,6 @@ impl AirPlaySpeakers {
             }) => {
                 let mut problem = problem(reason);
                 self.paired_for_session.remove(id);
-                self.note_path_switch(id, error.kind, retry_at.is_some());
                 // Outside the user's attempt its row keeps no code request:
                 // switching it on starts one, which pairs it.
                 let unasked = problem == AirPlayProblem::PairingNotYet
@@ -4533,7 +4510,6 @@ impl AirPlaySpeakers {
                     // The user's switch-on asks for it; the speaker stays on
                     // meanwhile.
                     added.remove(self.link.as_mut());
-                    self.airplay1_outcome.remove(id);
                     self.forget_reported(id, &added);
                     self.queue_password_ask(id, turned_down, false, None);
                     return true;
@@ -5072,6 +5048,16 @@ pub mod tests {
                     reason: kind.user_reason(),
                     retry_at,
                 }),
+            });
+        }
+
+        /// The sender remembered `kind` for `device` (P218), as after a
+        /// [`FakeAirPlay::fail`] that moved it to AirPlay 2.
+        pub fn remember(&self, device: &Device, kind: ErrorKind) {
+            self.push(SenderEvent::PathLog {
+                key: device.key.clone(),
+                line: format!("AirPlay 1 outcome {kind:?} remembered"),
+                remembered: Some(kind),
             });
         }
 
@@ -6480,6 +6466,7 @@ pub mod tests {
 
         // Refused on AirPlay 1: the sender moves it to AirPlay 2 at once.
         fake.fail(&both, ErrorKind::Refused);
+        fake.remember(&both, ErrorKind::Refused);
         airplay.poll();
         assert!(airplay.speakers()[0].airplay2);
         assert_eq!(
@@ -6487,9 +6474,16 @@ pub mod tests {
             AirPlayAvailability::Open
         );
 
-        // Off, the sender forgets the refusal and tries AirPlay 1 again.
+        // Off, the sender keeps the refusal per device (P218).
         assert_eq!(airplay.set_enabled(&id, false), Ok(()));
-        assert!(!airplay.speakers()[0].airplay2);
+        assert!(airplay.speakers()[0].airplay2);
+        fake.push(SenderEvent::PathLog {
+            key: both.key.clone(),
+            line: "AirPlay 1 outcome Refused forgotten".to_owned(),
+            remembered: None,
+        });
+        airplay.poll();
+        assert!(!airplay.speakers()[0].airplay2, "the sender forgot it");
 
         // With the switch off, a refusal moves nothing.
         let fake = FakeAirPlay::new();
@@ -6497,6 +6491,25 @@ pub mod tests {
         fake.appear(&both);
         airplay.poll();
         assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.set_streaming(true);
+        fake.fail(&both, ErrorKind::Refused);
+        airplay.poll();
+        assert!(!airplay.speakers()[0].airplay2);
+    }
+
+    // A refusal the sender didn't remember, as an AirPlay 2 session's,
+    // moves nothing: only the sender's PathLog records an outcome (P218).
+    // covers: P218
+    #[test]
+    fn a_refusal_the_sender_didnt_remember_keeps_no_outcome() {
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        let both = den(true);
+        let id = id_of(&both);
+        fake.appear(&both);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
         airplay.set_streaming(true);
         fake.fail(&both, ErrorKind::Refused);
         airplay.poll();
@@ -6516,6 +6529,7 @@ pub mod tests {
         airplay.set_enabled(&id, true).unwrap();
         airplay.set_streaming(true);
         fake.fail(&both, ErrorKind::Refused);
+        fake.remember(&both, ErrorKind::Refused);
         airplay.poll();
         assert!(airplay.speakers()[0].airplay2);
 
@@ -6530,6 +6544,7 @@ pub mod tests {
         );
 
         fake.fail(&both, ErrorKind::Refused);
+        fake.remember(&both, ErrorKind::Refused);
         airplay.poll();
         assert!(airplay.speakers()[0].airplay2);
         let second = FakeAirPlay::new();
@@ -6592,9 +6607,9 @@ pub mod tests {
         assert!(airplay.speakers()[0].airplay2, "Retry ended the session");
     }
 
-    // covers: P177, S313
+    // covers: P177, P218, S313
     #[test]
-    fn a_pair_switched_off_forgets_what_its_members_airplay1_said() {
+    fn a_pair_switched_off_keeps_what_its_members_airplay1_said() {
         let fake = FakeAirPlay::new();
         let (mut pair, left, _) = stereo_pair();
         let both = den(true);
@@ -6604,11 +6619,12 @@ pub mod tests {
         airplay.set_streaming(true);
         airplay.set_enabled(PAIR, true).expect("the pair can play");
         fake.fail(&both, ErrorKind::Refused);
+        fake.remember(&both, ErrorKind::Refused);
         airplay.poll();
         assert!(airplay.over_airplay2(&member), "moved to AirPlay 2");
 
         airplay.set_enabled(PAIR, false).expect("off");
-        assert!(!airplay.over_airplay2(&member), "AirPlay 1 first again");
+        assert!(airplay.over_airplay2(&member), "the sender keeps it (P218)");
     }
 
     // covers: P61, S223
