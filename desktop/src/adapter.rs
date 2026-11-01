@@ -16488,25 +16488,34 @@ mod tests {
 
     // covers: S393
     #[test]
-    fn the_cast_list_says_the_search_failed_only_while_it_lists_none() {
-        let mut audio = MockBackend::empty();
-        audio.connect_output(SPEAKERS, "Speakers");
-        let fake = FakeCast::default();
-        fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
-        audio.set_cast(fake.link());
-        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
-        adapter.poll();
+    fn the_cast_list_says_the_search_failed_unless_a_speaker_added_by_address_or_in_a_session_is_listed()
+     {
+        let (mut adapter, fake) = cast_adapter();
         fake.state().discovery_stopped = true;
         adapter.poll();
-        assert_eq!(adapter.snapshot().cast_list, CastList::Quiet);
-        let mut audio = MockBackend::empty();
-        audio.connect_output(SPEAKERS, "Speakers");
-        let empty = FakeCast::default();
-        empty.state().discovery_stopped = true;
-        audio.set_cast(empty.link());
-        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        assert_eq!(
+            adapter.snapshot().cast_list,
+            CastList::Failed,
+            "browsed rows outlive a dead browser"
+        );
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
         adapter.poll();
-        assert_eq!(adapter.snapshot().cast_list, CastList::Failed);
+        assert_eq!(
+            adapter.snapshot().cast_list,
+            CastList::Quiet,
+            "in a session"
+        );
+
+        let (mut adapter, fake) = cast_adapter();
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        fake.state().discovery_stopped = true;
+        adapter.poll();
+        assert_eq!(
+            adapter.snapshot().cast_list,
+            CastList::Quiet,
+            "added by address"
+        );
     }
 
     // covers: S394, S401 (the amount counts the AirPlay speaker's own receiver offset)

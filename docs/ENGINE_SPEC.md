@@ -5386,7 +5386,7 @@ The release side:
 | refresh_devices_starts_a_stopped_airplay_sender_again_once_its_notice_is_dismissed (`desktop/src/adapter.rs`) | S396 |
 | refresh_devices_leaves_a_running_airplay_sender_alone (`desktop/src/adapter.rs`) | S396 |
 | the_cast_list_says_it_searches_then_that_none_was_found (`desktop/src/adapter.rs`) | S393, S396 |
-| the_cast_list_says_the_search_failed_only_while_it_lists_none (`desktop/src/adapter.rs`) | S393 |
+| the_cast_list_says_the_search_failed_unless_a_speaker_added_by_address_or_in_a_session_is_listed (`desktop/src/adapter.rs`) | S393 |
 | damaged_pairings_get_their_notice_at_launch_naming_the_copy (`desktop/src/adapter.rs`) | S397 |
 | pairings_unreadable_at_launch_get_their_notice_once_they_can_be_kept_aside_unchanged (`desktop/src/adapter.rs`) | S397 |
 | pairings_unreadable_at_launch_get_a_notice_once_they_are_kept_aside (`desktop/src/adapter.rs`) | S397 |
