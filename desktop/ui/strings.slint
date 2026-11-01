@@ -6,7 +6,7 @@
 // English only for now. @tr marks each string for Slint's gettext translation
 // when a second language is added.
 
-import { SpeakerKind, Availability, AirPlayProblem, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, NoticeKind, PinPhase, RowState, SpeakerGroup, UpdateButton } from "types.slint";
+import { SpeakerKind, Availability, AirPlayProblem, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, NoticeKind, PinPhase, RowState, SpeakerGroup, SpeakerItem, UpdateButton } from "types.slint";
 
 export global Strings {
     // The sender's AirPlay 2 session limit, set from Rust (AIRPLAY2_SESSIONS).
@@ -1246,6 +1246,22 @@ export global Strings {
             return @tr("Enter the code shown on {}", name);
         }
         return "";
+    }
+
+    // A speaker row's note after its zone's, in the main window and the
+    // tray flyout: its Cast note, else its availability or state note, else
+    // that it was added by address.
+    public pure function speaker-note(item: SpeakerItem) -> string {
+        if item.cast && root.cast-note(item.cast-state, item.muted, item.cast-group-note) != "" {
+            return root.cast-note(item.cast-state, item.muted, item.cast-group-note);
+        }
+        if root.speaker-availability(item.availability, item.code-every-time, item.state) != "" {
+            return root.speaker-availability(item.availability, item.code-every-time, item.state);
+        }
+        if root.row-note(item.state, item.name) == "" && item.cast-added-by-address {
+            return root.cast-added-by-address;
+        }
+        return root.row-note(item.state, item.name);
     }
 
     // What selecting a row does, read after its value.
