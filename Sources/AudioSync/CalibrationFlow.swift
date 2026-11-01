@@ -165,6 +165,24 @@ enum CalibrationLeftOut: Equatable {
     case headphones, virtual
 }
 
+/// Whether the reference output's own volume and mute let the microphone
+/// hear it, read before a run so the window can warn up front.
+enum CalibrationReferenceLevel: Equatable {
+    case muted, quiet, ok, unknown
+
+    /// Quiet is the main window's low line (S196, 25 % or less), since no
+    /// measurement ties a volume to the core's too-quiet refusal.
+    init(_ reading: DeviceVolumeReading) {
+        let verdict = reading.verdict
+        switch verdict.decision {
+        case UInt32(ASC_DEVICE_VOLUME_MUTED), UInt32(ASC_DEVICE_VOLUME_MUTED_AND_LOW): self = .muted
+        case UInt32(ASC_DEVICE_VOLUME_LOW): self = .quiet
+        case UInt32(ASC_DEVICE_VOLUME_FINE) where verdict.percent != nil: self = .ok
+        default: self = .unknown
+        }
+    }
+}
+
 enum CalibrationFlow {
     /// Why calibration won't record from the default input, nil when it may:
     /// a Bluetooth hands-free input is refused before anything plays, for one

@@ -11365,6 +11365,22 @@ do {
           "calibration: only the speaker being calibrated shows its progress")
 }
 
+// MARK: Calibration reference level: muted or quiet before a run (CalibrationFlow.swift)
+do {
+    func refLevel(_ volume: Double?, _ muted: Bool?) -> CalibrationReferenceLevel {
+        CalibrationReferenceLevel(DeviceVolumeReading(volume: volume, muted: muted))
+    }
+    check(refLevel(0.8, true) == .muted && refLevel(0.1, true) == .muted && refLevel(nil, true) == .muted,
+          "calibration reference: muted wins at any volume, known or not")
+    check(refLevel(0, false) == .quiet && refLevel(0.25, false) == .quiet && refLevel(0.254, false) == .quiet
+            && refLevel(0.2, nil) == .quiet,
+          "calibration reference: 25 % or less (whole percent) is quiet, the main window's low line")
+    check(refLevel(0.256, false) == .ok && refLevel(0.26, false) == .ok && refLevel(1, false) == .ok && refLevel(0.75, nil) == .ok,
+          "calibration reference: above 25 % and not muted is ok")
+    check(refLevel(nil, nil) == .unknown && refLevel(nil, false) == .unknown && refLevel(Double.nan, nil) == .unknown,
+          "calibration reference: no readable volume and not muted is unknown")
+}
+
 // MARK: Calibrate All Speakers: the plan, the stops and the sheet (CalibrateAllFlow.swift, S235-S240)
 do {
     let t = UIStrings()

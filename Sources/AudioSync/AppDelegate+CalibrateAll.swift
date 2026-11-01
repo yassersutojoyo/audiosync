@@ -342,7 +342,7 @@ extension AppDelegate {
     }
 
     /// What macOS reports for each output a calibration would use, so the
-    /// debug log shows why one sat out or took part.
+    /// debug log shows why one sat out or took part, and the reference's own volume.
     func logCalibrationKinds(_ uids: [String]) {
         guard DebugTrace.enabled else { return }
         let hex = { (value: UInt32?) in value.map { String(format: "0x%08X", $0) } ?? "none" }
@@ -353,6 +353,14 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] calibration output \(device.name): transport \(hex(device.transport)), "
                 + "terminal \(hex(device.outputTerminal)), data source \(hex(source)), \(reason)")
         }
+        let reading = calibrationReferenceReading()
+        DebugTrace.log("[AudioSync] calibration reference volume: \(reading.logText), \(CalibrationReferenceLevel(reading))")
+    }
+
+    /// The reference output's own volume and mute now; unknown without a listed reference.
+    func calibrationReferenceReading() -> DeviceVolumeReading {
+        guard let uid = localReference, let device = localDevices[uid] else { return .unknown }
+        return deviceVolumes.read(device.id)
     }
 
     /// The speakers a run would measure now, or why it can't start.
