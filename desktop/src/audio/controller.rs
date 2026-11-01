@@ -9747,7 +9747,7 @@ mod tests {
 
     // covers: S355
     #[test]
-    fn a_failed_input_listing_leaves_the_inputs_out_and_keeps_the_apps() {
+    fn a_failed_input_listing_keeps_the_apps_and_the_inputs_listed_before() {
         let mut backend = backend();
         backend.connect_input("mic", "Microphone", "USB");
         backend.fail_input_listing(Some(BackendError::System {
@@ -9771,7 +9771,10 @@ mod tests {
         assert_eq!(ids(&mut backend), apps);
         assert_eq!(ids(&mut backend), apps, "every refresh");
         backend.fail_input_listing(None);
-        assert_eq!(ids(&mut backend).len(), 3, "the input is back");
+        let listed = ids(&mut backend);
+        assert_eq!(listed.len(), 3, "the input is back");
+        backend.fail_input_listing(Some(BackendError::NotResponding));
+        assert_eq!(ids(&mut backend), listed, "the input stays listed");
     }
 
     // covers: S355

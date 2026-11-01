@@ -5263,7 +5263,7 @@ The release side:
 | Test | Clauses |
 |---|---|
 | input_devices_are_offered_by_name_without_hands_free_or_unreadable_ones (`desktop/src/audio/capture.rs`) | S355 |
-| a_failed_input_listing_leaves_the_inputs_out_and_keeps_the_apps (`desktop/src/audio/controller.rs`) | S355 |
+| a_failed_input_listing_keeps_the_apps_and_the_inputs_listed_before (`desktop/src/audio/controller.rs`) | S355 |
 | an_input_device_is_captured_from_its_endpoint_not_by_process_loopback (`desktop/src/audio/capture.rs`) | S355 |
 | an_input_device_from_8_to_384_khz_is_captured_at_its_own_rate (`desktop/src/audio/capture.rs`) | S16 |
 | an_input_device_choice_survives_a_round_trip_and_older_builds_read_the_whole_system (`desktop/src/settings.rs`) | S355 |
