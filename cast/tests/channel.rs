@@ -1016,6 +1016,22 @@ fn a_close_from_the_app_ends_as_taken_over_when_the_status_lacks_it() {
     assert!(sent(&mut channel).is_empty(), "no CONNECT, no relaunch");
 }
 
+// covers: C82
+#[test]
+fn a_close_from_the_app_with_no_status_answer_ends_as_silent() {
+    let start = Instant::now();
+    let mut channel = running(start);
+    channel.handle(
+        start,
+        json_message("t-1", SENDER, NS_CONNECTION, json!({"type": "CLOSE"})),
+    );
+    assert_eq!(sent(&mut channel)[0].2["type"], "GET_STATUS");
+    channel.tick(start + Duration::from_secs(5));
+    assert!(channel.is_ended());
+    let seen = events(&mut channel);
+    assert!(seen.contains(&Event::Ended(EndReason::Silent)), "{seen:?}");
+}
+
 // covers: C87
 #[test]
 fn a_stop_while_the_launch_waits_sends_only_the_platform_close() {
