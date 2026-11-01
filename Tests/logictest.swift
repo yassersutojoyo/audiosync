@@ -9840,6 +9840,49 @@ do {
         }
     }
 
+    // covers: S66, S187 (the Mac's renderer applies the new delay after its fade-out)
+    // A running output at 48 kHz with 512-frame callbacks goes from 100 to 50 ms: the fade-out
+    // takes the first callback and 448 frames of the second, and the third reads at the new delay.
+    do {
+        let name = "delay change: a running output takes a new delay after its fade-out, "
+            + "within 20 ms and one buffer of its next callback"
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
+           let renderer = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 48_000, channels: 2, gain: 1) {
+            renderer.setDelay(ms: 100)
+            let history = [Float](repeating: 0.5, count: 9_600 * 2)
+            history.withUnsafeBufferPointer { ring.write(interleaved: $0.baseAddress!, frames: 9_600) }
+            let block = [Float](repeating: 0.5, count: 512 * 2)
+            var out = [Float](repeating: 0, count: 512 * 2)
+            var k: UInt64 = 0
+            func delayCallback() {
+                block.withUnsafeBufferPointer { ring.write(interleaved: $0.baseAddress!, frames: 512) }
+                out.withUnsafeMutableBufferPointer {
+                    renderer.render(into: $0.baseAddress!, frames: 512, outputTimeNs: 5_000_000_000 + k * 10_666_667)
+                }
+                k += 1
+            }
+            for _ in 0..<20 { delayCallback() }
+            let wasOpen = renderer.fadeState == .open
+            let lagAtRequest = renderer.lagFrames
+            let resyncsAtRequest = renderer.counters.resyncs
+            renderer.setDelay(ms: 50)
+            var takenLags: [Int64] = []
+            var takenStates: [CoreRenderer.FadeState] = []
+            for _ in 0..<6 {
+                delayCallback()
+                takenLags.append(renderer.lagFrames)
+                takenStates.append(renderer.fadeState)
+            }
+            check(wasOpen && renderer.fadeFrames == 960 && takenStates.first == .fadingOut
+                    && takenLags[0] == lagAtRequest && takenLags[1] == lagAtRequest
+                    && takenLags[2...].allSatisfy { $0 == lagAtRequest - 2_400 }
+                    && renderer.counters.resyncs - resyncsAtRequest == 1, name,
+                  "open \(wasOpen), lag \(lagAtRequest) then \(takenLags), states \(takenStates)")
+        } else {
+            check(false, name, "the core's renderer could not be made")
+        }
+    }
+
     // covers: S230
     // S230: an output the host marks as Bluetooth adds a capture block of
     // 512 frames to its start lead, which its start line logs in ms.
@@ -10179,6 +10222,21 @@ do {
             && twice?.notices.map(\.uid) == ["bt", "usb"],
           "S69 start failure: two failures share one alert and get a notice each",
           "\(String(describing: twice))")
+
+    // covers: S60
+    // The Mac's speakers come first in the list, as the default output does, and are off.
+    let macSpeakers = AudioDevices.Device(id: 73, name: "MacBook Speakers", uid: "builtin",
+                                          transport: kAudioDeviceTransportTypeBuiltIn)
+    let perOutput = RefusingEngine(active: [], refusing: [])
+    let firstSync = LocalOutputSync.apply(enabled: ["usb", "bt", "tv"], listing: [macSpeakers, usb, bt, usbAgain],
+                                          to: perOutput, holdBacks: [:], gain: { _ in 1 })
+    let secondSync = LocalOutputSync.apply(enabled: ["usb", "bt", "tv"], listing: [macSpeakers, usb, bt],
+                                           to: perOutput, holdBacks: [:], gain: { _ in 1 })
+    check(perOutput.tried == ["bt", "usb"] && perOutput.activeOutputUIDs == ["bt", "usb"]
+            && perOutput.deviceIDs == ["usb": 52, "bt": 61] && firstSync.devices == ["usb": 52, "bt": 61]
+            && secondSync == LocalOutputSync.Applied(),
+          "S60 outputs: one renderer per output that is on and listed, keyed by its UID and bound to its device",
+          "tried \(perOutput.tried), devices \(perOutput.deviceIDs), second sync \(secondSync)")
 
     // S36: a capture rate the ring can't hold names the rate and Audio MIDI Setup, not exclusive use.
     let tooFast = LocalOutputSync.apply(

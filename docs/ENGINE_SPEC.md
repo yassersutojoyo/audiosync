@@ -1695,6 +1695,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | fade: with only AirPlay speakers on, a stop keeps capturing until the AirPlay inputs have faded | S186, S189 |
 | fade: a stop waits for the slowest output, never more than 500 ms | S186 |
 | fade: an output is faded once the host clock passes its last faded frame's output time plus its latency | S185 |
+| delay change: a running output takes a new delay after its fade-out, within 20 ms and one buffer of its next callback | S66, S187 |
 | fade: a source change fades the local outputs out on the old capture before the new one starts | S186 |
 | fade: a source change asks the AirPlay input to fade out while the old capture runs, and the new one starts after the old one stopped | S186, S189 |
 | fade: a speaker switched off is stopped only after it faded | S185, S186 |
@@ -1712,6 +1713,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | S69 start failure: streaming stops when the failed speaker was the only one on | S69, S118 |
 | S69 start failure: an AirPlay speaker still on keeps streaming | S69, S118 |
 | S69 start failure: two failures share one alert and get a notice each | S69 |
+| S60 outputs: one renderer per output that is on and listed, keyed by its UID and bound to its device | S60 |
 | S72 master: every running local speaker gets its gain again, and only those | S71, S72 |
 | S186 switch-off: the speakers a sync switches off are detached together | S186 |
 | EC1 new ID: a sync stops the renderer bound to the old ID and starts it on the new one | S161 |

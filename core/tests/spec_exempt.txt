@@ -7,9 +7,9 @@ S6 Architecture overview only; each component it names has its own clauses.
 S10 Hosts only: the capture leaves AudioSync's own process out; the Mac logic suite checks it for app sources, mixes and their taps, and the Windows tests for the whole system.
 S11 Mac host only: the Core Audio process objects that make up an app source; its logic suite checks it.
 S13 Mac host only: the process tap mutes the tapped processes' own output; its logic suite checks that every tap is set up muted and private (SourceCapture.configureTap) and that a retap keeps the app muted.
-S60 Mac host only: Core Audio output device enumeration and device object IDs; the --hardware engine suite checks it.
+S60 Mac host only: Core Audio output device enumeration and device object IDs; the --hardware engine suite checks it, and the Mac logic suite checks one renderer per output on and listed, bound to its device.
 S61 The renderer object wraps a Core Audio output unit; its pure parts are S56, S62, S64 and S65, and the --hardware engine suite checks the rest.
-S66 A renderer's delay call measured on real hardware by the --hardware engine suite; its pure parts are S3 and S46.
+S66 A renderer's delay call measured on real hardware by the --hardware engine suite; its pure parts are S3 and S46; the Mac logic suite checks the fade-out wait through the core's renderer.
 S67 Frames a real output device renders per second; the --hardware engine suite checks it.
 S72 Retired in part with the bundled engine: what stands, re-applying every active local output's gain on a master change, is the host's; the gain itself is S71's; the Mac logic suite and the Windows tests check the host's part.
 S101 The host's reconciles, driven by Core Audio's device-list notice, the sender's events and a 30 s safety net (the Mac logic suite's "reconcile: …" tests); the rest, the bundled engine's HTTP client transport (timeouts, serial write queue, path encoding), is retired.
