@@ -410,7 +410,7 @@ pub enum CastProblem {
     Refused,
     /// It couldn't fetch the stream from this PC.
     Blocked,
-    /// Another app started casting to it.
+    /// The speaker ended the stream: another app cast to it, or its own controls stopped it.
     TakenOver,
     ConnectionLost,
     SearchStopped,

@@ -837,7 +837,7 @@ export global Strings {
             return @tr("{} declined the stream, so it's off. Turn it on again to try once more.", speaker);
         }
         if problem == CastProblem.taken-over {
-            return @tr("Another app started casting to {}, so it's off in AudioSync.", speaker);
+            return @tr("{} stopped AudioSync's stream, so it's off.", speaker);
         }
         if problem == CastProblem.blocked {
             if Platform.os == OperatingSystemType.linux {
