@@ -10239,6 +10239,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[test]
+    fn a_master_change_logs_each_playing_outputs_gain_once_it_rests() {
+        let (mut backend, log, dir) = logged_backend("controller-master-gain");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_master_volume(70.0);
+        backend.set_master_volume(80.0);
+        backend.log_rested_volumes(Instant::now() + VOLUME_LOG_PAUSE);
+        let expected: Vec<String> = [(HEADPHONES, "Headphones"), (SPEAKERS, "Speakers")]
+            .into_iter()
+            .map(|(id, name)| {
+                let gain = backend.policy().params(id).gain;
+                let volume = backend.policy().settings(id).volume;
+                format!(
+                    "output \"{name}\" ({id}) volume: {volume} (gain {gain:.3}, \
+                     EQ headroom returned 0.00 dB)"
+                )
+            })
+            .collect();
+        let messages = logged(&log, &dir);
+        let gains: Vec<&String> = messages
+            .iter()
+            .filter(|m| m.starts_with("output ") && m.contains(" volume: "))
+            .collect();
+        assert_eq!(gains, expected.iter().collect::<Vec<_>>(), "{messages:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     // covers: S291
     #[test]
     fn a_phone_hold_ends_once_its_steps_rest_and_a_window_drag_holds_on() {
