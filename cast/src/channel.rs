@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use crate::error::{EndReason, LaunchError};
+use crate::error::{EndReason, LaunchError, ReconnectPacer};
 use crate::group::MultizoneMessage;
 use crate::ids::RequestIds;
 use crate::media::{
@@ -172,7 +172,9 @@ pub struct Channel {
     phase: Phase,
     status: Option<ReceiverStatus>,
     app: Option<AppSession>,
-    app_reconnected: bool,
+    /// When `CLOSE` last reconnected the app; it allows no second one
+    /// until the stream has played on for [`ReconnectPacer::HEALTHY`] (C82).
+    app_reconnected: Option<Instant>,
     last_inbound: Instant,
     next_ping: Instant,
     pending: Vec<Pending>,
@@ -203,7 +205,7 @@ impl Channel {
             phase: Phase::AwaitingStatus,
             status: None,
             app: None,
-            app_reconnected: false,
+            app_reconnected: None,
             last_inbound: now,
             next_ping: now + PING_INTERVAL,
             pending: Vec::new(),
@@ -609,7 +611,7 @@ impl Channel {
                         status.volume.has_level = known.has_level;
                     }
                 }
-                self.on_status(id, status);
+                self.on_status(now, id, status);
             }
             (Namespace::Receiver, "LAUNCH_ERROR" | "INVALID_REQUEST") => {
                 let reason = device_text(
@@ -902,7 +904,7 @@ impl Channel {
             .any(|pending| pending.request == request)
     }
 
-    fn on_status(&mut self, id: u32, status: ReceiverStatus) {
+    fn on_status(&mut self, now: Instant, id: u32, status: ReceiverStatus) {
         // A status that answers LAUNCH may not list the app yet; the launch
         // stays pending until one does, or until its timeout.
         let answered = match self
@@ -953,7 +955,7 @@ impl Channel {
                 if !status.has_session(&app.session_id) {
                     self.end(EndReason::TakenOver);
                 } else if answered == Some(Request::AppCheck) {
-                    self.app_reconnected = true;
+                    self.app_reconnected = Some(now);
                     self.connect(&app.transport_id);
                     self.events.push_back(Event::AppReconnected);
                 }
@@ -1003,7 +1005,10 @@ impl Channel {
         if !from_app || self.phase != Phase::Running {
             return;
         }
-        if self.app_reconnected {
+        if self
+            .app_reconnected
+            .is_some_and(|at| now.saturating_duration_since(at) < ReconnectPacer::HEALTHY)
+        {
             self.end(EndReason::AppClosed);
             return;
         }
@@ -1032,7 +1037,7 @@ impl Channel {
     fn attach(&mut self, app: AppSession, reused: bool) {
         self.connect(&app.transport_id);
         self.app = Some(app.clone());
-        self.app_reconnected = false;
+        self.app_reconnected = None;
         self.phase = Phase::Running;
         self.events.push_back(Event::Launched { app, reused });
     }

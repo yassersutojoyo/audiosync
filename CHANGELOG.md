@@ -299,6 +299,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, a USB output that macOS lists under a new ID after you plug it into another port keeps its settings while AudioSync runs, as on Windows: its switch, volume, delay, name, zones, presets and hidden mark follow it.
 - A PTP time that isn't a number no longer stops AudioSync's AirPlay 2 sending. Before, the AirPlay 2 speakers could go silent. On the Mac and on Windows.
 - A Google Cast TV that closes AudioSync's stream as it powers down and then stops answering now reconnects like any speaker that drops its connection. Before, it turned off as if it had declined the stream. On the Mac and on Windows.
+- A Google Cast speaker that closes the stream or reports a playback error a second time now recovers again when it has played for a minute since the first. Before, a second one hours later turned it off. On the Mac and on Windows.
 
 ## [0.7.1] - 2026-10-27
 
