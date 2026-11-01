@@ -1726,7 +1726,10 @@ struct MenuBarView: View {
                 // The sheet belongs to the main window, which has room for it.
                 NoticeLink(title: t.castAddByAddress) {
                     model.actions.openMainWindow()
-                    model.castAddShown = true
+                    if MainWindowSheet.castAdd.mayOpen(calibrateShown: model.calibrateAll.shown,
+                                                       castAddShown: model.castAddShown) {
+                        model.castAddShown = true
+                    }
                 }
                 .help(t.castAddBody)
                 .accessibilityHint(t.castAddBody)

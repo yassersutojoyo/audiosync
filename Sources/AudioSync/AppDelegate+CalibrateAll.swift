@@ -28,7 +28,9 @@ extension AppDelegate {
     }
 
     private func startCalibrateRun(zone zoneID: String?) {
-        guard calibrateAllRun == nil, calibrationRun == nil, !appModel.calibration.holdsOutputs else { return }
+        guard calibrateAllRun == nil, calibrationRun == nil, !appModel.calibration.holdsOutputs,
+              MainWindowSheet.calibrate.mayOpen(calibrateShown: appModel.calibrateAll.shown,
+                                                castAddShown: appModel.castAddShown) else { return }
         logCalibrationKinds(calibrateAllInputs().localOutputs.map(\.id))
         let scope = zoneID.flatMap(calibrateZoneScope)
         if zoneID != nil, scope == nil { return }

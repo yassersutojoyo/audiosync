@@ -281,7 +281,10 @@ enum MainWindowSheet {
     case calibrate, castAdd
 
     func mayOpen(calibrateShown: Bool, castAddShown: Bool) -> Bool {
-        true
+        switch self {
+        case .calibrate: return !castAddShown
+        case .castAdd: return !calibrateShown
+        }
     }
 }
 
