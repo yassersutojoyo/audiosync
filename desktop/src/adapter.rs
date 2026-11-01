@@ -2091,6 +2091,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
             return true;
         };
         if self.cast_saved.as_ref() == Some(&json) {
+            // Set back to what the file holds after a failed write.
+            if std::mem::take(&mut self.cast_unsaved) && self.unsaved.is_none() {
+                self.notices.clear(&[NoticeSubject::SettingsFile]);
+            }
             return true;
         }
         if !self.cast_file_checked {
