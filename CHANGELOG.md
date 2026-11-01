@@ -47,6 +47,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On the Mac, an AirPlay speaker that went off because it turned its pairing down now shows on the web remote as one to turn on in AudioSync, until you turn it on on the Mac. Before, the phone's switch turned it on and it went straight back off with the PIN notice.
 - On the Mac, the menu bar panel's link to add a Google Cast device by address only brings the main window forward while the calibration sheet is open, and calibration doesn't start while the address sheet is open. Before, the other sheet could pop up later, or the link did nothing the next time it was clicked.
 - On Windows, switching the source or channel pair while a Google Cast speaker plays now fades the old source out and the new one in on that speaker, as on the Mac. Before, the sound jumped from one to the other, which could click.
 - On the Mac, a Google Cast speaker now fades out as smoothly as the others when you stop or switch the source. Before, its fade-out could be steeper than intended when it played with little or no delay.

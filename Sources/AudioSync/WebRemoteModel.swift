@@ -99,7 +99,7 @@ extension RemoteRow {
     /// from the phone: the prompt would open on the Mac with nobody there.
     init(_ f: Facts, text: UIStrings) {
         let turnsOn = SpeakerState(enabled: f.on, streaming: f.streaming).clickTurnsOn
-        let codeBlocked = (f.needsCode && !f.paired && !f.holdsPassword || f.memberAsksPassword) && turnsOn
+        let codeBlocked = (f.needsCode && !f.paired && !f.holdsPassword || f.memberAsksPassword || f.refusedForCode) && turnsOn
         let castStep = f.castVolumeStep > 0 && f.castVolumeStep <= 1 ? f.castVolumeStep : CastModel.fallbackVolumeStep
         let delay: RemoteDelay
         if f.isAirPlay { delay = .airPlay(f.airPlayDelayMs) }

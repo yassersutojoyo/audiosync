@@ -52,6 +52,8 @@ final class AppModel: ObservableObject {
         var holdsCredentials = false
         /// An AirPlay speaker whose password AudioSync holds until it quits.
         var holdsPassword = false
+        /// An AirPlay speaker turned off for refusing a pairing, until the user turns it on here.
+        var refusedForCode = false
         /// A stereo pair or home theater group: its kind and members (P176).
         var airPlayTarget: AirPlayTargetRow? = nil
         /// Why a local speaker sits out of microphone calibration: headphones
