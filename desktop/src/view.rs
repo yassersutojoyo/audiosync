@@ -9384,6 +9384,30 @@ mod tests {
     }
 
     #[test]
+    fn a_reconnecting_cast_row_says_so_before_its_mute_or_group() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        assert_eq!(
+            strings
+                .invoke_cast_note(CastState::Reconnecting, true, "".into())
+                .as_str(),
+            "Reconnecting…",
+            "muted"
+        );
+        assert_eq!(
+            strings
+                .invoke_cast_note(
+                    CastState::Reconnecting,
+                    false,
+                    "Google Cast group: Kitchen and Living Room".into()
+                )
+                .as_str(),
+            "Reconnecting…",
+            "group"
+        );
+    }
+
+    #[test]
     fn a_cast_group_row_names_its_members_or_says_they_are_unknown() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();

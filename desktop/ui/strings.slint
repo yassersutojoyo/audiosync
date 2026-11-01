@@ -1316,6 +1316,9 @@ export global Strings {
         if state == CastState.connecting {
             return @tr("Connecting…");
         }
+        if state == CastState.reconnecting {
+            return root.reconnecting;
+        }
         if muted && group-note != "" {
             return @tr("Muted on the group");
         }
