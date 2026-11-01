@@ -822,12 +822,16 @@ pub fn host_frame_of(frame: [i16; 2]) -> Option<u64> {
 pub struct HostAudio {
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<InputWriter>>,
+    /// When the capture wrote its first block and its latest.
+    writes: Arc<Mutex<Option<(Instant, Instant)>>>,
 }
 
 impl HostAudio {
     pub fn start(mut writer: InputWriter) -> HostAudio {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
+        let writes = Arc::new(Mutex::new(None));
+        let stamps = writes.clone();
         let thread = thread::spawn(move || {
             let mut written: u64 = 0;
             let start = Instant::now();
@@ -836,7 +840,13 @@ impl HostAudio {
                 for (index, pair) in block.as_chunks_mut::<2>().0.iter_mut().enumerate() {
                     pair.copy_from_slice(&host_samples(written + index as u64));
                 }
-                writer.write_i16(&block, Instant::now());
+                let now = Instant::now();
+                writer.write_i16(&block, now);
+                stamps
+                    .lock()
+                    .expect("write times")
+                    .get_or_insert((now, now))
+                    .1 = now;
                 written += BLOCK_FRAMES as u64;
                 let next = start + Duration::from_secs_f64(written as f64 / 44_100.0);
                 if let Some(wait) = next.checked_duration_since(Instant::now()) {
@@ -848,12 +858,18 @@ impl HostAudio {
         HostAudio {
             stop,
             thread: Some(thread),
+            writes,
         }
+    }
+
+    /// When the capture wrote its first block and its latest, once it wrote.
+    pub fn writes(&self) -> Option<(Instant, Instant)> {
+        *self.writes.lock().expect("write times")
     }
 
     /// Stops the capture and gives its writer back, for the next capture
     /// of a host that switches sources.
-    pub fn stop(mut self) -> InputWriter {
+    pub fn stop(&mut self) -> InputWriter {
         self.stop.store(true, Ordering::SeqCst);
         self.thread
             .take()
