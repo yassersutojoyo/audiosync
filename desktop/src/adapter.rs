@@ -2612,12 +2612,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.log
             .log(|| format!("the user recalled preset \"{}\"", preset.name));
         // Before any member goes on, so a speaker that starts plays at the
-        // preset's master and its zone level.
+        // preset's master, its zone level and its own volume.
         self.audio.set_master_volume(preset.master);
         for (zone, volume) in presets::recall_zone_volumes(&preset, &self.zones) {
             self.zones.set_volume(zone, volume);
         }
         self.push_zone_volumes();
+        for ((key, volume, ..), set_volume) in members.iter().zip(&plan.set_volume) {
+            if let (true, Some(volume)) = (*set_volume, volume) {
+                self.set_preset_volume(key, *volume);
+            }
+        }
         for ((id, ..), off) in others.iter().zip(&plan.switch_off) {
             if let (true, Some(key)) = (*off, SpeakerKey::parse(id)) {
                 self.switch_zone_member(&key, false);
@@ -2628,14 +2633,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             preset.members.iter().any(|member| member.key == key)
         });
         let running = self.running();
-        for ((key, volume, _, facts), (step, set_volume)) in
-            members.iter().zip(plan.steps.iter().zip(&plan.set_volume))
-        {
+        for ((key, _, _, facts), step) in members.iter().zip(&plan.steps) {
             if matches!(step, RecallStep::On | RecallStep::Waiting) && (!running || !facts.on) {
                 self.switch_zone_member(key, true);
-            }
-            if let (true, Some(volume)) = (*set_volume, volume) {
-                self.set_preset_volume(key, *volume);
             }
         }
         // The preamp and the equalizer switch are standing trims outside
