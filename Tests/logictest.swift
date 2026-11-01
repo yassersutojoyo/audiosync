@@ -2912,6 +2912,10 @@ do {
     check(CaptureRate.running(device: 0, tap: 0) == 0
             && !CaptureRate.needsRestart(current: 48000, reported: CaptureRate.running(device: 0, tap: 0)),
           "capture rate: nothing readable keeps the session playing")
+    // covers: S335 (a reopened app tap with no audio process yet read 48 kHz and restarted every local output)
+    check(!CaptureRate.needsRestart(current: 44100, reported: CaptureRate.untilRead(reopening: 44100))
+            && CaptureRate.untilRead(reopening: nil) == CaptureRate.fallback,
+          "capture rate: a reopen whose app tap waits for an audio process keeps the session rate")
 
     func format(flags: AudioFormatFlags, bits: UInt32 = 32, channels: UInt32 = 2) -> AudioStreamBasicDescription {
         AudioStreamBasicDescription(mSampleRate: 48000, mFormatID: kAudioFormatLinearPCM, mFormatFlags: flags,
