@@ -7810,6 +7810,34 @@ mod tests {
         assert!(backend.driver().capture_running());
     }
 
+    // covers: S26, S71, S329
+    #[test]
+    fn a_reopened_capture_gives_the_cut_back_to_the_frames_already_in_the_ring() {
+        let mut backend = backend();
+        backend.set_output_volume(SPEAKERS, 50.0);
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: 0.5,
+            gains_db: [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0],
+        });
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let ring = backend.driver().capture_ring().expect("a ring");
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        // Equalized by the lost capture, with the same curve.
+        let mut writer = ring.writer().expect("the mock capture let it go");
+        writer.write(&[0.0; 960], 480);
+        drop(writer);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        backend.set_output_volume(SPEAKERS, 40.0);
+        let gain = &backend.session.as_ref().unwrap().outputs[SPEAKERS].gain;
+        assert!(gain.get() > 0.4f32.powi(3), "the cut comes back");
+        for frame in [0, 479, 480] {
+            assert_eq!(gain.gain_at(frame), Some(gain.get()), "frame {frame}");
+        }
+    }
+
     // covers: S329, S20, S140, S157 (another rate restarts the session on a new ring)
     #[test]
     fn a_capture_back_in_another_format_restarts_the_session() {
