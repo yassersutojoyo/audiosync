@@ -1045,11 +1045,12 @@ struct CastModel {
     }
 
     /// The sender sent `level`, the latest asked for, with no answer to come
-    /// (C70, C104): when `repeated`, the levels asked for since its earlier
+    /// (C70, C104): when `repeated`, the levels asked for since its latest earlier
     /// copy stop waiting; else the device already reports it, and every level does.
     private mutating func volumeUnanswered(_ id: String, _ level: Double, repeated: Bool) {
-        guard unanswered.last == level, let first = unanswered.firstIndex(of: level) else { return }
-        unanswered.removeSubrange((repeated ? first + 1 : 0)...)
+        guard unanswered.last == level else { return }
+        let kept = repeated ? unanswered.dropLast().lastIndex(of: level).map { $0 + 1 } ?? unanswered.count : 0
+        unanswered.removeSubrange(kept...)
         if unanswered.isEmpty, let requested, requested.id == id {
             levels[id] = requested.level
             self.requested = nil

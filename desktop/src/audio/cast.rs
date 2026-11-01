@@ -1662,15 +1662,17 @@ impl CastSpeakers {
     }
 
     /// The sender sent `level`, the latest asked for, with no answer to come
-    /// (C70, C104): when `repeated`, the levels asked for since its earlier
+    /// (C70, C104): when `repeated`, the levels asked for since its latest earlier
     /// copy stop waiting; else the device already reports it, and every level
     /// does.
     fn volume_unanswered(&mut self, device: DeviceId, level: f64, repeated: bool) {
         if self.unanswered.last() != Some(&level) {
             return;
         }
-        let kept = match self.unanswered.iter().position(|&sent| sent == level) {
-            Some(first) if repeated => first + 1,
+        let earlier = &self.unanswered[..self.unanswered.len() - 1];
+        let kept = match earlier.iter().rposition(|&sent| sent == level) {
+            Some(copy) if repeated => copy + 1,
+            None if repeated => self.unanswered.len(),
             _ => 0,
         };
         self.unanswered.truncate(kept);
