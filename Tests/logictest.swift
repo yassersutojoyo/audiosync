@@ -12958,6 +12958,18 @@ do {
     check(quiet.apply(.volume(attempt: 7, reported(0.1, fixed: true))) != .setVolume(0.8),
           "cast master: a fixed volume is not set at the start (C68)")
 
+    var presetFixed = appeared()
+    _ = presetFixed.setVolume(tv, position: 50)
+    presetFixed = session(attempt: 14, from: presetFixed)
+    _ = presetFixed.setZones([tv: 50])
+    _ = presetFixed.apply(.volume(attempt: 14, reported(0.3, fixed: true)))
+    // covers: C68, S415
+    check(approx(presetFixed.rowVolume(of: tv), 30, 1e-9),
+          "cast row: a fixed volume shows what the device reports, whatever the zone and the own level kept")
+    // covers: C68
+    check(approx(presetFixed.knownVolume(of: tv) ?? 0, 30, 1e-9),
+          "cast master: a fixed volume's slider shows what the device reports, not the own level kept")
+
     var group = CastModel()
     group.apply(.appeared(CastDevice(id: "group1", name: "Everywhere", group: true), offsetMs: nil))
     _ = group.turnOn("group1")

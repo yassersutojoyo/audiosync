@@ -1939,6 +1939,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | cast master: the sender reports a level re-sent at the first status unanswered, so a later change to it from elsewhere moves the speaker | C70, C105 |
 | cast master: a session starts at the own level when the device is quieter, not read back (C105) | C105 |
 | cast master: a fixed volume is not set at the start (C68) | C68, C105 |
+| cast row: a fixed volume shows what the device reports, whatever the zone and the own level kept | C68, S415 |
+| cast master: a fixed volume's slider shows what the device reports, not the own level kept | C68 |
 | cast master: a group gets its own level like a device | C104 |
 | cast master: the core's arithmetic | C70, C104, C105 |
 | cast row: a row move sends the row and stores row ÷ zone | S415 |

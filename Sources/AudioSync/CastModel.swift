@@ -580,14 +580,16 @@ struct CastModel {
     /// A session runs or starts for `id`: its volume, Mute and Resync reach it.
     func isLive(_ id: String) -> Bool { status(of: id) != .idle }
 
-    /// The slider position, 0 to 100: the own level the user set until a
-    /// status answers it, else the one kept, else the reported level.
+    /// The slider position, 0 to 100: a fixed volume's reported level, else
+    /// the own level the user set until a status answers it, else the one
+    /// kept, else the reported level.
     func volume(of id: String) -> Double { knownVolume(of: id) ?? 100 }
 
     /// `volume(of:)`, nil while no status reported a level and the user set
     /// none; it may pass 100 (S415).
     func knownVolume(of id: String) -> Double? {
-        (ownLevel(of: id) ?? volumes[id]?.level).map { max(0, $0 * 100) }
+        let fixed = volumes[id].flatMap { $0.fixed ? $0.level : nil }
+        return (fixed ?? ownLevel(of: id) ?? volumes[id]?.level).map { max(0, $0 * 100) }
     }
 
     private func ownLevel(of id: String) -> Double? {
@@ -600,8 +602,11 @@ struct CastModel {
         asc_airplay_row_level(deviceLevel(of: id) * 100)
     }
 
-    /// A level held at zone 0, else zone × own, else the reported level, else 1.
+    /// A fixed volume's reported level, else a level held at zone 0, else
+    /// zone × own, else the reported level, else 1.
     private func deviceLevel(of id: String) -> Double {
+        // Nothing reaches a fixed volume (C68), so zone × own would be a guess.
+        if let reported = volumes[id], reported.fixed { return reported.level }
         if let held, held.id == id { return held.level }
         return ownLevel(of: id).map { asc_cast_zone_level(zone(of: id), $0) } ?? volumes[id]?.level ?? 1
     }
