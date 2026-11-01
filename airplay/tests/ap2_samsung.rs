@@ -469,6 +469,19 @@ fn the_fake_default_stream_ports_lie_below_every_ephemeral_range() {
     }
 }
 
+#[test]
+fn a_stream_port_the_test_sets_to_a_fake_default_is_kept() {
+    let mut fake = FakeAp2::new();
+    fake.data_port = DATA_PORT;
+    fake.control_port = RECEIVER_CONTROL_PORT;
+    let server = Ap2Server::start(fake);
+    let fake = server.fake();
+    assert_eq!(
+        (fake.data_port, fake.control_port),
+        (DATA_PORT, RECEIVER_CONTROL_PORT)
+    );
+}
+
 /// A data port that keeps the RTP header of every audio datagram.
 fn data_port() -> (UdpSocket, Arc<Mutex<Vec<Datagram>>>) {
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("a UDP socket");
