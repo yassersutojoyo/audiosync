@@ -6,10 +6,10 @@
 //! [`MediaControls`] (on Windows, the card's half of
 //! `audio::wasapi::read_media_sessions`; a fake in tests). They are read
 //! only while the main window shows, as the Mac reads its players only
-//! while the window or a receiver needs them. With the
-//! whole system or a mix of apps as the source, the session that plays counts, else the first
-//! paused one; with one app, that app's own; an input device has none, so
-//! the card hides. Without a session that counts, the card hides too.
+//! while the window or a receiver needs them. With the whole system or a
+//! mix of apps as the source, the session that plays counts, else the
+//! first paused one; with one app, that app's own; an input device has
+//! none, so the card hides. Without a session that counts, the card hides too.
 //!
 //! The card keeps the last track while the window is hidden, so it shows at
 //! once when the window comes back, and changes with the first new reading.
@@ -38,7 +38,6 @@ impl CardSource {
     /// `None` for an input device, which has no media session.
     pub fn of(state: &AppState) -> Option<CardSource> {
         let id = state.source_id.as_str();
-        // A mix follows any app, as the Mac's card and the AirPlay metadata do.
         if id == "system" || id.starts_with("mix:") {
             return Some(CardSource::AnyApp);
         }
