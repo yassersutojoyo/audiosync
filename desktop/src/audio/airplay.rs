@@ -4370,11 +4370,7 @@ impl AirPlaySpeakers {
             self.reconcile();
             events.push(BackendEvent::AirPlayMemberNeedsPassword {
                 id: target.to_owned(),
-                member: self
-                    .names
-                    .get(member)
-                    .cloned()
-                    .unwrap_or_else(|| member.to_owned()),
+                member_id: member.to_owned(),
             });
         }
         true
@@ -10655,7 +10651,7 @@ pub mod tests {
         let events = airplay.poll();
         assert!(events.contains(&BackendEvent::AirPlayMemberNeedsPassword {
             id: PAIR.to_owned(),
-            member: "Right".to_owned(),
+            member_id: id_of(&right),
         }));
         assert_eq!(
             airplay.set_enabled(PAIR, true),
@@ -10692,7 +10688,7 @@ pub mod tests {
         );
         assert!(events.contains(&BackendEvent::AirPlayMemberNeedsPassword {
             id: PAIR.to_owned(),
-            member: "Right".to_owned(),
+            member_id: id_of(&right),
         }));
         assert!(!airplay.submit_password(&id_of(&right), "hunter2"));
         assert!(airplay.enabled_ids().is_empty());
@@ -10751,7 +10747,7 @@ pub mod tests {
         let events = airplay.poll();
         assert!(events.contains(&BackendEvent::AirPlayMemberNeedsPassword {
             id: PAIR.to_owned(),
-            member: "Right".to_owned(),
+            member_id: id_of(&right),
         }));
         assert!(airplay.enabled_ids().is_empty());
         assert_eq!(airplay.password_prompt(), None);
