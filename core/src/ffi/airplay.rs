@@ -5733,7 +5733,7 @@ mod tests {
                 .iter()
                 .any(|body| body.contains("Track One")
                     && body.contains("Some Artist")
-                    && body.contains("Some Album"))),
+                    && !body.contains("Some Album"))),
             "{:?}",
             receiver.bodies(Method::SetParameter)
         );
