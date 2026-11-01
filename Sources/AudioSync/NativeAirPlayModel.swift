@@ -906,7 +906,7 @@ struct NativeAirPlayModel {
         return prompt
     }
 
-    /// The user answered `prompt` with `code`, nil or empty for Cancel.
+    /// The user answered `prompt` with `code`, nil for Cancel.
     /// A prompt that isn't the open one (taken back meanwhile) is ignored.
     mutating func answered(_ prompt: NativePrompt, code: String?) -> NativePromptAnswer {
         guard openPrompt == prompt else { return .ignore }
