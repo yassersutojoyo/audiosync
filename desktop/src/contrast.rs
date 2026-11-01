@@ -630,7 +630,7 @@ fn keyboard_shortcuts_are_declared() {
 /// short name for the dismiss button, the notice that another app holds
 /// the PTP ports, and the note that discovery has found
 /// no speaker yet (alone, or with Google Cast's in one sentence), which
-/// shows only while it runs. The note and row state for a speaker waiting
+/// shows only while it runs, as does the note that it still looks. The note and row state for a speaker waiting
 /// for the one AirPlay 2 slot show only behind the AirPlay 2 switch, whose
 /// File menu item says it is experimental, as do the notice that turning
 /// the item on or off applies at the next launch and its short name.
@@ -686,6 +686,9 @@ fn no_text_promises_airplay() {
                     "airplay-none-found: root.public-network ? \
                      @tr(\"No AirPlay speakers found yet.",
                 )
+                || line.contains(
+                    "looking-for-airplay-speakers: @tr(\"Looking for AirPlay speakers…\")"
+                )
                 || line.contains("plays up to {0} AirPlay 2 speakers at once, so {1} waits.")
                 || line.contains("@tr(\"Waiting: too many AirPlay 2 speakers\")")
                 || line.contains(
@@ -732,7 +735,7 @@ fn no_text_promises_airplay() {
     assert!(strings.contains("connected-none: @tr(\"No connected speakers\")"));
     assert!(
         include_str!("../ui/main.slint")
-            .contains("root.connected.length > 0 || root.connected-zoned.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? Strings.looking-for-speakers : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
+            .contains("root.connected.length > 0 || root.connected-zoned.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
         "the empty Connected Speakers list says it looks while AirPlay searches, then uses the plain note"
     );
     assert!(

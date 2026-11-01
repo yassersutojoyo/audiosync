@@ -2202,6 +2202,12 @@ impl MockBackend {
         self.state.airplay_searching = on;
     }
 
+    /// How the Google Cast search goes while it lists no speaker.
+    #[cfg(test)]
+    pub fn set_cast_list(&mut self, list: CastList) {
+        self.state.cast_list = list;
+    }
+
     /// Streaming is on with every speaker off.
     #[cfg(test)]
     pub fn set_no_speaker_on(&mut self, on: bool) {
