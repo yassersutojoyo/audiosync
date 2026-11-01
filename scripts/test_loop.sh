@@ -1,12 +1,22 @@
 #!/usr/bin/env bash
 # Runs one test binary over and over in parallel processes, to catch a crash
-# that shows up once in hundreds of runs. On Windows a crashed cast or desktop
-# test binary leaves a minidump in <crate>/target/crash-dumps
-# (cast/tests/common/crash_dump.rs).
+# or a load flake that shows up once in hundreds of runs, and prints how often
+# each test failed. On Windows a crashed cast or desktop test binary leaves a
+# minidump in <crate>/target/crash-dumps (cast/tests/common/crash_dump.rs).
 #
-# usage: scripts/test_loop.sh <crate dir> <runs per process> <processes> <cargo test target>
-#   e.g. scripts/test_loop.sh cast 50 8 --test playback
+# usage: scripts/test_loop.sh [-b <busy loops>] <crate dir> <runs per process> <processes> <cargo test target>
+#   e.g. scripts/test_loop.sh -b 16 airplay 50 8 --test ap2_samsung
+# The copies and the busy loops run at the lowest priority, so they load each
+# other without slowing the rest of the machine.
 set -u
+busy=0
+while getopts b: opt; do
+    case $opt in
+        b) busy=$OPTARG ;;
+        *) exit 2 ;;
+    esac
+done
+shift $((OPTIND - 1))
 [ $# -ge 4 ] || { sed -n '7,8p' "$0" >&2; exit 2; }
 crate=$1 runs=$2 procs=$3
 shift 3
@@ -18,16 +28,35 @@ build=$(cargo test "$@" --no-run 2>&1) || { echo "$build" >&2; exit 1; }
 exe=$(echo "$build" | sed -n 's/.*Executable .*(\(.*\))$/\1/p' | tail -1)
 [ -n "$exe" ] || { echo "$build" >&2; echo "cargo built no test binary for: $*" >&2; exit 1; }
 log=target/test-loop.log
+failed=target/test-loop.failed
 mkdir -p target
 : > "$log"
+: > "$failed"
+rm -f target/test-loop-*.fail
+loops=()
+trap '[ ${#loops[@]} -eq 0 ] || kill "${loops[@]}" 2> /dev/null' EXIT
+for _ in $(seq "$busy"); do
+    nice -n 19 sh -c 'while :; do :; done' &
+    loops+=("$!")
+done
+copies=()
 for p in $(seq "$procs"); do
     (
+        out=target/test-loop-$p.out
         for r in $(seq "$runs"); do
-            "$exe" -q > /dev/null 2>&1 || echo "process $p run $r: exit $?" >> "$log"
+            nice -n 19 "$exe" > "$out" 2>&1 && continue
+            code=$?
+            tests=$(sed -n 's/^test \(.*\) \.\.\. FAILED$/\1/p' "$out")
+            echo "process $p run $r: exit $code ${tests:-(no test reported FAILED)}" | paste -sd ' ' - >> "$log"
+            [ -z "$tests" ] || echo "$tests" >> "$failed"
+            cp "$out" "target/test-loop-$p-$r.fail"
         done
+        rm -f "$out"
     ) &
+    copies+=("$!")
 done
-wait
+wait "${copies[@]}"
 echo "$(wc -l < "$log") of $((runs * procs)) runs failed ($crate/$log)"
+sort "$failed" | uniq -c | sort -rn
 ls -l target/crash-dumps 2> /dev/null
 [ ! -s "$log" ]
