@@ -127,9 +127,14 @@ struct DelayLine {
     buffer: Box<[f32]>,
     /// The frame written next.
     write: usize,
-    /// The delay in frames; `None` until the first frame, which takes the
-    /// target at once since only silence is behind it.
+    /// Frames written since the last reset, at most the capacity: older ones
+    /// read as silence.
+    filled: usize,
+    /// The delay in frames; `None` until the first frame after a reset, which
+    /// takes the target at once since only silence is behind it.
     delay: Option<usize>,
+    /// [`DelayLine::close`] ran: the output fades out and stays silent.
+    closing: bool,
     fade: Fade,
 }
 
@@ -148,9 +153,26 @@ impl DelayLine {
         DelayLine {
             buffer,
             write: 0,
+            filled: 0,
             delay: None,
+            closing: false,
             fade: Fade::opened(SESSION_RATE),
         }
+    }
+
+    /// Forgets the audio taken in, so a new capture never replays the end
+    /// of the old one, and opens a closed line. Never allocates.
+    fn reset(&mut self) {
+        self.filled = 0;
+        self.delay = None;
+        self.closing = false;
+        self.fade.open();
+    }
+
+    /// Fades the output out and keeps it silent until [`DelayLine::reset`],
+    /// so the audio it still holds doesn't end the stream with a cut.
+    fn close(&mut self) {
+        self.closing = true;
     }
 
     /// Takes in the whole frames of `input` and hands as many frames, held
@@ -168,7 +190,9 @@ impl DelayLine {
                 .zip(chunk.as_chunks_mut::<2>().0)
             {
                 let delay = *self.delay.get_or_insert(target);
-                if delay == target {
+                if self.closing {
+                    self.fade.fade_out();
+                } else if delay == target {
                     self.fade.fade_in();
                 } else if self.fade.is_closed() {
                     self.delay = Some(target);
@@ -179,10 +203,15 @@ impl DelayLine {
                 let delay = self.delay.unwrap_or(target);
                 let write = self.write * 2;
                 self.buffer[write..write + 2].copy_from_slice(frame.as_slice());
-                let read = (self.write + capacity - delay) % capacity * 2;
+                self.filled = (self.filled + 1).min(capacity);
                 let gain = self.fade.next_gain();
-                held[0] = self.buffer[read] * gain;
-                held[1] = self.buffer[read + 1] * gain;
+                if delay < self.filled {
+                    let read = (self.write + capacity - delay) % capacity * 2;
+                    held[0] = self.buffer[read] * gain;
+                    held[1] = self.buffer[read + 1] * gain;
+                } else {
+                    held.fill(0.0);
+                }
                 self.write = (self.write + 1) % capacity;
             }
             out(&chunk[..frames * 2]);
@@ -283,6 +312,9 @@ impl CastFeedSlot {
             .unwrap_or_else(PoisonError::into_inner)
             .take()?;
         tap.fade.restart(SESSION_RATE);
+        if let Some(writer) = tap.writer.as_mut() {
+            writer.delay.reset();
+        }
         self.closing.store(false, Ordering::Release);
         Some(CastLease {
             tap: Some(tap),
@@ -319,6 +351,9 @@ impl CastLease {
         if let Some(tap) = self.tap.as_mut() {
             if self.closing.load(Ordering::Acquire) {
                 tap.fade.fade_out();
+                if let Some(writer) = tap.writer.as_mut() {
+                    writer.delay.close();
+                }
             }
             tap.push(block, frames);
         }
