@@ -32,3 +32,16 @@ unused-allowed-license = "allow"
 
 [licenses.private]
 ignore = false
+
+# `cargo deny check advisories` (the weekly Advisories workflow) fails on any
+# RustSec vulnerability, unsound or unmaintained crate in the graph; a yanked
+# crate only warns. An ignore entry names the advisory and why it can't reach us.
+[advisories]
+unmaintained = "all"
+unsound = "all"
+yanked = "warn"
+ignore = [
+    # A dev-dependency that only generates the fake receiver's test key; ring
+    # signs with it, and no shipped code runs RSA.
+    { id = "RUSTSEC-2023-0071", reason = "rsa only makes a test key; Marvin needs RSA decryption" },
+]

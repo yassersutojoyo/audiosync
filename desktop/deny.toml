@@ -62,3 +62,24 @@ unused-allowed-license = "allow"
 
 [licenses.private]
 ignore = false
+
+# `cargo deny check advisories` (the weekly Advisories workflow) fails on any
+# RustSec vulnerability, unsound or unmaintained crate in the graph; a yanked
+# crate only warns. An ignore entry names the advisory and why it can't reach us.
+[advisories]
+unmaintained = "all"
+unsound = "all"
+yanked = "warn"
+ignore = [
+    # A dev-dependency that only generates the fake receiver's test key; ring
+    # signs with it, and no shipped code runs RSA.
+    { id = "RUSTSEC-2023-0071", reason = "rsa only makes a test key; Marvin needs RSA decryption" },
+    # Slint parses styled text with ENABLE_STRIKETHROUGH only, never wikilinks.
+    { id = "RUSTSEC-2026-0414", reason = "Slint never sets ENABLE_WIKILINKS" },
+    # Linux-only crates under Slint (winit's window decorations, accesskit's
+    # AT-SPI bridge); they go when Slint moves off them.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser: unmaintained, Linux-only, under Slint" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: unmaintained, Linux-only, under Slint" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained, Linux-only, under Slint" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained, Linux-only, under Slint" },
+]
